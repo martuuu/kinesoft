@@ -221,8 +221,13 @@ export async function saveOnboardingClinic(
         // VX-Z (decisión 24, default para Martin): un Titular que NO atiende (`ownerClinical=false`) en Individual
         // (1 lugar) ocupa el único lugar sin agenda y no puede invitar a nadie que atienda: consultorio sin salida.
         // Esa alta nace en prueba CONSULTORIO, con los días de SU fila del catálogo (o el default del plan).
+        // VX-Z (B4): se lee como el signup (`getPublicPlanCatalog`, que filtra `isPublic`): con la fila oculta, el
+        // signup promete `PLAN_DEFAULTS` y el alta tiene que dar lo mismo, no los días de una fila que nadie ve.
         const trialPlan = ownerClinical ? "INDIVIDUAL" : "CONSULTORIO";
-        const catalog = await tx.saasPlanConfig.findUnique({ where: { plan: trialPlan }, select: { trialDays: true } });
+        const catalog = await tx.saasPlanConfig.findFirst({
+          where: { plan: trialPlan, isPublic: true },
+          select: { trialDays: true },
+        });
         const sub = initialSubscriptionFor(trialPlan, catalog?.trialDays, new Date());
         const ent = await applyTenantEntitlementsInTx(tx, {
           tenantId: created.tenantId,

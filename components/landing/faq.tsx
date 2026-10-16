@@ -7,6 +7,9 @@ import s from "./faq.module.css";
  * «¿Cómo pago?» solo con `SAAS_BILLING_MODE=manual` (D-VX17): con `off` (default en prod) no se cobra todavía y la
  * pregunta no aplica; el débito automático de Mercado Pago para la suscripción quedó fuera (§20.18), así que la
  * respuesta habla solo del pago manual (PL-F, M8c: comprobante desde Configuración → Facturación).
+ *
+ * «¿Cómo reservan turno mis pacientes?» no nombra Mercado Pago (VX-Z, decisión de Martin): el cobro del turnero entra
+ * a la cuenta MP de la plataforma (`MP_ACCESS_TOKEN`), no a la del consultorio. Vuelve cuando el bloque D lo resuelva.
  */
 export type FaqItem = { q: string; a: string };
 
@@ -25,7 +28,7 @@ export function faqItems({ trialDays, showBilling }: { trialDays: number | null;
     },
     {
       q: "¿Cómo reservan turno mis pacientes?",
-      a: "Desde el link de tu consultorio: eligen profesional, servicio y horario. Si lo activás, pagan con Mercado Pago al reservar.",
+      a: "Desde el link de tu consultorio: eligen profesional, servicio y horario.",
     },
     {
       q: "¿Quién ve la historia clínica?",

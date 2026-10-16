@@ -307,3 +307,11 @@
     align-items: center;
   }
 }
+
+/* [VX-Z FX-auth] Notebook 1366×768 (≈ 650 px útiles con la barra del navegador): con el padding de 24/56 el CTA
+   «Crear cuenta» del signup quedaba bajo el pliegue. Solo en desktop bajo; el layout de < 1024 no cambia. */
+@media (min-width: 1024px) and (max-height: 820px) {
+  .splitMain {
+    padding-block: 8px 24px;
+  }
+}

@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
-import { GoogleIcon } from "@/components/ui/brand-icons";
+import { SocialButtons } from "@/components/auth/social-buttons";
 import { IconCal, IconCheck, IconHeart } from "@/components/ui/icons";
 import { getPortalAuth } from "@/lib/portal";
+import { visibleOAuthProviders } from "@/lib/oauth-providers-public";
 import { PORTAL_HOME, portalPatientCardCopy, portalPlanProgress } from "@/lib/portal-copy";
 import type { PortalPatient } from "@/lib/portal-types";
 import { PortalEmailForm } from "./portal-email-form";
@@ -24,7 +25,9 @@ export default async function PortalHome({
   const auth = await getPortalAuth();
 
   if (!auth.signedIn) {
-    return <PortalSignIn slug={slugParam(searchParams?.c)} />;
+    // VX-Z (D-VX16): Google apagado en Supabase no se ofrece (antes el botón terminaba en `provider_disabled`).
+    const google = (await visibleOAuthProviders()).includes("google");
+    return <PortalSignIn slug={slugParam(searchParams?.c)} google={google} />;
   }
 
   if (auth.patients.length === 0) {
@@ -222,12 +225,14 @@ function PatientCard({ p }: { p: PortalPatient }) {
   );
 }
 
-function PortalSignIn({ slug }: { slug: string | null }) {
+function PortalSignIn({ slug, google }: { slug: string | null; google: boolean }) {
   // IAM-3c: además de Google, «Entrar con tu email» (magic link propio; IAM-D5). El `next` de Google vuelve
   // al consultorio del CTA si vino con `?c=`.
   // VX2-f (D-VX28): copy neutral (sin saber el consultorio no se sabe la vertical: nada de «recuperación» ni «la
   // evolución de tu dolor», que solo vale en Kinesiología) y el botón de Google con la primitiva de auth
-  // (`.k-btn-social` + `GoogleIcon`, la misma del login). La ruta `/api/auth/google` no cambia.
+  // (`.k-btn-social` + `GoogleIcon`, la misma del login).
+  // VX-Z: `SocialButtons` (la misma primitiva del login) postea a la ruta canónica `/api/auth/oauth/google` (C-PL12) en
+  // vez del alias viejo `/api/auth/google`; solo Google (IAM-D5: el portal no ofrece Facebook) y solo si está prendido.
   const next = slug ? `/portal/c/${slug}` : "/portal";
   return (
     <Card glass style={{ padding: "clamp(20px, 5vw, 32px)", display: "flex", flexDirection: "column", gap: 16 }}>
@@ -253,13 +258,12 @@ function PortalSignIn({ slug }: { slug: string | null }) {
         </h1>
         <p style={{ fontSize: 15, color: "var(--navy-500)", margin: 0 }}>{PORTAL_HOME.signInLead}</p>
       </div>
-      <form action={`/api/auth/google?next=${encodeURIComponent(next)}`} method="post">
-        <button type="submit" className="k-btn-social">
-          <GoogleIcon />
-          Continuar con Google
-        </button>
-      </form>
-      <div className="k-divider">o con tu email</div>
+      {google && (
+        <>
+          <SocialButtons providers={["google"]} next={next} />
+          <div className="k-divider">o con tu email</div>
+        </>
+      )}
       <PortalEmailForm slug={slug} />
       <p className="k-hint" style={{ margin: 0, textAlign: "center" }}>
         {PORTAL_HOME.signInFootnote}

@@ -284,6 +284,36 @@ A1.1 los escribió con la expectativa **correcta** (fallaban por la aserción, n
   DELETE/TRUNCATE **también al owner**, ventana de 24 h + 10 min, revisión por trigger, parcial de una viva por turno,
   FKs compuestas. Las notas sembradas se limpian con `deleteTenantDeep` (modo réplica, solo superusuario local).
 
+### Patrones nuevos de VX (cara pública y cimientos visuales, 15/16-oct-2026)
+
+Todos unit (corren en `TZ=UTC npm test`, sin DB ni server) y sobre el **árbol real** de archivos; cada uno falla si
+su alcance queda vacío (anti falso verde).
+- **`tests/unit/public-surface-imports.test.ts`** (C-F3): recorre el grafo de imports real (no un grep plano) desde
+  cada superficie pública de C-F7 (landing, auth, estado, invite, 404, turnero, portal) y falla si alcanza
+  `framer-motion` o una primitiva con motion/provider (`toast`, `modal`, `drawer`, `confirm-dialog`, `UIProviders`).
+- **`tests/unit/public-claims.test.ts`** (§3.4 del brief): lista de claims prohibidos (WhatsApp, Google
+  Calendar, AFIP, AES-256, HIPAA, testimonios, porcentajes, «pantalla de la sala», «Matrícula», IA…; más un caso
+  propio: la landing no promete cobrar turnos con Mercado Pago) sobre los archivos públicos; una
+  excepción se justifica en el código con `// claim-ok: <evidencia archivo:línea>`.
+- **`tests/unit/ui-ratchets.test.ts`** + `ui-ratchets.baseline.json` (C-F5): conteos que **solo bajan** —
+  `<Link>` con `<Button>` adentro, `outline: none`, placeholders demo («Movare»/«Camila»), literales de estado del mapa
+  de F2. Si sube, falla; si baja, imprime el número y el integrador de la ola regraba el JSON (nunca una sesión).
+- **`tests/unit/tokens-contract.test.ts`** (C-F1): los tokens de `:root` existen con su valor y las clases de C-F2
+  los consumen. Complementa `design-tokens.test.ts` (todo `var(--x)` usado está definido; las variables de `next/font`
+  van en su allowlist). `tests/unit/input-placeholder-contrast.test.ts` calcula el contraste AA del placeholder con el
+  valor del token.
+- **`tests/unit/bundle-groups.test.ts`** (C-F6): cada ruta del build cae en un grupo de `scripts/bundle-groups.mjs` y
+  el orden de match es el esperado. El presupuesto en sí lo corta `node scripts/check-bundle-budget.mjs` después de
+  `next build` (bloqueante para public/turnero/portal en CI). `tests/unit/csp-public.test.ts`: CSP sin Google Fonts.
+- **`tests/unit/module-wall-page-cut.test.ts`** (VX-Z B1): todo `page.tsx` bajo un `layout.tsx` con `moduleWall`
+  corta al inicio con `moduleWall(...) !== "ok"` (layout y página corren en paralelo; sin el corte la página consulta y
+  loguea `ForbiddenError` en cada visita al muro).
+- **`tests/unit/codemod-status-colors.test.ts`**: el codemod de F2 es idempotente (segunda corrida = 0 cambios) y
+  respeta sus exclusiones (mails, `next/og`, atributos SVG).
+- **Formularios sin JS:** las pantallas de auth y el portal usan `useFormState` con una server action directa
+  (`components/auth/auth-form-actions.ts`, `app/(portal)/portal/portal-link-action.ts`); el estado se deriva del
+  resultado, así el form funciona antes de hidratar (`tests/unit/auth-form-actions.test.ts`).
+
 ### Build local (`next build`) — por qué con `-v NODE_ENV=production`
 
 `.env.local` define `NODE_ENV`, y `next build` con ese valor falla en el
@@ -390,6 +420,9 @@ Corren en CI **sin levantar DB ni server**, parseando el repo. Sesión `ci-pipel
   `email-match`, `email-confirm-guard` y `actor-practitioner-guard` (ver «Patrones nuevos de IAM»). Faltan como guard
   estático `auth.admin.` solo en el puerto y `auth.getUser()` solo en `getVerifiedSessionUser` (AUDIT
   `guard-auth-admin-y-getuser`, BO).
+- **Guards de la cara pública (VX)** — también en la unit: `public-surface-imports`, `public-claims`, `ui-ratchets`,
+  `tokens-contract`, `bundle-groups`, `module-wall-page-cut` (ver «Patrones nuevos de VX»). El presupuesto de bundle
+  corre después del build (`check-bundle-budget.mjs`).
 
 ---
 

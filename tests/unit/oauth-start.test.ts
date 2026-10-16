@@ -47,7 +47,12 @@ vi.mock("@/lib/supabase/server", () => ({
 import { POST as oauthPOST } from "@/app/api/auth/oauth/[provider]/route";
 import { POST as googlePOST } from "@/app/api/auth/google/route";
 import { __rateLimitInternals } from "@/lib/rate-limit";
-import { __resetOAuthSettingsCacheForTests, OAUTH_PROVIDERS, parseOAuthProvider } from "@/lib/oauth-start";
+import {
+  __resetOAuthSettingsCacheForTests,
+  isProviderEnabled,
+  OAUTH_PROVIDERS,
+  parseOAuthProvider,
+} from "@/lib/oauth-start";
 import { env } from "@/lib/env";
 
 const ORIGIN = new URL(env.NEXT_PUBLIC_APP_URL).origin;
@@ -167,6 +172,25 @@ describe("POST /api/auth/oauth/[provider]", () => {
     __resetOAuthSettingsCacheForTests();
     settings = { status: 503, body: {} };
     expect((await callOAuth("facebook")).headers.get("location")).toContain("provider=facebook");
+  });
+
+  // VX-Z (B5): sin caché negativo, con GoTrue caído o lento cada render del login/signup/turnero volvía a esperar el
+  // timeout de 1,5 s por proveedor (`visibleOAuthProviders` los consulta en serie).
+  it.each([
+    ["red", "throw" as const],
+    ["5xx", { status: 503, body: {} }],
+    ["forma rara", { status: 200, body: { nope: true } }],
+  ])("falla (%s) → null y caché negativo de 15 s: no reconsulta hasta que vence", async (_k, cfg) => {
+    settings = cfg;
+    const t0 = 1_000_000;
+    expect(await isProviderEnabled("google", t0)).toBeNull();
+    expect(await isProviderEnabled("facebook", t0 + 14_999)).toBeNull();
+    expect(settingsHits).toBe(1);
+    // Vencido el caché negativo se vuelve a consultar, y una respuesta buena entra al caché normal de 60 s.
+    settings = { status: 200, body: { external: { google: true, facebook: false } } };
+    expect(await isProviderEnabled("google", t0 + 15_000)).toBe(true);
+    expect(await isProviderEnabled("facebook", t0 + 15_001)).toBe(false);
+    expect(settingsHits).toBe(2);
   });
 
   it("error de Supabase al armar la URL → /login?error=oauth_failed (sin el texto de Supabase)", async () => {

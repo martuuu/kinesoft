@@ -11,6 +11,7 @@ import {
   parsePlanesFilter,
   resolveDisciplineTab,
 } from "@/components/planes/planes-model";
+import { moduleWall } from "@/lib/module-wall";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +39,9 @@ export default async function PlanesDisciplinePage({
   params: { discipline: string };
   searchParams: Record<string, string | string[] | undefined>;
 }) {
+  // VX-Z (B1): el layout y la página se renderizan EN PARALELO; sin el módulo, el layout muestra el muro o redirige,
+  // pero la página igual corría sus queries (y `assertModule` tiraba). Mismo veredicto que el layout (actor cacheado).
+  if ((await moduleWall("planes")) !== "ok") return null;
   const [services, caps] = await Promise.all([listServices(), getCapabilities()]);
   const disciplines = availableDisciplines(services);
   const discipline = resolveDisciplineTab(params.discipline, disciplines);

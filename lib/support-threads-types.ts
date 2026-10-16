@@ -40,6 +40,8 @@ export const LEAD_EMAIL_LIMIT = { limit: 3, windowMs: 24 * 60 * 60_000 } as cons
 export const LEAD_GLOBAL_LIMIT = { limit: 200, windowMs: 24 * 60 * 60_000 } as const;
 /** Un humano no completa el formulario en menos de 3 s; un bot que lo postea directo, sí. */
 export const LEAD_MIN_FILL_MS = 3_000;
+/** Cuánto en el futuro se tolera `startedAt` (reloj del cliente adelantado) antes de tratarlo como bot (VX-Z B7). */
+export const LEAD_MAX_CLOCK_SKEW_MS = 24 * 60 * 60_000;
 
 // ── Copy ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -169,12 +171,15 @@ export function isUnreadForPlatform(lastInboundAt: Date | null, platformReadAt: 
  * manda (VX2-c2 lo tiene que incluir como hidden), así que quien no lo trae está posteando directo a la action y se
  * salteaba el filtro de tiempo. Un `startedAt` en el futuro (reloj del cliente adelantado) NO cuenta como bot:
  * preferimos un spam más a perder un lead real.
+ * VX-Z (B7): pero solo hasta 24 h. Sin tope, un bot que mandaba `startedAt` = año 2100 se salteaba el filtro de tiempo
+ * para siempre; un reloj desfasado de verdad son minutos u horas (zona mal puesta), nunca más de un día.
  */
 export function leadBotVerdict(p: { website: string | null | undefined; startedAt: number | null | undefined; now: number }): "bot" | "ok" {
   if ((p.website ?? "").trim() !== "") return "bot";
   const s = p.startedAt;
   if (typeof s !== "number" || !Number.isFinite(s) || s <= 0) return "bot";
   const elapsed = p.now - s;
+  if (elapsed < -LEAD_MAX_CLOCK_SKEW_MS) return "bot";
   if (elapsed < 0) return "ok";
   return elapsed < LEAD_MIN_FILL_MS ? "bot" : "ok";
 }

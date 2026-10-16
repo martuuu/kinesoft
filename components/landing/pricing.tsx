@@ -11,8 +11,9 @@ import styles from "./pricing.module.css";
  * - Individual, Consultorio y Clínica (los de CTA `signup`) van como tarjetas; Libre NO es tarjeta sino la banda
  *   «¿Hospital o clínica grande? Hablemos» → `#contacto` (D-VX9 / D-VX18), y la banda está siempre, aunque el catálogo
  *   venga sin Libre o vacío.
- * - Precio `null` → «Consultá» sin «por mes» (PL-D19: los precios nacen NULL hasta que Martin los cargue). Nada de
- *   «Precio de ejemplo» (era de la maqueta; lo prohíbe el guard de claims).
+ * - Precio `null` → «Pedinos el precio», link a `#contacto` y SIN el estilo de monto (PL-D19: los precios nacen NULL
+ *   hasta que Martin los cargue). VX-Z: antes iba «Consultá» en el `<strong>` grande del precio y se leía como un
+ *   precio raro, no como algo que se puede pedir. Nada de «Precio de ejemplo» (era de la maqueta; lo prohíbe el guard).
  * - `[]` (la base no respondió en el build ISR, riesgo 5 del brief): sin tarjetas, la banda y «Escribinos y te pasamos
  *   los precios.». No rompe ni muestra tarjetas vacías.
  * - Sin switch de vertical (D-VX15): se listan los bullets de General y, aparte, lo que Kinesiología suma en ese plan.
@@ -45,10 +46,19 @@ function PriceCard({ plan, featured }: { plan: PublicPlan; featured: boolean }) 
         <p className={styles.for}>{plan.limitsLabel}</p>
       </div>
       <div className={styles.priceBlock}>
-        <p className={styles.amount}>
-          <strong>{plan.priceLabel}</strong>
-          {plan.period === "mes" && <span>por mes</span>}
-        </p>
+        {plan.priceCents === null ? (
+          // aria-describedby: los tres links dicen lo mismo; el lector los distingue por el plan (como el CTA).
+          <p className={styles.trial}>
+            <a href="#contacto" className="k-link" aria-describedby={titleId}>
+              Pedinos el precio
+            </a>
+          </p>
+        ) : (
+          <p className={styles.amount}>
+            <strong>{plan.priceLabel}</strong>
+            {plan.period === "mes" && <span>por mes</span>}
+          </p>
+        )}
         {plan.trialDays > 0 && (
           <p className={styles.trial}>
             {plan.trialDays} días gratis, sin medio de pago

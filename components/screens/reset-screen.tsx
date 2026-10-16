@@ -1,15 +1,17 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef } from "react";
+import { useFormState } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AuthShell } from "@/components/auth/auth-shell";
-import { AuthSubmit } from "@/components/auth/auth-submit";
+import { AuthSubmitStatus } from "@/components/auth/auth-submit";
+import { resetFormAction } from "@/components/auth/auth-form-actions";
+import type { ResetFormState } from "@/components/auth/auth-form-state";
 import { ButtonLink } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { PasswordInput } from "@/components/ui/password-input";
 import { IconAlert, IconCheckCircle } from "@/components/ui/icons";
-import { updatePasswordWithRecoverySession } from "@/lib/auth";
 import st from "./auth-screens.module.css";
 
 /**
@@ -22,39 +24,25 @@ import st from "./auth-screens.module.css";
  * VX2-a: AuthShell `centered`, h1 en la card, `Field` + `PasswordInput` con `autocomplete` correcto (la actual es
  * `current-password`, las dos nuevas `new-password`: así el gestor de contraseñas ofrece generar una y guarda la
  * nueva en vez de pisar la vieja).
+ *
+ * VX-Z FX-auth: `useFormState(resetFormAction)` con la action directa (anda sin JS; el «no coinciden» ahora lo chequea
+ * la action, antes vivía en el cliente). Con JS, tras guardar se va solo al panel; sin JS queda el link «Ir a tu panel».
  */
 export function ResetScreen({ mode }: { mode: "recovery" | "change" | "expired" }) {
   const router = useRouter();
-  const [pending, start] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string[] | undefined>>({});
+  const [state, formAction] = useFormState<ResetFormState, FormData>(resetFormAction, null);
+  const done = state?.status === "done";
+  const error = state?.status === "error" ? state.error : null;
+  const fieldErrors = state?.status === "error" ? state.fieldErrors : {};
+  const doneRef = useRef<HTMLDivElement>(null);
 
-  const onSubmit = (formData: FormData) => {
-    if (pending) return;
-    setError(null);
-    setFieldErrors({});
-    const password = String(formData.get("password") ?? "");
-    const confirm = String(formData.get("confirm") ?? "");
-    if (password !== confirm) {
-      setFieldErrors({ confirm: ["Las contraseñas no coinciden."] });
-      return;
-    }
-    start(async () => {
-      const r = await updatePasswordWithRecoverySession({
-        password,
-        currentPassword: mode === "change" ? String(formData.get("currentPassword") ?? "") : "",
-      });
-      if (!r.ok) {
-        setError(r.error);
-        setFieldErrors(r.fieldErrors ?? {});
-        return;
-      }
-      setDone(true);
-      // Pausa breve para que se lea la confirmación; después, al panel.
-      setTimeout(() => router.replace("/dashboard"), 1200);
-    });
-  };
+  useEffect(() => {
+    if (!done) return;
+    doneRef.current?.focus();
+    // Pausa breve para que se lea la confirmación; después, al panel.
+    const t = setTimeout(() => router.replace("/dashboard"), 1200);
+    return () => clearTimeout(t);
+  }, [done, router]);
 
   if (mode === "expired") {
     return (
@@ -93,13 +81,18 @@ export function ResetScreen({ mode }: { mode: "recovery" | "change" | "expired" 
         </div>
 
         {done ? (
-          <div className="k-alert k-alert-success" role="status">
+          <div ref={doneRef} tabIndex={-1} className="k-alert k-alert-success" role="status">
             <IconCheckCircle size={18} />
-            <span>Contraseña actualizada. Te llevamos a tu panel…</span>
+            <span>
+              Contraseña actualizada. Te llevamos a tu panel…{" "}
+              <Link href="/dashboard" className="k-link">
+                Ir a tu panel
+              </Link>
+            </span>
           </div>
         ) : (
           <>
-            <form action={onSubmit} className={st.fields}>
+            <form action={formAction} className={st.fields}>
               {error && (
                 <div className="k-alert" role="alert">
                   <IconAlert size={18} />
@@ -127,7 +120,7 @@ export function ResetScreen({ mode }: { mode: "recovery" | "change" | "expired" 
               <Field id="reset-confirm" label="Confirmar contraseña" error={fieldErrors.confirm?.[0]}>
                 <PasswordInput name="confirm" autoComplete="new-password" required minLength={8} large />
               </Field>
-              <AuthSubmit label="Guardar nueva contraseña" busyLabel="Guardando…" pending={pending} />
+              <AuthSubmitStatus label="Guardar nueva contraseña" busyLabel="Guardando…" />
             </form>
             <p className={st.foot}>
               <Link href="/login" className="k-link">

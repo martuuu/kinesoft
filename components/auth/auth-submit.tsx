@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useFormStatus } from "react-dom";
 import { buttonClassName } from "@/components/ui/button";
 
 /**
@@ -9,7 +10,9 @@ import { buttonClassName } from "@/components/ui/button";
  * Dos usos:
  * - Form nativo (login: `action="/api/auth/sign-in"`): sin `pending`, escucha el `submit` de su form. Así el form
  *   sigue andando sin JavaScript y, con JS, el segundo clic no manda otro POST (el rate limit de login es por IP+email).
- * - Form con server action (signup, forgot, reset): la pantalla le pasa `pending` de su `useTransition`.
+ * - Form con server action vía `useFormState` (signup, forgot, reset; VX-Z FX-auth): `AuthSubmitStatus`, que lee
+ *   `pending` de `useFormStatus` del form que lo contiene. No sirve el listener de `submit` acá: React intercepta el
+ *   envío del form con action y el «enviando» quedaría pegado para siempre.
  *
  * `aria-disabled` y no `disabled` mientras envía: un botón `disabled` pierde el foco en medio del envío y el lector
  * de pantalla no anuncia el cambio de texto. Volver atrás (bfcache) lo devuelve a su estado normal.
@@ -66,4 +69,13 @@ export function AuthSubmit({
       )}
     </button>
   );
+}
+
+/**
+ * [VX-Z FX-auth] `AuthSubmit` para forms con server action directa (`useFormState`): el «enviando» sale de
+ * `useFormStatus`. Separado para que el login (form nativo a una ruta) no dependa del hook.
+ */
+export function AuthSubmitStatus({ label, busyLabel }: { label: string; busyLabel: string }) {
+  const { pending } = useFormStatus();
+  return <AuthSubmit label={label} busyLabel={busyLabel} pending={pending} />;
 }

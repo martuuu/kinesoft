@@ -7,6 +7,7 @@ import { signExerciseMedia } from "@/lib/exercise-media-internal";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { Markdown } from "@/components/ui/markdown";
+import { moduleWall } from "@/lib/module-wall";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,9 @@ export const dynamic = "force-dynamic";
  * when the article / media are empty.
  */
 export default async function Page({ params }: { params: { slug: string } }) {
+  // VX-Z (B1): el layout y la página se renderizan EN PARALELO; sin el módulo, el layout muestra el muro o redirige,
+  // pero la página igual corría sus queries (y `assertModule` tiraba). Mismo veredicto que el layout (actor cacheado).
+  if ((await moduleWall("ejercicios")) !== "ok") return null;
   const ex = await getExercise(params.slug);
   if (!ex) notFound();
 

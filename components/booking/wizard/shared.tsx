@@ -8,10 +8,30 @@
 import type { ReactNode } from "react";
 import s from "../public-booking.module.css";
 
+/**
+ * VX-Z: al avanzar o retroceder, el wizard reemplaza el contenido de la card y el foco quedaba en el botón (o en
+ * `<body>` si el botón se desmontaba): el lector de pantalla no anunciaba el paso nuevo. El título del paso es el
+ * destino del foco (`tabIndex=-1`: enfocable por script, fuera del orden de tab), marcado con `data-step-heading`.
+ */
+export const STEP_HEADING_SELECTOR = "[data-step-heading]";
+
+type Focusable = { focus: (opts?: { preventScroll?: boolean }) => void };
+type HeadingRoot = { querySelector: (sel: string) => Focusable | null };
+
+/** Enfoca el título del paso dentro de `root`. Devuelve si encontró uno (sin título no se mueve nada). */
+export function focusStepHeading(root: HeadingRoot | null): boolean {
+  const h = root?.querySelector(STEP_HEADING_SELECTOR) ?? null;
+  if (!h) return false;
+  h.focus({ preventScroll: false });
+  return true;
+}
+
 export function StepHeader({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <header>
-      <h2 className={`k-display ${s.stepTitle}`}>{title}</h2>
+      <h2 className={`k-display ${s.stepTitle}`} tabIndex={-1} data-step-heading="">
+        {title}
+      </h2>
       <p className={s.stepSubtitle}>{subtitle}</p>
     </header>
   );

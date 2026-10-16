@@ -29,7 +29,7 @@
 | 0 | **Paso 0 + DIR-0 + VX0 + PF-0** | Docs al día; hotfix A del email como nombre (DIR-0); prototipo visual de login y landing en `design_source/vx0/` (no toca la app); diagnóstico de lentitud (H-SLOW) + arreglos rápidos (sesión sin ida y vuelta a Auth, `loading.tsx`, sin doble render) | — |
 | 1 | **PL** Planes, cobros y cuenta | Recorte de auditoría (PL-A), planes Individual/Consultorio/Clínica/Libre en ARS, cupos (Consultorio 5 y Clínica 10 de cualquier tipo) y bajar de plan, Titular y permisos delegables, 2FA opcional por usuario, pagos manuales (sin Mercado Pago, ADR-016) + estado contable, mensajes y leads, alta con Google/Facebook, salas y sala de espera solo en Clínica/Libre, turnero por profesional | **M8** `pl_accounts_billing` |
 | 2 | **EV2** Evoluciones | HC base para todas las verticales: evolución por consulta, 24 h para editar, después enmienda o anulación; nunca se borra ni va al portal | **M9** `clinical_notes` |
-| 3 | **VX** Cara pública | Cimientos (Ola F: tokens, fuentes, `AuthShell` v2, framer fuera del root; F2 codemod de colores) y superficies públicas (VX2: auth, status, landing, turnero, onboarding, portal) | — |
+| 3 | **VX** Cara pública ✅ | Cimientos (Ola F: tokens, fuentes, `AuthShell` v2, framer fuera del root; F2 codemod de colores) y superficies públicas (VX2: auth, status, landing, turnero, onboarding, portal) | — |
 | 4 | **ES4** Portal (P4) | Identidad del portal por `(tenantId, userId)`, turnos y progreso del plan, estado de cuenta, «Mis datos», ejercicios, matriz authz. Sin E2E (al roadmap), sin legacy S25*, sin reset | — |
 | 5 | **PF** Performance + pulido | PF1 bundle + pulido por área (mismo dueño), «sesión→turno»; PF-M índices FK; PF2 una tx por loader y actor memoizado | **M10** `perf_fk_indexes` |
 | 6 | **DIR** Directorio | Consultorios y profesionales públicos con opt-in y consentimiento por persona, SEO con `DIRECTORY_MODE`, deep link al turnero | **M11** `public_directory` |
@@ -75,9 +75,9 @@ o sin turno; 24 h para que el autor la edite, después enmienda o anulación con
 ADR-020). Pestaña «Evoluciones» en el perfil (la curva pasa a «EVA»), fila en el drawer del turno, toast «Cargar
 evolución» al marcar «Atendido» (agenda, Recepción), Seguimiento con «Registrar sesión» + «Cargar evolución»,
 impresión auditada y export del consultorio con HC. Commiteados EV2-0 (`8e3e9f6`), EV2-1 (`5e11c95`), EV2-2
-(`1597903`), EV2-3 (`55042c5`); EV2-Z en el working tree ([QA «EV2»](QA.md), [AUDIT «EV2»](AUDIT.md)). **Prod:** M9
+(`1597903`), EV2-3 (`55042c5`), EV2-Z (`9827545`) ([QA «EV2»](QA.md), [AUDIT «EV2»](AUDIT.md)). **Prod:** M9
 antes del deploy (RUNBOOK «M9 en prod»). Abiertos: a6 (C0, decide Martin), detalle de Seguimiento a 1024 (PF/MB),
-Drawer/Modal sin portal (PF), `updateBooking` en perf (PF), borde de `KindTag` (VX F).
+Drawer/Modal sin portal (PF), `updateBooking` en perf (PF). El borde de `KindTag` lo cerró VX F-b2.
 Decisiones EV2 con default (para Martin; las EV2-D1..D12 son suyas, §20.11):
 - **EV2-D13** un turno ausente tampoco admite evolución (igual que cancelado).
 - **EV2-D14** enmienda: cualquier profesional con escritura sobre el paciente, sin límite de tiempo, solo sobre una
@@ -102,7 +102,41 @@ Decisiones EV2 con default (para Martin; las EV2-D1..D12 son suyas, §20.11):
 - **a6** (abierto, *decide Martin*): un kine que atiende un paciente ajeno sin share no puede cargarle la evolución
   (falla cerrado) pero ve el toast. *Recomendado:* resolverlo en C0 con la visibilidad por registro (EV2-D7).
 
-**Siguiente:** **VX** (cara pública: Ola F + VX2) → ES4 → PF → DIR → MB.
+**VX ✅ (15/16-oct) — Cara pública + cimientos visuales** (§20.7, brief `wip-20/brief-vx.md`), **sin migración**.
+Commiteados Ola F (`f80a6f3`: tokens C-F1, `next/font`, `AuthShell` v2, primitivas, framer fuera del root, presupuestos
+de bundle y CSP sin Google Fonts), F2 (`31fcc91`: codemod de colores de estado, 237 literales exactos a tokens), VX2.1
+(`4203e93`: login C, signup, forgot/reset, páginas de estado, muro de módulo, landing B con precios y contacto) y VX2.2 +
+VX-Z (1) (`30ed858`: turnero, resultados, onboarding con «¿Atendés pacientes?», portal); VX-Z (2) (revisores, 3 fixers,
+integrador) en el working tree. ADR-021 en [ARCHITECTURE.md](ARCHITECTURE.md); QA en [QA «VX»](QA.md); hallazgos en
+[AUDIT «Hallazgos de VX»](AUDIT.md). Bundle bloqueante por grupo: públicas ≤ 120, turnero ≤ 135, portal ≤ 125,
+onboarding ≤ 160 kB gz.
+**Para Martin (decide; default entre paréntesis):**
+- **El cobro del turnero entra a la cuenta MP de la plataforma** (`MP_ACCESS_TOKEN`), no a la del consultorio: viene de
+  antes (bloque D). La landing ya no promete «pagan con Mercado Pago» hasta resolverlo.
+- **Cargar los precios** de los planes en Plataforma → Precios: con `null` la landing muestra «Pedinos el precio».
+- **Alta sin atender** (decisión 24): el Titular que contesta «No atiendo» arranca en prueba **Consultorio** (Individual
+  tiene un solo lugar y no podría sumar a quien atiende). B3: quien diga «No» y después se marque como que atiende
+  conserva esa prueba (rodeo aceptado; se ve en Plataforma).
+- **404 dinámico**: `/_not-found` lee la cookie para el CTA (una verificación JWT local por request) (aceptar).
+- **Facebook**: antes de pasar la CSP a enforce, sumar `web.facebook.com` a `form-action` (B8).
+- **Incidente VX2-c1**: un agente corrió `git rm --cached components/screens/landing-screen.tsx` (prohibido). El efecto
+  fue el mismo que el `git add -A` del commit; queda asentado.
+- Defaults del brief (§1.2), ya aplicados: **D-VX13** `.k-input` 44 px en toda la app y 48 px en auth/landing ·
+  **D-VX14** sin radio de vertical en el signup (lo pide el onboarding) · **D-VX15** sin switch Kine/General en la
+  landing · **D-VX16** el proveedor OAuth apagado no se muestra (login, signup, portal, turnero) · **D-VX17** FAQ «¿Cómo
+  pago?» solo con `SAAS_BILLING_MODE=manual` · **D-VX18** todo CTA de precios va a `/signup` (toda alta nace Individual
+  con prueba) y Libre a `#contacto` · **D-VX19** contacto con consultorio y plan opcionales · **D-VX20** muro con upsell
+  solo para un módulo de plan mayor; módulo de otra vertical → `/dashboard` · **D-VX21** shim de `AuthShell` borrado ·
+  **D-VX22** presupuestos de arriba · **D-VX23** F2 solo igualdades exactas (`#4F8A10`, `#9A5B00` → PF1) · **D-VX24**
+  `next/font/google` self-hosteado · **D-VX25** `lib/brand.ts` (`BRAND_NAME`), sin rename · **D-VX26** sala de espera
+  sin «en vivo» · **D-VX27** ejercicios propios se comparten con el equipo, no con el paciente · **D-VX28** portal solo
+  copy y contenedor (`lib/portal-copy.ts` para ES4) · **D-VX29** landing estática (ISR 1 h) · **D-VX30/31** partición
+  de olas y sesiones.
+- Copy a mirar en el QA: h1 del turnero «Reservá tu turno», «El pago se hace en Mercado Pago», «Consultorio» en vez de
+  «Centro», portal «Recorrido del plan», bullets de cobros unidos en precios, CTA «Crear cuenta» (no «Elegir X»).
+
+**Siguiente:** **ES4** (portal, P4) → PF → DIR → MB. PF1 hereda de VX: bundle del workspace, colores no exactos,
+densidad de `FormField` a 44 px y `note-card` (AUDIT «Hallazgos de VX»).
 
 **Modo de ejecución (decisión 22):** se ejecuta completo, ola por ola, sin frenar: brief con contratos literales →
 sesiones en paralelo con dueño único por archivo → integrador → gate → **commit local** (`git add -A -- . ':!Screenshot*'`,
@@ -245,7 +279,7 @@ Gate de cierre (01-oct): `tsc` 0 · unit 1156/1156 en 51 archivos (UTC y AR) · 
    (`data-api-anon-sin-rls`, [VERTICALES.md §1](VERTICALES.md)).
 2. **Orden de corridas (14-oct, decisión 4 de Martin):** EV0 (✅ `ddfdff3`) → ES2b (✅ `58ec36f`) → ES3 (✅ `ad50059`;
    M3a) → SR (✅ `5811ea2`; M4) → SV (✅ `d70513a`; M5) → **IAM** (✅ en develop; M6) → **BO** (✅ en develop; M7) → **EV1** (✅ en develop, sin migración) →
-   **VX** (siguiente) → **ES4** → DIR, todo en develop con commit de Martin entre corridas. B y SV ya están en prod (migraciones
+   **VX** → **ES4** → DIR (historia: desde el 15-oct manda §20, arriba), todo en develop con commit de Martin entre corridas. B y SV ya están en prod (migraciones
    incrementales del 14-oct, **sin reset ni staging**). Planes sigue [PLANES.md](PLANES.md) tal cual, más las enmiendas de una
    línea de [VERTICALES.md §5](VERTICALES.md) (copiadas al tope de PLANES §10-§12).
    - **ES1 ✅** (`d7ac75f`): fugas E0 cerradas en código, Secretaria, fixes de planes y cimientos. Evidencia en

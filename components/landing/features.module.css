@@ -55,16 +55,17 @@
   flex-wrap: wrap;
 }
 .views li {
+  /* VX-Z: chip chato (sin borde, 24 px, cursor default) para que no se lea como tab ni botón. */
   display: inline-flex;
   align-items: center;
-  height: 32px;
-  padding: 0 12px;
-  border-radius: 999px;
-  background: #fff;
-  border: 1px solid rgba(15, 30, 51, 0.1);
-  font-size: 13px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 6px;
+  background: var(--sky-50);
+  font-size: 12px;
   font-weight: 600;
   color: var(--navy-700);
+  cursor: default;
 }
 .week {
   margin-top: 8px;

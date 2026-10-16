@@ -71,8 +71,16 @@ const KINE_CONSULTORIO_UP: readonly TenantModule[] = ["plantillas", "favoritos",
 /** Clínica / Libre, en las DOS verticales: salas (consultorios físicos) y sala de espera. */
 const CLINICA_UP: readonly TenantModule[] = ["salas", "salaEspera"];
 
-/** Orden de los planes de menor a mayor (para `minimumPlanFor` y las invariantes de monotonía). */
-const PLAN_ORDER: readonly SaasPlan[] = ["INDIVIDUAL", "CONSULTORIO", "CLINICA", "LIBRE"];
+/**
+ * Orden de los planes de menor a mayor (para `minimumPlanFor`, las invariantes de monotonía y el muro de módulo).
+ * Exportado en VX-Z (B2): `lib/module-wall.ts` tenía su propia copia (`PLAN_RANK`) que podía desincronizarse.
+ */
+export const PLAN_ORDER: readonly SaasPlan[] = ["INDIVIDUAL", "CONSULTORIO", "CLINICA", "LIBRE"];
+
+/** Rango del plan en `PLAN_ORDER`. Falla cerrado: un plan desconocido vale 0 (el más chico), igual que `baseModules`. */
+export function planRank(p: SaasPlan): number {
+  return Math.max(0, PLAN_ORDER.indexOf(p));
+}
 
 function baseModules(e: TenantEntitlements): readonly TenantModule[] {
   // Falla cerrado: un plan desconocido (enum nuevo sin actualizar esta matriz, o un valor legado colado por un

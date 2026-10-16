@@ -8,7 +8,10 @@
  *    /dashboard como hoy: no se le vende Kine a un General.
  *
  * El muro es UX, nunca barrera: no abre nada. Cada action del módulo sigue con `assertModule`/`requireModule`, y el
- * layout no se re-ejecuta en cada navegación suave (ver la regla en `lib/authz.ts`).
+ * layout no se re-ejecuta en cada navegación suave (ver la regla en `lib/authz.ts`). Además Next renderiza el layout y
+ * la página EN PARALELO: sin el módulo la página igual correría sus queries (y `assertModule` tiraría `ForbiddenError`
+ * al log en cada visita al muro), así que cada `page.tsx` de un segmento con muro corta al inicio con
+ * `if ((await moduleWall("<módulo>")) !== "ok") return null;` (VX-Z B1; lo exige `tests/unit/module-wall-page-cut.test.ts`).
  *
  * El tenant sale del actor de la sesión (`actor.entitlements`, misma fila de Tenant que `buildActor` ya trae): ningún
  * input del cliente decide el muro.
@@ -18,15 +21,11 @@ import type { SaasPlan } from "@prisma/client";
 import { capabilitiesForActor } from "@/lib/authz";
 import { tryGetActor } from "@/lib/session";
 import type { Capability } from "@/lib/capabilities";
-import { minimumPlanFor, modulesFor, type TenantEntitlements, type TenantModule } from "@/lib/tenant-modules";
+import { minimumPlanFor, modulesFor, planRank, type TenantEntitlements, type TenantModule } from "@/lib/tenant-modules";
 
 /** `canBuy` = el actor puede cambiar el plan (`account.billing`: Titular o «Planes y pagos»). */
 export type ModuleWallBlock = { plan: SaasPlan; canBuy: boolean };
 export type ModuleWallResult = "ok" | "redirect" | ModuleWallBlock;
-
-// Mismo orden que `PLAN_ORDER` de `lib/tenant-modules.ts` (no exportado): solo para decidir si el plan mínimo es
-// realmente SUPERIOR al actual.
-const PLAN_RANK: Record<SaasPlan, number> = { INDIVIDUAL: 0, CONSULTORIO: 1, CLINICA: 2, LIBRE: 3 };
 
 /**
  * Decisión pura (testeable sin sesión). Upsell solo si un plan superior lo desbloquea: si el plan mínimo no es mayor
@@ -40,9 +39,8 @@ export function moduleWallFor(
   if (modulesFor(e).has(m)) return "ok";
   const plan = minimumPlanFor(m, e.vertical);
   if (plan === null) return "redirect";
-  // Plan desconocido = el más chico (falla cerrado, igual que `baseModules`).
-  const current = PLAN_RANK[e.plan] ?? 0;
-  if (PLAN_RANK[plan] <= current) return "redirect";
+  // `planRank` (orden de `lib/tenant-modules.ts`): plan desconocido = el más chico (falla cerrado).
+  if (planRank(plan) <= planRank(e.plan)) return "redirect";
   return { plan, canBuy: caps.has("account.billing") };
 }
 

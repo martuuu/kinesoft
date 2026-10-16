@@ -21,7 +21,8 @@ export function isKinePortal(vertical: TenantVertical): boolean {
 export const PORTAL_HOME = {
   title: "Tus turnos y tu tratamiento, en un solo lugar",
   signInLead: "Entrá para ver tus próximos turnos y tu tratamiento.",
-  signInFootnote: "Usá el mismo email que tiene tu ficha en el consultorio. Nada se publica.",
+  // VX-Z: sin «Nada se publica.» (no decía qué no se publica ni por qué lo preguntaría alguien; sonaba a disclaimer).
+  signInFootnote: "Usá el mismo email que tiene tu ficha en el consultorio.",
   upcomingTitle: "Próximos turnos",
   noUpcoming: "No tenés turnos próximos.",
   bookCta: "Sacar un turno",

@@ -1487,7 +1487,7 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] /plataforma → «Mensajes» (en el nav después de Usuarios): responder → el consultorio recibe «Te respondimos» y ve la respuesta; abrir/cerrar la conversación.
 - [ ] Como soporte dentro del consultorio, la pestaña «Soporte» no deja escribir (aviso de sesión de soporte).
 - [ ] Más de 10 mensajes en una hora por usuario → rebota con el aviso de límite.
-- [ ] Lead (hasta que VX arme el formulario, desde un test o la action): llega «Consulta nueva desde la web» con el mensaje escapado; responder desde Plataforma manda el mail al lead; el honeypot `website` lleno no crea nada.
+- [ ] Lead (desde el formulario «Hablemos» de la landing, `#contacto`): llega «Consulta nueva desde la web» con el mensaje escapado; responder desde Plataforma manda el mail al lead; el honeypot `website` lleno no crea nada.
 
 ### Ingreso con Google y Facebook (PL-2e)
 - [ ] `POST /api/auth/oauth/google?next=/agenda` y `/facebook` llevan al proveedor y vuelven a `next`; `/api/auth/google` sigue andando (portal, turnero).
@@ -1684,3 +1684,71 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] **390**: búsqueda de 16 px (no hace zoom), botones del header de 44 px, tipo de nota de 44 px; el Drawer ocupa la pantalla.
 - [ ] **1024** con sidebar abierto: perfil y editor sin scroll horizontal (el detalle de Seguimiento todavía no es responsive: abierto, PF/MB).
 - [ ] **1366**: la línea de tiempo agrupa nota y sesión del mismo turno.
+
+## VX · Cara pública y cimientos visuales (15/16-oct-2026)
+
+> Ola F (`f80a6f3`), F2 (`31fcc91`), VX2.1 (`4203e93`), VX2.2 + VX-Z (1) (`30ed858`) commiteados; VX-Z (2) sin
+> commitear. **Sin migración.** Con `next build && next start` (no dev: el bundle y el ISR cambian), `TZ=UTC`, en Chrome,
+> Safari y Firefox; turnero y portal además en **iOS Safari real**. Anchos: **360, 390, 768, 1024, 1366×768, 1728**: en
+> todos, sin scroll horizontal. Capturas con «reducir movimiento» (o `?motion=reduce`). Hallazgos en
+> [AUDIT «Hallazgos de VX»](AUDIT.md); decisiones D-VX* en el [ROADMAP «VX ✅»](ROADMAP.md). OAuth de Google real queda
+> para cuando se pushee.
+
+### Transversal (cada superficie de abajo)
+- [ ] **Teclado:** todo se alcanza con Tab en orden visual, con anillo de foco visible (`--focus-ring`); nada atrapa el foco; Escape cierra el menú mobile de la landing.
+- [ ] **Sin JS** (DevTools → deshabilitar JavaScript): login, signup, forgot, reset, email del portal y contacto de la landing envían y muestran el resultado.
+- [ ] **Reducir movimiento** (sistema): el estado final se ve completo desde el primer frame; sin animaciones de entrada.
+- [ ] **Zoom 200 %** a 1280: sin scroll horizontal; nada tapado.
+- [ ] Una sola `h1` por página; controles ≥ 44 px por debajo de 768.
+- [ ] Red (DevTools): ninguna request a `fonts.googleapis.com`/`fonts.gstatic.com`; ninguna superficie pública baja `framer-motion`.
+
+### Landing (`/`)
+- [ ] Skip link «Saltar al contenido» con Tab; menú mobile (< 1024) con `aria-expanded`, Escape y foco que vuelve al botón.
+- [ ] Claims con su evidencia (solo esto se promete): agenda día/semana/lista (`components/agenda/agenda-toolbar.tsx:16-19`) · turnero por link con profesional, servicio y horario, **sin** nombrar Mercado Pago (`components/landing/features.tsx`, `faq.tsx`; AUDIT `turnero-mp-cuenta-plataforma`) · evolución editable 24 h y después enmienda o anulación (`lib/clinical-notes-logic.ts:150`) · copago y obra social (`lib/copago.ts:9-10`) · roles y HC solo para quien atiende (`lib/visibility.ts:143-146`) · salas y sala de espera en Clínica, sin «en vivo» (`lib/tenant-modules.ts:72`) · ejercicios propios para todo el consultorio (`lib/exercises.ts:429-430`).
+- [ ] Sección **«Enfoque exclusivo para kinesiólogos y osteópatas»**, sin switch; línea final a `#funciones` para Clínica general.
+- [ ] Precios: tarjetas desde Plataforma → Precios; con precio sin cargar dice «Pedinos el precio» (link a `#contacto`); Libre como banda «Hablemos». Editar un precio en Plataforma → `/` lo muestra (revalidación del tag).
+- [ ] FAQ «¿Cómo pago?» aparece solo con `SAAS_BILLING_MODE=manual`.
+- [ ] Contacto: enviar sin JS y con JS → «Recibimos tu consulta…» con foco en el mensaje; honeypot lleno → no crea nada; envío inmediato tras cargar (con JS) → rechazado como bot.
+- [ ] El guard de claims (`tests/unit/public-claims.test.ts`) en verde.
+
+### Login (`/login`)
+- [ ] ≥ 1024: panel de producto oscuro + form; < 1024 solo el form; a **1366×768** entra sin scroll; a **390×844** «Ingresar» visible sin scroll.
+- [ ] Botones sociales solo de los proveedores prendidos en Supabase (Facebook apagado → no aparece); postean a `/api/auth/oauth/<p>`.
+- [ ] Credenciales mal → aviso con `role="alert"` y los dos campos con `aria-invalid`; Tab desde el email va a la contraseña (el «¿Olvidaste…?» viene después).
+- [ ] Mostrar/ocultar contraseña: el lector anuncia «Mostrar contraseña, presionado/no presionado».
+- [ ] Sin «Matrícula» ni «Recordarme».
+
+### Signup (`/signup`)
+- [ ] Split a 1200 px; a 390 los sociales visibles sin scroll; a 1366×768 «Crear cuenta» visible o a un scroll corto.
+- [ ] «{N} días gratis» sale del catálogo (Plataforma → Precios, Individual); sin selector de tipo de consultorio.
+- [ ] Contraseña con `new-password` (el gestor ofrece generar); hint «Al menos 8 caracteres, con una letra y un número.».
+- [ ] Al crear: «Revisá tu email» con el foco en el título.
+
+### Forgot / reset / estado / invite / 404
+- [ ] `/forgot` y `/reset` (también `/reset?…expired`) en tarjeta centrada; reset con las dos contraseñas `new-password`.
+- [ ] `/sin-acceso`, `/suspendido` (Titular de 2 consultorios suspendidos), `/cuenta-desactivada`, `/mantenimiento`, `/verificar-acceso`, `/elegir-consultorio`: tarjeta centrada, h1 en la tarjeta, botones como link (un solo `<a>`).
+- [ ] `/invite/<token>`: activar con contraseña nueva; email equivocado; token vencido.
+- [ ] 404 con sesión → «Ir a mi consultorio»; sin sesión → «Ir al inicio» (a 360 y 1366).
+- [ ] `/cuenta/seguridad` y `/plataforma-mfa/verificar` abren sin «useToast must be used inside».
+
+### Muro de módulo
+- [ ] Kine **Individual** entra a `/sala` o a un módulo de plan mayor → muro «{Módulo} está en el plan {Plan}»; Titular ve «Ver planes» (`/configuracion?tab=plan`), el resto «Pedile a quien administra la cuenta…».
+- [ ] Consultorio **General** entra a `/diagnostico` → vuelve a `/dashboard` (no se le vende Kine).
+- [ ] En el muro no salen errores `ForbiddenError` en el log del server (la página corta antes de consultar).
+
+### Turnero y resultados (`/c/<slug>/booking`, `/booking/<id>/{ok,pending,failed}`)
+- [ ] La marca del consultorio adelante; horario real («Lun a vie 8 a 19 · Sáb 9 a 13»), sin franjas no se muestra nada.
+- [ ] Los 3 pasos + resultado a los 6 anchos; al cambiar de paso el foco va al título del paso.
+- [ ] Datos del paciente con autocompletar (nombre, email, teléfono).
+- [ ] «Iniciar sesión» lleva a `/portal`; Google oculto si está apagado.
+- [ ] Resultado ok/pending/failed: sin «te mandamos un email» ni «cancelás gratis»; botones de 44 px.
+
+### Onboarding (`/onboarding`)
+- [ ] Paso **«¿Atendés pacientes?»**: «Sí, atiendo» sigue con «mis horarios»; «No, organizo el consultorio» saltea horarios y termina el alta con prueba del plan **Consultorio** (verificar en Configuración → Plan y uso).
+- [ ] Placeholders neutros (sin «Movare»/«Camila»); «escribinos» con `SupportContact` (mailto real); pasos hechos se anuncian «(completo)».
+- [ ] Sin halos con blur; a 390 el editor de horarios entra sin scroll horizontal.
+
+### Portal (`/portal`)
+- [ ] Copy neutral sin consultorio («Tus turnos y tu tratamiento, en un solo lugar»); «sesión por sesión» y check-in solo en Kinesiología.
+- [ ] «Entrar con tu email» sin JS y con JS → «Revisá tu email» con foco en el título.
+- [ ] «Continuar con Google» solo si Google está prendido; «Mi cuenta» solo con sesión.

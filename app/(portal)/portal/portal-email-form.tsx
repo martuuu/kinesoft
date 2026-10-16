@@ -9,83 +9,38 @@
  * `slug` (opcional) viene de `/portal?c=<slug>` (CTA de `/portal/c/<slug>`): el link vuelve a ese consultorio.
  * VX2-f (D-VX28): `Field` + `.k-input-lg` (C-F2/C-F5, como el login), `autoComplete="email"` e `inputMode` para el
  * teclado del celular, y «Usar otro email» con área táctil de 44 px.
+ * VX-Z FX-portal: `useFormState(portalLinkFormAction)` con la action directa: anda sin JS (antes `onSubmit` +
+ * `preventDefault`; sin JS el form hacía un GET a /portal con el email en la URL y no mandaba nada).
  */
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useFormState, useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { IconArrow } from "@/components/ui/icons";
 import { ResendButton } from "@/components/screens/resend-verification";
+import type { PortalLinkFormState } from "@/components/auth/auth-form-state";
 import { requestPortalLink } from "@/lib/portal-auth";
+import { portalLinkFormAction } from "./portal-link-action";
 
 export function PortalEmailForm({ slug }: { slug: string | null }) {
-  const [pending, start] = useTransition();
-  const [sentTo, setSentTo] = useState<string | null>(null);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [state, formAction] = useFormState<PortalLinkFormState, FormData>(portalLinkFormAction, null);
+  // «Usar otro email» descarta ESTE estado (cada envío trae un objeto nuevo).
+  const [dismissed, setDismissed] = useState<PortalLinkFormState>(null);
+  const sent = state?.status === "sent" && state !== dismissed ? state : null;
+  const error = state?.status === "error" ? state.error : null;
 
-  const send = (email: string) => {
-    const fd = new FormData();
-    fd.set("email", email);
-    if (slug) fd.set("slug", slug);
-    return requestPortalLink(fd);
-  };
-
-  const onSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const email = String(new FormData(e.currentTarget).get("email") ?? "").trim();
-    setError(null);
-    start(async () => {
-      const r = await send(email);
-      if (!r.ok) {
-        setError(r.fieldErrors?.email?.[0] ?? r.error);
-        return;
-      }
-      setMessage(r.data.message);
-      setSentTo(email);
-    });
-  };
-
-  if (sentTo) {
-    return (
-      <div style={{ display: "grid", gap: 10, textAlign: "left" }}>
-        <div className="k-display" style={{ fontSize: 18, fontWeight: 700 }}>
-          Revisá tu email
-        </div>
-        <p role="status" style={{ fontSize: 14, color: "var(--navy-500)", margin: 0, lineHeight: 1.5 }}>
-          {message} Lo mandamos a <strong>{sentTo}</strong>. Si no lo ves, fijate en spam o promociones.
-        </p>
-        <ResendButton
-          label="Reenviar el link"
-          sentCopy={message}
-          startCooling
-          onSend={() => send(sentTo)}
-        />
-        <button
-          type="button"
-          onClick={() => {
-            setSentTo(null);
-            setError(null);
-          }}
-          style={{
-            background: "none",
-            border: 0,
-            padding: 0,
-            minHeight: 44,
-            fontSize: 14,
-            color: "var(--sky-700)",
-            fontWeight: 600,
-            cursor: "pointer",
-            justifySelf: "start",
-          }}
-        >
-          Usar otro email
-        </button>
-      </div>
-    );
+  if (sent) {
+    return <PortalLinkSent email={sent.email} message={sent.message} slug={slug} onBack={() => setDismissed(sent)} />;
   }
 
   return (
-    <form onSubmit={onSubmit} style={{ display: "grid", gap: 10, textAlign: "left" }} noValidate>
+    <form
+      key={state ? state.email : "new"}
+      action={formAction}
+      style={{ display: "grid", gap: 10, textAlign: "left" }}
+      noValidate
+    >
+      {slug && <input type="hidden" name="slug" value={slug} />}
       <Field id="portal-email" label="Tu email" error={error ?? undefined}>
         <input
           className="k-input k-input-lg"
@@ -94,8 +49,8 @@ export function PortalEmailForm({ slug }: { slug: string | null }) {
           inputMode="email"
           autoComplete="email"
           required
+          defaultValue={state?.email ?? ""}
           placeholder="nombre@ejemplo.com"
-          disabled={pending}
         />
       </Field>
       {/* `Field` pinta el error pero no lo anuncia (no es live region): este aviso solo para lector de pantalla
@@ -103,9 +58,82 @@ export function PortalEmailForm({ slug }: { slug: string | null }) {
       <div role="alert" className="k-sr-only">
         {error ?? ""}
       </div>
-      <Button variant="ghost" size="lg" block type="submit" disabled={pending}>
-        {pending ? "Enviando…" : "Mandame un link para entrar"} <IconArrow size={14} />
-      </Button>
+      <PortalLinkSubmit />
     </form>
+  );
+}
+
+/** El botón lee el «enviando» del form (`useFormStatus`): con la action directa no hay `useTransition` que mirar. */
+function PortalLinkSubmit() {
+  const { pending } = useFormStatus();
+  return (
+    <Button
+      variant="ghost"
+      size="lg"
+      block
+      type="submit"
+      aria-disabled={pending || undefined}
+      onClick={(e) => {
+        // `aria-disabled` y no `disabled` (como AuthSubmit): el foco no salta; el segundo clic no manda otro POST.
+        if (pending) e.preventDefault();
+      }}
+    >
+      {pending ? "Enviando…" : "Mandame un link para entrar"} <IconArrow size={14} />
+    </Button>
+  );
+}
+
+/**
+ * «Revisá tu email» (exportado para el render test). VX-Z: el título es una h2 que recibe el foco al aparecer (antes
+ * un <div>: el foco quedaba en el botón que desaparecía y el lector no se enteraba del cambio).
+ */
+export function PortalLinkSent({
+  email,
+  message,
+  slug,
+  onBack,
+}: {
+  email: string;
+  message: string;
+  slug: string | null;
+  onBack: () => void;
+}) {
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    heading.current?.focus();
+  }, []);
+  const resend = () => {
+    const fd = new FormData();
+    fd.set("email", email);
+    if (slug) fd.set("slug", slug);
+    return requestPortalLink(fd);
+  };
+  return (
+    <div style={{ display: "grid", gap: 10, textAlign: "left" }}>
+      <h2 ref={heading} tabIndex={-1} className="k-display" style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>
+        Revisá tu email
+      </h2>
+      <p role="status" style={{ fontSize: 14, color: "var(--navy-500)", margin: 0, lineHeight: 1.5 }}>
+        {message} Lo mandamos a <strong>{email}</strong>. Si no lo ves, fijate en spam o promociones.
+      </p>
+      <ResendButton label="Reenviar el link" sentCopy={message} startCooling onSend={resend} />
+      <button
+        type="button"
+        onClick={onBack}
+        style={{
+          background: "none",
+          border: 0,
+          padding: 0,
+          minHeight: 44,
+          fontSize: 14,
+          color: "var(--sky-700)",
+          fontWeight: 600,
+          cursor: "pointer",
+          justifySelf: "start",
+        }}
+      >
+        Usar otro email
+      </button>
+    </div>
   );
 }

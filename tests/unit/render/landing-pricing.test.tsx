@@ -46,14 +46,21 @@ describe("[VX2-c2] LandingPricing", () => {
     expect(h).toMatch(/<a class="[^"]*k-btn-lime[^"]*" href="#contacto">Escribinos/);
   });
 
-  it("precio null → «Consultá» sin «por mes»; precio cargado → formatARS + «por mes»", () => {
+  it("[VX-Z] precio null → «Pedinos el precio» como link a #contacto, sin estilo de monto ni «por mes»; cargado → formatARS + «por mes»", () => {
     const h = html(catalog((r) => (r.plan === "CONSULTORIO" ? { ...r, priceCents: 6_400_000 } : r)));
-    const ind = text(card(h, "individual")!);
-    expect(ind).toContain("Consultá");
+    const indHtml = card(h, "individual")!;
+    const ind = text(indHtml);
+    expect(indHtml).toMatch(/<a href="#contacto" class="k-link" aria-describedby="plan-individual">Pedinos el precio<\/a>/);
+    expect(ind).not.toContain("Consultá");
     expect(ind).not.toContain("por mes");
-    const cons = text(card(h, "consultorio")!);
+    // Sin el <strong> grande del monto: el link no se lee como un precio.
+    expect(indHtml).not.toMatch(/<strong>/);
+    const consHtml = card(h, "consultorio")!;
+    const cons = text(consHtml);
     expect(cons).toContain(formatARS(6_400_000).replace(/\s+/g, " "));
     expect(cons).toContain("por mes");
+    expect(cons).not.toContain("Pedinos el precio");
+    expect(consHtml).toMatch(/<strong>/);
     expect(text(h)).not.toMatch(/precio de ejemplo/i);
   });
 

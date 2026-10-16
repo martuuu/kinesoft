@@ -69,9 +69,9 @@ describe("[VX F-b2] PasswordInput", () => {
     );
   });
 
-  it("toggle: mostrado = type=text, aria-pressed=true, «Ocultar contraseña»", () => {
+  it("[VX-Z] toggle: mostrado = type=text y aria-pressed=true; el nombre es fijo «Mostrar contraseña» (APG)", () => {
     expect(passwordToggleState(false)).toEqual({ type: "password", pressed: false, label: "Mostrar contraseña" });
-    expect(passwordToggleState(true)).toEqual({ type: "text", pressed: true, label: "Ocultar contraseña" });
+    expect(passwordToggleState(true)).toEqual({ type: "text", pressed: true, label: "Mostrar contraseña" });
   });
 });
 

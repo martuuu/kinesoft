@@ -1,14 +1,18 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
+import { useFormState } from "react-dom";
 import Link from "next/link";
 import { AuthShell } from "@/components/auth/auth-shell";
-import { AuthSubmit } from "@/components/auth/auth-submit";
+import { AuthSubmitStatus } from "@/components/auth/auth-submit";
+import { forgotFormAction } from "@/components/auth/auth-form-actions";
+import type { ForgotFormState } from "@/components/auth/auth-form-state";
 import { Field } from "@/components/ui/field";
 import { IconAlert, IconCheckCircle } from "@/components/ui/icons";
 import { sendPasswordReset } from "@/lib/auth";
 import { FORGOT_SENT } from "@/components/screens/auth-feedback";
 import { ResendButton } from "@/components/screens/resend-verification";
+import { useFocusOnMount } from "@/components/screens/signup-screen";
 import st from "./auth-screens.module.css";
 
 /**
@@ -17,27 +21,15 @@ import st from "./auth-screens.module.css";
  * Volver», que vuelve al form con el email cargado.
  *
  * VX2-a: AuthShell `centered` con la h1 en la card (una sola por página); mismo copy que antes.
+ * VX-Z FX-auth: `useFormState(forgotFormAction)` con la action directa (anda sin JS); «Revisá tu email» es una h2
+ * que recibe el foco al aparecer.
  */
 export function ForgotScreen() {
-  const [pending, start] = useTransition();
-  const [sentTo, setSentTo] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
-  const [error, setError] = useState<string | null>(null);
-
-  const onSubmit = (formData: FormData) => {
-    if (pending) return;
-    setError(null);
-    const email = String(formData.get("email") ?? "").trim();
-    setDraft(email);
-    start(async () => {
-      const r = await sendPasswordReset({ email });
-      if (!r.ok) {
-        setError(r.error);
-        return;
-      }
-      setSentTo(email);
-    });
-  };
+  const [state, formAction] = useFormState<ForgotFormState, FormData>(forgotFormAction, null);
+  const [dismissed, setDismissed] = useState<ForgotFormState>(null);
+  const sent = state?.status === "sent" && state !== dismissed ? state : null;
+  const failed = state?.status === "error" ? state : null;
+  const draft = state?.email ?? "";
 
   return (
     <AuthShell variant="centered" footerLinks={[{ label: "Volver al login", href: "/login" }]}>
@@ -47,15 +39,15 @@ export function ForgotScreen() {
           <p className={st.sub}>Te mandamos por email un link para crear una contraseña nueva. Vence en 1 hora.</p>
         </div>
 
-        {sentTo ? (
-          <ForgotSent email={sentTo} onBack={() => setSentTo(null)} />
+        {sent ? (
+          <ForgotSent email={sent.email} onBack={() => setDismissed(sent)} />
         ) : (
           <>
-            <form action={onSubmit} className={st.fields}>
-              {error && (
+            <form key={state ? draft : "new"} action={formAction} className={st.fields}>
+              {failed && (
                 <div className="k-alert" role="alert">
                   <IconAlert size={18} />
-                  <span>{error}</span>
+                  <span>{failed.error}</span>
                 </div>
               )}
               <Field id="forgot-email" label="Email">
@@ -70,7 +62,7 @@ export function ForgotScreen() {
                   placeholder="nombre@ejemplo.com"
                 />
               </Field>
-              <AuthSubmit label="Enviar link de recuperación" busyLabel="Enviando…" pending={pending} />
+              <AuthSubmitStatus label="Enviar link de recuperación" busyLabel="Enviando…" />
             </form>
             <p className={st.foot}>
               <Link href="/login" className="k-link">
@@ -86,12 +78,16 @@ export function ForgotScreen() {
 
 /** Estado «te mandamos un link» (exportado para el render test). El reenvío arranca con cooldown. */
 export function ForgotSent({ email, onBack }: { email: string; onBack: () => void }) {
+  const heading = useFocusOnMount<HTMLHeadingElement>();
   return (
     <div className={st.stack}>
       <div className="k-alert k-alert-success" role="status">
         <IconCheckCircle size={18} />
         <div className={st.alertBody}>
-          <strong>Revisá tu email</strong>
+          {/* VX-Z: h2 (era un <strong>) con el mismo aspecto, para que el foco caiga en el título del estado nuevo. */}
+          <h2 ref={heading} tabIndex={-1} style={{ margin: 0, font: "inherit", fontWeight: 700 }}>
+            Revisá tu email
+          </h2>
           <span>{FORGOT_SENT}</span>
           <span>
             Lo pediste para <strong>{email}</strong>. ¿No llega? Revisá spam o promociones.

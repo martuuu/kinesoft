@@ -24,6 +24,7 @@
 import { useMemo, useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { KineLogo } from "@/components/ui/kine-logo";
+import { BRAND_NAME } from "@/lib/brand";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
@@ -52,7 +53,8 @@ import {
 } from "@/lib/public-wizard-state";
 import { PractitionerStep } from "./wizard/practitioner-step";
 import { FirstSlotStep } from "./wizard/first-slot-step";
-import { EmptyBox, StepHeader, formatWhenAR } from "./wizard/shared";
+import { EmptyBox, StepHeader, focusStepHeading, formatWhenAR } from "./wizard/shared";
+import { clinicInitials } from "./booking-unavailable";
 import s from "./public-booking.module.css";
 
 export type PatientHC = {
@@ -236,6 +238,16 @@ export function PublicBookingWizard({
   };
   const back = () => setStep((s) => Math.max(firstStep, s - 1) as Step);
 
+  // VX-Z: foco al título del paso nuevo al avanzar/retroceder (también «Elegir profesional» desde el primer turno).
+  // No en el primer render: robarle el foco a quien recién llega rompe el recorrido normal de la página.
+  const cardRef = useRef<HTMLDivElement>(null);
+  const prevStep = useRef(step);
+  useEffect(() => {
+    if (prevStep.current === step) return;
+    prevStep.current = step;
+    focusStepHeading(cardRef.current);
+  }, [step]);
+
   const submit = () => {
     setError(null);
     if (!practitionerId || !serviceId || !slotISO) {
@@ -265,11 +277,12 @@ export function PublicBookingWizard({
 
   return (
     <div className={`k-app ${s.root}`}>
-      <Nav clinic={clinic} session={session} googleEnabled={googleEnabled} />
+      <Nav clinic={clinic} session={session} />
       <Header clinic={clinic} step={step} />
 
       <main className={s.body}>
         <Card glass className={s.card}>
+          <div ref={cardRef} className={s.stepBody}>
           {step === 0 && (
             <PractitionerStep
               clinic={clinic}
@@ -346,6 +359,7 @@ export function PublicBookingWizard({
               error={error}
             />
           )}
+          </div>
 
           <footer className={s.actions}>
             {step > firstStep ? (
@@ -375,6 +389,14 @@ export function PublicBookingWizard({
           location={findLocation(clinic, slotLocationId)}
         />
       </main>
+
+      {/* VX-Z: como `BookingFrame` (booking-unavailable.tsx): adelante la marca del consultorio, KineSoft chico acá. */}
+      <footer className={s.foot}>
+        <span>Turnos online con</span>
+        <Link href="/" className="k-link" aria-label={`${BRAND_NAME}, inicio`}>
+          <KineLogo size={18} />
+        </Link>
+      </footer>
     </div>
   );
 }
@@ -404,26 +426,27 @@ function isHcValid(hc: PatientHC) {
 }
 
 /**
- * OAuth de Google del turnero: form POST a la ruta canónica `/api/auth/oauth/google` (PL-2e; el alias viejo
- * `/api/auth/google` sigue vivo para otros llamadores). POST porque un `<Link>` GET daba 405 (A3b-S-auth).
+ * OAuth de Google del turnero (paso «Tus datos»): form POST a la ruta canónica `/api/auth/oauth/google` (PL-2e; el
+ * alias viejo `/api/auth/google` sigue vivo para otros llamadores). POST porque un `<Link>` GET daba 405 (A3b-S-auth).
  */
 function googleAction(slug: string) {
   return `/api/auth/oauth/google?next=${encodeURIComponent(`/c/${slug}/booking`)}`;
 }
 
-function Nav({
-  clinic,
-  session,
-  googleEnabled,
-}: {
-  clinic: PublicClinic;
-  session: { email: string } | null;
-  googleEnabled: boolean;
-}) {
+function Nav({ clinic, session }: { clinic: PublicClinic; session: { email: string } | null }) {
+  const initials = clinicInitials(clinic.name);
   return (
     <header className={`k-glass ${s.nav}`}>
-      <KineLogo size={24} />
-      <span className={s.navClinic}>· {clinic.name}</span>
+      {/* VX-Z: la marca es la DEL CONSULTORIO (monograma + nombre, como `BookingFrame`): el paciente llegó por su link
+          y no sabe qué es KineSoft. KineSoft queda chico en el pie. El nombre es un `<p>`: la única h1 es la del head. */}
+      <div className={s.navBrand}>
+        {initials && (
+          <span className={s.navMono} aria-hidden="true">
+            {initials}
+          </span>
+        )}
+        <p className={s.navClinic}>{clinic.name}</p>
+      </div>
       <div className={s.navSpacer} />
       {/* VX2-d1 (AUDIT `turnero-texto-fijo-lun-sab`): antes «lun-sáb 8 a 19hs» fijo para todos. Ahora el resumen de
           las franjas reales (`summarizeOpeningHours`); sin franjas vigentes no se muestra nada. */}
@@ -434,22 +457,12 @@ function Nav({
           {clinic.openingSummary}
         </span>
       )}
-      {session ? (
-        <Link href="/portal" className={s.navLink}>
-          Mis turnos
-        </Link>
-      ) : googleEnabled ? (
-        <form action={googleAction(clinic.slug)} method="post" className={s.navForm}>
-          <button type="submit" className={s.pillButton}>
-            Iniciar sesión
-          </button>
-        </form>
-      ) : (
-        // Sin Google: el portal tiene su propio ingreso por email (enlace mágico).
-        <Link href="/portal" className={s.navLink}>
-          Iniciar sesión
-        </Link>
-      )}
+      {/* VX-Z: «Iniciar sesión» lleva SIEMPRE al portal (ingreso por email o Google, con su propio criterio). Antes,
+          con Google prendido, era un form POST directo a Google: quien no tiene Google se quedaba sin entrar, y el
+          mismo texto hacía dos cosas distintas según la config. Google sigue ofrecido en «Tus datos» (`DataStep`). */}
+      <Link href="/portal" className={s.navLink}>
+        {session ? "Mis turnos" : "Iniciar sesión"}
+      </Link>
     </header>
   );
 }

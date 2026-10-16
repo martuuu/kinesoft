@@ -46,7 +46,11 @@ export function LoginScreen({
   const q = next ? `?next=${encodeURIComponent(next)}` : "";
   // Field no recibe `error` (el mensaje está en el aviso, no se repite debajo de cada campo): el input lleva el
   // aria-invalid/aria-errormessage que apunta al aviso. Ver el handoff de field.tsx en el reporte de VX2-a.
-  const invalidProps = fieldsInvalid ? { "aria-invalid": true, "aria-errormessage": LOGIN_ALERT_ID } : {};
+  // VX-Z: además `aria-describedby` al aviso: `aria-errormessage` casi no lo leen los lectores de hoy (NVDA/VoiceOver),
+  // y sin describedby el campo inválido se anunciaba sin decir por qué. Field lo suma a los suyos.
+  const invalidProps = fieldsInvalid
+    ? { "aria-invalid": true, "aria-errormessage": LOGIN_ALERT_ID, "aria-describedby": LOGIN_ALERT_ID }
+    : {};
 
   return (
     <AuthShell variant="product" footerLinks={[{ label: `Conocé ${BRAND_NAME}`, href: "/" }]}>
@@ -95,17 +99,17 @@ export function LoginScreen({
             />
           </Field>
 
-          <Field
-            id="login-password"
-            label="Contraseña"
-            labelAside={
-              <Link href="/forgot" className={`k-link ${st.small}`}>
-                ¿Olvidaste tu contraseña?
-              </Link>
-            }
-          >
-            <PasswordInput name="password" autoComplete="current-password" required large {...invalidProps} />
-          </Field>
+          {/* VX-Z: «¿Olvidaste tu contraseña?» va DESPUÉS del input en el DOM (antes, `labelAside` lo ponía entre el
+              email y la contraseña: con Tab, quien tipeaba el email caía en el link en vez de en la contraseña). Se ve
+              igual: arriba a la derecha, a la altura del label (mismo font-size y line-height que `.k-label`). */}
+          <div style={{ position: "relative" }}>
+            <Field id="login-password" label="Contraseña">
+              <PasswordInput name="password" autoComplete="current-password" required large {...invalidProps} />
+            </Field>
+            <Link href="/forgot" className={`k-link ${st.small}`} style={{ position: "absolute", top: 0, right: 0 }}>
+              ¿Olvidaste tu contraseña?
+            </Link>
+          </div>
 
           <AuthSubmit label="Ingresar" busyLabel="Ingresando…" />
         </form>

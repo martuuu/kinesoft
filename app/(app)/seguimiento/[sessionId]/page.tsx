@@ -10,6 +10,7 @@ import {
   sessionCounterLabel,
   type SessionClinicalNote,
 } from "@/components/seguimiento/seguimiento-model";
+import { moduleWall } from "@/lib/module-wall";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,9 @@ export default async function Page({
   params: { sessionId: string };
   searchParams?: Record<string, string | string[] | undefined>;
 }) {
+  // VX-Z (B1): el layout y la página se renderizan EN PARALELO; sin el módulo, el layout muestra el muro o redirige,
+  // pero la página igual corría sus queries (y `assertModule` tiraba). Mismo veredicto que el layout (actor cacheado).
+  if ((await moduleWall("sesiones")) !== "ok") return null;
   const session = await getSessionDetail(params.sessionId);
   if (!session) notFound();
 

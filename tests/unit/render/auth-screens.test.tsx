@@ -5,7 +5,20 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * (las server actions de `lib/auth`), `next/navigation` y la lectura de sesión de la page de signup.
  * `renderToStaticMarkup` pinta el estado inicial: los estados posteriores al envío («Revisá tu email») se
  * montan directo con sus componentes exportados (`SignupSent`, `ForgotSent`).
+ *
+ * VX-Z FX-auth: signup/forgot/reset usan `useFormState` con la server action directa. El react-dom 18 de node no trae
+ * `useFormState`/`useFormStatus` (en la app los da el React canary de Next): se mockean para inyectar el estado de la
+ * action y capturar QUÉ action recibe el form (tiene que ser la del server, no una función del cliente).
  */
+const form = vi.hoisted(() => ({ state: null as unknown, actions: [] as unknown[] }));
+vi.mock("react-dom", async (orig) => ({
+  ...(await orig<typeof import("react-dom")>()),
+  useFormState: (fn: unknown) => {
+    form.actions.push(fn);
+    return [form.state, "/"];
+  },
+  useFormStatus: () => ({ pending: false, data: null, method: null, action: null }),
+}));
 const nav = { redirects: [] as string[] };
 class RedirectSignal extends Error {}
 vi.mock("next/navigation", () => ({
@@ -45,9 +58,12 @@ import { ForgotScreen, ForgotSent } from "@/components/screens/forgot-screen";
 import { ResetScreen } from "@/components/screens/reset-screen";
 import { ResendVerification } from "@/components/screens/resend-verification";
 import SignupPage from "@/app/(auth)/signup/page";
+import { forgotFormAction, resetFormAction, signupFormAction } from "@/components/auth/auth-form-actions";
 import LoginPage from "@/app/(auth)/login/page";
 
 beforeEach(() => {
+  form.state = null;
+  form.actions = [];
   nav.redirects = [];
   session.user = null;
   ext.providers = ["google", "facebook"];
@@ -166,6 +182,10 @@ describe("[VX2-a] Login: botones sociales", () => {
     expect(html).toContain('<label for="login-email" class="k-label">Email</label>');
     expect(html).toContain('aria-label="Mostrar contraseña"');
     expect(html).toMatch(/<a[^>]*href="\/forgot"[^>]*>¿Olvidaste tu contraseña\?<\/a>/);
+    // VX-Z: el link va DESPUÉS del input de contraseña (y de su mostrar/ocultar) en el orden de Tab.
+    expect(html.indexOf('href="/forgot"')).toBeGreaterThan(html.indexOf('name="password"'));
+    expect(html.indexOf('href="/forgot"')).toBeGreaterThan(html.indexOf('aria-label="Mostrar contraseña"'));
+    expect(html.indexOf('href="/forgot"')).toBeLessThan(html.lastIndexOf('type="submit"'));
     expect(html).toMatch(/<a[^>]*href="\/signup"[^>]*>Creá tu consultorio<\/a>/);
     expect(html).toMatch(/<button type="submit" class="k-btn k-btn-primary k-btn-lg k-btn-block"[^>]*>Ingresar<\/button>/);
     // Sin outline:none inline ni placeholders inventados (ratchets de C-F5).
@@ -194,7 +214,12 @@ describe("[VX2-a] Login: botones sociales", () => {
       const tag = inputTag(html, name);
       expect(tag, name).toContain('aria-invalid="true"');
       expect(tag, name).toContain('aria-errormessage="login-error"');
+      // VX-Z: describedby también (aria-errormessage casi no se anuncia).
+      expect(tag, name).toMatch(/aria-describedby="login-error"/);
     }
+    // Sin error de credenciales, los campos no apuntan al aviso.
+    const clean = renderToStaticMarkup(<LoginScreen />);
+    expect(inputTag(clean, "password")).not.toContain("login-error");
   });
 });
 
@@ -357,5 +382,86 @@ describe("[IAM-2d] ResendVerification (onboarding no verificado)", () => {
     const html = renderToStaticMarkup(<ResendVerification email="ana@x.test" label="Reenviar el email" />);
     expect(html).toMatch(/<button[^>]*type="button"[^>]*>Reenviar el email<\/button>/);
     expect(html).not.toContain("disabled");
+  });
+});
+
+describe("[VX-Z FX-auth] forms con server action directa (andan sin JS) y foco al estado nuevo", () => {
+  const h2Focusable = /<h2[^>]*tabindex="-1"[^>]*>Revisá tu email<\/h2>|<h2 tabindex="-1"[^>]*>Revisá tu email<\/h2>/i;
+
+  it("signup, forgot y reset le pasan a useFormState la action del server (no una función del cliente)", () => {
+    renderToStaticMarkup(<SignupScreen />);
+    renderToStaticMarkup(<ForgotScreen />);
+    renderToStaticMarkup(<ResetScreen mode="recovery" />);
+    expect(form.actions).toEqual([signupFormAction, forgotFormAction, resetFormAction]);
+    for (const html of [
+      renderToStaticMarkup(<SignupScreen />),
+      renderToStaticMarkup(<ForgotScreen />),
+      renderToStaticMarkup(<ResetScreen mode="change" />),
+    ]) {
+      expect(html).toMatch(/<form[^>]*action="\/"/);
+      expect(html).not.toContain("javascript:");
+    }
+  });
+
+  it("signup enviado: h2 «Revisá tu email» enfocable, una sola h1 (la de la página, solo lector)", () => {
+    form.state = {
+      status: "sent",
+      email: "ana@x.test",
+      message: "Te mandamos un email para confirmar tu cuenta.",
+      values: { fullName: "Ana", email: "ana@x.test" },
+    };
+    const html = renderToStaticMarkup(<SignupScreen />);
+    expect(html).toMatch(h2Focusable);
+    expect(h1Count(html)).toBe(1);
+    expect(html).toMatch(/<h1 class="k-sr-only">Creá tu consultorio<\/h1>/);
+    expect(html).toContain("<strong>ana@x.test</strong>");
+    expect(html).not.toContain('name="password"');
+  });
+
+  it("signup con error: aviso y lo tipeado de vuelta en el form (también sin JS)", () => {
+    form.state = {
+      status: "error",
+      error: "Revisá los datos.",
+      fieldErrors: { password: ["Muy corta"] },
+      values: { fullName: "Ana Pérez", email: "ana@x.test" },
+    };
+    const html = renderToStaticMarkup(<SignupScreen />);
+    expect(html).toMatch(/role="alert"[^>]*>.*Revisá los datos\./s);
+    expect(inputTag(html, "fullName")).toContain('value="Ana Pérez"');
+    expect(inputTag(html, "email")).toContain('value="ana@x.test"');
+    expect(html).toContain("Muy corta");
+  });
+
+  it("forgot enviado (por estado): h2 enfocable dentro del aviso; forgot con error: aviso + email", () => {
+    form.state = { status: "sent", email: "ana@x.test" };
+    const sent = renderToStaticMarkup(<ForgotScreen />);
+    expect(sent).toMatch(h2Focusable);
+    expect(h1Count(sent)).toBe(1);
+    form.state = { status: "error", error: "Demasiados intentos.", email: "ana@x.test" };
+    const err = renderToStaticMarkup(<ForgotScreen />);
+    expect(err).toContain("Demasiados intentos.");
+    expect(inputTag(err, "email")).toContain('value="ana@x.test"');
+  });
+
+  it("reset: «no coinciden» bajo el campo; hecho = aviso enfocable con «Ir a tu panel» (sin JS no hay redirect)", () => {
+    form.state = { status: "error", error: null, fieldErrors: { confirm: ["Las contraseñas no coinciden."] } };
+    const err = renderToStaticMarkup(<ResetScreen mode="recovery" />);
+    expect(err).toContain("Las contraseñas no coinciden.");
+    expect(err).not.toContain('class="k-alert" role="alert"');
+    form.state = { status: "done" };
+    const done = renderToStaticMarkup(<ResetScreen mode="recovery" />);
+    expect(done).toMatch(/<div tabindex="-1" class="k-alert k-alert-success" role="status">/i);
+    expect(done).toMatch(/<a[^>]*href="\/dashboard"[^>]*>Ir a tu panel<\/a>/);
+    expect(done).not.toContain('name="password"');
+  });
+});
+
+describe("[VX-Z] signup a 1366×768", () => {
+  it("desktop bajo (≥ 1024 y ≤ 820 de alto): el split achica su padding para que «Crear cuenta» quede arriba del pliegue", async () => {
+    const { readFileSync } = await import("node:fs");
+    const css = readFileSync("components/auth/auth-shell.module.css", "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(css).toMatch(
+      /@media \(min-width: 1024px\) and \(max-height: 820px\) \{\s*\.splitMain \{\s*padding-block: 8px 24px;\s*\}\s*\}/
+    );
   });
 });

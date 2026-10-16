@@ -15,12 +15,20 @@ export type PasswordInputProps = Omit<InputHTMLAttributes<HTMLInputElement>, "ty
   large?: boolean;
 };
 
-/** Estado → atributos del input y del botón. Puro y exportado para testearlo sin DOM (los render tests son SSR). */
+/**
+ * Estado → atributos del input y del botón. Puro y exportado para testearlo sin DOM (los render tests son SSR).
+ *
+ * VX-Z: el `aria-label` es FIJO («Mostrar contraseña») y el estado lo dice `aria-pressed`. Antes cambiaba a «Ocultar
+ * contraseña» además de `aria-pressed=true`: un toggle con nombre que cambia Y estado pressed se anuncia «Ocultar
+ * contraseña, presionado», que dice lo contrario de lo que pasa (patrón de botón toggle de WAI-ARIA APG).
+ */
+export const PASSWORD_TOGGLE_LABEL = "Mostrar contraseña";
+
 export function passwordToggleState(shown: boolean) {
   return {
     type: shown ? "text" : "password",
     pressed: shown,
-    label: shown ? "Ocultar contraseña" : "Mostrar contraseña",
+    label: PASSWORD_TOGGLE_LABEL,
   } as const;
 }
 

@@ -1,13 +1,16 @@
 import Link from "next/link";
 import { KineLogo } from "@/components/ui/kine-logo";
 import { SupportContact } from "@/components/ui/support-contact";
+import { supportEmail } from "@/lib/support-contact";
 import { BRAND_NAME } from "@/lib/brand";
 import { LANDING_NAV } from "./site-header";
 import s from "./site-footer.module.css";
 
 /**
  * [VX2-c1] Footer (brief VX §3.1). Repite las anclas del header: sin JS el menú mobile no abre, y acá quedan a mano.
- * El contacto de soporte sale de `SupportContact` (mailto si hay `NEXT_PUBLIC_SUPPORT_EMAIL`, texto neutro si no).
+ * El contacto de soporte sale de `SupportContact` (mailto si hay `NEXT_PUBLIC_SUPPORT_EMAIL`). Sin email (VX-Z): el
+ * texto neutro de `SupportContact` («Escribile al equipo de KineSoft») dejaba al visitante sin a dónde ir, y en la
+ * landing el formulario de `#contacto` está en la misma página: «¿Dudas? Escribinos.» con link ahí.
  */
 const LINKS = [
   ...LANDING_NAV,
@@ -16,7 +19,7 @@ const LINKS = [
   { href: "/signup", label: "Crear cuenta" },
 ];
 
-export function SiteFooter() {
+export function SiteFooter({ email = supportEmail() }: { email?: string | null } = {}) {
   return (
     <footer className={s.footer}>
       <div className="k-container">
@@ -33,7 +36,15 @@ export function SiteFooter() {
               kinesiología.
             </p>
             <p className={s.blurb}>
-              ¿Dudas? <SupportContact capital subject={`Consulta desde la web de ${BRAND_NAME}`} />.
+              ¿Dudas?{" "}
+              {email ? (
+                <SupportContact capital email={email} subject={`Consulta desde la web de ${BRAND_NAME}`} />
+              ) : (
+                <a href="#contacto" className="k-link">
+                  Escribinos
+                </a>
+              )}
+              .
             </p>
           </div>
           <nav aria-label="Pie de página">

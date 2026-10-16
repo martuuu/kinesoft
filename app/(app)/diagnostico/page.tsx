@@ -5,6 +5,7 @@ import { parseDiagnosisDeepLink } from "@/lib/plans-deeplink";
 import { DiagnosticoScreen } from "@/components/screens/diagnostico-screen";
 import { DiagnosticoWizard } from "@/components/screens/diagnostico-wizard";
 import type { DiagnosisDoor } from "@/components/diagnostico/assign-plan-modal";
+import { moduleWall } from "@/lib/module-wall";
 
 export const metadata = { title: "Diagnóstico · KineSoft" };
 export const dynamic = "force-dynamic";
@@ -27,6 +28,9 @@ export default async function DiagnosticoPage({
 }: {
   searchParams: Record<string, string | string[] | undefined>;
 }) {
+  // VX-Z (B1): el layout y la página se renderizan EN PARALELO; sin el módulo, el layout muestra el muro o redirige,
+  // pero la página igual corría sus queries (y `assertModule` tiraba). Mismo veredicto que el layout (actor cacheado).
+  if ((await moduleWall("diagnostico")) !== "ok") return null;
   const link = parseDiagnosisDeepLink(searchParams);
   const [catalog, caps, named] = await Promise.all([
     loadCatalog(),

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { IconBell, IconCheck, IconHome, IconLogout, IconSettings, IconX } from "@/components/ui/icons";
+import { IconBell, IconCheck, IconHome, IconLogout, IconSettings, IconShield, IconX } from "@/components/ui/icons";
 import { updateUserPreferences } from "@/lib/preferences";
 import {
   effectivePinnedKpis,
@@ -181,7 +181,7 @@ export function ProfileMenu({
               textDecoration: "none",
             }}
           >
-            <IconCheck size={14} /> Seguridad de la cuenta
+            <IconShield size={14} /> Seguridad de la cuenta
           </a>
           <a
             href={SUPPORT_HELP_HREF}

@@ -22,9 +22,32 @@
   gap: var(--space-3);
   flex-wrap: wrap;
 }
+/* VX-Z: marca del consultorio adelante (monograma + nombre), como `BookingFrame` de booking-unavailable.tsx. */
+.navBrand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.navMono {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sky-700);
+  color: #fff;
+  font-weight: 700;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.02em;
+}
 .navClinic {
+  margin: 0;
   font-size: var(--fs-sm);
-  color: var(--navy-500);
+  font-weight: 700;
+  color: var(--navy-900);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -58,7 +81,8 @@
   margin: 0;
 }
 .pillButton {
-  min-height: 40px;
+  /* VX-Z: 44 px de objetivo táctil (WCAG 2.5.5 / criterio §5), como `.navLink`. */
+  min-height: 44px;
   padding: 0 var(--space-4);
   border-radius: 999px;
   background: #fff;
@@ -512,6 +536,26 @@
   font-size: 13px;
   color: var(--navy-500);
   margin: 6px 0 0;
+}
+
+/* VX-Z: contenedor del paso (destino del foco al cambiar de paso, ver `focusStepHeading`); no agrega caja. */
+.stepBody {
+  display: contents;
+}
+/* El título del paso recibe foco por script (tabIndex=-1): se ve el anillo solo con teclado. */
+.stepTitle:focus:not(:focus-visible) {
+  outline: 0;
+}
+
+/* VX-Z: KineSoft chico en el pie (la marca de arriba es la del consultorio), como `BookingFrame`. */
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding-block: 8px 24px;
+  font-size: var(--fs-xs);
+  color: var(--navy-500);
 }
 
 /* ── Breakpoints ────────────────────────────────────────────── */

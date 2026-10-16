@@ -1,16 +1,17 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useFormState } from "react-dom";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { AuthShell } from "@/components/auth/auth-shell";
 import { SocialButtons } from "@/components/auth/social-buttons";
-import { AuthSubmit } from "@/components/auth/auth-submit";
+import { AuthSubmitStatus } from "@/components/auth/auth-submit";
+import { signupFormAction } from "@/components/auth/auth-form-actions";
+import type { SignupFormState } from "@/components/auth/auth-form-state";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { PasswordInput } from "@/components/ui/password-input";
 import { IconAlert, IconArrow, IconCheckCircle } from "@/components/ui/icons";
-import { signUpPractitioner } from "@/lib/auth";
 import type { OAuthProvider } from "@/lib/oauth-start";
 import { PLAN_DEFAULTS } from "@/lib/saas-plans-logic";
 import { signupTrialCopy } from "@/components/screens/auth-feedback";
@@ -22,13 +23,19 @@ import st from "./auth-screens.module.css";
  * `/onboarding` DESPUÉS de verificar el email (antes se creaba todo acá, sin verificar nada — H5).
  *
  * IAM-2d: ya no hay modo «unión por invitación» (la page manda `?invite=` a `/invite/<token>`). Si igual la
- * action devuelve `redirectTo` (contrato de IAM-2c: solo con invitación), se sigue ese destino y NO se
- * muestra «te mandamos un email»: ese era el bug del QA del 14-oct (§19.1 #4), la pantalla prometía un mail
+ * action devuelve `redirectTo` (contrato de IAM-2c: solo con invitación), `signupFormAction` hace el redirect y NO
+ * se muestra «te mandamos un email»: ese era el bug del QA del 14-oct (§19.1 #4), la pantalla prometía un mail
  * que nunca salía.
  *
  * VX2-a (`design_source/vx0/signup.html`): AuthShell `split` (intro + card + puntos). Sin el radio «Tu consultorio
  * es de» del prototipo (D-VX14): la vertical se elige en el paso 1 del onboarding y el alta con Google/Facebook no
  * pasaría por ese radio. Los días de prueba (`trialDays`) salen del catálogo público (los lee la page).
+ *
+ * VX-Z FX-auth: `useFormState(signupFormAction)` con la action directa, así el alta anda sin JS (antes el form
+ * llamaba a la action desde una función del cliente y sin JS el botón no hacía nada). Lo tipeado vuelve en el
+ * estado (`values`) para repoblar el form tras un error o un «Volver». En «Revisá tu email» el foco va a la h2 del
+ * estado nuevo (si no, el foco queda en un botón que ya no existe y el lector no se entera del cambio); la h1 de la
+ * página sigue siendo «Creá tu consultorio» (visible solo para lector en ese estado).
  */
 export function SignupScreen({
   assisted,
@@ -39,13 +46,9 @@ export function SignupScreen({
   providers?: readonly OAuthProvider[];
   trialDays?: number;
 } = {}) {
-  const router = useRouter();
-  const [pending, start] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string[] | undefined>>({});
-  const [sentTo, setSentTo] = useState<{ email: string; message: string } | null>(null);
-  // Lo tipeado, para que «¿Email equivocado? Volver» no obligue a escribir todo de nuevo.
-  const [draft, setDraft] = useState({ fullName: "", email: "" });
+  const [state, formAction] = useFormState<SignupFormState, FormData>(signupFormAction, null);
+  // «¿Email equivocado? Volver» descarta ESTE estado (cada envío trae un objeto nuevo) sin perder lo tipeado.
+  const [dismissed, setDismissed] = useState<SignupFormState>(null);
 
   if (assisted) {
     // BO-Z (BO-D11): sin form ni sociales (el server rechaza el alta igual): una card centrada con el canal.
@@ -57,33 +60,10 @@ export function SignupScreen({
   }
 
   const copy = signupTrialCopy(trialDays);
-
-  const onSubmit = (formData: FormData) => {
-    if (pending) return;
-    setError(null);
-    setFieldErrors({});
-    const fullName = String(formData.get("fullName") ?? "");
-    const email = String(formData.get("email") ?? "");
-    setDraft({ fullName, email });
-    start(async () => {
-      const r = await signUpPractitioner({
-        fullName,
-        email,
-        password: String(formData.get("password") ?? ""),
-        inviteToken: "",
-      });
-      if (!r.ok) {
-        setError(r.error);
-        setFieldErrors(r.fieldErrors ?? {});
-        return;
-      }
-      if (r.data.redirectTo) {
-        router.replace(r.data.redirectTo);
-        return;
-      }
-      setSentTo({ email: r.data.email, message: r.data.message });
-    });
-  };
+  const sent = state?.status === "sent" && state !== dismissed ? state : null;
+  const failed = state?.status === "error" ? state : null;
+  const draft = state?.values ?? { fullName: "", email: "" };
+  const fieldErrors = failed?.fieldErrors ?? {};
 
   return (
     <AuthShell
@@ -95,15 +75,10 @@ export function SignupScreen({
       aside={<SignupPoints firstPoint={copy.firstPoint} />}
     >
       <div className={st.stack} data-screen-label="Signup">
-        {sentTo ? (
+        {sent ? (
           <>
-            <div className={st.head}>
-              <h1 className={st.title}>Revisá tu email</h1>
-              <p className={st.sub}>
-                Abrí el link del email para confirmar tu cuenta. Después cargás los datos de tu consultorio.
-              </p>
-            </div>
-            <SignupSent email={sentTo.email} message={sentTo.message} onBack={() => setSentTo(null)} />
+            <h1 className="k-sr-only">Creá tu consultorio</h1>
+            <SignupSent email={sent.email} message={sent.message} onBack={() => setDismissed(sent)} />
           </>
         ) : (
           <>
@@ -120,11 +95,12 @@ export function SignupScreen({
               </>
             )}
 
-            <form action={onSubmit} className={st.fields}>
-              {error && (
+            {/* `key`: tras un error o un «Volver» el form se vuelve a montar con lo tipeado como defaultValue. */}
+            <form key={state ? draft.email + draft.fullName : "new"} action={formAction} className={st.fields}>
+              {failed && (
                 <div className="k-alert" role="alert">
                   <IconAlert size={18} />
-                  <span>{error}</span>
+                  <span>{failed.error}</span>
                 </div>
               )}
               <Field id="signup-name" label="Nombre y apellido" error={fieldErrors.fullName?.[0]}>
@@ -162,7 +138,7 @@ export function SignupScreen({
                 <PasswordInput name="password" autoComplete="new-password" required minLength={8} large />
               </Field>
 
-              <AuthSubmit label="Crear cuenta" busyLabel="Creando tu cuenta…" pending={pending} />
+              <AuthSubmitStatus label="Crear cuenta" busyLabel="Creando tu cuenta…" />
             </form>
 
             <p className={st.foot}>
@@ -251,8 +227,17 @@ export function SignupAssisted({ message, mailto }: { message: string; mailto: s
  * confirmada no manda nada y la respuesta es la misma; por eso queda el texto de «si ya tenías cuenta».
  */
 export function SignupSent({ email, message, onBack }: { email: string; message: string; onBack: () => void }) {
+  const heading = useFocusOnMount<HTMLHeadingElement>();
   return (
     <div className={st.stack}>
+      <div className={st.head}>
+        <h2 ref={heading} tabIndex={-1} className={st.title}>
+          Revisá tu email
+        </h2>
+        <p className={st.sub}>
+          Abrí el link del email para confirmar tu cuenta. Después cargás los datos de tu consultorio.
+        </p>
+      </div>
       <div className="k-alert k-alert-success" role="status">
         <IconCheckCircle size={18} />
         <div className={st.alertBody}>
@@ -283,4 +268,16 @@ export function SignupSent({ email, message, onBack }: { email: string; message:
       </p>
     </div>
   );
+}
+
+/**
+ * [VX-Z FX-auth] Foco al heading del estado nuevo al montarlo (`tabIndex=-1`: enfocable por script, fuera del tab).
+ * Exportado para «te mandamos un link» de /forgot.
+ */
+export function useFocusOnMount<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+  useEffect(() => {
+    ref.current?.focus();
+  }, []);
+  return ref;
 }

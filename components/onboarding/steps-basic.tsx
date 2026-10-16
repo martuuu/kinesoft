@@ -57,7 +57,10 @@ const CLINICAL_OPTIONS: ReadonlyArray<{ value: boolean; label: string }> = [
   { value: false, label: "No, organizo el consultorio" },
 ];
 export const OWNER_CLINICAL_HELP =
-  "Si no atendés, no vas a tener agenda propia ni ver historias clínicas. Lo podés cambiar después desde Configuración.";
+  "Si no atendés, no vas a tener agenda propia ni ver historias clínicas. Lo podés cambiar después desde Configuración. " +
+  // VX-Z (B4): el alta de un Titular que no atiende arranca la prueba de CONSULTORIO (un Individual sin nadie que
+  // atienda no sirve); sin decirlo, el cambio de plan aparecía sin explicación.
+  "Si no atendés, arrancás con la prueba del plan Consultorio para sumar a quienes atienden.";
 
 /**
  * Lo que el paso Consultorio le manda a `saveOnboardingClinic`. Exportado para el render test (el submit no se puede

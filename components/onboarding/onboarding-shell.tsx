@@ -54,7 +54,11 @@ export function OnboardingShell({
                     <span className={`${s.dot} ${active ? s.dotActive : done ? s.dotDone : ""}`}>
                       {done ? <IconCheck size={12} stroke={3} /> : i + 1}
                     </span>
-                    <span>{st.label}</span>
+                    <span>
+                      {st.label}
+                      {/* VX-Z: el tilde es solo visual; el lector oye «Consultorio (completo)». */}
+                      {done && <span className="k-sr-only"> (completo)</span>}
+                    </span>
                   </>
                 );
                 const cls = `${s.railItem} ${active ? s.railItemActive : ""}`;

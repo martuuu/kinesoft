@@ -1363,6 +1363,35 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
   da de baja lógica. Los objetos que Prisma no expresa (parcial, FKs compuestas, CHECKs, triggers, policies) son drift
   aceptado: no se borran si `migrate diff` lo propone. AUDIT §5.51-55.
 
+### ADR-021 — Cimientos visuales y superficies públicas livianas (status: ACCEPTED, VX, 15/16-oct-2026)
+
+- **Contexto.** Antes de VX la cara pública cargaba framer-motion (~35 kB gz) en todas las rutas porque `UIProviders`
+  vivía en el root (H-BUNDLE), las fuentes iban por `<link>` bloqueante a Google, los colores de estado eran literales
+  sueltos (157 `#9F1F1F`) y el login/landing tenían layout propio y claims sin respaldo (H-LOGIN, H-LAND).
+- **Decisión.**
+  - **Tokens (C-F1, `app/globals.css` `:root`):** fuentes `--font-sans`/`--font-mono` sobre las variables de
+    `next/font` (`lib/fonts.ts`, self-hosteadas en el build, cero requests a Google; la CSP ya no las permite), estados
+    `--danger-*`/`--warn-*`/`--success-*`, foco global `--focus-ring`, `.k-input` 44 px (48 en auth/landing, D-VX13). F2
+    reemplazó solo igualdades exactas; lo no exacto queda para PF1. `tests/unit/tokens-contract.test.ts` fija el
+    contrato.
+  - **Providers fuera del root (C-F3):** `app/layout.tsx` no monta `UIProviders` ni framer. Los montan solo los layouts
+    que usan toast/confirm/modal/drawer: `(app)`, `(platform)`, `onboarding`, `cuenta`, `plataforma-mfa`. Las
+    superficies públicas (C-F7: landing, auth, estado, invite, 404, turnero, portal) no importan framer ni las
+    primitivas con motion; lo verifica `tests/unit/public-surface-imports.test.ts` sobre el grafo de imports real.
+  - **Presupuesto de bundle bloqueante por grupo (C-F6, `scripts/bundle-groups.mjs`):** públicas ≤ 120, turnero ≤ 135,
+    portal ≤ 125 kB gz (+ no más de 10 % sobre baseline) cortan CI; onboarding (160), Plataforma y workspace (180) se
+    reportan hasta PF1. Baseline en `scripts/bundle-baseline.json`, solo se regraba hacia abajo salvo decisión.
+  - **`AuthShell` v2 (C-F4)** con variantes `product` (login), `split` (signup) y `centered` (estado, forgot/reset,
+    invite); el shim viejo `components/screens/auth-shell.tsx` se borró.
+  - **Muro de módulo (D-VX20, `lib/module-wall.ts`):** un módulo de plan mayor muestra `AccessWall` con upsell; uno que
+    no existe en la vertical redirige a `/dashboard`. El tenant sale del actor. Como Next renderiza layout y página en
+    paralelo, cada `page.tsx` con muro **corta al inicio** (`if ((await moduleWall(m)) !== "ok") return null;`, guard
+    `module-wall-page-cut`). Es UX: la barrera sigue siendo `assertModule` en cada action. `guardModuleSegment`
+    (`lib/authz.ts`) queda sin llamadores de producción (solo su test de integración) hasta su retiro.
+- **Consecuencias.** Una pantalla nueva fuera de esos layouts que use `useToast`/`useConfirm` tira en runtime: hay que
+  montarle el provider en su layout. Sumar una dependencia pesada a una superficie pública rompe CI. Los mails y
+  `next/og` siguen con hex literales (no leen variables CSS).
+
 ## Cache & cookies (what is implemented — updated 30-sep-2026)
 
 **Data cache** — `unstable_cache` in 9 loaders, **every key carries the

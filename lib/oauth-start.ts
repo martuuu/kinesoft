@@ -11,7 +11,7 @@ import { isAllowedOrigin, safeNext } from "@/lib/safe-next";
  * PL-2e (C-PL12, plan §20.5.8) · arranque común del login/alta con un proveedor OAuth de Supabase.
  *
  * Lo usan `POST /api/auth/oauth/[provider]` (Google y Facebook, login y signup de VX) y el alias viejo
- * `POST /api/auth/google` (portal del paciente y turnero público). Antes la lógica vivía solo en la ruta de
+ * `POST /api/auth/google` (sin llamadores desde VX-Z; queda por páginas cacheadas). Antes la lógica vivía solo en la ruta de
  * Google; al sumar Facebook se movió acá para que las dos rutas tengan exactamente los mismos controles:
  *   - allowlist de proveedores (`OAUTH_PROVIDERS`): un `[provider]` cualquiera nunca llega a Supabase;
  *   - Origin propio (login CSRF: un sitio ajeno no puede arrancar un login a una cuenta suya);
@@ -51,12 +51,25 @@ export function oauthBackToLogin(req: Request, error: OAuthStartError, next: str
  * Cache en memoria 60 s por instancia (la config cambia a mano, rara vez). Si la consulta falla (red, timeout,
  * forma rara) devuelve `null` = no se sabe y el login sigue: es una comodidad de UX, no un control de seguridad,
  * y un Supabase caído hace fallar el login de todos modos.
+ *
+ * Caché negativo de 15 s (VX-Z B5): un fallo también se recuerda, y mientras dura se devuelve `null` sin volver a
+ * consultar. Sin él, con GoTrue caído o lento cada render del login/signup/turnero esperaba de nuevo el timeout de
+ * 1,5 s por proveedor (`visibleOAuthProviders` los consulta en serie). Más corto que el positivo para que, cuando
+ * GoTrue vuelve, el apagado se note rápido.
  */
 const SETTINGS_TTL_MS = 60_000;
+const SETTINGS_FAIL_TTL_MS = 15_000;
 let settingsCache: { at: number; external: Record<string, boolean> } | null = null;
+let settingsFailedAt: number | null = null;
+
+function settingsFailed(now: number): null {
+  settingsFailedAt = now;
+  return null;
+}
 
 export async function isProviderEnabled(provider: OAuthProvider, now = Date.now()): Promise<boolean | null> {
   if (settingsCache && now - settingsCache.at < SETTINGS_TTL_MS) return settingsCache.external[provider] === true;
+  if (settingsFailedAt !== null && now - settingsFailedAt < SETTINGS_FAIL_TTL_MS) return null;
   const base = env.NEXT_PUBLIC_SUPABASE_URL;
   const key = env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!base || !key) return null;
@@ -68,27 +81,29 @@ export async function isProviderEnabled(provider: OAuthProvider, now = Date.now(
     });
     if (!res.ok) {
       logger.warn("auth.oauth.settings_failed", { status: res.status });
-      return null;
+      return settingsFailed(now);
     }
     const body = (await res.json()) as { external?: unknown };
     const ext = body?.external;
     if (!ext || typeof ext !== "object") {
       logger.warn("auth.oauth.settings_failed", { status: res.status, reason: "shape" });
-      return null;
+      return settingsFailed(now);
     }
     const external: Record<string, boolean> = {};
     for (const [k, v] of Object.entries(ext as Record<string, unknown>)) external[k] = v === true;
     settingsCache = { at: now, external };
+    settingsFailedAt = null;
     return external[provider] === true;
   } catch (err) {
     logger.warn("auth.oauth.settings_failed", { message: err instanceof Error ? err.message : "unknown" });
-    return null;
+    return settingsFailed(now);
   }
 }
 
-/** Solo tests: vacía la cache de `/auth/v1/settings`. */
+/** Solo tests: vacía la cache de `/auth/v1/settings` (la positiva y la negativa). */
 export function __resetOAuthSettingsCacheForTests(): void {
   settingsCache = null;
+  settingsFailedAt = null;
 }
 
 // ── Arranque ─────────────────────────────────────────────────────────────

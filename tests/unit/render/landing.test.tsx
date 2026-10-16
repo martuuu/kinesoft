@@ -29,6 +29,9 @@ vi.mock("@/components/landing/contact", () => ({
 
 import HomePage, { metadata, revalidate } from "@/app/page";
 import { faqItems } from "@/components/landing/faq";
+import { SiteFooter } from "@/components/landing/site-footer";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { BRAND_NAME } from "@/lib/brand";
 
 function plan(p: PublicPlan["plan"], trialDays: number): PublicPlan {
@@ -189,6 +192,40 @@ describe("[VX2-c1] landing", () => {
     expect(html).not.toMatch(/<a[^>]*>(?:(?!<\/a>).)*<button/s);
     expect(html).toMatch(/<a[^>]*href="\/signup"[^>]*>Probá 14 días gratis<\/a>/);
     expect(html).toMatch(/<a[^>]*href="\/login"[^>]*>Ingresar<\/a>/);
+  });
+
+  it("[VX-Z] turnos online sin Mercado Pago: el cobro del turnero entra a la cuenta de la plataforma, no a la del consultorio", async () => {
+    const html = await render();
+    expect(html).not.toMatch(/mercado\s*pago/i);
+    expect(html).toContain("Tus pacientes reservan desde el link de tu consultorio: eligen profesional, servicio y horario.");
+    const reserva = faqItems({ trialDays: 14, showBilling: true }).find((i) => i.q === "¿Cómo reservan turno mis pacientes?");
+    expect(reserva?.a).toBe("Desde el link de tu consultorio: eligen profesional, servicio y horario.");
+    for (const i of faqItems({ trialDays: 14, showBilling: true })) expect(i.a).not.toMatch(/mercado\s*pago/i);
+  });
+
+  it("[VX-Z] footer sin email de soporte: «¿Dudas? Escribinos.» con link a #contacto", () => {
+    const html = renderToStaticMarkup(<SiteFooter email={null} />);
+    expect(html).toMatch(/¿Dudas\? <a href="#contacto" class="k-link">Escribinos<\/a>\./);
+    expect(html).not.toContain("mailto:");
+    expect(html).not.toContain("equipo de KineSoft");
+  });
+
+  it("[VX-Z] footer con email de soporte: mailto", () => {
+    const html = renderToStaticMarkup(<SiteFooter email="soporte@example.com" />);
+    expect(html).toMatch(/¿Dudas\? Escribinos a <a href="mailto:soporte@example.com\?subject=/);
+    expect(html).not.toContain('href="#contacto" class="k-link"');
+  });
+
+  it("[VX-Z] vistas de la agenda (Día/Semana/Lista) como lista de chips, no tabs ni botones", async () => {
+    const html = await render();
+    const ul = html.match(/<ul[^>]*aria-label="Vistas de la agenda"[^>]*>([\s\S]*?)<\/ul>/);
+    expect(ul?.[1]).toBe("<li>Día</li><li>Semana</li><li>Lista</li>");
+    expect(html).not.toMatch(/role="tab/);
+    const css = readFileSync(join(process.cwd(), "components/landing/features.module.css"), "utf8");
+    const rule = css.match(/\.views li \{([^}]*)\}/)?.[1] ?? "";
+    expect(rule).toContain("cursor: default");
+    expect(rule).not.toMatch(/border:/);
+    expect(rule).not.toMatch(/border-radius: 999px/);
   });
 
   it("footer con © y la marca", async () => {

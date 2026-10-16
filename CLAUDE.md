@@ -53,8 +53,13 @@
     - «PL» = planes SaaS, cobros y cuenta: olas PL-A (recorte de auditoría), PL-0 (M8), PL-1..PL-3, cierre PL-Z;
       «PL-D*» decisiones con default, «C-PL*» contratos. «H-PL1..4» son hallazgos (no olas).
     - «EV2» = Evoluciones (HC base; olas EV2-0..3, EV2-Z; «EV2-D*» decisiones). No es la pestaña «Evolución» (curva EVA).
-    - «VX0» = prototipo; «Ola F» (F-a..F-e) y «F2» (codemod) = cimientos; «VX2» (a..f) = superficies públicas;
-      «D-VX*» decisiones, «C-F*» contratos de la Ola F.
+    - «VX0» = prototipo. «Ola F» = cimientos: F-a (tokens/fuentes), F-b1 (`AuthShell` v2), F-b2 (primitivas), F-d
+      (motion fuera del root), F-e (bundle/CSP), cierre F-Z; «F-c» no se usa (cerrada en PL-F). «F2» = codemod de
+      colores. «VX2» = superficies públicas en dos tandas: VX2.1 (VX2-a auth, b1 estado/invite/404, b2 muro de
+      módulo, c1 landing, c2 precios/contacto) y VX2.2 (d1 turnero, d2 resultados, e onboarding, f portal); cierre
+      «VX-Z». «C-F1..C-F7» = contratos de la Ola F (tokens, clases, motion, AuthShell, primitivas, bundle, superficies
+      públicas) y «C-VX-L» el de landing ↔ precios/contacto. «D-VX1..12» son de Martin y «D-VX13..31» defaults del
+      brief (ROADMAP «VX ✅»). No confundir F-a..F-e con los fixers «F1/F2/F3a» de P3.Z ni con «F2» de AUDIT/Planes.
     - «PF» = performance + pulido: «PF-0a..d» (diagnóstico temprano), «PF1», «PF-M» (M10), «PF2»; «D-PF*» decisiones.
       «PF0» (sin guion) es la parte de bundle de la Ola F.
     - «ES4-D*» = decisiones del portal en §20.8. «DIR-0» = hotfix del email como nombre; «DIR-1..3» olas del directorio

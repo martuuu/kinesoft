@@ -10,6 +10,7 @@ vi.mock("@/lib/public-booking", () => ({
 import { readFileSync } from "node:fs";
 import { DataStep, PublicBookingWizard, type PatientHC } from "@/components/booking/public-booking-wizard";
 import { PractitionerStep } from "@/components/booking/wizard/practitioner-step";
+import { STEP_HEADING_SELECTOR, focusStepHeading } from "@/components/booking/wizard/shared";
 import type { PublicClinic } from "@/lib/public-booking-types";
 
 
@@ -46,8 +47,9 @@ describe("B5.6 render", () => {
     expect(html).toContain("Primer turno disponible");
     expect(html).toContain("Lic. Ana");
     expect(html).not.toMatch(/copago/i);
-    // Google sigue siendo form POST, ahora a la ruta canónica (VX2-d1).
-    expect(html).toMatch(/<form action="\/api\/auth\/oauth\/google\?next=%2Fc%2Fdemo%2Fbooking" method="post"/);
+    // VX-Z: el nav ya no arranca Google (siempre lleva al portal); Google queda en «Tus datos» (ver DataStep abajo).
+    expect(html).not.toContain("/api/auth/oauth/google");
+    expect(html).toMatch(/<a[^>]*href="\/portal"[^>]*>Iniciar sesión<\/a>/);
   });
 
   it("1 sede, solo Particular: sin filtros", () => {
@@ -149,5 +151,70 @@ describe("VX2-d1 · turnero", () => {
     expect(css).not.toMatch(/filter:\s*blur/);
     const src = readFileSync("components/booking/public-booking-wizard.tsx", "utf8");
     expect(src).not.toContain("RESPONSIVE_CSS");
+  });
+});
+
+describe("VX-Z · turnero", () => {
+  it("«Iniciar sesión» es SIEMPRE un link al portal (con Google prendido también); con sesión, «Mis turnos»", () => {
+    for (const googleEnabled of [true, false]) {
+      const html = renderToStaticMarkup(
+        <PublicBookingWizard clinic={clinic(1, false)} session={null} prefill={null} googleEnabled={googleEnabled} />
+      );
+      expect(html).toMatch(/<a[^>]*href="\/portal"[^>]*>Iniciar sesión<\/a>/);
+      expect(html).not.toMatch(/<button[^>]*>Iniciar sesión/);
+    }
+    const logged = renderToStaticMarkup(
+      <PublicBookingWizard clinic={clinic(1, false)} session={{ email: "a@b.c", fullName: null }} prefill={null} />
+    );
+    expect(logged).toMatch(/<a[^>]*href="\/portal"[^>]*>Mis turnos<\/a>/);
+    // Google sigue ofrecido en «Tus datos», como form POST a la ruta canónica.
+    const step = renderToStaticMarkup(
+      <DataStep clinic={clinic(1, false)} session={null} googleEnabled hc={HC} setHc={() => {}} error={null} />
+    );
+    expect(step).toMatch(/<form action="\/api\/auth\/oauth\/google\?next=%2Fc%2Fdemo%2Fbooking" method="post"/);
+  });
+
+  it(".pillButton y .navLink con objetivo táctil de 44 px", () => {
+    const css = readFileSync("components/booking/public-booking.module.css", "utf8");
+    expect(css).toMatch(/\.pillButton\s*\{[^}]*min-height:\s*44px/);
+    expect(css).toMatch(/\.navLink\s*\{[^}]*min-height:\s*44px/);
+  });
+
+  it("marca del consultorio adelante (monograma + nombre) y KineSoft chico en el pie; una sola h1", () => {
+    const html = renderToStaticMarkup(<PublicBookingWizard clinic={clinic(1, false)} session={null} prefill={null} />);
+    const nav = html.slice(html.indexOf("<header"), html.indexOf("</header>"));
+    expect(nav).toContain(">KD<");
+    expect(nav).toMatch(/<p[^>]*>Kine Demo<\/p>/);
+    expect(nav).not.toContain("<svg"); // sin el logo de KineSoft en el nav (salvo íconos chicos: el reloj va sin franjas)
+    const foot = html.slice(html.lastIndexOf("<footer"));
+    expect(foot).toContain("Turnos online con");
+    expect(foot).toMatch(/<a(?=[^>]*href="\/")(?=[^>]*aria-label="[^"]+, inicio")[^>]*>/);
+    expect(html.match(/<h1/g)).toHaveLength(1);
+  });
+
+  it("el título de cada paso es destino de foco (tabIndex=-1, data-step-heading)", () => {
+    const html = renderToStaticMarkup(<PublicBookingWizard clinic={clinic(2, false)} session={null} prefill={null} />);
+    expect(html).toMatch(/<h2[^>]*tabindex="-1"[^>]*data-step-heading=""[^>]*>¿Con quién querés atenderte\?<\/h2>/);
+    const step = renderToStaticMarkup(
+      <DataStep clinic={clinic(1, false)} session={null} googleEnabled hc={HC} setHc={() => {}} error={null} />
+    );
+    expect(step).toMatch(/<h2[^>]*tabindex="-1"[^>]*data-step-heading=""[^>]*>Completá tus datos<\/h2>/);
+  });
+
+  it("focusStepHeading: enfoca el título del paso y no hace nada sin contenedor o sin título", () => {
+    const focus = vi.fn();
+    const seen: string[] = [];
+    const root = { querySelector: (sel: string) => (seen.push(sel), { focus }) };
+    expect(focusStepHeading(root)).toBe(true);
+    expect(seen).toEqual([STEP_HEADING_SELECTOR]);
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(focusStepHeading(null)).toBe(false);
+    expect(focusStepHeading({ querySelector: () => null })).toBe(false);
+  });
+
+  it("el wizard mueve el foco al cambiar de paso, no en el primer render", () => {
+    const src = readFileSync("components/booking/public-booking-wizard.tsx", "utf8");
+    expect(src).toMatch(/if \(prevStep\.current === step\) return;[\s\S]*focusStepHeading\(cardRef\.current\);[\s\S]*\}, \[step\]\);/);
+    expect(src).toContain("<div ref={cardRef}");
   });
 });

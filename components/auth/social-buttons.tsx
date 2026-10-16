@@ -7,7 +7,7 @@ import type { OAuthProvider } from "@/lib/oauth-start";
  *
  * Cada botón es su propio `<form method="post">` a `POST /api/auth/oauth/<provider>?next=` (C-PL12): funciona sin
  * JavaScript, y el Origin propio del POST es el control anti login-CSRF de `startOAuth`. Antes el login posteaba al
- * alias viejo `/api/auth/google` (queda solo para el portal y el turnero) y no ofrecía Facebook.
+ * alias viejo `/api/auth/google` (hoy sin llamadores: queda por páginas cacheadas) y no ofrecía Facebook.
  *
  * Qué proveedores llegan acá lo decide el server con `visibleOAuthProviders()` (D-VX16: el apagado no se muestra).
  * Sin estado ni hooks: lo puede montar una pantalla server (login) o una cliente (signup).

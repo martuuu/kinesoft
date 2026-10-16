@@ -5,7 +5,9 @@ import s from "./features.module.css";
 /**
  * [VX2-c1] «Funciones» (brief VX §3.1, cada claim con su evidencia en el brief):
  * - Agenda: vistas Día/Semana/Lista (`components/agenda/agenda-toolbar.tsx:16-19`), varios profesionales.
- * - Turnos online: turnero por link con profesional/servicio/horario y pago con MP opcional (`lib/public-booking.ts`).
+ * - Turnos online: turnero por link con profesional/servicio/horario (`lib/public-booking.ts`). **Sin Mercado Pago**
+ *   (VX-Z, decisión de Martin): el cobro del turnero entra a la cuenta MP de la plataforma (`MP_ACCESS_TOKEN`), no a
+ *   la del consultorio; prometerle al consultorio «tus pacientes pagan con MP» es falso hasta el bloque D.
  * - HC: evoluciones editables 24 h, después enmienda o anulación con motivo (`lib/clinical-notes-logic.ts:150`).
  * - Cobros: copago y obra social (`lib/copago.ts`). Roles: la HC queda para quien atiende (`lib/visibility.ts`).
  * - Clínica: salas y Recepción. **Sin «en vivo» ni «pantalla de la sala»** (D-VX26: realtime está `off` por default y
@@ -114,6 +116,8 @@ export function Features() {
         <div className={s.bento}>
           <Tile className={s.agenda} icon={ICON.agenda} title="La agenda de cada profesional">
             <p>Día, semana y lista, con varios profesionales lado a lado.</p>
+            {/* VX-Z: eran pills con borde y 32 px de alto, y se leían como tabs clickeables. Son una lista de lo que
+                tiene la agenda: chips chatos, sin borde ni cursor de mano (estilo en .views). */}
             <ul className={s.views} role="list" aria-label="Vistas de la agenda">
               <li>Día</li>
               <li>Semana</li>
@@ -132,8 +136,7 @@ export function Features() {
           </Tile>
           <Tile className={s.online} icon={ICON.link} title="Turnos online">
             <p>
-              Tus pacientes reservan desde el link de tu consultorio: eligen profesional, servicio y horario. Si lo
-              activás, pagan el turno con Mercado Pago.
+              Tus pacientes reservan desde el link de tu consultorio: eligen profesional, servicio y horario.
             </p>
             <div className={s.linkPill} aria-hidden="true">
               {ICON.globe}…/c/tu-consultorio

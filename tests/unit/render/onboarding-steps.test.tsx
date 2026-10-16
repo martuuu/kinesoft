@@ -63,6 +63,8 @@ describe("[VX2-e] paso Consultorio", () => {
       "Si no atendés, no vas a tener agenda propia ni ver historias clínicas. Lo podés cambiar después desde Configuración."
     );
     expect(OWNER_CLINICAL_HELP).toContain("no vas a tener agenda propia ni ver historias clínicas");
+    // VX-Z (B4): dice que el alta sin atender arranca la prueba de Consultorio (lib/onboarding.ts: trialPlan).
+    expect(t).toContain("Si no atendés, arrancás con la prueba del plan Consultorio para sumar a quienes atienden.");
     // Radios nativos con nombre propio; el «Sí» viene tildado (default de PL-1a).
     const radios = [...h.matchAll(/<input[^>]*name="ownerClinical"[^>]*>/g)].map((m) => m[0]);
     expect(radios).toHaveLength(2);
@@ -230,5 +232,29 @@ describe("[VX2-e] bundle: el alta no arrastra el editor de Configuración", () =
     ]) {
       expect(deps).not.toContain(banned);
     }
+  });
+});
+
+describe("[VX-Z] marco del alta", () => {
+  it("paso hecho: el tilde es visual y el lector oye «(completo)»; el actual y los que faltan no", () => {
+    const h = html(
+      <OnboardingShell current={STEP.services} maxReachable={STEP.services}>
+        <p>x</p>
+      </OnboardingShell>
+    );
+    const rail = h.slice(h.indexOf('aria-label="Pasos del alta"'), h.indexOf("</nav>"));
+    const done = rail.match(/<span class="k-sr-only"> \(completo\)<\/span>/g) ?? [];
+    expect(done.length).toBeGreaterThan(0);
+    // El paso actual (aria-current) no lleva la marca.
+    const current = rail.slice(rail.indexOf('aria-current="step"'));
+    expect(current.slice(0, current.indexOf("</div>"))).not.toContain("(completo)");
+  });
+
+  it("halos sin `filter: blur` (D-VX9): el borde suave es del gradiente", () => {
+    const css = readFileSync(join(process.cwd(), "components/onboarding/onboarding.module.css"), "utf8");
+    const rules = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(rules).not.toMatch(/filter:\s*blur/);
+    expect(rules).toMatch(/\.haloSky\s*\{[^}]*radial-gradient/);
+    expect(rules).toMatch(/\.haloLime\s*\{[^}]*radial-gradient/);
   });
 });

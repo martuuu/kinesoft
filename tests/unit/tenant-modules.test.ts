@@ -8,6 +8,8 @@ import {
   roomsEnabled,
   waitingRoomEnabled,
   minimumPlanFor,
+  planRank,
+  PLAN_ORDER,
   MODULE_DENIED_COPY,
   VERTICAL_LABEL,
   SAAS_PLAN_LABEL,
@@ -320,5 +322,14 @@ describe("nav único (C-EV2)", () => {
 
   it("shortcutsFor: General sin atajos clínicos", () => {
     expect(shortcutsFor(general).map((s) => s.href)).toEqual(["/dashboard", "/agenda", "/pacientes"]);
+  });
+});
+
+// VX-Z (B2): `lib/module-wall.ts` usa este rango en vez de su copia `PLAN_RANK`.
+describe("planRank / PLAN_ORDER", () => {
+  it("ordena de menor a mayor y un plan desconocido falla cerrado (0)", () => {
+    expect(PLAN_ORDER).toEqual(["INDIVIDUAL", "CONSULTORIO", "CLINICA", "LIBRE"]);
+    expect(PLAN_ORDER.map(planRank)).toEqual([0, 1, 2, 3]);
+    expect(planRank("PRO" as SaasPlan)).toBe(0);
   });
 });

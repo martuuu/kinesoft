@@ -3,6 +3,7 @@ import { getCapabilities } from "@/lib/authz";
 import { listServices } from "@/lib/bookings";
 import { PlanesClient } from "@/components/planes/planes-client";
 import { availableDisciplines, planesHref } from "@/components/planes/planes-model";
+import { moduleWall } from "@/lib/module-wall";
 
 export const metadata = { title: "Planes · KineSoft" };
 export const dynamic = "force-dynamic";
@@ -15,6 +16,9 @@ export const dynamic = "force-dynamic";
  * `planes` vive en `layout.tsx` (EV0): no se duplica acá.
  */
 export default async function PlanesIndexPage() {
+  // VX-Z (B1): el layout y la página se renderizan EN PARALELO; sin el módulo, el layout muestra el muro o redirige,
+  // pero la página igual corría sus queries (y `assertModule` tiraba). Mismo veredicto que el layout (actor cacheado).
+  if ((await moduleWall("planes")) !== "ok") return null;
   const [services, caps] = await Promise.all([listServices(), getCapabilities()]);
   const disciplines = availableDisciplines(services);
   if (disciplines.length > 0) redirect(planesHref(disciplines[0]));

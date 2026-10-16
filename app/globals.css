@@ -796,7 +796,8 @@ body {
 textarea.k-input { height: auto; min-height: 120px; padding: 12px 14px; resize: vertical; line-height: 1.5; }
 select.k-input { appearance: none; padding-right: 40px;
   background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5l5-5' fill='none' stroke='%233a4d6c' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 16px center; }
-.k-input::placeholder { color: var(--navy-300); }
+/* VX-Z: navy-300 sobre blanco no llegaba a 4.5:1 (AA); navy-400 es el mismo tono de `.k-hint`. */
+.k-input::placeholder { color: var(--navy-400); }
 .k-input:hover { border-color: rgba(15, 30, 51, 0.3); }
 .k-input:focus { outline: none; border-color: var(--sky-700); box-shadow: 0 0 0 3px rgba(31, 79, 190, 0.18); }
 .k-input[aria-invalid="true"] { border-color: var(--danger-solid); }

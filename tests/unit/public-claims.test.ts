@@ -164,6 +164,18 @@ describe("[VX2-c1] claims prohibidos en superficies públicas (§3.4)", () => {
     for (const p of PENDING) expect(hits.some((h) => matches(h, p)), `${p.file} [${p.id}] (${p.owner})`).toBe(true);
   });
 
+  it("[VX-Z] la landing no promete cobrar turnos con Mercado Pago (el cobro entra a la cuenta de la plataforma)", () => {
+    // Solo landing: el turnero (`components/booking/**`) sí muestra MP al paciente, que es quien paga.
+    const landing = files.filter((f) => f.startsWith("components/landing/") || f === "app/page.tsx");
+    expect(landing.length).toBeGreaterThan(5);
+    const hits = landing.flatMap((f) =>
+      stripComments(readFileSync(join(ROOT, f), "utf8"))
+        .split("\n")
+        .flatMap((l, i) => (/mercado\s*pago/i.test(l) ? [`${f}:${i + 1} ${l.trim()}`] : [])),
+    );
+    expect(hits, hits.join("\n")).toEqual([]);
+  });
+
   it("el detector agarra lo que dice (sin falso verde)", () => {
     const bad = [
       `<p>Recordatorios por WhatsApp</p>`,

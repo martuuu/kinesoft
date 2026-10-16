@@ -685,6 +685,31 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
       }
     });
 
+    // VX-Z (B4): el signup lee los días del catálogo PÚBLICO (`getPublicPlanCatalog` filtra `isPublic`) y, sin fila
+    // pública, cae a `PLAN_DEFAULTS`; el alta leía la fila sin filtrar. Con el plan oculto, la pantalla prometía 14 y
+    // el consultorio nacía con los días de la fila oculta. Ahora el alta lee igual que el signup.
+    it("[VX-Z B4] con la fila del plan oculta (isPublic=false) el alta usa PLAN_DEFAULTS, igual que el signup", async () => {
+      const before = await db.saasPlanConfig.findUniqueOrThrow({ where: { plan: "INDIVIDUAL" } });
+      try {
+        await db.saasPlanConfig.update({ where: { plan: "INDIVIDUAL" }, data: { trialDays: 7, isPublic: false } });
+        newIdentity();
+        const now = new Date();
+        const r = await saveOnboardingClinic({ name: "Plan Oculto" });
+        if (!r.ok) throw new Error(r.error);
+        createdTenants.push(r.data.tenantId);
+        const t = await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } });
+        expect(t.subscriptionStatus).toBe("TRIALING");
+        expect(t.trialEndsAt?.toISOString()).toBe(
+          initialSubscriptionFor("INDIVIDUAL", undefined, now).trialEndsAt?.toISOString(),
+        );
+      } finally {
+        await db.saasPlanConfig.update({
+          where: { plan: "INDIVIDUAL" },
+          data: { trialDays: before.trialDays, isPublic: before.isPublic, updatedById: before.updatedById },
+        });
+      }
+    });
+
     it("[BO-Z] `onboarding` sin `initial` sigue sin poder escribir el plan (allowlist intacta)", async () => {
       const uid = newIdentity();
       const r = await saveOnboardingClinic({ name: "Allowlist" });

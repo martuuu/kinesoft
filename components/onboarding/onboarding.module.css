@@ -11,7 +11,9 @@
   overflow: hidden;
 }
 
-/* Halos decorativos (aria-hidden): mismo fondo que las pantallas de auth, para que el alta siga al signup. */
+/* Halos decorativos (aria-hidden): mismo fondo que las pantallas de auth, para que el alta siga al signup.
+   VX-Z (D-VX9): sin `filter: blur` (es una capa más que el navegador re-pinta en cada scroll/resize en equipos
+   modestos); el borde suave lo da el propio gradiente, que ya termina en transparente. */
 .haloSky,
 .haloLime {
   position: absolute;
@@ -23,18 +25,16 @@
   right: -80px;
   width: 460px;
   height: 460px;
-  background: radial-gradient(circle, var(--sky-300), transparent 70%);
+  background: radial-gradient(circle, var(--sky-300) 0%, transparent 72%);
   opacity: 0.55;
-  filter: blur(10px);
 }
 .haloLime {
   bottom: -160px;
   left: -120px;
   width: 520px;
   height: 520px;
-  background: radial-gradient(circle, var(--lime-300), transparent 65%);
+  background: radial-gradient(circle, var(--lime-300) 0%, transparent 68%);
   opacity: 0.35;
-  filter: blur(20px);
 }
 
 .grid {
