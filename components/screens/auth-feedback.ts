@@ -3,6 +3,8 @@
  * error del login, y el cooldown de los botones de «reenviar». Sin React ni `next/*`, así la cubre el unit
  * (tests/unit/login-error-message.test.ts) y la usan login, signup, forgot y onboarding por igual.
  */
+// Solo el tipo (se borra al compilar): este módulo lo importan pantallas cliente y `oauth-start` es server-only.
+import type { OAuthProvider } from "@/lib/oauth-start";
 
 /**
  * Mensajes de error del login por código (A3b-S-auth). Los emiten `/api/auth/sign-in`, `/api/auth/google`,
@@ -96,3 +98,42 @@ export const RESEND_VERIFICATION_SENT = "Si tu cuenta está pendiente de confirm
 /** Respuesta genérica de «olvidé mi contraseña» (misma exista o no la cuenta). */
 export const FORGOT_SENT =
   "Si existe una cuenta con ese email, te mandamos un link para crear una contraseña nueva. Vence en 1 hora.";
+
+// ── VX2-a: copy que depende de la config (proveedores visibles, días de prueba) ─────────────────────────────────
+
+/** Nombre visible de cada proveedor OAuth (el botón dice «Continuar con …»). */
+export const OAUTH_PROVIDER_LABEL: Record<OAuthProvider, string> = { google: "Google", facebook: "Facebook" };
+
+/**
+ * Bajada del login (§3.2): «Con Google, Facebook o tu email.» armada con los proveedores que de verdad se muestran
+ * (D-VX16). Si Facebook está apagado no se lo nombra: prometer un botón que no está es el mismo bug que un botón roto.
+ */
+export function authMethodsSubtitle(providers: readonly OAuthProvider[]): string {
+  if (providers.length === 0) return "Con tu email y tu contraseña.";
+  return `Con ${providers.map((p) => OAUTH_PROVIDER_LABEL[p]).join(", ")} o tu email.`;
+}
+
+/**
+ * Copy del signup según los días de prueba del plan Individual (catálogo público, `SaasPlanConfig.trialDays`). Con 0
+ * (Plataforma sacó la prueba) no se promete «0 días gratis»: se dice solo lo que sigue siendo cierto.
+ */
+export function signupTrialCopy(trialDays: number): {
+  eyebrow: string;
+  cardSub: string;
+  firstPoint: string;
+} {
+  const n = Number.isFinite(trialDays) ? Math.max(0, Math.floor(trialDays)) : 0;
+  if (n === 0) {
+    return {
+      eyebrow: "Plan Individual",
+      cardSub: "Plan Individual. No te pedimos medio de pago para empezar.",
+      firstPoint: "Sin medio de pago para empezar.",
+    };
+  }
+  const days = n === 1 ? "1 día" : `${n} días`;
+  return {
+    eyebrow: `Plan Individual · ${days} gratis`,
+    cardSub: `Plan Individual con ${days} gratis. No te pedimos medio de pago.`,
+    firstPoint: `${days[0].toUpperCase()}${days.slice(1)} gratis, sin medio de pago.`,
+  };
+}

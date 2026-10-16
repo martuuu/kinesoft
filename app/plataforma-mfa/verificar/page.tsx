@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { AuthShell } from "@/components/screens/auth-shell";
+import { AuthShell } from "@/components/auth/auth-shell";
 import { verifyPlatformMfaLogin } from "@/lib/platform-mfa-actions";
 import { platformMfaRedirect } from "@/lib/platform-mfa-logic";
 import { mfaPageContext } from "../guard";
@@ -19,11 +19,9 @@ export default async function VerificarMfaPage({ searchParams }: { searchParams:
   if (status === "none") redirect(platformMfaRedirect("setup", next));
   if (status === "verified") redirect(next);
 
-  const blurb = "Plataforma toca datos de todos los consultorios: además de tu contraseña, te pedimos un código del teléfono.";
-
   if (status === "unavailable") {
     return (
-      <AuthShell eyebrow="Plataforma" heading="Verificación en dos pasos." blurb={blurb}>
+      <AuthShell variant="centered" introAs="p">
         <MfaHeading eyebrow="Sin conexión" title="No pudimos comprobar tu verificación" />
         <MfaText>El servicio de verificación no respondió. Probá de nuevo en unos segundos.</MfaText>
         <MfaGoButton href={`/plataforma-mfa/verificar?next=${encodeURIComponent(next)}`}>Reintentar</MfaGoButton>
@@ -33,7 +31,7 @@ export default async function VerificarMfaPage({ searchParams }: { searchParams:
   }
 
   return (
-    <AuthShell eyebrow="Plataforma" heading="Verificación en dos pasos." blurb={blurb}>
+    <AuthShell variant="centered" introAs="p">
       <MfaHeading eyebrow="Seguridad" title="Ingresá el código" />
       <MfaText>Abrí tu app de autenticación y escribí el código de 6 números de KineSoft.</MfaText>
       <MfaVerifyForm next={next} verifyAction={verifyPlatformMfaLogin} />

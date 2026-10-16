@@ -652,6 +652,39 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
       expect((ev[0].payload as { changed: string[] }).changed).not.toContain("saasPlan");
     });
 
+    // VX2.1 (handoff 11 de VX2-a): el signup promete los días de `SaasPlanConfig.trialDays` (catálogo, lo edita
+    // Plataforma), pero el alta usaba `PLAN_DEFAULTS` (14 fijo). Si Plataforma cambiaba la prueba, la pantalla y el
+    // consultorio decían cosas distintas. Ahora el alta lee la fila INDIVIDUAL en la misma tx.
+    it("[VX2.1] la prueba del alta web sale de SaasPlanConfig.trialDays del catálogo, no de PLAN_DEFAULTS", async () => {
+      const before = await db.saasPlanConfig.findUniqueOrThrow({ where: { plan: "INDIVIDUAL" } });
+      try {
+        await db.saasPlanConfig.update({ where: { plan: "INDIVIDUAL" }, data: { trialDays: 7 } });
+        newIdentity();
+        const now = new Date();
+        const r = await saveOnboardingClinic({ name: "Prueba Catalogo" });
+        if (!r.ok) throw new Error(r.error);
+        createdTenants.push(r.data.tenantId);
+        const t = await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } });
+        expect(t.subscriptionStatus).toBe("TRIALING");
+        expect(t.trialEndsAt?.toISOString()).toBe(initialSubscriptionFor("INDIVIDUAL", 7, now).trialEndsAt?.toISOString());
+
+        // 0 en el catálogo = sin prueba: nace ACTIVE sin fecha (mismo contrato que el alta desde Plataforma).
+        await db.saasPlanConfig.update({ where: { plan: "INDIVIDUAL" }, data: { trialDays: 0 } });
+        newIdentity();
+        const r0 = await saveOnboardingClinic({ name: "Sin Prueba" });
+        if (!r0.ok) throw new Error(r0.error);
+        createdTenants.push(r0.data.tenantId);
+        const t0 = await db.tenant.findUniqueOrThrow({ where: { id: r0.data.tenantId } });
+        expect(t0.subscriptionStatus).toBe("ACTIVE");
+        expect(t0.trialEndsAt).toBeNull();
+      } finally {
+        await db.saasPlanConfig.update({
+          where: { plan: "INDIVIDUAL" },
+          data: { trialDays: before.trialDays, updatedById: before.updatedById },
+        });
+      }
+    });
+
     it("[BO-Z] `onboarding` sin `initial` sigue sin poder escribir el plan (allowlist intacta)", async () => {
       const uid = newIdentity();
       const r = await saveOnboardingClinic({ name: "Allowlist" });

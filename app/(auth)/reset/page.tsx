@@ -1,9 +1,10 @@
 import { cookies } from "next/headers";
+import { BRAND_NAME } from "@/lib/brand";
 import { ResetScreen } from "@/components/screens/reset-screen";
 import { getSessionUser } from "@/lib/onboarding-internal";
 import { RECOVERY_COOKIE, verifyRecoveryCookie } from "@/lib/recovery-cookie";
 
-export const metadata = { title: "Nueva contraseña · KineSoft" };
+export const metadata = { title: `Nueva contraseña · ${BRAND_NAME}` };
 export const dynamic = "force-dynamic";
 
 /**

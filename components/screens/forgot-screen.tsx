@@ -2,17 +2,21 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
-import { IconCheck } from "@/components/ui/icons";
-import { AuthShell } from "@/components/screens/auth-shell";
+import { AuthShell } from "@/components/auth/auth-shell";
+import { AuthSubmit } from "@/components/auth/auth-submit";
+import { Field } from "@/components/ui/field";
+import { IconAlert, IconCheckCircle } from "@/components/ui/icons";
 import { sendPasswordReset } from "@/lib/auth";
 import { FORGOT_SENT } from "@/components/screens/auth-feedback";
 import { ResendButton } from "@/components/screens/resend-verification";
+import st from "./auth-screens.module.css";
 
 /**
  * /forgot. La respuesta es SIEMPRE la genérica (`FORGOT_SENT`): exista o no la cuenta, para no confirmar qué
  * emails están registrados. IAM-2d: tras el envío, «Reenviar el link» (con cooldown) y «¿Email equivocado?
  * Volver», que vuelve al form con el email cargado.
+ *
+ * VX2-a: AuthShell `centered` con la h1 en la card (una sola por página); mismo copy que antes.
  */
 export function ForgotScreen() {
   const [pending, start] = useTransition();
@@ -21,6 +25,7 @@ export function ForgotScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const onSubmit = (formData: FormData) => {
+    if (pending) return;
     setError(null);
     const email = String(formData.get("email") ?? "").trim();
     setDraft(email);
@@ -35,73 +40,46 @@ export function ForgotScreen() {
   };
 
   return (
-    <AuthShell
-      eyebrow="Recuperar acceso"
-      heading="¿Olvidaste tu contraseña?"
-      blurb="Te mandamos por email un link para crear una contraseña nueva. Vence en 1 hora."
-      footerLinks={[{ label: "Volver al login", href: "/login" }]}
-    >
-      <div
-        style={{
-          fontSize: 12,
-          fontWeight: 600,
-          color: "var(--sky-700)",
-          letterSpacing: "0.06em",
-          textTransform: "uppercase",
-          marginBottom: 10,
-        }}
-      >
-        Recuperar contraseña
-      </div>
-      <h2 className="k-display" style={{ fontSize: 26, margin: "0 0 22px", lineHeight: 1.1 }}>
-        Te mandamos un link
-      </h2>
+    <AuthShell variant="centered" footerLinks={[{ label: "Volver al login", href: "/login" }]}>
+      <div className={st.stack} data-screen-label="Forgot">
+        <div className={st.head}>
+          <h1 className={st.title}>¿Olvidaste tu contraseña?</h1>
+          <p className={st.sub}>Te mandamos por email un link para crear una contraseña nueva. Vence en 1 hora.</p>
+        </div>
 
-      {sentTo ? (
-        <ForgotSent email={sentTo} onBack={() => setSentTo(null)} />
-      ) : (
-        <form action={onSubmit} autoComplete="on" style={{ display: "grid", gap: 14 }}>
-          <label style={{ display: "block" }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)" }}>Email</span>
-            <input
-              type="email"
-              name="email"
-              required
-              defaultValue={draft}
-              placeholder="camila@movare.com.ar"
-              autoComplete="email"
-              style={inputStyle}
-            />
-          </label>
-          {error && (
-            <div
-              role="alert"
-              style={{
-                padding: 10,
-                borderRadius: 10,
-                background: "var(--danger-bg)",
-                color: "var(--danger-fg)",
-                fontSize: 12,
-              }}
-            >
-              {error}
-            </div>
-          )}
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={pending}
-            style={{ width: "100%", justifyContent: "center", padding: "14px 18px", fontSize: 14 }}
-          >
-            {pending ? "Enviando…" : "Enviar link de recuperación"}
-          </Button>
-          <div style={{ fontSize: 13, color: "var(--navy-500)", textAlign: "center", marginTop: 4 }}>
-            <Link href="/login" style={{ color: "var(--sky-700)", fontWeight: 600 }}>
-              ← Volver al login
-            </Link>
-          </div>
-        </form>
-      )}
+        {sentTo ? (
+          <ForgotSent email={sentTo} onBack={() => setSentTo(null)} />
+        ) : (
+          <>
+            <form action={onSubmit} className={st.fields}>
+              {error && (
+                <div className="k-alert" role="alert">
+                  <IconAlert size={18} />
+                  <span>{error}</span>
+                </div>
+              )}
+              <Field id="forgot-email" label="Email">
+                <input
+                  className="k-input k-input-lg"
+                  type="email"
+                  name="email"
+                  autoComplete="email"
+                  inputMode="email"
+                  required
+                  defaultValue={draft}
+                  placeholder="nombre@ejemplo.com"
+                />
+              </Field>
+              <AuthSubmit label="Enviar link de recuperación" busyLabel="Enviando…" pending={pending} />
+            </form>
+            <p className={st.foot}>
+              <Link href="/login" className="k-link">
+                Volver al login
+              </Link>
+            </p>
+          </>
+        )}
+      </div>
     </AuthShell>
   );
 }
@@ -109,40 +87,16 @@ export function ForgotScreen() {
 /** Estado «te mandamos un link» (exportado para el render test). El reenvío arranca con cooldown. */
 export function ForgotSent({ email, onBack }: { email: string; onBack: () => void }) {
   return (
-    <div style={{ display: "grid", gap: 14 }}>
-      <div
-        role="status"
-        style={{
-          padding: 18,
-          borderRadius: 14,
-          background: "rgba(200,245,100,0.18)",
-          color: "var(--navy-900)",
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
-          <span
-            aria-hidden
-            style={{
-              width: 22,
-              height: 22,
-              borderRadius: "50%",
-              background: "var(--lime-300)",
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <IconCheck size={12} stroke={3} />
+    <div className={st.stack}>
+      <div className="k-alert k-alert-success" role="status">
+        <IconCheckCircle size={18} />
+        <div className={st.alertBody}>
+          <strong>Revisá tu email</strong>
+          <span>{FORGOT_SENT}</span>
+          <span>
+            Lo pediste para <strong>{email}</strong>. ¿No llega? Revisá spam o promociones.
           </span>
-          Revisá tu email
         </div>
-        <p style={{ margin: 0, fontSize: 13 }}>{FORGOT_SENT}</p>
-        <p style={{ margin: 0, fontSize: 12, color: "var(--navy-500)" }}>
-          Lo pediste para <strong>{email}</strong>. ¿No llega? Revisá spam o promociones.
-        </p>
       </div>
       <ResendButton
         label="Reenviar el link"
@@ -150,34 +104,16 @@ export function ForgotSent({ email, onBack }: { email: string; onBack: () => voi
         startCooling
         onSend={() => sendPasswordReset({ email })}
       />
-      <div style={{ fontSize: 13, color: "var(--navy-500)", textAlign: "center" }}>
+      <p className={st.foot}>
         ¿Email equivocado?{" "}
-        <button
-          type="button"
-          onClick={onBack}
-          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit", color: "var(--sky-700)", fontWeight: 600 }}
-        >
+        <button type="button" onClick={onBack} className={`k-link ${st.linkButton}`}>
           Volver
         </button>
         {" · "}
-        <Link href="/login" style={{ color: "var(--sky-700)", fontWeight: 600 }}>
+        <Link href="/login" className="k-link">
           Ir al login
         </Link>
-      </div>
+      </p>
     </div>
   );
 }
-
-const inputStyle: React.CSSProperties = {
-  marginTop: 6,
-  padding: "12px 14px",
-  borderRadius: 12,
-  background: "rgba(255,255,255,0.6)",
-  border: "1px solid rgba(15,30,51,0.08)",
-  display: "block",
-  width: "100%",
-  fontSize: 14,
-  color: "var(--navy-900)",
-  outline: "none",
-  boxSizing: "border-box",
-};

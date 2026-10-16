@@ -1,4 +1,6 @@
-import { guardModuleSegment } from "@/lib/authz";
+import { redirect } from "next/navigation";
+import { AccessWall } from "@/components/ui/access-wall";
+import { moduleWall } from "@/lib/module-wall";
 
 /**
  * Guard de módulo del segmento /reportes (EV0, plan §15.4): requiere `reportes`.
@@ -12,8 +14,13 @@ import { guardModuleSegment } from "@/lib/authz";
  * él, así que cada action del módulo chequea `assertModule`/`requireModule`.
  *
  * PL-F1c: la página ahora redirige siempre a /dashboard; el guard queda igual (los dos destinos coinciden).
+ *
+ * VX2-b2 (D-VX20): si un plan MAYOR trae el módulo en la vertical del consultorio, muro con upsell (`AccessWall`) en
+ * vez del redirect; si ningún plan lo trae para la vertical, /dashboard como antes. El muro no abre nada.
  */
 export default async function ReportesLayout({ children }: { children: React.ReactNode }) {
-  await guardModuleSegment("reportes");
+  const wall = await moduleWall("reportes");
+  if (wall === "redirect") redirect("/dashboard");
+  if (wall !== "ok") return <AccessWall module="reportes" plan={wall.plan} canBuy={wall.canBuy} />;
   return <>{children}</>;
 }

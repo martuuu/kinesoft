@@ -1,0 +1,66 @@
+/* [VX2-c1] Footer de la landing (shared.css .site-footer). */
+.footer {
+  border-top: 1px solid rgba(15, 30, 51, 0.08);
+  padding-block: 48px 40px;
+  background: #fff;
+}
+.grid {
+  display: flex;
+  justify-content: space-between;
+  gap: 32px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.brand {
+  display: grid;
+  gap: 12px;
+  max-width: 360px;
+}
+.logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  border-radius: 10px;
+  text-decoration: none;
+  color: var(--navy-900);
+}
+.logo:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+.logoWord {
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+.blurb {
+  font-size: 14px;
+  color: var(--navy-500);
+}
+.links {
+  display: flex;
+  gap: 8px 24px;
+  flex-wrap: wrap;
+}
+.links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--navy-500);
+  text-decoration: none;
+  font-size: 15px;
+}
+.links a:hover {
+  color: var(--navy-900);
+}
+.base {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid rgba(15, 30, 51, 0.06);
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 14px;
+  color: var(--navy-500);
+}

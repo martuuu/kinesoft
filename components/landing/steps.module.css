@@ -1,0 +1,59 @@
+/* [VX2-c1] «Cómo empezás» (shared.css .steps/.step): 3 columnas con conector punteado; < 768 en vertical. */
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+  counter-reset: step;
+}
+.step {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding-top: 56px;
+}
+.step::before {
+  counter-increment: step;
+  content: counter(step);
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 16px;
+  background: var(--navy-900);
+  color: #fff;
+}
+.step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 20px;
+  left: 56px;
+  right: 8px;
+  height: 1px;
+  background: repeating-linear-gradient(90deg, var(--navy-100) 0 6px, transparent 6px 12px);
+}
+@media (max-width: 767px) {
+  .steps {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 28px;
+  }
+  .step {
+    padding-top: 0;
+    padding-left: 60px;
+    min-height: 40px;
+  }
+  .step:not(:last-child)::after {
+    top: 48px;
+    bottom: -20px;
+    left: 20px;
+    right: auto;
+    width: 1px;
+    height: auto;
+    background: repeating-linear-gradient(180deg, var(--navy-100) 0 6px, transparent 6px 12px);
+  }
+}

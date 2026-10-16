@@ -254,6 +254,15 @@
   --bg-panel: #f5f2fc;
 }
 
+/* VX2.1 (handoff 14, como el prototipo `design_source/vx0/shared.css:90`): border-box global. Sin él, todo
+   `width: 100%` con padding (`.k-container`, inputs) desborda en mobile. Se verificó con capturas antes/después de
+   las pantallas del workspace (1366 y 390). */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 html,
 body {
   margin: 0;
@@ -367,6 +376,8 @@ body {
   font-weight: 600;
   border: none;
   cursor: pointer;
+  /* VX2.1: `ButtonLink`/<a class="k-btn"> heredaba el subrayado del link. */
+  text-decoration: none;
   transition:
     transform 0.12s,
     box-shadow 0.12s;
@@ -419,57 +430,8 @@ body {
   background-clip: padding-box;
 }
 
-/* ───── Public surfaces — mobile responsiveness ───── */
+/* ───── Turnero público — mobile responsiveness (las .booking-* las borra VX-Z cuando VX2-d1 las pase a su módulo) ───── */
 @media (max-width: 1024px) {
-  .landing-hero {
-    padding: 120px 24px 40px !important;
-  }
-  .landing-hero-grid,
-  .landing-feat-grid,
-  .landing-pricing-grid,
-  .landing-testimonials,
-  .landing-cta-grid,
-  .landing-footer-grid {
-    grid-template-columns: 1fr !important;
-  }
-  .landing-nav {
-    left: 16px !important;
-    right: 16px !important;
-  }
-  .landing-nav-links {
-    display: none !important;
-  }
-  .landing-hero-title {
-    font-size: 44px !important;
-  }
-  .landing-hero-preview {
-    display: none !important;
-  }
-  .landing-stats {
-    grid-template-columns: repeat(2, 1fr) !important;
-    padding: 24px !important;
-    gap: 18px;
-  }
-  .landing-stats > div {
-    border-right: none !important;
-  }
-  .landing-how-grid {
-    grid-template-columns: 1fr !important;
-  }
-  .landing-feat-header {
-    flex-direction: column !important;
-    align-items: flex-start !important;
-  }
-  .landing-cta {
-    padding: 36px 24px !important;
-  }
-  .login-brand {
-    padding: 32px 24px !important;
-  }
-  .login-form-wrap {
-    width: 100% !important;
-    padding: 24px !important;
-  }
   .booking-body {
     flex-direction: column !important;
     padding: 0 16px 24px !important;
@@ -479,12 +441,6 @@ body {
   }
   .booking-summary {
     width: 100% !important;
-  }
-}
-
-@media (max-width: 640px) {
-  .landing-hero-title {
-    font-size: 36px !important;
   }
 }
 

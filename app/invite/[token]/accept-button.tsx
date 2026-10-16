@@ -27,8 +27,9 @@ export function AcceptInviteButton({ token, tenantName }: { token: string; tenan
       <Button
         type="button"
         variant="primary"
+        size="lg"
+        block
         disabled={pending}
-        style={{ width: "100%", justifyContent: "center", padding: "14px 18px", fontSize: 14 }}
         onClick={() =>
           start(async () => {
             setError(null);

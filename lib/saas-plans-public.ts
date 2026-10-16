@@ -21,6 +21,7 @@ import { prismaService } from "@/lib/db";
 import { formatARS } from "@/lib/format";
 import { reportError } from "@/lib/error-report";
 import { SAAS_PLANS_TAG, ttl } from "@/lib/cache-tags";
+import { BRAND_NAME } from "@/lib/brand";
 import { SAAS_PLANS } from "@/lib/saas-plans-logic";
 import type { PlanLimits, SaasPlanConfigRow } from "@/lib/saas-plans-types";
 import { SAAS_PLAN_LABEL, modulesFor, type TenantModule } from "@/lib/tenant-modules";
@@ -47,21 +48,24 @@ export const MAX_FEATURE_BULLETS = 8;
 const VERTICALS: readonly TenantVertical[] = ["GENERAL", "KINESIOLOGY"];
 
 /**
- * Bullet de cada módulo, en el orden en que se muestran. Varios módulos comparten bullet (planes + sesiones). Quedan
- * AFUERA a propósito: `evoluciones` (clave reservada; EV2 todavía no está) y `reportes` (EV-D3: hoy es un
- * placeholder). No se promete lo que la app no hace.
+ * Bullet de cada módulo, en el orden en que se muestran. Varios módulos comparten bullet (planes + sesiones). Queda
+ * AFUERA a propósito `reportes` (EV-D3: hoy es un placeholder): no se promete lo que la app no hace.
+ *
+ * VX2-c2: `evoluciones` (núcleo, EV2 cerrada en EV2-Z) entra con su bullet. Para que no se pase del tope de 8 en
+ * Individual Kine (y el slice corte «Biblioteca con tus propios ejercicios»), cobros y obras sociales —los dos son
+ * núcleo y siempre van juntos— comparten un solo bullet.
  */
 const MODULE_BULLETS: readonly { modules: readonly TenantModule[]; text: string }[] = [
   { modules: ["agenda"], text: "Agenda de turnos por profesional" },
   { modules: ["pacientes"], text: "Fichas de pacientes con antecedentes y archivos" },
-  { modules: ["facturacion"], text: "Cobros y copagos de cada turno" },
-  { modules: ["obrasSociales"], text: "Obras sociales y prepagas" },
+  { modules: ["evoluciones"], text: "Evoluciones de cada consulta en la historia clínica" },
+  { modules: ["facturacion", "obrasSociales"], text: "Cobros de copago y obra social en cada turno" },
   { modules: ["turneroPublico"], text: "Turnero online para que tus pacientes reserven solos" },
   { modules: ["planes", "sesiones"], text: "Planes de tratamiento con seguimiento de sesiones" },
   { modules: ["diagnostico", "evaluaciones"], text: "Diagnóstico y evaluaciones" },
   { modules: ["ejercicios"], text: "Biblioteca con tus propios ejercicios" },
   { modules: ["plantillas", "favoritos"], text: "Plantillas de plan y ejercicios favoritos" },
-  { modules: ["ejerciciosGlobales"], text: "Catálogo de ejercicios de KineSoft" },
+  { modules: ["ejerciciosGlobales"], text: `Catálogo de ejercicios de ${BRAND_NAME}` },
   { modules: ["salas"], text: "Salas: organizá los turnos por consultorio físico" },
   { modules: ["salaEspera"], text: "Sala de espera con llamado de pacientes" },
 ];

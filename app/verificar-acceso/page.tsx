@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
-import { AuthShell } from "@/components/screens/auth-shell";
+import { AuthShell } from "@/components/auth/auth-shell";
 import { VerifyAccessForm } from "@/components/account/verify-access-form";
-import { MfaFooter, MfaHeading } from "@/app/plataforma-mfa/shared";
+import { MfaFooter, MfaHeading, MfaText } from "@/app/plataforma-mfa/shared";
 import { getAccessSnapshot } from "@/lib/session";
 import { safeNext } from "@/lib/safe-next";
 import { maskEmail } from "@/lib/email/transport";
@@ -36,12 +36,9 @@ export default async function VerificarAccesoPage({ searchParams }: { searchPara
 
   const methods = snapshot!.twoFactor.methods;
   return (
-    <AuthShell
-      eyebrow="Seguridad"
-      heading="Verificación en dos pasos."
-      blurb="Tu cuenta tiene la verificación en dos pasos activada: además de tu contraseña, confirmá que sos vos."
-    >
+    <AuthShell variant="centered" introAs="p">
       <MfaHeading eyebrow="Verificá tu acceso" title="Confirmá que sos vos" />
+      <MfaText>Tu cuenta tiene la verificación en dos pasos activada: además de tu contraseña, te pedimos un código.</MfaText>
       <VerifyAccessForm next={next} methods={methods} emailMasked={maskEmail(snapshot!.profile!.email)} />
       <MfaFooter hasHome={false} />
     </AuthShell>

@@ -3,24 +3,42 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { KineLogo } from "@/components/ui/kine-logo";
+import { AuthShell } from "@/components/auth/auth-shell";
+import { SocialButtons } from "@/components/auth/social-buttons";
+import { AuthSubmit } from "@/components/auth/auth-submit";
 import { Button } from "@/components/ui/button";
-import { Tag } from "@/components/ui/tag";
-import { IconArrow, IconCheck } from "@/components/ui/icons";
+import { Field } from "@/components/ui/field";
+import { PasswordInput } from "@/components/ui/password-input";
+import { IconAlert, IconArrow, IconCheckCircle } from "@/components/ui/icons";
 import { signUpPractitioner } from "@/lib/auth";
+import type { OAuthProvider } from "@/lib/oauth-start";
+import { PLAN_DEFAULTS } from "@/lib/saas-plans-logic";
+import { signupTrialCopy } from "@/components/screens/auth-feedback";
 import { ResendVerification } from "@/components/screens/resend-verification";
+import st from "./auth-screens.module.css";
 
 /**
- * Paso 1 del alta: la cuenta (A3c-S-signup). Solo nombre, email y
- * contraseña: el consultorio se carga en `/onboarding` DESPUÉS de verificar el
- * email (antes se creaba todo acá, sin verificar nada — H5).
+ * Paso 1 del alta: la cuenta (A3c-S-signup). Solo nombre, email y contraseña: el consultorio se carga en
+ * `/onboarding` DESPUÉS de verificar el email (antes se creaba todo acá, sin verificar nada — H5).
  *
  * IAM-2d: ya no hay modo «unión por invitación» (la page manda `?invite=` a `/invite/<token>`). Si igual la
  * action devuelve `redirectTo` (contrato de IAM-2c: solo con invitación), se sigue ese destino y NO se
  * muestra «te mandamos un email»: ese era el bug del QA del 14-oct (§19.1 #4), la pantalla prometía un mail
  * que nunca salía.
+ *
+ * VX2-a (`design_source/vx0/signup.html`): AuthShell `split` (intro + card + puntos). Sin el radio «Tu consultorio
+ * es de» del prototipo (D-VX14): la vertical se elige en el paso 1 del onboarding y el alta con Google/Facebook no
+ * pasaría por ese radio. Los días de prueba (`trialDays`) salen del catálogo público (los lee la page).
  */
-export function SignupScreen({ assisted }: { assisted?: { message: string; mailto: string | null } } = {}) {
+export function SignupScreen({
+  assisted,
+  providers = [],
+  trialDays = PLAN_DEFAULTS.INDIVIDUAL.trialDays,
+}: {
+  assisted?: { message: string; mailto: string | null };
+  providers?: readonly OAuthProvider[];
+  trialDays?: number;
+} = {}) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -29,7 +47,19 @@ export function SignupScreen({ assisted }: { assisted?: { message: string; mailt
   // Lo tipeado, para que «¿Email equivocado? Volver» no obligue a escribir todo de nuevo.
   const [draft, setDraft] = useState({ fullName: "", email: "" });
 
+  if (assisted) {
+    // BO-Z (BO-D11): sin form ni sociales (el server rechaza el alta igual): una card centrada con el canal.
+    return (
+      <AuthShell variant="centered" footerLinks={[{ label: "Ingresar", href: "/login" }]}>
+        <SignupAssisted message={assisted.message} mailto={assisted.mailto} />
+      </AuthShell>
+    );
+  }
+
+  const copy = signupTrialCopy(trialDays);
+
   const onSubmit = (formData: FormData) => {
+    if (pending) return;
     setError(null);
     setFieldErrors({});
     const fullName = String(formData.get("fullName") ?? "");
@@ -56,217 +86,124 @@ export function SignupScreen({ assisted }: { assisted?: { message: string; mailt
   };
 
   return (
-    <div
-      className="k-app"
-      data-screen-label="Signup"
-      style={{
-        minHeight: "100vh",
-        background: "var(--bg-app)",
-        position: "relative",
-        overflow: "hidden",
-        display: "flex",
-      }}
+    <AuthShell
+      variant="split"
+      introAs="p"
+      eyebrow={copy.eyebrow}
+      heading="Empezá hoy con tu consultorio."
+      blurb="Agenda, turnos online, historia clínica y cobros, con las herramientas de kinesiología incluidas."
+      aside={<SignupPoints firstPoint={copy.firstPoint} />}
     >
-      <div
-        aria-hidden
-        style={{
-          position: "absolute",
-          top: -120,
-          right: -80,
-          width: 460,
-          height: 460,
-          borderRadius: "50%",
-          background: "radial-gradient(circle, var(--sky-300), transparent 70%)",
-          opacity: 0.7,
-          filter: "blur(10px)",
-        }}
-      />
-      <div
-        aria-hidden
-        style={{
-          position: "absolute",
-          bottom: -160,
-          left: -120,
-          width: 520,
-          height: 520,
-          borderRadius: "50%",
-          background: "radial-gradient(circle, var(--lime-300), transparent 65%)",
-          opacity: 0.45,
-          filter: "blur(20px)",
-        }}
-      />
-
-      <div
-        className="login-brand"
-        style={{
-          flex: 1,
-          padding: 56,
-          display: "flex",
-          flexDirection: "column",
-          position: "relative",
-          zIndex: 2,
-        }}
-      >
-        <KineLogo size={32} />
-        <div style={{ marginTop: "auto", maxWidth: 460 }}>
-          <Tag tone="lime" className="mb-6">
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--navy-900)" }} />
-            Crear consultorio
-          </Tag>
-          <h1 className="k-display" style={{ fontSize: 56, lineHeight: 1.02, margin: "0 0 18px" }}>
-            Sumá tu
-            <br />
-            consultorio
-            <br />a KineSoft.
-          </h1>
-          <p style={{ fontSize: 16, lineHeight: 1.55, color: "var(--navy-500)", margin: 0, maxWidth: 420 }}>
-            Creá tu cuenta, confirmá tu email y configurá tu consultorio en pocos pasos: horario, servicios,
-            obras sociales y equipo.
-          </p>
-          <ul style={{ marginTop: 20, padding: 0, listStyle: "none", display: "grid", gap: 8 }}>
-            {[
-              "Agenda + turnero online",
-              "Historia clínica + diagnóstico interactivo",
-              "Planes y seguimiento por sesión",
-            ].map((b) => (
-              <li key={b} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--navy-700)" }}>
-                <span
-                  style={{
-                    width: 18,
-                    height: 18,
-                    borderRadius: 6,
-                    background: "var(--lime-300)",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <IconCheck size={11} stroke={3} />
-                </span>
-                {b}
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div style={{ marginTop: 28, fontSize: 12, color: "var(--navy-300)" }}>
-          © 2026 KineSoft · Buenos Aires, Argentina
-        </div>
-      </div>
-
-      <div
-        className="login-form-wrap"
-        style={{
-          width: 560,
-          padding: "56px 56px 56px 0",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          position: "relative",
-          zIndex: 2,
-        }}
-      >
-        <div
-          className="k-glass-strong"
-          style={{
-            padding: 40,
-            borderRadius: "var(--r-2xl)",
-            width: "100%",
-            maxWidth: 480,
-          }}
-        >
-          <div
-            style={{
-              fontSize: 12,
-              fontWeight: 600,
-              color: "var(--sky-700)",
-              letterSpacing: "0.06em",
-              textTransform: "uppercase",
-              marginBottom: 10,
-            }}
-          >
-            {assisted ? "Alta de consultorio" : "Paso 1 de 7 · Tu cuenta"}
-          </div>
-          {assisted ? (
-            <SignupAssisted message={assisted.message} mailto={assisted.mailto} />
-          ) : (
+      <div className={st.stack} data-screen-label="Signup">
+        {sentTo ? (
           <>
-          <h2 className="k-display" style={{ fontSize: 28, margin: "0 0 10px", lineHeight: 1.1 }}>
-            {sentTo ? "Revisá tu email" : "Creá tu cuenta en KineSoft"}
-          </h2>
-          <p style={{ fontSize: 13, color: "var(--navy-500)", margin: "0 0 22px", lineHeight: 1.5 }}>
-            {sentTo
-              ? "Abrí el link del email para confirmar tu cuenta. Después cargás los datos de tu consultorio."
-              : "Te mandamos un email para confirmarla. Después cargás los datos de tu consultorio en pocos pasos."}
-          </p>
-
-          {sentTo ? (
-            <SignupSent email={sentTo.email} message={sentTo.message} onBack={() => setSentTo(null)} />
-          ) : (
-          <form action={onSubmit} autoComplete="on" style={{ display: "grid", gap: 14 }}>
-            <Field label="Tu nombre completo" error={fieldErrors.fullName?.[0]}>
-              <input
-                type="text"
-                name="fullName"
-                required
-                defaultValue={draft.fullName}
-                placeholder="Camila Rossi"
-                style={inputStyle}
-                autoComplete="name"
-              />
-            </Field>
-
-            <Field label="Email profesional" error={fieldErrors.email?.[0]}>
-              <input
-                type="email"
-                name="email"
-                required
-                defaultValue={draft.email}
-                placeholder="camila@movare.com.ar"
-                style={inputStyle}
-                autoComplete="email"
-              />
-            </Field>
-
-            <Field
-              label="Contraseña"
-              hint="Mínimo 8 caracteres, con al menos una letra y un número"
-              error={fieldErrors.password?.[0]}
-            >
-              <input
-                type="password"
-                name="password"
-                required
-                minLength={8}
-                placeholder="••••••••"
-                style={inputStyle}
-                autoComplete="new-password"
-              />
-            </Field>
-
-            {error && <Notice tone="error" role="alert">{error}</Notice>}
-
-            <Button
-              variant="primary"
-              type="submit"
-              disabled={pending}
-              style={{ width: "100%", justifyContent: "center", padding: "14px 18px", fontSize: 14 }}
-            >
-              {pending ? "Creando tu cuenta…" : "Crear mi cuenta"} <IconArrow size={16} />
-            </Button>
-
-            <div style={{ marginTop: 4, fontSize: 13, color: "var(--navy-500)", textAlign: "center" }}>
-              ¿Ya tenés cuenta?{" "}
-              <Link href="/login" style={{ color: "var(--sky-700)", fontWeight: 600 }}>
-                Ingresar
-              </Link>
+            <div className={st.head}>
+              <h1 className={st.title}>Revisá tu email</h1>
+              <p className={st.sub}>
+                Abrí el link del email para confirmar tu cuenta. Después cargás los datos de tu consultorio.
+              </p>
             </div>
-          </form>
-          )}
+            <SignupSent email={sentTo.email} message={sentTo.message} onBack={() => setSentTo(null)} />
           </>
-          )}
-        </div>
+        ) : (
+          <>
+            <div className={st.head}>
+              <h1 className={st.title}>Creá tu consultorio</h1>
+              <p className={st.sub}>{copy.cardSub}</p>
+            </div>
+
+            {providers.length > 0 && (
+              <>
+                {/* Alta con Google/Facebook: el callback crea la cuenta ya verificada y sigue al onboarding. */}
+                <SocialButtons providers={providers} next="/onboarding" className={st.social} />
+                <div className="k-divider">o con tu email</div>
+              </>
+            )}
+
+            <form action={onSubmit} className={st.fields}>
+              {error && (
+                <div className="k-alert" role="alert">
+                  <IconAlert size={18} />
+                  <span>{error}</span>
+                </div>
+              )}
+              <Field id="signup-name" label="Nombre y apellido" error={fieldErrors.fullName?.[0]}>
+                <input
+                  className="k-input k-input-lg"
+                  type="text"
+                  name="fullName"
+                  autoComplete="name"
+                  required
+                  defaultValue={draft.fullName}
+                />
+              </Field>
+
+              <Field id="signup-email" label="Email" error={fieldErrors.email?.[0]}>
+                <input
+                  className="k-input k-input-lg"
+                  type="email"
+                  name="email"
+                  autoComplete="email"
+                  inputMode="email"
+                  required
+                  defaultValue={draft.email}
+                  placeholder="nombre@ejemplo.com"
+                />
+              </Field>
+
+              {/* El hint dice la regla entera de `NewPassword` (lib/validation.ts: 8+, una letra y un número): el
+                  «Al menos 8 caracteres.» del prototipo dejaba pasar «12345678» y el error llegaba recién al enviar. */}
+              <Field
+                id="signup-password"
+                label="Contraseña"
+                hint="Al menos 8 caracteres, con una letra y un número."
+                error={fieldErrors.password?.[0]}
+              >
+                <PasswordInput name="password" autoComplete="new-password" required minLength={8} large />
+              </Field>
+
+              <AuthSubmit label="Crear cuenta" busyLabel="Creando tu cuenta…" pending={pending} />
+            </form>
+
+            <p className={st.foot}>
+              ¿Ya tenés cuenta?{" "}
+              <Link href="/login" className="k-link">
+                Ingresá
+              </Link>
+            </p>
+          </>
+        )}
       </div>
-    </div>
+    </AuthShell>
+  );
+}
+
+/** Los puntos del split (`signup.html`): qué implica la prueba, sin prometer nada que la app no haga. */
+function SignupPoints({ firstPoint }: { firstPoint: string }) {
+  const points = [
+    firstPoint,
+    // Es así: el que crea la cuenta queda como OWNER del consultorio (lib/team-internal.ts).
+    "Quien crea la cuenta es titular del consultorio.",
+    "Cuando sumes equipo, pasás a Consultorio o Clínica.",
+  ];
+  return (
+    <section className={st.points} aria-label="Cómo funciona la prueba">
+      <ul role="list">
+        {points.map((p) => (
+          <li key={p}>
+            <IconCheckCircle size={24} />
+            <span>{p}</span>
+          </li>
+        ))}
+      </ul>
+      <p className={st.plans}>
+        ¿Vas a trabajar con más de 10 personas?{" "}
+        <Link href="/#contacto" className="k-link">
+          Escribinos
+        </Link>{" "}
+        y armamos el plan Libre.
+      </p>
+    </section>
   );
 }
 
@@ -277,32 +214,33 @@ export function SignupScreen({ assisted }: { assisted?: { message: string; mailt
  */
 export function SignupAssisted({ message, mailto }: { message: string; mailto: string | null }) {
   return (
-    <div style={{ display: "grid", gap: 14 }}>
-      <h2 className="k-display" style={{ fontSize: 28, margin: 0, lineHeight: 1.1 }}>
-        Escribinos para sumar tu consultorio
-      </h2>
-      <p style={{ fontSize: 14, color: "var(--navy-700)", margin: 0, lineHeight: 1.55 }}>{message}</p>
+    <div className={st.stack}>
+      <div className={st.head}>
+        <h1 className={st.title}>Escribinos para sumar tu consultorio</h1>
+        <p className={st.sub}>{message}</p>
+      </div>
       {mailto && (
         <Button
           variant="primary"
+          size="lg"
+          block
           type="button"
           onClick={() => {
             window.location.href = mailto;
           }}
-          style={{ width: "100%", justifyContent: "center", padding: "14px 18px", fontSize: 14 }}
         >
           Escribinos <IconArrow size={16} />
         </Button>
       )}
-      <p style={{ fontSize: 12, color: "var(--navy-500)", margin: 0, lineHeight: 1.5 }}>
+      <p className={`k-hint ${st.small}`} style={{ margin: 0 }}>
         ¿Te invitaron a sumarte a un equipo? Abrí el link del mail de invitación: desde ahí creás tu cuenta.
       </p>
-      <div style={{ fontSize: 13, color: "var(--navy-500)", textAlign: "center" }}>
+      <p className={st.foot}>
         ¿Ya tenés cuenta?{" "}
-        <Link href="/login" style={{ color: "var(--sky-700)", fontWeight: 600 }}>
+        <Link href="/login" className="k-link">
           Ingresar
         </Link>
-      </div>
+      </p>
     </div>
   );
 }
@@ -314,94 +252,35 @@ export function SignupAssisted({ message, mailto }: { message: string; mailto: s
  */
 export function SignupSent({ email, message, onBack }: { email: string; message: string; onBack: () => void }) {
   return (
-    <div style={{ display: "grid", gap: 14 }}>
-      <div role="status">
-        <Notice tone="success">
-          <strong style={{ display: "block", marginBottom: 4 }}>{message}</strong>
-          Lo enviamos a <strong>{email}</strong>. Abrí el link desde cualquier dispositivo para confirmar tu cuenta
-          y seguir con el alta del consultorio.
-        </Notice>
+    <div className={st.stack}>
+      <div className="k-alert k-alert-success" role="status">
+        <IconCheckCircle size={18} />
+        <div className={st.alertBody}>
+          <strong>{message}</strong>
+          <span>
+            Lo enviamos a <strong>{email}</strong>. Abrí el link desde cualquier dispositivo para confirmar tu cuenta
+            y seguir con el alta del consultorio.
+          </span>
+        </div>
       </div>
       <ResendVerification email={email} label="Reenviar el email" startCooling />
-      <p style={{ fontSize: 12, color: "var(--navy-500)", margin: 0, lineHeight: 1.5 }}>
+      <p className={`k-hint ${st.small}`} style={{ margin: 0 }}>
         ¿No llega? Revisá spam o promociones. Si ya tenías cuenta con ese email, no te llega un mail nuevo:{" "}
-        <Link href="/login" style={{ color: "var(--sky-700)", fontWeight: 600 }}>ingresá</Link> o{" "}
-        <Link href="/forgot" style={{ color: "var(--sky-700)", fontWeight: 600 }}>recuperá tu contraseña</Link>.
+        <Link href="/login" className="k-link">
+          ingresá
+        </Link>{" "}
+        o{" "}
+        <Link href="/forgot" className="k-link">
+          recuperá tu contraseña
+        </Link>
+        .
       </p>
-      <div style={{ fontSize: 13, color: "var(--navy-500)", textAlign: "center" }}>
+      <p className={st.foot}>
         ¿Email equivocado?{" "}
-        <button
-          type="button"
-          onClick={onBack}
-          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit", color: "var(--sky-700)", fontWeight: 600 }}
-        >
+        <button type="button" onClick={onBack} className={`k-link ${st.linkButton}`}>
           Volver
         </button>
-      </div>
-    </div>
-  );
-}
-
-const inputStyle: React.CSSProperties = {
-  marginTop: 6,
-  padding: "12px 14px",
-  borderRadius: 12,
-  background: "rgba(255,255,255,0.6)",
-  border: "1px solid rgba(15,30,51,0.08)",
-  display: "block",
-  width: "100%",
-  fontSize: 14,
-  color: "var(--navy-900)",
-  outline: "none",
-  boxSizing: "border-box",
-};
-
-function Field({
-  label,
-  hint,
-  error,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  error?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label style={{ display: "block" }}>
-      <span style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)" }}>{label}</span>
-      {children}
-      {error ? (
-        <span style={{ fontSize: 11, color: "var(--danger-fg)", marginTop: 4, display: "block" }}>{error}</span>
-      ) : hint ? (
-        <span style={{ fontSize: 11, color: "var(--navy-300)", marginTop: 4, display: "block" }}>{hint}</span>
-      ) : null}
-    </label>
-  );
-}
-
-function Notice({
-  tone,
-  role,
-  children,
-}: {
-  tone: "success" | "error";
-  role?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      role={role}
-      style={{
-        padding: 12,
-        borderRadius: 12,
-        background: tone === "success" ? "rgba(200,245,100,0.18)" : "var(--danger-bg)",
-        color: tone === "success" ? "var(--navy-900)" : "var(--danger-fg)",
-        fontSize: 13,
-        lineHeight: 1.5,
-      }}
-    >
-      {children}
+      </p>
     </div>
   );
 }

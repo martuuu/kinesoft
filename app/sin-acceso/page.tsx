@@ -1,7 +1,6 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
-import { AuthShell } from "@/components/screens/auth-shell";
-import { Button } from "@/components/ui/button";
+import { AuthShell } from "@/components/auth/auth-shell";
+import { SignOutButton, StatusHeading, StatusLink, StatusText } from "@/app/plataforma-mfa/shared";
 import { getAccessSnapshot, type AccessMembership } from "@/lib/session";
 import { isUsableMembership } from "@/lib/access-logic";
 
@@ -25,10 +24,11 @@ export default async function SinAccesoPage() {
 
   if (s.state.kind === "ok") {
     return (
-      <AuthShell eyebrow="Acceso" heading="Ya podés entrar." blurb="Tu usuario tiene un consultorio disponible.">
-        <Heading eyebrow="Todo en orden" title="Tu acceso está activo" />
-        <Cta href="/dashboard" label="Entrar a KineSoft" />
-        <SignOut />
+      <AuthShell variant="centered" introAs="p">
+        <StatusHeading eyebrow="Todo en orden" title="Tu acceso está activo" />
+        <StatusText last>Tu usuario tiene un consultorio disponible.</StatusText>
+        <StatusLink href="/dashboard">Entrar a KineSoft</StatusLink>
+        <SignOutButton />
       </AuthShell>
     );
   }
@@ -37,15 +37,15 @@ export default async function SinAccesoPage() {
   const copy = reasonCopy(reason, namesFor(reason, s.memberships));
 
   return (
-    <AuthShell eyebrow="Acceso" heading="No podés entrar todavía." blurb={copy.blurb}>
-      <Heading eyebrow="Sin acceso" title={copy.title} />
-      <p style={{ fontSize: 14, color: "var(--navy-700)", margin: "0 0 10px", lineHeight: 1.55 }}>{copy.body}</p>
-      <p style={{ fontSize: 13, color: "var(--navy-500)", margin: "0 0 18px", lineHeight: 1.55 }}>
+    <AuthShell variant="centered" introAs="p">
+      <StatusHeading eyebrow="Sin acceso" title={copy.title} />
+      <StatusText>{copy.body}</StatusText>
+      <StatusText muted last>
         Si te invitaron a otro consultorio, o querés armar el tuyo, podés seguir desde acá.
-      </p>
+      </StatusText>
       {/* /onboarding con membresías no usables muestra las invitaciones pendientes o el alta (IAM-3a): no rebota. */}
-      <Cta href="/onboarding" label="Ver invitaciones o crear mi consultorio" />
-      <SignOut />
+      <StatusLink href="/onboarding">Ver invitaciones o crear mi consultorio</StatusLink>
+      <SignOutButton />
     </AuthShell>
   );
 }
@@ -70,68 +70,23 @@ function list(names: string[]): string {
 }
 
 /** Copy en voseo por motivo (no se exporta: Next solo admite exports de página en page.tsx). */
-function reasonCopy(reason: Reason, names: string[]): { title: string; body: string; blurb: string } {
+function reasonCopy(reason: Reason, names: string[]): { title: string; body: string } {
   const where = list(names);
   switch (reason) {
     case "all_disabled":
       return {
         title: "Tu acceso está suspendido",
         body: `Tu usuario está deshabilitado en ${where}. Si creés que es un error, hablá con quien administra el consultorio para que te vuelva a habilitar.`,
-        blurb: "El consultorio suspendió tu acceso.",
       };
     case "pending_only":
       return {
         title: "Tu acceso todavía no está activo",
-        body: `Tu lugar en ${where} está pendiente de activación. Abrí el link de la invitación que te llegó por email o pedile al consultorio que te mande uno nuevo.`,
-        blurb: "Falta activar tu invitación.",
+        body: `Tu lugar en ${where} está pendiente de activación. Abrí el link de tu invitación o pedile al consultorio que te mande uno nuevo.`,
       };
     case "missing_practitioner":
       return {
         title: "Falta configurar tu perfil",
         body: `Sos parte de ${where}, pero tu usuario no tiene un perfil de profesional ahí y sin él no podemos abrir la agenda. Pedile a quien administra el consultorio que lo revise en Configuración → Usuarios.`,
-        blurb: "Tu usuario necesita un ajuste del consultorio.",
       };
   }
-}
-
-function Heading({ eyebrow, title }: { eyebrow: string; title: string }) {
-  return (
-    <>
-      <div
-        style={{
-          fontSize: 12,
-          fontWeight: 600,
-          color: "var(--sky-700)",
-          letterSpacing: "0.06em",
-          textTransform: "uppercase",
-          marginBottom: 10,
-        }}
-      >
-        {eyebrow}
-      </div>
-      <h2 className="k-display" style={{ fontSize: 26, margin: "0 0 12px", lineHeight: 1.15 }}>
-        {title}
-      </h2>
-    </>
-  );
-}
-
-function Cta({ href, label }: { href: string; label: string }) {
-  return (
-    <Link href={href} style={{ display: "block" }}>
-      <Button variant="primary" style={{ width: "100%", justifyContent: "center", padding: "12px 18px" }}>
-        {label}
-      </Button>
-    </Link>
-  );
-}
-
-function SignOut() {
-  return (
-    <form action="/api/auth/sign-out" method="post" style={{ marginTop: 10 }}>
-      <Button type="submit" variant="ghost" style={{ width: "100%", justifyContent: "center", padding: "12px 18px" }}>
-        Cerrar sesión
-      </Button>
-    </form>
-  );
 }

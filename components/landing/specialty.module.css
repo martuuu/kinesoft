@@ -1,0 +1,120 @@
+/* [VX2-c1] «Enfoque exclusivo para kinesiólogos y osteópatas» (landing-b.html .kine, sin el switch: D-VX15). */
+.section {
+  background: #fff;
+  border-block: 1px solid rgba(15, 30, 51, 0.06);
+}
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: clamp(32px, 6vw, 96px);
+  align-items: center;
+}
+.head {
+  margin-bottom: 8px;
+}
+.list {
+  display: grid;
+  gap: 4px;
+  margin-top: 16px;
+}
+.list li {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 16px;
+  padding: 14px 0;
+  border-top: 1px solid rgba(15, 30, 51, 0.07);
+}
+.list li:first-child {
+  border-top: 0;
+}
+.list h3 {
+  font-size: 17px;
+  font-weight: 650;
+  margin-bottom: 2px;
+}
+.list p {
+  color: var(--navy-500);
+  font-size: 15px;
+  line-height: 1.5;
+}
+.other {
+  margin-top: 20px;
+  font-size: 15px;
+  color: var(--navy-500);
+}
+
+/* Mock de plan y EVA (decorativo). */
+.mock {
+  display: grid;
+  gap: 16px;
+  padding: 24px;
+  border-radius: var(--r-xl);
+  background: var(--bg-public);
+  border: 1px solid rgba(15, 30, 51, 0.06);
+  font-size: 12px;
+  color: var(--navy-700);
+  user-select: none;
+}
+.card {
+  background: #fff;
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: var(--shadow-card);
+  display: grid;
+  gap: 14px;
+}
+.cardHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cardHead > span:nth-child(2) {
+  flex: 1;
+}
+.cardTitle {
+  font-size: 15px;
+}
+.disc {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--disc-kine);
+}
+.dots {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.dots i {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--disc-kine);
+}
+.dots .done {
+  background: var(--disc-kine);
+}
+.dots .next {
+  border-style: dashed;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.eva {
+  width: 100%;
+  height: 80px;
+  display: block;
+}
+
+@media (max-width: 1023px) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

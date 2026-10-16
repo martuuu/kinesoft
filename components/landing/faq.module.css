@@ -1,0 +1,48 @@
+/* [VX2-c1] FAQ con <details>/<summary>: accesible y sin JS (shared.css .faq). */
+.faq {
+  display: grid;
+  gap: 12px;
+  max-width: var(--container-narrow);
+  margin-inline: auto;
+}
+.item {
+  background: #fff;
+  border-radius: var(--r-md);
+  border: 1px solid rgba(15, 30, 51, 0.08);
+}
+.item summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 60px;
+  padding: 16px 20px;
+  list-style: none;
+  font-size: 17px;
+  font-weight: 600;
+  border-radius: var(--r-md);
+  cursor: pointer;
+}
+.item summary::-webkit-details-marker {
+  display: none;
+}
+.item summary svg {
+  width: 20px;
+  height: 20px;
+  color: var(--navy-400);
+  flex-shrink: 0;
+  transition: transform var(--dur-base) var(--ease-out);
+}
+.item[open] summary svg {
+  transform: rotate(45deg);
+}
+.answer {
+  padding: 0 20px 20px;
+  color: var(--navy-500);
+  line-height: var(--lh-relaxed);
+}
+@media (prefers-reduced-motion: reduce) {
+  .item summary svg {
+    transition: none;
+  }
+}

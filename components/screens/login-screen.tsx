@@ -1,360 +1,122 @@
 import Link from "next/link";
-import { KineLogo } from "@/components/ui/kine-logo";
-import { PhotoSlot } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Tag } from "@/components/ui/tag";
-import { IconArrow, IconCheck } from "@/components/ui/icons";
-import { loginErrorFeedback, type ConfirmLinkKind } from "@/components/screens/auth-feedback";
+import { AuthShell } from "@/components/auth/auth-shell";
+import { SocialButtons } from "@/components/auth/social-buttons";
+import { AuthSubmit } from "@/components/auth/auth-submit";
+import { Field } from "@/components/ui/field";
+import { PasswordInput } from "@/components/ui/password-input";
+import { IconAlert } from "@/components/ui/icons";
+import { BRAND_NAME } from "@/lib/brand";
+import type { OAuthProvider } from "@/lib/oauth-start";
+import { authMethodsSubtitle, loginErrorFeedback, type ConfirmLinkKind } from "@/components/screens/auth-feedback";
 import { ResendVerification } from "@/components/screens/resend-verification";
+import st from "./auth-screens.module.css";
+
+/** Id del aviso de error: los campos lo apuntan con `aria-errormessage` cuando el error es de credenciales. */
+export const LOGIN_ALERT_ID = "login-error";
+
+/** Códigos cuyo arreglo está en lo que se tipeó: marcan los dos campos como inválidos (el resto no es culpa del form). */
+const FIELD_ERROR_CODES = new Set(["invalid_credentials", "missing_credentials"]);
 
 /**
- * El mapa de códigos → mensaje + salidas vive en `auth-feedback.ts` (lógica pura, con su unit test). Acá solo
- * se pinta: nunca el valor crudo de la query.
+ * [VX2-a] Login (D-VX1, `design_source/vx0/login-c.html`): AuthShell `product` + card con sociales arriba (D-VX4),
+ * «o con tu email» y el form nativo a `/api/auth/sign-in` (funciona sin JS).
+ *
+ * - El mapa de códigos → mensaje + salidas vive en `auth-feedback.ts` (lógica pura, con su unit test). Acá solo se
+ *   pinta: nunca el valor crudo de la query.
+ * - Sin «Matrícula» (no existe ese ingreso) ni «Mantenerme conectada» (el checkbox no hacía nada: la sesión de
+ *   Supabase ya persiste; queda en el backlog C).
+ * - `providers` lo decide la page con `visibleOAuthProviders()` (D-VX16); la bajada se arma con los mismos.
  */
 export function LoginScreen({
   error,
   next,
   email,
   linkKind,
-}: { error?: string; next?: string; email?: string; linkKind?: ConfirmLinkKind } = {}) {
+  providers = [],
+}: {
+  error?: string;
+  next?: string;
+  email?: string;
+  linkKind?: ConfirmLinkKind;
+  providers?: readonly OAuthProvider[];
+} = {}) {
   const feedback = loginErrorFeedback(error, linkKind);
+  const fieldsInvalid = Boolean(error && FIELD_ERROR_CODES.has(error));
   // `next` ya viene validado por la page (safeNext); acá solo se propaga.
   const q = next ? `?next=${encodeURIComponent(next)}` : "";
+  // Field no recibe `error` (el mensaje está en el aviso, no se repite debajo de cada campo): el input lleva el
+  // aria-invalid/aria-errormessage que apunta al aviso. Ver el handoff de field.tsx en el reporte de VX2-a.
+  const invalidProps = fieldsInvalid ? { "aria-invalid": true, "aria-errormessage": LOGIN_ALERT_ID } : {};
+
   return (
-    <div
-      className="k-app"
-      data-screen-label="Login"
-      style={{
-        minHeight: "100vh",
-        background: "var(--bg-app)",
-        position: "relative",
-        overflow: "hidden",
-        display: "flex",
-      }}
-    >
-      <div
-        aria-hidden
-        style={{
-          position: "absolute",
-          top: -120,
-          right: -80,
-          width: 460,
-          height: 460,
-          borderRadius: "50%",
-          background: "radial-gradient(circle, var(--sky-300), transparent 70%)",
-          opacity: 0.7,
-          filter: "blur(10px)",
-        }}
-      />
-      <div
-        aria-hidden
-        style={{
-          position: "absolute",
-          bottom: -160,
-          left: -120,
-          width: 520,
-          height: 520,
-          borderRadius: "50%",
-          background: "radial-gradient(circle, var(--lime-300), transparent 65%)",
-          opacity: 0.45,
-          filter: "blur(20px)",
-        }}
-      />
-
-      {/* Brand panel */}
-      <div
-        className="login-brand"
-        style={{
-          flex: 1,
-          padding: 56,
-          display: "flex",
-          flexDirection: "column",
-          position: "relative",
-          zIndex: 2,
-        }}
-      >
-        <KineLogo size={32} />
-
-        <div style={{ marginTop: "auto", maxWidth: 460 }}>
-          <Tag tone="lime" className="mb-6">
-            <span
-              style={{
-                width: 6,
-                height: 6,
-                borderRadius: "50%",
-                background: "var(--navy-900)",
-              }}
-            />
-            Plataforma para kinesiólogos
-          </Tag>
-          <h1
-            className="k-display"
-            style={{ fontSize: 56, lineHeight: 1.02, margin: "0 0 18px" }}
-          >
-            Acompañá la
-            <br />
-            recuperación de tus
-            <br />
-            pacientes, sesión
-            <br />a sesión.
-          </h1>
-          <p
-            style={{
-              fontSize: 16,
-              lineHeight: 1.55,
-              color: "var(--navy-500)",
-              margin: 0,
-              maxWidth: 420,
-            }}
-          >
-            {/* EV1-C2: el login es el mismo para todas las verticales; Clínica general no es «práctica kinésica». */}
-            Agenda, historia clínica, planes de ejercicios y seguimiento — todo en
-            un mismo lugar, pensado para consultorios de salud.
-          </p>
+    <AuthShell variant="product" footerLinks={[{ label: `Conocé ${BRAND_NAME}`, href: "/" }]}>
+      <div className={st.stack} data-screen-label="Login">
+        <div className={st.head}>
+          <h1 className={st.title}>Ingresá a tu consultorio</h1>
+          <p className={st.sub}>{authMethodsSubtitle(providers)}</p>
         </div>
 
-        <div
-          className="k-glass"
-          style={{
-            marginTop: 56,
-            padding: 16,
-            borderRadius: 20,
-            maxWidth: 380,
-            display: "flex",
-            alignItems: "center",
-            gap: 14,
-          }}
-        >
-          <PhotoSlot
-            label="kine + paciente"
-            style={{
-              width: 64,
-              height: 64,
-              borderRadius: 16,
-              flexShrink: 0,
-            }}
-          />
-          <div style={{ flex: 1 }}>
-            <div
-              style={{
-                fontSize: 13,
-                lineHeight: 1.4,
-                color: "var(--navy-700)",
-                fontWeight: 500,
-              }}
-            >
-              “Bajamos el tiempo administrativo a la mitad. Tengo todas las
-              sesiones de mis pacientes a mano.”
-            </div>
-            <div
-              style={{
-                fontSize: 11,
-                color: "var(--navy-300)",
-                marginTop: 4,
-              }}
-            >
-              Lic. Camila Rossi · Centro Movare, Rosario
-            </div>
-          </div>
-        </div>
+        {providers.length > 0 && (
+          <>
+            <SocialButtons providers={providers} next={next} className={st.social} />
+            <div className="k-divider">o con tu email</div>
+          </>
+        )}
 
-        <div style={{ marginTop: 28, fontSize: 12, color: "var(--navy-300)" }}>
-          © 2026 KineSoft · Buenos Aires, Argentina
-        </div>
-      </div>
-
-      {/* Form card */}
-      <div
-        className="login-form-wrap"
-        style={{
-          width: 540,
-          padding: "56px 56px 56px 0",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          position: "relative",
-          zIndex: 2,
-        }}
-      >
-        <div
-          className="k-glass-strong"
-          style={{
-            padding: 40,
-            borderRadius: "var(--r-2xl)",
-            width: "100%",
-            maxWidth: 460,
-          }}
-        >
-          <div
-            style={{
-              fontSize: 12,
-              fontWeight: 600,
-              color: "var(--sky-700)",
-              letterSpacing: "0.06em",
-              textTransform: "uppercase",
-              marginBottom: 10,
-            }}
-          >
-            Bienvenido de vuelta
-          </div>
-          <h2 className="k-display" style={{ fontSize: 32, margin: "0 0 28px", lineHeight: 1.1 }}>
-            Ingresá a tu consultorio
-          </h2>
-
-          <form action={`/api/auth/sign-in${q}`} method="post" autoComplete="on">
-            {/* El aviso va DENTRO del form: «Reenviar email de confirmación» lee el email que la persona
-                tipeó en este form (IAM-2d), sin pedírselo de nuevo. */}
-            {feedback && (
-              <div
-                role="alert"
-                style={{
-                  padding: 10,
-                  borderRadius: 10,
-                  background: "var(--danger-bg)",
-                  color: "var(--danger-fg)",
-                  fontSize: 12,
-                  marginBottom: 16,
-                  display: "grid",
-                  gap: 10,
-                }}
-              >
+        <form action={`/api/auth/sign-in${q}`} method="post" className={st.fields}>
+          {/* El aviso va DENTRO del form: «Reenviar email de confirmación» lee el email que la persona
+              tipeó en este form (IAM-2d), sin pedírselo de nuevo. */}
+          {feedback && (
+            <div className="k-alert" role="alert" id={LOGIN_ALERT_ID}>
+              <IconAlert size={18} />
+              <div className={st.alertBody}>
                 <span>{feedback.message}</span>
                 {feedback.ctas.includes("forgot") && (
-                  <Link href="/forgot" style={{ color: "var(--sky-700)", fontWeight: 600 }}>
-                    Pedir un link para crear una contraseña nueva →
-                  </Link>
+                  <Link href="/forgot">Pedir un link para crear una contraseña nueva</Link>
                 )}
                 {feedback.ctas.includes("resend_verification") && (
                   <ResendVerification label="Reenviar email de confirmación" />
                 )}
               </div>
-            )}
-            <Field label="Email profesional">
-              <input
-                type="email"
-                name="email"
-                required
-                defaultValue={email ?? ""}
-                placeholder="camila.rossi@movare.com.ar"
-                style={inputStyle}
-              />
-            </Field>
-
-            <Field label="Contraseña">
-              <input
-                type="password"
-                name="password"
-                required
-                placeholder="••••••••••"
-                style={inputStyle}
-              />
-            </Field>
-
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginBottom: 24,
-                marginTop: 12,
-              }}
-            >
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  fontSize: 13,
-                  color: "var(--navy-500)",
-                }}
-              >
-                <input type="checkbox" name="remember" defaultChecked style={{ display: "none" }} />
-                <span
-                  style={{
-                    width: 16,
-                    height: 16,
-                    borderRadius: 5,
-                    background: "var(--sky-700)",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: "#fff",
-                  }}
-                >
-                  <IconCheck size={11} stroke={3} />
-                </span>
-                Mantenerme conectada
-              </label>
-              <Link href="/forgot" style={{ fontSize: 13, color: "var(--sky-700)", fontWeight: 600 }}>
-                ¿Olvidaste tu clave?
-              </Link>
             </div>
+          )}
 
-            <Button
-              variant="primary"
-              type="submit"
-              style={{ width: "100%", justifyContent: "center", padding: "14px 18px", fontSize: 14 }}
-            >
-              Ingresar a KineSoft <IconArrow size={16} />
-            </Button>
-          </form>
+          <Field id="login-email" label="Email">
+            <input
+              className="k-input k-input-lg"
+              type="email"
+              name="email"
+              autoComplete="email"
+              inputMode="email"
+              required
+              defaultValue={email ?? ""}
+              placeholder="nombre@ejemplo.com"
+              {...invalidProps}
+            />
+          </Field>
 
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              margin: "22px 0",
-              color: "var(--navy-200)",
-              fontSize: 11,
-            }}
+          <Field
+            id="login-password"
+            label="Contraseña"
+            labelAside={
+              <Link href="/forgot" className={`k-link ${st.small}`}>
+                ¿Olvidaste tu contraseña?
+              </Link>
+            }
           >
-            <span style={{ flex: 1, height: 1, background: "rgba(15,30,51,0.08)" }} />
-            o continuá con
-            <span style={{ flex: 1, height: 1, background: "rgba(15,30,51,0.08)" }} />
-          </div>
+            <PasswordInput name="password" autoComplete="current-password" required large {...invalidProps} />
+          </Field>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <form action={`/api/auth/google${q}`} method="post">
-              <Button variant="ghost" type="submit" style={{ justifyContent: "center", fontSize: 13, width: "100%" }}>
-                <span style={{ fontWeight: 700, color: "#4285F4" }}>G</span> Google
-              </Button>
-            </form>
-            <Button variant="ghost" style={{ justifyContent: "center", fontSize: 13 }}>
-              <span style={{ fontWeight: 700 }}>⏵</span> Matrícula
-            </Button>
-          </div>
+          <AuthSubmit label="Ingresar" busyLabel="Ingresando…" />
+        </form>
 
-          <div style={{ marginTop: 28, fontSize: 13, color: "var(--navy-500)", textAlign: "center" }}>
-            ¿Sos nuevo acá?{" "}
-            <Link href="/signup" style={{ color: "var(--sky-700)", fontWeight: 600 }}>
-              Creá tu consultorio →
-            </Link>
-          </div>
-        </div>
+        <p className={st.foot}>
+          ¿Todavía no tenés cuenta?{" "}
+          <Link href="/signup" className="k-link">
+            Creá tu consultorio
+          </Link>
+        </p>
       </div>
-    </div>
-  );
-}
-
-const inputStyle: React.CSSProperties = {
-  marginTop: 8,
-  padding: "14px 16px",
-  borderRadius: 14,
-  background: "rgba(255,255,255,0.6)",
-  border: "1px solid rgba(15,30,51,0.08)",
-  display: "block",
-  width: "100%",
-  fontSize: 14,
-  color: "var(--navy-900)",
-  outline: "none",
-};
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label style={{ display: "block", marginBottom: 18 }}>
-      <span style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)" }}>{label}</span>
-      {children}
-    </label>
+    </AuthShell>
   );
 }

@@ -4,8 +4,12 @@ import { getSessionUser } from "@/lib/onboarding-internal";
 import { signupMode } from "@/lib/env";
 import { signupAssistedMessage } from "@/lib/onboarding-logic";
 import { supportEmail, supportMailto } from "@/lib/support-contact";
+import { visibleOAuthProviders } from "@/lib/oauth-providers-public";
+import { getPublicPlanCatalog } from "@/lib/saas-plans-public";
+import { PLAN_DEFAULTS } from "@/lib/saas-plans-logic";
+import { BRAND_NAME } from "@/lib/brand";
 
-export const metadata = { title: "Crear cuenta · KineSoft" };
+export const metadata = { title: `Crear cuenta · ${BRAND_NAME}` };
 export const dynamic = "force-dynamic";
 
 /**
@@ -35,5 +39,10 @@ export default async function SignupPage({
   if (signupMode() === "assisted") {
     return <SignupScreen assisted={{ message: signupAssistedMessage(), mailto: supportMailto(supportEmail(), "Alta de consultorio") }} />;
   }
-  return <SignupScreen />;
+  // VX2-a: los días de prueba del plan Individual salen del catálogo público (`SaasPlanConfig`, lo edita Plataforma);
+  // sin base (`[]`, el catálogo nunca tira) caen al default del código, que es el mismo con el que nace la prueba.
+  // Los dos lookups van en paralelo: cada uno tiene su propio tope y ninguno tira.
+  const [catalog, providers] = await Promise.all([getPublicPlanCatalog(), visibleOAuthProviders()]);
+  const trialDays = catalog.find((p) => p.plan === "INDIVIDUAL")?.trialDays ?? PLAN_DEFAULTS.INDIVIDUAL.trialDays;
+  return <SignupScreen providers={providers} trialDays={trialDays} />;
 }

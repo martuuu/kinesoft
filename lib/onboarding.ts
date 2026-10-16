@@ -211,11 +211,15 @@ export async function saveOnboardingClinic(
           source: "onboarding",
           ownerClinical,
         });
-        // PL-1a (§20.5.8, PL-D10): el alta web nace INDIVIDUAL en prueba de 14 días (hasta el fin del día AR; mismo
+        // PL-1a (§20.5.8, PL-D10): el alta web nace INDIVIDUAL en prueba (14 días por default; hasta el fin del día AR; mismo
         // cálculo que el alta desde Plataforma). Por el escritor único y en la MISMA tx: o nace con la prueba, o no
         // nace. Antes (BO-D1) nacía en prueba PRO. `saasPlan` ya es INDIVIDUAL por default de la columna: va igual en
         // el patch para que el contrato sea explícito (y el escritor espeja `plan` = FREE si hiciera falta).
-        const sub = initialSubscriptionFor("INDIVIDUAL", undefined, new Date());
+        // VX2.1: los días salen de `SaasPlanConfig.trialDays` (lo que promete el signup, que lee el catálogo); sin
+        // fila cae a `PLAN_DEFAULTS` (undefined). Antes usaba siempre el default y, si Plataforma cambiaba la prueba,
+        // la pantalla y el consultorio decían cosas distintas.
+        const catalog = await tx.saasPlanConfig.findUnique({ where: { plan: "INDIVIDUAL" }, select: { trialDays: true } });
+        const sub = initialSubscriptionFor("INDIVIDUAL", catalog?.trialDays, new Date());
         const ent = await applyTenantEntitlementsInTx(tx, {
           tenantId: created.tenantId,
           source: "onboarding",

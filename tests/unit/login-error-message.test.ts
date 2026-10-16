@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   FORGOT_SENT,
   RESEND_COOLDOWN_S,
+  authMethodsSubtitle,
+  signupTrialCopy,
   cooldownSecondsLeft,
   loginErrorFeedback,
   loginErrorMessage,
@@ -114,5 +116,29 @@ describe("[IAM-2d] cooldown de reenvío", () => {
     expect(FORGOT_SENT).toBe(
       "Si existe una cuenta con ese email, te mandamos un link para crear una contraseña nueva. Vence en 1 hora."
     );
+  });
+});
+
+describe("[VX2-a] copy según la config", () => {
+  it("authMethodsSubtitle nombra solo los proveedores que se muestran (D-VX16)", () => {
+    expect(authMethodsSubtitle(["google", "facebook"])).toBe("Con Google, Facebook o tu email.");
+    expect(authMethodsSubtitle(["google"])).toBe("Con Google o tu email.");
+    expect(authMethodsSubtitle(["facebook"])).toBe("Con Facebook o tu email.");
+    expect(authMethodsSubtitle([])).toBe("Con tu email y tu contraseña.");
+  });
+
+  it("signupTrialCopy: N días; 1 en singular; 0, negativo o basura → sin «gratis»", () => {
+    expect(signupTrialCopy(14)).toEqual({
+      eyebrow: "Plan Individual · 14 días gratis",
+      cardSub: "Plan Individual con 14 días gratis. No te pedimos medio de pago.",
+      firstPoint: "14 días gratis, sin medio de pago.",
+    });
+    expect(signupTrialCopy(1).eyebrow).toBe("Plan Individual · 1 día gratis");
+    expect(signupTrialCopy(1).firstPoint).toBe("1 día gratis, sin medio de pago.");
+    for (const n of [0, -3, Number.NaN]) {
+      const c = signupTrialCopy(n);
+      expect(Object.values(c).join(" ")).not.toMatch(/gratis/);
+      expect(c.eyebrow).toBe("Plan Individual");
+    }
   });
 });

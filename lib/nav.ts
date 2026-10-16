@@ -9,7 +9,7 @@
  * `navFor` filtra.
  *
  * Esconder una entrada es UX: la barrera es `assertModule`/`requireModule` en
- * cada action y `guardModuleSegment` en el layout del segmento (`lib/authz.ts`).
+ * cada action; el layout del segmento usa `moduleWall` (`lib/module-wall.ts`, VX2-b2: muro del plan o redirect).
  *
  * "Planes" (S21, ES3 · PD-11): UNA entrada con pestañas por disciplina
  * (`/planes` lleva a `/planes/kinesiologia` u `/planes/osteopatia`); su guard

@@ -22,6 +22,8 @@ import {
  * `onSend` recibe el contenedor del botón para que el caso del login pueda leer el email del form que lo
  * contiene (`Button` no reenvía `ref`).
  * Si la action falla (email inválido, rate limit) se muestra el error y NO arranca el cooldown.
+ *
+ * VX2-a: tamaño `md` (44 px, táctil en mobile) y ancho completo con las clases de C-F2, sin estilos inline.
  */
 export function ResendButton({
   label,
@@ -73,24 +75,14 @@ export function ResendButton({
 
   return (
     <div ref={ref} style={{ display: "grid", gap: 8 }}>
-      <Button
-        type="button"
-        variant={variant}
-        disabled={pending || left > 0}
-        onClick={onClick}
-        style={{ width: "100%", justifyContent: "center" }}
-      >
+      <Button type="button" variant={variant} size="md" block disabled={pending || left > 0} onClick={onClick}>
         {resendButtonLabel(label, left, pending)}
       </Button>
       {feedback && (
         <p
           role={feedback.tone === "error" ? "alert" : "status"}
-          style={{
-            margin: 0,
-            fontSize: 12,
-            lineHeight: 1.5,
-            color: feedback.tone === "error" ? "var(--danger-fg)" : "var(--navy-500)",
-          }}
+          className={feedback.tone === "error" ? "k-field-error" : "k-hint"}
+          style={{ margin: 0, lineHeight: 1.5 }}
         >
           {feedback.text}
         </p>

@@ -18,11 +18,18 @@ export function RouteError({
   reset,
   title = "Algo salió mal",
   kind = "route",
+  headingAs = "h2",
 }: {
   error: Error & { digest?: string };
   reset: () => void;
   title?: string;
   kind?: ClientErrorKind;
+  /**
+   * VX2-b1: "h1" cuando el error ES la página (p. ej. `/invite/<token>`, que lo monta dentro de `AuthShell centered`
+   * con `introAs="p"`: sin esto la página quedaba sin h1). Default "h2": dentro del workspace el título de la sección
+   * vive en el layout.
+   */
+  headingAs?: "h1" | "h2";
 }) {
   useEffect(() => {
     reportClientError(error, { kind });
@@ -30,6 +37,7 @@ export function RouteError({
     console.error("[route-error]", error?.digest ?? "", error);
   }, [error, kind]);
 
+  const Heading = headingAs;
   return (
     <div
       role="alert"
@@ -39,22 +47,23 @@ export function RouteError({
         alignItems: "center",
         justifyContent: "center",
         gap: 14,
-        padding: 40,
-        minHeight: 320,
+        padding: headingAs === "h1" ? 0 : 40,
+        minHeight: headingAs === "h1" ? undefined : 320,
         textAlign: "center",
       }}
     >
-      <h2 className="k-display" style={{ fontSize: 22, margin: 0, color: "var(--navy-900)" }}>
+      <Heading className="k-display" style={{ fontSize: 24, margin: 0, color: "var(--navy-900)", lineHeight: 1.2 }}>
         {title}
-      </h2>
-      <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0, maxWidth: 380 }}>
+      </Heading>
+      <p style={{ fontSize: 15, color: "var(--navy-500)", margin: 0, maxWidth: 380, lineHeight: 1.55 }}>
         Probá de nuevo. Si sigue pasando, actualizá la página.
       </p>
-      <Button type="button" onClick={() => reset()}>
+      <Button type="button" size="md" onClick={() => reset()}>
         Reintentar
       </Button>
       {error?.digest ? (
-        <p style={{ fontSize: 12, color: "var(--navy-400)", margin: 0 }}>
+        // navy-500 y no navy-400: el código se dicta a soporte, tiene que leerse (AA).
+        <p style={{ fontSize: 13, color: "var(--navy-500)", margin: 0 }}>
           Código: <code style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>{error.digest}</code>
         </p>
       ) : null}

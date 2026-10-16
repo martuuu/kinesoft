@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
-import { AuthShell } from "@/components/screens/auth-shell";
+import { AuthShell } from "@/components/auth/auth-shell";
+import { StatusHeading, StatusText } from "@/app/plataforma-mfa/shared";
 import { SecuritySettings } from "@/components/account/security-settings";
 import { getAccessSnapshot } from "@/lib/session";
 import { loadTwoFactorOverview } from "@/lib/two-factor-internal";
@@ -38,11 +39,13 @@ export default async function SeguridadPage({ searchParams }: { searchParams?: {
   const fallback = snapshot.usable.length > 0 ? "/dashboard" : snapshot.profile.isPlatformAdmin ? "/plataforma" : "/dashboard";
   const backHref = safeNext(nextParam, fallback);
   return (
-    <AuthShell
-      eyebrow="Tu cuenta"
-      heading="Seguridad de la cuenta."
-      blurb="La verificación en dos pasos pide, además de tu contraseña, un código de tu teléfono o de tu email. Es opcional, salvo para cambiar el plan, los permisos del equipo o la titularidad del consultorio."
-    >
+    <AuthShell variant="centered" introAs="p">
+      {/* VX2-b1: la h1 vive en la card (en `centered` la intro no se pinta); SecuritySettings sigue con sus h2. */}
+      <StatusHeading eyebrow="Tu cuenta" title="Seguridad de la cuenta" />
+      <StatusText muted last>
+        La verificación en dos pasos pide, además de tu contraseña, un código de tu teléfono o de tu email. Es opcional,
+        salvo para cambiar el plan, los permisos del equipo o la titularidad del consultorio.
+      </StatusText>
       <SecuritySettings overview={overview} emailMasked={maskEmail(snapshot.profile.email)} backHref={backHref} />
     </AuthShell>
   );

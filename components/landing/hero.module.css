@@ -1,0 +1,72 @@
+/* [VX2-c1] Hero editorial centrado (landing-b.html .hero). Entrada por CSS (.k-enter*, D-VX6), sin framer. */
+.hero {
+  position: relative;
+  padding-block: clamp(48px, 8vw, 112px) 0;
+  background: var(--bg-public);
+  overflow: hidden;
+}
+.copy {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  gap: 24px;
+  max-width: 920px;
+  margin-inline: auto;
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(15, 30, 51, 0.08);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--navy-700);
+}
+.pillDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--lime-500);
+}
+.h1 {
+  font-size: var(--fs-display-1);
+  line-height: var(--lh-tight);
+  font-weight: 650;
+  letter-spacing: -0.04em;
+  text-wrap: balance;
+}
+.h1 em {
+  font-style: normal;
+  color: var(--sky-700);
+}
+.lead {
+  max-width: 640px;
+}
+.ctas {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.note {
+  font-size: 14px;
+  color: var(--navy-500);
+}
+.frameWrap {
+  margin-top: clamp(48px, 6vw, 80px);
+  position: relative;
+}
+@media (max-width: 479px) {
+  .ctas {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+  .ctas > * {
+    width: 100%;
+  }
+}

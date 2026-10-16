@@ -1,0 +1,137 @@
+/* [VX2-c1] Header de la landing (shared.css .site-header/.nav/.nav-panel). Menú mobile < 1024 (mobile-nav.tsx). */
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: rgba(247, 250, 253, 0.86);
+  -webkit-backdrop-filter: saturate(160%) blur(12px);
+  backdrop-filter: saturate(160%) blur(12px);
+  border-bottom: 1px solid rgba(15, 30, 51, 0.06);
+}
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  height: 72px;
+}
+.logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 10px;
+  text-decoration: none;
+  color: var(--navy-900);
+  flex-shrink: 0;
+}
+.logo:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+.logoWord {
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+.links {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--navy-700);
+  text-decoration: none;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+.links a:hover {
+  background: rgba(31, 79, 190, 0.07);
+  color: var(--navy-900);
+}
+.cta {
+  display: flex;
+  gap: 8px;
+}
+
+/* ── Menú mobile ─────────────────────────────────────────────── */
+.toggle {
+  display: none;
+  margin-left: auto;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 30, 51, 0.12);
+  background: #fff;
+  color: var(--navy-900);
+  place-items: center;
+  padding: 0;
+}
+.toggle svg {
+  width: 22px;
+  height: 22px;
+}
+.panel {
+  display: none;
+}
+
+@media (max-width: 1023px) {
+  .links,
+  .cta {
+    display: none;
+  }
+  .toggle {
+    display: grid;
+  }
+  .panel {
+    display: block;
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 72px;
+    max-height: calc(100dvh - 72px);
+    overflow-y: auto;
+    background: #fff;
+    border-bottom: 1px solid rgba(15, 30, 51, 0.08);
+    box-shadow: 0 18px 30px rgba(15, 30, 51, 0.08);
+    padding: 8px var(--gutter) 20px;
+    animation: k-rise var(--dur-base) var(--ease-out) both;
+  }
+  .panel[hidden] {
+    display: none;
+  }
+  .panelList {
+    display: grid;
+    gap: 2px;
+    padding: 0;
+    margin: 0 0 16px;
+    list-style: none;
+  }
+  .panelList a {
+    display: flex;
+    align-items: center;
+    min-height: 48px;
+    padding: 0 8px;
+    font-size: 17px;
+    font-weight: 500;
+    color: var(--navy-900);
+    text-decoration: none;
+    border-bottom: 1px solid rgba(15, 30, 51, 0.06);
+  }
+  .panelCta {
+    display: grid;
+    gap: 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel {
+    animation: none;
+  }
+  .links a {
+    transition: none;
+  }
+}

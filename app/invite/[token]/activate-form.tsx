@@ -3,8 +3,8 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { FormField } from "@/components/ui/form-field";
-import { IconArrow } from "@/components/ui/icons";
+import { Field } from "@/components/ui/field";
+import { PasswordInput } from "@/components/ui/password-input";
 import { activateInvitationAction } from "./activate-action";
 import { inviteLoginHref } from "./invite-state";
 import { InviteNotice } from "./invite-notice";
@@ -57,73 +57,57 @@ export function ActivateForm({
   const needsLogin = error && (error.code === "account_exists" || error.code === "signin_failed" || error.code === "accepted");
 
   return (
-    <form action={onSubmit} autoComplete="on" style={{ display: "grid", gap: 14 }}>
-      <div>
-        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)" }}>Email</span>
-        <div
-          style={{
-            marginTop: 6,
-            padding: "10px 12px",
-            borderRadius: 12,
-            background: "rgba(15,30,51,0.04)",
-            border: "1px solid rgba(15,30,51,0.08)",
-            fontSize: 14,
-            color: "var(--navy-700)",
-            overflowWrap: "anywhere",
-          }}
-        >
-          {email}
-        </div>
-        <span style={{ display: "block", marginTop: 4, fontSize: 11, color: "var(--navy-300)" }}>
-          Es el email al que te invitaron: con este vas a ingresar.
-        </span>
-      </div>
+    <form action={onSubmit} autoComplete="on" style={{ display: "grid", gap: 16 }}>
+      {/* El email es fijo (lo pone la invitación): se muestra en un input de solo lectura con `autocomplete="username"`
+          para que el gestor de contraseñas guarde la contraseña nueva asociada a ESE email. No viaja en el form: la
+          action lo toma de la invitación. */}
+      <Field id="invite-email" label="Email" hint="Es el email al que te invitaron: con este vas a ingresar.">
+        <input className="k-input k-input-lg" type="email" value={email} readOnly autoComplete="username" />
+      </Field>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
-        <FormField
-          label="Nombre"
-          name="firstName"
-          required
-          defaultValue={firstName}
-          error={fieldErrors.firstName?.[0]}
-        />
-        <FormField
-          label="Apellido"
-          name="lastName"
-          required
-          defaultValue={lastName}
-          error={fieldErrors.lastName?.[0]}
-        />
+        <Field id="invite-first-name" label="Nombre" error={fieldErrors.firstName?.[0]}>
+          <input
+            className="k-input k-input-lg"
+            name="firstName"
+            required
+            defaultValue={firstName}
+            autoComplete="given-name"
+          />
+        </Field>
+        <Field id="invite-last-name" label="Apellido" error={fieldErrors.lastName?.[0]}>
+          <input
+            className="k-input k-input-lg"
+            name="lastName"
+            required
+            defaultValue={lastName}
+            autoComplete="family-name"
+          />
+        </Field>
       </div>
 
-      <FormField
+      <Field
+        id="invite-password"
         label="Contraseña"
-        name="password"
-        type="password"
-        required
-        placeholder="••••••••"
         hint="Mínimo 8 caracteres, con al menos una letra y un número."
         error={fieldErrors.password?.[0]}
-      />
-      <FormField
-        label="Repetí la contraseña"
-        name="passwordConfirm"
-        type="password"
-        required
-        placeholder="••••••••"
-        error={fieldErrors.passwordConfirm?.[0]}
-      />
+      >
+        <PasswordInput name="password" required autoComplete="new-password" large />
+      </Field>
+      <Field id="invite-password-confirm" label="Repetí la contraseña" error={fieldErrors.passwordConfirm?.[0]}>
+        <PasswordInput name="passwordConfirm" required autoComplete="new-password" large />
+      </Field>
 
       {error && (
         <InviteNotice tone="error" role="alert">
           {error.message}
           {needsLogin && (
             <div style={{ marginTop: 8 }}>
-              <Link href={inviteLoginHref(token, email)} style={{ color: "var(--sky-700)", fontWeight: 600 }}>
+              <Link href={inviteLoginHref(token, email)} className="k-link">
                 Ingresar
               </Link>
               {" · "}
-              <Link href="/forgot" style={{ color: "var(--sky-700)", fontWeight: 600 }}>
+              <Link href="/forgot" className="k-link">
                 Olvidé mi contraseña
               </Link>
             </div>
@@ -131,21 +115,16 @@ export function ActivateForm({
         </InviteNotice>
       )}
 
-      <Button
-        variant="primary"
-        type="submit"
-        disabled={pending}
-        style={{ width: "100%", justifyContent: "center", padding: "14px 18px", fontSize: 14 }}
-      >
-        {pending ? "Activando tu cuenta…" : `Activar mi cuenta y unirme a ${tenantName}`} <IconArrow size={16} />
+      <Button variant="primary" type="submit" size="lg" block disabled={pending}>
+        {pending ? "Activando tu cuenta…" : `Activar mi cuenta y unirme a ${tenantName}`}
       </Button>
 
-      <div style={{ fontSize: 13, color: "var(--navy-500)", textAlign: "center" }}>
+      <p style={{ fontSize: 14, color: "var(--navy-500)", textAlign: "center", margin: 0 }}>
         ¿Ya tenés cuenta en KineSoft?{" "}
-        <Link href={inviteLoginHref(token, email)} style={{ color: "var(--sky-700)", fontWeight: 600 }}>
+        <Link href={inviteLoginHref(token, email)} className="k-link">
           Ingresá para unirte
         </Link>
-      </div>
+      </p>
     </form>
   );
 }

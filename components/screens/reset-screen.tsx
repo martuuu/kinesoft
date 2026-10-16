@@ -3,9 +3,14 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
-import { AuthShell } from "@/components/screens/auth-shell";
+import { AuthShell } from "@/components/auth/auth-shell";
+import { AuthSubmit } from "@/components/auth/auth-submit";
+import { ButtonLink } from "@/components/ui/button";
+import { Field } from "@/components/ui/field";
+import { PasswordInput } from "@/components/ui/password-input";
+import { IconAlert, IconCheckCircle } from "@/components/ui/icons";
 import { updatePasswordWithRecoverySession } from "@/lib/auth";
+import st from "./auth-screens.module.css";
 
 /**
  * /reset (A3c-S-signup). `mode` lo decide el server (ver app/(auth)/reset):
@@ -13,6 +18,10 @@ import { updatePasswordWithRecoverySession } from "@/lib/auth";
  *     clave nueva;
  *   - "change": sesión común → además la contraseña actual;
  *   - "expired": sin sesión → link vencido, pedir otro.
+ *
+ * VX2-a: AuthShell `centered`, h1 en la card, `Field` + `PasswordInput` con `autocomplete` correcto (la actual es
+ * `current-password`, las dos nuevas `new-password`: así el gestor de contraseñas ofrece generar una y guarda la
+ * nueva en vez de pisar la vieja).
  */
 export function ResetScreen({ mode }: { mode: "recovery" | "change" | "expired" }) {
   const router = useRouter();
@@ -22,12 +31,13 @@ export function ResetScreen({ mode }: { mode: "recovery" | "change" | "expired" 
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[] | undefined>>({});
 
   const onSubmit = (formData: FormData) => {
+    if (pending) return;
     setError(null);
     setFieldErrors({});
     const password = String(formData.get("password") ?? "");
     const confirm = String(formData.get("confirm") ?? "");
     if (password !== confirm) {
-      setError("Las contraseñas no coinciden.");
+      setFieldErrors({ confirm: ["Las contraseñas no coinciden."] });
       return;
     }
     start(async () => {
@@ -41,156 +51,92 @@ export function ResetScreen({ mode }: { mode: "recovery" | "change" | "expired" 
         return;
       }
       setDone(true);
-      // Brief pause so the user sees the confirmation, then redirect.
+      // Pausa breve para que se lea la confirmación; después, al panel.
       setTimeout(() => router.replace("/dashboard"), 1200);
     });
   };
 
-  return (
-    <AuthShell
-      eyebrow="Nueva contraseña"
-      heading="Definí tu nueva clave"
-      blurb="Una vez actualizada, te llevamos directo a tu panel. Vas a poder usar la nueva contraseña en todos los dispositivos."
-      footerLinks={[{ label: "Volver al login", href: "/login" }]}
-    >
-      <div
-        style={{
-          fontSize: 12,
-          fontWeight: 600,
-          color: "var(--sky-700)",
-          letterSpacing: "0.06em",
-          textTransform: "uppercase",
-          marginBottom: 10,
-        }}
-      >
-        Reset de contraseña
-      </div>
-      <h2 className="k-display" style={{ fontSize: 26, margin: "0 0 22px", lineHeight: 1.1 }}>
-        Nueva contraseña
-      </h2>
-
-      {mode === "expired" ? (
-        <div style={{ display: "grid", gap: 14 }}>
-          <div
-            role="alert"
-            style={{ padding: 14, borderRadius: 12, background: "var(--danger-bg)", color: "var(--danger-fg)", fontSize: 13, lineHeight: 1.5 }}
-          >
-            El link venció o ya se usó. Pedí uno nuevo: te llega por email y vence en 1 hora.
+  if (mode === "expired") {
+    return (
+      <AuthShell variant="centered" footerLinks={[{ label: "Volver al login", href: "/login" }]}>
+        <div className={st.stack} data-screen-label="Reset">
+          <div className={st.head}>
+            <h1 className={st.title}>Nueva contraseña</h1>
           </div>
-          {/* IAM-2d: la salida es un botón, no un link al pie. Mismas clases que `Button` (y que
-              /auth/confirm/continuar) porque es navegación, no una acción. */}
-          <Link href="/forgot" className="k-btn k-btn-primary" style={{ width: "100%", justifyContent: "center" }}>
+          <div className="k-alert" role="alert">
+            <IconAlert size={18} />
+            <span>El link venció o ya se usó. Pedí uno nuevo: te llega por email y vence en 1 hora.</span>
+          </div>
+          {/* IAM-2d: la salida es un botón, no un link al pie. Es navegación: ButtonLink (un solo <a>). */}
+          <ButtonLink href="/forgot" size="lg" block>
             Pedir un link nuevo
-          </Link>
-          <Link href="/login" style={{ color: "var(--sky-700)", fontWeight: 600, fontSize: 13, textAlign: "center" }}>
-            Volver al login
-          </Link>
-        </div>
-      ) : done ? (
-        <div
-          role="status"
-          style={{
-            padding: 18,
-            borderRadius: 14,
-            background: "rgba(200,245,100,0.18)",
-            color: "var(--navy-900)",
-            fontSize: 14,
-            fontWeight: 600,
-          }}
-        >
-          ✓ Contraseña actualizada — redirigiendo al dashboard…
-        </div>
-      ) : (
-        <form action={onSubmit} style={{ display: "grid", gap: 14 }}>
-          {mode === "change" && (
-            <label style={{ display: "block" }}>
-              <span style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)" }}>
-                Contraseña actual
-              </span>
-              <input
-                type="password"
-                name="currentPassword"
-                required
-                placeholder="La que usás hoy"
-                autoComplete="current-password"
-                style={inputStyle}
-              />
-              <span style={{ fontSize: 11, color: fieldErrors.currentPassword ? "var(--danger-fg)" : "var(--navy-300)", marginTop: 4, display: "block" }}>
-                {fieldErrors.currentPassword?.[0] ?? "¿No la recordás? Pedí un link desde “Olvidé mi contraseña”."}
-              </span>
-            </label>
-          )}
-          <label style={{ display: "block" }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)" }}>
-              Nueva contraseña
-            </span>
-            <input
-              type="password"
-              name="password"
-              required
-              minLength={8}
-              placeholder="Mínimo 8 caracteres"
-              autoComplete="new-password"
-              style={inputStyle}
-            />
-          </label>
-          <label style={{ display: "block" }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)" }}>
-              Confirmar contraseña
-            </span>
-            <input
-              type="password"
-              name="confirm"
-              required
-              minLength={8}
-              placeholder="Repetí la nueva clave"
-              autoComplete="new-password"
-              style={inputStyle}
-            />
-          </label>
-          {error && (
-            <div
-              role="alert"
-              style={{
-                padding: 10,
-                borderRadius: 10,
-                background: "var(--danger-bg)",
-                color: "var(--danger-fg)",
-                fontSize: 12,
-              }}
-            >
-              {error}
-            </div>
-          )}
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={pending}
-            style={{ width: "100%", justifyContent: "center", padding: "14px 18px", fontSize: 14 }}
-          >
-            {pending ? "Guardando…" : "Guardar nueva contraseña"}
-          </Button>
-          <div style={{ fontSize: 13, color: "var(--navy-500)", textAlign: "center", marginTop: 4 }}>
-            <Link href="/login" style={{ color: "var(--sky-700)", fontWeight: 600 }}>
-              ← Volver al login
+          </ButtonLink>
+          <p className={st.foot}>
+            <Link href="/login" className="k-link">
+              Volver al login
             </Link>
+          </p>
+        </div>
+      </AuthShell>
+    );
+  }
+
+  return (
+    <AuthShell variant="centered" footerLinks={[{ label: "Volver al login", href: "/login" }]}>
+      <div className={st.stack} data-screen-label="Reset">
+        <div className={st.head}>
+          <h1 className={st.title}>Nueva contraseña</h1>
+          <p className={st.sub}>
+            Una vez actualizada, te llevamos directo a tu panel. Vas a poder usar la nueva contraseña en todos los
+            dispositivos.
+          </p>
+        </div>
+
+        {done ? (
+          <div className="k-alert k-alert-success" role="status">
+            <IconCheckCircle size={18} />
+            <span>Contraseña actualizada. Te llevamos a tu panel…</span>
           </div>
-        </form>
-      )}
+        ) : (
+          <>
+            <form action={onSubmit} className={st.fields}>
+              {error && (
+                <div className="k-alert" role="alert">
+                  <IconAlert size={18} />
+                  <span>{error}</span>
+                </div>
+              )}
+              {mode === "change" && (
+                <Field
+                  id="reset-current"
+                  label="Contraseña actual"
+                  hint={fieldErrors.currentPassword ? undefined : "¿No la recordás? Pedí un link desde «¿Olvidaste tu contraseña?»."}
+                  error={fieldErrors.currentPassword?.[0]}
+                >
+                  <PasswordInput name="currentPassword" autoComplete="current-password" required large />
+                </Field>
+              )}
+              <Field
+                id="reset-password"
+                label="Nueva contraseña"
+                hint="Al menos 8 caracteres, con una letra y un número."
+                error={fieldErrors.password?.[0]}
+              >
+                <PasswordInput name="password" autoComplete="new-password" required minLength={8} large />
+              </Field>
+              <Field id="reset-confirm" label="Confirmar contraseña" error={fieldErrors.confirm?.[0]}>
+                <PasswordInput name="confirm" autoComplete="new-password" required minLength={8} large />
+              </Field>
+              <AuthSubmit label="Guardar nueva contraseña" busyLabel="Guardando…" pending={pending} />
+            </form>
+            <p className={st.foot}>
+              <Link href="/login" className="k-link">
+                Volver al login
+              </Link>
+            </p>
+          </>
+        )}
+      </div>
     </AuthShell>
   );
 }
-
-const inputStyle: React.CSSProperties = {
-  marginTop: 6,
-  padding: "12px 14px",
-  borderRadius: 12,
-  background: "rgba(255,255,255,0.6)",
-  border: "1px solid rgba(15,30,51,0.08)",
-  display: "block",
-  width: "100%",
-  fontSize: 14,
-  color: "var(--navy-900)",
-  outline: "none",
-  boxSizing: "border-box",
-};

@@ -203,6 +203,10 @@ export async function requireModule(m: TenantModule, message?: string): Promise<
 }
 
 /**
+ * SOLO COMPAT/TESTS (VX2.1): desde VX2-b2 (D-VX20) ningún layout lo llama; los segmentos usan `moduleWall`
+ * (`lib/module-wall.ts`), que muestra el muro del plan (`AccessWall`) o hace este mismo redirect. Queda porque
+ * `tests/integration/module-guards.test.ts` lo ejercita; VX-Z/PF decide retirarlo. No usar en código nuevo.
+ *
  * Para el `layout.tsx` de un segmento de un módulo (`/diagnostico`,
  * `/seguimiento`, `/biblioteca`, …): sin el módulo, `redirect("/dashboard")`.
  * Sin actor es no-op: de la sesión se ocupan el middleware y el layout de

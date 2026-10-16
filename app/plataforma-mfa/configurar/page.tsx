@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { AuthShell } from "@/components/screens/auth-shell";
+import { AuthShell } from "@/components/auth/auth-shell";
 import { confirmPlatformMfaEnrollment, startPlatformMfaEnrollment } from "@/lib/platform-mfa-actions";
 import { platformMfaRedirect } from "@/lib/platform-mfa-logic";
 import { mfaPageContext } from "../guard";
@@ -19,11 +19,9 @@ export default async function ConfigurarMfaPage({ searchParams }: { searchParams
 
   if (status === "pending") redirect(platformMfaRedirect("verify", next));
 
-  const blurb = "Plataforma toca datos de todos los consultorios: además de tu contraseña, te pedimos un código del teléfono.";
-
   if (status === "verified") {
     return (
-      <AuthShell eyebrow="Plataforma" heading="Verificación en dos pasos." blurb={blurb}>
+      <AuthShell variant="centered" introAs="p">
         <MfaHeading eyebrow="Todo en orden" title="Ya la tenés configurada" />
         <MfaText>Esta sesión ya pasó por el código. Podés seguir a Plataforma.</MfaText>
         <MfaGoButton href={next}>Ir a Plataforma</MfaGoButton>
@@ -34,7 +32,7 @@ export default async function ConfigurarMfaPage({ searchParams }: { searchParams
 
   if (status === "unavailable") {
     return (
-      <AuthShell eyebrow="Plataforma" heading="Verificación en dos pasos." blurb={blurb}>
+      <AuthShell variant="centered" introAs="p">
         <MfaHeading eyebrow="Sin conexión" title="No pudimos comprobar tu verificación" />
         <MfaText>El servicio de verificación no respondió. Probá de nuevo en unos segundos.</MfaText>
         <MfaGoButton href={`/plataforma-mfa/configurar?next=${encodeURIComponent(next)}`}>Reintentar</MfaGoButton>
@@ -44,9 +42,12 @@ export default async function ConfigurarMfaPage({ searchParams }: { searchParams
   }
 
   return (
-    <AuthShell eyebrow="Plataforma" heading="Verificación en dos pasos." blurb={blurb}>
+    <AuthShell variant="centered" introAs="p">
       <MfaHeading eyebrow="Seguridad" title="Configurá la verificación en dos pasos" />
-      <MfaText>Vas a usar una app de autenticación del teléfono. Te lleva un minuto y se hace una sola vez.</MfaText>
+      <MfaText>
+        Plataforma toca datos de todos los consultorios: además de tu contraseña, te vamos a pedir un código de una app
+        de autenticación del teléfono. Configurarla te lleva un minuto y se hace una sola vez.
+      </MfaText>
       <MfaSetupForm next={next} startAction={startPlatformMfaEnrollment} confirmAction={confirmPlatformMfaEnrollment} />
       <MfaFooter hasHome={actor.homeTenantId !== null} />
     </AuthShell>

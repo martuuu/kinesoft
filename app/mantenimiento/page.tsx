@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { AuthShell } from "@/components/screens/auth-shell";
+import { AuthShell } from "@/components/auth/auth-shell";
+import { StatusHeading, StatusText } from "@/app/plataforma-mfa/shared";
 import { ReloadButton } from "./reload-button";
 import { maintenanceMessage } from "@/lib/maintenance";
 
@@ -21,38 +22,22 @@ export default function MantenimientoPage() {
   const message = maintenanceMessage(process.env.MAINTENANCE_MESSAGE);
 
   return (
-    <AuthShell
-      eyebrow="Mantenimiento"
-      heading="Estamos haciendo mejoras."
-      blurb="KineSoft vuelve a estar disponible en unos minutos. Tus datos están a salvo."
-    >
-      <div
-        style={{
-          fontSize: 12,
-          fontWeight: 600,
-          color: "var(--sky-700)",
-          letterSpacing: "0.06em",
-          textTransform: "uppercase",
-          marginBottom: 10,
-        }}
-      >
-        En mantenimiento
-      </div>
-      <h2 className="k-display" style={{ fontSize: 26, margin: "0 0 12px", lineHeight: 1.15 }}>
-        Volvé en unos minutos
-      </h2>
-      <p style={{ fontSize: 14, color: "var(--navy-700)", margin: "0 0 10px", lineHeight: 1.55 }}>
+    <AuthShell variant="centered" introAs="p">
+      <StatusHeading eyebrow="En mantenimiento" title="Volvé en unos minutos" />
+      <StatusText>
         Estamos actualizando KineSoft. Mientras tanto no se puede entrar a la agenda, a los pacientes ni al turnero.
-      </p>
+      </StatusText>
       {message ? (
         // Texto de React (escapado): el mensaje es público y nunca se interpreta como HTML.
-        <p style={{ fontSize: 14, color: "var(--navy-700)", margin: "0 0 10px", lineHeight: 1.55, fontWeight: 600 }}>
+        <p style={{ fontSize: 15, color: "var(--navy-900)", margin: "0 0 12px", lineHeight: 1.55, fontWeight: 600 }}>
           {message}
         </p>
       ) : null}
-      <p style={{ fontSize: 13, color: "var(--navy-500)", margin: "0 0 18px", lineHeight: 1.55 }}>
+      {/* Cierto por código: `/api/webhooks/**` no se corta en mantenimiento (lib/maintenance.ts:63, AUDIT §5.4). Se
+          sacó el «Tus datos están a salvo» de la intro vieja: es una promesa que esta página no puede verificar. */}
+      <StatusText muted last>
         Los pagos que ya hiciste se registran igual.
-      </p>
+      </StatusText>
       <ReloadButton />
     </AuthShell>
   );

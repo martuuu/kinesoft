@@ -1,0 +1,197 @@
+/* [VX2-c1] Funciones en bento (landing-b.html .bento/.tile): 6 columnas → 2 → 1 sin huecos. */
+.bento {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 16px;
+}
+.tile {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+}
+.tile p {
+  color: var(--navy-500);
+  line-height: 1.55;
+}
+.agenda {
+  grid-column: span 4;
+  grid-row: span 2;
+  background: linear-gradient(160deg, #fff 30%, var(--sky-50));
+  grid-template-rows: auto auto auto auto 1fr;
+}
+.online,
+.hc {
+  grid-column: span 2;
+}
+.cobros,
+.roles {
+  grid-column: span 3;
+}
+.sala {
+  grid-column: span 6;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  align-items: center;
+  gap: 32px;
+  background: var(--navy-900);
+  color: #fff;
+  border-color: transparent;
+}
+.sala p {
+  color: var(--navy-100);
+}
+.salaCopy {
+  display: grid;
+  gap: 14px;
+}
+.salaTitle {
+  font-size: 24px;
+}
+.views {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.views li {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid rgba(15, 30, 51, 0.1);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--navy-700);
+}
+.week {
+  margin-top: 8px;
+  align-self: stretch;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+}
+.week > div {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  padding: 8px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid rgba(15, 30, 51, 0.06);
+  min-height: 132px;
+}
+.week b {
+  font: 600 11px/1 var(--font-sans);
+  color: var(--navy-400);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+.week s {
+  display: block;
+  height: 18px;
+  border-radius: 6px;
+  text-decoration: none;
+  border-left: 3px solid;
+}
+.linkPill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--bg-panel);
+  border: 1px dashed rgba(31, 79, 190, 0.3);
+  font: 500 13px/1.2 var(--font-mono);
+  color: var(--sky-700);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.linkPill svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.board {
+  display: grid;
+  gap: 10px;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.row > span:nth-child(2) {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.18);
+  max-width: 180px;
+}
+.pill {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 650;
+  padding: 4px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+/* Sobre navy: En sala usa el lime opaco (el --rc-insala-bg es translúcido y sobre fondo oscuro se ensucia);
+   Llamado lleva un filo blanco para separarse. */
+.insala {
+  background: var(--lime-300);
+  color: var(--navy-900);
+}
+.called {
+  background: var(--rc-called-bg);
+  color: var(--rc-called-fg);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+.attending {
+  background: #fff;
+  color: var(--navy-900);
+}
+
+@media (max-width: 1023px) {
+  .bento {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .agenda,
+  .sala {
+    grid-column: span 2;
+    grid-row: auto;
+  }
+  .online,
+  .hc,
+  .cobros,
+  .roles {
+    grid-column: span 1;
+  }
+  .sala {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 639px) {
+  .bento {
+    grid-template-columns: 1fr;
+  }
+  .agenda,
+  .sala,
+  .online,
+  .hc,
+  .cobros,
+  .roles {
+    grid-column: auto;
+  }
+  .week {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .week > div:nth-child(n + 4) {
+    display: none;
+  }
+}

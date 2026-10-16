@@ -1,0 +1,125 @@
+/* [VX2-c2] Precios de la landing. Valores portados de design_source/vx0/shared.css (.pricing, .price-*, .section*,
+   .eyebrow, .h2, .lead). Breakpoints del brief §5: 3 columnas ≥ 1024, una columna centrada < 1024. */
+
+.section {
+  padding-block: clamp(64px, 8vw, 120px);
+  background: #fff;
+  border-top: 1px solid rgba(15, 30, 51, 0.06);
+  scroll-margin-top: 72px;
+}
+
+.sectionHead {
+  display: grid;
+  gap: 16px;
+  max-width: 680px;
+  margin: 0 auto clamp(32px, 4vw, 56px);
+  text-align: center;
+  justify-items: center;
+}
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sky-700);
+}
+.eyebrowDot { width: 6px; height: 6px; border-radius: 50%; background: var(--lime-500); }
+.h2 {
+  margin: 0;
+  font-size: var(--fs-display-2);
+  line-height: 1.1;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+  color: var(--navy-900);
+}
+.lead {
+  margin: 0;
+  font-size: clamp(17px, 0.4vw + 15.5px, 20px);
+  line-height: var(--lh-relaxed);
+  color: var(--navy-500);
+  text-wrap: pretty;
+}
+
+/* Tarjetas */
+.grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; align-items: stretch; }
+.grid[data-count="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 780px; margin-inline: auto; }
+.grid[data-count="1"] { grid-template-columns: minmax(0, 1fr); max-width: 420px; margin-inline: auto; }
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  position: relative;
+  min-width: 0;
+  background: #fff;
+  border-radius: var(--r-lg);
+  border: 1px solid rgba(15, 30, 51, 0.07);
+  box-shadow: var(--shadow-card);
+  padding: clamp(20px, 2.4vw, 28px);
+}
+/* Destacado con un anillo extra en box-shadow, no con borde de 2 px (correría el contenido 1 px). */
+.featured { border-color: var(--sky-700); box-shadow: 0 0 0 1px var(--sky-700), var(--shadow-card-lg); }
+
+.head { display: grid; gap: 8px; }
+.name { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.015em; color: var(--navy-900); }
+.for { margin: 0; font-size: 15px; color: var(--navy-500); min-height: 2.9em; }
+
+.priceBlock { display: grid; gap: 10px; }
+.amount { margin: 0; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.amount strong {
+  font-size: 40px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums;
+  color: var(--navy-900);
+  overflow-wrap: anywhere;
+}
+.amount span { font-size: 15px; color: var(--navy-500); }
+.trial { margin: 0; font-size: 14px; font-weight: 600; color: var(--lime-700); }
+
+.sep { height: 1px; background: rgba(15, 30, 51, 0.08); }
+
+.list { display: grid; gap: 12px; padding: 0; margin: 0; list-style: none; font-size: 15px; }
+.list li { display: grid; grid-template-columns: 20px 1fr; gap: 10px; align-items: start; color: var(--navy-700); }
+.check { display: inline-flex; color: var(--lime-700); margin-top: 1px; }
+
+.extra { display: grid; gap: 12px; }
+.extraTitle { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--sky-700); }
+
+.cta { margin-top: auto; }
+
+/* Banda Libre */
+.band {
+  margin-top: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding: clamp(24px, 3vw, 32px) clamp(24px, 3vw, 40px);
+  border-radius: var(--r-lg);
+  background: var(--navy-900);
+  background-image: radial-gradient(60% 120% at 100% 0%, rgba(94, 146, 204, 0.35), rgba(94, 146, 204, 0) 70%);
+  color: #fff;
+}
+.band p { margin: 0; color: var(--navy-100); max-width: 560px; line-height: 1.55; }
+.bandTitle { margin: 0 0 6px; font-size: 22px; line-height: 1.3; font-weight: 650; letter-spacing: -0.015em; color: #fff; }
+.arrow { display: inline-flex; }
+
+.note { margin: 16px 0 0; font-size: 14px; color: var(--navy-400); text-align: center; }
+
+@media (max-width: 1023px) {
+  .grid,
+  .grid[data-count="2"] { grid-template-columns: minmax(0, 1fr); max-width: 560px; margin-inline: auto; }
+  .band { max-width: 560px; margin-inline: auto; }
+  .for { min-height: 0; }
+}
+@media (max-width: 479px) {
+  .band > a { width: 100%; justify-content: center; }
+}

@@ -1,0 +1,15 @@
+/* [VX2-c2] Formulario de contacto. Valores de design_source/vx0/shared.css (.contact-form, .form-2, .hp). */
+
+.form { display: grid; gap: 20px; }
+.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
+
+/* El mensaje recibe el foco por programa (tabIndex=-1); el anillo es el global de :focus-visible (no se apaga el outline
+   acá: lo cuenta el ratchet de ui-ratchets). */
+.message { scroll-margin-top: 96px; }
+
+/* Honeypot fuera de pantalla: no `display: none` (algunos bots lo saltean) y fuera del orden de tab. */
+.hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+
+@media (max-width: 639px) {
+  .two { grid-template-columns: minmax(0, 1fr); }
+}

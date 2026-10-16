@@ -8,7 +8,7 @@
  * `useTenantModules().has("diagnostico")` sin volver a la DB ni recibir props.
  *
  * Solo esconde UI. La barrera es `assertModule`/`requireModule` en cada action
- * y `guardModuleSegment` en el layout del segmento (`lib/authz.ts`).
+ * y `moduleWall` en el layout del segmento (`lib/module-wall.ts`, VX2-b2).
  *
  * Default fuera del provider = set de Kine PRO (todo lo de Kine). Es a
  * propósito y SOLO de UI: los render tests existentes montan pantallas sueltas

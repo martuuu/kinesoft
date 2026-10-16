@@ -40,8 +40,9 @@ export function Field({ id, label, hint, error, optional, labelAside, children }
   const control = cloneElement(children, {
     id,
     "aria-describedby": describedBy || undefined,
-    "aria-invalid": error ? true : undefined,
-    "aria-errormessage": error ? ids.error : undefined,
+    // Spread condicional: sin `error`, Field no pisa el aria-invalid/aria-errormessage que ya trae el control
+    // (el login marca los campos contra el aviso general, VX2-a).
+    ...(error ? { "aria-invalid": true, "aria-errormessage": ids.error } : {}),
   } as Record<string, unknown>);
 
   const labelEl = (

@@ -1,7 +1,7 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
-import { AuthShell } from "@/components/screens/auth-shell";
-import { Button } from "@/components/ui/button";
+import { AuthShell } from "@/components/auth/auth-shell";
+import { buttonClassName } from "@/components/ui/button";
+import { SignOutButton, StatusHeading, StatusLink, StatusText } from "@/app/plataforma-mfa/shared";
 import { getAccessSnapshot, sessionBlockOf } from "@/lib/session";
 import { exportHref } from "@/components/configuracion/panels/export-panel";
 import { SupportContact } from "@/components/ui/support-contact";
@@ -30,10 +30,11 @@ export default async function SuspendidoPage() {
 
   if (!block) {
     return (
-      <AuthShell eyebrow="Acceso" heading="Tu consultorio está disponible." blurb="No hay nada bloqueado en tu acceso.">
-        <Heading eyebrow="Todo en orden" title="Podés volver a entrar" />
-        <Cta href="/dashboard" label="Entrar a KineSoft" />
-        <SignOut />
+      <AuthShell variant="centered" introAs="p">
+        <StatusHeading eyebrow="Todo en orden" title="Podés volver a entrar" />
+        <StatusText last>No hay nada bloqueado en tu acceso.</StatusText>
+        <StatusLink href="/dashboard">Entrar a KineSoft</StatusLink>
+        <SignOutButton />
       </AuthShell>
     );
   }
@@ -50,16 +51,12 @@ export default async function SuspendidoPage() {
   const canContact = !thisBlock || thisBlock.role === "OWNER" || thisBlock.role === "ADMIN";
 
   return (
-    <AuthShell
-      eyebrow="Acceso"
-      heading={closed ? "Este consultorio se dio de baja." : "Este consultorio está suspendido."}
-      blurb={closed ? "El consultorio ya no está activo en KineSoft." : "Por ahora no se puede entrar al consultorio."}
-    >
-      <Heading
+    <AuthShell variant="centered" introAs="p">
+      <StatusHeading
         eyebrow={closed ? "Consultorio dado de baja" : "Consultorio suspendido"}
         title={closed ? `${block.tenantName} ya no está activo` : `${block.tenantName} está suspendido`}
       />
-      <p style={{ fontSize: 14, color: "var(--navy-700)", margin: "0 0 10px", lineHeight: 1.55 }}>
+      <StatusText>
         {closed
           ? "Tus datos no se borraron. Si necesitás volver a usar el consultorio o tenés dudas, "
           : "Mientras esté suspendido no se puede entrar a la agenda ni a los pacientes. Si creés que es un error, "}
@@ -70,75 +67,35 @@ export default async function SuspendidoPage() {
         ) : (
           "avisale al titular del consultorio."
         )}
-      </p>
+      </StatusText>
       {ownerBlocks.length > 0 ? (
         <>
-          <p style={{ fontSize: 14, color: "var(--navy-700)", margin: "0 0 12px", lineHeight: 1.55 }}>
+          <StatusText>
             Como titular, podés descargar el export de todos tus datos: pacientes, turnos, pagos, planes e historia
             clínica.
-          </p>
+          </StatusText>
+          {/* `<a download>` y no ButtonLink: es una descarga de /api, no una navegación del router. */}
           {ownerBlocks.map((b) => (
             <a
               key={b.tenantId}
               href={exportHref(b.tenantId)}
               download
-              className="k-btn k-btn-primary"
-              style={{ display: "flex", justifyContent: "center", textDecoration: "none", marginBottom: 10, whiteSpace: "normal", textAlign: "center" }}
+              className={buttonClassName({ variant: "primary", size: "md", block: true })}
+              style={{ marginTop: 10, whiteSpace: "normal", textAlign: "center", textDecoration: "none" }}
             >
               {ownerBlocks.length === 1 ? "Descargar el export de mis datos" : `Descargar el export de ${b.tenantName}`}
             </a>
           ))}
         </>
       ) : (
-        <p style={{ fontSize: 13, color: "var(--navy-500)", margin: "0 0 18px", lineHeight: 1.55 }}>
-          Si trabajás también en otro consultorio, o querés armar el tuyo, podés seguir desde acá.
-        </p>
+        <StatusText muted>Si trabajás también en otro consultorio, o querés armar el tuyo, podés seguir desde acá.</StatusText>
       )}
       {/* /onboarding con membresías no usables ofrece invitaciones pendientes o el alta: no rebota a la app. */}
-      <Cta href="/onboarding" label="Ver invitaciones o crear mi consultorio" variant="ghost" />
-      <SignOut />
+      <StatusLink href="/onboarding" variant="ghost">
+        Ver invitaciones o crear mi consultorio
+      </StatusLink>
+      {/* Con descarga, «Cerrar sesión» queda ghost: un solo botón lleno por pantalla (antes había dos primarios). */}
+      <SignOutButton variant={ownerBlocks.length > 0 ? "ghost" : "primary"} />
     </AuthShell>
-  );
-}
-
-function Heading({ eyebrow, title }: { eyebrow: string; title: string }) {
-  return (
-    <>
-      <div
-        style={{
-          fontSize: 12,
-          fontWeight: 600,
-          color: "var(--sky-700)",
-          letterSpacing: "0.06em",
-          textTransform: "uppercase",
-          marginBottom: 10,
-        }}
-      >
-        {eyebrow}
-      </div>
-      <h2 className="k-display" style={{ fontSize: 26, margin: "0 0 12px", lineHeight: 1.15 }}>
-        {title}
-      </h2>
-    </>
-  );
-}
-
-function Cta({ href, label, variant = "primary" }: { href: string; label: string; variant?: "primary" | "ghost" }) {
-  return (
-    <Link href={href} style={{ display: "block" }}>
-      <Button variant={variant} style={{ width: "100%", justifyContent: "center", padding: "12px 18px" }}>
-        {label}
-      </Button>
-    </Link>
-  );
-}
-
-function SignOut() {
-  return (
-    <form action="/api/auth/sign-out" method="post" style={{ marginTop: 10 }}>
-      <Button type="submit" variant="primary" style={{ width: "100%", justifyContent: "center", padding: "12px 18px" }}>
-        Cerrar sesión
-      </Button>
-    </form>
   );
 }

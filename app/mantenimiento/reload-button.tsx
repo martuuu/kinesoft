@@ -10,12 +10,7 @@ import { Button } from "@/components/ui/button";
  */
 export function ReloadButton() {
   return (
-    <Button
-      type="button"
-      variant="primary"
-      onClick={() => window.location.reload()}
-      style={{ width: "100%", justifyContent: "center", padding: "12px 18px" }}
-    >
+    <Button type="button" variant="primary" size="md" block onClick={() => window.location.reload()}>
       Probar de nuevo
     </Button>
   );

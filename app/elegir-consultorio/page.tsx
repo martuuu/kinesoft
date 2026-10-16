@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
-import { AuthShell } from "@/components/screens/auth-shell";
-import { Button } from "@/components/ui/button";
+import { AuthShell } from "@/components/auth/auth-shell";
+import { SignOutButton, StatusHeading, StatusText } from "@/app/plataforma-mfa/shared";
 import { Tag } from "@/components/ui/tag";
 import { getAccessSnapshot } from "@/lib/session";
 import { getTenantChoiceState, safeChoiceNext } from "@/lib/tenant-choice";
@@ -37,48 +37,23 @@ export default async function ElegirConsultorioPage({
   }
   if (options.length === 1) redirect(next);
 
-  const firstName = (snapshot.profile?.fullName ?? "").trim().split(/\s+/)[0] || null;
+  // Decisión 19 (§20): el email nunca hace de nombre. Un perfil viejo con el email en `fullName` cae al genérico.
+  const rawFirst = (snapshot.profile?.fullName ?? "").trim().split(/\s+/)[0] || null;
+  const firstName = rawFirst && !rawFirst.includes("@") ? rawFirst : null;
   // Con cookie válida (vino a cambiar desde la app) se marca el actual; recién logueado no hay «actual».
   const current = needsChoice ? null : activeTenantId;
 
   return (
-    <AuthShell
-      eyebrow="Tus consultorios"
-      heading={firstName ? `Hola, ${firstName}.` : "Hola."}
-      blurb="Trabajás en más de un consultorio. Elegí en cuál querés entrar; después podés cambiar desde el menú."
-    >
-      <div
-        style={{
-          fontSize: 12,
-          fontWeight: 600,
-          color: "var(--sky-700)",
-          letterSpacing: "0.06em",
-          textTransform: "uppercase",
-          marginBottom: 10,
-        }}
-      >
-        Elegí consultorio
-      </div>
-      <h2 className="k-display" style={{ fontSize: 26, margin: "0 0 16px", lineHeight: 1.15 }}>
-        ¿A qué consultorio querés entrar?
-      </h2>
+    <AuthShell variant="centered" introAs="p">
+      <StatusHeading eyebrow={firstName ? `Hola, ${firstName}` : "Tus consultorios"} title="¿A qué consultorio querés entrar?" />
+      <StatusText muted last>
+        Trabajás en más de un consultorio. Elegí en cuál entrar; después podés cambiar desde el menú.
+      </StatusText>
 
       {searchParams.error === "no_disponible" && (
-        <p
-          role="alert"
-          style={{
-            fontSize: 13,
-            lineHeight: 1.5,
-            margin: "0 0 14px",
-            padding: "10px 12px",
-            borderRadius: "var(--r-md)",
-            // Mismo rojo que el aviso de error de /invite (no hay token de error en globals.css).
-            background: "var(--danger-bg)",
-            color: "var(--danger-fg)",
-          }}
-        >
+        <div role="alert" className="k-alert" style={{ marginBottom: 14 }}>
           Ese consultorio ya no está disponible para tu usuario. Elegí otro.
-        </p>
+        </div>
       )}
 
       <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 10 }}>
@@ -155,11 +130,9 @@ export default async function ElegirConsultorioPage({
         })}
       </ul>
 
-      <form action="/api/auth/sign-out" method="post" style={{ marginTop: 18 }}>
-        <Button type="submit" variant="ghost" style={{ width: "100%", justifyContent: "center", padding: "12px 18px" }}>
-          Cerrar sesión
-        </Button>
-      </form>
+      <div style={{ marginTop: 8 }}>
+        <SignOutButton />
+      </div>
     </AuthShell>
   );
 }

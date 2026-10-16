@@ -20,6 +20,7 @@ vi.mock("@/lib/error-report", () => report);
 import { getPublicPlanCatalog, SAAS_PLANS_TAG, MAX_FEATURE_BULLETS, limitsLabelFor } from "@/lib/saas-plans-public";
 import { formatARS } from "@/lib/format";
 import { tags } from "@/lib/cache-tags";
+import { BRAND_NAME } from "@/lib/brand";
 
 /** Las filas que siembra M8 (precios NULL, PL-D19), desordenadas a propósito. */
 const M8_ROWS = [
@@ -93,6 +94,35 @@ describe("[PL-1a] getPublicPlanCatalog (C-PL2)", () => {
     expect(all("CLINICA")).toMatch(/Sala de espera/);
     expect(c[1].features[1].bullets[0]).toBe("Todo lo del plan Individual");
     expect(c[1].features[1].bullets.join(" | ")).toMatch(/Catálogo de ejercicios de KineSoft/);
+  });
+});
+
+describe("[VX2-c2] bullet de evoluciones (EV2 ya está)", () => {
+  const EVOL = "Evoluciones de cada consulta en la historia clínica";
+
+  it("Individual lo muestra en las dos verticales y los planes de arriba lo heredan («Todo lo del plan…»)", async () => {
+    db.findMany.mockResolvedValue(M8_ROWS);
+    const c = await getPublicPlanCatalog();
+    const ind = c.find((p) => p.plan === "INDIVIDUAL")!;
+    for (const f of ind.features) expect(f.bullets).toContain(EVOL);
+    for (const p of c.filter((x) => x.plan !== "INDIVIDUAL")) {
+      for (const f of p.features) expect(f.bullets).not.toContain(EVOL);
+    }
+  });
+
+  it("sumarlo no corta ningún bullet de Individual Kine por el tope de 8 (ejercicios propios sigue)", async () => {
+    db.findMany.mockResolvedValue(M8_ROWS);
+    const kine = (await getPublicPlanCatalog()).find((p) => p.plan === "INDIVIDUAL")!.features[1].bullets;
+    expect(kine.length).toBeLessThanOrEqual(MAX_FEATURE_BULLETS);
+    expect(kine).toContain("Biblioteca con tus propios ejercicios");
+    expect(kine).toContain("Diagnóstico y evaluaciones");
+    expect(kine.join(" | ")).toMatch(/obra social/);
+  });
+
+  it("el catálogo de ejercicios lleva el nombre de la marca (BRAND_NAME, D-VX25)", async () => {
+    db.findMany.mockResolvedValue(M8_ROWS);
+    const cons = (await getPublicPlanCatalog()).find((p) => p.plan === "CONSULTORIO")!.features[1].bullets;
+    expect(cons).toContain(`Catálogo de ejercicios de ${BRAND_NAME}`);
   });
 });
 

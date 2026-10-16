@@ -31,7 +31,7 @@ import { TenantSwitcher } from "./tenant-switcher";
  * `navFor(modules, caps)` de `lib/nav.ts` (única fuente, compartida con el
  * topbar y los atajos ⌘K): antes de EV0 la lista estaba copiada acá y un
  * consultorio General veía Diagnóstico/Seguimiento/Ejercicios sin poder
- * usarlos. Esconder es UX; la barrera es `assertModule`/`guardModuleSegment`.
+ * usarlos. Esconder es UX; la barrera es `assertModule` (el layout del segmento usa `moduleWall`, VX2-b2).
  */
 export const NAV_ICONS: Record<NavIconKey, ComponentType<{ size?: number }>> = {
   home: IconHome,

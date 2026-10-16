@@ -1,0 +1,155 @@
+/* [VX2-c1] Base de la landing (prototipo design_source/vx0/landing-b.html + shared.css «LANDING · piezas compartidas»).
+   Lo comparten las secciones de la página (header, hero, funciones, especialidad, pasos, FAQ, footer) y lo pueden usar
+   precios/contacto (VX2-c2). Todo local al wrapper `.page`: el resto de la app no cambia. */
+
+/* El wrapper pone lo que el root no pone para una página pública: fondo claro (el body de la app es cálido,
+   #f0eee9), box-sizing (sin él, `.k-container` = width 100% + padding y desborda en mobile) y márgenes en cero. */
+.page {
+  min-height: 100%;
+  background: #f7fafd;
+  color: var(--navy-900);
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
+  overflow-x: clip;
+}
+.page,
+.page *,
+.page *::before,
+.page *::after {
+  box-sizing: border-box;
+}
+.page :where(h1, h2, h3, h4, p, ul, ol, figure, dl, dd) {
+  margin: 0;
+}
+.page :where(ul[role="list"], ol[role="list"]) {
+  list-style: none;
+  padding: 0;
+}
+/* `.k-btn` no saca el subrayado y `ButtonLink` es un <a>. */
+.page :global(.k-btn) {
+  text-decoration: none;
+}
+
+/* ── Secciones ─────────────────────────────────────────────────── */
+.section {
+  padding-block: clamp(64px, 8vw, 120px);
+  /* El header es sticky (72 px): sin esto, el ancla deja el título tapado. */
+  scroll-margin-top: 72px;
+}
+.sectionHead {
+  display: grid;
+  gap: 16px;
+  max-width: 680px;
+  margin-bottom: clamp(32px, 4vw, 56px);
+}
+.center {
+  margin-inline: auto;
+  text-align: center;
+  justify-items: center;
+}
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sky-700);
+}
+.eyebrowDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--lime-500);
+}
+.h2 {
+  font-size: var(--fs-display-2);
+  line-height: 1.1;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+.lead {
+  font-size: clamp(17px, 0.4vw + 15.5px, 20px);
+  line-height: var(--lh-relaxed);
+  color: var(--navy-500);
+  text-wrap: pretty;
+}
+.h3 {
+  font-size: 19px;
+  line-height: 1.3;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+.muted {
+  color: var(--navy-500);
+}
+
+.card {
+  background: #fff;
+  border-radius: var(--r-lg);
+  border: 1px solid rgba(15, 30, 51, 0.07);
+  box-shadow: var(--shadow-card);
+  padding: clamp(20px, 2.4vw, 28px);
+}
+
+.iconTile {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: var(--sky-100);
+  color: var(--sky-700);
+  flex-shrink: 0;
+}
+.iconTile svg {
+  width: 22px;
+  height: 22px;
+}
+.iconTileLime {
+  background: var(--lime-100);
+  color: var(--lime-700);
+}
+
+/* Chip de plan: marca lo que depende del plan sin prometer de más. */
+.planChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--lime-300);
+  color: var(--navy-900);
+  white-space: nowrap;
+  width: fit-content;
+}
+
+/* ── Piezas de mock (CSS puro, sin cifras: D-VX3) ──────────────── */
+.mockBar {
+  display: block;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(15, 30, 51, 0.1);
+}
+.w30 { width: 30%; }
+.w40 { width: 40%; }
+.w55 { width: 55%; }
+.w70 { width: 70%; }
+.avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--sky-600);
+  flex-shrink: 0;
+}

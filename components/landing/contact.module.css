@@ -1,0 +1,62 @@
+/* [VX2-c2] Contacto de la landing. Valores portados de design_source/vx0/shared.css (.contact*, .card, .section*).
+   Dos columnas ≥ 1024 (aside 5fr · form 7fr), una columna debajo. */
+
+.section {
+  padding-block: clamp(64px, 8vw, 120px);
+  background: #fff;
+  border-top: 1px solid rgba(15, 30, 51, 0.06);
+  scroll-margin-top: 72px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: clamp(32px, 5vw, 80px);
+  align-items: start;
+}
+
+.aside { display: grid; gap: 20px; }
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sky-700);
+}
+.eyebrowDot { width: 6px; height: 6px; border-radius: 50%; background: var(--lime-500); }
+.h2 {
+  margin: 0;
+  font-size: var(--fs-display-2);
+  line-height: 1.1;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+  color: var(--navy-900);
+}
+.lead {
+  margin: 0;
+  font-size: clamp(17px, 0.4vw + 15.5px, 20px);
+  line-height: var(--lh-relaxed);
+  color: var(--navy-500);
+  text-wrap: pretty;
+}
+.reasons { display: grid; gap: 14px; padding: 0; margin: 0; list-style: none; }
+.reasons li { display: grid; grid-template-columns: 24px 1fr; gap: 12px; color: var(--navy-700); }
+.reasonIcon { display: inline-flex; color: var(--sky-700); }
+
+.card {
+  min-width: 0;
+  background: #fff;
+  border-radius: var(--r-lg);
+  border: 1px solid rgba(15, 30, 51, 0.07);
+  box-shadow: var(--shadow-card);
+  padding: clamp(20px, 2.4vw, 28px);
+}
+
+@media (max-width: 1023px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+}
