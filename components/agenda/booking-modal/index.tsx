@@ -131,6 +131,7 @@ import {
   PatientOverlapPrompt,
   RoomBusyPrompt,
   focusRoomSelect,
+  promptFocusTarget,
   SamePatientPrompt,
   type RoomBusyState,
 } from "./conflict-prompts";
@@ -268,12 +269,28 @@ export function BookingModal({
   };
   // Every prompt renders below the form fields inside a scrolling drawer, so
   // bring whichever one appears into view instead of leaving it off-screen.
+  // PF1-Z-F1 (#1): el `nearest` lo dejaba DEBAJO del footer sticky (botones
+  // del aviso no clickeables); ahora el Drawer reserva el alto del footer como
+  // `scroll-padding-bottom` (`data-drawer-footer`) y el scroll lo respeta.
+  // Además el foco va a la primaria del aviso: quien venía con teclado quedaba
+  // en el submit, debajo. Se enfoca UNA vez por aviso y recién sin `pending`
+  // (el aviso se pinta con la transición todavía viva y los botones disabled).
   const promptRef = useRef<HTMLDivElement | null>(null);
+  const activePrompt =
+    conflict ?? samePatient ?? patientOverlap ?? batchConflict ?? blockedPrompt ?? outOfHoursPrompt ?? roomBusyPrompt;
+  const focusedPrompt = useRef<object | null>(null);
   useEffect(() => {
-    if (conflict || samePatient || patientOverlap || batchConflict || blockedPrompt || outOfHoursPrompt || roomBusyPrompt) {
+    if (activePrompt) {
       promptRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
-  }, [conflict, samePatient, patientOverlap, batchConflict, blockedPrompt, outOfHoursPrompt, roomBusyPrompt]);
+  }, [activePrompt]);
+  useEffect(() => {
+    if (!activePrompt || pending || focusedPrompt.current === activePrompt) return;
+    const target = promptFocusTarget(promptRef.current);
+    if (!target) return;
+    focusedPrompt.current = activePrompt;
+    target.focus({ preventScroll: true });
+  }, [activePrompt, pending]);
 
   // Stable idempotency key for THIS create attempt (one per modal instance):
   // a double-submit / retry converges to one turno, while a deliberate new
@@ -1075,7 +1092,7 @@ export function BookingModal({
             />
           )}
           {/* Footer apilado, full-width y pegado al pie (G7): una sola primaria. */}
-          <div className={styles.footer}>
+          <div className={styles.footer} data-drawer-footer="">
             <Button
               type="submit"
               variant="primary"

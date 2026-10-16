@@ -14,6 +14,10 @@
  * so any number of callsites reuse one mounted instance. Escape / backdrop
  * / "Cancelar" resolve `false`; the confirm button resolves `true`. Escape
  * no se propaga a overlays de abajo (Drawer, menús): ver el efecto del diálogo.
+ *
+ * Foco (PF1-Z-F2): el panel es un `useFocusTrap` (Tab cicla adentro y, al cerrar, el foco vuelve al elemento que lo
+ * abrió). Antes no había trap: tras Esc/Cancelar el foco quedaba en <body> y Tab seguía por la página con el Drawer de
+ * abajo abierto.
  */
 import { AnimatePresence, m } from "framer-motion";
 import {
@@ -25,6 +29,7 @@ import {
   useState,
 } from "react";
 import { Button } from "@/components/ui/button";
+import { useFocusTrap } from "@/hooks/use-focus-trap";
 import { backdropVariants, modalVariants } from "@/lib/motion";
 
 type ConfirmTone = "default" | "danger";
@@ -75,7 +80,18 @@ export function useConfirm(): ConfirmFn {
   return ctx;
 }
 
-function ConfirmDialog({
+/**
+ * PF1-Z-F2 (puro, para el test): foco inicial en el botón de aceptar. No se usa `autoFocus`: React lo aplica en el
+ * commit, ANTES del efecto del trap, y el trap guardaba como «elemento a devolver» al propio botón del confirm (que se
+ * desmonta) en vez del que abrió el diálogo. Así el trap captura primero al que abrió y después se enfoca el botón.
+ */
+export function focusConfirmAccept(
+  panel: { querySelector(sel: string): { focus(): void } | null } | null
+): void {
+  panel?.querySelector("[data-confirm-accept]")?.focus();
+}
+
+export function ConfirmDialog({
   state,
   onCancel,
   onConfirm,
@@ -86,6 +102,14 @@ function ConfirmDialog({
 }) {
   const danger = state?.tone === "danger";
   const open = !!state;
+  // Orden de efectos (importa): primero el del trap (guarda `document.activeElement` = el que abrió y enfoca el
+  // primer focuseable), después este, que pasa el foco a «Confirmar» como hacía el viejo `autoFocus`.
+  const trapRef = useFocusTrap<HTMLDivElement>(open);
+  useEffect(() => {
+    if (open) focusConfirmAccept(trapRef.current);
+    // `trapRef` es estable (useRef).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
   // Esc cierra SOLO este diálogo (A2b-S-ui). Antes el keydown del backdrop no
   // frenaba el evento y el listener de `window` del Drawer de abajo también lo
   // veía: un Esc cancelaba la confirmación Y cerraba el drawer (perdiendo el
@@ -130,6 +154,9 @@ function ConfirmDialog({
           }}
         >
           <m.div
+            ref={trapRef}
+            tabIndex={-1}
+            data-confirm-panel
             className="k-glass-strong"
             onClick={(e) => e.stopPropagation()}
             variants={modalVariants}
@@ -154,7 +181,7 @@ function ConfirmDialog({
               <Button
                 variant="primary"
                 onClick={onConfirm}
-                autoFocus
+                data-confirm-accept
                 style={
                   danger
                     ? { background: "var(--danger-fg)", boxShadow: "0 4px 14px rgba(159,31,31,0.3)" }

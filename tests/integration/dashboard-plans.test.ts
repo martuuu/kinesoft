@@ -162,7 +162,10 @@ describe.skipIf(!RUN)("S14 · dashboard sobre Planes", () => {
     const row = d.recent.find((r) => r.id === patientId);
     expect(row).toBeDefined();
     // Vivas: index 2 (cerrada) e index 3. Ordinal de la cerrada = 1 de 2 (antes: 2 / 3).
-    expect(row).toMatchObject({ access: "full", cond: "Cervicalgia S14", sessionsDone: 1, sessionsTotal: 2 });
+    // [PF2-a] D6: `cond` es el diagnóstico, nunca el título del plan; este plan no tiene caso → vacío (el caso con
+    // diagnóstico lo cubre `pf2-dashboard-budget.test.ts`).
+    expect(row).toMatchObject({ access: "full", cond: "", sessionsDone: 1, sessionsTotal: 2 });
+    expect(JSON.stringify(row)).not.toContain("Cervicalgia S14");
   });
 
   it("liveProgramWhere: el plan archivado no cuenta como activo ni aparece en recientes", async () => {

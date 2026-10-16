@@ -49,6 +49,15 @@ export function patientPickerEmptyHint(source: PatientPickerSource): string {
     : "Si es un paciente nuevo, activá el switch “Nuevo paciente” arriba para registrarlo.";
 }
 
+/**
+ * PF1-Z-F1 (#7): ¿el blur del input cierra la lista? Sí si el foco se va a un elemento FUERA del combobox (salir
+ * con Tab dejaba la lista abierta tapando el campo siguiente). Sin destino (`relatedTarget` null: click en la barra
+ * de scroll de la lista, cambio de ventana) no: los clicks de afuera ya los cierra el `mousedown` global.
+ */
+export function pickerBlurCloses(wrap: Pick<Node, "contains"> | null, relatedTarget: Node | null): boolean {
+  return !!relatedTarget && !wrap?.contains(relatedTarget);
+}
+
 export function PatientPicker({
   name,
   initialPatientId,
@@ -229,6 +238,12 @@ export function PatientPicker({
               setOpen(true);
             }}
             onFocus={() => setOpen(true)}
+            onBlur={(e) => {
+              if (pickerBlurCloses(wrapRef.current, e.relatedTarget as Node | null)) {
+                setOpen(false);
+                setActive(-1);
+              }
+            }}
             style={{
               marginTop: 6,
               padding: "10px 12px",

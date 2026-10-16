@@ -118,7 +118,9 @@
    recortaba). Aparece con hover y con foco de teclado; Escape lo cierra (WCAG 1.4.13). */
 .tooltip {
   position: fixed;
-  z-index: 60;
+  /* PF1-Z-F2: era 60 fijo y quedaba ENCIMA del Drawer (46) y su backdrop si el hover/foco seguía en el sidebar al
+     abrirse un overlay. Se ata al token: justo debajo del backdrop del Drawer (encima del contenido del shell). */
+  z-index: calc(var(--z-drawer-backdrop) - 1);
   transform: translateY(-50%);
   padding: 6px 10px;
   border-radius: 8px;

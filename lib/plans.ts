@@ -185,7 +185,9 @@ async function createPlanImpl(raw: PlanCreateInput): Promise<CreatePlanResult> {
         link: `/pacientes/${input.patientId}?tab=planes&programa=${out.programId}`,
       });
     }
-    revalidatePath(`/pacientes/${input.patientId}`);
   }
+  // Revalida también en el reintento idempotente (revisor A de PF1-Z): si se perdió la respuesta del primer
+  // guardado, el cliente ya no hace `router.refresh()` y el perfil saldría del router cache sin el plan.
+  revalidatePath(`/pacientes/${input.patientId}`);
   return { ok: true, programId: out.programId, idempotent: out.idempotent };
 }

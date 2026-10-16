@@ -469,14 +469,75 @@ ningún índice. Orden para prod en [RUNBOOK «M10 en prod»](MIGRACIONES-RUNBOO
   `fkExplain`). `compare.ts` la lee **última**: solo aporta techo a los escenarios que A1/B4.6 no tenían, así regrabar
   no afloja los techos viejos. `baseline.json` no se tocó.
 
+## PF2 · una tx por loader + actor memoizado (16-oct-2026, cierre PF-Z)
+
+Contrato C-PF8 (brief PF §2.4): la página resuelve el actor antes y hace `runWithRls(tenantId, tx => loadX(actor, tx))`;
+los loaders reciben `tx` y llevan `where: { tenantId }` a mano. Lo fija `tests/integration/pf2-*-budget.test.ts` con el
+contador real (`tests/helpers/query-counter.ts`) sobre los loaders que corre la página, en los dos roles.
+
+**Transacciones por carga (harness `loaders.perf`, fixture de volumen de A1; `compare.ts` en PF-Z):**
+
+| Página | Loader | tx antes → después | sentencias | wall (laptop) | Presupuesto |
+|---|---|---|---|---|---|
+| `/dashboard` (frío) | `getDashboardPageData` (`lib/dashboard.ts`) | **15 → 2** (caliente 4 → 1) | 45 → 33 | 43 → 62 ms (info) | ≤ 2 frío, ≤ 1 caliente |
+| `/pacientes/[id]` | `loadPatientProfilePage` (`lib/patient-profile-loader.ts`) | **14 → 3** | 63 → 30 | 411 → 233 ms | ≤ 3 |
+| `/agenda` | `loadAgendaPage` (`lib/agenda-page-loader.ts`) | **8-9 → 3** (`agenda.page`) | 48 → 31 | 126 → 65 ms | ≤ 3 |
+| `/configuracion` (Titular, todas las pestañas) | `lib/configuracion-page-loader.ts` | **13 → 3** | — | — | ≤ 3 |
+| `previewRecurrence` mensual ×20 | `lib/availability-actions.ts` | 2 → 1 | **106 → 18** | 52 → 15 ms | ≤ 40 sentencias, 1 tx |
+| server action cualquiera | `getActor()` memoizado (`lib/session.ts`) | N resoluciones → **1** | — | — | ≤ 1 por action |
+
+- **Payload de la semana** (`agendaPayloadBytes`, el cable compacto `lib/agenda-wire.ts` que `loadAgendaPage` manda al
+  cliente, 1.008 turnos): **802.569 → 317.049 bytes** (−60 %). Regla **estricta** nueva de `compare.ts`
+  (`AGENDA_PAYLOAD_MAX_BYTES = 400_000`; test en `tests/unit/perf-compare.test.ts`). El cable decodificado es idéntico
+  al DTO de antes (`pf2-agenda-budget`).
+- `/agenda` ya no lee el directorio entero de pacientes (`listPatients()`, ~120-135 ms con 1.000 pacientes): el picker
+  busca en el server y el deep-link `?patient=` se lee por id.
+- `compare.ts` (PF-Z, `PERF_OUT_DIR` en scratch): **0 regresiones** fuera de umbral (48 escenarios, 18 nuevos; techos
+  estrictos de turnos iguales). `pf.json` no se regrabó: queda como la foto de PF-M (antes de PF2).
+
+**TTFB / total con `next start` (`scripts/perf/ttfb.mjs`, tenant `movare`, rol OWNER).** Antes = «después» de PF-0b
+(misma tabla de arriba, `1553192`); después = PF-Z (633cdee + WIP de PF2). Misma región = auth 30 / DB 3 ms, mediana
+de 5; cruzado = auth 150 / DB 120 ms, mediana de 3. `tx` = por request entero (layout + página).
+
+| Ruta | misma región antes | **PF-Z** | cruzado antes | **PF-Z** | tx antes → PF-Z |
+|---|---|---|---|---|---|
+| `/dashboard` | 45 / 113 | **55 / 105** | 299 / 2.610 | **829 / 2.109** | 4 → 2 |
+| `/agenda` | 40 / 179 | **59 / 143** | 423 / 3.260 | **830 / 3.388** | 8 → 4 |
+| `/pacientes` | 36 / 103 | 59 / 101 | 303 / 2.115 | 809 / 2.089 | 3 → 3 |
+| `/pacientes/[id]` | 54 / 179 | **194 / 197** | 931 / 5.268 | **4.524 / 4.528** | 12 → 3 |
+| `/configuracion` | 116 / 119 (sin esqueleto) | **45 / 105** | — / 2.990 | **812 / 2.858** | 11 → 4 |
+| `/sala` | 41 / 73 | 55 / 60 | 295 / 1.449 | 819 / 1.184 | 3 → 3 |
+| `/seguimiento` | 104 / 107 (sin esqueleto) | 50 / 120 | — / 2.269 | 925 / 2.242 | 1 → 2 |
+| `router.refresh()` `/agenda` | 14 / 124 | 12 / 118 | 12 / 3.232 | 21 / 3.368 | 8 → 4 |
+| action `listAgendaBookings` | 69 / 71 | 51 / 53 | 1.451 / 1.452 | 920 / 921 | 2 → 1 |
+
+Lectura:
+
+- **Totales (D-PF-J):** en misma región ninguna página empeoró (dashboard −8, agenda −36, configuración −14 ms; perfil
+  +18 ms, dentro del ruido de una corrida). Cruzado: dashboard −0,5 s, perfil −0,7 s, configuración −0,1 s; agenda +0,13 s
+  (+4 %, ruido de 3 corridas: tiene la mitad de tx pero la disponibilidad espera al bootstrap). No hizo falta separar
+  ninguna tx en dos.
+- **El perfil perdió el esqueleto:** TTFB = total (54 → 194 ms misma región, 0,9 → 4,5 s cruzado). Causa: PF2-b hizo
+  que `generateMetadata` (`app/(app)/pacientes/[id]/page.tsx:20`) espere la carga entera para el título, y en Next 14
+  la metadata bloquea el primer byte, así que `loading.tsx` no sale hasta que termina todo. Antes el título era
+  `getPatientName` (1 tx chica). Abierto en AUDIT (`pf2-perfil-metadata-bloquea-esqueleto`), con recomendación.
+- **El TTFB de todas las páginas con esqueleto subió ~+15 ms (misma región) / ~+500 ms (cruzado) desde PF-0b**, también
+  en `/pacientes` y `/sala`, que PF2 no tocó: es el layout de `(app)`: PL-F sumó una tx en serie antes de pintar
+  (`ownPublicBooking`, `app/(app)/layout.tsx:131`, el switch «Aparezco en el turnero» del topbar) = 4 idas y vueltas
+  (≈ 12 ms / 480 ms), no PF2. Abierto en AUDIT (`layout-app-tx-en-serie`).
+- La action de lectura baja 2 → 1 tx y ~−35 % (el actor memoizado no cambia una action que pide el actor una vez; el
+  ahorro es en las que lo piden varias veces, `pf2-tx-budget`).
+- Crudo: `ttfb-same.json` / `ttfb-x.json` del scratchpad de PF-Z (no versionado; se regenera con el script, que hace
+  su propio `next build` con las URLs del GoTrue falso: con `--no-build` sobre un build normal todas las rutas dan 307).
+
 ## Qué confirman o refutan estos números (hallazgos de la auditoría del 23-sep)
 
 | Hallazgo | Veredicto con datos | Destino |
 |---|---|---|
-| `runwithrls-interactive-tx-per-read` (P) | **Confirmado.** Una tx interactiva por lectura: 15 tx en el dashboard, 14 en el perfil y 9 en la agenda. Con un pool chico todo se serializa, y una query lenta tira P2028 al resto | C1 |
+| `runwithrls-interactive-tx-per-read` (P) | **Confirmado.** Una tx interactiva por lectura: 15 tx en el dashboard, 14 en el perfil y 9 en la agenda. Con un pool chico todo se serializa, y una query lenta tira P2028 al resto | ✅ **PF2** en las lecturas de página: dashboard 2, perfil 3, agenda 3, configuración 3 ([§PF2](#pf2--una-tx-por-loader--actor-memoizado-16-oct-2026-cierre-pf-z)). Write-paths de turnos → C (D-PF4) |
 | `bulk-writes-one-tx-per-row` / `write-paths-tx-secuenciales` | **Confirmado.** `createBooking` abre 7 tx para 1 turno; el batch, 23 tx para 20 turnos, en serie | C1 (y el motor de Planes de B lo hace en 1 tx) |
-| `agenda-loads-full-patient-directory` | **Confirmado.** `listPatients()` sola cuesta más wall-clock (135 ms) que los turnos de la semana (69 ms) con 1.000 pacientes, y hace un Seq Scan de Booking. Crece con el directorio | C1 |
-| **NUEVO** `session-exercise-count-full-scan` | El `_count` de ejercicios por sesión del perfil (`getPatientProgramsLite`, **retirada en ES3**; falta re-verificar los lectores nuevos) agrega la tabla `SessionExercise` **entera** (de todos los tenants), con RLS fila por fila, antes de filtrar: 250-380 ms con 24k filas. **Crece con el tamaño de la plataforma**, no del paciente | C1 |
+| `agenda-loads-full-patient-directory` | **Confirmado.** `listPatients()` sola cuesta más wall-clock (135 ms) que los turnos de la semana (69 ms) con 1.000 pacientes, y hace un Seq Scan de Booking. Crece con el directorio | ✅ **PF2-c**: `/agenda` ya no lo lee (deep-link por id) |
+| **NUEVO** `session-exercise-count-full-scan` | El `_count` de ejercicios por sesión del perfil (`getPatientProgramsLite`, **retirada en ES3**; PF-Z: el lector nuevo `lib/plans-read-internal.ts:114` sigue con `_count: { exercises }`, falta medir si el plan es el mismo) agrega la tabla `SessionExercise` **entera** (de todos los tenants), con RLS fila por fila, antes de filtrar: 250-380 ms con 24k filas. **Crece con el tamaño de la plataforma**, no del paciente | C1 |
 | `missing-fk-indexes` (`Coverage.patientId`) | **Confirmado** en el plan de la suma de "OS percibido": Seq Scan de `Coverage` por cada turno | ✅ **PF-M (M10)**: `Coverage_patientId_idx` + 12 índices más ([§PF-M](#pf-m--m10-perf_fk_indexes-16-oct-2026)) |
 | Dashboard ~1 s | **Refutado como problema de prod:** era un artefacto de estadísticas vacías (sin `ANALYZE` el planner arrancaba por los 10k turnos). Con estadísticas reales, 43 ms. Queda como lección: después de imports masivos, correr `ANALYZE` | — |
 | `service-channel-direct-url-pool-prod` (P) | Sin medir: depende del `DATABASE_URL` real de Vercel (tarea A0a del dueño). El test de pool da el mecanismo | A0a → C1 |

@@ -1531,7 +1531,7 @@ Evidencia en §Ronda 13. Ninguno bloquea el deploy de B-pre.
 | perf-batch-una-tx | baja | C1 | lib/bookings.ts `createBookingsBatch` | 🔴 | C1 perf — 166 statements / 22 tx para 20 turnos |
 | perf-create-booking-34-statements | baja | C1 | lib/bookings.ts `createBooking` | 🔴 | C1 perf — 34 statements / 5 tx (A1: 12/7) |
 | perf-preview-recurrence-mensual | baja | C1 | lib/availability-actions.ts `previewRecurrence` | 🔴 | C1 perf — 106 statements para 20 fechas mensuales |
-| perf-agenda-payload-1mb | media | C1 | lib/bookings.ts `listAgendaBookings` · app/(app)/agenda/page.tsx | 🔴 | C1 perf — ~1 MB por semana con 6 profesionales |
+| perf-agenda-payload-1mb | media | C1 | lib/agenda-page-loader.ts · lib/agenda-wire.ts | 🟢 PF2-c | Cable compacto: 802.569 → **317.049 bytes** (fixture de volumen); regla estricta ≤ 400 kB en `tests/perf/compare.ts` (PF-Z) |
 | perf-harness-explain-params-tipados | baja | C1 | tests/perf/loaders.perf.test.ts | 🟢 | **PF-M (16-oct)** — `explainSlowest` inlinea literales sin tipo (`inlineParams`, mismo criterio que `agenda-multi.perf.test.ts`); con literales, los Seq Scan de la query más lenta del baseline de A1 se **mantienen** (Booking en `agenda.bookings`, Session en agenda/dashboard, SessionExercise en paciente): en el fixture de A1 (un tenant con todo el volumen) son elección del planner, no el artefacto de tipos. [PERF.md §PF-M](PERF.md) |
 | missing-fk-indexes (`Coverage.patientId`) | baja | C1 | prisma/schema.prisma · `prisma/migrations/20261018120000_perf_fk_indexes` | 🟢 local (prod con M10) | **PF-M (16-oct)** — M10: 13 índices btree de una columna sobre FKs sin índice (C-PF7); la query de FKs sin índice del catálogo local pasó de 47 a 34 filas (las 34 restantes son compuestas con `tenantId` o tienen el índice con tenant adelante, a propósito). El EXPLAIN de `Coverage` por paciente usa `Coverage_patientId_idx`. Orden para prod: [RUNBOOK «M10 en prod»](MIGRACIONES-RUNBOOK.md) |
 | bundle-sobre-presupuesto-bpre | media | C1 | /agenda 195 · /configuracion 209 · /pacientes/[id] 194 · /onboarding 185 · /plataforma/ejercicios 184 · /diagnostico 180 · /c/[slug]/booking 153 kB | 🟢 | **PF1-Z (16-oct)** — todas las rutas entran y workspace/Plataforma/onboarding son bloqueantes (D-PF-B): `/agenda` 175,7 · `/configuracion` 140,7 · `/pacientes/[id]` 171,7 · `/onboarding` 153 · `/plataforma/ejercicios` 149,9 · `/diagnostico` 152,4 · `/c/[slug]/booking` 118,6 kB. [PERF.md §Bundle](PERF.md) |
@@ -1540,7 +1540,7 @@ Evidencia en §Ronda 13. Ninguno bloquea el deploy de B-pre.
 | booking-body-css-regla-muerta | baja | C | app/globals.css | 🔴 | C — regla `.booking-body` (≤1024 px) |
 | turnero-texto-fijo-lun-sab | baja | C | nav del turnero público | 🟢 | **VX2-d1** — horario real por `lib/opening-hours-summary.ts` (puro, sobre `PractitionerSchedule` con `validFrom/validUntil` en `lib/datetime-ar.ts`; tests UTC y AR); DTO `openingSummary`, afirmado en `tests/integration/public-booking.test.ts` |
 | public-overlap-lookback-sin-uso | baja | C | lib/public-booking* | 🔴 | C — `PUBLIC_OVERLAP_LOOKBACK_MS` sin uso |
-| agenda-listpatients-in-1000 | baja | C1 | app/(app)/agenda/page.tsx | 🔴 | C1 — conocido (`agenda-loads-full-patient-directory`) |
+| agenda-listpatients-in-1000 | baja | C1 | app/(app)/agenda/page.tsx | 🟢 PF2-c | Cierra también `agenda-loads-full-patient-directory`: `/agenda` no lee el directorio; el picker busca en el server y `?patient=` se lee por id |
 | secretaria-sin-practitioner | media | C0 | lib/session.ts · lib/access-logic.ts | 🟢 | **IAM-4a** (Ronda 21) — `isUsableMembership` solo exige `Practitioner` a roles clínicos; `Actor.practitionerId` null + `ownPatientsWhere`/`isActorPractitioner` + guard `actor-practitioner-guard.test.ts`; la activación ya no le crea profesional |
 | catalogo-siglas-ambiguas | baja | catálogo | prisma/catalog/payers.csv (`aliases`) · lib/catalog/normalize.ts `matchKey` | 🔴 | curado en Plataforma — 37 siglas ambiguas sin alias (p. ej. OSPA no se encuentra por sigla) |
 | catalogo-datos-por-verificar | baja | catálogo | prisma/catalog/payer-plans.csv · specialties.csv | 🔴 | curado — planes Sancor 1000/1500 y especialidades de Mendoza |
@@ -1778,7 +1778,7 @@ FX2b drawer/modal/PlanCard, FX3 editor y KPI) o el orquestador en el gate, y se 
 | room-filter-densidad | baja | C1 | components/agenda/room-filter.tsx | 🔴 | **C1** — con > 4 salas los chips parten el toolbar en 2 líneas; pasar a `<select>` como el fallback de profesionales |
 | por-sala-filtro-sin-sala | baja | C1 | components/agenda/views/room-day-panel.tsx | 🔴 | **C1** — con el filtro "Sin sala", "Por sala" dibuja las salas vacías más "Sin sala"; mostrar solo esa columna |
 | bundle-sr-sobre-criterio | baja | C1 | `/agenda` 204,5 kB · `/configuracion` 216,2 kB | 🟢 | **PF1-Z (16-oct)** — `/agenda` 175,7 · `/configuracion` 140,7 kB (paneles y `WeekDrawer` diferidos en PF1.1). [PERF.md §Bundle](PERF.md) |
-| dashboard-counts-tx-paralelas | baja | C1 (perf) | lib/dashboard.ts:153-300 (`_loadDashboardCounts`) | 🔴 | **C1 perf** — sigue abriendo ~8 `runWithRls` en paralelo, el mismo patrón que daba timeout de pool en ingresos |
+| dashboard-counts-tx-paralelas | baja | C1 (perf) | lib/dashboard.ts (`getDashboardPageData`) | 🟢 PF2-a | 15-16 tx en frío → **2** (≤ 1 caliente): los counts en una tx propia dentro de `unstable_cache` (`pf2-dashboard-budget`) |
 | ingresos-filtro-owner-por-profesional | baja | C0 | dashboard (widget de ingresos) | 🔴 | **C0** — el OWNER ve el total del consultorio; filtrar por profesional queda para C0 (SR-D5I) |
 
 ### Hallazgos de SV (SVZ, 13/14-oct-2026)
@@ -1902,7 +1902,7 @@ Ronda 24. Evidencia y diseño en §20.2 del plan vigente; la ola de destino se c
 | PL-3 configuracion-500-con-configuracion-delegada | alta | PL | lib/invitations.ts (`requireTeamManager`) · app/(app)/configuracion/page.tsx · lib/tenant-plan-usage.ts | 🟢 | **PL-3b + integrador PL-3** — `requireTeamManager` exigía rol OWNER/ADMIN y la página leía el equipo por `tenant.admin`: un delegado con «Configuración» rompía /configuracion. Ahora los dos usan `tenant.admin` (y la lectura va con `unlessForbidden`); «Plan y uso» acepta `account.billing` o `tenant.admin` (`tests/integration/tenant-plan-usage.test.ts`) |
 | PL-3 switch-turnero-sin-ui-propia | baja | PL-Z | components/configuracion/panels/practitioners/public-booking-switch.tsx · lib/practitioner-public.ts · components/global/profile-menu.tsx | 🟢 PL-Z (sin commitear) | **PL-Z** — el switch de su propio turnero va en el menú de perfil para el profesional sin «Configuración»; `setPractitionerPublicBooking` devuelve `{ ok: false, error }` en vez de tirar `ForbiddenError` (a3#15) |
 | PL-3 assign-patient-sin-zod | media | PL-Z | lib/patients.ts (`assignPatientToPractitioner`) | 🟢 PL-Z (sin commitear) | **PL-Z** — zod estricto sobre la entrada y todo en una sola tx |
-| H-SLOW lentitud-general | alta | **A** (operación) | vercel.json:3 · lib/session-user.ts · lib/rls.ts:43 · .docs/PERF.md | 🔴 | **PF-0a..d** (bloque 0, antes de PL) — `getUser()` por request, una tx por lectura (15 en dashboard), doble render, sin `loading.tsx`, framer en la transición. Falta confirmar Supabase en `sa-east-1` (Martin) |
+| H-SLOW lentitud-general | alta | **A** (operación) | vercel.json:3 · lib/session-user.ts · lib/rls.ts:43 · .docs/PERF.md | 🟡 | **PF-0a..d + PF2** — sesión local, esqueletos, sin doble render y una tx por loader (dashboard 2, perfil 3, agenda 3, configuración 3). Queda `layout-app-tx-en-serie` (PF-Z); `pf2-perfil-metadata-bloquea-esqueleto` cerrado con título genérico. Falta confirmar Supabase en `sa-east-1` (Martin) |
 | H-EV2 pestana-evolucion-es-eva | baja | B | components/patients/profile/tabs-bar.tsx · components/seguimiento/seguimiento-model.ts | 🟢 | **EV2** — la pestaña de la curva pasa a «EVA» (id `evol`, EV2-D10/D20) y la nueva «Evoluciones» (`evoluciones`) es la HC; en Seguimiento la meta de sesión se llama «Registrar sesión» y «Cargar evolución» abre la evolución de HC del turno (EV2-D19) |
 | H-LAND landing-claims-inexistentes | media | VX | components/screens/landing-screen.tsx | 🟢 | **VX2-c1/c2 + VX-Z** — landing B nueva (`app/page.tsx`, `components/landing/**`), `landing-screen.tsx` borrado; solo claims con evidencia (brief §3) y guard `tests/unit/public-claims.test.ts` (incluye «no cobrar turnos con Mercado Pago», VX-Z) |
 | H-LOGIN login-layout-roto | media | VX | components/screens/login-screen.tsx · app/globals.css:384-390 · auth-shell.tsx | 🟢 | **Ola F (F-b1/F-b2) + VX2-a/b1** — `AuthShell` v2 (`product`/`split`/`centered`, contenedor máximo, apila < 1024), sin «Matrícula» ni «recordarme», foco global `--focus-ring`; los 13 consumidores migrados y el shim borrado |
@@ -2110,6 +2110,40 @@ después en [PERF.md §Bundle](PERF.md).
 | pf1-publicas-suben | baja | PF-Z | superficies públicas | 🟡 | +1-5 kB en PF1 (`/forgot` 110,8 → 116,3), dentro de 120 y del 10 %: medir con `--explain` qué entró |
 | pf1-zod-planes-seguimiento | baja | C | lib/plans-deeplink.ts (`planDeepLinkHref` → `encodePlanPrefill`) | 🔴 abierto | Zod (12,9 kB) sigue en `/planes*` y `/seguimiento/[sessionId]` (170-172 kB, entran). Separar el validador del prefill como `realtime-message-guard` (TS puro, test de equivalencia) |
 | pf1-seguimiento-ejercicio-390 | baja | MB | components/seguimiento/session-detail.tsx | 🔴 MB | Fila de ejercicio de `/seguimiento/[id]` con 6 columnas a 390 |
+
+### PF2 y PF-Z (16-oct-2026): cierre del bloque PF
+
+PF2 = una tx por loader + actor memoizado (PF2-a dashboard, b perfil, c agenda, d configuración, e actor); fixers F1/F2
+del revisor B de PF1-Z; PF-Z integrador. Números en [PERF.md §PF2](PERF.md).
+
+- **Cerrado:** `dashboard-counts-tx-paralelas`, `agenda-loads-full-patient-directory` / `agenda-listpatients-in-1000`,
+  `perf-agenda-payload-1mb` (filas de arriba); **`runwithrls-interactive-tx-per-read` en las lecturas de página**
+  (dashboard 2, perfil 3, agenda 3, configuración 3; write-paths de turnos → C, D-PF4);
+  **`react-cache-no-deduplica-en-server-actions`** (PF2-e: memo por `requestAsyncStorage` + token + `kine_tenant`,
+  `lib/session.ts`; N `getActor()` en una action = 1 resolución, `actor-memo` y `pf2-tx-budget` en los dos roles);
+  «Pacientes recientes» con el mismo paciente repetido (PF2-a, uno por paciente, `lib/dashboard.ts:343`);
+  `previewRecurrence` mensual 106 → 18 sentencias en 1 tx (PF2-c).
+- **PF-Z aplicó:** escenarios `agenda.page` y `paciente` de `loaders.perf` sobre los loaders reales; regla estricta
+  `agendaPayloadBytes ≤ 400 000` en `compare.ts`; orden de salas único (`ROOM_ORDER` de `lib/rooms-read.ts` también en
+  `lib/agenda-page-loader.ts`); ratchet `linkWrappingButton` 3 → 0; `AsyncLocalStorage` global en
+  `tests/helpers/integration-setup.ts` (12 fallas de `actor-memo`/`pf2-tx-budget` solo en `test:integration:owner`, por
+  orden de archivos en el fork único); conteo de sentencias de `availability-loader.test.ts` («no suma statements»)
+  delimitado con marcadores (los eventos `query` de Prisma llegan asincrónicos: 11 vs 10 intermitente; preexistente, ni
+  el loader ni el test cambiaron desde PL-Z).
+- **Abierto:**
+
+| Hallazgo | Sev | Bloque | Ubicación | Estado | Nota |
+|---|---|---|---|---|---|
+| pf2-perfil-metadata-bloquea-esqueleto | media | PF / C | app/(app)/pacientes/[id]/page.tsx (`metadata`) | 🟢 cerrado (PF-Z, default del orquestador) | El título esperaba la carga entera del perfil y en Next 14 la metadata bloquea el primer byte (TTFB 54 → 194 ms misma región). **Decisión con default (16-oct):** título genérico «Paciente · KineSoft» sin leer el paciente: vuelve el esqueleto, el perfil queda en 3 tx y el nombre no queda en la pestaña ni en el historial de PCs compartidas. Martin puede pedir el nombre (lectura liviana = 4 tx) |
+| layout-app-tx-en-serie | media | PF / C | app/(app)/layout.tsx:131 (`ownPublicBooking`, PL-F) | 🟡 mitigado (PF-Z: en paralelo con las preferencias; sigue siendo 1 tx más por página) | Una tx en serie antes de pintar en TODAS las páginas: +4 RT (≈ +12 ms misma región, +480 ms cruzado) en el TTFB desde PF-0b. Arreglo: el dato en la foto de acceso o la tx en paralelo con el gate |
+| pf2-dedupe-generatemetadata-sin-test | baja | PF / C | app/(app)/pacientes/[id]/page.tsx · lib/patient-profile-loader.ts (`cache()`) | 🟡 | Que `generateMetadata` y la página compartan la carga por `cache()` no está probado (en vitest `cache` es pass-through); el TTFB de arriba sugiere que se comparte (3 tx), sin test |
+| pf2-config-lectores-copiados | baja | C | lib/configuracion-page-loader.ts:120/148/164/188 | 🔴 abierto | Copias en tx de `getTenantSettings`, `getPractitionerScheduleSummary`, `listCustomConditions`, `listSupportSessionsForTenant`: mudarlas a variantes `*InTx` en sus módulos para no divergir |
+| pf2-perfil-planes-copiados | baja | C | lib/patient-profile-loader.ts:174-189 (`patientPlansAndBalancesInTx`) | 🔴 abierto | Réplica en tx de `getPatientPlans` + `getPatientPlanBalances` (`lib/plans-read.ts`, "use server"); la paridad la fija `pf2-profile-budget`. Mudar a `plans-read-internal.ts` |
+| session-exercise-count-full-scan | media | C1 | lib/plans-read-internal.ts:114 (`_count: { exercises }`) | 🔴 re-verificar | El lector nuevo de planes sigue con `_count` de ejercicios por sesión; falta medir si el plan agrega `SessionExercise` entera como el retirado (A1) |
+| pf2-seguimiento-2-tx | baja | PF / C | /seguimiento (request entero) | 🟡 | `ttfb.mjs`: 1 → 2 tx por request desde PF-0b (la página no cambió desde VX-Z: probablemente el layout). Presupuesto «no sube» |
+| pf2-agenda-bundle-176 | baja | PF | /agenda | 🟡 | 176,9 kB (presupuesto 180, +0,7 % sobre baseline): poco margen |
+| pf1z-toast-tapa-drawer | baja | MB | components/ui/toast.tsx:361 (`top: 16`) | 🔴 MB | El toast tapa el header del Drawer abierto (revisor B #11) |
+| pf1z-cls-390 | baja | MB | agenda Semana 390 | 🔴 MB | CLS 0,069 en Semana a 390 (Lista/Pacientes ≤ 0,02) |
 
 ### Hallazgos de ES4 (P4.Z, 15/16-oct-2026)
 

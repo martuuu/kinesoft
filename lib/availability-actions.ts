@@ -34,14 +34,17 @@
 import { requireCapability } from "@/lib/authz";
 import { runWithRls, type DbClient } from "@/lib/rls";
 import type { ActionResult } from "@/lib/validation";
-import { loadAvailabilityInputs, type LoadedAvailabilityInput } from "@/lib/availability-loader";
+import {
+  loadAvailabilityInputs,
+  loadAvailabilityInputsForDays,
+  type LoadedAvailabilityInput,
+} from "@/lib/availability-loader";
 import {
   NEXT_FREE_HORIZON_DAYS,
   addDays,
   buildSlots,
   classifyBatchInstant,
   classifyInstant,
-  dayKeyDiff,
   dayKeyOf,
   dayKeyRange,
   dayLockState,
@@ -617,11 +620,6 @@ export async function classifyBookingInstant(raw: ClassifyInstantQueryInput): Pr
 // 4. Vista previa de una serie (modo Sesiones del modal, B5.3)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Ventanas de carga de una serie: fechas a ≤ 62 días de la primera de su
- *  grupo van juntas. Mensual × 60 son 5 años: una sola carga traería todos
- *  los turnos del profesional de ese lapso; así son ~30 cargas chicas. */
-const PREVIEW_CHUNK_DAYS = 62;
-
 /**
  * Fechas de la serie (`expandDates`, misma regla que el multi-turno), su
  * resumen ("8 sesiones · Semanal 02/03 → 20/04") y, por fecha, el status que
@@ -642,12 +640,20 @@ export async function previewRecurrence(raw: RecurrencePreviewQueryInput): Promi
   // count ≥ 1 siempre da al menos el ancla (o el primer día pedido de su semana).
   if (dates.length === 0) return { ok: false, error: "La serie no tiene fechas." };
 
-  // Agrupa por ventana de carga (fechas ordenadas por construcción).
-  const chunks: Date[][] = [];
+  // PF2-c (C-PF8): UNA carga del motor por días sueltos (`loadAvailabilityInputsForDays`, el loader de Planes):
+  // las queries de ventana (excepciones, bloqueos, turnos) llevan un OR de tramos y la cantidad de sentencias no
+  // crece con las fechas. Antes eran ventanas de ≤ 62 días con una carga entera cada una (~10 sentencias por
+  // ventana): una mensual ×20 eran ~10 cargas, 95-106 sentencias. Por fecha se cargan los días AR que toca
+  // [inicio, inicio + duración] (con `q.durationMin ?? 480`, la misma cota que usaba la ventana para su último día):
+  // así una sesión que cruza la medianoche ve los turnos y bloqueos del día siguiente, igual que antes. Plantillas,
+  // servicios y reglas son los mismos que con la ventana contigua (contrato de `availability-loader-days`), y el
+  // motor no mira días fuera de los pedidos. Igualdad de `items`/`summary` contra el algoritmo anterior:
+  // tests/integration/pf2-agenda-budget.test.ts (TZ=UTC y AR).
+  const spanMin = q.durationMin ?? 480;
+  const days = new Set<DayKey>();
   for (const d of dates) {
-    const last = chunks[chunks.length - 1];
-    if (last && dayKeyDiff(dayKeyOf(last[0]), dayKeyOf(d)) <= PREVIEW_CHUNK_DAYS) last.push(d);
-    else chunks.push([d]);
+    const last = dayKeyOf(new Date(d.getTime() + spanMin * MIN_MS));
+    for (let k = dayKeyOf(d); k <= last; k = addDays(k, 1)) days.add(k);
   }
 
   const loaded = await runWithRls(tenantId, async (tx) => {
@@ -657,62 +663,52 @@ export async function previewRecurrence(raw: RecurrencePreviewQueryInput): Promi
       locationId,
       patientId,
     });
-    if (err) return { err, inputs: null } as const;
-    const inputs: { dates: Date[]; input: LoadedAvailabilityInput }[] = [];
-    // Secuencial: es un solo `tx` (Prisma encola igual).
-    for (const group of chunks) {
-      const lastEnd = new Date(group[group.length - 1].getTime() + (q.durationMin ?? 480) * MIN_MS);
-      const input = await loadAvailabilityInputs(tx, {
-        tenantId,
-        practitionerIds: [q.practitionerId],
-        serviceId: q.serviceId,
-        locationId: locationId ?? undefined,
-        patientId: patientId ?? undefined,
-        from: dayKeyOf(group[0]),
-        to: dayKeyOf(lastEnd),
-      });
-      inputs.push({ dates: group, input });
-    }
-    return { err: null, inputs } as const;
+    if (err) return { err, input: null } as const;
+    const input = await loadAvailabilityInputsForDays(tx, {
+      tenantId,
+      practitionerIds: [q.practitionerId],
+      serviceId: q.serviceId,
+      locationId: locationId ?? undefined,
+      patientId: patientId ?? undefined,
+      days: [...days],
+    });
+    return { err: null, input } as const;
   });
   if (loaded.err !== null) return { ok: false, error: loaded.err };
+  const { input } = loaded;
 
-  // Servicios y reglas no dependen de la ventana: alcanza la primera carga.
-  const eff = ruleFor(loaded.inputs[0].input, q.practitionerId, q.serviceId)!;
+  const eff = ruleFor(input, q.practitionerId, q.serviceId)!;
   const durationMin = q.durationMin ?? eff.durationMin;
   const now = new Date();
 
-  const items: RecurrencePreviewItem[] = [];
-  for (const { dates: group, input } of loaded.inputs) {
-    const base: Omit<ClassifyInstantInput, "when"> = {
-      durationMin,
-      patientId,
-      practitionerId: q.practitionerId,
-      serviceId: q.serviceId,
-      locationId,
-      cap: eff.cap,
-      rangesFor: (pid, dayKey) => scheduledRanges(pid, dayKey, input, { locationId }),
-      blocks: input.blocks,
-      bookings: input.bookings,
-      now,
+  const base: Omit<ClassifyInstantInput, "when"> = {
+    durationMin,
+    patientId,
+    practitionerId: q.practitionerId,
+    serviceId: q.serviceId,
+    locationId,
+    cap: eff.cap,
+    rangesFor: (pid, dayKey) => scheduledRanges(pid, dayKey, input, { locationId }),
+    blocks: input.blocks,
+    bookings: input.bookings,
+    now,
+  };
+  const items: RecurrencePreviewItem[] = dates.map((when) => {
+    const batch = classifyBatchInstant({ ...base, when });
+    const full = classifyInstant({ ...base, when });
+    return {
+      iso: when.toISOString(),
+      dayKey: dayKeyOf(when),
+      time: formatWallTime(Math.floor(minutesOfDayAR(when))),
+      status: batch.status,
+      class: full.class,
+      outOfHours: batch.outOfHours,
+      blocked: batch.blocked,
+      blockReasons: blockReasonsOf(input, batch.blockIds),
+      used: batch.used,
+      cap: batch.cap,
     };
-    for (const when of group) {
-      const batch = classifyBatchInstant({ ...base, when });
-      const full = classifyInstant({ ...base, when });
-      items.push({
-        iso: when.toISOString(),
-        dayKey: dayKeyOf(when),
-        time: formatWallTime(Math.floor(minutesOfDayAR(when))),
-        status: batch.status,
-        class: full.class,
-        outOfHours: batch.outOfHours,
-        blocked: batch.blocked,
-        blockReasons: blockReasonsOf(input, batch.blockIds),
-        used: batch.used,
-        cap: batch.cap,
-      });
-    }
-  }
+  });
 
   const counts: RecurrencePreview["counts"] = { libre: 0, sobreturno: 0, duplicado: 0, outOfHours: 0, blocked: 0 };
   for (const it of items) {

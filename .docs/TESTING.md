@@ -339,6 +339,32 @@ su alcance queda vacío (anti falso verde).
 - **Redirects de server actions:** `redirect()` tira un error con `digest = "NEXT_REDIRECT;<tipo>;<url>;<status>"`; los
   tests leen la URL del digest (`redirectOf` en `portal-invite.test.ts` y `portal-identity.test.ts`).
 
+### Patrones nuevos de PF2 (una tx por loader, actor memoizado, 16-oct-2026)
+
+- **Presupuesto de transacciones por página** (`tests/integration/pf2-{dashboard,profile,agenda,config}-budget.test.ts`):
+  se mide el loader REAL con los mismos argumentos que la página (`loadAgendaPage(actor, { monday, patientId })`,
+  `loadPatientProfilePage(actor, id, noteBookingId)`…) con el contador de `tests/helpers/query-counter.ts` (instalado
+  con `vi.mock("@/lib/db")`, sin tocar el loader) y se afirma `transactions ≤ N` y sentencias con techo. Además, paridad:
+  lo que el loader entrega es igual a lo que armaban los lectores de antes (un lector copiado que diverge pone el test
+  rojo). Corre en los dos roles.
+- **Actor memoizado** (`tests/integration/actor-memo.test.ts`, `pf2-tx-budget.test.ts`): cada «request» es un
+  `requestAsyncStorage.run(store, …)` propio; el store lleva el usuario de Supabase y el frasco de cookies de ese
+  request (mocks de `next/headers` y `@/lib/supabase/server` que leen del store), así dos requests concurrentes
+  (`Promise.all`) pueden ser de usuarios/consultorios distintos. Una resolución = una lectura de acceso por el canal de
+  servicio (contador real). Casos fijos: N `getActor()` = 1; concurrentes no comparten; `switchTenant` invalida; un
+  negativo no se memoiza; fuera de Next (sin store) no hay memo.
+- **`AsyncLocalStorage` global en el setup de integración** (`tests/helpers/integration-setup.ts`): `next start` lo
+  instala antes de cargar Next; la suite corre en un solo fork y Node cachea la instancia de
+  `request-async-storage` entre archivos, así que si un archivo la cargaba antes sin el global quedaba la falsa
+  («Invariant: AsyncLocalStorage accessed…»). Pasaba solo con el orden de `test:integration:owner`.
+- **Contar sentencias con un cliente con `log: query`:** los eventos de Prisma llegan por un canal aparte y pueden
+  entregarse después de que resuelve la query. No vaciar el array y medir: delimitar cada medición con una sentencia
+  marcadora y esperar a verla (`availability-loader.test.ts`, «no suma statements»).
+- **Perf:** `loaders.perf` mide `agenda.page` y `paciente` sobre los loaders de la página; `compare.ts` aplica la regla
+  estricta absoluta `agendaPayloadBytes ≤ 400 000` (`tests/unit/perf-compare.test.ts`).
+- **TTFB:** `scripts/perf/ttfb.mjs` hace su propio `next build` con las URLs del GoTrue falso (`NEXT_PUBLIC_*` se
+  inlinean al compilar): con `--no-build` sobre un build normal todas las rutas dan 307.
+
 ### Build local (`next build`) — por qué con `-v NODE_ENV=production`
 
 `.env.local` define `NODE_ENV`, y `next build` con ese valor falla en el

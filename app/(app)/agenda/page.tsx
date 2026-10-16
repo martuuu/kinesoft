@@ -1,19 +1,5 @@
-import { displayMemberName } from "@/lib/display-name";
-import { listAgendaBookings, listPractitioners, listServices } from "@/lib/bookings";
-import { listPatients } from "@/lib/patients";
-import { listInsurers } from "@/lib/insurers";
-import { getTenantSettings } from "@/lib/tenant-settings";
-import { AgendaClient } from "@/components/agenda/agenda-client";
-import { toBookingDTO } from "@/components/agenda/agenda-utils";
 import { getActor } from "@/lib/session";
-import { getCapabilities } from "@/lib/authz";
 import { toARDateKey } from "@/lib/datetime-ar";
-import { listLocations } from "@/lib/locations";
-import { listRoomOptions } from "@/lib/rooms";
-import { getAgendaAvailability } from "@/lib/availability-actions";
-import { getUserPreferences } from "@/lib/preferences";
-import { DEFAULT_AGENDA_VIEW_PREFS } from "@/lib/preferences-constants";
-import { addDays, dayWindow } from "@/lib/availability/day";
 import { practitionerInitials, practitionerOrder } from "@/lib/agenda-layout";
 import {
   effectiveRoomFilter,
@@ -23,8 +9,9 @@ import {
   roomsInScope,
   weekStartKey,
 } from "@/lib/agenda-client-state";
-import { logger } from "@/lib/logger";
 import { waitingRoomEnabled } from "@/lib/tenant-modules";
+import { loadAgendaPage } from "@/lib/agenda-page-loader";
+import { AgendaFromWire } from "./agenda-from-wire";
 
 export const metadata = { title: "Agenda · KineSoft" };
 export const dynamic = "force-dynamic";
@@ -40,8 +27,6 @@ type SP = {
   pros?: string;
 };
 
-const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
 export default async function AgendaPage({ searchParams }: { searchParams: SP }) {
   // B4.3: el día y la semana se calculan como DayKeys AR (`lib/availability/day`),
   // no con `setDate`/`getDay` del host. `?date=` inválido → hoy AR (antes un
@@ -49,74 +34,23 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
   // `toARDateKey` lo corregía, acá queda explícito).
   const dayKey = parseDayKeyParam(searchParams.date, toARDateKey(new Date()));
   const monday = weekStartKey(dayKey);
-  const sunday = addDays(monday, 6);
-  const weekStart = dayWindow(monday).start;
-  const weekEnd = dayWindow(sunday).end;
 
-  // Las cargas nuevas de B-pre (sedes, prefs de agenda, disponibilidad,
-  // capabilities) fallan SUELTAS (catch → vacío/default/null): la agenda de hoy
-  // no depende de ellas y no puede dejar de abrir porque, p. ej., un tenant
-  // viejo no tenga sede principal.
-  const locationsP = listLocations().catch((e) => {
-    logger.warn("agenda.bootstrap.listLocations_failed", { err: errMsg(e) });
-    return [];
-  });
-  // SR: catálogo de salas (activas de sedes activas). Una sentencia aparte,
-  // fuera de `listAgendaBookings` (su presupuesto de statements no se mueve).
-  // Falla suelta como las sedes: sin catálogo, la agenda de antes de SR.
-  const roomsP = listRoomOptions().catch((e) => {
-    logger.warn("agenda.bootstrap.listRoomOptions_failed", { err: errMsg(e) });
-    return [];
-  });
-  const prefsP = getUserPreferences()
-    .then((p) => p.agendaView)
-    .catch((e) => {
-      logger.warn("agenda.bootstrap.getUserPreferences_failed", { err: errMsg(e) });
-      return { ...DEFAULT_AGENDA_VIEW_PREFS };
-    });
-  const capsP = getCapabilities()
-    .then((c) => [...c] as string[])
-    .catch((e) => {
-      logger.warn("agenda.bootstrap.getCapabilities_failed", { err: errMsg(e) });
-      return [] as string[];
-    });
-  // La disponibilidad depende de la sede guardada: arranca apenas están las
-  // prefs y las sedes, en paralelo con los turnos. Sede guardada que ya no
-  // existe (archivada) → todas.
-  const availabilityP = Promise.all([prefsP, locationsP]).then(async ([prefs, locations]) => {
-    const locationId = locations.some((l) => l.id === prefs.locationId) ? prefs.locationId : null;
-    try {
-      const res = await getAgendaAvailability({ from: monday, to: sunday, locationId });
-      if (!res.ok) {
-        logger.warn("agenda.bootstrap.getAgendaAvailability_failed", { err: res.error });
-        return null;
-      }
-      return res.data;
-    } catch (e) {
-      logger.warn("agenda.bootstrap.getAgendaAvailability_failed", { err: errMsg(e) });
-      return null;
-    }
-  });
-
-  const [actor, bookings, services, practitioners, patients, insurers, settings] = await Promise.all([
-    getActor(),
-    // Proyección liviana (B4.1): todos los profesionales y sedes de la semana.
-    // Los chips y la sede filtran en el cliente: cambiar de profesional no
-    // vuelve al server y los chips muestran el conteo de todos.
-    listAgendaBookings({ from: weekStart, to: weekEnd }),
-    listServices(),
-    listPractitioners(),
-    listPatients(),
-    listInsurers({ onlyActive: true }),
-    getTenantSettings(),
-  ]);
-  const [locations, rawPrefs, capabilities, availability, rooms] = await Promise.all([
-    locationsP,
-    prefsP,
-    capsP,
-    availabilityP,
-    roomsP,
-  ]);
+  // PF2-c (C-PF8): ≤ 3 tx (turnos, bootstrap en una, disponibilidad) y sin el directorio de pacientes; el detalle,
+  // las fallas sueltas y el cable compacto de los turnos están en `lib/agenda-page-loader.ts`.
+  const actor = await getActor();
+  const {
+    bookings,
+    services,
+    practitioners,
+    patients,
+    insurers,
+    businessHours,
+    locations,
+    rooms,
+    agendaView: rawPrefs,
+    capabilities,
+    availability,
+  } = await loadAgendaPage(actor, { monday, patientId: searchParams.patient ?? null });
 
   // Preferencias contra lo que existe hoy: un favorito dado de baja o una sede
   // archivada no se arrastran (el JSON se guardó en otro momento).
@@ -145,7 +79,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
   });
 
   return (
-    <AgendaClient
+    <AgendaFromWire
       view={view}
       dayKey={dayKey}
       weekStartKey={monday}
@@ -156,29 +90,22 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
         practitionerIds
       )}
       viewer={{ userId: actor.userId, practitionerId: actor.practitionerId }}
-      bookings={bookings.map(toBookingDTO)}
+      // PF2-c: cable compacto (`lib/agenda-wire.ts`); `AgendaFromWire` lo devuelve a `BookingDTO` con `services` y
+      // `locations` de acá abajo, que son el catálogo con el que se codificó.
+      wireBookings={bookings}
       // `discipline` (P3-C, C9): el cliente resuelve `serviceDiscipline` de cada
       // turno desde acá; ya no viaja por turno (DTO compacto, `toBookingDTO`).
-      services={services.map((s) => ({ id: s.id, name: s.name, durationMin: s.durationMin, priceCents: s.priceCents, color: s.color, discipline: s.discipline }))}
-      practitioners={practitioners.map((p) => ({
-        id: p.id,
-        name: displayMemberName(p.user.fullName),
-      }))}
+      services={services}
+      practitioners={practitioners}
       practitionerBadges={practitionerOrder(
-        practitioners.map((p) => {
-          const name = displayMemberName(p.user.fullName);
-          return { id: p.id, name, initials: practitionerInitials(name) };
-        }),
+        practitioners.map((p) => ({ ...p, initials: practitionerInitials(p.name) })),
         agendaPrefs
       )}
-      patients={patients.map((p) => ({ id: p.id, name: `${p.firstName} ${p.lastName}` }))}
-      insurers={insurers.filter((i) => !i.isParticular).map((i) => ({ id: i.id, name: i.name }))}
-      businessHours={{
-        start: settings.businessHoursStart,
-        end: settings.businessHoursEnd,
-        slotMinutes: settings.agendaSlotMinutes,
-      }}
-      locations={locations.map((l) => ({ id: l.id, name: l.name, isPrimary: l.isPrimary }))}
+      // PF2-c: solo el paciente del deep-link (`?patient=`); el picker busca en el server.
+      patients={patients}
+      insurers={insurers}
+      businessHours={businessHours}
+      locations={locations}
       agendaPrefs={agendaPrefs}
       rooms={rooms}
       initialAvailability={availability}

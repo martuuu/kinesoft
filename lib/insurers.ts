@@ -27,6 +27,7 @@ import { logger } from "@/lib/logger";
 import { tags, ttl } from "@/lib/cache-tags";
 import type { ActionResult } from "@/lib/validation";
 import type { InsurerRow } from "@/lib/insurers-types";
+import { listInsurersInTx } from "@/lib/insurers-read";
 
 const ADMIN_MSG = "Solo OWNER/ADMIN pueden modificar el catálogo de obras sociales.";
 
@@ -46,30 +47,9 @@ export async function listInsurers(opts: { onlyActive?: boolean } = {}): Promise
   const onlyActive = !!opts.onlyActive;
   const fetcher = unstable_cache(
     async (tenantId: string, active: boolean): Promise<InsurerRow[]> => {
-      const rows = await runWithRls(tenantId, (tx) => tx.insurer.findMany({
-        where: {
-          tenantId,
-          ...(active ? { active: true } : {}),
-        },
-        orderBy: [{ active: "desc" }, { name: "asc" }],
-        include: {
-          _count: { select: { coverages: true } },
-          payer: { select: { name: true } },
-        },
-      }));
-      return rows.map((r) => ({
-        id: r.id,
-        name: r.name,
-        copagoCents: r.copagoCents,
-        fixedFeeCents: r.fixedFeeCents,
-        isParticular: r.isParticular,
-        active: r.active,
-        notes: r.notes,
-        payerId: r.payerId,
-        payerName: r.payer?.name ?? null,
-        patientsCount: r._count.coverages,
-        createdAt: r.createdAt,
-      }));
+      // PF2-d: la consulta y el mapeo viven en lib/insurers-read.ts (el loader de `/configuracion` la corre dentro de
+      // su tx única); acá sigue su propia tx y el cache por tag de siempre.
+      return runWithRls(tenantId, (tx) => listInsurersInTx(tx, tenantId, { onlyActive: active }));
     },
     ["insurers:list", actor.tenantId, String(onlyActive)],
     { tags: [tags.insurers(actor.tenantId)], revalidate: ttl.short }

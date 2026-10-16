@@ -15,6 +15,38 @@ export function drawerHandlesEscape(e: { key: string; defaultPrevented: boolean 
 }
 
 /**
+ * PF1-Z-F1 (#1/#3): atributo con el que un hijo marca su footer `position: sticky; bottom` («Nuevo turno», drawer
+ * del turno). El Drawer lo mide y reserva ese alto como `scroll-padding-bottom` del panel: sin eso, el
+ * `scrollIntoView` de los avisos de conflicto y el scroll del navegador al tabular dejaban el elemento DEBAJO del
+ * footer (botones del aviso no clickeables; foco tapado, WCAG 2.4.11). Se mide (ResizeObserver) porque el alto
+ * cambia: el footer del turno suma el error o la línea del plan, y a 390 los botones bajan de renglón.
+ */
+export const DRAWER_FOOTER_ATTR = "data-drawer-footer";
+
+/** Pura (para el test): `scroll-padding-bottom` del panel para un footer de `height` px. 8 px de aire para que el
+ *  anillo de foco no quede pegado al borde del footer. Sin footer, "" (el valor por defecto del navegador). */
+export function drawerScrollPaddingBottom(height: number | null | undefined): string {
+  return height && height > 0 ? `${Math.ceil(height) + 8}px` : "";
+}
+
+/**
+ * PF1-Z-F1 (#4): enfoca el primer campo habilitado de `container` y lo trae a la vista (p. ej. «Reprogramar», que
+ * se abre debajo de la tarjeta y quedaba fuera del panel). `preventScroll` + `scrollIntoView` suave: el foco solo
+ * haría un salto seco. `false` si todavía no hay campo (el form llega en un chunk aparte).
+ */
+export function focusFirstField(
+  container: Pick<ParentNode, "querySelector"> & { scrollIntoView?: (o?: ScrollIntoViewOptions) => void } | null | undefined
+): boolean {
+  const field = container?.querySelector<HTMLElement>(
+    'input:not([type="hidden"]):not(:disabled), select:not(:disabled), textarea:not(:disabled)'
+  );
+  if (!container || !field) return false;
+  field.focus({ preventScroll: true });
+  container.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  return true;
+}
+
+/**
  * Right-side sliding drawer.
  *
  * Use this instead of a modal when the content is contextual to the
@@ -63,6 +95,33 @@ export function Drawer({
   const hydrated = useHydrated();
   const armed = overlayArmed(open, hydrated);
   const trapRef = useFocusTrap<HTMLElement>(armed);
+  // PF1-Z-F1 (#1/#3): el panel reserva el alto del footer sticky (ver `DRAWER_FOOTER_ATTR`). Un MutationObserver
+  // vuelve a buscarlo porque puede montarse después (el turno llega, aparece un error); el ResizeObserver sigue su
+  // alto. Sin footer el panel queda como siempre.
+  useEffect(() => {
+    const panel = trapRef.current;
+    if (!armed || !panel) return;
+    let footer: HTMLElement | null = null;
+    const apply = () => {
+      panel.style.scrollPaddingBottom = drawerScrollPaddingBottom(footer?.getBoundingClientRect().height ?? null);
+    };
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(apply) : null;
+    const track = () => {
+      const next = panel.querySelector<HTMLElement>(`[${DRAWER_FOOTER_ATTR}]`);
+      if (next === footer) return;
+      if (footer) ro?.unobserve(footer);
+      footer = next;
+      if (footer) ro?.observe(footer);
+      apply();
+    };
+    track();
+    const mo = typeof MutationObserver !== "undefined" ? new MutationObserver(track) : null;
+    mo?.observe(panel, { childList: true, subtree: true });
+    return () => {
+      mo?.disconnect();
+      ro?.disconnect();
+    };
+  }, [armed, trapRef]);
   const offset = width + 24;
   const confirm = useConfirm();
   // Evita apilar dos confirmaciones (Esc + click en el fondo seguidos).

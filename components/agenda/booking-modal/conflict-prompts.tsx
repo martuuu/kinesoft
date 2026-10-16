@@ -58,6 +58,19 @@ export type RoomBusyState = RoomBusyResult & { payload: CreatePayload };
 
 type PromptRef = MutableRefObject<HTMLDivElement | null>;
 
+/**
+ * PF1-Z-F1 (#1): a qué botón va el foco cuando aparece un aviso. El marcado con `data-prompt-primary` (la primaria
+ * de cada aviso; en el de sala, la salida segura) y, si no hay, el primer botón habilitado. Solo habilitados: el
+ * aviso puede pintarse con `pending` todavía en true; `index.tsx` reintenta cuando termina la transición.
+ */
+export function promptFocusTarget(root: Pick<ParentNode, "querySelector"> | null | undefined): HTMLElement | null {
+  if (!root) return null;
+  return (
+    root.querySelector<HTMLElement>("[data-prompt-primary]:not(:disabled)") ??
+    root.querySelector<HTMLElement>("button:not(:disabled)")
+  );
+}
+
 /** "mar 09 mar 15:00" en hora AR (botón "Usar próximo libre" y listas). */
 function fmtSlot(iso: string): string {
   return new Date(iso).toLocaleString("es-AR", {
@@ -172,7 +185,7 @@ export function BatchConflictPrompt({
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
         {plan.conflicted > 0 ? (
           <>
-            <Button type="button" variant="primary" disabled={pending} onClick={() => onCreateAll(forceRoom)}>
+            <Button type="button" variant="primary" data-prompt-primary="true" disabled={pending} onClick={() => onCreateAll(forceRoom)}>
               Crear todas ({creatable.all}, bloqueadas y sobreturnos como sobreturno)
             </Button>
             <Button
@@ -190,7 +203,7 @@ export function BatchConflictPrompt({
           // duplicados): las dos opciones crearían lo mismo → un solo botón.
           <Button
             type="button"
-            variant="primary"
+            variant="primary" data-prompt-primary="true"
             disabled={pending || creatable.freeOnly === 0}
             onClick={() => onCreateFreeOnly(forceRoom)}
           >
@@ -249,7 +262,7 @@ export function PatientOverlapPrompt({
         paralelo). ¿Crear igual?
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-        <Button type="button" variant="primary" onClick={onConfirm} disabled={pending}>
+        <Button type="button" variant="primary" data-prompt-primary="true" onClick={onConfirm} disabled={pending}>
           Sí, crear superpuesto
         </Button>
         <Button type="button" variant="ghost" onClick={onCancel} disabled={pending}>
@@ -300,7 +313,7 @@ export function SamePatientPrompt({
         . ¿Agregar otro turno para hoy?
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-        <Button type="button" variant="primary" onClick={onConfirm} disabled={pending}>
+        <Button type="button" variant="primary" data-prompt-primary="true" onClick={onConfirm} disabled={pending}>
           Sí, agregar otro turno
         </Button>
         <Button type="button" variant="ghost" onClick={onCancel} disabled={pending}>
@@ -354,7 +367,7 @@ export function ConflictPrompt({
         {conflict.nextFreeISO && (
           <Button
             type="button"
-            variant="primary"
+            variant="primary" data-prompt-primary="true"
             onClick={onUseSuggestedSlot}
             disabled={pending}
           >
@@ -421,7 +434,7 @@ export function BlockedPrompt({
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
         {blocked.nextFreeISO && (
-          <Button type="button" variant="primary" onClick={onUseSuggestedSlot} disabled={pending}>
+          <Button type="button" variant="primary" data-prompt-primary="true" onClick={onUseSuggestedSlot} disabled={pending}>
             Usar próximo libre · {fmtSlot(blocked.nextFreeISO)}
           </Button>
         )}
@@ -465,7 +478,7 @@ export function OutOfHoursPrompt({
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
         {outOfHours.nextFreeISO && (
-          <Button type="button" variant="primary" onClick={onUseSuggestedSlot} disabled={pending}>
+          <Button type="button" variant="primary" data-prompt-primary="true" onClick={onUseSuggestedSlot} disabled={pending}>
             Usar próximo libre · {fmtSlot(outOfHours.nextFreeISO)}
           </Button>
         )}
@@ -518,7 +531,8 @@ export function RoomBusyPrompt({
         <Button type="button" variant="ghost" onClick={onForce} disabled={pending} style={WARN_GHOST}>
           {copy.confirmLabel}
         </Button>
-        <Button type="button" variant="ghost" onClick={onBack} disabled={pending}>
+        {/* PF1-Z-F1: sin primaria visual; el foco va a la salida segura (un Enter de más no agenda la sala llena). */}
+        <Button type="button" variant="ghost" data-prompt-primary="true" onClick={onBack} disabled={pending}>
           {copy.backLabel}
         </Button>
       </div>

@@ -45,11 +45,11 @@
  * (SR-D2: no es sobreturno). Sin `rooms` (o sin salas en la sede y sin sala en
  * el turno) el drawer es el de antes.
  */
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { Drawer } from "@/components/ui/drawer";
+import { Drawer, focusFirstField } from "@/components/ui/drawer";
 import { Skel } from "@/components/ui/skeleton";
 import { buttonClassName } from "@/components/ui/button";
 import styles from "./booking-drawer.module.css";
@@ -75,6 +75,7 @@ import { ShareActions } from "./share-actions";
 import {
   DeleteBookingButton,
   StatusActions,
+  cancelBookingConfirm,
   bookingHasClinicalNote,
   clinicalNoteRowEligible,
   offersNoteAfterStatus,
@@ -197,6 +198,19 @@ export function BookingDrawer({
   const [editingWhen, setEditingWhen] = useState(false);
   const [newWhenLocal, setNewWhenLocal] = useState<string>("");
   const [reschConflict, setReschConflict] = useState<BannerState | null>(null);
+  // PF1-Z-F1 (#4): «Reprogramar» abre el form debajo de la tarjeta, fuera de la vista del panel. Al abrir, foco al
+  // primer campo + scroll. El form es un chunk aparte (`dynamic`): si todavía no llegó, se espera a que aparezca.
+  const rescheduleRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!editingWhen) return;
+    const box = rescheduleRef.current;
+    if (!box || focusFirstField(box) || typeof MutationObserver === "undefined") return;
+    const mo = new MutationObserver(() => {
+      if (focusFirstField(box)) mo.disconnect();
+    });
+    mo.observe(box, { childList: true, subtree: true });
+    return () => mo.disconnect();
+  }, [editingWhen]);
   // Same sobreturno banner for a duration change that overflows the cupo
   // (A2a-S06: updateBooking now re-checks capacity when durationMin changes).
   const [editConflict, setEditConflict] = useState<BannerState | null>(null);
@@ -404,6 +418,13 @@ export function BookingDrawer({
       tone: "danger",
     });
     if (ok) setStatus("CANCELLED");
+  };
+
+  // PF1-Z-F1 (#6): «Cancelar turno» de «Cambiar estado» pasa por confirmación (antes un click). El «Cancelalo» de
+  // un turno de plan ya confirma por su lado (`cancelPlanBooking`).
+  const confirmCancel = async () => {
+    if (!booking) return;
+    if (await confirm(cancelBookingConfirm(booking))) setStatus("CANCELLED");
   };
 
   const remove = async () => {
@@ -815,6 +836,7 @@ export function BookingDrawer({
           )}
 
           {canOperate && editingWhen && (
+            <div ref={rescheduleRef}>
             <RescheduleForm
               booking={booking}
               capabilities={caps}
@@ -840,6 +862,7 @@ export function BookingDrawer({
               }}
               onDismissConflict={() => setReschConflict(null)}
             />
+            </div>
           )}
 
           {booking.patientId && (
@@ -894,7 +917,7 @@ export function BookingDrawer({
           {/* G7: «Cambiar estado» + el error, pegados al pie (sticky) con separador. Eliminar/Cancelalo quedan
               arriba, en el cuerpo: son destructivos y no van al lado de la primaria. */}
           {(canOperate || error) && (
-            <div className={styles.footer}>
+            <div className={styles.footer} data-drawer-footer="">
               {error && (
                 <div
                   role="alert"
@@ -912,7 +935,7 @@ export function BookingDrawer({
               {canOperate && (
                 <StatusActions
                   pending={pending}
-                  onSetStatus={(s) => setStatus(s)}
+                  onSetStatus={(s) => (s === "CANCELLED" ? void confirmCancel() : setStatus(s))}
                   planSession={isPlanBooking ? { ordinal: planOrdinal } : null}
                   current={booking.status}
                 />

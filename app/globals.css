@@ -206,6 +206,8 @@
   --z-drawer-backdrop: 45;
   --z-drawer: 46;
   --z-modal: 70;
+  /* ⌘K encima de un Modal abierto (revisor A de PF1-Z): el Modal va por portal a z 70; la paleta quedaba debajo. */
+  --z-palette: 75;
   --z-confirm: 80;
   --z-toast: 90;
 

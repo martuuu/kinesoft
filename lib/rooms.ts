@@ -46,10 +46,9 @@ import { assertModule, requireCapability } from "@/lib/authz";
 import { roomsEnabled } from "@/lib/tenant-modules";
 import { getActor } from "@/lib/session";
 import { logger } from "@/lib/logger";
-import { toARDateKey } from "@/lib/datetime-ar";
-import { dayKeyToDbDate } from "@/lib/schedule-validate";
 import { lockTenantLocations } from "@/lib/location-lock";
 import { ROOM_NAME_TAKEN_ERROR } from "@/lib/rooms-constants";
+import { ROOM_ORDER, listRoomsInTx, todayDb } from "@/lib/rooms-read";
 import {
   RoomArchive,
   RoomCreate,
@@ -91,20 +90,8 @@ function nameTaken(): { ok: false; error: string; fieldErrors: Record<string, st
   return { ok: false, error: ROOM_NAME_TAKEN_ERROR, fieldErrors: { name: [ROOM_NAME_TAKEN_ERROR] } };
 }
 
-/** Hoy AR como `@db.Date` (vigencia de franjas y fecha de excepciones), como `archiveLocation`. */
-function todayDb(now: Date): Date {
-  return dayKeyToDbDate(toARDateKey(now));
-}
-
-/** Orden de sede (principal primero, `sortOrder`, nombre) y después de sala. */
-const ROOM_ORDER = [
-  { location: { isPrimary: "desc" } },
-  { location: { sortOrder: "asc" } },
-  { location: { name: "asc" } },
-  { locationId: "asc" },
-  { sortOrder: "asc" },
-  { name: "asc" },
-] satisfies Prisma.RoomOrderByWithRelationInput[];
+// PF2-d: `todayDb`, `ROOM_ORDER` y la lectura de Configuración viven en lib/rooms-read.ts (la usa también el loader
+// de `/configuracion` dentro de su tx única).
 
 /**
  * Salas del consultorio para Configuración (`RoomRow`, con `scheduleCount`).
@@ -121,37 +108,7 @@ export async function listRooms(query: RoomListQueryInput = {}): Promise<RoomRow
     : await getActor();
   if (!q) return [];
   if (!roomsEnabled(actor.entitlements)) return [];
-  const today = todayDb(new Date());
-  const rows = await runWithRls(actor.tenantId, (tx) =>
-    tx.room.findMany({
-      where: {
-        tenantId: actor.tenantId,
-        ...(q.locationId ? { locationId: q.locationId } : {}),
-        ...(q.includeArchived ? {} : { active: true }),
-      },
-      orderBy: ROOM_ORDER,
-      select: {
-        id: true,
-        locationId: true,
-        name: true,
-        kind: true,
-        capacity: true,
-        active: true,
-        sortOrder: true,
-        _count: {
-          select: {
-            schedules: {
-              where: {
-                tenantId: actor.tenantId,
-                OR: [{ validUntil: null }, { validUntil: { gte: today } }],
-              },
-            },
-          },
-        },
-      },
-    })
-  );
-  return rows.map(({ _count, ...r }) => ({ ...r, scheduleCount: _count.schedules }));
+  return runWithRls(actor.tenantId, (tx) => listRoomsInTx(tx, actor.tenantId, q));
 }
 
 /**

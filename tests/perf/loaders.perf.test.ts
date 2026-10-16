@@ -25,35 +25,26 @@ vi.mock("@/lib/db", async (importOriginal) => {
 import { measure, type Measurement } from "@/tests/helpers/query-counter";
 import {
   listBookingsInRange,
-  listAgendaBookings,
   listPractitioners,
   listServices,
   createBooking,
   createBookingsBatch,
   updateBooking,
 } from "@/lib/bookings";
-import { toBookingDTO } from "@/components/agenda/agenda-utils";
-import {
-  listPatients,
-  getPatientCore,
-  getPatientName,
-  getPatientBookingsSummary,
-  getPatientBillableCount,
-  getPatientEvaScores,
-} from "@/lib/patients";
+import { loadAgendaPage } from "@/lib/agenda-page-loader";
+import { weekStartKey } from "@/lib/agenda-client-state";
+import { loadPatientProfilePage } from "@/lib/patient-profile-loader";
+import { listPatients } from "@/lib/patients";
 import { createPlan, previewPlan } from "@/lib/plans";
-import { getPatientPlans, getPatientPlanBalances } from "@/lib/plans-read";
 import type { PlanCreateInput, PlanRowResolution } from "@/lib/plans-types";
 import { addDays } from "@/lib/availability/day";
 import { listInsurers } from "@/lib/insurers";
 import { getTenantSettings } from "@/lib/tenant-settings";
-import { getDashboardData, getMonthBookingDays } from "@/lib/dashboard";
-import { getUserPreferences } from "@/lib/preferences";
+import { getDashboardPageData } from "@/lib/dashboard";
 import { listOpenSessions } from "@/lib/sessions";
 import { listAllTags, listExercises, loadFilterFacets } from "@/lib/exercises";
 import { gatingForActor } from "@/lib/plan-gating";
 import { getActor } from "@/lib/session";
-import { runWithRls } from "@/lib/rls";
 import { localToARIso, toARDateKey, toARDow } from "@/lib/datetime-ar";
 import { ownerClient } from "@/tests/helpers/tenant-factory";
 import { asUser } from "@/tests/helpers/actor";
@@ -210,13 +201,21 @@ describe.skipIf(!RUN)("perf baseline — cargas de página y write-paths", () =>
     );
   });
 
-  it("GET /agenda — payload de la semana (agendaPayloadBytes, referencia de PF)", async () => {
-    // Lo que /agenda serializa al cliente por turno (app/(app)/agenda/page.tsx pasa `toBookingDTO`). Se graba como
-    // número de referencia en tests/perf/pf.json; la regla estricta la pone PF2 (C-PF8, `perf-agenda-payload-1mb`).
-    const w = weekOf(new Date());
-    const dtos = (await listAgendaBookings({ from: w.from, to: w.to })).map(toBookingDTO);
-    agendaPayloadBytes = JSON.stringify(dtos).length;
-    expect(dtos.length).toBeGreaterThan(0);
+  it("GET /agenda (loadAgendaPage: lo que corre la página, PF2-c)", async () => {
+    const actor = await getActor();
+    const monday = weekStartKey(toARDateKey(new Date()));
+    await bench("agenda.page", () => loadAgendaPage(actor, { monday, patientId: null }));
+  });
+
+  it("GET /agenda — payload de la semana (agendaPayloadBytes, regla estricta de PF2)", async () => {
+    // Lo que /agenda serializa al cliente por turno: el cable compacto de `loadAgendaPage` (lib/agenda-wire.ts), con
+    // los mismos argumentos que la página. compare.ts lo corta en 400 kB (C-PF8, `perf-agenda-payload-1mb`).
+    const { bookings } = await loadAgendaPage(await getActor(), {
+      monday: weekStartKey(toARDateKey(new Date())),
+      patientId: null,
+    });
+    agendaPayloadBytes = JSON.stringify(bookings).length;
+    expect(bookings.length).toBeGreaterThan(0);
   });
 
   it("GET /agenda — solo listBookingsInRange (semana)", async () => {
@@ -228,29 +227,15 @@ describe.skipIf(!RUN)("perf baseline — cargas de página y write-paths", () =>
   });
 
   it("GET /dashboard", async () => {
-    const [y, m] = toARDateKey(new Date()).split("-").map(Number);
-    await bench("dashboard", () => Promise.all([getDashboardData(), getUserPreferences(), getMonthBookingDays(y, m - 1)]));
+    await bench("dashboard", () => getDashboardPageData());
   });
 
   it("GET /pacientes/[id] (paciente con plan de 20 sesiones)", async () => {
     const id = T.patientIds[0];
+    // PF2-b: la misma carga que la página (`loadPatientProfilePage`: actor resuelto antes + una tx).
     await bench("paciente", async () => {
-      await getPatientName(id);
       const actor = await getActor();
-      await getPatientCore(id);
-      await Promise.all([
-        // P3-S27a: la ficha lee planes y saldos por S14 (S22b), no por los
-        // lectores viejos de `lib/programs.ts` (retirados).
-        getPatientPlans({ patientId: id }),
-        getPatientPlanBalances({ patientId: id }),
-        getPatientBookingsSummary(id, 5),
-        getPatientBillableCount(id),
-        getPatientEvaScores(id),
-        listInsurers({ onlyActive: true }),
-        runWithRls(actor.tenantId, (tx) =>
-          tx.practitioner.findMany({ where: { tenantId: actor.tenantId }, include: { user: { select: { fullName: true, email: true } } } }),
-        ),
-      ]);
+      await loadPatientProfilePage(actor, id, null);
     });
   });
 

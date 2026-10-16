@@ -267,8 +267,8 @@ describe("[PF1.1-agenda-a] Lista (G5)", () => {
   });
 
   it("columnas de texto con `minmax(0, …)`: a 1024 con la barra abierta no desborda", () => {
-    const html = renderToStaticMarkup(<ListView bookings={[dto("a", "09:00")]} onEdit={noop} highlight={null} />);
-    expect(html).toContain("grid-template-columns:70px minmax(0, 1.4fr)");
+    // PF1-Z-F1 (#2): el track pasó del inline a `views.module.css` (para poder apilarlo ≤ 640 px).
+    expect(src("components/agenda/views/views.module.css")).toContain("grid-template-columns: 70px minmax(0, 1.4fr)");
   });
 });
 

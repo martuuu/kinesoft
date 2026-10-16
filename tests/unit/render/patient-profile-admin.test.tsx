@@ -17,6 +17,12 @@
 // Los tests contra el server de S07sp (proyección `admin` real de
 // `getPatientCore`, turnos redactados) son post-integración y viven en
 // `tests/integration/patients-secretaria.test.ts`.
+// PF2-b (C-PF8): la página ya no llama a cada lector; hace UNA carga con
+// `loadPatientProfilePage` (lib/patient-profile-loader.ts). Acá se mockea esa
+// frontera con la DB y se fija qué hace la PÁGINA con cada nivel; qué lee el
+// loader por nivel y módulo (planes/EVA solo con su módulo, nada clínico para
+// `admin`, paridad con los lectores públicos) lo fija contra Postgres
+// `tests/integration/pf2-profile-budget.test.ts`.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
@@ -34,19 +40,10 @@ vi.mock("react", async (importOriginal) => {
   return { ...actual, default: actual, cache: <T,>(fn: T) => fn };
 });
 
-// Capa de datos de la página: se mockea la frontera con la DB, nunca la página
-// ni el componente bajo test.
+// Capa de datos de la página: se mockea la frontera con la DB (el loader), nunca
+// la página ni el componente bajo test.
 const data = vi.hoisted(() => ({
-  getPatientCore: vi.fn(),
-  getPatientBookingsAll: vi.fn(),
-  getPatientBookingsSummary: vi.fn(),
-  getPatientBillableCount: vi.fn(),
-  getPatientEvaScores: vi.fn(),
-  getPatientName: vi.fn(),
-  getPatientPlans: vi.fn(),
-  getPatientPlanBalances: vi.fn(),
-  listInsurers: vi.fn(),
-  runWithRls: vi.fn(),
+  load: vi.fn(),
   getCapabilities: vi.fn(),
 }));
 const entitlements = vi.hoisted(() => ({
@@ -57,12 +54,6 @@ const entitlements = vi.hoisted(() => ({
   },
 }));
 vi.mock("@/lib/patients", () => ({
-  getPatientCore: data.getPatientCore,
-  getPatientBookingsAll: data.getPatientBookingsAll,
-  getPatientBookingsSummary: data.getPatientBookingsSummary,
-  getPatientBillableCount: data.getPatientBillableCount,
-  getPatientEvaScores: data.getPatientEvaScores,
-  getPatientName: data.getPatientName,
   // Actions que importa el hero completo (no se invocan en render estático).
   assignPatientToPractitioner: vi.fn(),
   sendPatientPortalInvite: vi.fn(),
@@ -70,12 +61,15 @@ vi.mock("@/lib/patients", () => ({
   setPatientCoverage: vi.fn(),
   updatePatient: vi.fn(),
 }));
-vi.mock("@/lib/plans-read", () => ({
-  getPatientPlans: data.getPatientPlans,
-  getPatientPlanBalances: data.getPatientPlanBalances,
+// `profileNoteBookingId` (puro) queda real: la página arma con él la clave de la carga.
+vi.mock("@/lib/patient-profile-loader", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/patient-profile-loader")>()),
+  loadPatientProfilePage: data.load,
 }));
-vi.mock("@/lib/insurers", () => ({ listInsurers: data.listInsurers }));
-vi.mock("@/lib/rls", () => ({ runWithRls: data.runWithRls }));
+vi.mock("@/lib/plans-read", () => ({ getPatientPlans: vi.fn(), getPatientPlanBalances: vi.fn() }));
+vi.mock("@/lib/insurers", () => ({ listInsurers: vi.fn() }));
+vi.mock("@/lib/clinical-notes-read", () => ({ getPatientClinicalSummary: vi.fn() }));
+vi.mock("@/lib/rls", () => ({ runWithRls: vi.fn() }));
 vi.mock("@/lib/session", () => ({
   getActor: async () => ({
     userId: "u1",
@@ -228,20 +222,25 @@ describe("[P0-S07v] PatientAdminProfile", () => {
   });
 });
 
+const EMPTY_BALANCES = {
+  plans: [],
+  totals: { pendingCents: 0, creditCents: 0, collectedCents: 0, inProcessCents: 0 },
+};
+
 describe("[P0-S07v] página del paciente con nivel admin", () => {
   beforeEach(() => {
     for (const f of Object.values(data)) f.mockReset();
     entitlements.current = { vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false };
-    data.getPatientCore.mockResolvedValue(admin);
-    data.getPatientPlans.mockResolvedValue({ ok: true, data: [] });
-    data.getPatientPlanBalances.mockResolvedValue({
-      ok: true,
-      data: { plans: [], totals: { pendingCents: 0, creditCents: 0, collectedCents: 0, inProcessCents: 0 } },
+    data.load.mockResolvedValue({
+      access: "admin",
+      core: admin,
+      bookingsPage: { rows, hasMore: false, nextCursor: null },
+      plans: { ok: true, data: [] },
+      balances: { ok: true, data: EMPTY_BALANCES },
     });
-    data.getPatientBookingsAll.mockResolvedValue({ rows, hasMore: false, nextCursor: null });
   });
 
-  it("renderiza el perfil administrativo sin pedir slices clínicos", async () => {
+  it("renderiza el perfil administrativo con UNA carga (actor, id, sin deep link)", async () => {
     data.getCapabilities.mockResolvedValue(capabilitiesFor("ASSISTANT"));
     const el = await PatientPage({ params: { id: admin.id } });
     const html = renderToStaticMarkup(<Providers>{el}</Providers>);
@@ -252,19 +251,8 @@ describe("[P0-S07v] página del paciente con nivel admin", () => {
     expect(html).toContain("Agregar turno");
     expect(tabLabels(html)).toEqual(["Datos", "Turnos"]);
 
-    expect(data.getPatientBookingsAll).toHaveBeenCalledWith(admin.id, 100);
-    // Planes en proyección `admin` (sin título): sí, para agrupar Turnos (H1 de S22f).
-    expect(data.getPatientPlans).toHaveBeenCalledWith({ patientId: admin.id });
-    expect(data.getPatientPlanBalances).toHaveBeenCalledWith({ patientId: admin.id });
-    for (const f of [
-      data.getPatientEvaScores,
-      data.getPatientBookingsSummary,
-      data.getPatientBillableCount,
-      data.listInsurers,
-      data.runWithRls,
-    ]) {
-      expect(f).not.toHaveBeenCalled();
-    }
+    expect(data.load).toHaveBeenCalledTimes(1);
+    expect(data.load).toHaveBeenCalledWith(expect.objectContaining({ tenantId: "t1" }), admin.id, null);
   });
 
   it("BILLING: mismo perfil, sin Agregar turno", async () => {
@@ -276,42 +264,44 @@ describe("[P0-S07v] página del paciente con nivel admin", () => {
   });
 
   it("basic sigue en la vista básica (sin turnos ni capabilities)", async () => {
-    data.getPatientCore.mockResolvedValue({
-      id: admin.id,
-      firstName: "Lucía",
-      lastName: "Gómez",
-      documentId: null,
-      nextBookingAt: null,
+    data.load.mockResolvedValue({
       access: "basic",
+      core: { id: admin.id, firstName: "Lucía", lastName: "Gómez", documentId: null, nextBookingAt: null, access: "basic" },
     });
     const el = await PatientPage({ params: { id: admin.id } });
     const html = renderToStaticMarkup(<Providers>{el}</Providers>);
     expect(html).toContain("Sin acceso");
-    expect(data.getPatientBookingsAll).not.toHaveBeenCalled();
-    expect(data.getPatientPlans).not.toHaveBeenCalled();
-    expect(data.getPatientPlanBalances).not.toHaveBeenCalled();
+    expect(data.getCapabilities).not.toHaveBeenCalled();
+  });
+
+  it("none → 404", async () => {
+    data.load.mockResolvedValue({ access: "none" });
+    await expect(PatientPage({ params: { id: admin.id } })).rejects.toThrow("NEXT_NOT_FOUND");
   });
 });
 
-// ─── S22b: perfil completo — qué pide la página según los módulos ───────────
+// ─── S22b: perfil completo — qué hace la página con la carga ────────────────
 
 describe("[S22b] página del paciente con acceso full", () => {
   const full = { ...admin, access: "full", coverages: [], emergency: [], diagnosisTitle: null };
+  const fullLoad = (over: Record<string, unknown> = {}) => ({
+    access: "full",
+    core: full,
+    plans: { ok: true, data: [] },
+    balances: { ok: true, data: EMPTY_BALANCES },
+    recentBookings: [],
+    billableCount: 0,
+    evaScores: [],
+    practitioners: [],
+    noteBookingRow: null,
+    insurers: [],
+    clinicalSummary: null,
+    ...over,
+  });
 
   beforeEach(() => {
     for (const f of Object.values(data)) f.mockReset();
-    data.getPatientCore.mockResolvedValue(full);
-    data.getPatientPlans.mockResolvedValue({ ok: true, data: [] });
-    data.getPatientPlanBalances.mockResolvedValue({
-      ok: true,
-      data: { plans: [], totals: { pendingCents: 0, creditCents: 0, collectedCents: 0, inProcessCents: 0 } },
-    });
-    data.getPatientBookingsSummary.mockResolvedValue([]);
-    data.getPatientBillableCount.mockResolvedValue(0);
-    data.getPatientEvaScores.mockResolvedValue([]);
-    data.listInsurers.mockResolvedValue([]);
-    // Única llamada: profesionales (PL-1: la membresía sale del Actor).
-    data.runWithRls.mockResolvedValueOnce([]);
+    data.load.mockResolvedValue(fullLoad());
   });
 
   /** El `PatientProfile` que arma la página (sin renderizar vistas de otras sesiones). */
@@ -321,37 +311,56 @@ describe("[S22b] página del paciente con acceso full", () => {
     return (profile as ReactElement<Record<string, unknown>>).props;
   }
 
-  it("consultorio General: no pide planes, saldos ni EVA", async () => {
+  it("consultorio General: sin planes ni saldos en la carga → pestaña vacía, saldos null, sin EVA", async () => {
     entitlements.current = { vertical: "GENERAL", plan: "INDIVIDUAL", publicBookingEnabled: false };
+    data.load.mockResolvedValue(fullLoad({ plans: null, balances: null }));
     const props = profileProps(await PatientPage({ params: { id: admin.id } }));
-    expect(data.getPatientPlans).not.toHaveBeenCalled();
-    expect(data.getPatientPlanBalances).not.toHaveBeenCalled();
-    expect(data.getPatientEvaScores).not.toHaveBeenCalled();
     expect(props.initialPlans).toEqual([]);
     expect(props.initialPlanBalances).toBeNull();
+    expect(props.initialPlansError).toBeNull();
     expect(props.evaScores).toEqual([]);
   });
 
-  it("Kinesiología: pide planes y saldos con getPatientPlans/getPatientPlanBalances", async () => {
+  it("Kinesiología: planes, saldos y capacidades del miembro llegan al perfil", async () => {
     entitlements.current = { vertical: "KINESIOLOGY", plan: "INDIVIDUAL", publicBookingEnabled: false };
     const props = profileProps(await PatientPage({ params: { id: admin.id } }));
-    expect(data.getPatientPlans).toHaveBeenCalledWith({ patientId: admin.id });
-    expect(data.getPatientPlanBalances).toHaveBeenCalledWith({ patientId: admin.id });
-    expect(data.getPatientEvaScores).toHaveBeenCalledWith(admin.id);
+    expect(data.load).toHaveBeenCalledTimes(1);
+    expect(props.initialPlans).toEqual([]);
+    expect(props.initialPlanBalances).toEqual(EMPTY_BALANCES);
     expect(props.role).toBe("PRACTITIONER");
     expect(props.capabilities).toEqual(expect.arrayContaining(["plans.manage", "clinical.read"]));
   });
 
-  it("deep-link C10: ?tab=plan&nuevo=1&turno= → tab normalizada e intent new", async () => {
+  it("deep-link C10: ?tab=plan&nuevo=1&turno= → tab normalizada e intent new (el turno NO es de evoluciones)", async () => {
     const props = profileProps(
       await PatientPage({ params: { id: admin.id }, searchParams: { tab: "plan", nuevo: "1", turno: "bk_9" } })
     );
     expect(props.initialTab).toBe("planes");
     expect(props.planIntent).toEqual({ kind: "new", fromBookingId: "bk_9", prefill: null, prefillInvalid: false });
+    expect(data.load).toHaveBeenCalledWith(expect.anything(), admin.id, null);
   });
 
-  it("error de getPatientPlans: llega a la pestaña, sin planes", async () => {
-    data.getPatientPlans.mockResolvedValue({ ok: false, error: "No tenés acceso a este paciente." });
+  it("deep-link EV2-3a: ?tab=evoluciones&turno= → la carga pide ese turno y llega al perfil", async () => {
+    data.load.mockResolvedValue(
+      fullLoad({
+        noteBookingRow: { id: "bk_9", scheduledFor: new Date("2026-09-01T13:00:00Z"), status: "COMPLETED", service: { name: "Kine" } },
+      })
+    );
+    const props = profileProps(
+      await PatientPage({ params: { id: admin.id }, searchParams: { tab: "evoluciones", turno: "bk_9" } })
+    );
+    expect(data.load).toHaveBeenCalledWith(expect.anything(), admin.id, "bk_9");
+    expect(props.noteBookingId).toBe("bk_9");
+    expect(props.noteBooking).toEqual({
+      id: "bk_9",
+      scheduledFor: "2026-09-01T13:00:00.000Z",
+      status: "COMPLETED",
+      serviceName: "Kine",
+    });
+  });
+
+  it("error de planes: llega a la pestaña, sin planes", async () => {
+    data.load.mockResolvedValue(fullLoad({ plans: { ok: false, error: "No tenés acceso a este paciente." } }));
     const props = profileProps(await PatientPage({ params: { id: admin.id } }));
     expect(props.initialPlans).toEqual([]);
     expect(props.initialPlansError).toBe("No tenés acceso a este paciente.");

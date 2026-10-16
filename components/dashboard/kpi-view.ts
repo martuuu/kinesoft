@@ -2,10 +2,10 @@
  * [PF1.1-dashboard] Textos de los indicadores fijados del tablero, puros (los prueba
  * `tests/unit/render/pf1-dashboard.test.tsx`). Antes vivían como un objeto literal adentro de `PinnedRow`.
  *
- * D4 de VX0-b («sin 100 % con denominador 0»): `getDashboardData` devuelve `adherencePct: 100` cuando la semana no
- * tiene turnos realizados ni ausentes (`totalSlots ? … : 100`, lib/dashboard.ts). Una consultora nueva veía
- * «100% adherencia» sin un solo turno. El loader es de PF2 (handoff); acá el denominador se recalcula con las barras de
- * la semana (`weeklyBars`, la misma fuente que usa el server) y sin turnos se muestra «—» y «Sin turnos esta semana».
+ * D4 de VX0-b («sin 100 % con denominador 0»): antes `getDashboardData` devolvía `adherencePct: 100` cuando la semana no
+ * tenía turnos realizados ni ausentes, y una consultora nueva veía «100% adherencia» sin un solo turno. Desde PF2-a el
+ * loader devuelve `null` en ese caso; acá además el denominador se recalcula con las barras de la semana
+ * (`weeklyBars`, la misma fuente que usa el server) y sin turnos se muestra «—» y «Sin turnos esta semana».
  */
 import type { KpiKey } from "@/lib/preferences-constants";
 import { GENERAL_KPI_COPY } from "@/lib/preferences-constants";
@@ -25,8 +25,8 @@ export function weekSlots(bars: DashboardData["weeklyBars"]): number {
 }
 
 /** «90%», o «—» si la semana no tiene turnos con resultado (nunca un 100 % sobre 0). */
-export function adherenceText(pct: number, slots: number): string {
-  return slots > 0 ? `${pct}%` : "—";
+export function adherenceText(pct: number | null, slots: number): string {
+  return pct != null && slots > 0 ? `${pct}%` : "—";
 }
 
 export function dashboardKpis(p: {
@@ -59,7 +59,7 @@ export function dashboardKpis(p: {
       icon: "cal",
       n: pinned.weekSessions.toString(),
       l: hasSessions ? "Sesiones esta semana" : GENERAL_KPI_COPY.weekSessions.label,
-      delta: slots > 0 ? `${pinned.adherencePct}% ${rate}` : "Sin turnos esta semana",
+      delta: pinned.adherencePct != null && slots > 0 ? `${pinned.adherencePct}% ${rate}` : "Sin turnos esta semana",
       tone: "lime",
     },
     activePrograms: {

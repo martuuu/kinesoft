@@ -74,7 +74,7 @@ export function hydrateTweaks(raw: string | null, serverPalette?: Palette | null
  * `receptionLayout`. Antes se importaban como VALORES de `lib/preferences-constants.ts`, que trae zod (los schemas de
  * patch) y los textos de las KPIs del dashboard: este provider monta en el layout de `(app)`, así que zod (~13 kB
  * gz) y el chunk de strings del dashboard («Pacientes activos», «Turnos de hoy»…) iban a TODAS las rutas del
- * workspace. `tests/unit/shell-zod-free.test.ts` afirma que estas copias siguen iguales a las de ese módulo.
+ * workspace. `tests/unit/render/pf1-shell.test.tsx` afirma que estas copias siguen iguales a las de ese módulo.
  */
 export const SHELL_DEFAULT_AGENDA: AgendaPrefs = {
   agendaShowWeekHeader: true,

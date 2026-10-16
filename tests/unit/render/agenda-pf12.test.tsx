@@ -103,11 +103,11 @@ describe("[PF1.2 G7] «Cambiar estado»: sin la transición al estado actual, un
     const confirmed = statusActionOptions("CONFIRMED");
     expect(confirmed.map((o) => o.status)).toEqual(["COMPLETED", "NO_SHOW", "CANCELLED"]);
     expect(confirmed.filter((o) => o.primary).map((o) => o.label)).toEqual(["Realizado"]);
-    expect(statusActionOptions("PENDING").map((o) => o.label)).toEqual(["Realizado", "Confirmar", "Ausente", "Cancelar"]);
+    expect(statusActionOptions("PENDING").map((o) => o.label)).toEqual(["Realizado", "Confirmar", "Ausente", "Cancelar turno"]);
     // Ya realizado: nada primario, quedan las correcciones.
     const done = statusActionOptions("COMPLETED");
     expect(done.some((o) => o.primary)).toBe(false);
-    expect(done.map((o) => o.label)).toEqual(["Confirmar", "Ausente", "Cancelar"]);
+    expect(done.map((o) => o.label)).toEqual(["Confirmar", "Ausente", "Cancelar turno"]);
   });
 
   it("render: un turno Confirmado no ofrece «Confirmar» y hay un solo botón primario", () => {

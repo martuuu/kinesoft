@@ -1838,3 +1838,33 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] Tablero: cambiar «Semana / Mes» de ingresos guarda y persiste al recargar; el esqueleto de carga tiene la misma grilla que el tablero (sin salto).
 - [ ] Configuración → General → avisos de la sala: el control funciona igual que en el menú «Vista».
 - [ ] Toasts de éxito y de aviso: ícono con el color del token (verde / ámbar) legible.
+
+## PF2 · Una tx por página y actor memoizado (16-oct-2026, PF-Z)
+
+> Sin migración nueva (M10 es de PF-M). Con `next build && next start`, `TZ=UTC`, mismo consultorio y cuentas que §PF1.
+> Números en [PERF.md §PF2](PERF.md); hallazgos en [AUDIT «PF2 y PF-Z»](AUDIT.md).
+
+### Datos iguales que antes (cambió cómo se leen, no qué se ve)
+- [ ] Tablero: KPIs, ingresos Semana/Mes y «Pacientes recientes» (un paciente una sola vez, aunque tenga varias sesiones cerradas); con 0 turnos con resultado en la semana la adherencia dice «—», no «100 %».
+- [ ] Agenda: servicios, profesionales, obras sociales (sin «Particular» en el modal), sedes y salas en el mismo orden que antes; disponibilidad y candado de día iguales; navegar de semana trae los turnos.
+- [ ] Agenda con `?patient=<id>`: «Nuevo turno» abre con ese paciente; con un id de otro consultorio o archivado abre sin paciente. El picker busca pacientes al escribir (ya no hay lista precargada).
+- [ ] «Varios turnos» mensual de 20 fechas: el preview da las mismas fechas, conflictos y resumen que antes, y responde rápido.
+- [ ] Perfil del paciente como Titular, Profesional (acceso completo y básico) y Secretaria (vista administrativa): pestañas, planes, saldos, turnos y evoluciones como antes; el título de la pestaña del navegador trae el nombre; un paciente de otro consultorio da 404 con título genérico.
+- [ ] Configuración como Titular (todas las pestañas, «Plan y uso», Facturación) y como ADMIN con «Configuración» y Profesional sin delegaciones: cada uno ve sus pestañas y los mismos datos.
+
+### Actor memoizado (seguridad)
+- [ ] Cambiar de consultorio con el selector y hacer una acción enseguida (crear un turno): queda en el consultorio nuevo.
+- [ ] Dos pestañas con dos consultorios distintos del mismo usuario: cada acción queda en el consultorio de su pestaña.
+- [ ] Deshabilitar a un miembro desde otra sesión: su próxima acción ya no entra.
+
+### Fixers F1/F2 de PF1-Z (revisor B)
+- [ ] Aviso de turno superpuesto en «Nuevo turno»: clickeable, y el foco va al botón principal del aviso.
+- [ ] Tab dentro del drawer del turno: el foco no queda tapado por el footer pegado (scroll-padding).
+- [ ] «Reprogramar» a 390: abre y deja el foco en el primer campo; «Cancelar turno» pide confirmación con el diálogo propio (no el del navegador).
+- [ ] Lista de la agenda a 390 y ≤ 640: cada turno en 2 líneas legibles.
+- [ ] Picker de pacientes: se cierra al salir con Tab.
+- [ ] Diálogo de confirmación: Tab no se escapa del diálogo (foco atrapado) y Esc lo cierra devolviendo el foco.
+- [ ] Perfil → hero y pestaña Turnos: los botones que navegan son links (clic medio abre otra pestaña); no hay `<button>` dentro de `<a>`.
+- [ ] Con un drawer abierto, un diálogo de confirmación queda por encima del fondo del drawer; ⌘K abierto con un Modal queda por debajo del Modal.
+- [ ] Conocido (abierto, MB): un toast tapa el encabezado del drawer abierto.
+

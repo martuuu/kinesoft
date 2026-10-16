@@ -43,6 +43,8 @@ import { cache } from "react";
 import { prismaService } from "@/lib/db";
 import { withTenantDb, type DbClient } from "@/lib/rls";
 import { getSessionUser } from "@/lib/session-user";
+import { requestAsyncStorage } from "next/dist/client/components/request-async-storage.external";
+import { staticGenerationAsyncStorage } from "next/dist/client/components/static-generation-async-storage.external";
 import { ACTIVE_TENANT_COOKIE } from "@/lib/active-tenant-cookie";
 import {
   isUsableMembership,
@@ -54,7 +56,7 @@ import { isClinicalMember } from "@/lib/roles";
 import type { SaasPlan } from "@prisma/client";
 import type { MemberAccess } from "@/lib/saas-plans-types";
 import { twoFactorStateOf, type TwoFactorMethods, type TwoFactorState } from "@/lib/two-factor-logic";
-import { hasSessionProof } from "@/lib/two-factor-cookie";
+import { STEP_UP_COOKIE, TWO_FACTOR_COOKIE, hasSessionProof } from "@/lib/two-factor-cookie";
 import { logger } from "@/lib/logger";
 import { ensureRequestContext, primeRequestContext } from "@/lib/request-context";
 import { timeAsync } from "@/lib/server-timing";
@@ -62,7 +64,12 @@ import { clientIp } from "@/lib/client-ip";
 import type { TenantEntitlements } from "@/lib/tenant-modules";
 import { tenantAccessEnforcement } from "@/lib/env";
 import { getRequestContext } from "@/lib/request-context";
-import { discardSupportCookieIfPresent, resolveSupportTarget, type SupportTarget } from "@/lib/support-session-internal";
+import {
+  SUPPORT_COOKIE,
+  discardSupportCookieIfPresent,
+  resolveSupportTarget,
+  type SupportTarget,
+} from "@/lib/support-session-internal";
 import {
   ReadOnlyModeError as ReadOnlyModeErrorClass,
   assertWritableFor,
@@ -621,9 +628,104 @@ async function resolveActor(): Promise<ActorOutcome> {
   return { actor: null, reason: "no_session" };
 }
 
-const cachedResolve = cache(async (): Promise<ActorOutcome> => {
+/*
+ * ── PF2-e (C-PF8): memo del actor por request ─────────────────────────────────────────────────────────────────────
+ *
+ * Por qué: `cache()` de React solo deduplica DENTRO de un render RSC; en una server action no hace nada, así que cada
+ * `getActor()`/`tryGetActor()` de la action (el suyo, `withAccountWritable`, `requireModule`, `getCapabilities`…)
+ * volvía a leer el acceso por el canal de servicio (`createSupportThread`: 2 lecturas; ver
+ * tests/integration/pf2-tx-budget.test.ts). Meta del brief: ≤ 1 resolución por action.
+ *
+ * Molde de `lib/session-user.ts` (memo por store de `requestAsyncStorage` + token). La clave lleva TODO lo que puede
+ * cambiar el actor dentro de un mismo request:
+ *  - la identidad verificada (`getSessionUser`: ya memoizada por token): usuario + `session_id` + `aal`. Si la action
+ *    inicia sesión con otro usuario a mitad de camino, la clave cambia;
+ *  - las cookies que lee la resolución: `kine_tenant` (`switchTenant`/`setActiveTenant` la cambian → memo nueva),
+ *    `kine_support` (entrar/salir de soporte), `kine_2fa` y `kine_stepup` (pasar la 2FA). La de step-up no la lee el
+ *    actor hoy: va igual, ante la duda (pedido del brief);
+ *  - la «época» de revalidación del request (`pathWasRevalidated` + cantidad de tags de `staticGenerationAsyncStorage`).
+ *    Next 14.2 re-renderiza la página DENTRO del mismo request (y del mismo store) cuando la action revalidó
+ *    (`generateFlight` en action-handler.js): sin esto, una action que cambia el nombre/plan/turnero del consultorio
+ *    o la membresía del propio usuario mostraba en ese render el actor de ANTES del cambio. Límite conocido: si la
+ *    action pide el actor DESPUÉS de revalidar un tag, escribe y revalida el MISMO tag otra vez, ese re-render reusa el
+ *    actor (no hay caso así hoy; en el peor caso se ve viejo hasta la próxima navegación, que es otro request).
+ *
+ * Qué NO se memoiza: sin store (scripts, unit, integración sin request: cada llamada resuelve, como antes); sin sesión
+ * (`getSessionUser` null: incluye el actor demo de dev); los resultados NEGATIVOS (sin membresía, 2FA pendiente,
+ * deshabilitado): son raros y un alta (`/onboarding`, invitación) puede crear la membresía y pedir el actor en el
+ * mismo request; y un actor cuyo `userId` no coincide con el de la clave (red: nunca debería pasar). Nada es global
+ * por usuario: el WeakMap cuelga del objeto del request y muere con él; dos requests concurrentes del mismo usuario
+ * tienen stores distintos y no comparten nada.
+ *
+ * Usuario o membresía deshabilitados, consultorio suspendido y modo solo lectura se evalúan igual que antes: una vez
+ * por request (como ya pasaba en las páginas con `cache()`); el request siguiente vuelve a leer todo.
+ */
+const actorMemo = new WeakMap<object, Map<string, Promise<ActorOutcome>>>();
+
+function currentRequestStore(): object | null {
+  try {
+    return (requestAsyncStorage.getStore() as object | undefined) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function readCookieForKey(name: string): string | null {
+  return cookies().get(name)?.value ?? null;
+}
+
+function revalidationEpoch(): string {
+  try {
+    const s = staticGenerationAsyncStorage.getStore() as
+      | { pathWasRevalidated?: boolean; revalidatedTags?: string[] }
+      | undefined;
+    return `${s?.pathWasRevalidated ? 1 : 0}:${s?.revalidatedTags?.length ?? 0}`;
+  } catch {
+    return "0:0";
+  }
+}
+
+/** Clave de la memo, o null = no memoizar (sin sesión o sin cookies legibles). */
+async function actorMemoKey(): Promise<{ key: string; userId: string } | null> {
+  const user = await getSessionUser();
+  if (!user) return null;
+  let jar: Array<string | null>;
+  try {
+    jar = [ACTIVE_TENANT_COOKIE, SUPPORT_COOKIE, TWO_FACTOR_COOKIE, STEP_UP_COOKIE].map(readCookieForKey);
+  } catch {
+    return null;
+  }
+  return { key: JSON.stringify([user.id, user.sessionId ?? null, user.aal ?? null, ...jar, revalidationEpoch()]), userId: user.id };
+}
+
+async function memoizedResolveActor(): Promise<ActorOutcome> {
   // PF-0a: marca `actor` (auth + membresías + soporte) con PERF_TIMING=1; apagado es `resolveActor()` tal cual.
-  const outcome = await timeAsync("actor", resolveActor);
+  const resolve = () => timeAsync("actor", resolveActor);
+  const store = currentRequestStore();
+  if (!store) return resolve();
+  const k = await actorMemoKey();
+  if (!k) return resolve();
+  let perKey = actorMemo.get(store);
+  if (!perKey) {
+    perKey = new Map();
+    actorMemo.set(store, perKey);
+  }
+  const hit = perKey.get(k.key);
+  if (hit) return hit;
+  const p = resolve();
+  const memo = perKey;
+  memo.set(k.key, p);
+  const forget = () => {
+    if (memo.get(k.key) === p) memo.delete(k.key);
+  };
+  p.then((o) => {
+    if (!o.actor || o.actor.userId !== k.userId) forget();
+  }, forget);
+  return p;
+}
+
+const cachedResolve = cache(async (): Promise<ActorOutcome> => {
+  const outcome = await memoizedResolveActor();
   const actor = outcome.actor;
   if (actor) {
     const h = headers();

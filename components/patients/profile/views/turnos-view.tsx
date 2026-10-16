@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { Button, ButtonLink } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { IconPlus } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
@@ -112,11 +112,10 @@ export function TurnosView({
   // (the /agenda?new=1&patient= deep-link is already handled by AgendaClient).
   const header = readOnly ? null : (
     <div style={{ display: "flex", justifyContent: "flex-end" }}>
-      <Link href={`/agenda?new=1&patient=${patientId}`} style={{ textDecoration: "none" }}>
-        <Button variant="primary">
-          <IconPlus size={14} /> Nuevo turno
-        </Button>
-      </Link>
+      {/* PF1-Z-F2: un solo <a> con aspecto de botón (antes <Link><Button/></Link>: <button> dentro de <a>). */}
+      <ButtonLink href={`/agenda?new=1&patient=${patientId}`} variant="primary">
+        <IconPlus size={14} /> Nuevo turno
+      </ButtonLink>
     </div>
   );
 

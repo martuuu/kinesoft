@@ -84,6 +84,65 @@
   max-width: 1180px;
 }
 
+/* Un solo track para encabezado y filas (antes inline en `list-view.tsx`; un inline no se pisa desde un @media). */
+.listHead,
+.listRow {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1.4fr) minmax(0, 1.1fr) minmax(0, 1fr) 90px 72px 112px;
+  gap: 14px;
+}
+.listHead {
+  padding: 12px 18px;
+}
+.listRow {
+  padding: 14px 18px;
+}
+.cellHour,
+.cellPatient,
+.cellService,
+.cellInsurer,
+.cellCopago,
+.cellDuration,
+.cellStatus {
+  min-width: 0;
+}
+
+/* PF1-Z-F1 (#2): a 390 los 428 px fijos del track desbordaban. ≤ 640 la fila va en dos líneas: hora + paciente
+   arriba; servicio · copago · estado abajo, alineados con el paciente. Obra social y duración quedan en el drawer. */
+@media (max-width: 640px) {
+  .listHead {
+    display: none;
+  }
+  .listRow {
+    grid-template-columns: max-content minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "hour patient patient patient"
+      ". service copago status";
+    gap: 6px 10px;
+    padding: 12px 14px;
+  }
+  .cellHour {
+    grid-area: hour;
+  }
+  .cellPatient {
+    grid-area: patient;
+  }
+  .cellService {
+    grid-area: service;
+  }
+  .cellCopago {
+    grid-area: copago;
+    align-self: center;
+  }
+  .cellStatus {
+    grid-area: status;
+  }
+  .cellInsurer,
+  .cellDuration {
+    display: none;
+  }
+}
+
 /* ── Celda de «Por profesional» / «Por sala»: el botón de alta cubre la celda. El anillo global (box-shadow hacia
    afuera) lo tapaba la celda vecina: va hacia adentro, con el mismo azul del token. ─────────────────────────── */
 .slotBtn:focus-visible {

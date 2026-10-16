@@ -634,10 +634,26 @@ describe.skipIf(!RUN)("loadAvailabilityInputs: salas (SR1a)", () => {
     counted.$on("query" as never, (e: { query: string }) => sql.push(e.query));
     const rb = await roomBlock(R.c1, L.main, ar("2027-03-01T09:00"), ar("2027-03-01T13:00"), "Conteo");
     try {
+      // PF-Z: los eventos `query` del engine de Prisma llegan por un canal aparte y pueden entregarse DESPUÉS de que
+      // resuelve la promesa de la query. Con `sql.length = 0` a secas, el último evento de una corrida caía en la
+      // siguiente (11 vs 10, intermitente; visto en `test:integration:owner` el 16-oct, sin cambios en el loader ni
+      // en este test desde PL-Z). Se delimita cada corrida con una sentencia marcadora y se espera a verla en el log.
+      const marker = async (tag: string) => {
+        await counted.$queryRawUnsafe(`SELECT '${tag}' AS marker`);
+        for (let i = 0; i < 200 && !sql.some((q) => q.includes(`'${tag}'`)); i++) await new Promise((r) => setTimeout(r, 5));
+      };
+      let seq = 0;
       const count = async (p: LoadAvailabilityParams) => {
-        sql.length = 0;
+        const start = `count-start-${++seq}`;
+        const end = `count-end-${seq}`;
+        await marker(start);
         await loadAvailabilityInputs(counted, p);
-        return [...sql];
+        await marker(end);
+        const from = sql.findIndex((q) => q.includes(`'${start}'`));
+        const to = sql.findIndex((q) => q.includes(`'${end}'`));
+        expect(from).toBeGreaterThanOrEqual(0);
+        expect(to).toBeGreaterThan(from);
+        return sql.slice(from + 1, to);
       };
       const full = await count({ tenantId: D.tenantId, from: FROM, to: TO });
       // Ninguna sentencia a la tabla Room (ni join ni query de relación).

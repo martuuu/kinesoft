@@ -36,6 +36,7 @@ import { dayKeyToDbDate } from "@/lib/schedule-validate";
 // Lock exclusivo de sedes (ver cabecera); módulo único desde el integrador B2.
 import { lockTenantLocations } from "@/lib/location-lock";
 import { liveProgramWhere } from "@/lib/plan-predicates";
+import { listLocationsInTx } from "@/lib/locations-read";
 import {
   LocationId,
   LocationInput,
@@ -55,39 +56,13 @@ function revalidateAll() {
   revalidatePath("/agenda");
 }
 
-const ROW_SELECT = {
-  id: true,
-  name: true,
-  address: true,
-  addressLine2: true,
-  city: true,
-  province: true,
-  postalCode: true,
-  phone: true,
-  isPrimary: true,
-  active: true,
-  sortOrder: true,
-  _count: { select: { schedules: true } },
-} satisfies Prisma.LocationSelect;
-
-function toRow(l: Prisma.LocationGetPayload<{ select: typeof ROW_SELECT }>): LocationRow {
-  const { _count, ...rest } = l;
-  return { ...rest, scheduleCount: _count.schedules };
-}
-
 /** Sedes del tenant: principal primero, después `sortOrder` y nombre. */
 export async function listLocations(
   opts: { includeArchived?: boolean } = {}
 ): Promise<LocationRow[]> {
   const { actor } = await requireCapability("agenda.viewAll", READ_MSG);
-  const rows = await runWithRls(actor.tenantId, (tx) =>
-    tx.location.findMany({
-      where: { tenantId: actor.tenantId, ...(opts.includeArchived ? {} : { active: true }) },
-      orderBy: [{ isPrimary: "desc" }, { sortOrder: "asc" }, { name: "asc" }],
-      select: ROW_SELECT,
-    })
-  );
-  return rows.map(toRow);
+  // PF2-d: la consulta vive en lib/locations-read.ts (el loader de `/configuracion` la corre en su tx única).
+  return runWithRls(actor.tenantId, (tx) => listLocationsInTx(tx, actor.tenantId, opts));
 }
 
 /**

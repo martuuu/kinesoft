@@ -10,7 +10,6 @@
  *
  * Auth: every action requires OWNER/ADMIN. PRACTITIONER can read.
  */
-import { displayMemberName } from "@/lib/display-name";
 import { withSupportWritable } from "@/lib/support-writable";
 import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
@@ -21,7 +20,7 @@ import { getActor } from "@/lib/session";
 import { requireTenantAdmin } from "@/lib/authz";
 import type { Actor } from "@/lib/session";
 import { modulesFor, MODULE_DENIED_COPY } from "@/lib/tenant-modules";
-import { suggestDisciplineFromSpecialties } from "@/lib/services-discipline";
+import { listServicesWithCountsInTx } from "@/lib/services-read";
 import { findActivePractice } from "@/lib/catalog-validate";
 import { enableServiceForPractitioners } from "@/lib/agenda-defaults";
 import { auditInTx } from "@/lib/audit";
@@ -49,39 +48,9 @@ export async function listServicesWithCounts(): Promise<ServiceRow[]> {
   const actor = await getActor();
   const fetcher = unstable_cache(
     async (tenantId: string): Promise<ServiceRow[]> => {
-      const rows = await runWithRls(tenantId, (tx) => tx.service.findMany({
-        where: { tenantId },
-        orderBy: { name: "asc" },
-        include: {
-          practitioner: { include: { user: { select: { fullName: true, email: true } } } },
-          // S13: las especialidades de la práctica alimentan la disciplina
-          // SUGERIDA (PQ-11); solo se lee el catálogo, nunca se guarda sola.
-          practice: {
-            select: { name: true, specialties: { select: { specialty: { select: { slug: true } } } } },
-          },
-          _count: { select: { bookings: true } },
-        },
-      }));
-      return rows.map((s) => ({
-        id: s.id,
-        name: s.name,
-        description: s.description,
-        color: s.color,
-        durationMin: s.durationMin,
-        priceCents: s.priceCents,
-        practitionerId: s.practitionerId,
-        practitionerName: s.practitioner
-          ? displayMemberName(s.practitioner.user.fullName)
-          : null,
-        maxConcurrent: s.maxConcurrent,
-        bookingsCount: s._count.bookings,
-        practiceId: s.practiceId,
-        practiceName: s.practice?.name ?? null,
-        discipline: s.discipline,
-        suggestedDiscipline: s.practice
-          ? suggestDisciplineFromSpecialties(s.practice.specialties.map((ps) => ps.specialty.slug))
-          : null,
-      }));
+      // PF2-d: la consulta y el mapeo viven en lib/services-read.ts (el loader de `/configuracion` la corre dentro de
+      // su tx única); acá sigue su propia tx y el cache por tag de siempre.
+      return runWithRls(tenantId, (tx) => listServicesWithCountsInTx(tx, tenantId));
     },
     // v2 (S13): la fila suma `discipline`/`suggestedDiscipline`. La data cache
     // de Vercel sobrevive al deploy: con la clave vieja se servirían filas sin

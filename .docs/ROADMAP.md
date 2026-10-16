@@ -31,7 +31,7 @@
 | 2 | **EV2** Evoluciones | HC base para todas las verticales: evolución por consulta, 24 h para editar, después enmienda o anulación; nunca se borra ni va al portal | **M9** `clinical_notes` |
 | 3 | **VX** Cara pública ✅ | Cimientos (Ola F: tokens, fuentes, `AuthShell` v2, framer fuera del root; F2 codemod de colores) y superficies públicas (VX2: auth, status, landing, turnero, onboarding, portal) | — |
 | 4 | **ES4** Portal (P4) ✅ | Identidad del portal por `(tenantId, userId)`, turnos y progreso del plan, estado de cuenta, «Mis datos», ejercicios, matriz authz. Sin E2E (al roadmap), sin legacy S25*, sin reset | — |
-| 5 | **PF** Performance + pulido | PF1 bundle + pulido por área (mismo dueño), «sesión→turno»; PF-M índices FK; PF2 una tx por loader y actor memoizado | **M10** `perf_fk_indexes` |
+| 5 | **PF** Performance + pulido ✅ | PF1 bundle + pulido por área (mismo dueño), «sesión→turno»; PF-M índices FK; PF2 una tx por loader y actor memoizado | **M10** `perf_fk_indexes` |
 | 6 | **DIR** Directorio | Consultorios y profesionales públicos con opt-in y consentimiento por persona, SEO con `DIRECTORY_MODE`, deep link al turnero | **M11** `public_directory` |
 | — | Roadmap después | E2E Playwright (C); facturación AFIP (D); chat interno (C2); contract de `TenantPlan` (C); recordatorios a pacientes (C1); «Mantenerme conectado» real (C) | — |
 
@@ -167,8 +167,15 @@ del portal, soak y perf de planes. Hallazgos en [AUDIT «Hallazgos de ES4»](AUD
 aplicada solo en el Docker local; orden para prod en [RUNBOOK «M10 en prod»](MIGRACIONES-RUNBOOK.md) (antes del
 deploy de PF). Perf sin regresiones, `tests/perf/pf.json` como referencia nueva ([PERF.md §PF-M](PERF.md)).
 
-**Siguiente:** **PF2** (una tx por loader, actor memoizado) → PF-Z → DIR → MB. De ES4 siguen: EXPLAIN de
-`listOpenSessions` (18 sentencias), check-in del portal sin JS y el editor de sesiones (`limites-sesiones-divergentes`);
+**PF2 + PF-Z ✅ — PF cerrado** (16-oct, sin commitear, sin migración nueva): una tx por loader (dashboard 15 → 2,
+perfil 14 → 3, agenda 8 → 3, configuración 13 → 3), actor memoizado por request (N `getActor()` = 1 resolución),
+payload de la semana 802 kB → 317 kB con regla estricta ≤ 400 kB, `previewRecurrence` mensual 106 → 18 sentencias.
+Gate completo verde (dos roles). Números y TTFB en [PERF.md §PF2](PERF.md); abiertos en [AUDIT «PF2 y PF-Z»](AUDIT.md)
+(el título del perfil bloquea su esqueleto: decide Martin; tx en serie del layout); checklist en [QA §PF2](QA.md).
+M10 sigue siendo la única migración de PF (orden en el RUNBOOK, antes del deploy).
+
+**Siguiente:** **DIR** (directorio público, M11) → **MB**. De ES4 siguen: EXPLAIN de `listOpenSessions` (18
+sentencias), check-in del portal sin JS y el editor de sesiones (`limites-sesiones-divergentes`);
 `vx-formfield-densidad` sigue abierta.
 
 **Modo de ejecución (decisión 22):** se ejecuta completo, ola por ola, sin frenar: brief con contratos literales →

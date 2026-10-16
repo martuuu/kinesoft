@@ -166,12 +166,12 @@ describe.skipIf(!RUN)("A2b-S-vis · visibilidad de HC y export", () => {
       expect(d.next[0].name).toBe("Ana Visible");
     });
 
-    it("fila full en recientes: diagnóstico/plan y lock del próximo turno", async () => {
+    it("fila full en recientes: diagnóstico y lock del próximo turno", async () => {
       asUser(kineA.userId);
       const d = await getDashboardData();
       const row = d.recent.find((r) => r.id === pat);
       expect(row?.access).toBe("full");
-      expect(row?.cond).toBe("Lumbalgia crónica");
+      expect(row?.cond).toBe(""); // [PF2-a] D6: sin caso con diagnóstico; el título del plan ya no se usa como condición
       expect(row?.nextBookingId).not.toBeNull();
       expect(row?.nextBookingUpdatedAt).toBeInstanceOf(Date);
     });

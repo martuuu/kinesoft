@@ -9,6 +9,18 @@
 import { beforeEach, vi } from "vitest";
 import { realtimeFake as fakeRegistry } from "./realtime-fake";
 
+// PF-Z: `next start` instala `globalThis.AsyncLocalStorage` antes de cargar nada de Next; acá también, y en el setup
+// (no solo en los tests que lo usan). Motivo medido: la suite corre en UN fork (`singleFork`) y Node cachea
+// `next/dist/client/components/request-async-storage-instance.js` en su `require` nativo entre archivos. Si otro
+// archivo lo cargaba primero sin el global, quedaba la instancia falsa de Next y `requestAsyncStorage.run` tiraba
+// «Invariant: AsyncLocalStorage accessed in runtime where it is not available» en actor-memo y pf2-tx-budget
+// (12 fallas solo en `test:integration:owner`, cuyo orden de archivos difiere; aislados pasaban).
+vi.hoisted(async () => {
+  const { AsyncLocalStorage } = await import("node:async_hooks");
+  const g = globalThis as { AsyncLocalStorage?: unknown };
+  g.AsyncLocalStorage ??= AsyncLocalStorage;
+});
+
 // React's `cache()` only exists in the react-server build that Next bundles;
 // the plain `react` package used by vitest doesn't export it. Pass-through:
 // every call resolves fresh, which is also what lets a test switch actors.

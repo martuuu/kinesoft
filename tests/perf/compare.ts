@@ -29,6 +29,8 @@
  *   - el resto de los escenarios y `wallMs` son informativos (el wall-clock de
  *     una laptop no es reproducible);
  *   - escenarios nuevos (sin referencia) se reportan, no fallan;
+ *   - `agendaPayloadBytes` (clave suelta de `baseline.json` medido, no una fila): ≤ 400 000 (estricto, PF2 C-PF8,
+ *     AUDIT `perf-agenda-payload-1mb`). Es un techo absoluto, no relativo a la referencia: era ~1 MB antes de PF2;
  *   - `REFERENCE_ERRATA` corrige filas versionadas que quedaron viejas respecto
  *     de HEAD (ver abajo): no se regraban los JSON, se documenta el desvío.
  * Sale con 1 si alguna regla falla y con 2 si no hay nada que comparar.
@@ -139,6 +141,26 @@ export function compareRows(
   });
 }
 
+/** PF2 (C-PF8): techo del JSON de turnos de la semana que `/agenda` manda al cliente (6 profesionales, volumen). */
+export const AGENDA_PAYLOAD_MAX_BYTES = 400_000;
+
+/** Regla estricta del payload de la agenda. `null` = la corrida no lo midió (se informa, no falla). Pura. */
+export function checkAgendaPayload(bytes: number | null | undefined): { status: "ok" | "fail" | "missing"; reason: string } {
+  if (typeof bytes !== "number") return { status: "missing", reason: "agendaPayloadBytes no medido en esta corrida" };
+  return bytes > AGENDA_PAYLOAD_MAX_BYTES
+    ? { status: "fail", reason: `agendaPayloadBytes ${bytes} > ${AGENDA_PAYLOAD_MAX_BYTES}` }
+    : { status: "ok", reason: `agendaPayloadBytes ${bytes} ≤ ${AGENDA_PAYLOAD_MAX_BYTES}` };
+}
+
+function readPayloadBytes(file: string): number | null {
+  try {
+    const v = (JSON.parse(readFileSync(file, "utf8")) as { agendaPayloadBytes?: unknown }).agendaPayloadBytes;
+    return typeof v === "number" ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 function readRows(file: string): PerfRow[] | null {
   try {
     const json = JSON.parse(readFileSync(file, "utf8")) as { rows?: unknown };
@@ -178,9 +200,11 @@ function main(argv: string[]): number {
   const reference = loadReference(refDir);
   const files = existsSync(outDir) ? readdirSync(outDir).filter((f) => f.endsWith(".json")).sort() : [];
   const measured: PerfRow[] = [];
+  let payloadBytes: number | null = null;
   for (const f of files) {
     const rows = readRows(join(outDir, f));
     if (rows) measured.push(...rows);
+    payloadBytes ??= readPayloadBytes(join(outDir, f));
   }
 
   // pool-pressure no tiene filas: se informa p95/errores contra el versionado, sin regla.
@@ -215,14 +239,18 @@ function main(argv: string[]): number {
       errata: REFERENCE_ERRATA[v.scenario] ? (REFERENCE_ERRATA[v.scenario].info ? "info" : `+${REFERENCE_ERRATA[v.scenario].statements}`) : "",
     })),
   );
+  const payload = checkAgendaPayload(payloadBytes);
+  console.log(`[${payload.status === "fail" ? "FALLA" : payload.status === "ok" ? "ok" : "info"}] ${payload.reason}`);
   const fails = verdicts.filter((v) => v.status === "fail");
   const news = verdicts.filter((v) => v.status === "new");
   if (news.length) console.log(`[nuevo] sin referencia (no falla): ${news.map((v) => v.scenario).join(", ")}`);
+  if (payload.status === "fail") console.error(`compare: payload de la agenda fuera de presupuesto (${payload.reason}).`);
   if (fails.length) {
     for (const v of fails) console.error(`[FALLA] ${v.scenario} (${v.rule}): ${v.reason}`);
     console.error(`compare: ${fails.length} regresión(es) fuera de umbral (${basename(resolve(outDir))} vs ${refDir}).`);
     return 1;
   }
+  if (payload.status === "fail") return 1;
   console.log(`compare: sin regresiones fuera de umbral (${verdicts.length} escenarios, ${news.length} nuevos).`);
   return 0;
 }

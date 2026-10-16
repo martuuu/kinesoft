@@ -1,11 +1,26 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState, useTransition, type ComponentType } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useTransition,
+  type ComponentType,
+} from "react";
 import { globalSearch } from "@/lib/search";
 import type { SearchHit } from "@/lib/search-types";
-import { IconArrow, IconCal, IconDumbbell, IconHeart, IconSearch, IconUsers } from "@/components/ui/icons";
+import {
+  IconArrow,
+  IconCal,
+  IconDumbbell,
+  IconHeart,
+  IconSearch,
+  IconUsers,
+} from "@/components/ui/icons";
 import styles from "./command-palette.module.css";
+import { OverlayPortal } from "@/components/ui/overlay-portal";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import type { TenantModule } from "@/lib/tenant-modules";
 
@@ -15,7 +30,9 @@ import type { TenantModule } from "@/lib/tenant-modules";
  * módulo en `lib/search.ts`), así que el grupo «Ejercicios»/«Diagnósticos»
  * nunca aparece; el placeholder tampoco los promete. Kine: el texto de siempre.
  */
-export function paletteSearchPlaceholder(has: (m: TenantModule) => boolean): string {
+export function paletteSearchPlaceholder(
+  has: (m: TenantModule) => boolean,
+): string {
   const parts = ["paciente"];
   if (has("ejercicios")) parts.push("ejercicio");
   if (has("diagnostico")) parts.push("diagnóstico");
@@ -43,7 +60,10 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
 
   // ── Escape cierra; el foco vuelve a donde estaba (el buscador del topbar, el botón de la barra móvil…) ──
   useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previous =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
@@ -90,7 +110,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       onClose();
       router.push(hit.href);
     },
-    [router, onClose]
+    [router, onClose],
   );
 
   const onInputKey = (e: React.KeyboardEvent) => {
@@ -108,121 +128,128 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div
-      role="dialog"
-      aria-modal
-      aria-label="Búsqueda rápida"
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(15,30,51,0.45)",
-        backdropFilter: "blur(4px)",
-        zIndex: 50,
-        display: "flex",
-        alignItems: "flex-start",
-        justifyContent: "center",
-        paddingTop: "12vh",
-      }}
-    >
+    <OverlayPortal>
       <div
-        onClick={(e) => e.stopPropagation()}
-        className="k-glass-strong"
+        role="dialog"
+        aria-modal
+        aria-label="Búsqueda rápida"
+        onClick={onClose}
         style={{
-          width: "min(640px, 92%)",
-          borderRadius: 20,
-          padding: 0,
-          overflow: "hidden",
+          position: "fixed",
+          inset: 0,
+          background: "rgba(15,30,51,0.45)",
+          backdropFilter: "blur(4px)",
+          zIndex: "var(--z-palette)",
           display: "flex",
-          flexDirection: "column",
+          alignItems: "flex-start",
+          justifyContent: "center",
+          paddingTop: "12vh",
         }}
       >
-        <header className={styles.searchBar}>
-          <IconSearch size={18} />
-          <input
-            ref={inputRef}
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            onKeyDown={onInputKey}
-            placeholder={paletteSearchPlaceholder(modules.has)}
-            // Global search — suppress the browser's own autofill dropdown.
-            autoComplete="new-password"
-            autoCorrect="off"
-            autoCapitalize="off"
-            spellCheck={false}
-            data-1p-ignore
-            data-lpignore="true"
-            data-form-type="other"
-            aria-label="Buscar"
-            className={styles.input}
-          />
-          <span
-            className="k-mono"
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              color: "var(--navy-300)",
-              padding: "3px 8px",
-              borderRadius: 6,
-              border: "1px solid rgba(15,30,51,0.08)",
-            }}
-          >
-            ESC
-          </span>
-        </header>
-
-        <div style={{ maxHeight: "60vh", overflowY: "auto", padding: 8 }}>
-          {pending && hits.length === 0 ? (
-            <div
-              style={{
-                padding: 24,
-                textAlign: "center",
-                color: "var(--navy-300)",
-                fontSize: 13,
-              }}
-            >
-              Buscando…
-            </div>
-          ) : hits.length === 0 ? (
-            <div
-              style={{
-                padding: 24,
-                textAlign: "center",
-                color: "var(--navy-300)",
-                fontSize: 13,
-              }}
-            >
-              Sin resultados para “{q}”.
-            </div>
-          ) : (
-            <Grouped hits={hits} active={active} setActive={setActive} choose={choose} />
-          )}
-        </div>
-
-        <footer
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="k-glass-strong"
           style={{
-            padding: "10px 20px",
-            borderTop: "1px solid rgba(15,30,51,0.06)",
+            width: "min(640px, 92%)",
+            borderRadius: 20,
+            padding: 0,
+            overflow: "hidden",
             display: "flex",
-            alignItems: "center",
-            gap: 16,
-            fontSize: 11,
-            color: "var(--navy-500)",
+            flexDirection: "column",
           }}
         >
-          <Kbd>↑</Kbd>
-          <Kbd>↓</Kbd>
-          <span>moverse</span>
-          <Kbd>↵</Kbd>
-          <span>abrir</span>
-          <div style={{ flex: 1 }} />
-          <span>
-            <Kbd>⌘</Kbd>
-            <Kbd>K</Kbd> para cerrar
-          </span>
-        </footer>
+          <header className={styles.searchBar}>
+            <IconSearch size={18} />
+            <input
+              ref={inputRef}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={onInputKey}
+              placeholder={paletteSearchPlaceholder(modules.has)}
+              // Global search — suppress the browser's own autofill dropdown.
+              autoComplete="new-password"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              data-1p-ignore
+              data-lpignore="true"
+              data-form-type="other"
+              aria-label="Buscar"
+              className={styles.input}
+            />
+            <span
+              className="k-mono"
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                color: "var(--navy-300)",
+                padding: "3px 8px",
+                borderRadius: 6,
+                border: "1px solid rgba(15,30,51,0.08)",
+              }}
+            >
+              ESC
+            </span>
+          </header>
+
+          <div style={{ maxHeight: "60vh", overflowY: "auto", padding: 8 }}>
+            {pending && hits.length === 0 ? (
+              <div
+                style={{
+                  padding: 24,
+                  textAlign: "center",
+                  color: "var(--navy-300)",
+                  fontSize: 13,
+                }}
+              >
+                Buscando…
+              </div>
+            ) : hits.length === 0 ? (
+              <div
+                style={{
+                  padding: 24,
+                  textAlign: "center",
+                  color: "var(--navy-300)",
+                  fontSize: 13,
+                }}
+              >
+                Sin resultados para “{q}”.
+              </div>
+            ) : (
+              <Grouped
+                hits={hits}
+                active={active}
+                setActive={setActive}
+                choose={choose}
+              />
+            )}
+          </div>
+
+          <footer
+            style={{
+              padding: "10px 20px",
+              borderTop: "1px solid rgba(15,30,51,0.06)",
+              display: "flex",
+              alignItems: "center",
+              gap: 16,
+              fontSize: 11,
+              color: "var(--navy-500)",
+            }}
+          >
+            <Kbd>↑</Kbd>
+            <Kbd>↓</Kbd>
+            <span>moverse</span>
+            <Kbd>↵</Kbd>
+            <span>abrir</span>
+            <div style={{ flex: 1 }} />
+            <span>
+              <Kbd>⌘</Kbd>
+              <Kbd>K</Kbd> para cerrar
+            </span>
+          </footer>
+        </div>
       </div>
-    </div>
+    </OverlayPortal>
   );
 }
 
@@ -264,7 +291,10 @@ function Grouped({
   choose: (h: SearchHit) => void;
 }) {
   // Preserve hit order but group by category.
-  const groups = new Map<SearchHit["category"], { hit: SearchHit; index: number }[]>();
+  const groups = new Map<
+    SearchHit["category"],
+    { hit: SearchHit; index: number }[]
+  >();
   hits.forEach((hit, index) => {
     const arr = groups.get(hit.category) ?? [];
     arr.push({ hit, index });
@@ -336,7 +366,11 @@ function Grouped({
                 {on && (
                   <span
                     className="k-mono"
-                    style={{ fontSize: 10, color: "var(--sky-700)", fontWeight: 700 }}
+                    style={{
+                      fontSize: 10,
+                      color: "var(--sky-700)",
+                      fontWeight: 700,
+                    }}
                   >
                     ↵
                   </span>
@@ -352,7 +386,10 @@ function Grouped({
 
 // PF1.0-a: íconos del sistema en vez de emoji (👤 🏋️ 🏥 📅): el emoji cambia de dibujo según el sistema operativo y
 // desentona con el resto de la app (C-PF5).
-const CATEGORY_ICON: Record<SearchHit["category"], ComponentType<{ size?: number }>> = {
+const CATEGORY_ICON: Record<
+  SearchHit["category"],
+  ComponentType<{ size?: number }>
+> = {
   patient: IconUsers,
   exercise: IconDumbbell,
   condition: IconHeart,

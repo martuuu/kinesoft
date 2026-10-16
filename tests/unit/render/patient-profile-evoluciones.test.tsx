@@ -461,14 +461,17 @@ describe("[EV2-3a] helpers de la línea de tiempo", () => {
 });
 
 // La página es un Server Component (no se renderiza acá): se fija en el fuente que el resumen de HC se pide UNA vez y
-// solo en la rama `full`, después de los cortes `admin` (Secretaria/Facturación) y básico.
-describe("[EV2-3a] page.tsx: getPatientClinicalSummary solo en el perfil full", () => {
-  it("una sola llamada, después de los returns de admin y básico", async () => {
+// solo en la rama `full`, después de los cortes `admin` (Secretaria/Facturación) y básico. PF2-b (C-PF8): la carga
+// vive en `lib/patient-profile-loader.ts` (`loadPatientProfilePage`) y la página ya no la llama.
+describe("[EV2-3a] getPatientClinicalSummary solo en el perfil full", () => {
+  it("una sola llamada (en el loader), después del corte de admin y básico; la página no la llama", async () => {
     const { readFileSync } = await import("node:fs");
-    const src = readFileSync("app/(app)/pacientes/[id]/page.tsx", "utf8");
+    expect(readFileSync("app/(app)/pacientes/[id]/page.tsx", "utf8")).not.toMatch(/getPatientClinicalSummary\(/);
+    const src = readFileSync("lib/patient-profile-loader.ts", "utf8");
     const calls = [...src.matchAll(/getPatientClinicalSummary\(/g)].map((m) => m.index!);
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toBeGreaterThan(src.indexOf('if (core.access === "admin")'));
-    expect(calls[0]).toBeGreaterThan(src.indexOf('if (core.access !== "full")'));
+    const cut = src.indexOf('if (base.access !== "full") return base;');
+    expect(cut).toBeGreaterThan(-1);
+    expect(calls[0]).toBeGreaterThan(cut);
   });
 });

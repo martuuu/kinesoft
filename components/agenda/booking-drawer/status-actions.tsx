@@ -184,7 +184,10 @@ export function StatusActions({
               variant="ghost"
               onClick={() => onSetStatus(o.status)}
               disabled={pending}
-              style={{ justifyContent: "center" }}
+              style={{
+                justifyContent: "center",
+                ...(o.status === "CANCELLED" ? { color: "var(--danger-fg)" } : null),
+              }}
             >
               {o.label}
             </Button>
@@ -193,13 +196,44 @@ export function StatusActions({
       </div>
       {planSession && (
         <div style={{ fontSize: 11.5, color: "var(--navy-500)", marginTop: 6 }}>
-          Ausente o Cancelar no consumen la sesión:{" "}
+          Ausente o Cancelar turno no consumen la sesión:{" "}
           {planSession.ordinal != null ? `la sesión ${planSession.ordinal}` : "la sesión"} queda sin turno para
           reprogramar.
         </div>
       )}
     </div>
   );
+}
+
+/**
+ * PF1-Z-F1 (#6): confirmación de «Cancelar turno» del drawer (antes un click lo cancelaba). Nombra paciente y fecha
+ * en hora AR para que no haya duda de cuál; el «no» es «Volver» (dos «Cancelar» en el mismo diálogo confunden).
+ * «Ausente» queda en un click: no se confunde con cerrar y es la marca de todos los días de la recepción (se corrige
+ * desde el mismo menú).
+ */
+export function cancelBookingConfirm(b: { patientName: string; scheduledFor: string }): {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  cancelLabel: string;
+  tone: "danger";
+} {
+  const when = new Date(b.scheduledFor).toLocaleString("es-AR", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone: "America/Argentina/Buenos_Aires",
+  });
+  return {
+    title: `¿Cancelar el turno de ${b.patientName} del ${when}?`,
+    message: "El horario queda libre en la agenda. Si fue un error, lo podés reactivar desde «Cambiar estado».",
+    confirmLabel: "Cancelar turno",
+    cancelLabel: "Volver",
+    tone: "danger",
+  };
 }
 
 export type StatusActionOption = { status: BookingStatus; label: string; primary: boolean };
@@ -214,7 +248,8 @@ export function statusActionOptions(current?: BookingStatus): StatusActionOption
     { status: "COMPLETED", label: "Realizado", primary: true },
     { status: "CONFIRMED", label: "Confirmar", primary: false },
     { status: "NO_SHOW", label: "Ausente", primary: false },
-    { status: "CANCELLED", label: "Cancelar", primary: false },
+    // PF1-Z-F1 (#6): «Cancelar» a secas se leía como «cerrar el drawer» y cancelaba el turno en un click.
+    { status: "CANCELLED", label: "Cancelar turno", primary: false },
   ];
   return all.filter((o) => o.status !== current);
 }

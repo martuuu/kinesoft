@@ -1,11 +1,10 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
-import Link from "next/link";
 import dynamic from "next/dynamic";
 import { Card } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
-import { Button } from "@/components/ui/button";
+import { Button, ButtonLink } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { IconPlus } from "@/components/ui/icons";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -232,11 +231,10 @@ export function PatientAdminHero({
           </div>
         </div>
         {canBook && (
-          <Link href={`/agenda?new=1&patient=${patient.id}`} style={{ textDecoration: "none" }}>
-            <Button variant="primary" style={{ fontSize: 12, padding: "8px 14px" }}>
-              <IconPlus size={12} /> Agregar turno
-            </Button>
-          </Link>
+          // PF1-Z-F2: un solo <a> con aspecto de botón (antes <Link><Button/></Link>: <button> dentro de <a>).
+          <ButtonLink href={`/agenda?new=1&patient=${patient.id}`} variant="primary" style={{ fontSize: 12, padding: "8px 14px" }}>
+            <IconPlus size={12} /> Agregar turno
+          </ButtonLink>
         )}
       </Card>
       {/* ES4 S24r · PD-13: la Secretaria aprueba contacto y cobertura del pedido del portal. */}
@@ -326,11 +324,9 @@ function PatientHeroActions({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-        <Link href={`/agenda?new=1&patient=${patient.id}`} style={{ textDecoration: "none" }}>
-          <Button variant="primary" style={{ fontSize: 12, padding: "8px 14px" }}>
-            <IconPlus size={12} /> Agregar turno
-          </Button>
-        </Link>
+        <ButtonLink href={`/agenda?new=1&patient=${patient.id}`} variant="primary" style={{ fontSize: 12, padding: "8px 14px" }}>
+          <IconPlus size={12} /> Agregar turno
+        </ButtonLink>
         <SharePatientButton
           patientId={patient.id}
           ownerPractitionerId={patient.assignedPractitionerId}

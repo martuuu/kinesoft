@@ -159,7 +159,9 @@
   bottom: 24px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 60;
+  /* PF1-Z-F2: era 60 fijo y quedaba ENCIMA del Drawer (46) que abre la misma pantalla (barra pisando el formulario).
+     Se ata al token: justo debajo del backdrop del Drawer, así cualquier overlay la tapa. */
+  z-index: calc(var(--z-drawer-backdrop) - 1);
   padding: 12px 16px;
   border-radius: 999px;
   background: var(--navy-900);

@@ -13,14 +13,17 @@ import { PlanMarks } from "../grid/booking-card";
 import { isPastUnclosed } from "@/lib/agenda-slot-helpers";
 import styles from "./views.module.css";
 
-/** Shared column track for the Lista view header + rows (kept in one
- *  place so the two grids never drift): Hora · Paciente · Servicio ·
- *  Obra social · Copago · Duración · Estado.
+/* Columnas de la Lista (Hora · Paciente · Servicio · Obra social · Copago · Duración · Estado): viven en
+ * `views.module.css` (`.listHead` / `.listRow`), un solo track para encabezado y filas.
  *
- *  PF1.1 (G5): columnas con tope (`minmax`) y la card con `max-width`
- *  (`views.module.css`), texto con `minmax(0, …)` + elipsis (a 1024 con la barra abierta no desborda): a 1728 la tabla iba a todo el ancho y «Servicio»
- *  quedaba a 470 px del paciente. Estado en 120 px: entra «Sin cerrar». */
-const LIST_COLS = "70px minmax(0, 1.4fr) minmax(0, 1.1fr) minmax(0, 1fr) 90px 72px 112px";
+ * PF1.1 (G5): columnas con tope (`minmax`) y la card con `max-width`, texto con `minmax(0, …)` + elipsis (a 1024 con
+ * la barra abierta no desborda): a 1728 la tabla iba a todo el ancho y «Servicio» quedaba a 470 px del paciente.
+ * Estado en 120 px: entra «Sin cerrar».
+ *
+ * PF1-Z-F1 (#2): antes el track iba inline y sumaba 428 px fijos: a 390 la fila era ilegible y ningún `@media` podía
+ * pisar un inline. Ahora ≤ 640 px la fila se apila en dos líneas (hora + paciente / servicio · copago · estado), sin
+ * encabezado; obra social y duración quedan en el drawer del turno. Desktop, igual que antes.
+ */
 
 /**
  * B4.3: con más de un profesional en pantalla (`practitionerById`), la hora
@@ -61,11 +64,8 @@ export function ListView({
   return (
     <Card className={styles.listCard} style={{ padding: 0, overflow: "hidden" }}>
       <div
+        className={styles.listHead}
         style={{
-          padding: "12px 18px",
-          display: "grid",
-          gridTemplateColumns: LIST_COLS,
-          gap: 14,
           fontSize: 10,
           fontWeight: 700,
           color: "var(--navy-300)",
@@ -107,11 +107,8 @@ export function ListView({
             key={b.id}
             type="button"
             onClick={() => onEdit(b)}
+            className={styles.listRow}
             style={{
-              padding: "14px 18px",
-              display: "grid",
-              gap: 14,
-              gridTemplateColumns: LIST_COLS,
               alignItems: "center",
               fontSize: 13,
               width: "100%",
@@ -127,11 +124,11 @@ export function ListView({
               transition: "box-shadow 0.12s ease, opacity 0.12s ease, background 0.12s ease",
             }}
           >
-            <div className="k-mono" style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-700)", display: "flex", alignItems: "center", gap: 6 }}>
+            <div className={`k-mono ${styles.cellHour}`} style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-700)", display: "flex", alignItems: "center", gap: 6 }}>
               {fmtHour(date)}
               {prac && <PractitionerBadge initials={prac.initials} name={prac.name} size={20} />}
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div className={styles.cellPatient} style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
               <Avatar name={b.patientName} size={32} tone="sky" />
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontWeight: 600, color: "var(--navy-900)", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -157,7 +154,7 @@ export function ListView({
                 )}
               </div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--navy-700)", minWidth: 0 }}>
+            <div className={styles.cellService} style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--navy-700)", minWidth: 0 }}>
               <span
                 style={{
                   width: 10,
@@ -169,16 +166,16 @@ export function ListView({
               />
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.serviceName}</span>
             </div>
-            <div style={{ color: "var(--navy-500)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <div className={styles.cellInsurer} style={{ color: "var(--navy-500)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {osLabel(b.obraSocial) || "—"}
             </div>
-            <div className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)", fontWeight: 600 }}>
+            <div className={`k-mono ${styles.cellCopago}`} style={{ fontSize: 12, color: "var(--navy-700)", fontWeight: 600 }}>
               {fmtMoney(b.copagoCents)}
             </div>
-            <div className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)" }}>
+            <div className={`k-mono ${styles.cellDuration}`} style={{ fontSize: 12, color: "var(--navy-500)" }}>
               {b.durationMin} min
             </div>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
+            <div className={styles.cellStatus} style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
               <StatusTag s={b.status} hold={paymentHoldState(b, clock)} />
               {isPastUnclosed(b, clock) && (
                 <span
