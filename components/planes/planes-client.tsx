@@ -28,7 +28,9 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { Button, ButtonLink } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
+import { IconPlans } from "@/components/ui/icons";
 import { Avatar } from "@/components/ui/avatar";
 import { Tag } from "@/components/ui/tag";
 import { Modal } from "@/components/ui/modal";
@@ -101,19 +103,17 @@ export function PlanesClient(props: PlanesClientProps) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14, minWidth: 0 }}>
-      <header style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 12, color: "var(--navy-300)", fontWeight: 500 }}>{PLANES_COPY.eyebrow}</div>
-          <h1 className="k-display" style={{ fontSize: 30, margin: "2px 0 0" }}>
-            {PLANES_COPY.heading}
-          </h1>
-        </div>
-        {perms.create && discipline && (
-          <Button type="button" variant="primary" onClick={() => setNewOpen(true)}>
-            {PLANES_COPY.newPlan}
-          </Button>
-        )}
-      </header>
+      <PageHeader
+        eyebrow={PLANES_COPY.eyebrow}
+        title={PLANES_COPY.heading}
+        actions={
+          perms.create && discipline ? (
+            <Button type="button" variant="primary" onClick={() => setNewOpen(true)}>
+              {PLANES_COPY.newPlan}
+            </Button>
+          ) : undefined
+        }
+      />
 
       {disciplines.length === 0 || !discipline ? (
         <NoDisciplines canEditServices={canEditServices} />
@@ -125,23 +125,15 @@ export function PlanesClient(props: PlanesClientProps) {
             {perms.sinTurnoFilter && (
               <FilterSwitch discipline={discipline} filter={effectiveFilter} sinTurnoCount={sinTurnoCount} />
             )}
+            {/* `.k-input`: 44 px / 16 px y foco visible del token (antes un input a mano sin anillo de foco). */}
             <input
               type="search"
+              className="k-input"
               aria-label={PLANES_COPY.search}
               placeholder={PLANES_COPY.search}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              style={{
-                flex: "1 1 200px",
-                minWidth: 0,
-                maxWidth: 320,
-                padding: "7px 12px",
-                borderRadius: 999,
-                border: "1px solid rgba(15,30,51,0.12)",
-                fontSize: 13,
-                background: "#fff",
-                color: "var(--navy-900)",
-              }}
+              style={{ flex: "1 1 200px", minWidth: 0, maxWidth: 320, borderRadius: 999 }}
             />
           </div>
           {effectiveFilter === "sin-turno" && (
@@ -194,6 +186,8 @@ export function PlanesClient(props: PlanesClientProps) {
           onClose={() => setScheduling(null)}
           onScheduled={() => {
             setScheduling(null);
+            // refresh-ok: `generatePlanBookings` revalida el perfil y /seguimiento, no /planes (el conteo «sin turno»
+            // de esta lista quedaría viejo).
             router.refresh();
           }}
         />
@@ -205,6 +199,9 @@ export function PlanesClient(props: PlanesClientProps) {
 // ─── Pestañas y filtro ───────────────────────────────────────────────────────
 
 const pill = (active: boolean): React.CSSProperties => ({
+  display: "inline-flex",
+  alignItems: "center",
+  minHeight: 36,
   fontSize: 13,
   fontWeight: 700,
   padding: "6px 14px",
@@ -249,8 +246,9 @@ function FilterSwitch({
   const seg = (active: boolean): React.CSSProperties => ({
     ...pill(active),
     fontSize: 12,
+    minHeight: 32,
     padding: "5px 12px",
-    background: active ? "var(--sky-700, #1f4fbe)" : "#fff",
+    background: active ? "var(--sky-700)" : "#fff",
     border: active ? "1px solid transparent" : "1px solid rgba(15,30,51,0.12)",
   });
   return (
@@ -288,7 +286,7 @@ export function PlanList({
   onSchedule: (t: ScheduleTarget) => void;
 }) {
   if (rows.length === 0) {
-    return <Card style={{ padding: 18, color: "var(--navy-300)", fontSize: 13 }}>{emptyText}</Card>;
+    return <Card style={{ padding: 18, color: "var(--navy-500)", fontSize: 13 }}>{emptyText}</Card>;
   }
   return (
     <div
@@ -389,7 +387,7 @@ function ScheduleButton({ row, onSchedule }: { row: PlanListRow; onSchedule: (t:
         const target = pickSessionToSchedule(row.id, sessions.data);
         if (!target) {
           toast.info(PLANES_COPY.scheduleNothing);
-          router.refresh();
+          router.refresh(); // refresh-ok: no hubo mutación nuestra (otro la agendó): se relee la lista
           return;
         }
         onSchedule({ programId: row.id, ...target });
@@ -406,17 +404,38 @@ function ScheduleButton({ row, onSchedule }: { row: PlanListRow; onSchedule: (t:
 
 // ─── Vacío y "Nuevo plan" ────────────────────────────────────────────────────
 
+/**
+ * C9 (VX0-b): sin servicios con disciplina la página era una card de aviso con un link de texto. Ahora es un vacío
+ * con ícono y la acción principal como botón, directo a la pestaña Servicios de Configuración.
+ */
 export function NoDisciplines({ canEditServices }: { canEditServices: boolean }) {
   return (
-    <Card style={{ padding: 18, display: "grid", gap: 6 }}>
-      <div style={{ fontSize: 14, fontWeight: 700, color: "var(--navy-900)" }}>{PLANES_COPY.noDisciplines}</div>
-      <div style={{ fontSize: 13, color: "var(--navy-500)" }}>{PLANES_COPY.noDisciplinesHint}</div>
-      {canEditServices && (
-        <div>
-          <Link href="/configuracion" style={{ fontSize: 13, fontWeight: 700, color: "var(--sky-700)" }}>
-            {PLANES_COPY.noDisciplinesAction}
-          </Link>
-        </div>
+    <Card style={{ padding: "32px 20px", display: "grid", gap: 8, justifyItems: "center", textAlign: "center" }}>
+      <span
+        aria-hidden
+        style={{
+          width: 52,
+          height: 52,
+          borderRadius: "50%",
+          background: "var(--sky-100)",
+          color: "var(--sky-700)",
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <IconPlans size={24} />
+      </span>
+      <h2 className="k-display" style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "var(--navy-900)" }}>
+        {PLANES_COPY.noDisciplines}
+      </h2>
+      <p style={{ margin: 0, maxWidth: "52ch", fontSize: 13.5, color: "var(--navy-500)" }}>{PLANES_COPY.noDisciplinesHint}</p>
+      {canEditServices ? (
+        <ButtonLink href="/configuracion?tab=servicios" variant="primary" style={{ marginTop: 6 }}>
+          {PLANES_COPY.noDisciplinesAction}
+        </ButtonLink>
+      ) : (
+        <p style={{ margin: 0, fontSize: 12.5, color: "var(--navy-500)" }}>{PLANES_COPY.noDisciplinesAskAdmin}</p>
       )}
     </Card>
   );

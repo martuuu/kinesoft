@@ -173,8 +173,8 @@ const noteStyle: React.CSSProperties = {
 };
 const warnStyle: React.CSSProperties = {
   ...noteStyle,
-  background: "rgba(180,110,20,0.08)",
-  border: "1px solid rgba(180,110,20,0.25)",
+  background: "var(--warn-bg)",
+  border: "1px solid var(--warn-border)",
 };
 const listStyle: React.CSSProperties = {
   listStyle: "none",
@@ -954,7 +954,7 @@ export function DayLockDialog({
                         {l.time}
                       </span>
                       <span style={{ color: "var(--navy-900)" }}>{l.patient}</span>
-                      <span style={{ fontSize: 12, color: "#8A5A00", flexBasis: "100%" }}>
+                      <span style={{ fontSize: 12, color: "var(--warn-fg)", flexBasis: "100%" }}>
                         {SKIP_REASON_LABEL[s.reason]}
                       </span>
                     </li>

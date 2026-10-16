@@ -26,19 +26,15 @@
  *     muestra el caller (contrato `PlanEditDone`; la PlanCard de S22a ya lo
  *     hace con `toast.info`). Así no sale dos veces.
  *
- * Por qué Modal + portal y no Drawer: el diálogo de renovación también se abre
- * desde el drawer del turno (S19c). El `Drawer`/`Modal` del design system no
- * usan portal y el panel del drawer tiene `transform` (framer-motion): un
- * `position: fixed` adentro queda atado al panel y no a la ventana. Además el
- * `Modal` (z 40) quedaba DEBAJO del drawer (z 46). El shell lo porta a
- * `document.body` dentro de un contenedor con z 60 (debajo del ConfirmDialog,
- * z 80) y frena el Esc en captura para que el drawer de abajo no se cierre con
- * el mismo Esc (`Drawer` respeta `defaultPrevented`). El dirty-guard es el
- * mismo texto que el del `Drawer`.
+ * Por qué Modal y no Drawer: el diálogo de renovación también se abre desde
+ * el drawer del turno (S19c). Antes el shell portaba a mano a `document.body`
+ * (z 60) y frenaba el Esc en captura, porque el `Modal` no tenía portal y el
+ * panel del drawer tiene `transform`. Desde PF1.0-b (C-PF6) el `Modal` porta
+ * solo (`OverlayPortal`, `--z-modal` > `--z-drawer`) y se queda con el Esc en
+ * captura (BO-Z C2): el portal y el listener de acá sobraban (PF1.2). El
+ * dirty-guard es el mismo texto que el del `Drawer`.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { createPortal } from "react-dom";
-import { Modal } from "@/components/ui/modal";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
 import { MoneyInput } from "@/components/ui/money-input";
@@ -86,6 +82,7 @@ import {
 import { PLAN_MAX_SESSIONS } from "@/lib/plans-constants";
 import { localToARIso } from "@/lib/datetime-ar";
 import { formatARS } from "@/lib/format";
+import { Choice, PLAN_DIALOG_COPY, PackageChoice, PlanDialogShell } from "@/components/planes/plan-dialog-shell";
 
 export type {
   CustomSessionDialogProps,
@@ -101,9 +98,9 @@ export const PLAN_EDIT_COPY = {
   priceTitle: "Cambiar el precio",
   customTitle: "Agregar sesión a medida",
   renewTitle: "Renovar autorización",
-  dirty: "Tenés cambios sin guardar. Si cerrás, se pierden.",
-  keepTotal: "Mantener el total",
-  keepPerSession: "Mantener el precio por sesión",
+  dirty: PLAN_DIALOG_COPY.dirty,
+  keepTotal: PLAN_DIALOG_COPY.keepTotal,
+  keepPerSession: PLAN_DIALOG_COPY.keepPerSession,
   sameCount: "Es la misma cantidad que tiene el plan.",
   samePrice: "Elegí un precio distinto al actual.",
   noPrice: PLAN_EDITOR_COPY.noPrice,
@@ -134,13 +131,6 @@ const nTurnos = (n: number) => `${n} ${n === 1 ? "turno" : "turnos"}`;
 export function repriceSummaryLine(p: Pick<RepricePlanPreview, "current" | "next" | "bookingsToStamp" | "bookingsKept">): string {
   const head = `Cambiar precio: de ${planPricingLabel(p.current)} a ${planPricingLabel(p.next)} en ${nTurnos(p.bookingsToStamp)}`;
   return p.bookingsKept > 0 ? `${head} · ${p.bookingsKept} quedan como están (cobrados o pasados)` : head;
-}
-
-/** C13 literal: "¿Mantenemos el total ($120.000) o el precio por sesión?" (sin el monto si no se pudo cargar). */
-export function packageChoiceQuestion(totalCents: number | null | undefined): string {
-  return totalCents == null
-    ? "¿Mantenemos el total o el precio por sesión?"
-    : `¿Mantenemos el total (${formatARS(totalCents)}) o el precio por sesión?`;
 }
 
 export type CountChange =
@@ -267,152 +257,10 @@ const summaryBox: CSSProperties = {
 };
 
 // ─── Shell común ─────────────────────────────────────────────────────────────
-
-/**
- * Modal del design system portado a `body` (ver la cabecera: el drawer del
- * turno tiene `transform` y z 46) con dirty-guard y Esc que no se escapa al
- * drawer de abajo. En el render del server (tests) se pinta en línea.
- */
-export function PlanDialogShell({
-  open,
-  onClose,
-  title,
-  description,
-  dirty = false,
-  width = 560,
-  children,
-}: {
-  open: boolean;
-  onClose: () => void;
-  title: string;
-  description?: string;
-  dirty?: boolean;
-  width?: number;
-  children: ReactNode;
-}) {
-  const confirm = useConfirm();
-  const asking = useRef(false);
-  const requestClose = useCallback(async () => {
-    if (!dirty) return onClose();
-    if (asking.current) return;
-    asking.current = true;
-    try {
-      const ok = await confirm({
-        title: "¿Descartar los cambios?",
-        message: PLAN_EDIT_COPY.dirty,
-        confirmLabel: "Descartar",
-        cancelLabel: "Seguir editando",
-        tone: "danger",
-      });
-      if (ok) onClose();
-    } finally {
-      asking.current = false;
-    }
-  }, [dirty, onClose, confirm]);
-
-  useEffect(() => {
-    if (!open) return;
-    // Captura en window: corre antes que el listener del Modal (document) y
-    // que el del Drawer de abajo (window, burbuja), que ignora un Esc con
-    // `defaultPrevented`. El cierre lo sigue haciendo el Modal (→ requestClose).
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") e.preventDefault();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [open]);
-
-  // Cerrado no se pinta nada (ni el portal): la PlanCard monta los cuatro
-  // diálogos siempre y cada instancia se descarta al cerrar (`freshOnClose`).
-  if (!open) return null;
-  const node = (
-    <div style={{ position: "relative", zIndex: 60 }}>
-      <Modal open={open} onClose={() => void requestClose()} title={title} description={description} width={width} lockBackdrop={dirty}>
-        {children}
-      </Modal>
-    </div>
-  );
-  return typeof document === "undefined" ? node : createPortal(node, document.body);
-}
-
-/** Segmentado accesible (radiogroup de radios nativos: flechas del teclado gratis). */
-function Choice<T extends string>({
-  name,
-  label,
-  value,
-  options,
-  onChange,
-  disabled,
-}: {
-  name: string;
-  label: string;
-  value: T | null;
-  options: ReadonlyArray<{ value: T; label: string }>;
-  onChange: (v: T) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <fieldset style={{ border: "none", margin: 0, padding: 0, minWidth: 0 }}>
-      <legend style={{ ...sectionLabel, padding: 0, marginBottom: 6 }}>{label}</legend>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, padding: 3, borderRadius: 14, background: "rgba(15,30,51,0.04)" }}>
-        {options.map((o) => {
-          const on = o.value === value;
-          return (
-            <label
-              key={o.value}
-              style={{
-                position: "relative",
-                flex: "1 1 auto",
-                textAlign: "center",
-                padding: "7px 12px",
-                borderRadius: 11,
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: disabled ? "not-allowed" : "pointer",
-                background: on ? "#fff" : "transparent",
-                color: on ? "var(--navy-900)" : "var(--navy-500)",
-                boxShadow: on ? "0 1px 3px rgba(15,30,51,0.12)" : undefined,
-              }}
-            >
-              <input
-                type="radio"
-                name={name}
-                value={o.value}
-                checked={on}
-                disabled={disabled}
-                onChange={() => onChange(o.value)}
-                style={{ position: "absolute", opacity: 0, width: 1, height: 1 }}
-              />
-              {o.label}
-            </label>
-          );
-        })}
-      </div>
-    </fieldset>
-  );
-}
-
-const PACKAGE_OPTIONS: ReadonlyArray<{ value: PackageCountPricing; label: string }> = [
-  { value: "keep-total", label: PLAN_EDIT_COPY.keepTotal },
-  { value: "keep-per-session", label: PLAN_EDIT_COPY.keepPerSession },
-];
-
-/** PACKAGE: "¿Mantenemos el total ($120.000) o el precio por sesión?" (default: mantener el total). */
-export function PackageChoice({
-  totalCents,
-  value,
-  onChange,
-  disabled,
-  name,
-}: {
-  totalCents: number | null | undefined;
-  value: PackageCountPricing;
-  onChange: (v: PackageCountPricing) => void;
-  disabled?: boolean;
-  name: string;
-}) {
-  return <Choice<PackageCountPricing> name={name} label={packageChoiceQuestion(totalCents)} value={value} options={PACKAGE_OPTIONS} onChange={onChange} disabled={disabled} />;
-}
+// PF1.2: `PlanDialogShell`, `Choice` y `PackageChoice` viven en `plan-dialog-shell.tsx` (liviano) para que la PlanCard
+// pueda bajar este módulo (preview del motor, zod de la renovación) con `next/dynamic` recién al abrir un diálogo,
+// mientras `plan-session-actions` (estático en la card) sigue usando el shell. Se re-exportan para los llamadores.
+export { PlanDialogShell, PackageChoice, packageChoiceQuestion } from "@/components/planes/plan-dialog-shell";
 
 // ─── Detalle del plan (precio actual / total del paquete) ────────────────────
 

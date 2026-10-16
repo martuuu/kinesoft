@@ -1,0 +1,24 @@
+/*
+ * [PF1.2-agenda-b] G7 (VX0-b): «Cambiar estado» pegado al pie del drawer del turno. Antes quedaba cortado al final
+ * del panel, sin separador. El panel del Drawer tiene `padding: 22px` y es el contenedor con scroll: el margen negativo
+ * lleva el fondo opaco hasta los bordes y `bottom: -22px` lo apoya sobre el borde inferior real.
+ */
+.footer {
+  position: sticky;
+  bottom: -22px;
+  z-index: 1;
+  display: grid;
+  gap: var(--space-2);
+  margin: 0 -22px -22px;
+  padding: var(--space-3) 22px 22px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--navy-100);
+  border-radius: 0 0 22px 22px;
+}
+
+/* «Abrir historia clínica»: link secundario (antes una banda azul que competía con la primaria del footer). */
+.hcLink {
+  justify-content: space-between;
+  min-height: 44px;
+  text-decoration: none;
+}

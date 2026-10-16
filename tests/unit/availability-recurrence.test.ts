@@ -225,35 +225,42 @@ describe("tope y entradas raras", () => {
 describe("summarizeRange", () => {
   it("el ejemplo del diseño", () => {
     const ds = expandDates({ anchor: ar("2026-09-28T18:30"), count: 2, frequency: "monthly" });
-    expect(summarizeRange(ds, "monthly")).toBe("2 sesiones · Mensual 28/09 → 28/10");
+    expect(summarizeRange(ds, "monthly", "sesion")).toBe("2 sesiones · Mensual 28/09 → 28/10");
   });
 
   it("semanal y cada 2 semanas", () => {
-    expect(summarizeRange(expandDates({ anchor: ar("2027-03-10T10:00"), count: 3, frequency: "weekly" }), "weekly")).toBe(
+    expect(summarizeRange(expandDates({ anchor: ar("2027-03-10T10:00"), count: 3, frequency: "weekly" }), "weekly", "sesion")).toBe(
       "3 sesiones · Semanal 10/03 → 24/03"
     );
     expect(
-      summarizeRange(expandDates({ anchor: ar("2027-03-10T10:00"), count: 3, frequency: "biweekly" }), "biweekly")
+      summarizeRange(expandDates({ anchor: ar("2027-03-10T10:00"), count: 3, frequency: "biweekly" }), "biweekly", "sesion")
     ).toBe("3 sesiones · Cada 2 semanas 10/03 → 07/04");
   });
 
+  it("[VX3-f] con unidad «turno» (Clínica general)", () => {
+    const ds = expandDates({ anchor: ar("2027-03-10T10:00"), count: 3, frequency: "weekly" });
+    expect(summarizeRange(ds, "weekly", "turno")).toBe("3 turnos · Semanal 10/03 → 24/03");
+    expect(summarizeRange([ar("2027-03-10T10:00")], "weekly", "turno")).toBe("1 turno · 10/03");
+    expect(summarizeRange([], "weekly", "turno")).toBe("Sin turnos");
+  });
+
   it("singular y vacío", () => {
-    expect(summarizeRange([ar("2027-03-10T10:00")], "weekly")).toBe("1 sesión · 10/03");
-    expect(summarizeRange([], "weekly")).toBe("Sin sesiones");
+    expect(summarizeRange([ar("2027-03-10T10:00")], "weekly", "sesion")).toBe("1 sesión · 10/03");
+    expect(summarizeRange([], "weekly", "sesion")).toBe("Sin sesiones");
   });
 
   it("si cruza de año muestra el año", () => {
     const ds = expandDates({ anchor: ar("2026-12-15T09:00"), count: 2, frequency: "monthly" });
-    expect(summarizeRange(ds, "monthly")).toBe("2 sesiones · Mensual 15/12/2026 → 15/01/2027");
+    expect(summarizeRange(ds, "monthly", "sesion")).toBe("2 sesiones · Mensual 15/12/2026 → 15/01/2027");
   });
 
   it("usa el día AR (23:30 AR no se corre al día siguiente en UTC)", () => {
     const ds = expandDates({ anchor: ar("2027-03-10T23:30"), count: 2, frequency: "weekly" });
-    expect(summarizeRange(ds, "weekly")).toBe("2 sesiones · Semanal 10/03 → 17/03");
+    expect(summarizeRange(ds, "weekly", "sesion")).toBe("2 sesiones · Semanal 10/03 → 17/03");
   });
 
   it("toma el mínimo y el máximo aunque vengan desordenadas", () => {
-    expect(summarizeRange([ar("2027-03-24T10:00"), ar("2027-03-10T10:00")], "weekly")).toBe(
+    expect(summarizeRange([ar("2027-03-24T10:00"), ar("2027-03-10T10:00")], "weekly", "sesion")).toBe(
       "2 sesiones · Semanal 10/03 → 24/03"
     );
   });

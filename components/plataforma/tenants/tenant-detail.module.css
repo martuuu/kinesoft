@@ -1,0 +1,46 @@
+/* [PF1.2-plataforma · VX0-b P4] «Uso» del detalle de un consultorio: antes eran 9 pares rótulo/valor en 4 columnas,
+   sin jerarquía (el número pesaba lo mismo que su rótulo). Ahora los conteos son mini-cards con el número grande; los
+   cupos del plan (texto, no un número) quedan arriba como dato. Grilla con mínimo de 140 px: 4-5 por fila a
+   1366×768, 3-4 a 1024×768 y 2 a 390. */
+.usage {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: repeat(auto-fill, minmax(min(140px, 100%), 1fr));
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.usageCard {
+  display: grid;
+  gap: var(--space-1);
+  align-content: start;
+  min-width: 0;
+  padding: var(--space-3);
+  border-radius: var(--r-sm);
+  background: var(--bg-panel);
+  border: 1px solid rgba(15, 30, 51, 0.06);
+}
+.usageValue {
+  margin: 0;
+  font-size: var(--fs-xl);
+  line-height: var(--lh-snug);
+  font-weight: 700;
+  color: var(--navy-900);
+  font-variant-numeric: tabular-nums;
+}
+.usageLabel {
+  margin: 0;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--navy-500);
+}
+.usageHint {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--navy-400);
+}
+@media (max-width: 400px) {
+  .usage {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

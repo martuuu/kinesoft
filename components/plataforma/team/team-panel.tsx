@@ -207,6 +207,11 @@ function RowAction({
   );
 }
 
+/** `{ changed: false }` de suspender/reactivar: la action no revalidó (no había nada que cambiar). */
+function isUnchanged(data: unknown): boolean {
+  return typeof data === "object" && data !== null && "changed" in data && (data as { changed: unknown }).changed === false;
+}
+
 export function MemberRow({
   tenantId,
   member,
@@ -246,7 +251,10 @@ export function MemberRow({
         return;
       }
       onOk?.(r.data);
-      router.refresh();
+      // PF1.2 (C-PF4): toda action de `lib/platform-team.ts` revalida `/plataforma` cuando cambió algo, así que su
+      // respuesta ya trae el equipo nuevo. refresh-ok: suspender/reactivar «sin cambio» (`changed: false`) no revalida
+      // y la fila que ofrecía la acción estaba vieja.
+      if (isUnchanged(r.data)) router.refresh();
     });
   };
 
@@ -514,7 +522,6 @@ export function InvitationItem({
       const c = inviteEmailStatusCopy(r.data.emailStatus, r.data.emailReason);
       if (r.data.emailSent) toast.success(c.text);
       else setLinkResult(r.data); // el mail no salió: se muestra el link para pasarlo a mano
-      router.refresh();
     });
   };
 
@@ -533,7 +540,6 @@ export function InvitationItem({
         return;
       }
       toast.success("Invitación anulada.");
-      router.refresh();
     });
   };
 

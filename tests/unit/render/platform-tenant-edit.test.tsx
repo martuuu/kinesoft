@@ -232,7 +232,7 @@ describe("[EV0-P3] TenantList (render)", () => {
     expect(html).toMatch(/href="\/plataforma\/consultorios\/t1"/);
   });
 
-  it("[EV0-fix] copy unificado: «Turnos online», «Titular»; Miembros/Creado solo en el detalle; Filtrar es <Button>", () => {
+  it("[EV0-fix] copy unificado: «Turnos online», «Titular»; Miembros/Creado solo en el detalle; Buscar es <Button>", () => {
     const html = renderToStaticMarkup(
       <TenantList page={{ rows: [row({ publicBookingEnabled: true })], total: 1, page: 1, pageSize: 50 }} query={query} />,
     );
@@ -244,7 +244,27 @@ describe("[EV0-P3] TenantList (render)", () => {
     expect(html).not.toContain("Prendido");
     expect(html).not.toContain("Miembros");
     expect(html).not.toContain("Creado");
-    expect(html).toMatch(/<button[^>]*class="k-btn k-btn-primary"[^>]*type="submit"[^>]*>Filtrar<\/button>|<button[^>]*type="submit"[^>]*class="k-btn k-btn-primary"[^>]*>Filtrar<\/button>/);
+    // PF1.2 (P2): «Filtrar» → «Buscar», en la fila del buscador; los selects aplican al cambiar.
+    expect(html).toMatch(/<button[^>]*class="k-btn k-btn-primary[^"]*"[^>]*type="submit"[^>]*>Buscar<\/button>|<button[^>]*type="submit"[^>]*class="k-btn k-btn-primary[^"]*"[^>]*>Buscar<\/button>/);
+  });
+
+  it("[PF1.2 · P2/P5] un solo submit, selects que no se cortan, campos a 44 px y primera celda con el fondo de su fila", () => {
+    const html = renderToStaticMarkup(
+      <TenantList page={{ rows: [row()], total: 1, page: 1, pageSize: 50 }} query={{ ...query, plan: "CLINICA" }} />,
+    );
+    expect(html.match(/type="submit"/g)).toHaveLength(1);
+    expect(html).not.toContain("Filtrar");
+    // P2: el rótulo largo «Activos, suspendidos y de baja» se cortaba a 160 px.
+    expect(html).toContain("Todos los estados");
+    expect(html).not.toContain("Activos, suspendidos y de baja");
+    // Cuatro selects y el buscador con la clase de campo del sistema (44 px / 16 px, D-VX13), nada de estilo inline.
+    expect(html.match(/<select[^>]*class="k-input/g)).toHaveLength(4);
+    expect(html).toMatch(/<input[^>]*type="search"[^>]*class="k-input/);
+    expect(html).not.toMatch(/<select[^>]*style=/);
+    // Con filtros, «Limpiar filtros» al lado de «Buscar».
+    expect(html).toContain("Limpiar filtros");
+    // P5: la celda fija ya no lleva `--bg-panel` inline (el bloque gris); el fondo lo pone el CSS Module por fila.
+    expect(html).not.toContain("background:var(--bg-panel)");
   });
 
   it("vacío con filtros dice que no hay coincidencias", () => {
@@ -314,6 +334,24 @@ describe("[EV0-P3] Resumen (render)", () => {
     expect(trialDaysLabel(-1)).toBe("Venció hace 2 días");
     expect(formatDayKeyAR("2026-10-21")).toBe("21 de oct de 2026");
     expect(formatDayKeyAR("2026-01-01")).toBe("01 de ene de 2026");
+  });
+});
+
+describe("[PF1.2-plataforma] detalle: Uso en mini-cards (P4) y «Cambiar de plan» diferido (C-PF2)", () => {
+  it("P4: los conteos de Uso son mini-cards (número + rótulo) en una lista, y las invitaciones pendientes van como pista", () => {
+    const html = renderToStaticMarkup(<TenantSummaryView detail={detail()} seats={null} />);
+    expect(html).toMatch(/<ul[^>]*aria-label="Conteos de uso"/);
+    const usage = html.slice(html.indexOf('aria-label="Conteos de uso"'));
+    expect(usage.match(/<li/g)?.length).toBeGreaterThanOrEqual(8);
+    for (const label of ["Miembros", "Profesionales", "Pacientes activos", "Turnos próximos"]) expect(usage).toContain(label);
+    expect(html).not.toContain("invitación(es) pendiente(s)");
+  });
+
+  it("C-PF2: la pestaña Suscripción pinta el botón «Cambiar de plan» pero no el Drawer (se baja al primer click)", () => {
+    const html = renderToStaticMarkup(<TenantSubscriptionView detail={detail()} />);
+    expect(html).toMatch(/<button[^>]*>Cambiar de plan<\/button>/);
+    // El cuerpo del Drawer («Rige ya; sin prorrateo…») no está en el primer pintado.
+    expect(html).not.toContain("sin prorrateo");
   });
 });
 

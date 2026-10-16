@@ -24,6 +24,7 @@ import type { SeatUsageByKind } from "@/lib/plan-catalog";
 import { Facts, Section, muted } from "@/components/plataforma/tenants/detail-ui";
 import { TenantProfileDrawer } from "@/components/plataforma/tenants/tenant-profile-drawer";
 import { ActivityList } from "@/components/plataforma/tenants/tenant-activity";
+import styles from "./tenant-detail.module.css";
 
 /** PL-1d: cupos por tipo (C-PL3), los de `getTenantTeamForPlatform`. */
 export type TenantSeats = SeatUsageByKind;
@@ -87,7 +88,7 @@ export function TenantSummaryView({ detail: d, seats }: { detail: PlatformTenant
                           {a}
                         </span>
                       ))}
-                      <span style={{ fontSize: 12, color: "var(--navy-300)" }}>Redirigen al slug actual.</span>
+                      <span style={{ fontSize: 12, color: "var(--navy-400)" }}>Redirigen al slug actual.</span>
                     </span>
                   ),
                 ],
@@ -121,21 +122,27 @@ export function TenantSummaryView({ detail: d, seats }: { detail: PlatformTenant
                 )}
               </span>,
             ],
-            ["Miembros", `${c.members}${c.pendingInvitations ? ` · ${c.pendingInvitations} invitación(es) pendiente(s)` : ""}`],
-            ["Profesionales", String(c.practitioners)],
-            ["Pacientes activos", String(c.patients)],
-            ["Servicios", String(c.services)],
-            ["Sedes", String(c.locations)],
-            ["Turnos (total)", String(c.bookingsTotal)],
-            ["Turnos últimos 30 días", String(c.bookingsLast30Days)],
-            ["Turnos próximos", String(c.bookingsUpcoming)],
           ]}
         />
+        <ul className={styles.usage} aria-label="Conteos de uso">
+          <UsageCard
+            label="Miembros"
+            value={c.members}
+            hint={c.pendingInvitations ? `${c.pendingInvitations} ${c.pendingInvitations === 1 ? "invitación pendiente" : "invitaciones pendientes"}` : undefined}
+          />
+          <UsageCard label="Profesionales" value={c.practitioners} />
+          <UsageCard label="Pacientes activos" value={c.patients} />
+          <UsageCard label="Servicios" value={c.services} />
+          <UsageCard label="Sedes" value={c.locations} />
+          <UsageCard label="Turnos (total)" value={c.bookingsTotal} />
+          <UsageCard label="Turnos últimos 30 días" value={c.bookingsLast30Days} />
+          <UsageCard label="Turnos próximos" value={c.bookingsUpcoming} />
+        </ul>
       </Section>
 
       <Section title="Módulos activos">
         {visibleModuleChips(d.modules).length === 0 ? (
-          <p style={{ margin: 0, fontSize: 13, color: "var(--navy-300)" }}>Sin módulos.</p>
+          <p style={{ margin: 0, fontSize: 13, color: "var(--navy-400)" }}>Sin módulos.</p>
         ) : (
           <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", gap: 6, flexWrap: "wrap" }}>
             {visibleModuleChips(d.modules).map((c) => (
@@ -158,5 +165,16 @@ export function TenantSummaryView({ detail: d, seats }: { detail: PlatformTenant
         <ActivityList events={d.recentPlatformEvents} empty="Todavía no hubo cambios desde Plataforma." />
       </Section>
     </div>
+  );
+}
+
+/** P4: un conteo de «Uso» como mini-card (número arriba, rótulo abajo). */
+function UsageCard({ label, value, hint }: { label: string; value: number; hint?: string }) {
+  return (
+    <li className={styles.usageCard}>
+      <p className={styles.usageValue}>{value.toLocaleString("es-AR")}</p>
+      <p className={styles.usageLabel}>{label}</p>
+      {hint && <p className={styles.usageHint}>{hint}</p>}
+    </li>
   );
 }

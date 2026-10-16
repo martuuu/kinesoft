@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { DischargeSuggestionRow, OpenSessionBucket, OpenSessionBuckets, OpenSessionRow } from "@/lib/sessions-types";
 import { planDeepLinkHref } from "@/lib/plans-deeplink";
 import { Card } from "@/components/ui/card";
+import { PageHeader } from "@/components/ui/page-header";
 import { Avatar } from "@/components/ui/avatar";
 import { Tag } from "@/components/ui/tag";
 import { IconActivity, IconCheck } from "@/components/ui/icons";
@@ -12,7 +13,10 @@ import {
   landingLenses,
   sessionCounterLabel,
   sessionHref,
+  splitOverdueGroups,
+  type PatientGroup,
 } from "@/components/seguimiento/seguimiento-model";
+import styles from "./seguimiento.module.css";
 
 /**
  * Landing de Seguimiento (S20, ES3). Presentacional y sin hooks: la página
@@ -29,6 +33,10 @@ import {
  *   - "Sin evolución" con "Cargar evolución" (S12b);
  *   - los cuatro de siempre, con el tag "Sin evolución" / "Sin turno" en las
  *     tarjetas que también están en esos lentes.
+ *
+ * PF1.2 (C8 de VX0-b): «Hoy» va primero; «Vencidas sin cerrar» es una lista
+ * compacta agrupada por paciente, colapsada a 6 filas con «Ver todas (N)»
+ * (`<details>`: sin JS, sigue siendo server-safe).
  */
 export function SeguimientoLanding({
   buckets,
@@ -43,12 +51,11 @@ export function SeguimientoLanding({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14, minWidth: 0 }}>
-      <header>
-        <div style={{ fontSize: 12, color: "var(--navy-300)", fontWeight: 500 }}>Seguimiento</div>
-        <h1 className="k-display" style={{ fontSize: 30, margin: "2px 0 0" }}>
-          Sesiones del plan
-        </h1>
-      </header>
+      <PageHeader eyebrow="Seguimiento" title="Sesiones del plan" />
+
+      <Section id="hoy" title="Hoy" bucket={today}>
+        <SessionList items={today.rows} variant="today" lenses={lenses} plansEnabled={plansEnabled} />
+      </Section>
 
       {suggestDischarge && suggestDischarge.rows.length > 0 && <DischargeBanner rows={suggestDischarge.rows} />}
 
@@ -59,7 +66,7 @@ export function SeguimientoLanding({
           hint="Sesiones de planes activos con fecha pasada que nunca se cerraron."
           bucket={overdue}
         >
-          <SessionList items={overdue.rows} variant="overdue" lenses={lenses} plansEnabled={plansEnabled} />
+          <OverdueList rows={overdue.rows} />
         </Section>
       )}
       {sinTurno && sinTurno.total > 0 && (
@@ -77,9 +84,6 @@ export function SeguimientoLanding({
           <SessionList items={realizadasSinEvolucion.rows} variant="sinEvolucion" lenses={lenses} plansEnabled={plansEnabled} />
         </Section>
       )}
-      <Section id="hoy" title="Hoy" bucket={today}>
-        <SessionList items={today.rows} variant="today" lenses={lenses} plansEnabled={plansEnabled} />
-      </Section>
       <Section id="proximas" title="Próximas" bucket={upcoming}>
         <SessionList items={upcoming.rows} variant="upcoming" lenses={lenses} plansEnabled={plansEnabled} />
       </Section>
@@ -93,9 +97,9 @@ export function SeguimientoLanding({
 function DischargeBanner({ rows }: { rows: DischargeSuggestionRow[] }) {
   return (
     <section aria-labelledby="seg-alta-title">
-      <div id="seg-alta-title" className="k-display" style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>
+      <h2 id="seg-alta-title" className="k-display" style={{ fontSize: 16, fontWeight: 700, margin: "0 0 8px" }}>
         {SEGUIMIENTO_COPY.dischargeTitle}
-      </div>
+      </h2>
       <div style={{ display: "grid", gap: 8 }}>
         {rows.map((p) => {
           const href = planDeepLinkHref({ kind: "program", patientId: p.patientId, programId: p.programId });
@@ -130,6 +134,9 @@ function DischargeBanner({ rows }: { rows: DischargeSuggestionRow[] }) {
 const linkButton: React.CSSProperties = {
   fontSize: 12,
   fontWeight: 700,
+  display: "inline-flex",
+  alignItems: "center",
+  minHeight: 32,
   padding: "6px 12px",
   borderRadius: 999,
   border: "1px solid rgba(31,79,190,0.25)",
@@ -165,9 +172,9 @@ function Section({
         }}
       >
         <div style={{ minWidth: 0 }}>
-          <div id={headingId} className="k-display" style={{ fontSize: 16, fontWeight: 700 }}>
+          <h2 id={headingId} className="k-display" style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>
             {title}
-          </div>
+          </h2>
           {hint && <div style={{ fontSize: 11.5, color: "var(--navy-500)" }}>{hint}</div>}
         </div>
         <Tag tone="soft">{truncated ? `${bucket.rows.length} de ${bucket.total}` : bucket.total}</Tag>
@@ -184,6 +191,75 @@ function Section({
 
 type Variant = "overdue" | "sinTurno" | "sinEvolucion" | "today" | "upcoming" | "completed";
 
+const EMPTY_COPY: Record<Variant, string> = {
+  overdue: "No hay sesiones vencidas.",
+  sinTurno: "Todas las sesiones tienen turno.",
+  sinEvolucion: "No hay sesiones sin evolución.",
+  today: "Hoy no hay sesiones de planes.",
+  upcoming: "No hay sesiones próximas.",
+  completed: "No hubo sesiones realizadas en los últimos 14 días.",
+};
+
+const whenFmt = (d: Date) =>
+  d.toLocaleString("es-AR", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone: "America/Argentina/Buenos_Aires",
+  });
+
+/** C8: vencidas en filas compactas por paciente; las que pasan de 6 quedan en «Ver todas (N)». */
+function OverdueList({ rows }: { rows: OpenSessionRow[] }) {
+  const { visible, hidden } = splitOverdueGroups(rows);
+  return (
+    <Card style={{ padding: 0, overflow: "hidden" }}>
+      <OverdueGroups groups={visible} />
+      {hidden.length > 0 && (
+        <details className={styles.more}>
+          <summary className={styles.moreSummary}>Ver todas ({rows.length})</summary>
+          <OverdueGroups groups={hidden} />
+        </details>
+      )}
+    </Card>
+  );
+}
+
+function OverdueGroups({ groups }: { groups: PatientGroup<OpenSessionRow>[] }) {
+  return (
+    <ul className={styles.overdueList}>
+      {groups.map((g) => (
+        <li key={g.patientId} className={styles.overdueGroup}>
+          <div className={styles.overduePatient}>
+            <Avatar name={g.patientName} size={28} tone="sky" />
+            <span className={styles.ellipsis} title={g.patientName}>
+              {g.patientName}
+            </span>
+            {g.rows.length > 1 && <span className={styles.overdueCount}>{g.rows.length}</span>}
+          </div>
+          <ul className={styles.overdueRows}>
+            {g.rows.map((s) => {
+              const counter = sessionCounterLabel(s.ordinal, s.totalLive);
+              return (
+                <li key={s.id}>
+                  <Link href={sessionHref(s.id)} className={styles.overdueRow} aria-label={`${g.patientName} · ${counter}`}>
+                    <span className={`k-mono ${styles.nowrap}`}>{counter}</span>
+                    <span className={styles.ellipsis} title={s.programTitle}>
+                      {s.programTitle}
+                    </span>
+                    <span className={styles.nowrap}>{whenFmt(s.scheduledFor)}</span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function SessionList({
   items,
   variant,
@@ -196,7 +272,7 @@ function SessionList({
   plansEnabled: boolean;
 }) {
   if (items.length === 0) {
-    return <Card style={{ padding: 18, color: "var(--navy-300)", fontSize: 13 }}>Nada por acá.</Card>;
+    return <Card style={{ padding: 18, color: "var(--navy-500)", fontSize: 13 }}>{EMPTY_COPY[variant]}</Card>;
   }
   return (
     <div
@@ -230,14 +306,7 @@ function SessionCard({
   const sinTurno = !completed && lenses.sinTurno.has(s.id);
   const canAgendar = sinTurno && plansEnabled;
   const counter = sessionCounterLabel(s.ordinal, s.totalLive);
-  const when = s.scheduledFor.toLocaleString("es-AR", {
-    day: "2-digit",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-    timeZone: "America/Argentina/Buenos_Aires",
-  });
+  const when = whenFmt(s.scheduledFor);
 
   return (
     <article
@@ -260,8 +329,10 @@ function SessionCard({
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <Avatar name={s.patientName} size={36} tone={emphasize ? "lime" : "sky"} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-900)" }}>{s.patientName}</div>
-            <div style={{ fontSize: 11, color: "var(--navy-500)", overflow: "hidden", textOverflow: "ellipsis" }}>
+            <div className={styles.ellipsis} style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-900)" }} title={s.patientName}>
+              {s.patientName}
+            </div>
+            <div className={styles.ellipsis} style={{ fontSize: 11, color: "var(--navy-500)" }} title={s.programTitle}>
               {s.programTitle}
             </div>
           </div>
@@ -271,7 +342,6 @@ function SessionCard({
             </Tag>
           )}
           {sinEvolucion && <Tag tone="soft">{SEGUIMIENTO_COPY.sinEvolucionTag}</Tag>}
-          {variant === "overdue" && <Tag tone="soft">Sin cerrar</Tag>}
           {sinTurno && variant !== "sinTurno" && <Tag tone="soft">Sin turno</Tag>}
         </div>
         <div
@@ -285,20 +355,25 @@ function SessionCard({
           }}
         >
           <span className="k-mono">{counter}</span>
-          <span>{when}</span>
+          <span className={styles.nowrap}>{when}</span>
         </div>
-        <div style={{ height: 6, borderRadius: 3, overflow: "hidden", background: "rgba(15,30,51,0.06)" }}>
-          <div
-            style={{
-              width: `${s.exerciseCount ? (s.doneCount / s.exerciseCount) * 100 : 0}%`,
-              height: "100%",
-              background: "linear-gradient(90deg, var(--sky-500), var(--lime-400))",
-            }}
-          />
-        </div>
-        <div className="k-mono" style={{ fontSize: 11, color: "var(--sky-700)" }}>
-          <IconActivity size={11} style={{ verticalAlign: -1 }} /> {s.doneCount} / {s.exerciseCount} ejercicios
-        </div>
+        {/* Sin ejercicios cargados no se pinta «0 / 0» ni la barra vacía (C8). */}
+        {s.exerciseCount > 0 && (
+          <>
+            <div aria-hidden style={{ height: 6, borderRadius: 3, overflow: "hidden", background: "rgba(15,30,51,0.06)" }}>
+              <div
+                style={{
+                  width: `${(s.doneCount / s.exerciseCount) * 100}%`,
+                  height: "100%",
+                  background: "linear-gradient(90deg, var(--sky-500), var(--lime-400))",
+                }}
+              />
+            </div>
+            <div className="k-mono" style={{ fontSize: 11, color: "var(--sky-700)" }}>
+              <IconActivity size={11} style={{ verticalAlign: -1 }} /> {s.doneCount} / {s.exerciseCount} ejercicios
+            </div>
+          </>
+        )}
       </Link>
       {(canAgendar || sinEvolucion) && (
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>

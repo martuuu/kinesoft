@@ -133,7 +133,7 @@ describe("resumen local (misma regla que el server)", () => {
         count: 2,
         daysOfWeek: [1],
         frequency: "monthly",
-      }),
+      }, "sesion"),
     ).toBe("2 sesiones · Mensual 28/09 → 28/10");
   });
 
@@ -143,7 +143,7 @@ describe("resumen local (misma regla que el server)", () => {
         count: 3,
         daysOfWeek: [],
         frequency: "monthly",
-      }),
+      }, "sesion"),
     ).toBe("3 sesiones · Mensual 31/01 → 31/03");
   });
 
@@ -154,14 +154,14 @@ describe("resumen local (misma regla que el server)", () => {
         count: 3,
         daysOfWeek: [],
         frequency: "weekly",
-      }),
+      }, "sesion"),
     ).toBe("3 sesiones · Semanal 28/09 → 12/10");
     expect(
       localSummary("2026-09-28T21:30:00-03:00", {
         count: 3,
         daysOfWeek: [],
         frequency: "biweekly",
-      }),
+      }, "sesion"),
     ).toBe("3 sesiones · Cada 2 semanas 28/09 → 26/10");
   });
 
@@ -171,9 +171,18 @@ describe("resumen local (misma regla que el server)", () => {
         count: 1,
         daysOfWeek: [],
         frequency: "weekly",
-      }),
+      }, "sesion"),
     ).toBe("1 sesión · 28/09");
-    expect(localSummary("", DEFAULT_SESSIONS_VALUE)).toBe("");
+    expect(localSummary("", DEFAULT_SESSIONS_VALUE, "sesion")).toBe("");
+  });
+
+  it("[VX3-f] Clínica general: la misma regla con «turnos»", () => {
+    expect(
+      localSummary("2026-09-28T10:00:00-03:00", { count: 2, daysOfWeek: [1], frequency: "monthly" }, "turno"),
+    ).toBe("2 turnos · Mensual 28/09 → 28/10");
+    expect(
+      localSummary("2026-09-28T10:00:00-03:00", { count: 1, daysOfWeek: [], frequency: "weekly" }, "turno"),
+    ).toBe("1 turno · 28/09");
   });
 });
 
@@ -278,8 +287,11 @@ describe("estado por fecha y conteos", () => {
   });
 
   it("shortfall solo si el server generó menos", () => {
-    expect(shortfallNote(5, 5)).toBeNull();
-    expect(shortfallNote(60, 58)).toBe("Se generan 58 de 60 sesiones pedidas.");
+    expect(shortfallNote(5, 5, "sesion")).toBeNull();
+    expect(shortfallNote(60, 58, "sesion")).toBe("Se generan 58 de 60 sesiones pedidas.");
+    // VX3-f: Clínica general cuenta turnos, con la concordancia («pedidos»).
+    expect(shortfallNote(60, 58, "turno")).toBe("Se generan 58 de 60 turnos pedidos.");
+    expect(shortfallNote(1, 0, "turno")).toBe("Se generan 0 de 1 turno pedido.");
   });
 
   it("fila: fecha AR con día de la semana y hora de pared", () => {

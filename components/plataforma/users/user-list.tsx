@@ -32,7 +32,7 @@ const MIN_WIDTH = 870;
 
 function Head({ children }: { children: ReactNode }) {
   return (
-    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--navy-300)" }}>
+    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--navy-500)", whiteSpace: "nowrap" }}>
       {children}
     </div>
   );

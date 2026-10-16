@@ -438,6 +438,26 @@ describe.skipIf(!RUN)("availability actions (B3.3)", () => {
       expect(r.data.items.slice(0, 11).every((i) => i.status === "libre" && !i.outOfHours)).toBe(true);
       expect(r.data.summary).toBe("12 sesiones · Semanal 06/04 → 22/06");
     });
+
+    it("[VX3-f] Clínica general: el resumen cuenta «turnos» (unidad de los módulos del actor, no del cliente)", async () => {
+      const G = await createEphemeralTenant(db, { vertical: "GENERAL" });
+      try {
+        asUser(G.userId);
+        const r = await previewRecurrence({
+          anchor: at("10:00", "2027-04-06"),
+          count: 3,
+          frequency: "weekly",
+          practitionerId: G.practitionerId,
+          serviceId: G.serviceId,
+        });
+        expect(r.ok).toBe(true);
+        if (!r.ok) return;
+        expect(r.data.summary).toBe("3 turnos · Semanal 06/04 → 20/04");
+        expect(r.data.summary).not.toMatch(/sesi/i);
+      } finally {
+        await G.cleanup();
+      }
+    });
   });
 
   describe("sin PHI", () => {

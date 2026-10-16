@@ -122,7 +122,7 @@ function ConfirmDialog({
             inset: 0,
             background: "rgba(15,30,51,0.45)",
             backdropFilter: "blur(4px)",
-            zIndex: 80,
+            zIndex: "var(--z-confirm)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",

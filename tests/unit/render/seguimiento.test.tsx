@@ -59,7 +59,7 @@ import type { ReactElement } from "react";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { ToastProvider } from "@/components/ui/toast";
 import { SeguimientoLanding } from "@/components/seguimiento/seguimiento-landing";
-import { SessionDetail, urlWithoutAgendarParam, type SessionDTO } from "@/components/seguimiento/session-detail";
+import { SessionDetail, sessionNoteEditorMode, urlWithoutAgendarParam, type SessionDTO } from "@/components/seguimiento/session-detail";
 import {
   SEGUIMIENTO_COPY,
   dischargeCopy,
@@ -71,6 +71,7 @@ import {
   sessionHref,
   sortByOrdinal,
   sessionClinicalNoteAction,
+  splitOverdueGroups,
   type SessionClinicalNote,
 } from "@/components/seguimiento/seguimiento-model";
 import type { OpenSessionBuckets, OpenSessionRow } from "@/lib/sessions-types";
@@ -418,10 +419,13 @@ describe("[EV2-3c] Seguimiento: evolución de HC del turno de la sesión (EV2-D1
   });
 
   it("[EV2-Z A1] el editor de la evolución recibe el nombre del paciente («Apellido, Nombre») y el turno", () => {
+    // [PF1.2] El editor es dinámico y se monta al primer «Cargar evolución»: el `mode` se fija en el helper que usa
+    // SessionDetail, y el HTML inicial ya no trae el editor (ni su chunk).
+    const mode = sessionNoteEditorMode(detail(done), note());
+    expect(mode).toMatchObject({ type: "create", patientName: "Pérez, Ana", booking: { id: "bk1" } });
     const out = html(<SessionDetail session={detail(done)} scheduledLabel="x" clinicalNote={note()} />);
-    expect(out).toContain('data-editor-mode="create"');
-    expect(out).toContain('data-editor-patient-name="Pérez, Ana"');
-    expect(out).toContain('data-editor-booking="bk1"');
+    expect(out).toContain(">Cargar evolución<");
+    expect(out).not.toContain("data-editor-mode");
   });
 
   it("[EV2-Z M2] el encabezado envuelve y «Cargar/Ver evolución» van en su propia fila, después de las acciones", () => {
@@ -449,5 +453,74 @@ describe("[EV2-3c] Seguimiento: evolución de HC del turno de la sesión (EV2-D1
     const probe = { completedAt: "2026-10-06T13:00:00.000Z", notes: null, rpe: null, paInPre: null, paInPost: null, exercises: [] };
     expect(isSessionWithoutEvolution(probe)).toBe(true);
     expect(isSessionWithoutEvolution(probe, { hasClinicalNote: true })).toBe(false);
+  });
+});
+
+// ─── PF1.2 · C8 (VX0-b) ──────────────────────────────────────────────────────
+
+describe("[PF1.2] Seguimiento: Hoy primero y vencidas compactas por paciente (C8)", () => {
+  const overdueRows = [
+    row({ id: "o1", patientId: "a", patientName: "Ana Pérez" }),
+    row({ id: "o2", patientId: "b", patientName: "Bruno Díaz" }),
+    row({ id: "o3", patientId: "a", patientName: "Ana Pérez" }),
+    row({ id: "o4", patientId: "c", patientName: "Carla Gómez" }),
+    row({ id: "o5", patientId: "c", patientName: "Carla Gómez" }),
+    row({ id: "o6", patientId: "c", patientName: "Carla Gómez" }),
+    row({ id: "o7", patientId: "d", patientName: "Diego Ruiz" }),
+    row({ id: "o8", patientId: "e", patientName: "Eva Sosa" }),
+  ];
+
+  it("agrupa por paciente en el orden de llegada y no parte grupos al colapsar a 6", () => {
+    const { visible, hidden, hiddenRows } = splitOverdueGroups(overdueRows);
+    expect(visible.map((g) => [g.patientId, g.rows.map((r) => r.id)])).toEqual([
+      ["a", ["o1", "o3"]],
+      ["b", ["o2"]],
+      ["c", ["o4", "o5", "o6"]],
+    ]);
+    expect(hidden.map((g) => g.patientId)).toEqual(["d", "e"]);
+    expect(hiddenRows).toBe(2);
+    // El primer grupo se ve aunque solo él pase el límite (la sección nunca queda vacía).
+    expect(splitOverdueGroups(overdueRows, 1).visible.map((g) => g.patientId)).toEqual(["a"]);
+  });
+
+  it("Hoy va antes que Vencidas; vencidas con «Ver todas (N)» y sin el tag «Sin cerrar» repetido", () => {
+    const out = html(
+      <SeguimientoLanding
+        buckets={buckets({
+          today: { rows: [row({ id: "t1", patientName: "Tomás Hoy" })], total: 1 },
+          overdue: { rows: overdueRows, total: overdueRows.length },
+        })}
+        plansEnabled
+      />
+    );
+    expect(out.indexOf('id="seg-hoy"')).toBeGreaterThan(-1);
+    expect(out.indexOf('id="seg-hoy"')).toBeLessThan(out.indexOf('id="seg-vencidas"'));
+    expect(out).toContain("<details");
+    expect(out).toContain(">Ver todas (8)<");
+    expect(out).not.toContain(">Sin cerrar<");
+    // Cada vencida es un link a su detalle; el nombre del paciente aparece una vez por grupo.
+    expect(out).toContain('href="/seguimiento/o5"');
+    expect(out.match(/>Carla Gómez</g)?.length).toBe(1);
+  });
+
+  it("sin ejercicios no pinta «0 / 0 ejercicios»; vacío con copy propio y un solo h1", () => {
+    const out = html(<SeguimientoLanding buckets={buckets({ today: { rows: [row({ id: "s1" })], total: 1 } })} plansEnabled />);
+    expect(out).not.toContain("0 / 0 ejercicios");
+    expect(out).toContain("No hay sesiones próximas.");
+    expect(out.match(/<h1\b/g)?.length).toBe(1);
+    const withEx = html(
+      <SeguimientoLanding buckets={buckets({ today: { rows: [row({ id: "s2", exerciseCount: 4, doneCount: 1 })], total: 1 } })} plansEnabled />
+    );
+    expect(withEx).toContain("1 / 4 ejercicios");
+  });
+});
+
+describe("[PF1.2] detalle de sesión responsive a 1024 (ev2-seguimiento-detalle-1024)", () => {
+  it("la grilla ya no es la fija 260/1fr/320 en línea: va por clases del CSS Module (container query)", () => {
+    const out = html(<SessionDetail session={detail()} scheduledLabel="x" />);
+    expect(out).not.toContain("grid-template-columns:260px 1fr 320px");
+    expect(out).toMatch(/class="[^"]*detailWrap[^"]*"/);
+    expect(out).toMatch(/class="[^"]*rail[^"]*"/);
+    expect(out).toMatch(/class="[^"]*side[^"]*"/);
   });
 });

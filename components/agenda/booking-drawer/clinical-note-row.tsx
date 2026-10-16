@@ -8,10 +8,10 @@
  * La Secretaria no tiene `clinical.read`: ni siquiera viaja la lectura. La barrera real es el server: `null` (sin acceso,
  * turno guest o ajeno) → la fila no se renderiza, sin decir si el turno tiene evolución.
  *
- * La nota se muestra con `NoteCard` en modo LECTURA (`readOnlyNote`). Por qué: el panel del Drawer es un
- * `motion.aside` con `transform`, y el `NoteEditorDrawer`/`VoidNoteDialog` que monta `NoteCard` adentro
- * quedarían `position: fixed` relativos al panel (el mismo problema que llevó los diálogos de la fila Plan
- * afuera del drawer, S19c). Editar, enmendar y anular se hacen desde la pestaña Evoluciones del paciente
+ * La nota se muestra con `NoteCard` en modo LECTURA (`readOnlyNote`). El motivo original (EV2-3b) era que el panel
+ * del Drawer tenía `transform` y los diálogos que monta `NoteCard` quedaban `position: fixed` relativos al panel;
+ * desde PF1.0-b Drawer y Modal van por portal, por eso «Ver versiones anteriores» ya se ofrece acá (PF1.1). Editar,
+ * enmendar y anular siguen en la HC a propósito (un solo lugar para escribir). Se hacen desde la pestaña Evoluciones del paciente
  * (link «Abrir en la historia clínica», `clinicalNoteDeepLink`). Crear sí se ofrece acá: el editor se abre
  * AFUERA del drawer (lo monta `BookingDrawer`, que se cierra antes).
  *

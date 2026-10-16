@@ -1,4 +1,4 @@
-import { Card } from "@/components/ui/card";
+import { PageHeader } from "@/components/ui/page-header";
 import { listPlatformTenants } from "@/lib/platform-tenants-read";
 import { PlatformTenantListQuery } from "@/lib/platform-tenants-schemas";
 import { TenantList } from "@/components/plataforma/tenants/tenant-list";
@@ -37,26 +37,12 @@ export default async function PlataformaConsultoriosPage({ searchParams }: { sea
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <Card
-        style={{
-          padding: 24,
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
-          gap: 12,
-          flexWrap: "wrap",
-        }}
-      >
-        <div style={{ minWidth: 0 }}>
-          <h1 className="k-display" style={{ fontSize: 26, margin: 0 }}>
-            Consultorios
-          </h1>
-          <p style={{ color: "var(--navy-500)", fontSize: 13.5, marginTop: 6, marginBottom: 0, maxWidth: 640, lineHeight: 1.45 }}>
-            Todos los consultorios de KineSoft. Entrá a uno para ver su uso, su suscripción, su equipo y su ciclo de vida.
-          </p>
-        </div>
-        <NewTenantDrawer />
-      </Card>
+      <PageHeader
+        eyebrow="Plataforma"
+        title="Consultorios"
+        description="Todos los consultorios de KineSoft. Entrá a uno para ver su uso, su suscripción, su equipo y su ciclo de vida."
+        actions={<NewTenantDrawer />}
+      />
       <TenantList page={page} query={query} />
     </div>
   );

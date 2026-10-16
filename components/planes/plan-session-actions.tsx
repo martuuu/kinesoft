@@ -25,7 +25,7 @@ import { useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
-import { PackageChoice, PlanDialogShell } from "@/components/planes/plan-edit-dialogs";
+import { PackageChoice, PlanDialogShell } from "@/components/planes/plan-dialog-shell";
 import { archivePlanSessions, restoreSession } from "@/lib/plans-edit";
 import type {
   GeneratePendingButtonProps,

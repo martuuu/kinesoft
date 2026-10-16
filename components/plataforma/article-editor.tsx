@@ -66,7 +66,6 @@ export function ArticleEditor({
       }
       toast.success("Artículo guardado");
       onChanged?.();
-      router.refresh();
     });
   };
 

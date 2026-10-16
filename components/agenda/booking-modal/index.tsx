@@ -65,9 +65,12 @@
  * muestra todos los servicios, no muestra sede ni el modo bloquear.
  */
 import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties } from "react";
+import dynamic from "next/dynamic";
+import { Skel } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { FormField } from "@/components/ui/form-field";
+import styles from "./booking-modal.module.css";
 import { Button } from "@/components/ui/button";
 import { Drawer } from "@/components/ui/drawer";
 import { IconArrow } from "@/components/ui/icons";
@@ -119,8 +122,6 @@ import { PatientSection } from "./patient-section";
 import { BillingSection } from "./billing-section";
 import { ScheduleSection } from "./schedule-section";
 import { SlotPicker } from "./slot-picker";
-import { MultiSection } from "./multi-section";
-import { BlockMode } from "./block-mode";
 import { TelemedicineSection } from "./telemedicine-section";
 import {
   BatchConflictPrompt,
@@ -147,6 +148,25 @@ import type {
 } from "./types";
 
 /** Campos del alta inline → nombre del input en este formulario (para `fieldErrors`). */
+// [PF1.2 · C-PF2] «Varias sesiones» (con su preview por fecha) y «Bloquear horario» solo aparecen al cambiar de modo:
+// van en chunks aparte para que abrir «Nuevo turno» (siempre en «Turno») no los espere. Se precargan al pasar el
+// puntero o el foco por el selector de modo (`preloadModeChunks`), así el click no espera red. Skeleton con alto
+// parecido al real para que el drawer no salte.
+const loadMultiSection = () => import("./multi-section");
+const loadBlockMode = () => import("./block-mode");
+const MultiSection = dynamic(() => loadMultiSection().then((m) => m.MultiSection), {
+  ssr: false,
+  loading: () => <Skel h={180} r={12} />,
+});
+const BlockMode = dynamic(() => loadBlockMode().then((m) => m.BlockMode), {
+  ssr: false,
+  loading: () => <Skel h={220} r={12} />,
+});
+function preloadModeChunks() {
+  void loadMultiSection();
+  void loadBlockMode();
+}
+
 const INLINE_PATIENT_FIELDS = {
   firstName: "newFirstName",
   lastName: "newLastName",
@@ -861,20 +881,6 @@ export function BookingModal({
             serviceId={serviceId}
           />
 
-          {/* Mini-diagnóstico opcional: si se dejan vacíos, el server
-              completa title/description con el diagnóstico del paciente. */}
-          {fieldAccess.title === "rw" && (
-            <FormField
-              label={hasDiagnostico ? "Título (diagnóstico)" : "Motivo de consulta"}
-              name="title"
-              placeholder={
-                hasDiagnostico
-                  ? "Opcional · si se deja vacío se toma el diagnóstico del paciente"
-                  : "Opcional"
-              }
-            />
-          )}
-
           <ScheduleSection
             defaultISO={defaultISO}
             durationMin={shownDuration}
@@ -905,13 +911,9 @@ export function BookingModal({
                   onChange={onSlotPicked}
                   practitionerLabels={practitionerLabels}
                 />
-              ) : (
-                <div style={{ fontSize: 12, color: "var(--navy-300)" }}>
-                  {practitionerId
-                    ? "Elegí el servicio para ver los horarios libres."
-                    : "Elegí el profesional y el servicio para ver los horarios libres."}
-                </div>
-              )
+              ) : null
+              // G6: la ayuda «Elegí el servicio para ver los horarios libres» vive debajo del selector de
+              // servicio (`ServiceSection`), no acá: quedaba lejos del control que la resuelve.
             }
           />
 
@@ -958,19 +960,35 @@ export function BookingModal({
             urlError={showUrlError ? urlError : null}
           />
 
-          {fieldAccess.description === "rw" && (
-            <FormField
-              as="textarea"
-              label={hasDiagnostico ? "Descripción (diagnóstico)" : "Detalle"}
-              name="description"
-              placeholder={
-                hasDiagnostico
-                  ? "Opcional · si se deja vacío se toma el diagnóstico del paciente"
-                  : "Opcional"
-              }
-            />
+          {/* G6 (VX0-b): «Detalles» colapsable al final. Son opcionales (el server completa título y descripción con
+              el diagnóstico del paciente si quedan vacíos) y ocupaban el primer pliegue entre Paciente y Fecha. Un
+              `<details>` cerrado sigue enviando sus campos con el form; ninguno es `required`. Placeholders
+              distintos: antes título y descripción repetían el mismo texto. */}
+          {(fieldAccess.title === "rw" || fieldAccess.description === "rw" || fieldAccess.notes === "rw") && (
+            <details className={styles.details}>
+              <summary className={styles.detailsSummary}>
+                Detalles <span className={styles.detailsHint}>· opcional</span>
+              </summary>
+              <div className={styles.detailsBody}>
+                {fieldAccess.title === "rw" && (
+                  <FormField
+                    label={hasDiagnostico ? "Título (diagnóstico)" : "Motivo de consulta"}
+                    name="title"
+                    placeholder={hasDiagnostico ? "Vacío = el diagnóstico del paciente" : "Opcional"}
+                  />
+                )}
+                {fieldAccess.description === "rw" && (
+                  <FormField
+                    as="textarea"
+                    label={hasDiagnostico ? "Descripción (diagnóstico)" : "Detalle"}
+                    name="description"
+                    placeholder={hasDiagnostico ? "Vacío = la descripción del diagnóstico del paciente" : "Opcional"}
+                  />
+                )}
+                {fieldAccess.notes === "rw" && <FormField as="textarea" label="Notas" name="notes" />}
+              </div>
+            </details>
           )}
-          {fieldAccess.notes === "rw" && <FormField as="textarea" label="Notas" name="notes" />}
           {error && (
             <div
               style={{
@@ -1056,8 +1074,8 @@ export function BookingModal({
               }}
             />
           )}
-          {/* Footer apilado y full-width, como el drawer lateral. */}
-          <div style={{ display: "grid", gap: 8, marginTop: 4 }}>
+          {/* Footer apilado, full-width y pegado al pie (G7): una sola primaria. */}
+          <div className={styles.footer}>
             <Button
               type="submit"
               variant="primary"
@@ -1118,6 +1136,8 @@ function ModeSelector({
       aria-label="Qué querés cargar"
       className="k-glass"
       style={{ display: "flex", borderRadius: 999, padding: 3, gap: 2 }}
+      onPointerEnter={preloadModeChunks}
+      onFocus={preloadModeChunks}
     >
       {modes.map((m) => {
         const on = m === value;

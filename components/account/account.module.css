@@ -1,0 +1,8 @@
+/* PF1.2 (C-PF5.4): los campos de código (TOTP y recuperación) apagaban el contorno (`outline: none` inline) sin
+   reemplazo: el foco era invisible en /verificar-acceso y en la configuración de 2FA. El anillo es `--focus-ring`;
+   el outline transparente sobrevive en forced-colors. CSS module plano (sin framer ni Modal): lo importa la superficie
+   pública y lo vigila tests/unit/public-surface-imports.test.ts. */
+.codeInput:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: var(--focus-ring);
+}

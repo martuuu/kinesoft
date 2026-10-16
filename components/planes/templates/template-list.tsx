@@ -27,7 +27,7 @@ import { Tag } from "@/components/ui/tag";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { DisciplineChip } from "@/components/planes/discipline-chip";
-import { TemplateDrawer } from "@/components/planes/templates/template-drawer";
+import dynamic from "next/dynamic";
 import { deletePlanTemplate, listPlanTemplates, setPlanTemplateArchived } from "@/lib/plan-templates";
 import type { PlanTemplateRow } from "@/lib/plan-templates-types";
 import { MODULE_DENIED_COPY } from "@/lib/tenant-modules";
@@ -36,6 +36,13 @@ import { summarizePlanSchedule } from "@/lib/plan-schedule";
 import { PLAN_EDITOR_COPY } from "@/lib/plan-editor-state";
 import type { Discipline } from "@/lib/plans-constants";
 import type { PlanPricingInput } from "@/lib/plans-types";
+
+// PF1.2 (C-PF2): el drawer de plantilla (editor de horario + precio) no está en el primer pintado de /planes: baja al
+// abrirlo y se precarga en hover/foco de «Nueva plantilla» o de una fila. Cerrado ya devolvía null, así que montarlo
+// solo abierto es equivalente.
+const loadTemplateDrawer = () => import("@/components/planes/templates/template-drawer");
+const TemplateDrawer = dynamic(() => loadTemplateDrawer().then((m) => m.TemplateDrawer), { ssr: false });
+const preloadTemplateDrawer = () => void loadTemplateDrawer();
 
 // ─── Contrato publicado (lo monta S21) ───────────────────────────────────────
 
@@ -131,7 +138,7 @@ function Header({ canCreate, onNew }: { canCreate: boolean; onNew?: () => void }
         <p style={{ ...muted, marginTop: 4 }}>{TEMPLATE_LIST_COPY.subtitle}</p>
       </div>
       {canCreate && onNew && (
-        <Button type="button" variant="lime" onClick={onNew}>
+        <Button type="button" variant="lime" onClick={onNew} onPointerEnter={preloadTemplateDrawer} onFocus={preloadTemplateDrawer}>
           {TEMPLATE_LIST_COPY.newTemplate}
         </Button>
       )}
@@ -259,13 +266,15 @@ function TemplateListEnabled({
         )}
       </div>
 
-      <TemplateDrawer
-        open={drawer.open}
-        templateId={drawer.templateId}
-        discipline={discipline}
-        onClose={() => setDrawer({ open: false, templateId: null })}
-        onSaved={() => void reload()}
-      />
+      {drawer.open && (
+        <TemplateDrawer
+          open
+          templateId={drawer.templateId}
+          discipline={discipline}
+          onClose={() => setDrawer({ open: false, templateId: null })}
+          onSaved={() => void reload()}
+        />
+      )}
     </Card>
   );
 }
@@ -312,7 +321,15 @@ function TemplateRowItem({
         {row.authorName && <p style={{ ...muted, marginTop: 2, fontSize: 11 }}>Creada por {row.authorName}</p>}
       </div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        <Button type="button" variant="ghost" style={smallBtn} onClick={onOpen} disabled={busy} aria-label={`${row.canEdit ? "Editar" : "Ver"} ${row.name}`}>
+        <Button
+          type="button"
+          variant="ghost"
+          style={smallBtn}
+          onClick={onOpen}
+          onPointerEnter={preloadTemplateDrawer}
+          onFocus={preloadTemplateDrawer}
+          disabled={busy}
+          aria-label={`${row.canEdit ? "Editar" : "Ver"} ${row.name}`}>
           {row.canEdit ? "Editar" : "Ver"}
         </Button>
         {row.canEdit && (

@@ -1,4 +1,4 @@
-import { Card } from "@/components/ui/card";
+import { PageHeader } from "@/components/ui/page-header";
 import { getPlatformHealth } from "@/lib/platform-health-read";
 import { HealthBoard } from "@/components/plataforma/health/health-board";
 import { healthSummary } from "@/components/plataforma/health/health-logic";
@@ -19,20 +19,21 @@ export default async function PlataformaSaludPage() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <Card style={{ padding: 24 }}>
-        <h1 className="k-display" style={{ fontSize: 26, margin: 0 }}>
-          Salud
-        </h1>
-        <p style={{ color: "var(--navy-500)", fontSize: 13.5, marginTop: 6, marginBottom: 0, maxWidth: 680, lineHeight: 1.45 }}>
-          Cuentas y consultorios que quedaron en un estado roto y dejan a alguien afuera. Cada caso tiene su arreglo o
-          el link a donde se resuelve.
-        </p>
-        <p style={{ fontSize: 12.5, color: "var(--navy-700)", margin: "10px 0 0" }}>
-          {problems === 0 ? "Sin problemas detectados" : problems === 1 ? "1 caso para revisar" : `${problems} casos para revisar`}
-          {unavailable > 0 ? ` · ${unavailable === 1 ? "1 detector no disponible" : `${unavailable} detectores no disponibles`}` : ""}
-          <span style={{ color: "var(--navy-300)" }}> · actualizado {formatDateTimeAR(report.generatedAt)}</span>
-        </p>
-      </Card>
+      <PageHeader
+        eyebrow="Plataforma"
+        title="Salud"
+        description={
+          <>
+            Cuentas y consultorios que quedaron en un estado roto y dejan a alguien afuera. Cada caso tiene su arreglo o
+            el link a donde se resuelve.
+          </>
+        }
+      />
+      <p style={{ fontSize: "var(--fs-sm)", color: "var(--navy-700)", margin: 0 }}>
+        {problems === 0 ? "Sin problemas detectados" : problems === 1 ? "1 caso para revisar" : `${problems} casos para revisar`}
+        {unavailable > 0 ? ` · ${unavailable === 1 ? "1 detector no disponible" : `${unavailable} detectores no disponibles`}` : ""}
+        <span style={{ color: "var(--navy-400)" }}> · actualizado {formatDateTimeAR(report.generatedAt)}</span>
+      </p>
       <HealthBoard report={report} />
     </div>
   );

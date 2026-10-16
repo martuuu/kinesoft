@@ -1,0 +1,172 @@
+/*
+ * [PF1.2-planes-bib] Layout de Biblioteca / Terapia manual (C-PF5.7: `@media` en CSS Module, no inline).
+ *
+ * C2 (VX0-b): a 390 el panel de filtros fijo de 260 px empujaba la grilla (`scrollWidth` 586). Debajo de 1024 el
+ * panel se esconde y los filtros se abren en un Drawer desde «Filtros (n)»; la grilla pasa a 1 columna < 480.
+ */
+
+.header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3, 12px);
+  flex-wrap: wrap;
+}
+
+.tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* Buscador en píldora: el foco se ve en la píldora (antes el input apagaba el contorno sin reemplazo). */
+.search {
+  padding: 8px 14px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(320px, 100%);
+  min-height: 44px;
+  font-size: 13px;
+  color: var(--navy-500);
+}
+.search:focus-within {
+  box-shadow: var(--focus-ring);
+}
+.searchInput {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  /* El anillo lo pinta .search:focus-within; contorno transparente (no `none`) para que se vea en colores forzados. */
+  outline: 2px solid transparent;
+  background: transparent;
+  font-size: 16px; /* 16 px: iOS no hace zoom al enfocar */
+  color: var(--navy-900);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.tools .filtersButton {
+  display: none;
+}
+
+@media (max-width: 1023px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .aside {
+    display: none;
+  }
+  .tools .filtersButton {
+    display: inline-flex;
+  }
+}
+
+@media (max-width: 639px) {
+  .search {
+    width: 100%;
+  }
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+@media (max-width: 479px) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/*
+ * C1 (VX0-b): la card era un <button> con la estrella (otro <button>) adentro → error de hidratación y re-render
+ * entero en cliente. Ahora la card es un <div>; el botón principal es el nombre y su `::after` cubre toda la card;
+ * la estrella es hermana y queda por encima (z-index 1).
+ */
+.card {
+  position: relative;
+  text-align: left;
+  padding: 14px;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid rgba(15, 30, 51, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: var(--shadow-card);
+  min-width: 0;
+}
+.cardPrivate {
+  border-color: rgba(31, 79, 190, 0.2);
+}
+.cardSelected {
+  background: rgba(200, 245, 100, 0.18);
+  border: 1.5px solid var(--sky-700);
+}
+.cardMain {
+  all: unset;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--navy-900);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.cardMain::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+}
+.cardMain:focus-visible {
+  box-shadow: none;
+}
+.cardMain:focus-visible::after {
+  box-shadow: var(--focus-ring);
+}
+.cardOver {
+  position: relative;
+  z-index: 1;
+}
+
+/* Campos sueltos (select de diagnóstico): foco visible con el token. */
+.select {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(15, 30, 51, 0.12);
+  background: rgba(255, 255, 255, 0.8);
+  font-size: 13px;
+  color: var(--navy-700);
+}
+.select:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: var(--focus-ring);
+}
+
+.actionBar {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  padding: 12px 16px;
+  border-radius: 999px;
+  background: var(--navy-900);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  box-shadow: 0 16px 40px -10px rgba(15, 30, 51, 0.4);
+  max-width: calc(100vw - 32px);
+}

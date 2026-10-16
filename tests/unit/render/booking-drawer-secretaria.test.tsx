@@ -109,7 +109,8 @@ describe("[P0-S07u] drawer: la Secretaria opera pero no ve clínica", () => {
     expect(html).toContain("Reprogramar");
     expect(html).toContain("Editar");
     expect(html).toContain("Cambiar estado");
-    expect(html).toContain("Confirmar");
+    // G7 (PF1.2): el turno ya está Confirmado → no se ofrece «Confirmar»; «Realizado» es la única primaria.
+    expect(html).not.toContain(">Confirmar<");
     expect(html).toContain("Realizado");
     expect(html).toContain("Ausente");
     expect(html).toContain("Cancelar");

@@ -117,7 +117,6 @@ export function ExerciseDrawer({
         return;
       }
       toast.success(mode === "create" ? "Ejercicio creado" : "Ejercicio actualizado");
-      router.refresh();
       if (mode === "create") onClose();
     });
   };
@@ -131,7 +130,6 @@ export function ExerciseDrawer({
         return;
       }
       toast.success(archived ? "Archivado" : "Restaurado");
-      router.refresh();
       onClose();
     });
   };
@@ -153,7 +151,6 @@ export function ExerciseDrawer({
         return;
       }
       toast.success("Ejercicio borrado");
-      router.refresh();
       onClose();
     });
   };

@@ -1,0 +1,8 @@
+/* [PF1.2-planes-bib] Segmentado de los diálogos del plan: el radio nativo es invisible (opacity 0), así que el foco de
+   teclado se pinta en su rótulo (antes no se veía nada al moverse con Tab/flechas). */
+.choice:focus-within {
+  box-shadow: var(--focus-ring);
+}
+.choice:has(input:focus:not(:focus-visible)) {
+  box-shadow: none;
+}

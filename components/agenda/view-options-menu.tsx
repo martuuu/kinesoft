@@ -116,6 +116,8 @@ export function ViewOptionsMenu({
             right: 0,
             // SV11b: 264 (antes 240) para que «Visual y sonido» entre en el segmentado de Avisos.
             width: 264,
+            // PF1.2: a 390 el botón «Vista» puede quedar a la izquierda: el menú no se sale de la pantalla.
+            maxWidth: "calc(100vw - 32px)",
             maxHeight: "min(75vh, 620px)",
             overflowY: "auto",
             borderRadius: 14,
@@ -147,7 +149,7 @@ export function ViewOptionsMenu({
                     border: "none",
                     fontSize: 11.5,
                     fontWeight: 600,
-                    background: on ? "#fff" : "transparent",
+                    background: on ? "var(--card-bg)" : "transparent",
                     color: on ? "var(--navy-900)" : "var(--navy-500)",
                     cursor: "pointer",
                   }}
@@ -187,7 +189,7 @@ export function ViewOptionsMenu({
                         border: "none",
                         fontSize: 11.5,
                         fontWeight: 600,
-                        background: on ? "#fff" : "transparent",
+                        background: on ? "var(--card-bg)" : "transparent",
                         color: on ? "var(--navy-900)" : "var(--navy-500)",
                         cursor: "pointer",
                       }}
@@ -229,7 +231,7 @@ export function ViewOptionsMenu({
                         border: "none",
                         fontSize: 11.5,
                         fontWeight: 600,
-                        background: on ? "#fff" : "transparent",
+                        background: on ? "var(--card-bg)" : "transparent",
                         color: on ? "var(--navy-900)" : "var(--navy-500)",
                         cursor: "pointer",
                       }}

@@ -27,7 +27,7 @@ import { ExerciseSearchPicker } from "@/components/ui/exercise-search-picker";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useUnsavedGuard } from "@/components/seguimiento/use-unsaved-guard";
 import { DisciplineChip } from "@/components/planes/discipline-chip";
-import { NoteEditorDrawer } from "@/components/clinical-notes/note-editor-drawer";
+import styles from "./seguimiento.module.css";
 import {
   AGENDAR_PARAM,
   SEGUIMIENTO_COPY,
@@ -49,6 +49,30 @@ const ScheduleSessionModal = dynamic(
   () => import("@/components/seguimiento/schedule-session-modal").then((m) => m.ScheduleSessionModal),
   { ssr: false, loading: () => null }
 );
+
+/**
+ * PF1.2 (C-PF2): el editor de evolución de HC (Tiptap/markdown, versiones) no está en el primer pintado: baja al
+ * primer «Cargar evolución» y se precarga en hover/foco del botón.
+ */
+const loadNoteEditor = () => import("@/components/clinical-notes/note-editor-drawer");
+const NoteEditorDrawer = dynamic(() => loadNoteEditor().then((m) => m.NoteEditorDrawer), { ssr: false, loading: () => null });
+
+/**
+ * Con qué `mode` se abre el editor de evolución de HC desde una sesión. Puro y exportado: desde PF1.2 el editor se
+ * monta recién al primer click (chunk dinámico), así que el render test fija el contrato acá y no en el HTML inicial.
+ * Contrato A1 (EV2-Z): el editor dice de quién es la evolución («Paciente: Apellido, Nombre»).
+ */
+export function sessionNoteEditorMode(
+  session: { program: { patient: { firstName: string; lastName: string } } },
+  clinicalNote: Pick<SessionClinicalNote, "patientId" | "booking">
+) {
+  return {
+    type: "create" as const,
+    patientId: clinicalNote.patientId,
+    patientName: `${session.program.patient.lastName}, ${session.program.patient.firstName}`,
+    booking: clinicalNote.booking,
+  };
+}
 
 /**
  * El DTO es el de `getSessionDetail` tal cual (no una copia a mano del
@@ -141,6 +165,9 @@ export function SessionDetail({
   // no se ofrece crear otra (EV2-D2: una viva por turno).
   const [noteSaved, setNoteSaved] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
+  // Se monta al primer «Cargar evolución» (así el chunk dinámico no baja con la página) y queda montado para que el
+  // Drawer anime el cierre.
+  const [noteMounted, setNoteMounted] = useState(false);
   const noteState: SessionClinicalNote | null = clinicalNote
     ? { ...clinicalNote, hasLiveNote: clinicalNote.hasLiveNote || noteSaved }
     : null;
@@ -173,7 +200,7 @@ export function SessionDetail({
   }, []);
   const confirm = useConfirm();
   const [draft, setDraft] = useState<MetaDraft>(() => draftFrom(session));
-  // Base = lo persistido (props). Tras guardar, `router.refresh()` trae las
+  // Base = lo persistido (props). Tras guardar, la respuesta de la action (que revalida /seguimiento/[id]) trae las
   // props nuevas y el borrador vuelve a coincidir → deja de estar sucio.
   const dirty = editable && !sameDraft(draft, draftFrom(session));
   useUnsavedGuard(dirty);
@@ -201,7 +228,7 @@ export function SessionDetail({
         return;
       }
       if (r.data.suggestDischarge) setDischargeSuggested(true);
-      router.refresh();
+      // PF1.2 (C-PF4): `completeSessionFromSeguimiento` revalida /seguimiento/[id]: sin `router.refresh()`.
     });
   };
 
@@ -222,232 +249,243 @@ export function SessionDetail({
       // `loaded:false` = ya tenía evolución (p. ej. una EVA que el DTO no trae):
       // el server no pisa y se avisa en vez de fingir que se guardó.
       if (!r.data.loaded) setInfo(SEGUIMIENTO_COPY.evolutionAlreadyLoaded);
-      router.refresh();
+      // PF1.2 (C-PF4): `loadSessionEvolution` revalida /seguimiento/[id]: sin `router.refresh()`.
     });
   };
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "260px 1fr 320px", gap: 14 }}>
-      {/* Left rail — sessions of the plan */}
-      <Card style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
-        <div className="k-display" style={{ fontSize: 14, fontWeight: 700 }}>
-          {session.program.title}
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {discipline && <DisciplineChip discipline={discipline} size="xs" />}
-          <span className="k-mono" style={{ fontSize: 11, color: "var(--sky-700)" }}>
-            {/* M13: realizadas / vivas (no `totalSessions`, que en un legacy no coincide con las filas). */}
-            {rail.filter((x) => x.completedAt).length} / {session.totalLive}
-          </span>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
-          {rail.map((s, i) => {
-            const on = s.id === session.id;
-            return (
-              <a
-                key={s.id}
-                href={`/seguimiento/${s.id}`}
-                aria-current={on ? "page" : undefined}
-                title={sessionCounterLabel(i + 1, rail.length)}
-                style={{
-                  textDecoration: "none",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "8px 10px",
-                  borderRadius: 10,
-                  background: on ? "var(--sky-700)" : "rgba(246,249,253,0.7)",
-                  color: on ? "#fff" : s.completedAt ? "var(--navy-500)" : "var(--navy-700)",
-                  border: on ? "none" : "1px solid rgba(15,30,51,0.06)",
-                  fontSize: 12,
-                  fontWeight: on ? 700 : 500,
-                }}
-              >
-                {/* Posición en el riel ordenado por fecha = ordinal (M13), no el `index` crudo. */}
-                <span className="k-mono" style={{ width: 28 }}>
-                  #{i + 1}
-                </span>
-                <span style={{ flex: 1 }}>
-                  {s.completedAt
-                    ? s.completedAt.toLocaleDateString("es-AR", {
-                        day: "2-digit",
-                        month: "short",
-                        timeZone: "America/Argentina/Buenos_Aires",
-                      })
-                    : "Programada"}
-                </span>
-                {s.completedAt && <IconCheck size={11} stroke={3} />}
-              </a>
-            );
-          })}
-        </div>
-      </Card>
-
-      {/* Center — exercises */}
-      <main style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {/* EV2-Z M2: con `flexWrap` los botones bajan antes de aplastar el nombre (a 1024 la columna central queda
-            en ~400 px), y «Cargar evolución» / «Ver evolución» van en su propia fila: antes competían con
-            «Agendar» y «Cerrar sesión» y el título se partía letra a letra. */}
-        <Card glass style={{ padding: 16, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-          <Avatar
-            name={`${session.program.patient.firstName} ${session.program.patient.lastName}`}
-            size={48}
-            tone="sky"
-          />
-          <div style={{ flex: "1 1 200px", minWidth: 0 }}>
-            <h1 className="k-display" style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>
-              {session.program.patient.firstName} {session.program.patient.lastName} · {heading}
-            </h1>
-            <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
-              {scheduledLabel}
-              {diagnosis ? ` · ${diagnosis}` : ""}
-            </div>
+    // ev2-seguimiento-detalle-1024: la grilla fija 260 / 1fr / 320 dejaba la columna central en ~130 px a 1024 con el
+    // sidebar abierto. Ahora responde al ancho del CONTENEDOR (container query: cuenta el sidebar abierto o contraído):
+    // una columna, después riel + centro con las anotaciones debajo, y las tres columnas recién desde 1100 px.
+    <div className={styles.detailWrap}>
+      <div className={styles.detail}>
+        {/* Left rail — sessions of the plan */}
+        <Card className={styles.rail} style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div className="k-display" style={{ fontSize: 14, fontWeight: 700 }}>
+            {session.program.title}
           </div>
-          {completed ? (
-            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-              <Tag tone="lime">
-                <IconCheck size={10} stroke={3} /> Realizada
-              </Tag>
-              {withoutEvolution && <Tag tone="soft">{SEGUIMIENTO_COPY.sinEvolucionTag}</Tag>}
-            </div>
-          ) : (
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-              {canSchedule && (
-                <Button variant="ghost" onClick={() => setScheduleOpen(true)} disabled={pending}>
-                  {SEGUIMIENTO_COPY.agendar}
-                </Button>
-              )}
-              <Button variant="primary" onClick={finish} disabled={pending}>
-                {pending ? "Cerrando…" : "Cerrar sesión"} <IconArrow size={12} />
-              </Button>
-            </div>
-          )}
-          {noteAction && (
-            <div
-              data-session-note-action=""
-              style={{ flexBasis: "100%", display: "flex", justifyContent: "flex-end", alignItems: "center" }}
-            >
-              {noteAction?.kind === "create" && (
-                <Button variant="ghost" onClick={() => setNoteOpen(true)} disabled={pending}>
-                  {SEGUIMIENTO_COPY.cargarEvolucionHc}
-                </Button>
-              )}
-              {noteAction?.kind === "view" && (
-                <Link
-                  href={noteAction.href}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {discipline && <DisciplineChip discipline={discipline} size="xs" />}
+            <span className="k-mono" style={{ fontSize: 11, color: "var(--sky-700)" }}>
+              {/* M13: realizadas / vivas (no `totalSessions`, que en un legacy no coincide con las filas). */}
+              {rail.filter((x) => x.completedAt).length} / {session.totalLive}
+            </span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+            {rail.map((s, i) => {
+              const on = s.id === session.id;
+              return (
+                <a
+                  key={s.id}
+                  href={`/seguimiento/${s.id}`}
+                  aria-current={on ? "page" : undefined}
+                  title={sessionCounterLabel(i + 1, rail.length)}
                   style={{
-                    fontSize: 12,
-                    fontWeight: 700,
-                    color: "var(--sky-700)",
                     textDecoration: "none",
-                    whiteSpace: "nowrap",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "8px 10px",
+                    borderRadius: 10,
+                    background: on ? "var(--sky-700)" : "rgba(246,249,253,0.7)",
+                    color: on ? "#fff" : s.completedAt ? "var(--navy-500)" : "var(--navy-700)",
+                    border: on ? "none" : "1px solid rgba(15,30,51,0.06)",
+                    fontSize: 12,
+                    fontWeight: on ? 700 : 500,
                   }}
                 >
-                  {SEGUIMIENTO_COPY.verEvolucionHc}
-                </Link>
-              )}
-            </div>
-          )}
+                  {/* Posición en el riel ordenado por fecha = ordinal (M13), no el `index` crudo. */}
+                  <span className="k-mono" style={{ width: 28 }}>
+                    #{i + 1}
+                  </span>
+                  <span style={{ flex: 1 }}>
+                    {s.completedAt
+                      ? s.completedAt.toLocaleDateString("es-AR", {
+                          day: "2-digit",
+                          month: "short",
+                          timeZone: "America/Argentina/Buenos_Aires",
+                        })
+                      : "Programada"}
+                  </span>
+                  {s.completedAt && <IconCheck size={11} stroke={3} />}
+                </a>
+              );
+            })}
+          </div>
         </Card>
 
-        {dischargeSuggested && (
-          <Card
-            role="status"
-            style={{ padding: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}
-          >
-            <div style={{ flex: 1, minWidth: 180, fontSize: 13, fontWeight: 600, color: "var(--navy-900)" }}>
-              {dischargeCopy(session.totalLive)}
+        {/* Center — exercises */}
+        <main className={styles.center} style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+          {/* EV2-Z M2: con `flexWrap` los botones bajan antes de aplastar el nombre (a 1024 la columna central queda
+              en ~400 px), y «Cargar evolución» / «Ver evolución» van en su propia fila: antes competían con
+              «Agendar» y «Cerrar sesión» y el título se partía letra a letra. */}
+          <Card glass style={{ padding: 16, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+            <Avatar
+              name={`${session.program.patient.firstName} ${session.program.patient.lastName}`}
+              size={48}
+              tone="sky"
+            />
+            <div style={{ flex: "1 1 200px", minWidth: 0 }}>
+              <h1 className="k-display" style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>
+                {session.program.patient.firstName} {session.program.patient.lastName} · {heading}
+              </h1>
+              <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
+                {scheduledLabel}
+                {diagnosis ? ` · ${diagnosis}` : ""}
+              </div>
             </div>
-            {planHref && (
-              <Link
-                href={planHref}
-                style={{ fontSize: 12, fontWeight: 700, color: "var(--sky-700)", textDecoration: "none" }}
+            {completed ? (
+              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <Tag tone="lime">
+                  <IconCheck size={10} stroke={3} /> Realizada
+                </Tag>
+                {withoutEvolution && <Tag tone="soft">{SEGUIMIENTO_COPY.sinEvolucionTag}</Tag>}
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                {canSchedule && (
+                  <Button variant="ghost" onClick={() => setScheduleOpen(true)} disabled={pending}>
+                    {SEGUIMIENTO_COPY.agendar}
+                  </Button>
+                )}
+                <Button variant="primary" onClick={finish} disabled={pending}>
+                  {pending ? "Cerrando…" : "Cerrar sesión"} <IconArrow size={12} />
+                </Button>
+              </div>
+            )}
+            {noteAction && (
+              <div
+                data-session-note-action=""
+                style={{ flexBasis: "100%", display: "flex", justifyContent: "flex-end", alignItems: "center" }}
               >
-                {SEGUIMIENTO_COPY.dischargeAction}
-              </Link>
+                {noteAction?.kind === "create" && (
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      setNoteMounted(true);
+                      setNoteOpen(true);
+                    }}
+                    onPointerEnter={() => void loadNoteEditor()}
+                    onFocus={() => void loadNoteEditor()}
+                    disabled={pending}
+                  >
+                    {SEGUIMIENTO_COPY.cargarEvolucionHc}
+                  </Button>
+                )}
+                {noteAction?.kind === "view" && (
+                  <Link
+                    href={noteAction.href}
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: "var(--sky-700)",
+                      textDecoration: "none",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {SEGUIMIENTO_COPY.verEvolucionHc}
+                  </Link>
+                )}
+              </div>
             )}
           </Card>
-        )}
 
-        <PainTimeline sessions={rail} currentIndex={session.index} />
+          {dischargeSuggested && (
+            <Card
+              role="status"
+              style={{ padding: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}
+            >
+              <div style={{ flex: 1, minWidth: 180, fontSize: 13, fontWeight: 600, color: "var(--navy-900)" }}>
+                {dischargeCopy(session.totalLive)}
+              </div>
+              {planHref && (
+                <Link
+                  href={planHref}
+                  style={{ fontSize: 12, fontWeight: 700, color: "var(--sky-700)", textDecoration: "none" }}
+                >
+                  {SEGUIMIENTO_COPY.dischargeAction}
+                </Link>
+              )}
+            </Card>
+          )}
 
-        {info && (
-          <div role="status" style={{ padding: 10, borderRadius: 12, background: "rgba(31,79,190,0.06)", fontSize: 13 }}>
-            {info}
-          </div>
-        )}
+          <PainTimeline sessions={rail} currentIndex={session.index} />
 
-        {error && (
-          <div
-            role="alert"
-            style={{
-              padding: 10,
-              borderRadius: 12,
-              background: "var(--danger-bg)",
-              color: "var(--danger-fg)",
-              fontSize: 13,
+          {info && (
+            <div role="status" style={{ padding: 10, borderRadius: 12, background: "rgba(31,79,190,0.06)", fontSize: 13 }}>
+              {info}
+            </div>
+          )}
+
+          {error && (
+            <div
+              role="alert"
+              style={{
+                padding: 10,
+                borderRadius: 12,
+                background: "var(--danger-bg)",
+                color: "var(--danger-fg)",
+                fontSize: 13,
+              }}
+            >
+              {error}
+            </div>
+          )}
+
+          <ExerciseSequencer
+            // Keying on the persisted order signature lets us reset the
+            // sequencer's local optimistic state whenever the server
+            // payload genuinely changes (after refresh / reorder commit).
+            // This replaces the `useState(exercises)` + `useEffect` sync
+            // anti-pattern that double-rendered on every prop change.
+            key={session.exercises.map((e) => e.id).join("|")}
+            sessionId={session.id}
+            exercises={session.exercises}
+            disabled={completed}
+            disciplineSlug={discipline ? DISCIPLINE_TAG_SLUGS[discipline] : null}
+          />
+        </main>
+
+        <SessionNotes
+          className={styles.side}
+          session={session}
+          draft={draft}
+          onChange={setDraft}
+          dirty={dirty}
+          disabled={!editable}
+          evolution={unrecorded ? { onLoad: loadEvolution, pending } : null}
+        />
+
+        {clinicalNote && noteAction?.kind === "create" && noteMounted && (
+          <NoteEditorDrawer
+            open={noteOpen}
+            onClose={() => setNoteOpen(false)}
+            mode={sessionNoteEditorMode(session, clinicalNote)}
+            onSaved={() => {
+              // «Sin evolución» del landing y el tag de acá salen del server (EV2-D18): `createClinicalNote`
+              // revalida el layout de /seguimiento si la raíz es de un turno (EV2-Z), y la respuesta de la action ya
+              // trae este árbol nuevo. Sin `router.refresh()`: era un segundo render entero.
+              setNoteSaved(true);
             }}
-          >
-            {error}
-          </div>
+          />
         )}
 
-        <ExerciseSequencer
-          // Keying on the persisted order signature lets us reset the
-          // sequencer's local optimistic state whenever the server
-          // payload genuinely changes (after refresh / reorder commit).
-          // This replaces the `useState(exercises)` + `useEffect` sync
-          // anti-pattern that double-rendered on every prop change.
-          key={session.exercises.map((e) => e.id).join("|")}
-          sessionId={session.id}
-          exercises={session.exercises}
-          disabled={completed}
-          disciplineSlug={discipline ? DISCIPLINE_TAG_SLUGS[discipline] : null}
-        />
-      </main>
-
-      <SessionNotes
-        session={session}
-        draft={draft}
-        onChange={setDraft}
-        dirty={dirty}
-        disabled={!editable}
-        evolution={unrecorded ? { onLoad: loadEvolution, pending } : null}
-      />
-
-      {clinicalNote && noteAction?.kind === "create" && (
-        <NoteEditorDrawer
-          open={noteOpen}
-          onClose={() => setNoteOpen(false)}
-          mode={{
-            type: "create",
-            patientId: clinicalNote.patientId,
-            // Contrato A1 (EV2-Z): el editor dice de quién es la evolución («Paciente: Apellido, Nombre»).
-            patientName: `${session.program.patient.lastName}, ${session.program.patient.firstName}`,
-            booking: clinicalNote.booking,
-          }}
-          onSaved={() => {
-            // «Sin evolución» del landing y el tag de acá salen del server (EV2-D18): `createClinicalNote`
-            // revalida el layout de /seguimiento si la raíz es de un turno (EV2-Z), y la respuesta de la action ya
-            // trae este árbol nuevo. Sin `router.refresh()`: era un segundo render entero.
-            setNoteSaved(true);
-          }}
-        />
-      )}
-
-      {canSchedule && !completed && (
-        <ScheduleSessionModal
-          open={scheduleOpen}
-          onClose={() => setScheduleOpen(false)}
-          onScheduled={() => {
-            setScheduleOpen(false);
-            router.refresh();
-          }}
-          programId={session.programId}
-          sessionId={session.id}
-          sessionLabel={counter}
-        />
-      )}
+        {canSchedule && !completed && (
+          <ScheduleSessionModal
+            open={scheduleOpen}
+            onClose={() => setScheduleOpen(false)}
+            onScheduled={() => {
+              setScheduleOpen(false);
+              // refresh-ok: `generatePlanBookings` revalida el perfil del paciente, no /seguimiento/[id] (el riel y el
+              // estado «Sin turno» de esta página no se enterarían).
+              router.refresh();
+            }}
+            programId={session.programId}
+            sessionId={session.id}
+            sessionLabel={counter}
+          />
+        )}
+      </div>
     </div>
   );
 }
@@ -490,7 +528,7 @@ function ExerciseSequencer({
       const r = await reorderSessionExercises({ sessionId, orderedIds: nextIds });
       if (!r.ok) {
         setError(r.error);
-        router.refresh();
+        router.refresh(); // refresh-ok: rollback del optimista; la action falló y no revalidó
       }
     });
   };
@@ -508,7 +546,7 @@ function ExerciseSequencer({
       const r = await removeSessionExercise(id);
       if (!r.ok) {
         setError(r.error);
-        router.refresh();
+        router.refresh(); // refresh-ok: rollback del optimista; la action falló y no revalidó
       }
     });
   };
@@ -569,8 +607,8 @@ function ExerciseSequencer({
           start(async () => {
             const r = await addSessionExercise({ sessionId, exerciseId: ex.id });
             if (r.ok) {
+              // PF1.2 (C-PF4): `addSessionExercise` revalida /seguimiento/[id]; la respuesta trae la lista nueva.
               setPicker(false);
-              router.refresh();
             } else {
               setPicker(false);
               setError(r.error);
@@ -597,7 +635,6 @@ function ExerciseRow({
   disabled: boolean;
   onRemove?: () => void;
 }) {
-  const router = useRouter();
   const [pending, start] = useTransition();
   const [sets, setSets] = useState(sx.sets);
   const [reps, setReps] = useState(sx.reps);
@@ -610,9 +647,8 @@ function ExerciseRow({
     start(async () => {
       const r = await updateSessionExercise({ sessionExerciseId: sx.id, ...patch });
       // Antes el error se tragaba y el valor tipeado quedaba en pantalla como
-      // si se hubiera guardado.
-      if (r.ok) router.refresh();
-      else setError(r.error);
+      // si se hubiera guardado. PF1.2 (C-PF4): `updateSessionExercise` revalida /seguimiento/[id]: sin refresh.
+      if (!r.ok) setError(r.error);
     });
   };
 
@@ -831,6 +867,7 @@ function StatusButton({
 }
 
 function SessionNotes({
+  className,
   session,
   draft,
   onChange,
@@ -838,6 +875,7 @@ function SessionNotes({
   disabled,
   evolution,
 }: {
+  className?: string;
   session: SessionDTO;
   draft: MetaDraft;
   onChange: (d: MetaDraft) => void;
@@ -851,7 +889,6 @@ function SessionNotes({
    */
   evolution?: { onLoad: () => void; pending: boolean } | null;
 }) {
-  const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const set = <K extends keyof MetaDraft>(k: K, v: MetaDraft[K]) => onChange({ ...draft, [k]: v });
@@ -861,14 +898,13 @@ function SessionNotes({
     start(async () => {
       const r = await updateSessionMeta({ sessionId: session.id, ...draftToMeta(draft) });
       // Antes un error acá se tragaba: el kine veía sus notas en pantalla y
-      // creía que estaban guardadas.
-      if (r.ok) router.refresh();
-      else setError(r.error);
+      // creía que estaban guardadas. PF1.2 (C-PF4): `updateSessionMeta` revalida /seguimiento/[id]: sin refresh.
+      if (!r.ok) setError(r.error);
     });
   };
 
   return (
-    <Card style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card className={className} style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
       <div className="k-display" style={{ fontSize: 14, fontWeight: 700 }}>
         Anotaciones del kinesiólogo
       </div>
@@ -1073,13 +1109,13 @@ function PainTimeline({
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <Legend dot="var(--sky-700)" label="Pre" />
-          <Legend dot="var(--lime-700, #4f8a10)" label="Post" />
+          <Legend dot="var(--success-fg)" label="Post" />
           {trend != null && (
             <span
               className="k-mono"
               style={{
                 fontSize: 11,
-                color: trend < 0 ? "var(--lime-700, #4f8a10)" : trend > 0 ? "var(--danger-fg)" : "var(--navy-500)",
+                color: trend < 0 ? "var(--success-fg)" : trend > 0 ? "var(--danger-fg)" : "var(--navy-500)",
                 fontWeight: 700,
               }}
               title="Variación entre la primera EVA pre y la última EVA post"
@@ -1120,7 +1156,7 @@ function PainTimeline({
           );
         })()}
         <path d={pathFrom(preLine)} fill="none" stroke="var(--sky-700)" strokeWidth={0.9} strokeLinecap="round" strokeLinejoin="round" />
-        <path d={pathFrom(postLine)} fill="none" stroke="var(--lime-700, #4f8a10)" strokeWidth={0.9} strokeLinecap="round" strokeLinejoin="round" />
+        <path d={pathFrom(postLine)} fill="none" stroke="var(--success-fg)" strokeWidth={0.9} strokeLinecap="round" strokeLinejoin="round" />
         {preLine.map((p) =>
           p.y == null ? null : (
             <circle key={`pre-${p.x}`} cx={p.x} cy={p.y} r={1.1} fill="var(--sky-700)" />
@@ -1128,7 +1164,7 @@ function PainTimeline({
         )}
         {postLine.map((p) =>
           p.y == null ? null : (
-            <circle key={`post-${p.x}`} cx={p.x} cy={p.y} r={1.1} fill="var(--lime-700, #4f8a10)" />
+            <circle key={`post-${p.x}`} cx={p.x} cy={p.y} r={1.1} fill="var(--success-fg)" />
           )
         )}
       </svg>

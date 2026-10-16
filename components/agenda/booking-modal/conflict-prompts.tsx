@@ -75,11 +75,11 @@ const WARN_BOX: CSSProperties = {
   padding: 14,
   borderRadius: 12,
   background: "var(--warn-bg)",
-  border: "1px solid rgba(255,176,32,0.45)",
+  border: "1px solid var(--warn-border)",
   display: "grid",
   gap: 10,
 };
-const WARN_GHOST: CSSProperties = { color: "var(--warn-fg)", borderColor: "rgba(122,74,0,0.3)" };
+const WARN_GHOST: CSSProperties = { color: "var(--warn-fg)", borderColor: "var(--warn-border)" };
 
 export function BatchConflictPrompt({
   promptRef,
@@ -335,7 +335,7 @@ export function ConflictPrompt({
         padding: 14,
         borderRadius: 12,
         background: "var(--warn-bg)",
-        border: "1px solid rgba(255,176,32,0.45)",
+        border: "1px solid var(--warn-border)",
         display: "grid",
         gap: 10,
       }}
@@ -375,7 +375,7 @@ export function ConflictPrompt({
           variant="ghost"
           onClick={onForceOverbooking}
           disabled={pending}
-          style={{ color: "var(--warn-fg)", borderColor: "rgba(122,74,0,0.3)" }}
+          style={{ color: "var(--warn-fg)", borderColor: "var(--warn-border)" }}
         >
           Forzar sobreturno
         </Button>

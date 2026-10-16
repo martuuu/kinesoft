@@ -32,6 +32,7 @@ import { ToastProvider } from "@/components/ui/toast";
 import {
   CustomSessionDialog,
   PlanCountDialog,
+  PlanDialogShell,
   PlanPriceDialog,
   RenewAuthorizationDialog,
   addCommitLabel,
@@ -323,5 +324,20 @@ describe("[S22e] Generar turnos para pendientes", () => {
     const html = render(<GeneratePendingButton plan={PLAN} pendingCount={3} permissions={SECRETARIA} onOpenEditor={noop} />);
     expect(html).toContain("Generar turnos para pendientes (3)");
     expect(render(<GeneratePendingButton plan={PLAN} pendingCount={3} permissions={NO_PLAN_PERMISSIONS} onOpenEditor={noop} />)).toBe("");
+  });
+});
+
+describe("[PF1.2] PlanDialogShell sobre el Modal con portal (handoff PF1.0-b)", () => {
+  it("no envuelve en el contenedor z 60 propio: el portal y el z-index son del Modal (--z-modal)", () => {
+    const html = render(
+      <PlanDialogShell open onClose={noop} title="Cambiar precio">
+        <p>cuerpo</p>
+      </PlanDialogShell>
+    );
+    expect(html).toContain("Cambiar precio");
+    expect(html).toContain("cuerpo");
+    expect(html).not.toContain("z-index:60");
+    expect(html).toContain("z-index:var(--z-modal)");
+    expect(render(<PlanDialogShell open={false} onClose={noop} title="x"><p>cuerpo</p></PlanDialogShell>)).toBe("");
   });
 });

@@ -24,7 +24,7 @@ import {
   portalLinksLabel,
 } from "@/components/plataforma/users/users-logic";
 
-const TONE_COLOR = { ok: "var(--navy-900)", warn: "#9A5B00", muted: "var(--navy-500)" } as const;
+const TONE_COLOR = { ok: "var(--navy-900)", warn: "var(--warn-fg)", muted: "var(--navy-500)" } as const;
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h2 style={{ fontSize: 15, fontWeight: 700, margin: "0 0 10px", color: "var(--navy-900)" }}>{children}</h2>;
@@ -50,7 +50,7 @@ function MembershipRow({ m }: { m: PlatformUserMembership }) {
         </Link>
         <div style={{ fontSize: 12, color: "var(--navy-300)", fontFamily: "var(--font-mono)" }}>{m.tenantSlug}</div>
         {membershipNeedsPractitioner(m) && (
-          <div style={{ fontSize: 12, color: "#9A5B00", marginTop: 4 }}>
+          <div style={{ fontSize: 12, color: "var(--warn-fg)", marginTop: 4 }}>
             Le falta el profesional en este consultorio: se repara desde <Link href="/plataforma/salud">Salud</Link>.
           </div>
         )}

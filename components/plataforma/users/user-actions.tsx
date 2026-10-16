@@ -195,7 +195,6 @@ function DisableAction({ user, isSelf }: { user: PlatformUserDetail; isSelf: boo
         if (msg.tone === "success") toast.success(msg.title);
         else toast.info(msg.title);
       }
-      router.refresh();
       return true;
     } catch {
       setError(GENERIC_ERROR);
@@ -368,7 +367,9 @@ function SuperadminAction({ user }: { user: PlatformUserDetail }) {
       setOpen(false);
       if (r.data.changed) toast.success(grant ? "Ahora tiene acceso a Plataforma" : "Ya no tiene acceso a Plataforma");
       else toast.info(grant ? "Ya tenía acceso a Plataforma" : "Ya no tenía acceso a Plataforma");
-      router.refresh();
+      // PF1.2 (C-PF4): con cambio, la action revalida `/plataforma` y su respuesta ya trae el detalle nuevo.
+      // refresh-ok: sin cambio no revalida, y la pantalla que ofrecía el cambio estaba vieja.
+      if (!r.data.changed) router.refresh();
     } catch {
       setError(GENERIC_ERROR);
     } finally {
@@ -439,7 +440,9 @@ export function useSyncEmail() {
         return;
       }
       toast.success(r.data.changed ? "Email sincronizado" : "Ya estaba sincronizado");
-      router.refresh();
+      // PF1.2 (C-PF4): con cambio, la action revalida `/plataforma`.
+      // refresh-ok: sin cambio no revalida, y la fila que ofrecía sincronizar estaba vieja.
+      if (!r.data.changed) router.refresh();
     } catch {
       toast.error("No se pudo sincronizar", { description: GENERIC_ERROR });
     }

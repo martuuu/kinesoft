@@ -50,7 +50,7 @@ const STATE_STYLE: Record<ReceptionState, StateStyle> = {
   llamado: { icon: <IconBell size={11} stroke={2.4} />, bg: "var(--rc-called-bg)", fg: "var(--rc-called-fg)" },
   "en-atencion": { icon: <IconActivity size={11} stroke={2.4} />, bg: "var(--rc-attending-bg)", fg: "var(--rc-attending-fg)" },
   atendido: { icon: <IconCheck size={11} stroke={3} />, bg: "var(--st-completed-bg)", fg: "var(--st-completed-fg)" },
-  ausente: { icon: <IconX size={11} stroke={2.6} />, bg: "var(--st-noshow-bg)", fg: "var(--st-noshow-fg)", border: "1px dashed rgba(154,91,0,0.4)" },
+  ausente: { icon: <IconX size={11} stroke={2.6} />, bg: "var(--st-noshow-bg)", fg: "var(--st-noshow-fg)", border: "1px dashed var(--warn-border)" },
   cancelado: { icon: <IconX size={11} stroke={2.6} />, bg: "var(--st-cancelled-bg)", fg: "var(--st-cancelled-fg)" },
 };
 

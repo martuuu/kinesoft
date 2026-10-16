@@ -86,7 +86,9 @@ function RowAction({ action }: { action: HealthRowAction }) {
                   return;
                 }
                 toast.success(r.data.created ? "Profesional creado" : "Ya tenía profesional");
-                router.refresh();
+                // PF1.2 (C-PF4): si lo creó, la action revalida `/plataforma` y su respuesta ya trae el tablero nuevo.
+                // refresh-ok: «ya tenía» no revalida, y el tablero que lo listaba quedó viejo.
+                if (!r.data.created) router.refresh();
               } catch {
                 toast.error("No se pudo crear", { description: GENERIC_ERROR });
               }
@@ -117,7 +119,6 @@ function RowAction({ action }: { action: HealthRowAction }) {
                   return;
                 }
                 toast.success("Cuenta borrada");
-                router.refresh();
               } catch {
                 toast.error("No se pudo borrar", { description: GENERIC_ERROR });
               }
@@ -166,7 +167,7 @@ export function DetectorCard({ copy, report }: { copy: HealthDetectorCopy; repor
         </div>
         <Tag tone={state === "problem" ? "sky" : state === "ok" ? "lime" : "soft"}>{detectorCountLabel(d)}</Tag>
       </div>
-      {state === "unavailable" && <p style={{ fontSize: 12.5, color: "#9A5B00", margin: "10px 0 0", lineHeight: 1.45 }}>{UNAVAILABLE_COPY}</p>}
+      {state === "unavailable" && <p style={{ fontSize: 12.5, color: "var(--warn-fg)", margin: "10px 0 0", lineHeight: 1.45 }}>{UNAVAILABLE_COPY}</p>}
       {state === "ok" && <p style={{ fontSize: 12.5, color: "var(--navy-500)", margin: "10px 0 0" }}>{copy.emptyText}</p>}
       {rows.length > 0 && (
         <ul style={{ listStyle: "none", margin: "10px 0 0", padding: 0 }}>

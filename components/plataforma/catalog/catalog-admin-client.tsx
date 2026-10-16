@@ -26,6 +26,7 @@ import {
   SOURCE_OPTIONS,
   formatARDate,
 } from "@/components/plataforma/catalog/catalog-copy";
+import ctl from "../controls.module.css";
 
 export type CatalogListState = {
   q: string;
@@ -112,6 +113,7 @@ export function CatalogAdminClient({
             <IconSearch size={14} />
           </span>
           <input
+            className={ctl.field}
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder={copy.searchPlaceholder}
@@ -128,7 +130,6 @@ export function CatalogAdminClient({
               background: "rgba(255,255,255,0.95)",
               fontSize: 13,
               color: "var(--navy-900)",
-              outline: "none",
             }}
           />
         </div>
@@ -242,7 +243,6 @@ function Row({ entity, r, onEdit }: { entity: CatalogEntityKind; r: CatalogAdmin
       toast.success(r.archived ? "Restaurada" : "Archivada", {
         description: r.archived ? undefined : "Ya no aparece en los buscadores de los consultorios.",
       });
-      router.refresh();
     });
   };
 
@@ -349,11 +349,14 @@ export function Badge({ children }: { children: React.ReactNode }) {
 }
 
 const headStyle: React.CSSProperties = {
-  fontSize: 10,
+  // PF1.2 (C-PF5.6): rótulo de tabla `nowrap` y navy-500 (navy-300 no llegaba a AA). 11 px y no `--fs-xs`: con
+  // las columnas fijas, «PRESCRIPCIÓN» en mayúsculas a 12 px pasaba los 96 px de su columna.
+  fontSize: 11,
   fontWeight: 700,
   letterSpacing: "0.06em",
   textTransform: "uppercase",
-  color: "var(--navy-300)",
+  color: "var(--navy-500)",
+  whiteSpace: "nowrap",
 };
 
 function Head({ children, align }: { children: React.ReactNode; align?: "right" }) {
@@ -394,6 +397,7 @@ function Select({
 }) {
   return (
     <select
+      className={ctl.field}
       aria-label={label}
       value={value}
       onChange={(e) => onChange(e.target.value)}
@@ -405,7 +409,6 @@ function Select({
         fontSize: 12.5,
         color: "var(--navy-700)",
         cursor: "pointer",
-        outline: "none",
       }}
     >
       {options.map((o) => (

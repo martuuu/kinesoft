@@ -33,7 +33,7 @@ export function InviteResultNotice({ result }: { result: InvitationSendResult })
           padding: 10,
           borderRadius: 10,
           background:
-            status.tone === "ok" ? "rgba(200,245,100,0.18)" : status.tone === "warn" ? "rgba(228,176,32,0.15)" : "rgba(159,31,31,0.08)",
+            status.tone === "ok" ? "rgba(200,245,100,0.18)" : status.tone === "warn" ? "var(--warn-bg)" : "var(--danger-bg)",
           color: status.tone === "ok" ? "var(--navy-900)" : status.tone === "warn" ? "var(--warn-fg)" : "var(--danger-fg)",
           fontSize: 12.5,
           lineHeight: 1.45,

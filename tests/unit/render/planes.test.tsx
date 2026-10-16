@@ -279,7 +279,18 @@ describe("[P3-S21] PlanesClient (render)", () => {
     expect(out).toContain("Todavía no hay servicios con disciplina");
     expect(out).not.toContain("Nuevo plan");
     expect(out).not.toContain("/configuracion");
-    expect(html({ discipline: null, disciplines: [], rows: [], canEditServices: true })).toContain('href="/configuracion"');
+    const admin = html({ discipline: null, disciplines: [], rows: [], canEditServices: true });
+    // [PF1.2] C9: CTA botón «Configurar servicios» directo a la pestaña Servicios; sin admin, a quién pedírselo.
+    expect(admin).toContain('href="/configuracion?tab=servicios"');
+    expect(admin).toContain(">Configurar servicios<");
+    expect(admin).toMatch(/class="k-btn k-btn-primary[^"]*"[^>]*href="\/configuracion\?tab=servicios"|href="\/configuracion\?tab=servicios"[^>]*class="k-btn k-btn-primary/);
+    expect(out).toContain("Pedile al titular o a un administrador");
+  });
+
+  it("[PF1.2] encabezado con PageHeader: un solo h1", () => {
+    const out = html({});
+    expect(out.match(/<h1\b/g)?.length).toBe(1);
+    expect(out).toContain("Planes");
   });
 
   it("error de lectura se muestra; vacío con copy por disciplina", () => {

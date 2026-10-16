@@ -78,7 +78,6 @@ function ProposalRow({ p }: { p: PayerPlanProposal }) {
         return;
       }
       toast.success(r.data.merged ? "Fusionado con el plan global" : "Plan promovido al catálogo");
-      router.refresh();
     });
   };
 
@@ -126,7 +125,7 @@ function Head({ children, align }: { children: React.ReactNode; align?: "right" 
         fontWeight: 700,
         letterSpacing: "0.06em",
         textTransform: "uppercase",
-        color: "var(--navy-300)",
+        color: "var(--navy-500)", whiteSpace: "nowrap",
         textAlign: align,
       }}
     >

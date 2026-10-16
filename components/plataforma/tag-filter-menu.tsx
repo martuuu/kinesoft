@@ -8,6 +8,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { IconChevD, IconCheck } from "@/components/ui/icons";
+import ctl from "./controls.module.css";
 
 export type TagOpt = { slug: string; label: string };
 
@@ -121,6 +122,7 @@ export function TagFilterMenu({
           }}
         >
           <input
+            className={ctl.field}
             autoFocus
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -134,7 +136,6 @@ export function TagFilterMenu({
               borderRadius: 9,
               border: "1px solid rgba(15,30,51,0.1)",
               fontSize: 12.5,
-              outline: "none",
               marginBottom: 6,
             }}
           />

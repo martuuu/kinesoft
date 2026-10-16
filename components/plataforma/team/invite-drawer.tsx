@@ -114,7 +114,6 @@ export function InviteDrawerBody({
         return;
       }
       setResult(r.data);
-      router.refresh();
     });
   };
 
@@ -184,7 +183,7 @@ export function InviteDrawerBody({
 const warnBox: React.CSSProperties = {
   padding: 10,
   borderRadius: 10,
-  background: "rgba(228,176,32,0.15)",
+  background: "var(--warn-bg)",
   color: "var(--warn-fg)",
   fontSize: 12.5,
   lineHeight: 1.45,
@@ -193,7 +192,7 @@ const warnBox: React.CSSProperties = {
 const errorBox: React.CSSProperties = {
   padding: 10,
   borderRadius: 10,
-  background: "rgba(159,31,31,0.08)",
+  background: "var(--danger-bg)",
   color: "var(--danger-fg)",
   fontSize: 12.5,
   lineHeight: 1.45,

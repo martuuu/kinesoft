@@ -40,12 +40,7 @@ import { useToast } from "@/components/ui/toast";
 import { DisciplineChip } from "@/components/planes/discipline-chip";
 import { PlanBalance } from "@/components/planes/plan-balance";
 import { PLAN_STATUS_LABEL } from "@/components/planes/plan-booking-groups";
-import {
-  CustomSessionDialog,
-  PlanCountDialog,
-  PlanPriceDialog,
-  RenewAuthorizationDialog,
-} from "@/components/planes/plan-edit-dialogs";
+import dynamic from "next/dynamic";
 import { GeneratePendingButton, PlanSessionActions } from "@/components/planes/plan-session-actions";
 import {
   PlanDetailsDrawer,
@@ -79,6 +74,16 @@ import type {
   PlanSessionState,
 } from "@/lib/plans-read-types";
 import type { RescheduleSessionResult } from "@/lib/sessions-types";
+
+// PF1.2 (C-PF2): los diálogos de edición (cantidad, precio, sesión a medida, renovar) traen la tabla de preview del
+// motor y el zod de la renovación. No están en el primer pintado: bajan al abrir uno (la card ya no los monta
+// cerrados) y se precargan en hover/foco de «Acciones del plan». Mismo chunk que el booking drawer (P3.Z F3a).
+const loadEditDialogs = () => import("@/components/planes/plan-edit-dialogs");
+const PlanCountDialog = dynamic(() => loadEditDialogs().then((m) => m.PlanCountDialog), { ssr: false });
+const PlanPriceDialog = dynamic(() => loadEditDialogs().then((m) => m.PlanPriceDialog), { ssr: false });
+const CustomSessionDialog = dynamic(() => loadEditDialogs().then((m) => m.CustomSessionDialog), { ssr: false });
+const RenewAuthorizationDialog = dynamic(() => loadEditDialogs().then((m) => m.RenewAuthorizationDialog), { ssr: false });
+const preloadEditDialogs = () => void loadEditDialogs();
 
 const AR_TZ = "America/Argentina/Buenos_Aires";
 
@@ -423,12 +428,13 @@ export function PlanCard({ plan, patientId, permissions, insured, focused = fals
               padding: 0,
             }}
           >
+            {/* D9 (VX0-b): el chevron dibujado era de 24 px; ahora el dibujo es el área de toque (32). */}
             <span
               aria-hidden
               style={{
-                width: 24,
-                height: 24,
-                borderRadius: 8,
+                width: 32,
+                height: 32,
+                borderRadius: 10,
                 background: "rgba(15,30,51,0.06)",
                 display: "inline-flex",
                 alignItems: "center",
@@ -505,11 +511,18 @@ export function PlanCard({ plan, patientId, permissions, insured, focused = fals
             {!plan.linked && !archivedPlan && (
               <div data-testid="plan-legacy" style={noticeBox}>
                 <span>{PLAN_LEGACY_COPY}</span>
-                {has("complete-data") && (
+                {has("complete-data") ? (
                   <Button variant="ghost" onClick={completeData} disabled={pending}>
                     Completar datos
                   </Button>
-                )}
+                ) : plan.status === "PAUSED" && has("status:ACTIVE") ? (
+                  // D9 (VX0-b): la card pausada quedaba con la franja sin acción. «Completar datos» agenda, y un
+                  // plan pausado se reactiva primero (P3.Z, `planCardActions`): se ofrece ese paso, con el mismo
+                  // diálogo de estado de las acciones del plan.
+                  <Button variant="ghost" onClick={() => setDialog({ kind: "status", to: "ACTIVE" })} disabled={pending}>
+                    Reactivar para completar
+                  </Button>
+                ) : null}
               </div>
             )}
             {showAuth && (
@@ -519,7 +532,13 @@ export function PlanCard({ plan, patientId, permissions, insured, focused = fals
                   {plan.authorization?.code ? ` · orden ${plan.authorization.code}` : ""}
                 </span>
                 {has("renew") && (
-                  <Button variant="ghost" onClick={() => setDialog({ kind: "renew" })} disabled={pending}>
+                  <Button
+                    variant="ghost"
+                    onClick={() => setDialog({ kind: "renew" })}
+                    onPointerEnter={preloadEditDialogs}
+                    onFocus={preloadEditDialogs}
+                    disabled={pending}
+                  >
                     Renovar autorización
                   </Button>
                 )}
@@ -533,7 +552,13 @@ export function PlanCard({ plan, patientId, permissions, insured, focused = fals
             <PlanBalance balance={plan.balance} status={plan.status} />
 
             {actions.some((a) => a !== "renew" && a !== "complete-data") && (
-              <div role="group" aria-label="Acciones del plan" style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              <div
+                role="group"
+                aria-label="Acciones del plan"
+                style={{ display: "flex", flexWrap: "wrap", gap: 6 }}
+                onPointerEnter={preloadEditDialogs}
+                onFocus={preloadEditDialogs}
+              >
                 {planStatusActions(plan.status)
                   .filter((a) => has(`status:${a.to}`))
                   .map((a) => (
@@ -651,13 +676,14 @@ export function PlanCard({ plan, patientId, permissions, insured, focused = fals
         )}
       </section>
 
-      {/* Diálogos: los de S22e se montan siempre con `open` (props congeladas). */}
-      <PlanCountDialog open={dialog?.kind === "count"} onClose={close} onChanged={editDone} onStale={stale} plan={target} />
-      <PlanPriceDialog open={dialog?.kind === "price"} onClose={close} onChanged={editDone} onStale={stale} plan={target} />
-      <CustomSessionDialog open={dialog?.kind === "custom"} onClose={close} onChanged={editDone} onStale={stale} plan={target} />
-      {showAuth && (
+      {/* Diálogos de S22e: se montan solo abiertos (chunk dinámico). Cerrados ya no pintaban nada (`PlanDialogShell`
+          devuelve null y cada apertura es una instancia nueva, `useInstanceKey`): montarlos al abrir es equivalente. */}
+      {dialog?.kind === "count" && <PlanCountDialog open onClose={close} onChanged={editDone} onStale={stale} plan={target} />}
+      {dialog?.kind === "price" && <PlanPriceDialog open onClose={close} onChanged={editDone} onStale={stale} plan={target} />}
+      {dialog?.kind === "custom" && <CustomSessionDialog open onClose={close} onChanged={editDone} onStale={stale} plan={target} />}
+      {showAuth && dialog?.kind === "renew" && (
         <RenewAuthorizationDialog
-          open={dialog?.kind === "renew"}
+          open
           onClose={close}
           onChanged={editDone}
           onStale={stale}

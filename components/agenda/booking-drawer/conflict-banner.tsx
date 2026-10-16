@@ -40,8 +40,8 @@ export function ConflictBanner({
       style={{
         padding: 12,
         borderRadius: 12,
-        background: "rgba(255,176,32,0.12)",
-        border: "1px solid rgba(255,176,32,0.4)",
+        background: "var(--warn-bg)",
+        border: "1px solid var(--warn-border)",
         fontSize: 12,
         color: "var(--navy-700)",
         display: "grid",
@@ -87,11 +87,11 @@ export function ConflictBanner({
           style={{
             padding: "6px 12px",
             borderRadius: 999,
-            background: "rgba(255,176,32,0.9)",
-            color: "var(--navy-900)",
+            background: "var(--warn-bg-strong)",
+            color: "var(--warn-fg)",
             fontSize: 11.5,
             fontWeight: 600,
-            border: "none",
+            border: "1px solid var(--warn-border)",
             cursor: "pointer",
           }}
         >

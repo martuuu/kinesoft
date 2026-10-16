@@ -27,6 +27,7 @@ import {
 } from "@/lib/catalog-admin";
 import type { CatalogDetail, CatalogEntityKind } from "@/lib/catalog-admin-types";
 import { ENTITY_COPY, PAYER_KIND_OPTIONS, SOURCE_LABEL, formatARDate } from "@/components/plataforma/catalog/catalog-copy";
+import ctl from "../controls.module.css";
 
 const TITLE: Record<CatalogEntityKind, string> = {
   payer: "Editar prestadora",
@@ -125,7 +126,6 @@ function CatalogDrawerBody({ detail, onClose }: { detail: CatalogDetail; onClose
         return;
       }
       toast.success("Guardado", { description: "Quedó marcada como curada: el próximo import no la pisa." });
-      router.refresh();
       onClose();
     });
   };
@@ -147,7 +147,6 @@ function CatalogDrawerBody({ detail, onClose }: { detail: CatalogDetail; onClose
         return;
       }
       toast.success(archived ? "Restaurada" : "Archivada");
-      router.refresh();
       onClose();
     });
   };
@@ -376,7 +375,6 @@ function MergeSection({
             ? `${m.insurers ?? 0} consultorio(s), ${(m.plans ?? 0) + (m.plansMerged ?? 0)} plan(es) y ${m.coverages ?? 0} cobertura(s) repuntados.`
             : `${m.services ?? 0} servicio(s) y ${m.specialties ?? 0} especialidad(es) repuntados.`,
       });
-      router.refresh();
       onDone();
     });
   };
@@ -388,6 +386,7 @@ function MergeSection({
         Para duplicados (p. ej. la misma obra social cargada con dos nombres). Elegí la {noun} que queda.
       </p>
       <input
+        className={ctl.field}
         value={q}
         onChange={(e) => setQ(e.target.value)}
         placeholder={`Buscar la ${noun} destino…`}
@@ -402,7 +401,6 @@ function MergeSection({
           background: "rgba(255,255,255,0.95)",
           fontSize: 13,
           color: "var(--navy-900)",
-          outline: "none",
         }}
       />
       {results.length > 0 && (

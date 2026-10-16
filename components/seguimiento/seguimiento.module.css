@@ -1,0 +1,141 @@
+/* [PF1.2-planes-bib] Seguimiento: landing (C8 de VX0-b) y detalle de sesión (ev2-seguimiento-detalle-1024). */
+
+.ellipsis {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nowrap {
+  white-space: nowrap;
+}
+
+/* ─── Landing: vencidas en lista compacta por paciente ───────────────────── */
+
+.overdueList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.overdueGroup {
+  padding: 10px 14px;
+  border-top: 1px solid rgba(15, 30, 51, 0.06);
+}
+.overdueGroup:first-child {
+  border-top: none;
+}
+.overduePatient {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--navy-900);
+  min-width: 0;
+}
+.overdueCount {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--navy-500);
+  background: rgba(15, 30, 51, 0.06);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.overdueRows {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0 0 0 36px;
+  display: grid;
+  gap: 2px;
+}
+.overdueRow {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--navy-700);
+  text-decoration: none;
+}
+.overdueRow:hover {
+  background: rgba(31, 79, 190, 0.05);
+}
+@media (max-width: 479px) {
+  .overdueRows {
+    padding-left: 0;
+  }
+  .overdueRow {
+    grid-template-columns: minmax(0, 1fr) max-content;
+  }
+  .overdueRow > :nth-child(2) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
+.more {
+  border-top: 1px solid rgba(15, 30, 51, 0.06);
+}
+.moreSummary {
+  cursor: pointer;
+  list-style: none;
+  padding: 10px 14px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--sky-700);
+}
+.moreSummary::-webkit-details-marker {
+  display: none;
+}
+.more[open] > .moreSummary {
+  border-bottom: 1px solid rgba(15, 30, 51, 0.06);
+}
+
+/* ─── Detalle de sesión: grilla por ancho del contenedor ─────────────────── */
+
+.detailWrap {
+  container-type: inline-size;
+  min-width: 0;
+}
+.detail {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "center"
+    "side"
+    "rail";
+  align-items: start;
+}
+.rail {
+  grid-area: rail;
+  min-width: 0;
+}
+.center {
+  grid-area: center;
+}
+.side {
+  grid-area: side;
+}
+
+/* 1024 con sidebar abierto deja ~760 px de contenido: riel + centro y las anotaciones debajo del centro. */
+@container (min-width: 720px) {
+  .detail {
+    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-areas:
+      "rail center"
+      "rail side";
+  }
+}
+@container (min-width: 1100px) {
+  .detail {
+    grid-template-columns: 260px minmax(0, 1fr) 320px;
+    grid-template-areas: "rail center side";
+  }
+}

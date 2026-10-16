@@ -338,6 +338,22 @@ describe("[S22a] render de la PlanCard", () => {
     expect(html).toContain("Completar datos");
   });
 
+  it("[PF1.2] D9: la card pausada legacy no queda sin acción (ofrece reactivar primero); chevron de 32 px", () => {
+    const paused = render(
+      <PlanCard plan={plan({ linked: false, status: "PAUSED" })} patientId="pat-1" permissions={PRO} onOpenEditor={noop} onChanged={noop} />
+    );
+    const band = paused.slice(paused.indexOf('data-testid="plan-legacy"'));
+    expect(band).toContain(PLAN_LEGACY_COPY);
+    expect(band).not.toContain(">Completar datos<");
+    expect(band).toContain(">Reactivar para completar<");
+    expect(paused).toMatch(/<span aria-hidden="true" style="width:32px;height:32px/);
+    // Sin `plans.manage` (Secretaria) no hay acción que ofrecer: ni completar ni reactivar.
+    const sec = render(
+      <PlanCard plan={plan({ linked: false, status: "PAUSED" })} patientId="pat-1" permissions={SECRETARIA} onOpenEditor={noop} onChanged={noop} />
+    );
+    expect(sec).not.toContain("Reactivar para completar");
+  });
+
   it("[P3-Z F2] 'Reprogramar' exige plans.schedule", () => {
     const withSchedule = render(<PlanCard plan={plan()} patientId="pat-1" permissions={PRO} focused onOpenEditor={noop} onChanged={noop} />);
     expect(withSchedule).toContain("Reprogramar");

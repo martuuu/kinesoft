@@ -135,7 +135,7 @@ export function DeleteBookingButton({
 }
 
 /**
- * Grilla "Cambiar estado" (Confirmar / Realizado / Ausente / Cancelar).
+ * Grilla "Cambiar estado" (Realizado / Confirmar / Ausente / Cancelar, sin la del estado actual: G7).
  *
  * Contrato: solo presenta. `onSetStatus` es el `setStatus` del drawer, que lleva
  * el lock optimista (`expectedUpdatedAt`) y el re-chequeo de cupo / superposición
@@ -151,48 +151,45 @@ export function StatusActions({
   pending,
   onSetStatus,
   planSession,
+  current,
 }: {
   pending: boolean;
   onSetStatus: (status: BookingStatus) => void;
   /** Turno de plan: `ordinal` de la sesión (null si la proyección no lo trae). */
   planSession?: { ordinal: number | null } | null;
+  /** G7: estado actual del turno; su botón no se ofrece (era «Confirmar» primario sobre un turno ya confirmado). */
+  current?: BookingStatus;
 }) {
+  const options = statusActionOptions(current);
+  const primary = options.find((o) => o.primary);
+  const rest = options.filter((o) => !o.primary);
   return (
     <div>
       <div style={menuLabel}>Cambiar estado</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-        <Button
-          variant="primary"
-          onClick={() => onSetStatus("CONFIRMED")}
-          disabled={pending}
-          style={{ justifyContent: "center" }}
-        >
-          Confirmar
-        </Button>
-        <Button
-          variant="lime"
-          onClick={() => onSetStatus("COMPLETED")}
-          disabled={pending}
-          style={{ justifyContent: "center" }}
-        >
-          <IconCheck size={12} stroke={3} /> Realizado
-        </Button>
-        <Button
-          variant="ghost"
-          onClick={() => onSetStatus("NO_SHOW")}
-          disabled={pending}
-          style={{ justifyContent: "center" }}
-        >
-          Ausente
-        </Button>
-        <Button
-          variant="ghost"
-          onClick={() => onSetStatus("CANCELLED")}
-          disabled={pending}
-          style={{ justifyContent: "center" }}
-        >
-          Cancelar
-        </Button>
+      <div style={{ display: "grid", gap: 6 }}>
+        {primary && (
+          <Button
+            variant="primary"
+            onClick={() => onSetStatus(primary.status)}
+            disabled={pending}
+            style={{ justifyContent: "center" }}
+          >
+            <IconCheck size={12} stroke={3} /> {primary.label}
+          </Button>
+        )}
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${rest.length}, minmax(0, 1fr))`, gap: 6 }}>
+          {rest.map((o) => (
+            <Button
+              key={o.status}
+              variant="ghost"
+              onClick={() => onSetStatus(o.status)}
+              disabled={pending}
+              style={{ justifyContent: "center" }}
+            >
+              {o.label}
+            </Button>
+          ))}
+        </div>
       </div>
       {planSession && (
         <div style={{ fontSize: 11.5, color: "var(--navy-500)", marginTop: 6 }}>
@@ -203,4 +200,21 @@ export function StatusActions({
       )}
     </div>
   );
+}
+
+export type StatusActionOption = { status: BookingStatus; label: string; primary: boolean };
+
+/**
+ * G7 (VX0-b): qué transiciones ofrece «Cambiar estado». Sin la del estado actual (no se «confirma» un turno
+ * confirmado) y con UNA sola primaria: «Realizado», la siguiente lógica del día (antes convivían tres jerarquías:
+ * Confirmar azul, Realizado lima y dos ghost). Un turno ya Realizado no tiene primaria: las otras quedan para corregir.
+ */
+export function statusActionOptions(current?: BookingStatus): StatusActionOption[] {
+  const all: StatusActionOption[] = [
+    { status: "COMPLETED", label: "Realizado", primary: true },
+    { status: "CONFIRMED", label: "Confirmar", primary: false },
+    { status: "NO_SHOW", label: "Ausente", primary: false },
+    { status: "CANCELLED", label: "Cancelar", primary: false },
+  ];
+  return all.filter((o) => o.status !== current);
 }

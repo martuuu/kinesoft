@@ -1,0 +1,9 @@
+/* [PF1.2-plataforma · C-PF5.4] Foco visible de los inputs/selects sueltos de Plataforma (buscadores de catálogo,
+   filtros de tabla, buscador del menú de tags). Antes apagaban el outline inline sin reemplazo: con teclado no
+   se veía dónde estaba el foco. El anillo es el token global (`--focus-ring`); `outline` transparente (no `none`)
+   para que el modo de alto contraste de Windows siga dibujando un borde. */
+.field:focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+}

@@ -85,7 +85,7 @@ export function RefinementPanel({
                   height: 6,
                   borderRadius: 2,
                   background:
-                    i <= 3 ? "var(--lime-400)" : i <= 6 ? "var(--sky-500)" : "#E14B4B",
+                    i <= 3 ? "var(--lime-400)" : i <= 6 ? "var(--sky-500)" : "var(--danger-dot)",
                   opacity: i <= intensity ? 1 : 0.25,
                 }}
               />

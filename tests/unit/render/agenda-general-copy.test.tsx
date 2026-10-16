@@ -39,7 +39,7 @@ vi.mock("@/lib/search", () => proxy());
 
 import { BookingModal } from "@/components/agenda/booking-modal";
 import { MultiSection } from "@/components/agenda/booking-modal/multi-section";
-import { asTurnos } from "@/components/agenda/booking-modal/sessions-mode";
+import { bookingUnitOf } from "@/lib/copy/booking-unit";
 import { BatchConflictPrompt, ConflictPrompt } from "@/components/agenda/booking-modal/conflict-prompts";
 import { EditDetailsForm } from "@/components/agenda/booking-drawer/edit-details-form";
 import { BillingRows } from "@/components/agenda/booking-drawer/billing-rows";
@@ -116,7 +116,9 @@ describe("[EV1-C1] modal de turno nuevo", () => {
     const html = kine(<BookingModal {...props} />);
     expect(html).toContain("Título (diagnóstico)");
     expect(html).toContain("Descripción (diagnóstico)");
-    expect(html).toContain("Opcional · si se deja vacío se toma el diagnóstico del paciente");
+    // G6 (PF1.2): placeholders distintos para título y descripción (antes repetían el mismo texto).
+    expect(html).toContain("Vacío = el diagnóstico del paciente");
+    expect(html).toContain("Vacío = la descripción del diagnóstico del paciente");
     expect(html).toContain("Varias sesiones");
     expect(html).not.toContain("Motivo de consulta");
     expect(html).not.toContain("Varios turnos");
@@ -146,7 +148,7 @@ describe("[EV1-C1] toggle y modo de varios turnos", () => {
     expect(html).not.toMatch(/sesion/i);
   });
 
-  it("General con fecha: el resumen dice «turnos» (texto armado en lib/server con «sesiones»)", () => {
+  it("General con fecha: el resumen dice «turnos» (VX3-f: `localSummary` con la unidad)", () => {
     const html = general(<MultiSection {...props} anchorIso="2027-03-08T10:00:00-03:00" />);
     expect(html).toMatch(/\d+ turnos · Semanal/);
     expect(html).not.toMatch(/sesion/i);
@@ -154,11 +156,11 @@ describe("[EV1-C1] toggle y modo de varios turnos", () => {
     expect(k).toMatch(/\d+ sesiones · Semanal/);
   });
 
-  it("asTurnos: los textos fijos del resumen", () => {
-    expect(asTurnos("8 sesiones · Semanal 08/03 → 31/03")).toBe("8 turnos · Semanal 08/03 → 31/03");
-    expect(asTurnos("1 sesión · 08/03")).toBe("1 turno · 08/03");
-    expect(asTurnos("Sin sesiones")).toBe("Sin turnos");
-    expect(asTurnos("Se generan 3 de 8 sesiones pedidas.")).toBe("Se generan 3 de 8 turnos pedidos.");
+  it("[VX3-f] sin `asTurnos`: la unidad la eligen quienes arman el texto", async () => {
+    const mod = await import("@/components/agenda/booking-modal/sessions-mode");
+    expect("asTurnos" in mod).toBe(false);
+    expect(bookingUnitOf(new Set(["sesiones"]))).toBe("sesion");
+    expect(bookingUnitOf(new Set())).toBe("turno");
   });
 
   it("Kine (golden): «Varias sesiones» y «Sesiones»", () => {

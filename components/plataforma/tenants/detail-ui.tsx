@@ -80,8 +80,8 @@ export function ErrorBox({ children }: { children: ReactNode }) {
       style={{
         padding: "10px 12px",
         borderRadius: "var(--r-sm)",
-        background: "rgba(225,75,75,0.08)",
-        border: "1px solid rgba(225,75,75,0.25)",
+        background: "var(--danger-bg)",
+        border: "1px solid var(--danger-border)",
         color: "var(--danger-fg)",
         fontSize: 13,
         lineHeight: 1.45,
@@ -100,7 +100,7 @@ export function WarnBox({ children }: { children: ReactNode }) {
       style={{
         padding: "10px 12px",
         borderRadius: "var(--r-sm)",
-        background: "rgba(228,176,32,0.15)",
+        background: "var(--warn-bg)",
         color: "var(--warn-fg)",
         fontSize: 12.5,
         lineHeight: 1.45,

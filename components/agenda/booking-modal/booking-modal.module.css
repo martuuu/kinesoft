@@ -1,0 +1,78 @@
+/*
+ * [PF1.2-agenda-b] Layout del drawer «Nuevo turno» (G6 de VX0-b). Antes era todo `style` inline: no había forma de
+ * cambiar la grilla en < 480 (a 390 la fecha se cortaba en «27/07,📅») ni de pegar el footer al pie.
+ */
+
+/* Fecha y hora + Duración. En < 480 la fecha va a ancho completo y la duración abajo. */
+.scheduleRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 86px;
+  gap: 10px;
+  align-items: end;
+}
+@media (max-width: 479px) {
+  .scheduleRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* «Detalles» colapsable: motivo / descripción / notas. Opcionales: no ocupan el primer pliegue a 1366×768. */
+.details {
+  border-top: 1px solid var(--navy-100);
+  padding-top: var(--space-1);
+}
+.detailsSummary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--navy-700);
+  border-radius: var(--r-sm);
+  list-style: none;
+}
+.detailsSummary::-webkit-details-marker {
+  display: none;
+}
+.detailsSummary::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  flex: none;
+}
+.details[open] > .detailsSummary::before {
+  transform: rotate(45deg);
+}
+.detailsHint {
+  font-weight: 400;
+  font-size: var(--fs-xs);
+  color: var(--navy-400);
+}
+.detailsBody {
+  display: grid;
+  gap: 10px;
+  padding-bottom: var(--space-2);
+}
+
+/*
+ * Footer pegado al pie del panel (G7): la acción primaria queda a la vista con el form largo (sobreturno, varias
+ * sesiones, prompts). El panel del Drawer tiene `padding: 22px` y es el contenedor con scroll: el margen negativo
+ * lleva el fondo opaco hasta los bordes y `bottom: -22px` lo apoya sobre el borde inferior real.
+ */
+.footer {
+  position: sticky;
+  bottom: -22px;
+  z-index: 1;
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-1) -22px -22px;
+  padding: var(--space-3) 22px 22px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--navy-100);
+  border-radius: 0 0 22px 22px;
+}

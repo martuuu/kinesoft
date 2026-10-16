@@ -269,12 +269,12 @@ export function TenantLifecyclePanel({ detail: d }: { detail: PlatformTenantDeta
         } else {
           toast.error(res.error);
         }
+        // refresh-ok: la action falló y no revalida; si fue «otro cambio se guardó antes», trae la foto vigente.
         router.refresh();
         return false;
       }
       setVersion(res.data.updatedAt);
       toast.success(success);
-      router.refresh();
       return true;
     } catch {
       const msg = "No se pudo guardar el cambio. Revisá la conexión y probá de nuevo.";

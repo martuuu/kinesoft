@@ -3,19 +3,23 @@
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useState, useTransition, type ReactNode } from "react";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { Button } from "@/components/ui/button";
-import { ModalCloseButton } from "@/components/ui/modal-close";
-import { TagCombobox, type TagOption } from "@/components/ui/tag-combobox";
-import { IconSearch, IconX, IconFilter, IconDumbbell, IconPlus, IconStar } from "@/components/ui/icons";
-import { createExercise, ensureTag } from "@/lib/exercises";
+import { Drawer } from "@/components/ui/drawer";
+import { Modal } from "@/components/ui/modal";
+import { PageHeader } from "@/components/ui/page-header";
+import { useToast } from "@/components/ui/toast";
+import type { TagOption } from "@/components/ui/tag-combobox";
+import { IconSearch, IconFilter, IconDumbbell, IconPlus, IconStar } from "@/components/ui/icons";
 import type { ExerciseRow, FilterFacets } from "@/lib/exercises-types";
 import { toggleFavourite } from "@/lib/favourites";
 import { useDebouncedSearchParam } from "@/hooks/use-debounced-search-param";
-import { BulkAssignModal } from "@/components/biblioteca/bulk-assign-modal";
 import { SAAS_PLAN_LABEL, minimumPlanFor } from "@/lib/tenant-modules";
+import { relationLabel } from "@/components/diagnostico/labels";
+import type { ExerciseRelation } from "@prisma/client";
+import styles from "./biblioteca.module.css";
 
 // Superadmin-only editor: lazy so the ~everyone-is-not-an-admin case never
 // downloads the drawer + its media/article editors with the page bundle.
@@ -23,6 +27,15 @@ const ExerciseDrawer = dynamic(
   () => import("@/components/plataforma/exercise-drawer").then((m) => m.ExerciseDrawer),
   { ssr: false },
 );
+
+// [PF1.2 · C-PF2] Alta y asignación masiva: no están en el primer pintado (se abren con un click), así que bajan con
+// `next/dynamic` y se precargan en hover/foco del disparador (`import()` sin await) para que el click no espere red.
+const loadCreateDrawer = () => import("@/components/biblioteca/create-exercise-drawer");
+const CreateExerciseDrawer = dynamic(() => loadCreateDrawer().then((m) => m.CreateExerciseDrawer), { ssr: false });
+const loadBulkAssign = () => import("@/components/biblioteca/bulk-assign-modal");
+const BulkAssignModal = dynamic(() => loadBulkAssign().then((m) => m.BulkAssignModal), { ssr: false });
+const preloadCreate = { onPointerEnter: () => void loadCreateDrawer(), onFocus: () => void loadCreateDrawer() };
+const preloadBulk = { onPointerEnter: () => void loadBulkAssign(), onFocus: () => void loadBulkAssign() };
 
 type Active = {
   q?: string;
@@ -88,7 +101,8 @@ export function BibliotecaClient({
   const [bulkMode, setBulkMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [assignOpen, setAssignOpen] = useState(false);
-  const [appliedMsg, setAppliedMsg] = useState<string | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const toast = useToast();
 
   const toggleSelected = (id: string) =>
     setSelected((prev) => {
@@ -104,7 +118,7 @@ export function BibliotecaClient({
   };
 
   const basePath = mode === "manual-therapy" ? "/terapia-manual" : "/biblioteca";
-  const pageTitle = mode === "manual-therapy" ? "Terapia Manual" : "Biblioteca de ejercicios";
+  const pageTitle = mode === "manual-therapy" ? "Terapia manual" : "Biblioteca de ejercicios";
   const pageSubtitle =
     mode === "manual-therapy"
       ? "Maniobras y técnicas manuales para combinar con ejercicios en cada sesión."
@@ -140,96 +154,154 @@ export function BibliotecaClient({
   const libraryEmpty = items.length === 0 && activeFiltersCount === 0 && !active.q;
   const noun = mode === "manual-therapy" ? "maniobra" : "ejercicio";
 
+  const clearFilters = () =>
+    pushFilters({
+      difficulty: undefined,
+      muscleGroup: undefined,
+      equipment: undefined,
+      conditionSlug: undefined,
+      favouritesOnly: undefined,
+      privateOnly: undefined,
+    });
+
+  // Mismo contenido en el panel lateral (≥ 1024) y en el Drawer «Filtros (n)» (< 1024, C2).
+  const filters = (
+    <>
+      <FilterSection label="Acceso rápido">
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <QuickPill
+            label={
+              <>
+                <IconStar size={12} style={{ verticalAlign: -1 }} /> Favoritos
+              </>
+            }
+            on={!!active.favouritesOnly}
+            onToggle={() => pushFilters({ favouritesOnly: !active.favouritesOnly })}
+            locked={!capabilities.canFavourite}
+          />
+          <QuickPill
+            label={mode === "manual-therapy" ? "Mis maniobras" : "Mis ejercicios"}
+            on={!!active.privateOnly}
+            onToggle={() => pushFilters({ privateOnly: !active.privateOnly })}
+          />
+        </div>
+      </FilterSection>
+
+      <FilterSection label="Dificultad">
+        <ChipRow
+          value={active.difficulty != null ? String(active.difficulty) : null}
+          items={facets.difficulties.map((d) => ({ slug: String(d), label: `Nivel ${d}` }))}
+          onChange={(v) => pushFilters({ difficulty: v ? Number(v) : undefined })}
+        />
+      </FilterSection>
+
+      <FilterSection label="Grupo muscular">
+        <ChipRow
+          value={active.muscleGroup ?? null}
+          items={facets.muscleGroups.map((m) => ({ slug: m, label: m }))}
+          onChange={(v) => pushFilters({ muscleGroup: v ?? undefined })}
+        />
+      </FilterSection>
+
+      <FilterSection label="Equipo">
+        <ChipRow
+          value={active.equipment ?? null}
+          items={facets.equipment.map((m) => ({ slug: m, label: m }))}
+          onChange={(v) => pushFilters({ equipment: v ?? undefined })}
+        />
+      </FilterSection>
+
+      <FilterSection label="Diagnóstico">
+        <select
+          value={active.conditionSlug ?? ""}
+          onChange={(e) => pushFilters({ conditionSlug: e.target.value || undefined })}
+          aria-label="Filtrar por diagnóstico"
+          className={styles.select}
+        >
+          <option value="">Todos</option>
+          {facets.conditions.map((c) => (
+            <option key={c.slug} value={c.slug}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+      </FilterSection>
+    </>
+  );
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <header
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 12,
-          flexWrap: "wrap",
-        }}
-      >
-        <div>
-          <div style={{ fontSize: 12, color: "var(--navy-300)", fontWeight: 500 }}>
-            {pageTitle} · plan{" "}
-            <span
-              style={{
-                fontWeight: 700,
-                color: capabilities.hasFullCatalog ? "var(--sky-700)" : "var(--navy-500)",
-              }}
-            >
-              {planLabel(capabilities.plan)}
-            </span>
-          </div>
-          <h1 className="k-display" style={{ fontSize: 30, margin: "2px 0 0" }}>
-            <span style={{ color: mode === "manual-therapy" ? "var(--lime-700, #4f8a10)" : "var(--sky-700)" }}>
-              {items.length}
-            </span>{" "}
-            {mode === "manual-therapy" ? "maniobras" : "ejercicios"}
-          </h1>
-          <div style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 4 }}>{pageSubtitle}</div>
-          {!capabilities.hasFullCatalog && (
-            <div style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 4 }}>
-              {mode === "manual-therapy" ? "Tus maniobras." : "Tus ejercicios."} {FULL_CATALOG_UPSELL}
+      <PageHeader
+        eyebrow={
+          <>
+            {pageTitle} · plan {planLabel(capabilities.plan)}
+          </>
+        }
+        title={
+          <>
+            {items.length} {mode === "manual-therapy" ? (items.length === 1 ? "maniobra" : "maniobras") : items.length === 1 ? "ejercicio" : "ejercicios"}
+          </>
+        }
+        description={
+          <>
+            {pageSubtitle}
+            {!capabilities.hasFullCatalog && (
+              <>
+                {" "}
+                {FULL_CATALOG_UPSELL}
+              </>
+            )}
+          </>
+        }
+        actions={
+          <div className={styles.tools}>
+            <div className={`k-glass ${styles.search}`}>
+              <IconSearch size={15} />
+              <input
+                type="search"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    flushQ();
+                  }
+                }}
+                placeholder="Buscar por nombre, músculo, descripción…"
+                aria-label={mode === "manual-therapy" ? "Buscar maniobra" : "Buscar ejercicio"}
+                className={styles.searchInput}
+              />
+              {pendingNav && (
+                <span role="status" style={{ fontSize: 11 }}>
+                  Buscando…
+                </span>
+              )}
             </div>
-          )}
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <div
-            className="k-glass"
-            style={{
-              padding: "8px 14px",
-              borderRadius: 999,
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              minWidth: 280,
-              fontSize: 13,
-              color: "var(--navy-300)",
-            }}
-          >
-            <IconSearch size={15} />
-            <input
-              type="search"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  flushQ();
-                }
-              }}
-              placeholder="Buscar por nombre, músculo, descripción…"
-              aria-label="Buscar ejercicio"
-              style={{
-                flex: 1,
-                border: "none",
-                outline: "none",
-                background: "transparent",
-                fontSize: 13,
-                color: "var(--navy-900)",
-              }}
-            />
-            {pendingNav && <span style={{ fontSize: 11 }}>…</span>}
+            <Button
+              variant="ghost"
+              className={styles.filtersButton}
+              onClick={() => setFiltersOpen(true)}
+              aria-haspopup="dialog"
+            >
+              <IconFilter size={13} /> Filtros{activeFiltersCount > 0 ? ` (${activeFiltersCount})` : ""}
+            </Button>
+            <Button
+              variant={bulkMode ? "primary" : "ghost"}
+              onClick={() => (bulkMode ? exitBulk() : setBulkMode(true))}
+              title={bulkMode ? "Salir del modo selección" : "Seleccionar varios para asignar a un plan"}
+              {...preloadBulk}
+            >
+              {bulkMode ? "Salir de selección" : "Seleccionar"}
+            </Button>
+            <Button variant="primary" onClick={() => setCreating(true)} {...preloadCreate}>
+              <IconPlus size={14} /> {mode === "manual-therapy" ? "Nueva maniobra" : "Nuevo ejercicio"}
+            </Button>
           </div>
-          <Button
-            variant={bulkMode ? "primary" : "ghost"}
-            onClick={() => (bulkMode ? exitBulk() : setBulkMode(true))}
-            style={{ fontSize: 12 }}
-            title={bulkMode ? "Salir del modo selección" : "Seleccionar varios para asignar a un plan"}
-          >
-            {bulkMode ? "Salir de selección" : "Seleccionar"}
-          </Button>
-          <Button variant="primary" onClick={() => setCreating(true)}>
-            <IconPlus size={14} /> Nuevo ejercicio
-          </Button>
-        </div>
-      </header>
+        }
+      />
 
-      <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 14 }}>
-        <aside style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div className={styles.layout}>
+        <aside className={styles.aside} aria-label="Filtros">
           <Card glass style={{ padding: 14 }}>
             <div
               style={{
@@ -245,101 +317,22 @@ export function BibliotecaClient({
                   fontWeight: 700,
                   letterSpacing: "0.06em",
                   textTransform: "uppercase",
-                  color: "var(--navy-300)",
+                  color: "var(--navy-500)",
                 }}
               >
                 <IconFilter size={11} style={{ verticalAlign: -1 }} /> Filtros
               </div>
               {activeFiltersCount > 0 && (
-                <button
-                  onClick={() =>
-                    pushFilters({
-                      difficulty: undefined,
-                      muscleGroup: undefined,
-                      equipment: undefined,
-                      conditionSlug: undefined,
-                    })
-                  }
-                  style={{
-                    background: "none",
-                    border: "none",
-                    fontSize: 11,
-                    color: "var(--sky-700)",
-                    fontWeight: 600,
-                    cursor: "pointer",
-                  }}
-                >
+                <button type="button" onClick={clearFilters} style={linkBtn}>
                   Limpiar ({activeFiltersCount})
                 </button>
               )}
             </div>
-
-            <FilterSection label="Acceso rápido">
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <QuickPill
-                  label="⭐ Favoritos"
-                  on={!!active.favouritesOnly}
-                  onToggle={() => pushFilters({ favouritesOnly: !active.favouritesOnly })}
-                  locked={!capabilities.canFavourite}
-                />
-                <QuickPill
-                  label="🔒 Mis ejercicios"
-                  on={!!active.privateOnly}
-                  onToggle={() => pushFilters({ privateOnly: !active.privateOnly })}
-                />
-              </div>
-            </FilterSection>
-
-            <FilterSection label="Dificultad">
-              <ChipRow
-                value={active.difficulty != null ? String(active.difficulty) : null}
-                items={facets.difficulties.map((d) => ({ slug: String(d), label: `Nivel ${d}` }))}
-                onChange={(v) => pushFilters({ difficulty: v ? Number(v) : undefined })}
-              />
-            </FilterSection>
-
-            <FilterSection label="Grupo muscular">
-              <ChipRow
-                value={active.muscleGroup ?? null}
-                items={facets.muscleGroups.map((m) => ({ slug: m, label: m }))}
-                onChange={(v) => pushFilters({ muscleGroup: v ?? undefined })}
-              />
-            </FilterSection>
-
-            <FilterSection label="Equipo">
-              <ChipRow
-                value={active.equipment ?? null}
-                items={facets.equipment.map((m) => ({ slug: m, label: m }))}
-                onChange={(v) => pushFilters({ equipment: v ?? undefined })}
-              />
-            </FilterSection>
-
-            <FilterSection label="Diagnóstico">
-              <select
-                value={active.conditionSlug ?? ""}
-                onChange={(e) => pushFilters({ conditionSlug: e.target.value || undefined })}
-                style={{
-                  width: "100%",
-                  padding: "8px 10px",
-                  borderRadius: 10,
-                  border: "1px solid rgba(15,30,51,0.08)",
-                  background: "rgba(255,255,255,0.8)",
-                  fontSize: 12.5,
-                  color: "var(--navy-700)",
-                }}
-              >
-                <option value="">Todos</option>
-                {facets.conditions.map((c) => (
-                  <option key={c.slug} value={c.slug}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </FilterSection>
+            {filters}
           </Card>
         </aside>
 
-        <main>
+        <main style={{ minWidth: 0 }}>
           {items.length === 0 ? (
             <Card style={{ padding: 40, textAlign: "center" }}>
               <div
@@ -368,26 +361,28 @@ export function BibliotecaClient({
                     </div>
                   )}
                   <div style={{ marginTop: 14 }}>
-                    <Button variant="primary" onClick={() => setCreating(true)}>
+                    <Button variant="primary" onClick={() => setCreating(true)} {...preloadCreate}>
                       <IconPlus size={14} /> Nuev{noun === "maniobra" ? "a" : "o"} {noun}
                     </Button>
                   </div>
                 </>
               ) : (
-                <div className="k-display" style={{ fontSize: 18, fontWeight: 700 }}>
-                  No encontramos {mode === "manual-therapy" ? "maniobras" : "ejercicios"} con estos
-                  filtros
-                </div>
+                <>
+                  <div className="k-display" style={{ fontSize: 18, fontWeight: 700 }}>
+                    No encontramos {mode === "manual-therapy" ? "maniobras" : "ejercicios"} con estos filtros
+                  </div>
+                  {activeFiltersCount > 0 && (
+                    <div style={{ marginTop: 14 }}>
+                      <Button variant="ghost" onClick={clearFilters}>
+                        Limpiar filtros
+                      </Button>
+                    </div>
+                  )}
+                </>
               )}
             </Card>
           ) : (
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-                gap: 12,
-              }}
-            >
+            <div className={styles.grid}>
               {items.map((ex) => (
                 <ExerciseCard
                   key={ex.id}
@@ -409,6 +404,20 @@ export function BibliotecaClient({
         </main>
       </div>
 
+      <Drawer open={filtersOpen} onClose={() => setFiltersOpen(false)} title="Filtros" width={360}>
+        <div style={{ display: "grid", gap: 4 }}>
+          {filters}
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 8 }}>
+            <Button variant="ghost" onClick={clearFilters} disabled={activeFiltersCount === 0}>
+              Limpiar
+            </Button>
+            <Button variant="primary" onClick={() => setFiltersOpen(false)}>
+              Ver {items.length} {mode === "manual-therapy" ? "maniobras" : "ejercicios"}
+            </Button>
+          </div>
+        </div>
+      </Drawer>
+
       {open && <ExerciseDetail ex={open} onClose={() => setOpen(null)} />}
       {editingId && (
         <ExerciseDrawer
@@ -420,7 +429,7 @@ export function BibliotecaClient({
         />
       )}
       {creating && (
-        <CreateExerciseModal
+        <CreateExerciseDrawer
           tags={tags}
           kind={mode === "manual-therapy" ? "MANUAL_THERAPY" : "EXERCISE"}
           onClose={() => setCreating(false)}
@@ -428,33 +437,11 @@ export function BibliotecaClient({
       )}
 
       {bulkMode && selected.size > 0 && (
-        <div
-          role="region"
-          aria-label="Acciones de selección"
-          style={{
-            position: "fixed",
-            bottom: 24,
-            left: "50%",
-            transform: "translateX(-50%)",
-            zIndex: 60,
-            padding: "12px 16px",
-            borderRadius: 999,
-            background: "var(--navy-900)",
-            color: "#fff",
-            display: "flex",
-            alignItems: "center",
-            gap: 14,
-            boxShadow: "0 16px 40px -10px rgba(15,30,51,0.4)",
-          }}
-        >
+        <div role="region" aria-label="Acciones de selección" className={styles.actionBar}>
           <span style={{ fontSize: 13, fontWeight: 600 }}>
             {selected.size} {selected.size === 1 ? "seleccionado" : "seleccionados"}
           </span>
-          <Button
-            variant="primary"
-            onClick={() => setAssignOpen(true)}
-            style={{ fontSize: 12, padding: "8px 14px" }}
-          >
+          <Button variant="primary" onClick={() => setAssignOpen(true)} {...preloadBulk}>
             Asignar a plan
           </Button>
           <button
@@ -463,10 +450,12 @@ export function BibliotecaClient({
             style={{
               background: "transparent",
               border: "none",
-              color: "rgba(255,255,255,0.7)",
+              color: "rgba(255,255,255,0.85)",
               fontSize: 12,
               fontWeight: 600,
               cursor: "pointer",
+              minHeight: 32,
+              borderRadius: 8,
             }}
           >
             Limpiar
@@ -479,35 +468,25 @@ export function BibliotecaClient({
           onClose={() => setAssignOpen(false)}
           onApplied={(created) => {
             setAssignOpen(false);
-            setAppliedMsg(`✓ ${created} asignaciones creadas.`);
+            toast.success(`${created} ${created === 1 ? "asignación creada" : "asignaciones creadas"}`);
             clearSelection();
-            setTimeout(() => setAppliedMsg(null), 3000);
           }}
         />
-      )}
-      {appliedMsg && (
-        <div
-          role="status"
-          style={{
-            position: "fixed",
-            bottom: 24,
-            right: 24,
-            zIndex: 60,
-            padding: "12px 16px",
-            borderRadius: 12,
-            background: "rgba(200,245,100,0.95)",
-            color: "var(--navy-900)",
-            fontSize: 13,
-            fontWeight: 600,
-            boxShadow: "0 12px 30px -10px rgba(15,30,51,0.3)",
-          }}
-        >
-          {appliedMsg}
-        </div>
       )}
     </div>
   );
 }
+
+const linkBtn: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  fontSize: 12,
+  color: "var(--sky-700)",
+  fontWeight: 600,
+  cursor: "pointer",
+  minHeight: 28,
+  borderRadius: 6,
+};
 
 function FilterSection({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -545,8 +524,11 @@ function ChipRow({
         return (
           <button
             key={it.slug}
+            type="button"
+            aria-pressed={on}
             onClick={() => onChange(on ? null : it.slug)}
             style={{
+              minHeight: 32,
               padding: "5px 10px",
               borderRadius: 999,
               border: on ? "1px solid var(--sky-700)" : "1px solid rgba(15,30,51,0.08)",
@@ -597,27 +579,7 @@ function ExerciseCard({
   };
 
   return (
-    <button
-      onClick={onOpen}
-      aria-pressed={bulkMode ? selected : undefined}
-      style={{
-        textAlign: "left",
-        padding: 14,
-        borderRadius: 14,
-        background: selected ? "rgba(200,245,100,0.18)" : "#fff",
-        border: selected
-          ? "1.5px solid var(--sky-700)"
-          : ex.isPrivate
-            ? "1px solid rgba(31,79,190,0.2)"
-            : "1px solid rgba(15,30,51,0.06)",
-        cursor: "pointer",
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
-        boxShadow: "var(--shadow-card)",
-        position: "relative",
-      }}
-    >
+    <div className={`${styles.card} ${selected ? styles.cardSelected : ex.isPrivate ? styles.cardPrivate : ""}`} data-testid="exercise-card">
       {bulkMode && (
         <span
           aria-hidden
@@ -636,11 +598,12 @@ function ExerciseCard({
             border: selected ? "none" : "1.5px solid rgba(15,30,51,0.18)",
           }}
         >
-          {selected ? "✓" : ""}
+          {selected ? <IconCheckMark /> : null}
         </span>
       )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span
+          aria-hidden
           style={{
             width: 32,
             height: 32,
@@ -654,22 +617,24 @@ function ExerciseCard({
         >
           <IconDumbbell size={16} />
         </span>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, visibility: bulkMode ? "hidden" : undefined }}>
           <Tag tone="soft">Nivel {ex.difficulty}</Tag>
-          {canFavourite && (
+          {canFavourite && !bulkMode && (
+            // Hermana del botón principal (no anidada: C1) y por encima de su `::after`.
             <button
               type="button"
+              className={styles.cardOver}
               onClick={onStar}
-              aria-label={favOptimistic ? "Quitar de favoritos" : "Agregar a favoritos"}
+              aria-label={favOptimistic ? `Quitar ${ex.name} de favoritos` : `Agregar ${ex.name} a favoritos`}
               aria-pressed={favOptimistic}
               disabled={pendingFav}
               style={{
-                width: 28,
-                height: 28,
+                width: 32,
+                height: 32,
                 borderRadius: 8,
                 border: "none",
-                background: favOptimistic ? "var(--lime-300)" : "rgba(255,255,255,0.6)",
-                color: favOptimistic ? "var(--navy-900)" : "var(--navy-300)",
+                background: favOptimistic ? "var(--lime-300)" : "rgba(15,30,51,0.04)",
+                color: favOptimistic ? "var(--navy-900)" : "var(--navy-500)",
                 cursor: "pointer",
                 display: "inline-flex",
                 alignItems: "center",
@@ -681,9 +646,10 @@ function ExerciseCard({
           )}
         </div>
       </div>
-      <div style={{ fontSize: 14, fontWeight: 700, color: "var(--navy-900)", lineHeight: 1.25 }}>
+      {/* El botón principal es el nombre; su `::after` cubre toda la card (C1). */}
+      <button type="button" className={styles.cardMain} onClick={onOpen} aria-pressed={bulkMode ? selected : undefined}>
         {ex.name}
-      </div>
+      </button>
       {ex.muscleGroups && (
         <div style={{ fontSize: 11.5, color: "var(--navy-500)" }}>{ex.muscleGroups}</div>
       )}
@@ -701,9 +667,9 @@ function ExerciseCard({
           .filter(Boolean)
           .join(" · ")}
       </div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, flexWrap: "wrap" }}>
         {ex.conditionsCount > 0 ? (
-          <div style={{ fontSize: 11, color: "var(--navy-300)" }}>
+          <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
             Usado en {ex.conditionsCount} diagnóstico{ex.conditionsCount === 1 ? "" : "s"}
           </div>
         ) : (
@@ -714,10 +680,19 @@ function ExerciseCard({
           {/* EV0: `isBasic` ya no decide visibilidad (un Kine base no ve
               globales), así que el chip "Básico" no significaba nada. Lo que no
               es propio viene del catálogo de la plataforma (desde Consultorio, PL-1d). */}
-          {ex.isPrivate ? <Tag tone="sky">🔒 Mío</Tag> : <Tag tone="soft">Catálogo</Tag>}
+          {ex.isPrivate ? <Tag tone="sky">Mío</Tag> : <Tag tone="soft">Catálogo</Tag>}
         </div>
       </div>
-    </button>
+    </div>
+  );
+}
+
+/** Tilde del modo selección (antes el carácter «✓»). */
+function IconCheckMark() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M5 12l5 5L20 7" />
+    </svg>
   );
 }
 
@@ -727,7 +702,7 @@ function QuickPill({
   onToggle,
   locked,
 }: {
-  label: string;
+  label: ReactNode;
   on: boolean;
   onToggle: () => void;
   locked?: boolean;
@@ -737,9 +712,11 @@ function QuickPill({
       type="button"
       onClick={locked ? undefined : onToggle}
       disabled={locked}
+      aria-pressed={locked ? undefined : on}
       title={locked ? `Los favoritos están disponibles desde el ${FAVOURITES_FROM}` : undefined}
       style={{
         textAlign: "left",
+        minHeight: 36,
         padding: "7px 10px",
         borderRadius: 10,
         border: on ? "1px solid var(--sky-700)" : "1px solid rgba(15,30,51,0.08)",
@@ -753,79 +730,24 @@ function QuickPill({
       {label}
       {locked && (
         // Favoritos van desde Consultorio (C-PL1), igual que el catálogo global.
-        <span style={{ marginLeft: 6, fontSize: 9, color: "var(--navy-300)" }}>{FAVOURITES_FROM}</span>
+        <span style={{ marginLeft: 6, fontSize: 10, color: "var(--navy-500)" }}>{FAVOURITES_FROM}</span>
       )}
     </button>
   );
 }
 
+/**
+ * Ficha rápida del ejercicio. [PF1.2] Sobre el `Modal` del design system (foco atrapado, Esc, portal); antes era un
+ * overlay a mano sin Esc ni trap y con el rótulo «Ejercicio» fijo aunque fuera una maniobra.
+ */
 function ExerciseDetail({ ex, onClose }: { ex: ExerciseRow; onClose: () => void }) {
   return (
-    <div
-      role="dialog"
-      aria-modal
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(15,30,51,0.45)",
-        backdropFilter: "blur(4px)",
-        zIndex: 40,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 20,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="k-glass-strong"
-        style={{
-          width: "min(620px, 100%)",
-          borderRadius: 24,
-          padding: 24,
-          display: "flex",
-          flexDirection: "column",
-          gap: 14,
-          maxHeight: "90vh",
-          overflowY: "auto",
-        }}
-      >
-        <header style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
-          <div>
-            <Tag tone="lime">Ejercicio</Tag>
-            <h2 className="k-display" style={{ fontSize: 24, margin: "8px 0 4px", fontWeight: 700 }}>
-              {ex.name}
-            </h2>
-            {ex.muscleGroups && (
-              <div style={{ fontSize: 13, color: "var(--navy-500)" }}>{ex.muscleGroups}</div>
-            )}
-          </div>
-          <button
-            aria-label="Cerrar"
-            onClick={onClose}
-            style={{
-              border: "none",
-              background: "rgba(255,255,255,0.7)",
-              width: 36,
-              height: 36,
-              borderRadius: 12,
-              cursor: "pointer",
-              color: "var(--navy-700)",
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              flexShrink: 0,
-            }}
-          >
-            <IconX size={16} />
-          </button>
-        </header>
-
+    <Modal open onClose={onClose} title={ex.name} description={ex.muscleGroups || undefined} width={620}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(3, 1fr)",
+            gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
             gap: 10,
             padding: 12,
             background: "rgba(246,249,253,0.7)",
@@ -861,7 +783,7 @@ function ExerciseDetail({ ex, onClose }: { ex: ExerciseRow; onClose: () => void 
 
         {ex.cues && (
           <section>
-            <H>Cues / coaching</H>
+            <H>Indicaciones</H>
             <p style={{ fontSize: 13.5, color: "var(--navy-700)", margin: 0, lineHeight: 1.55 }}>{ex.cues}</p>
           </section>
         )}
@@ -888,45 +810,31 @@ function ExerciseDetail({ ex, onClose }: { ex: ExerciseRow; onClose: () => void 
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "space-between",
+                    gap: 8,
                     padding: "8px 12px",
                     background: "rgba(255,255,255,0.6)",
                     borderRadius: 10,
                     fontSize: 13,
                   }}
                 >
-                  <span style={{ fontWeight: 600 }}>{c.name}</span>
-                  <Tag tone={c.relation === "DIRECT" ? "sky" : "lime"}>{c.relation}</Tag>
+                  <span style={{ fontWeight: 600, minWidth: 0, overflowWrap: "anywhere" }}>{c.name}</span>
+                  <Tag tone={c.relation === "DIRECT" ? "sky" : "lime"}>{relationLabel(c.relation as ExerciseRelation)}</Tag>
                 </div>
               ))}
             </div>
           </section>
         )}
 
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <Button variant="ghost" onClick={onClose}>
             Cerrar
           </Button>
-          <Link
-            href={`/biblioteca/${ex.slug}`}
-            style={{
-              textDecoration: "none",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "10px 16px",
-              borderRadius: 12,
-              background: "linear-gradient(180deg, var(--sky-700), var(--sky-600))",
-              color: "#fff",
-              fontSize: 13.5,
-              fontWeight: 600,
-              boxShadow: "0 6px 16px rgba(31,79,190,0.28)",
-            }}
-          >
-            Ejercicio completo →
+          <Link href={`/biblioteca/${ex.slug}`} className="k-btn k-btn-primary">
+            Ver ficha completa
           </Link>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -938,7 +846,7 @@ function H({ children }: { children: React.ReactNode }) {
         fontWeight: 700,
         letterSpacing: "0.06em",
         textTransform: "uppercase",
-        color: "var(--navy-300)",
+        color: "var(--navy-500)",
         marginBottom: 6,
       }}
     >
@@ -957,188 +865,3 @@ function Stat({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
-
-function CreateExerciseModal({
-  tags,
-  onClose,
-  kind = "EXERCISE",
-}: {
-  tags: TagOption[];
-  onClose: () => void;
-  kind?: "EXERCISE" | "MANUAL_THERAPY";
-}) {
-  const [pending, start] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [availableTags, setAvailableTags] = useState(tags);
-
-  const onCreateTag = async (label: string) => {
-    const created = await ensureTag(label, "GOAL");
-    setAvailableTags((s) => (s.find((t) => t.slug === created.slug) ? s : [...s, created]));
-    return created;
-  };
-
-  const submit = (form: FormData) => {
-    setError(null);
-    start(async () => {
-      const r = await createExercise({
-        name: String(form.get("name") ?? ""),
-        description: String(form.get("description") ?? "") || undefined,
-        difficulty: Number(form.get("difficulty")) || 1,
-        defaultSets: Number(form.get("defaultSets")) || 3,
-        defaultReps: Number(form.get("defaultReps")) || 12,
-        equipment: String(form.get("equipment") ?? "") || undefined,
-        muscleGroups: String(form.get("muscleGroups") ?? "") || undefined,
-        cues: String(form.get("cues") ?? "") || undefined,
-        instructions: String(form.get("instructions") ?? "") || undefined,
-        tagSlugs: selectedTags,
-        kind,
-      });
-      if (!r.ok) {
-        setError(r.error);
-        return;
-      }
-      onClose();
-      // EV2-Z (PF-0d): `createExercise` revalida /biblioteca y /terapia-manual (+ tags): sin segundo render.
-    });
-  };
-
-  return (
-    <div
-      role="dialog"
-      aria-modal
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(15,30,51,0.45)",
-        backdropFilter: "blur(4px)",
-        zIndex: 60,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 20,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="k-glass-strong k-scroll"
-        style={{
-          position: "relative",
-          width: "min(600px, 100%)",
-          maxHeight: "92vh",
-          overflowY: "auto",
-          borderRadius: 22,
-          padding: 24,
-        }}
-      >
-        <ModalCloseButton onClose={onClose} />
-        <header style={{ marginRight: 40, marginBottom: 16 }}>
-          <Tag tone="lime">Nuevo ejercicio</Tag>
-          <h2 className="k-display" style={{ fontSize: 22, margin: "8px 0 0", fontWeight: 700 }}>
-            Crear ejercicio personalizado
-          </h2>
-        </header>
-
-        <form action={submit} style={{ display: "grid", gap: 12 }}>
-          <Labeled label="Nombre" required>
-            <input name="name" required style={fieldStyle} placeholder="Sentadilla búlgara" />
-          </Labeled>
-          <Labeled label="Grupo muscular">
-            <input name="muscleGroups" style={fieldStyle} placeholder="Cuádriceps, Glúteo" />
-          </Labeled>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-            <Labeled label="Series">
-              <input name="defaultSets" type="number" min={1} max={10} defaultValue={3} style={fieldStyle} />
-            </Labeled>
-            <Labeled label="Reps">
-              <input name="defaultReps" type="number" min={1} max={100} defaultValue={12} style={fieldStyle} />
-            </Labeled>
-            <Labeled label="Dificultad">
-              <input
-                name="difficulty"
-                type="number"
-                min={1}
-                max={5}
-                defaultValue={1}
-                style={fieldStyle}
-              />
-            </Labeled>
-          </div>
-          <Labeled label="Equipo">
-            <input name="equipment" style={fieldStyle} placeholder="banda, foam roller" />
-          </Labeled>
-          <Labeled label="Descripción">
-            <textarea name="description" rows={3} style={{ ...fieldStyle, resize: "vertical" }} />
-          </Labeled>
-          <Labeled label="Cues / coaching">
-            <textarea name="cues" rows={2} style={{ ...fieldStyle, resize: "vertical" }} />
-          </Labeled>
-          <Labeled label="Tags">
-            <TagCombobox
-              suggestions={availableTags}
-              value={selectedTags}
-              onChange={setSelectedTags}
-              onCreate={onCreateTag}
-              placeholder="Tocá Enter para crear un tag nuevo"
-            />
-          </Labeled>
-
-          {error && (
-            <div
-              style={{
-                padding: 10,
-                borderRadius: 10,
-                background: "var(--danger-bg)",
-                color: "var(--danger-fg)",
-                fontSize: 12,
-              }}
-            >
-              {error}
-            </div>
-          )}
-
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-              Cancelar
-            </Button>
-            <Button type="submit" variant="primary" disabled={pending}>
-              {pending ? "Creando…" : "Crear ejercicio"}
-            </Button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-function Labeled({
-  label,
-  required,
-  children,
-}: {
-  label: string;
-  required?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <label style={{ display: "block", fontSize: 12 }}>
-      <span style={{ fontWeight: 600, color: "var(--navy-500)" }}>
-        {label}
-        {required && <span style={{ color: "var(--sky-700)" }}> *</span>}
-      </span>
-      <div style={{ marginTop: 6 }}>{children}</div>
-    </label>
-  );
-}
-
-const fieldStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "10px 12px",
-  borderRadius: 12,
-  background: "rgba(255,255,255,0.7)",
-  border: "1px solid rgba(15,30,51,0.08)",
-  fontSize: 14,
-  color: "var(--navy-900)",
-  outline: "none",
-};

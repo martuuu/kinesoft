@@ -6,6 +6,8 @@
  * Lo guarda tests/unit/public-surface-imports.test.ts.
  */
 
+import css from "./account.module.css";
+
 /**
  * Campo del código TOTP. No es `FormField` porque el código necesita `inputMode="numeric"` (teclado numérico en el
  * teléfono) y `autoComplete="one-time-code"` (los gestores de contraseñas lo completan), que la primitiva no expone.
@@ -41,19 +43,19 @@ export function TotpCodeInput({
         maxLength={9}
         placeholder="123 456"
         aria-invalid={error ? true : undefined}
+        className={css.codeInput}
         style={{
           display: "block",
           marginTop: 6,
           width: "100%",
           padding: "12px 14px",
           borderRadius: 12,
-          border: `1px solid ${error ? "rgba(225,75,75,0.4)" : "rgba(15,30,51,0.08)"}`,
+          border: `1px solid ${error ? "var(--danger-border)" : "rgba(15,30,51,0.08)"}`,
           background: "rgba(255,255,255,0.96)",
           fontSize: 22,
           letterSpacing: "0.3em",
           fontFamily: "'JetBrains Mono', ui-monospace, monospace",
           color: "var(--navy-900)",
-          outline: "none",
           opacity: disabled ? 0.5 : 1,
         }}
       />

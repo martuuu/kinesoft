@@ -7,6 +7,7 @@ import { signExerciseMedia } from "@/lib/exercise-media-internal";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { Markdown } from "@/components/ui/markdown";
+import { PageHeader } from "@/components/ui/page-header";
 import { moduleWall } from "@/lib/module-wall";
 
 export const dynamic = "force-dynamic";
@@ -42,7 +43,7 @@ export default async function Page({ params }: { params: { slug: string } }) {
   const subtitle = ex.article?.subtitle ?? null;
   const isManual = ex.kind === "MANUAL_THERAPY";
   const backHref = isManual ? "/terapia-manual" : "/biblioteca";
-  const backLabel = isManual ? "Volver a Terapia Manual" : "Volver a Ejercicios";
+  const backLabel = isManual ? "Volver a Terapia manual" : "Volver a Ejercicios";
 
   // Meta chips — skip any whose value is null.
   const chips: ReactNode[] = [<Tag key="lvl" tone="soft">Nivel {ex.difficulty}</Tag>];
@@ -69,21 +70,17 @@ export default async function Page({ params }: { params: { slug: string } }) {
     <div style={{ maxWidth: 820, margin: "0 auto", display: "flex", flexDirection: "column", gap: 18 }}>
       <Link
         href={backHref}
-        style={{ fontSize: 13, fontWeight: 600, color: "var(--sky-700)", textDecoration: "none" }}
+        style={{ fontSize: 13, fontWeight: 600, color: "var(--sky-700)", textDecoration: "none", alignSelf: "flex-start", borderRadius: 6 }}
       >
         ← {backLabel}
       </Link>
 
       {/* 2. Header */}
-      <header>
-        <h1 className="k-display" style={{ fontSize: 32, lineHeight: 1.15, margin: 0, color: "var(--navy-900)" }}>
-          {title}
-        </h1>
-        {subtitle && (
-          <p style={{ fontSize: 16, lineHeight: 1.5, color: "var(--navy-500)", margin: "10px 0 0" }}>{subtitle}</p>
-        )}
+      {/* PF1.2 (C-PF5.3): encabezado con `PageHeader`; los chips de la ficha van debajo. */}
+      <div>
+        <PageHeader eyebrow={isManual ? "Terapia manual" : "Biblioteca de ejercicios"} title={title} description={subtitle ?? undefined} />
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 14 }}>{chips}</div>
-      </header>
+      </div>
 
       {/* 3. Media */}
       {media.length > 0 && (
@@ -182,7 +179,7 @@ function MediaPlaceholder() {
         padding: "18px 14px",
         borderRadius: 12,
         background: "rgba(15,30,51,0.04)",
-        color: "var(--navy-300)",
+        color: "var(--navy-500)",
         fontSize: 12,
         textAlign: "center",
       }}
@@ -288,7 +285,7 @@ function SectionLabel({ children }: { children: ReactNode }) {
         fontWeight: 700,
         letterSpacing: "0.06em",
         textTransform: "uppercase",
-        color: "var(--navy-300)",
+        color: "var(--navy-500)",
       }}
     >
       {children}

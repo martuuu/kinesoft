@@ -17,7 +17,7 @@ import {
 } from "@/components/plataforma/tenants/labels";
 import { Facts, Section, muted } from "@/components/plataforma/tenants/detail-ui";
 import { TenantEditDrawer } from "@/components/plataforma/tenants/tenant-edit-drawer";
-import { PlatformPlanChangeDrawer } from "@/components/plataforma/billing/plan-change-drawer";
+import { PlatformPlanChangeDrawer } from "@/components/plataforma/billing/plan-change-launcher";
 
 /** «Acceso completo» / «En gracia · quedan 3 días». Es lo que vive el consultorio, no lo que se cargó. */
 export function accessText(d: Pick<PlatformTenantDetail, "access" | "effectiveAccessMode">): string {

@@ -88,7 +88,7 @@ function useFallbackRun(): RunPlatformAction {
       try {
         return await fn();
       } catch (err) {
-        const f = platformFailureOf(err, () => router.refresh()) ?? stepUpFailureOf(err);
+        const f = platformFailureOf(err, () => router.refresh()) ?? stepUpFailureOf(err); // refresh-ok: cambió el estado de auth (MFA)
         if (f) return f;
         if (classifyPlatformActionError(err)?.kind === "reauth") return { ok: false as const, error: PLATFORM_MFA_COPY.reauth };
         throw err;
@@ -152,7 +152,7 @@ function PlatformReauthLayer({ verifyAction, children }: { verifyAction: VerifyR
       try {
         return await fn();
       } catch (err) {
-        const f = platformFailureOf(err, () => router.refresh());
+        const f = platformFailureOf(err, () => router.refresh()); // refresh-ok: cambió el estado de auth (MFA)
         if (f) return f;
         if (classifyPlatformActionError(err)?.kind !== "reauth") throw err;
       }
@@ -160,7 +160,7 @@ function PlatformReauthLayer({ verifyAction, children }: { verifyAction: VerifyR
       try {
         return await fn();
       } catch (err) {
-        const f = platformFailureOf(err, () => router.refresh());
+        const f = platformFailureOf(err, () => router.refresh()); // refresh-ok: cambió el estado de auth (MFA)
         if (f) return f;
         // Pidió el código otra vez justo después de verificarlo: la cookie no se guardó (bloqueada por el browser).
         // No se abre otro modal en loop.
@@ -191,6 +191,7 @@ function PlatformReauthLayer({ verifyAction, children }: { verifyAction: VerifyR
       }
       settle(true);
     } catch (err) {
+      // refresh-ok: cambió el estado de auth (MFA): el layout manda a configurar o verificar en el próximo render.
       setError(platformFailureOf(err, () => router.refresh())?.error ?? "No se pudo verificar el código. Revisá la conexión y probá de nuevo.");
       setPending(false);
     }

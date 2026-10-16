@@ -360,7 +360,7 @@ function Toaster({
         position: "fixed",
         top: 16,
         right: 16,
-        zIndex: 90,
+        zIndex: "var(--z-toast)",
         display: "flex",
         flexDirection: "column",
         gap: 10,

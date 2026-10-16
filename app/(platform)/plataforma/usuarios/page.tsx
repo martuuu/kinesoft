@@ -1,4 +1,4 @@
-import { Card } from "@/components/ui/card";
+import { PageHeader } from "@/components/ui/page-header";
 import { searchPlatformUsers } from "@/lib/platform-users-read";
 import { UserList } from "@/components/plataforma/users/user-list";
 import { parseUsersQuery } from "@/components/plataforma/users/users-logic";
@@ -19,15 +19,16 @@ export default async function PlataformaUsuariosPage({ searchParams }: { searchP
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <Card style={{ padding: 24 }}>
-        <h1 className="k-display" style={{ fontSize: 26, margin: 0 }}>
-          Usuarios
-        </h1>
-        <p style={{ color: "var(--navy-500)", fontSize: 13.5, marginTop: 6, marginBottom: 0, maxWidth: 640, lineHeight: 1.45 }}>
-          Todas las cuentas de KineSoft: equipos de los consultorios y pacientes del portal. Buscá por email o nombre
-          para ver su acceso, mandarle un link o deshabilitarla.
-        </p>
-      </Card>
+      <PageHeader
+        eyebrow="Plataforma"
+        title="Usuarios"
+        description={
+          <>
+            Todas las cuentas de KineSoft: equipos de los consultorios y pacientes del portal. Buscá por email o nombre
+            para ver su acceso, mandarle un link o deshabilitarla.
+          </>
+        }
+      />
       <UserList page={page} query={{ ...query, page: page.page }} />
     </div>
   );

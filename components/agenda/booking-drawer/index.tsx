@@ -50,6 +50,9 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { Drawer } from "@/components/ui/drawer";
+import { Skel } from "@/components/ui/skeleton";
+import { buttonClassName } from "@/components/ui/button";
+import styles from "./booking-drawer.module.css";
 import {
   deleteBooking,
   setBookingStatus,
@@ -68,7 +71,6 @@ import { EditDetailsForm } from "./edit-details-form";
 import { EditToggles } from "./edit-toggles";
 import { PatientHeader } from "./patient-header";
 import { RecentBookings } from "./recent-bookings";
-import { RescheduleForm } from "./reschedule-form";
 import { ShareActions } from "./share-actions";
 import {
   DeleteBookingButton,
@@ -93,7 +95,6 @@ import type { SchedulablePlanSession } from "@/lib/plans-read-types";
 import { planSessionLabel } from "@/lib/plan-display";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { planUiPermissions } from "@/components/planes/plan-editor-types";
-import { ScheduleSessionModal } from "@/components/seguimiento/schedule-session-modal";
 import {
   LinkSessionModal,
   PlanRow,
@@ -128,6 +129,19 @@ const RenewAuthorizationDialog = dynamic(
 // vive en la agenda) no los descarga. La lectura `getBookingClinicalNote` se
 // importa al usarla por lo mismo (y para que el drawer no arrastre el módulo de
 // actions de evoluciones a quien no lo usa).
+// [PF1.2 · C-PF2] Lo que se abre tras un click (reprogramar, agendar la próxima sesión del plan) va en chunks aparte:
+// abrir el turno no los espera. «Reprogramar» se precarga al pasar el puntero o el foco por la fila de acciones
+// (`EditToggles`), y su skeleton tiene el alto del form para que el panel no salte.
+const loadRescheduleForm = () => import("./reschedule-form");
+const RescheduleForm = dynamic(() => loadRescheduleForm().then((m) => m.RescheduleForm), {
+  ssr: false,
+  loading: () => <Skel h={160} r={12} />,
+});
+const ScheduleSessionModal = dynamic(
+  () => import("@/components/seguimiento/schedule-session-modal").then((m) => m.ScheduleSessionModal),
+  { ssr: false }
+);
+
 const ClinicalNoteRow = dynamic(() => import("./clinical-note-row").then((m) => m.ClinicalNoteRow), {
   ssr: false,
 });
@@ -706,6 +720,7 @@ export function BookingDrawer({
               </div>
             )}
             {canOperate && (
+              <div onPointerEnter={() => void loadRescheduleForm()} onFocus={() => void loadRescheduleForm()}>
               <EditToggles
                 status={booking.status}
                 pending={pending}
@@ -728,6 +743,7 @@ export function BookingDrawer({
                   setEditingWhen(false);
                 }}
               />
+              </div>
             )}
           </div>
 
@@ -829,18 +845,7 @@ export function BookingDrawer({
           {booking.patientId && (
             <Link
               href={`/pacientes/${booking.patientId}`}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "12px 14px",
-                borderRadius: 12,
-                background: booking.patientAccess === "basic" ? "rgba(15,30,51,0.08)" : "var(--sky-700)",
-                color: booking.patientAccess === "basic" ? "var(--navy-700)" : "#fff",
-                fontWeight: 700,
-                textDecoration: "none",
-                fontSize: 13,
-              }}
+              className={buttonClassName({ variant: "ghost", block: true, className: styles.hcLink })}
             >
               {booking.patientAccess === "basic" ? "Ver datos básicos" : "Abrir historia clínica"}
               <span aria-hidden>→</span>
@@ -849,27 +854,6 @@ export function BookingDrawer({
 
           <ShareActions booking={booking} />
 
-          {canOperate && (
-            <StatusActions
-              pending={pending}
-              onSetStatus={(s) => setStatus(s)}
-              planSession={isPlanBooking ? { ordinal: planOrdinal } : null}
-            />
-          )}
-
-          {error && (
-            <div
-              style={{
-                padding: 10,
-                borderRadius: 10,
-                background: "var(--danger-bg)",
-                color: "var(--danger-fg)",
-                fontSize: 12,
-              }}
-            >
-              {error}
-            </div>
-          )}
 
           {canDelete &&
             typeof booking.programId === "string" &&
@@ -905,6 +889,35 @@ export function BookingDrawer({
               pending={pending}
               blockedByNote={bookingHasClinicalNote(noteRowEligible ? noteView : null)}
             />
+          )}
+
+          {/* G7: «Cambiar estado» + el error, pegados al pie (sticky) con separador. Eliminar/Cancelalo quedan
+              arriba, en el cuerpo: son destructivos y no van al lado de la primaria. */}
+          {(canOperate || error) && (
+            <div className={styles.footer}>
+              {error && (
+                <div
+                  role="alert"
+                  style={{
+                    padding: 10,
+                    borderRadius: 10,
+                    background: "var(--danger-bg)",
+                    color: "var(--danger-fg)",
+                    fontSize: 12,
+                  }}
+                >
+                  {error}
+                </div>
+              )}
+              {canOperate && (
+                <StatusActions
+                  pending={pending}
+                  onSetStatus={(s) => setStatus(s)}
+                  planSession={isPlanBooking ? { ordinal: planOrdinal } : null}
+                  current={booking.status}
+                />
+              )}
+            </div>
           )}
         </div>
       )}

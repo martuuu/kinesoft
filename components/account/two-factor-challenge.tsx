@@ -13,6 +13,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { TotpCodeInput } from "@/components/account/totp-code-input";
+import css from "./account.module.css";
 import {
   requestEmailCode,
   useRecoveryCode as redeemRecoveryCode,
@@ -180,13 +181,14 @@ export function TwoFactorChallenge({
                   maxLength={20}
                   placeholder="abcde-fghjk"
                   aria-invalid={error ? true : undefined}
+                  className={css.codeInput}
                   style={{
                     display: "block",
                     marginTop: 6,
                     width: "100%",
                     padding: "12px 14px",
                     borderRadius: 12,
-                    border: `1px solid ${error ? "rgba(225,75,75,0.4)" : "rgba(15,30,51,0.08)"}`,
+                    border: `1px solid ${error ? "var(--danger-border)" : "rgba(15,30,51,0.08)"}`,
                     background: "rgba(255,255,255,0.96)",
                     fontSize: 18,
                     letterSpacing: "0.12em",

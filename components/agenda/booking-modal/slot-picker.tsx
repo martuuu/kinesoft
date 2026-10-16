@@ -521,10 +521,10 @@ function chipStyle(tone: ChipTone, selected: boolean): React.CSSProperties {
     case "free":
       return { background: "#fff", color: "var(--sky-800)", border: "1px solid var(--sky-300)" };
     case "full":
-      return { background: "var(--warn-bg)", color: "var(--warn-fg)", border: "1px solid rgba(122,74,0,0.25)" };
+      return { background: "var(--warn-bg)", color: "var(--warn-fg)", border: "1px solid var(--warn-border)" };
     case "conflict":
       // Borde punteado: canal no cromático para "el paciente ya tiene turno".
-      return { background: "rgba(255,176,32,0.08)", color: "var(--warn-fg)", border: "1px dashed var(--warn-fg)" };
+      return { background: "var(--warn-bg)", color: "var(--warn-fg)", border: "1px dashed var(--warn-fg)" };
     case "blocked":
       return {
         background: "rgba(15,30,51,0.04)",

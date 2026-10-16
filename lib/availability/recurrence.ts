@@ -28,6 +28,7 @@
  */
 import { AR_OFFSET, toARDateKey, toARDow } from "@/lib/datetime-ar";
 import type { DayKey, Frequency, RecurrenceInput } from "@/lib/availability/types";
+import { unitCount, unitNone, type BookingUnit } from "@/lib/copy/booking-unit";
 
 /** Máximo de fechas que devuelve `expandDates` (= tope del batch). */
 export const RECURRENCE_MAX_COUNT = 60;
@@ -140,9 +141,12 @@ export function frequencyLabel(frequency: Frequency): string {
  *   "2 sesiones · Mensual 15/12/2026 → 15/01/2027" (si cruza de año)
  *   "Sin sesiones"
  * Toma el mínimo y el máximo (no asume orden).
+ *
+ * VX3-f: `unit` es obligatoria («turnos» en Clínica general, `lib/copy/booking-unit.ts`). Sin default a propósito:
+ * un caller nuevo que se olvide la unidad no compila, en vez de mostrar «sesiones» donde no corresponde.
  */
-export function summarizeRange(dates: ReadonlyArray<Date>, frequency: Frequency): string {
-  if (dates.length === 0) return "Sin sesiones";
+export function summarizeRange(dates: ReadonlyArray<Date>, frequency: Frequency, unit: BookingUnit): string {
+  if (dates.length === 0) return unitNone(unit);
   let min = dates[0];
   let max = dates[0];
   for (const d of dates) {
@@ -156,6 +160,6 @@ export function summarizeRange(dates: ReadonlyArray<Date>, frequency: Frequency)
     const [y, m, d] = key.split("-");
     return withYear ? `${d}/${m}/${y}` : `${d}/${m}`;
   };
-  if (dates.length === 1) return `1 sesión · ${fmt(first)}`;
-  return `${dates.length} sesiones · ${frequencyLabel(frequency)} ${fmt(first)} → ${fmt(last)}`;
+  if (dates.length === 1) return `${unitCount(unit, 1)} · ${fmt(first)}`;
+  return `${unitCount(unit, dates.length)} · ${frequencyLabel(frequency)} ${fmt(first)} → ${fmt(last)}`;
 }

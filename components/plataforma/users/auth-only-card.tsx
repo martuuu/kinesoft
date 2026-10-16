@@ -38,7 +38,6 @@ export function AuthOnlyCard({ hit }: { hit: PlatformAuthOnlyHit }) {
       const r = await runPlatform(() => repairDeleteAuthOrphan({ authUserId: hit.authUserId }));
       if (r.ok) {
         toast.success("Cuenta borrada");
-        router.refresh();
       } else {
         toast.error("No se pudo borrar", { description: r.error });
       }

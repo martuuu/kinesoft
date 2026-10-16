@@ -62,15 +62,27 @@ export function TenantDetailHeader({ detail: d }: { detail: PlatformTenantRow })
               </h1>
               {d.isPlatformHome && <Tag tone="lime">Plataforma</Tag>}
             </div>
-            <div style={{ fontSize: 13, color: "var(--navy-300)", fontFamily: "var(--font-mono)", marginTop: 2 }}>
-              {d.slug}
+            {/* PF1.2 (VX0-b P4): tipo y plan son datos, no estados: van en la línea del slug como texto. Los chips
+                quedan solo para estados, en dos pesos: el del consultorio relleno (tono por estado) y los secundarios
+                (suscripción, acceso) con borde. Antes eran cinco chips en tres estilos y la suscripción, con `soft`
+                sobre la card blanca, se leía como texto suelto. */}
+            <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 2, display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <span style={{ fontFamily: "var(--font-mono)" }}>{d.slug}</span>
+              <span aria-hidden="true">·</span>
+              <span>{VERTICAL_LABEL[d.vertical]}</span>
+              <span aria-hidden="true">·</span>
+              <span>Plan {SAAS_PLAN_LABEL[d.saasPlan]}</span>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
               <Tag tone={TENANT_STATUS_TONE[d.status]}>{TENANT_STATUS_LABEL[d.status]}</Tag>
-              <Tag tone="sky">{VERTICAL_LABEL[d.vertical]}</Tag>
-              <Tag tone="sky">Plan {SAAS_PLAN_LABEL[d.saasPlan]}</Tag>
-              <Tag tone="soft">{SUBSCRIPTION_STATUS_LABEL[d.subscriptionStatus]}</Tag>
-              {showAccess && <Tag tone="soft">Acceso: {ACCESS_MODE_LABEL[d.access.mode].toLowerCase()}</Tag>}
+              <Tag tone="soft" variant="outline">
+                Suscripción: {SUBSCRIPTION_STATUS_LABEL[d.subscriptionStatus].toLowerCase()}
+              </Tag>
+              {showAccess && (
+                <Tag tone="soft" variant="outline">
+                  Acceso: {ACCESS_MODE_LABEL[d.access.mode].toLowerCase()}
+                </Tag>
+              )}
             </div>
           </div>
           <SupportButton tenantId={d.id} tenantName={d.name} status={d.status} />
@@ -84,8 +96,8 @@ export function TenantDetailHeader({ detail: d }: { detail: PlatformTenantRow })
           style={{
             padding: "10px 12px",
             borderRadius: "var(--r-sm)",
-            background: "rgba(225,75,75,0.08)",
-            border: "1px solid rgba(225,75,75,0.25)",
+            background: "var(--danger-bg)",
+            border: "1px solid var(--danger-border)",
             color: "var(--danger-fg)",
             fontSize: 13,
             lineHeight: 1.45,

@@ -101,6 +101,14 @@ export function ServiceSection({
             </option>
           ))}
         </Select>
+        {/* G6: la ayuda va pegada al control que la resuelve (antes quedaba abajo, entre Título y Fecha). */}
+        {!serviceId && services.length > 0 && (
+          <div style={{ fontSize: 12, color: "var(--navy-400)" }}>
+            {practitionerId
+              ? "Elegí el servicio para ver los horarios libres."
+              : "Elegí el profesional y el servicio para ver los horarios libres."}
+          </div>
+        )}
         {serviceId && serviceEnabled === false && (
           <div
             role="status"
@@ -108,7 +116,7 @@ export function ServiceSection({
               fontSize: 11.5,
               color: "var(--warn-fg)",
               background: "var(--warn-bg)",
-              border: "1px solid rgba(255,176,32,0.45)",
+              border: "1px solid var(--warn-border)",
               borderRadius: 10,
               padding: "6px 10px",
             }}

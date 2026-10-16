@@ -318,7 +318,7 @@ const freedStyle: CSSProperties = {
   padding: "8px 10px",
   borderRadius: 10,
   // Ámbar = Ausente (PLANES "Ausente en ámbar"); el texto lleva el mensaje.
-  background: "rgba(245,158,11,0.12)",
+  background: "var(--warn-bg)",
   color: "var(--navy-900)",
   fontSize: 12,
 };

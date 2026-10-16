@@ -1,0 +1,70 @@
+/* [PF1.2-plataforma · VX0-b P2/P5] Lista de consultorios de /plataforma/consultorios.
+   P2: con `auto-fit` de 160 px el buscador cortaba su placeholder («…o sluǥ»), el select de estado se cortaba
+   («Activos, suspendidos y de…») y «Filtrar» caía solo en una segunda fila. Ahora: arriba el buscador a lo ancho con
+   «Buscar» y «Limpiar» en la MISMA fila; abajo los cuatro selects, que aplican al cambiar (`AutoSubmitSelect`), en una
+   grilla con mínimo de 180 px (4 columnas a 1366×768, 3-4 a 1024×768 según la barra, 1 a 390). Los campos son
+   `.k-input` (44 px / 16 px, D-VX13): la densidad se gana con la grilla, no achicando el control. */
+.filters {
+  display: grid;
+  gap: var(--space-2);
+}
+.searchRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+.search {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.searchActions {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  white-space: nowrap;
+}
+.selects {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+}
+.control {
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+/* P5: la tabla scrollea por dentro (1310 px) y la primera columna queda fija. Antes la celda fija pintaba
+   `--bg-panel` sobre filas blancas y un encabezado translúcido: se veía un bloque gris distinto en la primera celda.
+   Ahora la celda fija toma el MISMO fondo que su fila (el del encabezado arriba, el de la card en el cuerpo). */
+.scroller {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.headRow {
+  background: var(--bg-panel);
+  border-bottom: 1px solid rgba(15, 30, 51, 0.07);
+}
+.headRow .sticky {
+  background: var(--bg-panel);
+}
+.row .sticky {
+  background: var(--card-bg);
+}
+.sticky {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  box-shadow: 1px 0 0 rgba(15, 30, 51, 0.06);
+  margin-left: -16px;
+  padding-left: 16px;
+}
+/* P5: «Turnos online» partía el encabezado en dos líneas. */
+.head {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--navy-500);
+  white-space: nowrap;
+}

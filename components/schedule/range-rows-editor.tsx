@@ -165,8 +165,8 @@ export function RangeRowsEditor({
                 alignItems: "center",
                 padding: 6,
                 borderRadius: 10,
-                background: err ? "rgba(228,70,70,0.06)" : undefined,
-                border: err ? "1px solid rgba(225,75,75,0.35)" : "1px solid transparent",
+                background: err ? "var(--danger-bg)" : undefined,
+                border: err ? "1px solid var(--danger-border)" : "1px solid transparent",
               }}
             >
               <select

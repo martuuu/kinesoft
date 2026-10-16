@@ -28,6 +28,7 @@ import { useCatalogSearch } from "@/components/configuracion/catalog/use-catalog
 import { createService, deleteService } from "@/lib/services";
 import { addInsurerFromCatalog, createInsurer, deleteInsurer, linkInsurerToPayer, updateInsurer } from "@/lib/insurers";
 import { searchPayers } from "@/lib/catalog";
+import css from "./onboarding.module.css";
 import type { PayerOption } from "@/lib/catalog-schemas";
 // VX-Z: de `catalog-constants` (sin zod); importarla de `catalog-schemas` metía zod en el bundle de /onboarding.
 import { PAYER_KIND_LABEL } from "@/lib/catalog-constants";
@@ -369,9 +370,10 @@ export function StepInsurers({
                 placeholder="Buscá: OSDE, IOMA, Unión Personal…"
                 autoComplete="off"
                 aria-describedby="onb-insurer-hint"
+                className={css.textInput}
                 style={{
                   marginTop: 6, padding: "10px 12px", borderRadius: 12, background: "rgba(255,255,255,0.96)",
-                  border: "1px solid rgba(15,30,51,0.08)", width: "100%", fontSize: 16, color: "var(--navy-900)", outline: "none",
+                  border: "1px solid rgba(15,30,51,0.08)", width: "100%", fontSize: 16, color: "var(--navy-900)",
                 }}
               />
             </label>

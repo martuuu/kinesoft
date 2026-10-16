@@ -313,8 +313,8 @@ export function TenantEditForm({
           style={{
             padding: "10px 12px",
             borderRadius: "var(--r-sm)",
-            background: "rgba(225,75,75,0.08)",
-            border: "1px solid rgba(225,75,75,0.25)",
+            background: "var(--danger-bg)",
+            border: "1px solid var(--danger-border)",
             color: "var(--danger-fg)",
             fontSize: 13,
           }}
@@ -407,6 +407,7 @@ export function TenantEditDrawer({ detail }: { detail: PlatformTenantDetail }) {
         // no se toca, así que el cambio cargado no se pierde.
         setError(res.error);
         setFieldErrors(res.fieldErrors ?? {});
+        // refresh-ok: la action falló y no revalida (ver el porqué arriba).
         router.refresh();
         return;
       }
@@ -414,7 +415,6 @@ export function TenantEditDrawer({ detail }: { detail: PlatformTenantDetail }) {
       setBaseline(form);
       setOpen(false);
       toast.success("Suscripción actualizada");
-      router.refresh();
     } catch {
       setError("No se pudo guardar el cambio. Revisá la conexión y probá de nuevo.");
     } finally {

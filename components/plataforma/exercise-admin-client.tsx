@@ -17,6 +17,7 @@
  * catálogo global), así que editarlo era engañoso. Un `tier` viejo en la URL o
  * en las prefs guardadas lo descarta `sanitizeCatalogPrefs` (lib/preferences-constants.ts).
  */
+import { PageHeader } from "@/components/ui/page-header";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
@@ -38,6 +39,7 @@ import {
 } from "@/lib/preferences-constants";
 import { ExerciseDrawer } from "@/components/plataforma/exercise-drawer";
 import { TagFilterMenu, type TagOpt } from "@/components/plataforma/tag-filter-menu";
+import ctl from "./controls.module.css";
 
 /** Column track shared by the header and every row so the two never drift. */
 const COLS = "minmax(190px,2.3fr) 108px 58px minmax(150px,1.7fr) 96px 176px";
@@ -192,21 +194,16 @@ export function ExerciseAdminClient({
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
-      <header
-        style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}
-      >
-        <div>
-          <h1 style={{ fontSize: 19, fontWeight: 700, color: "var(--navy-900)", margin: 0, letterSpacing: "-0.01em" }}>
-            Catálogo de ejercicios
-          </h1>
-          <p style={{ fontSize: 12.5, color: "var(--navy-500)", margin: "3px 0 0" }}>
-            Ejercicios y terapias manuales globales — la base compartida por todos los consultorios.
-          </p>
-        </div>
-        <Button variant="primary" onClick={() => setCreating(true)}>
-          <IconPlus size={13} /> Nuevo ejercicio
-        </Button>
-      </header>
+      <PageHeader
+        eyebrow="Plataforma"
+        title="Catálogo de ejercicios"
+        description="Ejercicios y terapias manuales globales: la base compartida por todos los consultorios."
+        actions={
+          <Button variant="primary" onClick={() => setCreating(true)}>
+            <IconPlus size={13} /> Nuevo ejercicio
+          </Button>
+        }
+      />
 
       {/* ── Toolbar ───────────────────────────────────────────────────── */}
       <Card style={{ padding: 12, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
@@ -224,6 +221,7 @@ export function ExerciseAdminClient({
             <IconSearch size={14} />
           </span>
           <input
+            className={ctl.field}
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Buscar por nombre, descripción o tag…"
@@ -241,7 +239,6 @@ export function ExerciseAdminClient({
               background: "rgba(255,255,255,0.95)",
               fontSize: 13,
               color: "var(--navy-900)",
-              outline: "none",
             }}
           />
         </div>
@@ -433,7 +430,6 @@ function Row({ e, onEdit }: { e: GlobalExerciseAdminRow; onEdit: () => void }) {
         return;
       }
       toast.success(e.archived ? "Restaurado" : "Archivado");
-      router.refresh();
     });
   };
 
@@ -643,11 +639,14 @@ function Chip({ children, tone }: { children: React.ReactNode; tone: "sky" | "so
 }
 
 const headStyle: React.CSSProperties = {
-  fontSize: 10,
+  // PF1.2 (C-PF5.6): rótulo de tabla `nowrap` y navy-500 (navy-300 no llegaba a AA). 11 px y no `--fs-xs`: con
+  // las columnas fijas, «PRESCRIPCIÓN» en mayúsculas a 12 px pasaba los 96 px de su columna.
+  fontSize: 11,
   fontWeight: 700,
   letterSpacing: "0.06em",
   textTransform: "uppercase",
-  color: "var(--navy-300)",
+  color: "var(--navy-500)",
+  whiteSpace: "nowrap",
 };
 
 function Head({ children, align }: { children: React.ReactNode; align?: "right" }) {
@@ -703,6 +702,7 @@ function Select({
 }) {
   return (
     <select
+      className={ctl.field}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       style={{
@@ -713,7 +713,6 @@ function Select({
         fontSize: 12.5,
         color: "var(--navy-700)",
         cursor: "pointer",
-        outline: "none",
       }}
     >
       {options.map((o) => (

@@ -27,6 +27,7 @@ import {
   tenantHref,
   trialDaysLabel,
 } from "@/components/plataforma/tenants/labels";
+import styles from "./tenant-overview.module.css";
 
 export type VerticalPlanMatrix = {
   cells: Record<TenantVertical, Record<SaasPlan, number>>;
@@ -57,7 +58,7 @@ function Stat({ label, value, hint, href }: { label: string; value: number; hint
       <div className="k-display" style={{ fontSize: 30, fontWeight: 700, marginTop: 6, color: "var(--navy-900)" }}>
         {value}
       </div>
-      {hint && <div style={{ fontSize: 12, color: "var(--navy-300)", marginTop: 2 }}>{hint}</div>}
+      {hint && <div style={{ fontSize: 12, color: "var(--navy-400)", marginTop: 2 }}>{hint}</div>}
     </>
   );
   return (
@@ -154,15 +155,15 @@ function ListCard({
   return (
     <Card style={{ padding: 18, minWidth: 0 }}>
       <h2 className="k-display" style={{ fontSize: 17, margin: 0, fontWeight: 700 }}>
-        {title} <span style={{ color: "var(--navy-300)", fontWeight: 600 }}>· {count}</span>
+        {title} <span style={{ color: "var(--navy-400)", fontWeight: 600 }}>· {count}</span>
       </h2>
       {count === 0 ? (
-        <p style={{ fontSize: 13, color: "var(--navy-300)", marginBottom: 0 }}>{empty}</p>
+        <p style={{ fontSize: 13, color: "var(--navy-400)", marginBottom: 0 }}>{empty}</p>
       ) : (
         <ul style={{ listStyle: "none", padding: 0, margin: "12px 0 0", display: "grid", gap: 2 }}>{children}</ul>
       )}
       {count > shown && (
-        <p style={{ fontSize: 12, color: "var(--navy-300)", marginBottom: 0 }}>
+        <p style={{ fontSize: 12, color: "var(--navy-400)", marginBottom: 0 }}>
           Se muestran {shown} de {count}.
         </p>
       )}
@@ -182,8 +183,8 @@ const itemStyle: React.CSSProperties = {
 
 export function PlatformOverviewView({ overview }: { overview: PlatformOverview }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(170px, 100%), 1fr))", gap: 12 }}>
+    <div className={styles.root}>
+      <div className={styles.kpis}>
         <Stat label="Consultorios" value={overview.totalTenants} />
         <Stat
           label="Pruebas por vencer"
@@ -195,7 +196,7 @@ export function PlatformOverviewView({ overview }: { overview: PlatformOverview 
       </div>
 
       <section aria-label="Por estado del consultorio">
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(170px, 100%), 1fr))", gap: 12 }}>
+        <div className={styles.kpis}>
           {TENANT_STATUS_VALUES.map((st) => (
             <Stat key={st} label={TENANT_STATUS_PLURAL[st]} value={overview.byStatus[st]} href={statusListHref(st)} />
           ))}
@@ -222,7 +223,7 @@ export function PlatformOverviewView({ overview }: { overview: PlatformOverview 
                 <Link href={tenantHref(t.id)} style={{ fontWeight: 700, color: "var(--navy-900)", textDecoration: "none" }}>
                   {t.name}
                 </Link>
-                <span style={{ display: "block", fontSize: 12, color: "var(--navy-300)" }}>
+                <span style={{ display: "block", fontSize: 12, color: "var(--navy-400)" }}>
                   {VERTICAL_LABEL[t.vertical]} · {SAAS_PLAN_LABEL[t.saasPlan]} · {formatDayKeyAR(t.trialEndsOn)}
                 </span>
               </span>
@@ -252,7 +253,7 @@ export function PlatformOverviewView({ overview }: { overview: PlatformOverview 
                 <Link href={tenantHref(t.id)} style={{ fontWeight: 700, color: "var(--navy-900)", textDecoration: "none" }}>
                   {t.name}
                 </Link>
-                <span style={{ display: "block", fontSize: 12, color: "var(--navy-300)" }}>
+                <span style={{ display: "block", fontSize: 12, color: "var(--navy-400)" }}>
                   {VERTICAL_LABEL[t.vertical]} · {SAAS_PLAN_LABEL[t.saasPlan]}
                 </span>
               </span>
@@ -269,7 +270,7 @@ export function PlatformOverviewView({ overview }: { overview: PlatformOverview 
           <Link key={l.href} href={l.href} style={{ textDecoration: "none" }}>
             <Card style={{ padding: 16 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: "var(--sky-700)" }}>{l.label} →</div>
-              <div style={{ fontSize: 12, color: "var(--navy-300)", marginTop: 2 }}>{l.hint}</div>
+              <div style={{ fontSize: 12, color: "var(--navy-400)", marginTop: 2 }}>{l.hint}</div>
             </Card>
           </Link>
         ))}

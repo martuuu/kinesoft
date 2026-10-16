@@ -1,0 +1,26 @@
+/* [PF1.2-plataforma · VX0-b P3] Resumen de /plataforma. Los KPIs iban en dos grillas `auto-fit` (4 arriba, 3 abajo)
+   y cada fila repartía el ancho a su manera: las tarjetas de abajo salían más anchas que las de arriba. Ahora las dos
+   filas comparten la MISMA grilla de 4 columnas (2 en angosto), así cada KPI mide lo mismo. Va por container query
+   (el ancho útil depende de si la barra de Plataforma está abierta, no del viewport). */
+.root {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.kpis {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@container (min-width: 720px) {
+  .kpis {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@container (max-width: 359px) {
+  .kpis {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -42,14 +42,16 @@ import {
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const MINUTES = Array.from({ length: 60 / BLOCK_STEP_MIN }, (_, i) => i * BLOCK_STEP_MIN);
 
+// PF1.2 (C-PF5.4/5.6): sin `outline: none` (el foco de teclado no se veía) y a 44 px / 16 px como el resto de los
+// controles (D-VX13; con 13 px iOS hacía zoom al enfocar).
 const selectStyle: React.CSSProperties = {
+  minHeight: 44,
   padding: "10px 6px",
   borderRadius: 10,
   border: "1px solid rgba(15,30,51,0.1)",
-  background: "#fff",
-  fontSize: 13,
+  background: "var(--card-bg)",
+  fontSize: 16,
   color: "var(--navy-900)",
-  outline: "none",
 };
 
 const labelStyle: React.CSSProperties = {

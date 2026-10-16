@@ -37,6 +37,8 @@ import {
   seatLimitLabel,
   tenantHref,
 } from "@/components/plataforma/tenants/labels";
+import { AutoSubmitSelect } from "@/components/plataforma/tenants/auto-submit-select";
+import styles from "./tenant-list.module.css";
 
 /** Filtros normalizados ("" = sin filtro), como los parsea `PlatformTenantListQuery`. */
 export type TenantListQuery = {
@@ -74,41 +76,12 @@ const MIN_WIDTH = 1310;
 
 /**
  * BO-Z C6: la tabla scrollea en horizontal (1310 px) y en un celular, al ir a «Suscripción» o «Titular», se perdía de
- * qué consultorio era la fila. La primera columna queda fija a la izquierda (sticky dentro del `overflowX`), con fondo
- * opaco (`--bg-panel`) para que no se transparente lo que pasa por abajo y un filete a la derecha.
+ * qué consultorio era la fila. La primera columna queda fija a la izquierda (sticky dentro del `overflowX`) con un
+ * filete a la derecha. PF1.2 (P5): su fondo es el de su fila (`.headRow .sticky` / `.row .sticky` en el CSS Module).
  */
-const STICKY_FIRST: React.CSSProperties = {
-  position: "sticky",
-  left: 0,
-  zIndex: 1,
-  background: "var(--bg-panel)",
-  boxShadow: "1px 0 0 rgba(15,30,51,0.06)",
-  marginLeft: -16,
-  paddingLeft: 16,
-};
-
-const selectStyle: React.CSSProperties = {
-  padding: "9px 10px",
-  borderRadius: 12,
-  border: "1px solid rgba(15,30,51,0.08)",
-  background: "#fff",
-  fontSize: 13,
-  color: "var(--navy-900)",
-  minWidth: 0,
-};
-
 function Head({ children, align }: { children: ReactNode; align?: "right" }) {
   return (
-    <div
-      style={{
-        fontSize: 11,
-        fontWeight: 700,
-        letterSpacing: "0.04em",
-        textTransform: "uppercase",
-        color: "var(--navy-300)",
-        textAlign: align,
-      }}
-    >
+    <div className={styles.head} style={align ? { textAlign: align } : undefined}>
       {children}
     </div>
   );
@@ -117,72 +90,71 @@ function Head({ children, align }: { children: ReactNode; align?: "right" }) {
 function Filters({ query }: { query: TenantListQuery }) {
   const active = hasFilters(query);
   return (
-    <form
-      method="get"
-      action={LIST_PATH}
-      role="search"
-      style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fit, minmax(min(160px, 100%), 1fr))",
-        gap: 8,
-        alignItems: "center",
-      }}
-    >
-      <input
-        type="search"
-        name="q"
-        defaultValue={query.q}
-        placeholder="Buscar por nombre o slug"
-        aria-label="Buscar por nombre o slug"
-        maxLength={120}
-        style={selectStyle}
-      />
-      <select name="vertical" defaultValue={query.vertical} aria-label="Tipo" style={selectStyle}>
-        <option value="">Todos los tipos</option>
-        {TENANT_VERTICAL_VALUES.map((v) => (
-          <option key={v} value={v}>
-            {VERTICAL_LABEL[v]}
-          </option>
-        ))}
-      </select>
-      <select name="plan" defaultValue={query.plan} aria-label="Plan" style={selectStyle}>
-        <option value="">Todos los planes</option>
-        {SAAS_PLAN_VALUES.map((v) => (
-          <option key={v} value={v}>
-            {SAAS_PLAN_LABEL[v]}
-          </option>
-        ))}
-      </select>
-      <select
-        name="tenantStatus"
-        defaultValue={query.tenantStatus ?? ""}
-        aria-label="Estado del consultorio"
-        style={selectStyle}
-      >
-        <option value="">Activos, suspendidos y de baja</option>
-        {TENANT_STATUS_VALUES.map((v) => (
-          <option key={v} value={v}>
-            {TENANT_STATUS_LABEL[v]}
-          </option>
-        ))}
-      </select>
-      <select name="status" defaultValue={query.status} aria-label="Estado de la suscripción" style={selectStyle}>
-        <option value="">Todas las suscripciones</option>
-        {SUBSCRIPTION_STATUS_VALUES.map((v) => (
-          <option key={v} value={v}>
-            {SUBSCRIPTION_STATUS_LABEL[v]}
-          </option>
-        ))}
-      </select>
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <Button type="submit" variant="primary">
-          Filtrar
-        </Button>
-        {active && (
-          <Link href={LIST_PATH} style={{ fontSize: 13, fontWeight: 600, color: "var(--sky-700)" }}>
-            Limpiar
-          </Link>
-        )}
+    <form method="get" action={LIST_PATH} role="search" className={styles.filters}>
+      <div className={styles.searchRow}>
+        <input
+          type="search"
+          name="q"
+          defaultValue={query.q}
+          placeholder="Buscar por nombre o slug"
+          aria-label="Buscar por nombre o slug"
+          maxLength={120}
+          className={`k-input ${styles.control} ${styles.search}`}
+        />
+        <div className={styles.searchActions}>
+          <Button type="submit" variant="primary" size="md">
+            Buscar
+          </Button>
+          {active && (
+            <Link href={LIST_PATH} style={{ fontSize: "var(--fs-sm)", fontWeight: 600, color: "var(--sky-700)" }}>
+              Limpiar filtros
+            </Link>
+          )}
+        </div>
+      </div>
+      <div className={styles.selects}>
+        <AutoSubmitSelect name="vertical" defaultValue={query.vertical} aria-label="Tipo" className={`k-input ${styles.control}`}>
+          <option value="">Todos los tipos</option>
+          {TENANT_VERTICAL_VALUES.map((v) => (
+            <option key={v} value={v}>
+              {VERTICAL_LABEL[v]}
+            </option>
+          ))}
+        </AutoSubmitSelect>
+        <AutoSubmitSelect name="plan" defaultValue={query.plan} aria-label="Plan" className={`k-input ${styles.control}`}>
+          <option value="">Todos los planes</option>
+          {SAAS_PLAN_VALUES.map((v) => (
+            <option key={v} value={v}>
+              {SAAS_PLAN_LABEL[v]}
+            </option>
+          ))}
+        </AutoSubmitSelect>
+        <AutoSubmitSelect
+          name="tenantStatus"
+          defaultValue={query.tenantStatus ?? ""}
+          aria-label="Estado del consultorio"
+          className={`k-input ${styles.control}`}
+        >
+          <option value="">Todos los estados</option>
+          {TENANT_STATUS_VALUES.map((v) => (
+            <option key={v} value={v}>
+              {TENANT_STATUS_LABEL[v]}
+            </option>
+          ))}
+        </AutoSubmitSelect>
+        <AutoSubmitSelect
+          name="status"
+          defaultValue={query.status}
+          aria-label="Estado de la suscripción"
+          className={`k-input ${styles.control}`}
+        >
+          <option value="">Todas las suscripciones</option>
+          {SUBSCRIPTION_STATUS_VALUES.map((v) => (
+            <option key={v} value={v}>
+              {SUBSCRIPTION_STATUS_LABEL[v]}
+            </option>
+          ))}
+        </AutoSubmitSelect>
       </div>
     </form>
   );
@@ -190,7 +162,7 @@ function Filters({ query }: { query: TenantListQuery }) {
 
 function YesNo({ on, yes, no }: { on: boolean; yes: string; no: string }) {
   return (
-    <span style={{ fontSize: 12.5, fontWeight: 600, color: on ? "var(--lime-700)" : "var(--navy-300)" }}>
+    <span style={{ fontSize: 12.5, fontWeight: 600, color: on ? "var(--lime-700)" : "var(--navy-400)" }}>
       {on ? yes : no}
     </span>
   );
@@ -199,6 +171,7 @@ function YesNo({ on, yes, no }: { on: boolean; yes: string; no: string }) {
 function Row({ r }: { r: PlatformTenantRow }) {
   return (
     <div
+      className={styles.row}
       style={{
         display: "grid",
         gridTemplateColumns: COLS,
@@ -210,30 +183,30 @@ function Row({ r }: { r: PlatformTenantRow }) {
         color: "var(--navy-700)",
       }}
     >
-      <div style={{ minWidth: 0, ...STICKY_FIRST, alignSelf: "stretch", display: "grid", alignContent: "center" }}>
+      <div className={styles.sticky} style={{ minWidth: 0, alignSelf: "stretch", display: "grid", alignContent: "center" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <Link href={tenantHref(r.id)} style={{ fontWeight: 700, color: "var(--navy-900)", textDecoration: "none" }}>
             {r.name}
           </Link>
           {r.isPlatformHome && <Tag tone="lime">Plataforma</Tag>}
         </div>
-        <div style={{ fontSize: 12, color: "var(--navy-300)", fontFamily: "var(--font-mono)" }}>{r.slug}</div>
+        <div style={{ fontSize: 12, color: "var(--navy-400)", fontFamily: "var(--font-mono)" }}>{r.slug}</div>
       </div>
       <div style={{ display: "grid", gap: 3, justifyItems: "start" }}>
         <Tag tone={TENANT_STATUS_TONE[r.status]}>{TENANT_STATUS_LABEL[r.status]}</Tag>
-        <span style={{ fontSize: 11.5, color: "var(--navy-300)" }}>
+        <span style={{ fontSize: 11.5, color: "var(--navy-400)" }}>
           Acceso: {ACCESS_MODE_LABEL[r.effectiveAccessMode].toLowerCase()}
         </span>
       </div>
       <div>{VERTICAL_LABEL[r.vertical]}</div>
       <div>
         <div style={{ fontWeight: 600 }}>{SAAS_PLAN_LABEL[r.saasPlan]}</div>
-        <div style={{ fontSize: 12, color: "var(--navy-300)" }}>{seatLimitLabel(r)}</div>
+        <div style={{ fontSize: 12, color: "var(--navy-400)" }}>{seatLimitLabel(r)}</div>
       </div>
       <div>
         <div>{SUBSCRIPTION_STATUS_LABEL[r.subscriptionStatus]}</div>
         {r.trialEndsOn && (
-          <div style={{ fontSize: 12, color: "var(--navy-300)" }}>Prueba hasta {formatDayKeyAR(r.trialEndsOn)}</div>
+          <div style={{ fontSize: 12, color: "var(--navy-400)" }}>Prueba hasta {formatDayKeyAR(r.trialEndsOn)}</div>
         )}
       </div>
       <div>
@@ -250,7 +223,7 @@ function Row({ r }: { r: PlatformTenantRow }) {
             <div style={{ fontSize: 11.5, color: "var(--navy-500)" }}>Email: {r.ownerEmails.join(", ")}</div>
           </>
         ) : (
-          <span style={{ color: "var(--navy-300)" }}>—</span>
+          <span style={{ color: "var(--navy-400)" }}>—</span>
         )}
       </div>
       <div style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r.patientCount}</div>
@@ -300,19 +273,10 @@ export function TenantList({ page, query }: { page: PlatformTenantPage; query: T
       </div>
 
       <Card style={{ padding: 0, overflow: "hidden" }}>
-        <div style={{ overflowX: "auto" }}>
+        <div className={styles.scroller}>
           <div style={{ minWidth: MIN_WIDTH }}>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: COLS,
-                gap: 12,
-                padding: "10px 16px",
-                borderBottom: "1px solid rgba(15,30,51,0.07)",
-                background: "rgba(246,249,253,0.6)",
-              }}
-            >
-              <div style={STICKY_FIRST}>
+            <div className={styles.headRow} style={{ display: "grid", gridTemplateColumns: COLS, gap: 12, padding: "10px 16px" }}>
+              <div className={styles.sticky}>
                 <Head>Consultorio</Head>
               </div>
               <Head>Estado</Head>
@@ -330,7 +294,7 @@ export function TenantList({ page, query }: { page: PlatformTenantPage; query: T
                   {filtered ? "Nada coincide con los filtros." : "Todavía no hay consultorios."}
                 </div>
                 {filtered && (
-                  <div style={{ fontSize: 12, color: "var(--navy-300)", marginTop: 4 }}>
+                  <div style={{ fontSize: 12, color: "var(--navy-400)", marginTop: 4 }}>
                     Probá con otra búsqueda o quitá algún filtro.
                   </div>
                 )}

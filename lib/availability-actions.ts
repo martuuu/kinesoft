@@ -67,7 +67,8 @@ import { formatWallTime, minutesOfDayAR } from "@/lib/availability/day";
 import { defaultLocationFor } from "@/lib/bookings-core";
 import { loadRoomBookingsInTx, lockActiveRoomInTx } from "@/lib/booking-rooms-internal";
 import { BAD_ROOM_ERROR } from "@/lib/bookings-constants";
-import { roomsEnabled } from "@/lib/tenant-modules";
+import { modulesFor, roomsEnabled } from "@/lib/tenant-modules";
+import { bookingUnitOf } from "@/lib/copy/booking-unit";
 import {
   AgendaAvailabilityQuery,
   ClassifyInstantQuery,
@@ -722,7 +723,9 @@ export async function previewRecurrence(raw: RecurrencePreviewQueryInput): Promi
     ok: true,
     data: {
       frequency: q.frequency,
-      summary: summarizeRange(dates, q.frequency),
+      // VX3-f: «sesiones» en Kinesiología, «turnos» en Clínica general. La unidad sale de los módulos del actor
+      // (no del cliente): el resumen se arma una sola vez y con la palabra correcta.
+      summary: summarizeRange(dates, q.frequency, bookingUnitOf(modulesFor(actor.entitlements))),
       durationMin,
       requested: q.count,
       items,

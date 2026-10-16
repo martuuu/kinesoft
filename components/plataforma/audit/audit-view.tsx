@@ -55,7 +55,7 @@ function Head({ children }: { children: ReactNode }) {
         fontWeight: 700,
         letterSpacing: "0.04em",
         textTransform: "uppercase",
-        color: "var(--navy-300)",
+        color: "var(--navy-500)", whiteSpace: "nowrap",
       }}
     >
       {children}

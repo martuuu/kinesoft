@@ -99,7 +99,7 @@ export function BodyMapPanel({
           viewBox="0 0 240 520"
           width="100%"
           height={500}
-          style={{ maxWidth: 240, outline: "none" }}
+          style={{ maxWidth: 240, borderRadius: 12 }}
           role="application"
           aria-label={`Mapa corporal · vista ${view === "FRONT" ? "frontal" : "posterior"}. Usá las flechas para navegar, Enter para marcar, F/B para alternar vista.`}
           tabIndex={0}

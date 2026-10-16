@@ -233,3 +233,10 @@ a.railItem:hover {
   margin: 8px 0 0;
   line-height: 1.5;
 }
+
+/* PF1.2 (C-PF5.4): el buscador de prestadoras apagaba el contorno (`outline: none` inline) sin reemplazo y el foco
+   quedaba invisible. El anillo es `--focus-ring`; el outline transparente sobrevive en forced-colors. */
+.textInput:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: var(--focus-ring);
+}

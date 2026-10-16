@@ -137,7 +137,7 @@ export function RightStack({
                         width: 3,
                         alignSelf: "stretch",
                         borderRadius: 2,
-                        background: manual ? "var(--lime-700, #4f8a10)" : "var(--sky-700)",
+                        background: manual ? "var(--success-fg)" : "var(--sky-700)",
                       }}
                     />
                     <span style={{ flex: 1, fontSize: 12, fontWeight: 600 }}>{ex.name}</span>
@@ -301,7 +301,7 @@ function DxSuggestionCard({
                   fontWeight: 700,
                   padding: "2px 7px",
                   borderRadius: 999,
-                  background: "rgba(228,70,70,0.15)",
+                  background: "var(--danger-bg-strong)",
                   color: "var(--danger-fg)",
                 }}
               >

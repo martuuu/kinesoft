@@ -476,7 +476,9 @@ export function NewTenantDrawer() {
         return;
       }
       setResult(res.data);
-      router.refresh();
+      // PF1.2 (C-PF4): el alta revalida `/plataforma` (layout): la respuesta ya trae la lista con el consultorio nuevo.
+      // refresh-ok: un reintento `replayed` vuelve sin revalidar (lo hizo el primero, cuya respuesta se perdió).
+      if (res.data.replayed) router.refresh();
     } catch {
       // Misma clave al reintentar: si el primero sí llegó, el server lo devuelve como `replayed`.
       setError("No se pudo crear el consultorio. Revisá la conexión y probá de nuevo.");

@@ -437,6 +437,15 @@ describe("[BO3-B] ciclo de vida: confirmación tipeada del slug", () => {
   });
 });
 
+describe("[PF1.2-plataforma · VX0-b P4] header del detalle: chips solo para estados", () => {
+  it("tipo y plan van como texto junto al slug; suscripción con borde y sin chips celestes", () => {
+    const html = renderToStaticMarkup(<TenantDetailHeader detail={row()} />);
+    expect(html).toMatch(/Plan [A-ZÁÉÍÓÚ][a-záéíóú]+<\/span>/);
+    expect(html).not.toContain("k-tag-sky");
+    expect(html).toMatch(/Suscripción: [a-z]/);
+  });
+});
+
 describe("[BO3-B] header del detalle y soporte", () => {
   const supportBtn = /<button[^>]*>Entrar como soporte<\/button>/;
   const disabledSupport = /<button[^>]*disabled=""[^>]*>Entrar como soporte<\/button>/;

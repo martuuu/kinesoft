@@ -126,9 +126,12 @@ function RunsTable({ runs }: { runs: CatalogImportRunRow[] }) {
 }
 
 const headStyle: React.CSSProperties = {
-  fontSize: 10,
+  // PF1.2 (C-PF5.6): rótulo de tabla `nowrap` y navy-500 (navy-300 no llegaba a AA). 11 px y no `--fs-xs`: con
+  // las columnas fijas, «PRESCRIPCIÓN» en mayúsculas a 12 px pasaba los 96 px de su columna.
+  fontSize: 11,
   fontWeight: 700,
   letterSpacing: "0.06em",
   textTransform: "uppercase",
-  color: "var(--navy-300)",
+  color: "var(--navy-500)",
+  whiteSpace: "nowrap",
 };

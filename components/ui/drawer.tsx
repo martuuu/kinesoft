@@ -120,7 +120,6 @@ export function Drawer({
                 position: "fixed",
                 inset: 0,
                 background: "rgba(15,30,51,0.32)",
-                backdropFilter: "blur(2px)",
                 zIndex: "var(--z-drawer-backdrop)",
               }}
             />

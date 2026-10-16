@@ -97,6 +97,49 @@ export function landingLenses(b: Pick<OpenSessionBuckets, "sinTurno" | "realizad
 }
 
 /** Param de la página de detalle que abre el modal de agendar al entrar. */
+/**
+ * C8 (VX0-b): «Vencidas sin cerrar» como lista compacta agrupada por paciente. Con 29 vencidas en cards de alto
+ * variable, Hoy/Próximas quedaban a 1.500 px. Los grupos mantienen el orden en que llegan (el server ordena por fecha)
+ * y nunca se parten: se muestran grupos enteros hasta llegar a `limit` filas y el resto va colapsado («Ver todas»).
+ */
+export const OVERDUE_VISIBLE_ROWS = 6;
+
+export type PatientGroup<T> = { patientId: string; patientName: string; rows: T[] };
+
+export function groupByPatient<T extends { patientId: string; patientName: string }>(rows: readonly T[]): PatientGroup<T>[] {
+  const out: PatientGroup<T>[] = [];
+  const byId = new Map<string, PatientGroup<T>>();
+  for (const r of rows) {
+    let g = byId.get(r.patientId);
+    if (!g) {
+      g = { patientId: r.patientId, patientName: r.patientName, rows: [] };
+      byId.set(r.patientId, g);
+      out.push(g);
+    }
+    g.rows.push(r);
+  }
+  return out;
+}
+
+export function splitOverdueGroups<T extends { patientId: string; patientName: string }>(
+  rows: readonly T[],
+  limit = OVERDUE_VISIBLE_ROWS
+): { visible: PatientGroup<T>[]; hidden: PatientGroup<T>[]; hiddenRows: number } {
+  const groups = groupByPatient(rows);
+  const visible: PatientGroup<T>[] = [];
+  const hidden: PatientGroup<T>[] = [];
+  let shown = 0;
+  for (const g of groups) {
+    // El primer grupo siempre se ve, aunque solo él pase el límite (si no, la sección quedaría vacía).
+    // Cortado una vez, el resto también va colapsado: no se saltea un grupo para meter uno posterior (orden por fecha).
+    if (hidden.length === 0 && (visible.length === 0 || shown + g.rows.length <= limit)) {
+      visible.push(g);
+      shown += g.rows.length;
+    } else hidden.push(g);
+  }
+  return { visible, hidden, hiddenRows: rows.length - shown };
+}
+
 export const AGENDAR_PARAM = "agendar";
 
 export function sessionHref(sessionId: string, opts?: { agendar?: boolean }): string {

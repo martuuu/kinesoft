@@ -43,6 +43,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { FormField } from "@/components/ui/form-field";
+import styles from "./booking-modal.module.css";
 import { classifyBookingInstant } from "@/lib/availability-actions";
 import type { InstantCheck } from "@/lib/availability-actions-types";
 import { isoToARLocalInput, localToARIso } from "@/lib/datetime-ar";
@@ -195,7 +196,7 @@ export function ScheduleSection({
   return (
     <div style={{ display: "grid", gap: 8 }}>
       {slotPicker}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 86px", gap: 10, alignItems: "end" }}>
+      <div className={styles.scheduleRow}>
         {/* Controlado: FormField no emite el hidden en ese modo, va abajo. */}
         <FormField
           label={slotPicker ? "Fecha y hora (o cargá a mano)" : "Fecha y hora"}
@@ -222,9 +223,10 @@ export function ScheduleSection({
 }
 
 const TONE_STYLE: Record<InstantTone, React.CSSProperties> = {
-  ok: { background: "rgba(142,204,48,0.16)", color: "#3F5F0E" },
+  // C-PF5.2: tokens de estado (AA) en vez del lima/rojo sueltos.
+  ok: { background: "var(--success-bg)", color: "var(--success-fg)" },
   warn: { background: "var(--warn-bg)", color: "var(--warn-fg)" },
-  danger: { background: "rgba(225,75,75,0.12)", color: "var(--danger-fg)" },
+  danger: { background: "var(--danger-bg)", color: "var(--danger-fg)" },
 };
 
 function InstantStatusLine({ live }: { live: LiveState }) {

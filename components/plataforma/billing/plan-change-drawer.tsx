@@ -246,21 +246,29 @@ export function PlanChangeForm({
   );
 }
 
-export function PlatformPlanChangeDrawer({
-  tenantId,
-  tenantName,
-  current,
-  vertical,
-}: {
+export type PlatformPlanChangeProps = {
   tenantId: string;
   tenantName: string;
   current: SaasPlan;
   vertical: TenantVertical;
-}) {
+};
+
+/**
+ * PF1.2 (C-PF2): el Drawer sin su disparador. Lo baja con `next/dynamic` `PlatformPlanChangeDrawer`
+ * (`plan-change-launcher.tsx`), que pinta el botón y monta esto recién al primer click; cada apertura lo remonta con
+ * una `key` nueva, así arranca sin plan elegido ni preview (lo que antes hacía `openDrawer`).
+ */
+export function PlatformPlanChangePanel({
+  tenantId,
+  tenantName,
+  current,
+  vertical,
+  open,
+  onClose,
+}: PlatformPlanChangeProps & { open: boolean; onClose: () => void }) {
   const confirm = useConfirm();
   const toast = useToast();
   const runPlatform = usePlatformAction();
-  const [open, setOpen] = useState(false);
   const [to, setTo] = useState<SaasPlan | null>(null);
   const [preview, setPreview] = useState<PlanChangePreview | null>(null);
   const [loading, setLoading] = useState(false);
@@ -338,7 +346,7 @@ export function PlatformPlanChangeDrawer({
         }
         return;
       }
-      setOpen(false);
+      onClose();
       // Sin refresh extra del router: `platformApplyPlanChange` revalida y la respuesta ya trae la pestaña nueva (PF-0d).
       toast.success(`Plan cambiado a ${SAAS_PLAN_LABEL[to]}`);
     } catch {
@@ -348,41 +356,27 @@ export function PlatformPlanChangeDrawer({
     }
   };
 
-  const openDrawer = () => {
-    setTo(null);
-    setPreview(null);
-    setDisable(new Set());
-    setReactivate(new Set());
-    setError(null);
-    setOpen(true);
-  };
-
   return (
-    <>
-      <Button type="button" variant="ghost" onClick={openDrawer}>
-        Cambiar de plan
-      </Button>
-      <Drawer open={open} onClose={() => setOpen(false)} title="Cambiar de plan" dirty={to !== null} width={480}>
-        <p style={{ marginTop: 0, marginBottom: 16, fontSize: 13, color: "var(--navy-500)", lineHeight: 1.45 }}>
-          {tenantName}. Rige ya; sin prorrateo: el precio nuevo se cobra desde el próximo cargo.
-        </p>
-        <PlanChangeForm
-          current={current}
-          vertical={vertical}
-          to={to}
-          preview={preview}
-          loading={loading}
-          disable={disable}
-          reactivate={reactivate}
-          error={error}
-          pending={pending}
-          onPick={onPick}
-          onToggleDisable={(id) => setDisable((s) => toggle(s, id))}
-          onToggleReactivate={(id) => setReactivate((s) => toggle(s, id))}
-          onApply={() => void onApply()}
-          onCancel={() => setOpen(false)}
-        />
-      </Drawer>
-    </>
+    <Drawer open={open} onClose={onClose} title="Cambiar de plan" dirty={to !== null} width={480}>
+      <p style={{ marginTop: 0, marginBottom: 16, fontSize: 13, color: "var(--navy-500)", lineHeight: 1.45 }}>
+        {tenantName}. Rige ya; sin prorrateo: el precio nuevo se cobra desde el próximo cargo.
+      </p>
+      <PlanChangeForm
+        current={current}
+        vertical={vertical}
+        to={to}
+        preview={preview}
+        loading={loading}
+        disable={disable}
+        reactivate={reactivate}
+        error={error}
+        pending={pending}
+        onPick={onPick}
+        onToggleDisable={(id) => setDisable((s) => toggle(s, id))}
+        onToggleReactivate={(id) => setReactivate((s) => toggle(s, id))}
+        onApply={() => void onApply()}
+        onCancel={onClose}
+      />
+    </Drawer>
   );
 }

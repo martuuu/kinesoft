@@ -1,4 +1,4 @@
-import { Card } from "@/components/ui/card";
+import { PageHeader } from "@/components/ui/page-header";
 import { listPlatformAudit } from "@/lib/platform-audit-read";
 import { normalizeAuditFilters } from "@/lib/platform-audit-logic";
 import { AuditView } from "@/components/plataforma/audit/audit-view";
@@ -29,15 +29,16 @@ export default async function PlataformaAuditoriaPage({ searchParams }: { search
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <Card style={{ padding: 24 }}>
-        <h1 className="k-display" style={{ fontSize: 26, margin: 0 }}>
-          Auditoría
-        </h1>
-        <p style={{ color: "var(--navy-500)", fontSize: 13.5, marginTop: 6, marginBottom: 0, maxWidth: 640, lineHeight: 1.45 }}>
-          Todo lo que se hizo desde Plataforma: quién, cuándo, sobre qué consultorio o usuario y qué campos tocó. Las
-          fechas son de Argentina.
-        </p>
-      </Card>
+      <PageHeader
+        eyebrow="Plataforma"
+        title="Auditoría"
+        description={
+          <>
+            Todo lo que se hizo desde Plataforma: quién, cuándo, sobre qué consultorio o usuario y qué campos tocó. Las
+            fechas son de Argentina.
+          </>
+        }
+      />
       <AuditView page={page} filters={filters} />
     </div>
   );

@@ -110,8 +110,8 @@ export function PatientSection({
           style={{
             padding: "10px 12px",
             borderRadius: 12,
-            background: "rgba(54,179,126,0.1)",
-            border: "1px solid rgba(54,179,126,0.35)",
+            background: "var(--success-bg)",
+            border: "1px solid var(--success-border)",
             fontSize: 12.5,
             color: "var(--navy-700)",
             lineHeight: 1.45,

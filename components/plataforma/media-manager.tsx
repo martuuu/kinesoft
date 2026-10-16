@@ -31,6 +31,7 @@ import {
   deleteExerciseMedia,
   reorderExerciseMedia,
 } from "@/lib/exercise-media";
+import ctl from "./controls.module.css";
 
 export type MediaItem = {
   id: string;
@@ -57,7 +58,6 @@ const inputStyle: React.CSSProperties = {
   background: "rgba(255,255,255,0.96)",
   fontSize: 14,
   color: "var(--navy-900)",
-  outline: "none",
 };
 
 const labelStyle: React.CSSProperties = {
@@ -102,7 +102,6 @@ export function MediaManager({
       toast.success("Media agregada");
       onDone?.();
       onChanged?.();
-      router.refresh();
     });
   };
 
@@ -151,7 +150,6 @@ export function MediaManager({
       }
       toast.success("Orden actualizado");
       onChanged?.();
-      router.refresh();
     });
   };
 
@@ -173,7 +171,6 @@ export function MediaManager({
       }
       toast.success("Media eliminada");
       onChanged?.();
-      router.refresh();
     });
   };
 
@@ -297,7 +294,7 @@ export function MediaManager({
           <form ref={uploadRef} action={onUpload} style={{ display: "grid", gap: 10 }}>
             <label style={labelStyle}>
               Tipo
-              <select name="type" defaultValue="VIDEO" style={{ ...inputStyle, marginTop: 6, appearance: "auto", background: "#fff" }}>
+              <select name="type" className={ctl.field} defaultValue="VIDEO" style={{ ...inputStyle, marginTop: 6, appearance: "auto", background: "#fff" }}>
                 <option value="VIDEO">Video</option>
                 <option value="IMAGE">Imagen</option>
                 <option value="GIF">GIF</option>
@@ -333,7 +330,7 @@ export function MediaManager({
 
             <label style={labelStyle}>
               Epígrafe (opcional)
-              <input name="caption" style={{ ...inputStyle, marginTop: 6 }} />
+              <input name="caption" className={ctl.field} style={{ ...inputStyle, marginTop: 6 }} />
             </label>
 
             {error && <ErrorBox>{error}</ErrorBox>}
@@ -350,6 +347,7 @@ export function MediaManager({
                 value={ytUrl}
                 onChange={(e) => setYtUrl(e.target.value)}
                 placeholder="https://youtu.be/…"
+                className={ctl.field}
                 style={{ ...inputStyle, marginTop: 6 }}
               />
             </label>
@@ -358,6 +356,7 @@ export function MediaManager({
               <input
                 value={ytCaption}
                 onChange={(e) => setYtCaption(e.target.value)}
+                className={ctl.field}
                 style={{ ...inputStyle, marginTop: 6 }}
               />
             </label>

@@ -314,7 +314,7 @@ const RECEPTION_CSS = `
 .rcp-desk-link:focus-visible { outline: 2px solid var(--sky-700); outline-offset: 2px; }
 .rcp-counters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .rcp-counter { background: var(--card-bg); border: 1px solid rgba(15,30,51,0.06); border-radius: var(--r-md); padding: 10px 14px; }
-.rcp-counter[data-warn] { border-color: rgba(154,91,0,0.35); background: rgba(255,176,32,0.08); }
+.rcp-counter[data-warn] { border-color: var(--warn-border); background: var(--warn-bg); }
 .rcp-counter-label { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--navy-300); }
 .rcp-counter-value { font-size: 22px; font-weight: 700; color: var(--navy-900); line-height: 1.2; }
 .rcp-counter-hint { font-size: 11px; color: var(--navy-500); }
@@ -326,7 +326,7 @@ const RECEPTION_CSS = `
 .rcp-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .rcp-table thead th { padding: 12px 14px; text-align: left; font-size: 10px; font-weight: 700; color: var(--navy-300); letter-spacing: 0.06em; text-transform: uppercase; border-bottom: 1px solid rgba(15,30,51,0.06); }
 .rcp-row > td, .rcp-row > th { padding: 10px 14px; border-bottom: 1px solid rgba(15,30,51,0.04); vertical-align: middle; text-align: left; font-weight: inherit; }
-.rcp-row[data-highlight] { background: rgba(255,176,32,0.07); box-shadow: inset 3px 0 0 #E59A00; }
+.rcp-row[data-highlight] { background: var(--warn-bg); box-shadow: inset 3px 0 0 var(--warn-fg); }
 .rcp-time { font-weight: 700; color: var(--navy-700); white-space: nowrap; }
 .rcp-patient { min-width: 140px; }
 .rcp-link { background: none; border: none; padding: 0; font: inherit; font-weight: 600; color: var(--navy-900); cursor: pointer; text-align: left; }
@@ -350,13 +350,20 @@ const RECEPTION_CSS = `
   .rcp-counter-value { font-size: 18px; }
   .rcp-table, .rcp-table tbody { display: block; }
   .rcp-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-  .rcp-row { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; padding: 12px 14px; border-bottom: 1px solid rgba(15,30,51,0.06); }
-  .rcp-row > td, .rcp-row > th { display: block; padding: 0; border: none; }
-  .rcp-row > .rcp-time { grid-column: 1; font-size: 15px; }
-  .rcp-row > .rcp-patient { grid-column: 2; }
-  .rcp-row > td:not(.rcp-time) { grid-column: 1 / -1; }
-  .rcp-row > td:not(.rcp-time):not(.rcp-actions-cell)::before { content: attr(data-label) " · "; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--navy-300); }
-  .rcp-actions { justify-content: flex-start; margin-top: 6px; }
-  .rcp-btn { min-height: 40px; padding: 8px 14px; }
+  /* G8 (VX0-b): card de 2 líneas, «hora + paciente» arriba y «servicio · profesional · estado · espera» abajo, con
+     las acciones a la derecha. Antes cada celda era una línea con su rótulo en mayúsculas (~140 px por turno: 10
+     turnos = 1.500 px). Flex con «order»: el «::before» de la fila (ancho 100 %, alto 0) fuerza el corte de línea
+     entre las dos; las celdas siguen siendo «td»/«th» de la misma fila (la tabla no cambia para el lector). */
+  .rcp-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 10px 12px; border-bottom: 1px solid rgba(15,30,51,0.06); }
+  .rcp-row::before { content: ""; order: 2; flex-basis: 100%; height: 0; }
+  .rcp-row > td, .rcp-row > th { display: block; padding: 0; border: none; min-width: 0; }
+  .rcp-row > .rcp-time { order: 0; font-size: 15px; }
+  .rcp-row > .rcp-patient { order: 0; flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rcp-row > .rcp-actions-cell { order: 1; margin-left: auto; max-width: 60%; }
+  .rcp-row > td:not(.rcp-time):not(.rcp-actions-cell) { order: 3; font-size: 12px; color: var(--navy-500); max-width: 100%; }
+  .rcp-row > td:not(.rcp-time):not(.rcp-actions-cell) + td:not(.rcp-actions-cell)::before { content: "· "; color: var(--navy-300); }
+  .rcp-row .rcp-service { max-width: 160px; vertical-align: middle; }
+  .rcp-actions { justify-content: flex-end; }
+  .rcp-btn { min-height: 40px; padding: 8px 12px; }
 }
 `;

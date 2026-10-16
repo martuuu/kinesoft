@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Card } from "@/components/ui/card";
+import { PageHeader } from "@/components/ui/page-header";
 import { listAccounts } from "@/lib/platform-billing";
 import { saasBillingMode } from "@/lib/env";
 import { AccountsList } from "@/components/plataforma/billing/accounts-list";
@@ -27,16 +27,17 @@ export default async function PlataformaFacturacionPage({ searchParams }: { sear
   const rows = filterAccountRows(page.rows, query);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <Card style={{ padding: 24 }}>
-        <h1 className="k-display" style={{ fontSize: 26, margin: 0 }}>
-          Facturación
-        </h1>
-        <p style={{ color: "var(--navy-500)", fontSize: 13.5, marginTop: 6, marginBottom: 0, maxWidth: 680, lineHeight: 1.45 }}>
-          El estado de cuenta de cada consultorio: lo que debe, los comprobantes que mandaron y falta revisar, y cuándo
-          se genera el próximo cargo. Entrá a un consultorio para imputar un pago o revisar un comprobante. Los precios
-          de lista se cambian en <Link href={PRICES_PATH} style={{ color: "var(--sky-700)", fontWeight: 600 }}>Precios</Link>.
-        </p>
-      </Card>
+      <PageHeader
+        eyebrow="Plataforma"
+        title="Facturación"
+        description={
+          <>
+            El estado de cuenta de cada consultorio: lo que debe, los comprobantes que mandaron y falta revisar, y cuándo
+            se genera el próximo cargo. Entrá a un consultorio para imputar un pago o revisar un comprobante. Los precios
+            de lista se cambian en <Link href={PRICES_PATH} style={{ color: "var(--sky-700)", fontWeight: 600 }}>Precios</Link>.
+          </>
+        }
+      />
       <BillingModeNotice mode={saasBillingMode()} />
       <AccountsList rows={rows} nextCursor={page.nextCursor} query={query} />
     </div>

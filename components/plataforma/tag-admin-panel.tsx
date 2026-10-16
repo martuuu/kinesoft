@@ -254,7 +254,6 @@ function DeleteTagButton({ tag }: { tag: TagAdminRow }) {
         return;
       }
       toast.success("Categoría eliminada");
-      router.refresh();
     });
   };
 
@@ -263,7 +262,7 @@ function DeleteTagButton({ tag }: { tag: TagAdminRow }) {
       type="button"
       onClick={onClick}
       disabled={pending}
-      style={{ ...miniBtn, color: "var(--danger-fg)", borderColor: "rgba(159,31,31,0.25)" }}
+      style={{ ...miniBtn, color: "var(--danger-fg)", borderColor: "var(--danger-border)" }}
     >
       {pending ? "…" : "Eliminar"}
     </button>
@@ -298,7 +297,6 @@ function TagModal({
       }
       toast.success(existing ? "Categoría actualizada" : "Categoría creada");
       onClose();
-      router.refresh();
     });
   };
 

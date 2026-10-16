@@ -35,7 +35,8 @@ const STICKY_FIRST: CSSProperties = {
   position: "sticky",
   left: 0,
   zIndex: 1,
-  background: "var(--bg-panel)",
+  // PF1.2 (P5): el fondo de la celda fija es el de su fila (blanco en el cuerpo; el encabezado lo pisa abajo).
+  background: "var(--card-bg)",
   boxShadow: "1px 0 0 rgba(15,30,51,0.06)",
   marginLeft: -16,
   paddingLeft: 16,
@@ -49,7 +50,7 @@ function Head({ children, align }: { children: ReactNode; align?: "right" }) {
         fontWeight: 700,
         letterSpacing: "0.06em",
         textTransform: "uppercase",
-        color: "var(--navy-300)",
+        color: "var(--navy-500)", whiteSpace: "nowrap",
         textAlign: align,
       }}
     >
@@ -181,7 +182,7 @@ function Row({ r }: { r: PlatformAccountRow }) {
         {/* PL-Z (FX5): «N cargos vencidos» es lo único urgente de la lista y con `Tag` sky se perdía entre los demás.
             Ámbar + negrita + `role="status"`; no hay token `--warn-*` en globals.css, va el literal. */}
         {state.urgent ? (
-          <span role="status" className="k-tag" style={{ background: "rgba(228,176,32,0.18)", color: "var(--warn-fg)", fontWeight: 700 }}>
+          <span role="status" className="k-tag" style={{ background: "var(--warn-bg)", color: "var(--warn-fg)", fontWeight: 700 }}>
             {state.label}
           </span>
         ) : (
@@ -225,10 +226,10 @@ export function AccountsList({
                 gap: 12,
                 padding: "10px 16px",
                 borderBottom: "1px solid rgba(15,30,51,0.07)",
-                background: "rgba(246,249,253,0.95)",
+                background: "var(--bg-panel)",
               }}
             >
-              <div style={STICKY_FIRST}>
+              <div style={{ ...STICKY_FIRST, background: "var(--bg-panel)" }}>
                 <Head>Consultorio</Head>
               </div>
               <Head>Plan</Head>

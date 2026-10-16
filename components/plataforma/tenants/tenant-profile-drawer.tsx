@@ -163,6 +163,7 @@ export function TenantProfileDrawer({ detail }: { detail: PlatformTenantDetail }
       if (!res.ok) {
         setError(res.error);
         setFieldErrors(res.fieldErrors ?? {});
+        // refresh-ok: la action falló y no revalida; si fue «otro cambio se guardó antes», trae la versión vigente.
         router.refresh();
         return;
       }
@@ -170,7 +171,6 @@ export function TenantProfileDrawer({ detail }: { detail: PlatformTenantDetail }
       setBaseline(form);
       setOpen(false);
       toast.success("Datos del consultorio actualizados");
-      router.refresh();
     } catch {
       setError("No se pudo guardar el cambio. Revisá la conexión y probá de nuevo.");
     } finally {

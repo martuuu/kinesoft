@@ -38,6 +38,7 @@ import type {
   RecurrencePreviewQueryInput,
 } from "@/lib/availability-actions-types";
 import type { BatchSlotStatus } from "@/lib/booking-schedule";
+import { unitShortfall, type BookingUnit } from "@/lib/copy/booking-unit";
 
 /** Tope de la UI (el server acepta hasta 60). */
 export const SESSIONS_UI_MAX_COUNT = 20;
@@ -187,11 +188,13 @@ function isValidAnchor(iso: string | null | undefined): iso is string {
 /**
  * Resumen calculado en el cliente con la MISMA regla que el server
  * (`expandDates` + `summarizeRange`): se muestra al instante, antes (o sin)
- * respuesta del preview. "" si no hay ancla válida.
+ * respuesta del preview. "" si no hay ancla válida. `unit` (VX3-f): la misma
+ * que usa el server para el consultorio (`bookingUnitOf`).
  */
 export function localSummary(
   anchorIso: string | null | undefined,
   v: SessionsValue,
+  unit: BookingUnit,
 ): string {
   if (!isValidAnchor(anchorIso)) return "";
   const f = toBatchFields(v);
@@ -201,7 +204,7 @@ export function localSummary(
     daysOfWeek: f.daysOfWeek,
     frequency: f.frequency,
   });
-  return summarizeRange(dates, f.frequency);
+  return summarizeRange(dates, f.frequency, unit);
 }
 
 // ─── estado por fecha ─────────────────────────────────────────────────────
@@ -325,9 +328,10 @@ export function countsLine(c: SessionStateCounts): string {
 export function shortfallNote(
   requested: number,
   generated: number,
+  unit: BookingUnit,
 ): string | null {
   if (generated >= requested) return null;
-  return `Se generan ${generated} de ${requested} sesiones pedidas.`;
+  return unitShortfall(unit, generated, requested);
 }
 
 const DOW_SHORT = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"] as const;
