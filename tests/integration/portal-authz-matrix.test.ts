@@ -503,11 +503,9 @@ describe.skipIf(!RUN)("[ES4-S26p] matriz de autorización del portal", () => {
       expect(await pageOf(PortalAccountPageRoute({ params: { slug: K.slug } }))).toEqual({ kind: "notFound" });
     });
 
-    // HALLAZGO [ES4-S26p] `portal-cuenta-sin-sesion-404`: la tabla pide «→ login» (como /c/<slug> y /ejercicios, que
-    // muestran «Iniciá sesión» con el CTA a `/portal?c=<slug>`). La page de cuenta no distingue «sin sesión» de «no
-    // es tuyo» y responde 404: un paciente con la sesión vencida que abre el link de su estado de cuenta ve «no
-    // existe». No es una fuga (no muestra nada); es UX. Lo da vuelta quien dueñe la page (S24p).
-    it.fails("[ES4-S26p] P-sinverif → login (CTA a /portal?c=<slug>), no 404", async () => {
+    // Hallazgo [ES4-S26p] `portal-cuenta-sin-sesion-404`, cerrado en ES4 P4.Z: la page de cuenta no distinguía «sin
+    // sesión» de «no es tuyo» y respondía 404. Ahora, como /c/<slug> y /ejercicios, muestra el CTA a `/portal?c=<slug>`.
+    it("[ES4-S26p] P-sinverif → login (CTA a /portal?c=<slug>), no 404", async () => {
       as(PUnver, false);
       expect(await getPortalAccount(K.slug)).toBeNull();
       const out = await pageOf(PortalAccountPageRoute({ params: { slug: K.slug } }));
@@ -737,17 +735,19 @@ describe.skipIf(!RUN)("[ES4-S26p] matriz de autorización del portal", () => {
       expect((await db.patient.findUniqueOrThrow({ where: { id: free }, select: { userId: true } })).userId).toBe(PGen.id);
     });
 
-    // HALLAZGO [ES4-S26p] `portal-vincular-consultorio-suspendido`: la fila «Consultorio suspendido» de la tabla dice
-    // «escrituras ⛔», y `linkByInvite` (lib/portal-vincular.ts) no mira `publicSurfacesOpenFor`: con el consultorio
-    // suspendido la invitación vincula igual (escribe `Patient.userId`). A decidir: o el vínculo entra en «escrituras»
-    // y se corta como check-in y «Mis datos», o se asienta en la tabla que vincular no es una escritura del
-    // consultorio (solo habilita lecturas, que con suspensión siguen permitidas).
-    it.fails("[ES4-S26p] consultorio suspendido: la invitación no vincula (escritura ⛔)", async () => {
+    // Hallazgo [ES4-S26p] `portal-vincular-consultorio-suspendido`, decidido en ES4 P4.Z (default del orquestador, lo
+    // confirma Martin): vincular NO es una escritura del consultorio. Solo habilita LECTURAS (plan, turnos, cuenta), que
+    // con el consultorio suspendido siguen permitidas (Ley 26.529, BO2-D). Las escrituras del paciente (check-in, «Mis
+    // datos») siguen cortadas por `publicSurfacesOpenFor`. Antes era un it.fails que pedía el rechazo.
+    it("[ES4-S26p] consultorio suspendido: la invitación SÍ vincula (vincular habilita solo lecturas)", async () => {
       const someone = await account();
       const free = await addPatient(db, S, { email: someone.email });
       as(someone);
-      const r = await refusedWithoutWrite(() => linkPortalByInvite(form({ t: token(free, S, someone.email) })));
-      expect(r.ok).toBe(false);
+      const r = await linkPortalByInvite(form({ t: token(free, S, someone.email) }));
+      expect(r).toEqual({ ok: true, data: { slug: S.slug } });
+      expect((await db.patient.findUniqueOrThrow({ where: { id: free }, select: { userId: true } })).userId).toBe(
+        someone.id
+      );
     });
   });
 });

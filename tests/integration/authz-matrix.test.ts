@@ -833,17 +833,18 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "write",
       name: "Paciente · setPatientDiagnosis (clínico)",
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", // HALLAZGO S26b: `setPatientDiagnosis` no mira el módulo `diagnostico` (lib/patients.ts setPatientDiagnosisImpl):
-      // un consultorio GENERAL escribe el diagnóstico por RPC aunque la UI no lo muestre.
-      GENERAL: { exp: "deny", fails: "ES4-S26b", note: "sin `diagnostico` · hallazgo diagnostico-sin-gate-de-modulo" }, SUPPORT: "ro" },
+      // Hallazgo S26b `diagnostico-sin-gate-de-modulo`, cerrado en ES4 P4.Z: un GENERAL escribía el diagnóstico por RPC.
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny",
+      GENERAL: { exp: "deny", note: "sin `diagnostico` → ok:false (P4.Z)" }, SUPPORT: "ro" },
       act: (fx) => setPatientDiagnosis(fx.patientId, "S26b dx", "x"),
       effect: async (fx, db) => (await db.patient.findUniqueOrThrow({ where: { id: fx.patientId } })).diagnosisTitle === "S26b dx",
     },
     {
       kind: "write",
       name: "Paciente · recordEvaScore (clínico)",
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", GENERAL: { exp: "deny", note: "sin `evaluaciones`: hoy TIRA ForbiddenError (no `{ok:false}`)" }, SUPPORT: "ro" },
-      act: (fx) => settle(recordEvaScore({ patientId: fx.patientId, value: 5, source: "s26b" })),
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", GENERAL: { exp: "deny", note: "sin `evaluaciones` → ok:false, no tira (P4.Z)" }, SUPPORT: "ro" },
+      // Sin `settle`: desde P4.Z ninguna celda tira; si volviera a tirar ForbiddenError, la celda falla.
+      act: (fx) => recordEvaScore({ patientId: fx.patientId, value: 5, source: "s26b" }),
       effect: async (fx, db) => (await db.evaScore.count({ where: { patientId: fx.patientId, source: "s26b" } })) > 0,
     },
     {

@@ -11,7 +11,7 @@ import "server-only";
  */
 import { requirePortalPatient } from "@/lib/portal-identity-internal";
 import { loadPortalAccount } from "@/lib/portal-account-internal";
-import { portalSectionsFor } from "@/lib/portal-nav";
+import { PORTAL_SECTIONS, portalSectionsFor, type PortalSection } from "@/lib/portal-nav";
 import type { PortalAccountDTO } from "@/lib/portal-account-types";
 import type { TenantVertical } from "@prisma/client";
 
@@ -21,6 +21,8 @@ export type PortalAccountPage = {
   firstName: string;
   /** `portalSectionsFor(modules).has("plan")`: la UI muestra la sección de planes solo con el módulo. */
   showPlans: boolean;
+  /** ES4 P4.Z (handoff S24d): secciones de la ficha, para montar `<PortalTabs>` sin otra lectura. */
+  sections: PortalSection[];
   account: PortalAccountDTO;
 };
 
@@ -34,11 +36,13 @@ export async function getPortalAccount(slug: string): Promise<PortalAccountDTO |
 export async function getPortalAccountPage(slug: string): Promise<PortalAccountPage | null> {
   const ref = await requirePortalPatient(slug);
   if (!ref) return null;
+  const sections = portalSectionsFor(ref.modules);
   return {
     tenantName: ref.tenant.name,
     vertical: ref.tenant.vertical,
     firstName: ref.patient.firstName,
-    showPlans: portalSectionsFor(ref.modules).has("plan"),
+    showPlans: sections.has("plan"),
+    sections: PORTAL_SECTIONS.filter((x) => sections.has(x)),
     account: await loadPortalAccount(ref),
   };
 }

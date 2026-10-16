@@ -12,7 +12,7 @@ import "server-only";
  * → `loadPortalExercises` con el par tenantId + patientId del ref.
  */
 import { getPortalUser, requirePortalPatient } from "@/lib/portal-identity-internal";
-import { portalSectionsFor } from "@/lib/portal-nav";
+import { PORTAL_SECTIONS, portalSectionsFor } from "@/lib/portal-nav";
 import { resolveSlugAlias } from "@/lib/public-booking-internal";
 import { loadPortalExercises } from "@/lib/portal-exercises-internal";
 import type { PortalExercisesView } from "@/lib/portal-exercises-types";
@@ -28,7 +28,14 @@ export async function getPortalExercisesView(slug: string): Promise<PortalExerci
     const movedRef = moved && moved.slug !== slug ? await requirePortalPatient(moved.slug) : null;
     return { kind: "notFound", movedSlug: movedRef ? movedRef.tenant.slug : null };
   }
-  if (!portalSectionsFor(ref.modules).has("ejercicios")) return { kind: "notFound", movedSlug: null };
+  const sections = portalSectionsFor(ref.modules);
+  if (!sections.has("ejercicios")) return { kind: "notFound", movedSlug: null };
   const data = await loadPortalExercises({ tenantId: ref.tenantId, patientId: ref.patientId });
-  return { kind: "ok", tenantName: ref.tenant.name, vertical: ref.tenant.vertical, data };
+  return {
+    kind: "ok",
+    tenantName: ref.tenant.name,
+    vertical: ref.tenant.vertical,
+    sections: PORTAL_SECTIONS.filter((x) => sections.has(x)),
+    data,
+  };
 }

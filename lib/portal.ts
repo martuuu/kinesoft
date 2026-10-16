@@ -74,70 +74,89 @@ export async function getPortalAuth(): Promise<PortalAuth> {
 
   // S24a: solo las fichas VINCULADAS a esta cuenta (por userId), nunca por email.
   const refs = await listPortalPatients(me.id);
+  if (refs.length === 0) return { signedIn: true, email: me.email, fullName: me.fullName, patients: [] };
   const now = new Date();
-  const patients = await Promise.all(
-    refs.map(async (ref): Promise<PortalPatient> => {
-      const sections = portalSectionsFor(ref.modules);
-      const [programs, bookings] = await Promise.all([
-        // S24: sin `planes` (Clínica general) no se lee ningún plan: ni la query sale.
-        sections.has("plan")
-          ? prisma.treatmentProgram.findMany({
-              where: { patientId: ref.patientId, tenantId: ref.tenantId, ...PORTAL_PROGRAM_WHERE },
-              orderBy: [{ startDate: "desc" }, { createdAt: "desc" }, { id: "desc" }],
-              select: {
-                id: true,
-                title: true,
-                startDate: true,
-                sessions: { where: liveSessionWhere, select: { completedAt: true } },
-              },
-            })
-          : Promise.resolve([]),
-        prisma.booking.findMany({
+  // ES4 P4.Z (perf S26s #3): planes y turnos de TODAS las fichas en una lectura cada uno (en lote), no dos por
+  // consultorio: la home de una cuenta con N consultorios costaba 2·N sentencias. Cada rama del OR lleva el par
+  // patientId + tenantId del ref (canal BYPASSRLS), igual que las queries por ficha de antes.
+  const sectionsOf = new Map(refs.map((ref) => [ref.patientId, portalSectionsFor(ref.modules)]));
+  // S24: sin `planes` (Clínica general) no se leen planes de esa ficha; si ninguna los usa, ni la query sale.
+  const planRefs = refs.filter((ref) => sectionsOf.get(ref.patientId)!.has("plan"));
+  const [programs, bookings] = await Promise.all([
+    planRefs.length > 0
+      ? prisma.treatmentProgram.findMany({
+          // AND: `PORTAL_PROGRAM_WHERE` ya trae su propio `OR` (linkedProgramWhere) y un spread lo pisaría.
           where: {
-            patientId: ref.patientId,
-            tenantId: ref.tenantId,
-            scheduledFor: { gte: now },
-            status: { notIn: ["CANCELLED"] },
+            AND: [{ OR: planRefs.map((ref) => ({ patientId: ref.patientId, tenantId: ref.tenantId })) }, PORTAL_PROGRAM_WHERE],
           },
-          orderBy: { scheduledFor: "asc" },
-          take: 5,
+          orderBy: [{ startDate: "desc" }, { createdAt: "desc" }, { id: "desc" }],
           select: {
             id: true,
-            scheduledFor: true,
-            durationMin: true,
-            service: { select: { name: true } },
-            // DIR-0: sin `email`; el portal nunca muestra el email del profesional como nombre.
-            practitioner: { select: { user: { select: { fullName: true } } } },
+            patientId: true,
+            tenantId: true,
+            title: true,
+            startDate: true,
+            sessions: { where: liveSessionWhere, select: { completedAt: true } },
           },
-        }),
-      ]);
-      return {
-        id: ref.patientId,
-        tenantSlug: ref.tenant.slug,
-        tenantName: ref.tenant.name,
-        tenantVertical: ref.tenant.vertical,
-        firstName: ref.patient.firstName,
-        lastName: ref.patient.lastName,
-        sections: PORTAL_SECTIONS.filter((x) => sections.has(x)),
-        programs: programs.map((pr) => ({
-          id: pr.id,
-          title: pr.title,
-          // V1-D18: la N es la cantidad de sesiones VIVAS, igual que «Sesión n de N» (no `totalSessions`, que puede
-          // divergir de las filas: AUDIT `limites-sesiones-divergentes`).
-          totalSessions: pr.sessions.length,
-          completedSessions: pr.sessions.filter((s) => s.completedAt).length,
-          startDate: pr.startDate,
-        })),
-        upcoming: bookings.map((b) => ({
+        })
+      : Promise.resolve([]),
+    // Sin `take` por ficha (Prisma no tiene «top 5 por grupo»): se cortan 5 por ficha abajo. Son los turnos FUTUROS
+    // no cancelados de un paciente: acotados por su agenda real (un plan de 3/semana por 6 meses ≈ 80 filas).
+    prisma.booking.findMany({
+      where: {
+        OR: refs.map((ref) => ({ patientId: ref.patientId, tenantId: ref.tenantId })),
+        scheduledFor: { gte: now },
+        status: { notIn: ["CANCELLED"] },
+      },
+      orderBy: [{ scheduledFor: "asc" }, { id: "asc" }],
+      select: {
+        id: true,
+        patientId: true,
+        tenantId: true,
+        scheduledFor: true,
+        durationMin: true,
+        service: { select: { name: true } },
+        // DIR-0: sin `email`; el portal nunca muestra el email del profesional como nombre.
+        practitioner: { select: { user: { select: { fullName: true } } } },
+      },
+    }),
+  ]);
+
+  const patients = refs.map((ref): PortalPatient => {
+    const sections = sectionsOf.get(ref.patientId)!;
+    const mine = <T extends { patientId: string | null; tenantId: string }>(r: T) =>
+      r.patientId === ref.patientId && r.tenantId === ref.tenantId;
+    return {
+      id: ref.patientId,
+      tenantSlug: ref.tenant.slug,
+      tenantName: ref.tenant.name,
+      tenantVertical: ref.tenant.vertical,
+      firstName: ref.patient.firstName,
+      lastName: ref.patient.lastName,
+      sections: PORTAL_SECTIONS.filter((x) => sections.has(x)),
+      programs: sections.has("plan")
+        ? programs.filter(mine).map((pr) => ({
+            id: pr.id,
+            title: pr.title,
+            // V1-D18: la N es la cantidad de sesiones VIVAS, igual que «Sesión n de N» (no `totalSessions`, que puede
+            // divergir de las filas: AUDIT `limites-sesiones-divergentes`).
+            totalSessions: pr.sessions.length,
+            completedSessions: pr.sessions.filter((s) => s.completedAt).length,
+            startDate: pr.startDate,
+          }))
+        : [],
+      upcoming: bookings
+        .filter(mine)
+        .slice(0, 5)
+        .map((b) => ({
           id: b.id,
           scheduledFor: b.scheduledFor,
           durationMin: b.durationMin,
           serviceName: b.service.name,
           practitionerName: publicPractitionerName(b.practitioner.user.fullName),
         })),
-      };
-    })
-  );
+    };
+  });
 
   return { signedIn: true, email: me.email, fullName: me.fullName, patients };
 }

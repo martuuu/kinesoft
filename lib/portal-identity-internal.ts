@@ -20,13 +20,12 @@ import "server-only";
  *
  * El alias de slug viejo se resuelve en la página (`resolveSlugAlias`), no acá.
  */
-import type { TenantModule } from "@/lib/tenant-modules";
+import { modulesFor, type TenantModule } from "@/lib/tenant-modules";
 import type { TenantAccessInput } from "@/lib/tenant-access";
-import type { TenantVertical } from "@prisma/client";
+import type { SaasPlan, TenantVertical } from "@prisma/client";
 // Superficie del paciente, sin Actor: canal service (BYPASSRLS). Ver lib/db.ts#prismaService.
 import { prismaService as prisma } from "@/lib/db";
 import { getVerifiedSessionUser } from "@/lib/session-user";
-import { getTenantModulesById } from "@/lib/tenant-entitlements-internal";
 import { publicSurfacesOpenFor } from "@/lib/public-booking-internal";
 
 export type PortalUser = { id: string; email: string; fullName: string | null; isStaff: boolean };
@@ -51,7 +50,7 @@ export type PortalPatientRef = {
   tenantId: string;
   patientId: string;
   tenant: { id: string; slug: string; name: string; vertical: TenantVertical; publicEmail: string | null };
-  modules: ReadonlySet<TenantModule>; // getTenantModulesById(tenantId)
+  modules: ReadonlySet<TenantModule>; // modulesFor(entitlements de la fila del tenant)
   surfacesOpen: boolean; // publicSurfacesOpenFor(tenant): escrituras sin Actor (check-in, «Mis datos»)
   patient: { firstName: string; lastName: string; assignedPractitionerId: string | null };
 };
@@ -62,6 +61,10 @@ const TENANT_SELECT = {
   name: true,
   vertical: true,
   publicEmail: true,
+  // ES4 P4.Z (perf S26s #2): los entitlements van en la MISMA lectura del tenant. Antes `toRef` llamaba a
+  // `getTenantModulesById`, que releía la fila: `requirePortalPatient` costaba 4 sentencias y la home 1 más por ficha.
+  saasPlan: true,
+  publicBookingEnabled: true,
   // TenantAccessInput (BO2-D): lo que necesita `publicSurfacesOpenFor`.
   status: true,
   subscriptionStatus: true,
@@ -83,14 +86,16 @@ type TenantRow = TenantAccessInput & {
   slug: string;
   name: string;
   vertical: TenantVertical;
+  saasPlan: SaasPlan;
+  publicBookingEnabled: boolean;
   publicEmail: string | null;
 };
 
-async function toRef(
+function toRef(
   userId: string,
   tenant: TenantRow,
   patient: { id: string; firstName: string; lastName: string; assignedPractitionerId: string | null }
-): Promise<PortalPatientRef> {
+): PortalPatientRef {
   return {
     userId,
     tenantId: tenant.id,
@@ -103,7 +108,8 @@ async function toRef(
       vertical: tenant.vertical,
       publicEmail: tenant.publicEmail,
     },
-    modules: await getTenantModulesById(tenant.id),
+    // Mismo cálculo que `getTenantModulesById` (lib/tenant-entitlements-internal.ts), sin releer la fila.
+    modules: modulesFor({ vertical: tenant.vertical, plan: tenant.saasPlan, publicBookingEnabled: tenant.publicBookingEnabled }),
     surfacesOpen: publicSurfacesOpenFor(tenant),
     patient: {
       firstName: patient.firstName,
@@ -144,5 +150,5 @@ export async function listPortalPatients(userId: string): Promise<PortalPatientR
     select: { ...PATIENT_SELECT, tenant: { select: TENANT_SELECT } },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
-  return Promise.all(rows.filter((r) => r.userId === userId).map((r) => toRef(userId, r.tenant, r)));
+  return rows.filter((r) => r.userId === userId).map((r) => toRef(userId, r.tenant, r));
 }

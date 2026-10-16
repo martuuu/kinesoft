@@ -6,6 +6,7 @@ import { Tag } from "@/components/ui/tag";
 import { ButtonLink } from "@/components/ui/button";
 import { IconArrow } from "@/components/ui/icons";
 import { PortalExerciseList } from "@/components/portal/exercise-list";
+import { PortalTabs } from "@/components/portal/portal-tabs";
 import { BRAND_NAME } from "@/lib/brand";
 
 /*
@@ -59,6 +60,8 @@ export default async function PortalExercisesPage({ params }: { params: { slug: 
             : "Lo que tu profesional te indique para hacer en casa va a aparecer acá."}
         </p>
       </header>
+
+      <PortalTabs slug={params.slug} sections={view.sections} active="ejercicios" />
 
       {view.data ? (
         <PortalExerciseList data={view.data} vertical={view.vertical} />

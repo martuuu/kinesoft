@@ -17,8 +17,8 @@ import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { bookablePractitionerWhere, clinicalMembershipWhere, isActorPractitioner } from "@/lib/practitioner-scope";
 import { getActor, writableError, type Actor } from "@/lib/session";
-import { memberCapabilitiesForActor, requireModule } from "@/lib/authz";
-import { modulesFor } from "@/lib/tenant-modules";
+import { memberCapabilitiesForActor } from "@/lib/authz";
+import { MODULE_DENIED_COPY, modulesFor } from "@/lib/tenant-modules";
 import { canWriteClinical } from "@/lib/capabilities";
 import { bookingFieldAccess } from "@/lib/booking-field-access";
 import { findUsablePayerPlan } from "@/lib/catalog-validate";
@@ -1194,6 +1194,12 @@ async function setPatientDiagnosisImpl(
   note: string
 ): Promise<ActionResult> {
   const actor = await getActor();
+  // ES4 P4.Z (hallazgo S26b `diagnostico-sin-gate-de-modulo`): sin el módulo `diagnostico` (consultorio GENERAL) la UI
+  // no muestra el diagnóstico, pero la action se podía invocar por RPC y escribía. Se corta antes de abrir la tx y
+  // como `{ok:false}` (no tira): el drawer de la agenda muestra el error inline en vez de romper el render.
+  if (!modulesFor(actor.entitlements).has("diagnostico")) {
+    return { ok: false, error: MODULE_DENIED_COPY.diagnostico };
+  }
   const caps = await memberCapabilitiesForActor(actor);
   const result = await runWithRls(actor.tenantId, async (tx) => {
     const access = await patientAccessFor(actor, patientId, tx);
@@ -1239,8 +1245,13 @@ async function recordEvaScoreImpl(input: {
   value: number;
   source?: string;
 }): Promise<ActionResult<{ id: string }>> {
-  // Enmienda EV0 (S22b): escritura sin el módulo `evaluaciones` → tira (C-EV4).
-  const actor = await requireModule("evaluaciones");
+  // Enmienda EV0 (S22b) tiraba `ForbiddenError` sin el módulo `evaluaciones` (C-EV4). ES4 P4.Z (hallazgo S26b): ahora
+  // devuelve `{ok:false}` como el resto de las actions de la ficha (setPatientDiagnosis): en prod Next redacta el
+  // mensaje de un throw y el cliente veía un error genérico. Sigue sin escribir.
+  const actor = await getActor();
+  if (!modulesFor(actor.entitlements).has("evaluaciones")) {
+    return { ok: false, error: MODULE_DENIED_COPY.evaluaciones };
+  }
   // Gate + insert en la misma tx (antes eran dos: check y escritura separados).
   const row = await runWithRls(actor.tenantId, async (tx) => {
     const denied = await hcAccessError(actor, input.patientId, tx);

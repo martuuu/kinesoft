@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { Prisma } from "@prisma/client";
 import type { EmailOtpType } from "@supabase/supabase-js";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 // Sin Actor todavía (el usuario recién verifica): upsert del UserProfile por
@@ -101,16 +102,27 @@ export async function POST(req: Request) {
 
   // Mismo upsert que /auth/callback: el resto de la app asume que el
   // UserProfile existe para toda identidad con sesión.
-  await prisma.userProfile.upsert({
-    where: { id: user.id },
-    create: {
-      id: user.id,
-      email: (user.email ?? "").toLowerCase(),
-      fullName: (user.user_metadata?.full_name as string | undefined) ?? null,
-      avatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
-    },
-    update: { email: (user.email ?? "").toLowerCase() },
-  });
+  // ES4 P4.Z (hallazgo S24v): si OTRO UserProfile ya tiene ese email (cuenta recreada en Supabase con id nuevo), el
+  // upsert choca con el único de email (P2002) y el POST respondía 500 con la sesión de GoTrue ya abierta. Mismo
+  // tratamiento que /auth/callback: se cierra la sesión local y se vuelve al login con un error genérico.
+  try {
+    await prisma.userProfile.upsert({
+      where: { id: user.id },
+      create: {
+        id: user.id,
+        email: (user.email ?? "").toLowerCase(),
+        fullName: (user.user_metadata?.full_name as string | undefined) ?? null,
+        avatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+      },
+      update: { email: (user.email ?? "").toLowerCase() },
+    });
+  } catch (err) {
+    if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002")) throw err;
+    const { error: signOutError } = await supabase.auth.signOut({ scope: "local" });
+    // Sin el email: alcanza con el tipo de link para buscarlo en Supabase.
+    logger.warn("auth.confirm.profile_conflict", { type, ...(signOutError ? { signOutError: signOutError.message } : {}) });
+    return NextResponse.redirect(new URL("/login?error=oauth_failed", url.origin), 303);
+  }
 
   // IAM-3c: el magic link del portal vincula la ficha (Patient.userId) del consultorio del `next` (§5.8). Nunca tira.
   await linkPortalPatientsOnSignIn({ id: user.id, email: user.email, emailVerified: !!user.email_confirmed_at }, params.next);

@@ -188,6 +188,29 @@ describe.skipIf(!RUN)("portal · identidad y check-in", () => {
     expect(JSON.stringify(plan)).not.toContain("Nota privada del kine");
   });
 
+  // ES4 P4.Z (handoff S24e): el plan del portal es el mismo que eligen los ejercicios: sin archivados y con el orden
+  // startDate desc, createdAt desc, id desc. Un plan archivado más nuevo no le gana al vigente.
+  it("[ES4-P4.Z] getPortalPlan: sin planes archivados y mismo orden que ejercicios (startDate, createdAt, id)", async () => {
+    const uid = await patientIdentity();
+    const patientId = await linkedPatient(uid);
+    const start = new Date(Date.now() - 10 * 86_400_000);
+    const first = await addProgramWithSession(patientId, A, "Plan primero");
+    await db.treatmentProgram.update({ where: { id: first.programId }, data: { startDate: start, createdAt: new Date(Date.now() - 60_000) } });
+    // Mismo startDate, creado después → gana por createdAt desc.
+    const second = await addProgramWithSession(patientId, A, "Plan segundo");
+    await db.treatmentProgram.update({ where: { id: second.programId }, data: { startDate: start } });
+    // Más nuevo pero archivado → no cuenta ni en el plan ni en la home.
+    const archived = await addProgramWithSession(patientId, A, "Plan archivado");
+    await db.treatmentProgram.update({ where: { id: archived.programId }, data: { archivedAt: new Date() } });
+    asUser(uid);
+
+    const plan = await getPortalPlan(A.slug);
+    expect(plan?.programId).toBe(second.programId);
+    const auth = await getPortalAuth();
+    if (!auth.signedIn) throw new Error("debería tener sesión");
+    expect(auth.patients.find((p) => p.id === patientId)?.programs.map((p) => p.id)).toEqual([second.programId, first.programId]);
+  });
+
   // BO2-D (C-BO1 `publicSurfacesOpen`): el check-in es una escritura sin Actor; con el consultorio suspendido
   // (o en solo lectura bajo `enforce`) se rechaza sin escribir. Leer el plan NO se corta (Ley 26.529).
   it("[BO2-D] consultorio suspendido o en solo lectura con enforce: check-in rechazado, el plan se sigue viendo", async () => {

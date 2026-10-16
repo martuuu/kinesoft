@@ -29,4 +29,11 @@ export type PortalExercisesDTO = {
 export type PortalExercisesView =
   | { kind: "signedOut" }
   | { kind: "notFound"; movedSlug: string | null }
-  | { kind: "ok"; tenantName: string; vertical: import("@prisma/client").TenantVertical; data: PortalExercisesDTO };
+  | {
+      kind: "ok";
+      tenantName: string;
+      vertical: import("@prisma/client").TenantVertical;
+      /** ES4 P4.Z (handoff S24d): secciones de la ficha, para montar `<PortalTabs>` sin otra lectura. */
+      sections: import("@/lib/portal-nav").PortalSection[];
+      data: PortalExercisesDTO;
+    };

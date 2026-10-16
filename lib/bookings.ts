@@ -386,6 +386,8 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
         // C9 (S12): vínculo con el plan, para la proyección de abajo.
         programId: true,
         sessionId: true,
+        // ES4 P4.Z (perf S26s #1): escalar en la misma sentencia; la proyección C9 no vuelve a leer Booking.
+        pricedByPlan: true,
         // `discipline` para C9: así la proyección no vuelve a leer Service.
         service: { select: { name: true, color: true, priceCents: true, discipline: true } },
         patient: { select: { firstName: true, lastName: true } },
@@ -406,8 +408,12 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
         programId: r.programId,
         sessionId: r.sessionId,
         serviceDiscipline: r.service.discipline,
+        pricedByPlan: r.pricedByPlan,
       })),
-      caps
+      caps,
+      // ES4 P4.Z (perf S26s #1): el acceso de arriba cubre a todos los pacientes de las filas; sin esto la
+      // proyección hacía un segundo `bulkPatientAccess` (3 sentencias) para el título del plan.
+      access
     );
     // PD-13 (S07sb): cobertura/copago también para `admin` (Secretaria y
     // Facturación ven obra social y estado de cobro); nunca para `basic`.

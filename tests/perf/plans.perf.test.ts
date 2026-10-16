@@ -84,10 +84,10 @@ const BUDGET = {
   /**
    * Sentencias FIJAS que suma la proyección C9 (lib/agenda-plan-projection-internal.ts) cuando la semana tiene turnos
    * de plan: sesiones vivas (1), `pricedByPlan` (1) y un segundo `bulkPatientAccess` para el título (3). Medido en
-   * S26s: 12 sin planes → 17 con planes. Hallazgo: `pricedByPlan` ya podría venir en el select de la agenda y el
-   * acceso ya lo calculó `listAgendaBookings` (4 de las 5 sobran).
+   * S26s: 12 sin planes → 17 con planes. ES4 P4.Z: `pricedByPlan` viene en el select de la agenda, el acceso lo pasa
+   * `listAgendaBookings` y planes + sesiones van en una sola sentencia → 12 → 12 (0 de más).
    */
-  agendaPlanProjection: 5,
+  agendaPlanProjection: 0,
   requirePortalPatient: 3,
   portalPerTenant: 1,
   listPatients: 10,
@@ -527,7 +527,7 @@ describe.skipIf(!RUN)("perf ES4 S26s — Planes, Seguimiento, agenda con planes 
     expect(m.statements).toBe(r.statements);
   });
 
-  it.fails("[ES4-S26s] listAgendaBookings con turnos de plan: ≤ +5 % contra la misma semana sin planes", async () => {
+  it("[ES4-S26s] listAgendaBookings con turnos de plan: ≤ +5 % contra la misma semana sin planes", async () => {
     const { ceiling, refCeiling } = agendaCeiling("listAgendaBookings", "a.listAgendaBookings.week");
     expect(agendaWithPlans).not.toBeNull();
     expect(agendaWithPlans!.statements).toBeLessThanOrEqual(ceiling);
@@ -620,7 +620,7 @@ describe.skipIf(!RUN)("perf ES4 S26s — Planes, Seguimiento, agenda con planes 
 
   // ── Portal ──────────────────────────────────────────────────────────────────
 
-  it.fails("[ES4-S26s] requirePortalPatient: ≤ 3 sentencias (HEAD: 4, `getTenantModulesById` relee el Tenant por id)", async () => {
+  it("[ES4-S26s] requirePortalPatient: ≤ 3 sentencias (P4.Z: los entitlements van en la lectura del Tenant)", async () => {
     asUser(portalUserId);
     try {
       const slug = (await db.tenant.findUniqueOrThrow({ where: { id: T.tenantId }, select: { slug: true } })).slug;
@@ -635,7 +635,7 @@ describe.skipIf(!RUN)("perf ES4 S26s — Planes, Seguimiento, agenda con planes 
     }
   });
 
-  it.fails("[ES4-S26s] /portal home: ≤ 1 sentencia por consultorio vinculado (HEAD: 2, planes y turnos por separado)", async () => {
+  it("[ES4-S26s] /portal home: ≤ 1 sentencia por consultorio vinculado (P4.Z: planes y turnos en lote)", async () => {
     asUser(portalUserId);
     try {
       const measured: { n: number; statements: number; tenantReads: number }[] = [];

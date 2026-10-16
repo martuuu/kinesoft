@@ -20,6 +20,7 @@ import { addPatient, createEphemeralTenant, ownerClient, uniqueSuffix } from "@/
 
 const sb = vi.hoisted(() => ({
   calls: [] as Array<{ type: string; token_hash: string }>,
+  signOuts: 0,
   result: null as null | {
     user: { id: string; email: string; email_confirmed_at?: string; user_metadata?: Record<string, unknown> } | null;
     error: { message: string } | null;
@@ -32,6 +33,10 @@ vi.mock("@/lib/supabase/server", () => ({
         sb.calls.push(p);
         const r = sb.result ?? { user: null, error: { message: "Token has expired or is invalid" } };
         return { data: { user: r.user, session: r.user ? {} : null }, error: r.error };
+      },
+      signOut: async () => {
+        sb.signOuts += 1;
+        return { error: null };
       },
     },
   }),
@@ -72,6 +77,7 @@ describe.skipIf(!RUN)("/auth/confirm · GET no consume, POST canjea", () => {
   });
   beforeEach(() => {
     sb.calls = [];
+    sb.signOuts = 0;
     sb.result = null;
     cookies().delete(RECOVERY_COOKIE);
   });
@@ -175,6 +181,22 @@ describe.skipIf(!RUN)("/auth/confirm · GET no consume, POST canjea", () => {
       // La ficha apunta al UserProfile: se borra el consultorio (y la ficha) antes que el perfil en afterAll.
       await t.cleanup();
     }
+  });
+
+  it("[ES4-P4.Z] email de OTRO UserProfile (P2002 en el upsert) → sesión cerrada y /login?error=oauth_failed, no 500", async () => {
+    // Hallazgo S24v: el upsert por id choca con el único de email cuando otro perfil ya tiene ese email (cuenta
+    // recreada en Supabase con id nuevo). Antes el POST tiraba y Next devolvía 500 con la sesión de GoTrue abierta.
+    const owner = newUser();
+    await db.userProfile.create({ data: { id: owner.id, email: owner.email } });
+    const intruder = newUser();
+    sb.result = { user: { id: intruder.id, email: owner.email, email_confirmed_at: new Date().toISOString() }, error: null };
+    const r = await post({ token_hash: HASH, type: "magiclink", next: "/portal" });
+    expect(r.status).toBe(303);
+    expect(location(r)).toBe("/login?error=oauth_failed");
+    expect(sb.signOuts).toBe(1);
+    expect(await db.userProfile.findUnique({ where: { id: intruder.id } })).toBeNull();
+    expect((await db.userProfile.findUniqueOrThrow({ where: { id: owner.id } })).email).toBe(owner.email);
+    expect(cookies().get(RECOVERY_COOKIE)).toBeUndefined();
   });
 
   it("POST con parámetros inválidos → link_invalid sin llamar a verifyOtp", async () => {

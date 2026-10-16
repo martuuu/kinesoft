@@ -132,8 +132,9 @@ describe.skipIf(!RUN)("EV-C1 · guards de módulo", () => {
     const kPatient = await addPatient(db, K);
 
     asUser(G.userId);
-    const err = await recordEvaScore({ patientId: gPatient, value: 5 }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(ForbiddenError);
+    // ES4 P4.Z: sin el módulo devuelve `{ok:false}` con el copy del módulo (antes tiraba ForbiddenError).
+    const denied = await recordEvaScore({ patientId: gPatient, value: 5 });
+    expect(denied).toEqual({ ok: false, error: MODULE_DENIED_COPY.evaluaciones });
     expect(await db.evaScore.count({ where: { patientId: gPatient } })).toBe(0);
     // Una EVA cargada por otro camino (p. ej. el tenant era Kine antes) no sale.
     await db.evaScore.create({ data: { patientId: gPatient, value: 7 } });
