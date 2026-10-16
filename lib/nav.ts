@@ -53,6 +53,11 @@ export type NavItem = {
    * misma pantalla que el sidebar (revisión EV0).
    */
   shortcut?: string;
+  /**
+   * MB-0c (C-MB1): rótulo de la barra inferior bajo 768 px, donde cada ítem tiene ~70 px de ancho y «Sala de espera»
+   * se cortaba en dos líneas. Sin `shortLabel` la barra usa `label`.
+   */
+  shortLabel?: string;
 };
 
 export const NAV_ITEMS: readonly NavItem[] = [
@@ -65,6 +70,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   {
     href: "/sala",
     label: "Sala de espera",
+    shortLabel: "Sala",
     icon: "clock",
     module: "salaEspera",
     capability: "agenda.reception",
@@ -122,6 +128,48 @@ export function navFor(
   caps?: ReadonlySet<Capability>
 ): NavItem[] {
   return NAV_ITEMS.filter((it) => allowed(it, modules, caps));
+}
+
+/**
+ * Barra de navegación inferior (MB-0c, C-MB1, variante fija MB-D1). Prioridad de los destinos: lo que la Secretaria
+ * alterna decenas de veces por hora (Agenda ↔ Sala) más Inicio y Pacientes.
+ */
+export const BOTTOM_NAV_PRIORITY: readonly string[] = ["/dashboard", "/agenda", "/sala", "/pacientes"];
+const BOTTOM_NAV_MAX_LINKS = 4;
+
+export type BottomNavEntry =
+  | { kind: "link"; href: string; label: string; icon: NavIconKey }
+  | { kind: "more"; label: "Más" };
+
+/**
+ * Destinos de la barra inferior: sale de `navFor` (misma fuente que sidebar y ⌘K, nunca una lista aparte). Toma los
+ * de `BOTTOM_NAV_PRIORITY` que el actor ve; si falta alguno (sin Sala en General/Individual o para BILLING), completa
+ * con los siguientes de `navFor` en su orden hasta 4. El 5.º es siempre «Más», que abre el menú completo
+ * (`MobileNavDrawer`: el resto del nav, Configuración, Apariencia, cuenta y cambiar de consultorio).
+ */
+export function bottomNavFor(
+  modules: ReadonlySet<TenantModule>,
+  caps?: ReadonlySet<Capability>
+): BottomNavEntry[] {
+  const items = navFor(modules, caps);
+  const picked: NavItem[] = [];
+  for (const href of BOTTOM_NAV_PRIORITY) {
+    const it = items.find((x) => x.href === href);
+    if (it) picked.push(it);
+  }
+  for (const it of items) {
+    if (picked.length >= BOTTOM_NAV_MAX_LINKS) break;
+    if (!picked.includes(it)) picked.push(it);
+  }
+  // Orden final = orden de `navFor` (el mismo del sidebar): el dedo encuentra cada destino donde lo espera.
+  const order = (it: NavItem) => items.indexOf(it);
+  return [
+    ...picked
+      .slice(0, BOTTOM_NAV_MAX_LINKS)
+      .sort((a, b) => order(a) - order(b))
+      .map((it): BottomNavEntry => ({ kind: "link", href: it.href, label: it.shortLabel ?? it.label, icon: it.icon })),
+    { kind: "more", label: "Más" },
+  ];
 }
 
 /** `nav:dashboard` para `/dashboard`, `nav:agenda` para `/agenda?view=…`. */

@@ -252,7 +252,6 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
           specialty: p.specialty,
           licenseNumber: p.licenseNumber,
           yearsExp: p.yearsExp,
-          rating: p.rating,
           locationIds,
           acceptedInsurerIds: insurers
             .filter((ins) => ins.isParticular || acceptsInsurer(ppRows, p.id, ins.id))

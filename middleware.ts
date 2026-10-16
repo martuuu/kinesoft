@@ -201,5 +201,13 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  // MB-0b (C-MB5): los archivos de la PWA quedan FUERA del middleware. Si pasaran, con cookie de sesión saldrían
+  // `private, no-store` por el refresh de Supabase y, con `MAINTENANCE_MODE=on`, se reescribirían a la página de
+  // mantenimiento con 503: el navegador no actualiza el SW y la instalación falla. Son estáticos sin datos de nadie
+  // (sw.js, offline.html, manifest e íconos generados en el build), no necesitan tenant ni sesión. Lo de AUDIT §5.3
+  // (strip de x-tenant-*, x-request-id, bypass de webhooks, mantenimiento) sigue igual para todo lo demás.
+  // Test: tests/unit/pwa-manifest.test.ts compila este matcher con el mismo `getMiddlewareMatchers` del build.
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon.png|sw\\.js|manifest\\.webmanifest|offline\\.html|icons/).*)",
+  ],
 };

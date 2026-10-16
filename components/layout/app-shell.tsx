@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { Sidebar } from "./sidebar";
 import { TopBar } from "./topbar";
 import { MobileBar } from "./mobile-bar";
+import { BottomNav } from "./bottom-nav";
 import { CommandPaletteLauncher } from "./command-palette-launcher";
 import { useTweaks } from "./tweaks-context";
 import { TenantModulesProvider } from "./tenant-modules-context";
@@ -19,6 +20,7 @@ import { ArrivalAlerts } from "@/components/providers/arrival-alerts";
 import type { AlertPrefs, AlertViewer } from "@/lib/arrival-alert-state";
 import type { TenantOption } from "@/lib/tenant-choice";
 import { TenantChoiceProvider, type SwitchTenantAction } from "./tenant-switcher";
+import { SwRegister } from "@/components/pwa/sw-register";
 
 /**
  * Authenticated workspace shell. Picks chrome (sidebar vs. topbar) based
@@ -57,8 +59,13 @@ import { TenantChoiceProvider, type SwitchTenantAction } from "./tenant-switcher
  *   - Sin framer `motion.*` (sidebar, selector de consultorio, campana: `m` dentro del `LazyMotion` de UIProviders).
  *   - Sin zod (el guard de realtime es TS puro; `tweaks-context` y el menú de cuenta ya no tocan
  *     `lib/preferences-constants.ts`).
- * Mobile clase A (S1): bajo 768 px sidebar y topbar se esconden (`.desktopOnly`) y aparece `MobileBar` («Menú» →
- * Drawer). Todo por CSS: el HTML es el mismo en cualquier ancho.
+ * Mobile clase A (S1): bajo 768 px sidebar y topbar se esconden (`.desktopOnly`) y aparece `MobileBar` (logo, ⌘K y
+ * avatar). Todo por CSS: el HTML es el mismo en cualquier ancho.
+ *
+ * MB-0c (C-MB1): bajo 768 px también aparece `BottomNav` (barra inferior fija: 4 destinos + «Más» → Drawer con el nav
+ * completo). `.shell` publica su alto en `--k-bottom-nav-h` para que `main`, toast, FAB y Apariencia no queden debajo,
+ * y el alto mínimo es `100dvh` (respaldo `100vh`): en Safari iOS y en la PWA standalone `100vh` no es el alto real.
+ * `SwRegister` (MB-0a, C-MB5) registra el service worker de instalación solo con sesión (MB-D5).
  */
 const TweaksPanel = dynamic(() => loadTweaksPanel().then((m) => m.TweaksPanel), {
   ssr: false,
@@ -116,9 +123,8 @@ export function AppShell({
         <RealtimeProvider bootstrap={realtime}>
           <ArrivalAlerts viewer={alertViewer} initialPrefs={initialAlertPrefs} live={realtime.driver !== "off"}>
             <div
-              className="k-app"
+              className={`k-app ${styles.shell}`}
               style={{
-                minHeight: "100vh",
                 background: "var(--bg-app)",
                 display: useSidebar ? "flex" : "block",
               }}
@@ -135,7 +141,7 @@ export function AppShell({
               )}
               <div className={styles.column}>
                 {banner}
-                <MobileBar isPlatformAdmin={isPlatformAdmin} caps={caps} onOpenAppearance={openAppearance} />
+                <MobileBar userName={userName} ownPublicBooking={ownPublicBooking} onOpenAppearance={openAppearance} />
                 {!useSidebar && (
                   <div className={styles.desktopOnly}>
                     <TopBar
@@ -151,9 +157,11 @@ export function AppShell({
                   {children}
                 </main>
               </div>
+              <BottomNav isPlatformAdmin={isPlatformAdmin} caps={caps} onOpenAppearance={openAppearance} />
               {/* Montado solo abierto: cerrado, Apariencia no baja ni un byte (C-PF2). */}
               {!t.minimised && <TweaksPanel canReception={caps.includes("agenda.reception")} />}
               <CommandPaletteLauncher />
+              <SwRegister />
             </div>
           </ArrivalAlerts>
         </RealtimeProvider>

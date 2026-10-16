@@ -224,12 +224,15 @@ function shell() {
 }
 
 describe("[PF1.0-a] mobile clase A (S1) y sidebar (S3, S4)", () => {
-  it("la barra móvil está en el HTML con «Menú» y el buscador; el Drawer no baja hasta abrirlo", () => {
+  // MB-0c (C-MB1): «Menú» salió de la barra superior; el Drawer lo abre «Más» de la barra inferior (bottom-nav.test.tsx).
+  it("la barra móvil está en el HTML con el buscador y el avatar (sin «Menú»); el Drawer no baja hasta abrirlo", () => {
     tweaks.chrome = "sidebar";
     const html = shell();
-    expect(html).toMatch(/<button[^>]*aria-label="Abrir menú"[^>]*aria-expanded="false"/);
-    expect(html).toContain(">Menú<");
-    expect(html).toMatch(/<button[^>]*aria-label="Abrir búsqueda rápida"/);
+    const mobile = html.match(/<header[^>]*data-mobile-bar[\s\S]*?<\/header>/)?.[0] ?? "";
+    expect(mobile).toMatch(/<button[^>]*aria-label="Abrir búsqueda rápida"/);
+    expect(mobile).toContain('aria-label="Menú de cuenta de Ana Pérez"');
+    expect(mobile).not.toContain("Abrir menú");
+    expect(html).toMatch(/<nav [^>]*data-k-bottom-nav[^>]*>[\s\S]*aria-haspopup="dialog" aria-expanded="false"/);
     // Una sola lista de secciones (la del sidebar): el Drawer móvil no se monta cerrado.
     expect(html.match(/aria-label="Secciones"/g)).toHaveLength(1);
     // ⌘K y Apariencia cerrados: nada en el HTML.
@@ -313,7 +316,8 @@ describe("[PF1.0-a] Apariencia: cada opción viva tiene un lector (§20.18)", ()
     expect(shell()).toContain('aria-label="Navegación principal"');
     tweaks.chrome = "topbar";
     const top = shell();
-    expect(top).not.toContain('aria-label="Navegación principal"');
+    // El del sidebar (`<aside>`); la barra inferior (MB-0c) también se llama así y está en los dos chromes.
+    expect(top).not.toMatch(/<aside[^>]*aria-label="Navegación principal"/);
     expect(top).toContain('aria-label="Menú de cuenta de Ana Pérez"');
     tweaks.chrome = "sidebar";
   });

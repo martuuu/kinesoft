@@ -74,9 +74,10 @@ export function TweaksPanel({ canReception = false }: { canReception?: boolean }
       style={{
         position: "fixed",
         right: 14,
-        bottom: 14,
+        // MB-0c: bajo 768 px la barra inferior fija publica `--k-bottom-nav-h`; sin ella vale 0.
+        bottom: "calc(14px + var(--k-bottom-nav-h, 0px))",
         width: 296,
-        maxHeight: "calc(100vh - 28px)",
+        maxHeight: "calc(100dvh - 28px - var(--k-bottom-nav-h, 0px))",
         overflowY: "auto",
         borderRadius: "var(--r-xl)",
         padding: 16,

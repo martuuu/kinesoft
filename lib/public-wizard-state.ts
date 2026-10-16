@@ -145,6 +145,26 @@ export function reconcileSelection(
   return { practitionerId, serviceId };
 }
 
+// ─── Estado inicial y deep link (DIR-2d, C-DIR7) ──────────────────────
+
+/** Pasos del wizard: 0 Profesional · 1 Servicio · 2 Fecha y hora · 3 Tus datos. */
+export type WizardStep = 0 | 1 | 2 | 3;
+
+/**
+ * Con qué arranca el wizard. `pro` es el `?pro=` del deep link del directorio: input de un anónimo. Si es uno de
+ * `clinic.practitioners` (= reservable hoy: switch prendido, membresía usable, ≥ 1 servicio PUBLIC) se entra al paso 1
+ * con él elegido. Si no (apagado, de otro consultorio, basura) se ignora EN SILENCIO y queda el default de siempre
+ * (un solo profesional = paso 1 con él; si no, paso 0): un aviso revelaría si el id existe.
+ */
+export function initialWizardSelection(
+  clinic: PublicClinic,
+  pro: string | null | undefined
+): { step: WizardStep; practitionerId: string | null; mode: "pick" } {
+  if (pro && clinic.practitioners.some((p) => p.id === pro)) return { step: 1, practitionerId: pro, mode: "pick" };
+  if (clinic.practitioners.length === 1) return { step: 1, practitionerId: clinic.practitioners[0].id, mode: "pick" };
+  return { step: 0, practitionerId: null, mode: "pick" };
+}
+
 // ─── Idempotencia por instancia (AUDIT §5, A2b-S-pub) ──────────────────
 
 /** Firma de un intento: si cambia profesional, servicio u horario es OTRO

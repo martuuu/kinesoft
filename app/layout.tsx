@@ -10,6 +10,10 @@ export const metadata: Metadata = {
   description:
     "Agenda, turnos online, pacientes, historia clínica y cobros para consultorios de salud. Argentina.",
   applicationName: BRAND_NAME,
+  // MB-0b (C-MB5): iOS «Agregar a inicio» y Safari macOS «Agregar al Dock» abren standalone con este nombre (el ícono
+  // es app/apple-icon.png). `default` = iOS no pone contenido debajo de la barra de estado; con `black-translucent`
+  // habría que correr todo el layout.
+  appleWebApp: { capable: true, title: BRAND_NAME, statusBarStyle: "default" },
 };
 
 export const viewport: Viewport = {

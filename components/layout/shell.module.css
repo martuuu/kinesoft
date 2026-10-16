@@ -3,8 +3,8 @@
  * server no conoce el ancho: el HTML sale igual para todos y el CSS decide (sin flash al hidratar).
  *
  * S1 (VX0-b, clase A mobile): bajo 768 px el sidebar flotante de 64 px se comía ~25 % del ancho a 390 y no había
- * menú. Ahora se esconde y aparece la barra móvil con «Menú» → Drawer (el patrón de `PlatformShell`). Sin barra
- * inferior: eso es del bloque MB.
+ * menú. Ahora se esconde y aparece la barra móvil (logo, ⌘K, avatar). MB-0c (C-MB1): el nav completo lo abre «Más»
+ * de la barra inferior (`bottom-nav.module.css`).
  */
 
 /* ── Sidebar (S4) ─────────────────────────────────────────────────────────────
@@ -134,6 +134,12 @@
 }
 
 /* ── Contenido ─────────────────────────────────────────────────────────────── */
+/* Raíz del workspace. `100dvh` con `100vh` de respaldo: en Safari iOS y en la PWA standalone `100vh` incluye la barra
+   de direcciones (o no es el alto de la ventana) y sobraba scroll (C-MB2). */
+.shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
 .column {
   flex: 1;
   min-width: 0;
@@ -162,8 +168,11 @@
     z-index: 20;
     min-width: 0;
   }
+  /* MB-0c (C-MB1): `main` deja lugar a la barra inferior fija. `--k-bottom-nav-h` lo publica globals.css en el
+     `:root` mientras la barra está montada y visible (MB-0d): toast y overlays salen por portal a `body` y no
+     heredarían una variable del shell. */
   .main {
-    padding: 8px !important;
+    padding: 8px 8px calc(8px + var(--k-bottom-nav-h, 0px)) !important;
   }
 }
 
@@ -192,6 +201,18 @@
   min-width: 0;
 }
 
+/* Avatar del menú de cuenta en la barra móvil: el botón mide 36 px; el área táctil, 44 (C-MB1, targets ≥ 44). */
+.mobileAccount {
+  display: inline-flex;
+}
+.mobileAccount > div > button {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* Lista del Drawer móvil: ítems de 44 px de alto como mínimo (táctil). */
 .drawerNav .navItem,
 .drawerNav .navButton {
@@ -202,10 +223,11 @@
 .appearanceSkeleton {
   position: fixed;
   right: 14px;
-  bottom: 14px;
+  bottom: calc(14px + var(--k-bottom-nav-h, 0px));
   width: 296px;
   height: 320px;
-  max-height: calc(100vh - 28px);
+  max-height: calc(100vh - 28px - var(--k-bottom-nav-h, 0px));
+  max-height: calc(100dvh - 28px - var(--k-bottom-nav-h, 0px));
   border-radius: var(--r-xl);
   z-index: 35;
   display: grid;

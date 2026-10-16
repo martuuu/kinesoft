@@ -174,7 +174,9 @@ export function ConfirmDialog({
                 {state.message}
               </p>
             )}
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 20 }}>
+            {/* MB-0d (C-MB2): misma fila que `ModalActions` (sin importar modal.tsx: este archivo va en los providers de la raíz); < 640 apilada a ancho completo y 44 px (antes dos botones
+                chicos lado a lado en el celular). Escritorio: igual (flex a la derecha, gap 8, 20 arriba). */}
+            <div className="k-modal-actions">
               <Button variant="ghost" onClick={onCancel}>
                 {state.cancelLabel ?? "Cancelar"}
               </Button>

@@ -117,7 +117,11 @@ function fallbackTenant(actor: Actor) {
  */
 function revalidateTeam(tenantId: string, practitioners: boolean) {
   revalidatePath("/configuracion");
-  if (practitioners) revalidateTag(tags.practitioners(tenantId));
+  if (practitioners) {
+    revalidateTag(tags.practitioners(tenantId));
+    // DIR-2b (C-DIR4): suspender/reactivar/sacar un miembro cambia quién es reservable → quién aparece en el directorio.
+    revalidateTag(tags.directory());
+  }
 }
 
 // PF2-d: las consultas y el mapeo viven en lib/invitations-read.ts (el loader de `/configuracion` las corre dentro de

@@ -1,0 +1,100 @@
+/*
+ * Barra de navegación inferior (MB-0c, C-MB1, variante fija). Oculta en escritorio; bajo 768 px (el corte de
+ * `.desktopOnly` en `shell.module.css`) queda fija abajo. El alto suma `safe-area-inset-bottom`: en iPhone sin eso la
+ * barra quedaba debajo del indicador de inicio (`viewport-fit=cover` lo pone el layout de `(app)`, MB-0b).
+ *
+ * El mismo alto lo publica `globals.css` en `--k-bottom-nav-h` (MB-0d) mientras esta barra (`[data-k-bottom-nav]`)
+ * está montada y visible, para que `main`, toast, FAB y el panel de Apariencia no queden tapados. Sin transición de
+ * entrada/salida: con `reducedMotion` el estado final es el mismo.
+ */
+.bar {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .bar {
+    display: flex;
+    align-items: stretch;
+    justify-content: space-around;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: var(--z-bottom-nav, 30);
+    box-sizing: border-box;
+    height: calc(56px + env(safe-area-inset-bottom, 0px));
+    padding: 4px max(4px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px)
+      max(4px, env(safe-area-inset-left, 0px));
+    /* `k-glass-strong` trae borde en los 4 lados y sombra de tarjeta: acá es un borde de pantalla, solo arriba. */
+    border: none;
+    /* El token `--line` de C-MB1 no existe en globals.css: mismo gris de los separadores del sidebar. */
+    border-top: 1px solid rgba(15, 30, 51, 0.08);
+    border-radius: 0;
+    box-shadow: 0 -6px 20px rgba(31, 79, 190, 0.08);
+  }
+  /* Teclado virtual abierto (`hidden`, lo pone `useVirtualKeyboardOpen`): en iOS la barra fija saltaba sobre el
+     teclado. El `display: flex` de arriba le gana al `[hidden]` del navegador: hay que repetirlo. Con `hidden`, la regla
+     de globals.css (`:root:has([data-k-bottom-nav]:not([hidden]))`) devuelve `--k-bottom-nav-h` a 0. */
+  .bar[hidden] {
+    display: none;
+  }
+}
+
+.item {
+  appearance: none;
+  font: inherit;
+  margin: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  flex: 1 1 0;
+  min-height: 48px;
+  min-width: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 0 2px;
+  border-radius: 12px;
+  text-decoration: none;
+  color: var(--navy-500);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 28px;
+  border-radius: 999px;
+}
+
+.label {
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.15;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Activo: color + pastilla detrás del ícono (canal de forma, no solo cromático). */
+.itemOn {
+  color: var(--sky-700);
+}
+.itemOn .label {
+  font-weight: 700;
+}
+.itemOn .icon {
+  background: var(--sky-100);
+}
+
+.item:active .icon {
+  background: rgba(15, 30, 51, 0.06);
+}
+.itemOn:active .icon {
+  background: var(--sky-100);
+}

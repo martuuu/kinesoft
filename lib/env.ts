@@ -136,6 +136,17 @@ const schema = z.object({
   // Opcional: sin él los mensajes quedan en /plataforma → Mensajes y no sale el aviso por mail.
   PLATFORM_INBOX_EMAIL: z.preprocess(emptyAsUndefined, z.string().email().optional()),
 
+  // DIR (C-DIR2, plan §20.10/§20.13): directorio público de profesionales y consultorios.
+  //   off     = DEFAULT: /profesionales y /consultorios/* dan 404; sitemap, robots y landing como antes.
+  //   preview = rutas vivas pero `noindex`, fuera del sitemap y sin link en la landing (revisión antes de abrir).
+  //   public  = indexables, en el sitemap y con «Buscá un profesional» en la landing.
+  // Lo lee `directoryMode()` (`lib/directory-mode.ts`, process.env en cada llamada), no este objeto congelado. Un typo
+  // frena el deploy en vez de publicar en un modo que nadie eligió.
+  DIRECTORY_MODE: z.preprocess(
+    (v) => (typeof v === "string" ? emptyAsUndefined(v.trim().toLowerCase()) : v),
+    z.enum(["off", "preview", "public"]).default("off")
+  ),
+
   // Set by Vercel: "production" | "preview" | "development". Unset locally/CI.
   VERCEL_ENV: z.enum(["production", "preview", "development"]).optional(),
 });
@@ -288,6 +299,7 @@ export const env = parseEnv({
   SIGNUP_MODE: process.env.SIGNUP_MODE,
   SAAS_BILLING_MODE: process.env.SAAS_BILLING_MODE,
   PLATFORM_INBOX_EMAIL: process.env.PLATFORM_INBOX_EMAIL,
+  DIRECTORY_MODE: process.env.DIRECTORY_MODE,
 });
 
 /**

@@ -15,7 +15,7 @@ import type { PublicClinic } from "@/lib/public-booking-types";
 
 
 const pro = (id: string, extra: object = {}) => ({
-  id, name: `Lic. ${id}`, specialty: null, licenseNumber: null, yearsExp: null, rating: null, ...extra,
+  id, name: `Lic. ${id}`, specialty: null, licenseNumber: null, yearsExp: null, ...extra,
 });
 function clinic(locs: number, withOS: boolean): PublicClinic {
   const locations = [
@@ -216,5 +216,24 @@ describe("VX-Z · turnero", () => {
     const src = readFileSync("components/booking/public-booking-wizard.tsx", "utf8");
     expect(src).toMatch(/if \(prevStep\.current === step\) return;[\s\S]*focusStepHeading\(cardRef\.current\);[\s\S]*\}, \[step\]\);/);
     expect(src).toContain("<div ref={cardRef}");
+  });
+});
+
+describe("DIR-2d · deep link ?pro=", () => {
+  it("profesional reservable → arranca en Servicio con él elegido; inválido → paso Profesional como siempre", () => {
+    const html = renderToStaticMarkup(
+      <PublicBookingWizard clinic={clinic(2, true)} session={null} prefill={null} initialPractitionerId="Beto" />
+    );
+    expect(html).toContain("¿Qué servicio necesitás?");
+    expect(html).not.toContain("Primer turno disponible");
+    expect(html).toContain("Lic. Beto");
+    expect(html).not.toContain("Lic. Ana");
+
+    const bad = renderToStaticMarkup(
+      <PublicBookingWizard clinic={clinic(2, true)} session={null} prefill={null} initialPractitionerId="otro" />
+    );
+    expect(bad).not.toContain("¿Qué servicio necesitás?");
+    expect(bad).toContain("Primer turno disponible");
+    expect(bad).toContain("Lic. Ana");
   });
 });

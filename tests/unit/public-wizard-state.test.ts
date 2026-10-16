@@ -39,7 +39,6 @@ const pro = (id: string, extra: Partial<PublicClinic["practitioners"][number]> =
   specialty: null,
   licenseNumber: null,
   yearsExp: null,
-  rating: null,
   ...extra,
 });
 

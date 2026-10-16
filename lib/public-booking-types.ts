@@ -33,7 +33,8 @@ export type PublicClinic = {
     specialty: string | null;
     licenseNumber: string | null;
     yearsExp: number | null;
-    rating: number | null;
+    // DIR-D18: sin `rating`. Viajaba al cliente sin que el wizard lo usara y es un dato de seed (nadie escribe
+    // `Practitioner.rating`); el directorio tampoco lo publica.
     /** B3.2: sedes donde atiende (sus franjas en sedes activas; sin franjas =
      *  la principal). Orden de `PublicClinic.locations`. */
     locationIds?: string[];

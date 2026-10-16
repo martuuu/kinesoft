@@ -29,7 +29,7 @@ import { prismaService } from "@/lib/db";
 import { requirePlatformAdmin, type PlatformActor } from "@/lib/platform-actor";
 import { auditPlatformInTx } from "@/lib/audit";
 import type { PlatformActorRef } from "@/lib/platform-audit-types";
-import { tenantEntitlementTags } from "@/lib/cache-tags";
+import { tags, tenantEntitlementTags } from "@/lib/cache-tags";
 import { applyTenantEntitlementsInTx } from "@/lib/tenant-entitlements-internal";
 import {
   changeTenantSlugInTx,
@@ -232,6 +232,9 @@ export async function changePlatformTenantSlug(raw: unknown): Promise<Result> {
     revalidatePath(`/c/${res.to}/booking`);
     // Configuración muestra el link del turnero con el slug.
     revalidatePath("/configuracion");
+    // DIR-2c: el snapshot del directorio guarda `/consultorios/<slug>` y los `bookingHref` con el slug (C-DIR3); con el
+    // viejo, los links del directorio irían por el redirect del alias hasta el próximo rebuild (10 min).
+    revalidateTag(tags.directory());
   }
   return { ok: true, data: { updatedAt: res.updatedAt.toISOString() } };
 }

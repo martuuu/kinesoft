@@ -210,6 +210,23 @@
   --z-palette: 75;
   --z-confirm: 80;
   --z-toast: 90;
+  /* [MB-0d · C-MB2] Barra inferior del workspace (< 768): debajo del backdrop del Drawer (45), que la tapa como al
+     resto de la página. */
+  --z-bottom-nav: 30;
+
+  /* [MB-0d · C-MB2] Safe-area (notch, indicador de inicio). Valen 0 salvo con `viewport-fit=cover`, que solo pide el
+     workspace (MB-D13): las superficies públicas no cambian. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  /* Alto de la barra inferior: 0 por defecto (escritorio, Plataforma, públicas). Lo sube la regla de abajo cuando la
+     barra está montada; el `main`, el toast, el FAB y el esqueleto de Apariencia lo suman para no quedar debajo. */
+  --k-bottom-nav-h: 0px;
+  /* Ancho del Drawer (lo fija inline la prop `width`) y alto de su pie sticky (lo publica drawer.tsx en el <html>
+     mientras está abierto, para que el toast del celular quede encima). */
+  --k-drawer-width: 480px;
+  --k-drawer-footer-h: 0px;
 
   /* Fondo público sin blur (D-VX9): gradientes pintados, no blobs con filter: blur (cuestan GPU en mobile). */
   --bg-public:
@@ -863,7 +880,18 @@ select.k-input { appearance: none; padding-right: 40px;
    de `.k-glass-strong` pisaba el anillo del foco global (`:where()` pesa 0) y el `outline: none` inline lo dejaba
    invisible: el anillo va acá, sumado a la sombra del panel. */
 .k-overlay-panel:focus-visible { box-shadow: var(--focus-ring); }
-.k-drawer-panel { box-shadow: 0 32px 64px rgba(15, 30, 51, 0.18); }
+/* [MB-0d] Las medidas del panel (antes inline en drawer.tsx) viven acá para que la media query de < 640 las pueda
+   pisar; el ancho llega por `--k-drawer-width` (prop `width`). Escritorio y tablet quedan idénticos. */
+.k-drawer-panel {
+  top: 12px;
+  right: 12px;
+  bottom: 12px;
+  width: var(--k-drawer-width, 480px);
+  max-width: calc(100vw - 24px);
+  border-radius: 22px;
+  padding: 22px;
+  box-shadow: 0 32px 64px rgba(15, 30, 51, 0.18);
+}
 .k-drawer-panel:focus-visible { box-shadow: var(--focus-ring), 0 32px 64px rgba(15, 30, 51, 0.18); }
 
 /* FormField `layout="inline"`: rótulo a la izquierda desde 1024 px (drawers densos de la Secretaria). El control sigue a
@@ -880,4 +908,186 @@ select.k-input { appearance: none; padding-right: 40px;
   }
   .k-field-inline > .k-label { padding-top: 12px; white-space: normal; }
   .k-field-inline > :not(.k-label) { grid-column: 2; }
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   [MB-0d · C-MB2] Mobile: primitivas bajo 768 / 640, barra inferior y utilidades táctiles.
+   ───────────────────────────────────────────────────────────────── */
+
+/* La barra inferior (MB-0c) se monta dentro del shell, pero el toast y los overlays van por portal a <body>: el alto
+   tiene que valer en el <html>, no solo en el contenedor del shell. `[hidden]` = oculta por el teclado virtual. */
+@media (max-width: 767px) {
+  :root:has([data-k-bottom-nav]:not([hidden])) {
+    --k-bottom-nav-h: calc(56px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* Área táctil mínima (WCAG 2.5.5 / AGENTS §5) para íconos sueltos. */
+.k-tap {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Botón flotante de la acción primaria del área (MB-1: «Nuevo turno», «Nuevo paciente»), siempre sobre la barra
+   inferior. Lo muestra cada área solo < 768 (en escritorio la acción sigue en la toolbar). */
+.k-fab {
+  position: fixed;
+  right: 16px;
+  bottom: calc(var(--k-bottom-nav-h) + 16px);
+  z-index: var(--z-bottom-nav);
+  width: 56px;
+  height: 56px;
+  border-radius: 999px;
+  border: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sky-700);
+  color: #fff;
+  box-shadow: 0 10px 24px rgba(15, 30, 51, 0.22), 0 2px 6px rgba(15, 30, 51, 0.16);
+  cursor: pointer;
+}
+.k-fab:focus-visible { box-shadow: var(--focus-ring), 0 10px 24px rgba(15, 30, 51, 0.22); }
+
+/* Alto de pantalla completa: `dvh` (en Safari iOS y standalone `100vh` cuenta la barra de direcciones) con `vh` de
+   respaldo para navegadores sin `dvh`. Prohibido `100vh` solo en layouts nuevos o tocados (C-MB2). */
+.k-vh-full {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* Drawer: encabezado y cierre. En escritorio el encabezado no se ve distinto que antes (la X absoluta a 16/16 del
+   borde del panel, 32×32, el título con 40 px de aire a la derecha). */
+.k-drawer-head { position: relative; }
+.k-drawer-title { font-size: 20px; margin: 0; font-weight: 700; }
+.k-drawer-head[data-titled] { margin-bottom: 16px; padding-right: 40px; }
+.k-drawer-close {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  z-index: 1;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  border: none;
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--navy-700);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+/* Modal: fila de acciones (`ModalActions`). */
+.k-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+/* Toast: arriba a la derecha en escritorio (como siempre). */
+.k-toaster {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(360px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+/* pf1z-toast-tapa-drawer: con un Drawer abierto el toast de arriba a la derecha tapaba la X y el título del panel
+   (drawer.tsx marca el <html> con `data-k-drawer-open`). Se va arriba a la izquierda, que el drawer nunca ocupa
+   desde 768 (panel ≤ 480 + 12 de margen a la derecha). Abajo no: ahí está el pie con «Guardar». */
+@media (min-width: 768px) {
+  html[data-k-drawer-open] .k-toaster { left: 16px; right: auto; }
+}
+
+/* < 768: el toast arriba tapaba la barra superior. Abajo y centrado, sobre la barra inferior. Con un Drawer abierto
+   (que tapa la barra), sobre el pie del drawer: `--k-drawer-footer-h` lo publica drawer.tsx. */
+@media (max-width: 767px) {
+  .k-toaster {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: calc(var(--k-bottom-nav-h) + 12px);
+    width: min(100% - 24px, 420px);
+    margin-inline: auto;
+  }
+  html[data-k-drawer-open] .k-toaster {
+    bottom: calc(max(var(--k-drawer-footer-h, 0px), var(--safe-bottom)) + 12px);
+  }
+}
+
+/* < 640: Drawer a pantalla completa y Modal con scroll interno. Entre 640 y 1023 el Drawer queda como en escritorio. */
+@media (max-width: 639px) {
+  /* Padding de 22 arriba y abajo a propósito: los pies sticky de los llamadores («Nuevo turno»,
+     booking-modal.module.css) se apoyan con `bottom: -22px` y márgenes de −22. Los costados suman la safe-area
+     (iPhone apaisado). */
+  .k-drawer-panel {
+    inset: 0;
+    width: auto;
+    max-width: none;
+    border-radius: 0;
+    border: none;
+    padding: 22px max(22px, var(--safe-right)) 22px max(22px, var(--safe-left));
+    box-shadow: none;
+    overscroll-behavior-y: contain;
+  }
+  .k-drawer-panel:focus-visible { box-shadow: inset 0 0 0 2px var(--sky-700); }
+  /* Encabezado sticky: el cierre siempre a mano, debajo del notch. El margen negativo lleva el fondo opaco a los
+     bordes del panel. Con `.k-drawer-panel` delante pesa lo mismo que `[data-titled]` y, por ir después, gana. */
+  .k-drawer-panel .k-drawer-head {
+    position: sticky;
+    top: -22px;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 56px;
+    margin: -22px -22px 12px;
+    padding: var(--safe-top) 12px 0 22px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--navy-100);
+  }
+  .k-drawer-title { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 18px; }
+  /* Visualmente a la derecha del título; en el DOM sigue primero (primer focuseable del trap, como antes). */
+  .k-drawer-close {
+    position: static;
+    order: 2;
+    margin-left: auto;
+    flex-shrink: 0;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+  }
+  .k-drawer-panel [data-drawer-footer] {
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+  /* Sin pie sticky, el final del contenido no queda debajo del indicador de inicio. */
+  .k-drawer-panel:not(:has([data-drawer-footer]))::after {
+    content: "";
+    display: block;
+    height: max(0px, calc(var(--safe-bottom) - 22px));
+  }
+
+  .k-modal-backdrop { --k-modal-pad: 16px; }
+  .k-modal-panel {
+    --k-modal-max-h: calc(100dvh - 32px);
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+  .k-modal-actions { flex-direction: column; }
+  .k-modal-actions > * {
+    width: 100%;
+    min-height: 44px;
+    justify-content: center;
+  }
 }

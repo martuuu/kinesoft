@@ -3,7 +3,8 @@
 /**
  * Toast / snackbar system.
  *
- * Small snackbars docked top-right, newest on top, stacking downwards.
+ * Small snackbars docked top-right, newest on top, stacking downwards (MB-0d: < 768 abajo y centrados, y corridos a
+ * la izquierda con un Drawer abierto; ver `ToastRegion`).
  * When a new toast enters above an existing one, the existing toasts
  * slide down to make room — that's the `layout` prop on each item doing
  * the work (framer-motion animates the positional shift automatically).
@@ -353,21 +354,7 @@ function Toaster({
   if (!mounted) return null;
 
   return createPortal(
-    <div
-      aria-live="polite"
-      aria-relevant="additions"
-      style={{
-        position: "fixed",
-        top: 16,
-        right: 16,
-        zIndex: "var(--z-toast)",
-        display: "flex",
-        flexDirection: "column",
-        gap: 10,
-        width: "min(360px, calc(100vw - 32px))",
-        pointerEvents: "none",
-      }}
-    >
+    <ToastRegion>
       <AnimatePresence initial={false}>
         {toasts.map((t) => (
           // key = id: un reemplazo por id NO remonta el card (sin salida y
@@ -395,8 +382,25 @@ function Toaster({
           </m.div>
         ))}
       </AnimatePresence>
-    </div>,
+    </ToastRegion>,
     document.body
+  );
+}
+
+/**
+ * [MB-0d · C-MB2] Contenedor de la pila (región viva). La posición la da `.k-toaster` (globals.css) y no un estilo
+ * inline, porque cambia por ancho y por estado:
+ * - escritorio: arriba a la derecha, como siempre;
+ * - con un Drawer abierto (≥ 768): arriba a la izquierda. pf1z-toast-tapa-drawer: arriba a la derecha tapaba la X
+ *   y el título del panel (la marca `data-k-drawer-open` del `<html>` la pone drawer.tsx);
+ * - < 768: abajo y centrado, sobre la barra inferior (`--k-bottom-nav-h`) o sobre el pie del Drawer abierto.
+ * Exportado para el render test (el `Toaster` solo pinta después de montar, y por portal).
+ */
+export function ToastRegion({ children }: { children: ReactNode }) {
+  return (
+    <div aria-live="polite" aria-relevant="additions" className="k-toaster" style={{ zIndex: "var(--z-toast)" }}>
+      {children}
+    </div>
   );
 }
 

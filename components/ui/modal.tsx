@@ -44,6 +44,11 @@ export function modalOwnsEscape(p: {
  * `--z-drawer`). Antes un Modal abierto desde un Drawer quedaba adentro del panel (que tiene `transform`: el
  * `position: fixed` se ataba al panel) y DEBAJO de él (z 40 contra 46). Foco, Esc y scroll-lock se arman con el
  * diálogo ya en su lugar definitivo (`overlayArmed`).
+ *
+ * MB-0d (C-MB2): bajo 640 px el panel (`.k-modal-panel`) va a `100dvh − 32` de alto máximo (16 px de aire arriba y
+ * abajo) con scroll interno, y las acciones envueltas en `ModalActions` se apilan a ancho completo y 44 px. El alto y
+ * el padding del fondo siguen inline (escritorio igual que antes) pero a través de `--k-modal-max-h` / `--k-modal-pad`:
+ * un estilo inline le gana a cualquier media query, una variable que la media query redefine no.
  */
 export function Modal({
   open = true,
@@ -106,6 +111,7 @@ export function Modal({
             role="dialog"
             aria-modal
             aria-label={title}
+            className="k-modal-backdrop"
             onClick={lockBackdrop ? undefined : onClose}
             variants={backdropVariants}
             initial="initial"
@@ -120,19 +126,19 @@ export function Modal({
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              padding: 20,
+              padding: "var(--k-modal-pad, 20px)",
             }}
           >
             <m.div
               ref={trapRef}
               tabIndex={-1}
-              className="k-glass-strong k-scroll k-overlay-panel"
+              className="k-glass-strong k-scroll k-overlay-panel k-modal-panel"
               onClick={(e) => e.stopPropagation()}
               variants={modalVariants}
               style={{
                 position: "relative",
                 width: typeof width === "number" ? `min(${width}px, 100%)` : width,
-                maxHeight: "calc(100dvh - 40px)",
+                maxHeight: "var(--k-modal-max-h, calc(100dvh - 40px))",
                 overflowY: "auto",
                 borderRadius: 24,
                 padding: 22,
@@ -167,4 +173,13 @@ export function Modal({
       </AnimatePresence>
     </OverlayPortal>
   );
+}
+
+/**
+ * [MB-0d · C-MB2] Fila de acciones de un Modal (o de la confirmación): a la derecha en escritorio; < 640 apiladas a
+ * ancho completo y 44 px de alto, en el orden del DOM (la primaria, última, queda abajo, a mano del pulgar).
+ * Los llamadores la adoptan en sus sesiones de MB-1 en lugar de su `<div style={{ display: "flex", … }}>`.
+ */
+export function ModalActions({ children }: { children: React.ReactNode }) {
+  return <div className="k-modal-actions">{children}</div>;
 }

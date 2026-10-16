@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import { AnimatePresence, m } from "framer-motion";
-import { ModalCloseButton } from "@/components/ui/modal-close";
+import { IconX } from "@/components/ui/icons";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useFocusTrap } from "@/hooks/use-focus-trap";
 import { backdropVariants, drawerVariants } from "@/lib/motion";
@@ -27,6 +27,30 @@ export const DRAWER_FOOTER_ATTR = "data-drawer-footer";
  *  anillo de foco no quede pegado al borde del footer. Sin footer, "" (el valor por defecto del navegador). */
 export function drawerScrollPaddingBottom(height: number | null | undefined): string {
   return height && height > 0 ? `${Math.ceil(height) + 8}px` : "";
+}
+
+/** Lo mínimo del `<html>` que toca `drawerOpenMark` (para el test sin DOM). */
+type DrawerMarkRoot = {
+  dataset: Record<string, string | undefined>;
+  style: { setProperty(name: string, value: string): void; removeProperty(name: string): void };
+};
+
+/**
+ * [MB-0d] pf1z-toast-tapa-drawer + C-MB2: marca el `<html>` mientras haya drawers abiertos (`data-k-drawer-open` =
+ * cuántos) para que el toast se corra (globals.css `.k-toaster`): en escritorio arriba a la derecha tapaba la X del
+ * panel y en el celular, abajo, tapaba el pie con «Guardar». `footerHeight` (el pie medido por `DRAWER_FOOTER_ATTR`)
+ * se publica como `--k-drawer-footer-h` para que el toast quede encima. Es un contador y no un booleano porque hay
+ * drawers que abren otro (Plataforma) y el primero en cerrarse no tiene que borrar la marca del otro.
+ */
+export function drawerOpenMark(root: DrawerMarkRoot, delta: 1 | -1 | 0, footerHeight?: number | null): void {
+  const count = Math.max(0, (Number(root.dataset.kDrawerOpen) || 0) + delta);
+  if (count === 0) {
+    delete root.dataset.kDrawerOpen;
+    root.style.removeProperty("--k-drawer-footer-h");
+    return;
+  }
+  root.dataset.kDrawerOpen = String(count);
+  if (footerHeight != null) root.style.setProperty("--k-drawer-footer-h", `${Math.ceil(footerHeight)}px`);
 }
 
 /**
@@ -70,6 +94,11 @@ export function focusFirstField(
  * encerrado por el `transform` del panel y queda por encima (`--z-drawer` < `--z-modal`). Foco atrapado, Esc y
  * scroll-lock se arman recién con el panel en su lugar definitivo (`overlayArmed`): un drawer abierto en SSR pasa de
  * en línea a portal al hidratar, y el trap tiene que apuntar al nodo nuevo.
+ *
+ * MB-0d (C-MB2): bajo 640 px es una hoja a pantalla completa (encabezado sticky con el cierre de 44×44 y safe-area; el
+ * pie marcado con `DRAWER_FOOTER_ATTR` suma el indicador de inicio). Por eso las medidas viven en `.k-drawer-panel`
+ * (globals.css) y no inline: un estilo inline no se puede pisar desde una media query. El cierre es propio (mismo
+ * aspecto que `ModalCloseButton` en escritorio) porque el de los Modales es de 32 px fijos inline. Misma API.
  */
 export function Drawer({
   open,
@@ -102,8 +131,12 @@ export function Drawer({
     const panel = trapRef.current;
     if (!armed || !panel) return;
     let footer: HTMLElement | null = null;
+    const root = document.documentElement as unknown as DrawerMarkRoot;
+    drawerOpenMark(root, 1);
     const apply = () => {
-      panel.style.scrollPaddingBottom = drawerScrollPaddingBottom(footer?.getBoundingClientRect().height ?? null);
+      const h = footer?.getBoundingClientRect().height ?? null;
+      panel.style.scrollPaddingBottom = drawerScrollPaddingBottom(h);
+      drawerOpenMark(root, 0, h ?? 0);
     };
     const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(apply) : null;
     const track = () => {
@@ -120,6 +153,7 @@ export function Drawer({
     return () => {
       mo?.disconnect();
       ro?.disconnect();
+      drawerOpenMark(root, -1);
     };
   }, [armed, trapRef]);
   const offset = width + 24;
@@ -195,27 +229,24 @@ export function Drawer({
               initial="initial"
               animate="animate"
               exit="exit"
-              style={{
-                position: "fixed",
-                top: 12,
-                right: 12,
-                bottom: 12,
-                width,
-                maxWidth: "calc(100vw - 24px)",
-                borderRadius: 22,
-                padding: 22,
-                overflowY: "auto",
-                zIndex: "var(--z-drawer)",
-              }}
+              style={
+                {
+                  position: "fixed",
+                  "--k-drawer-width": `${width}px`,
+                  overflowY: "auto",
+                  zIndex: "var(--z-drawer)",
+                } as CSSProperties
+              }
             >
-              <ModalCloseButton onClose={() => void requestClose()} />
-              {title && (
-                <header style={{ marginRight: 40, marginBottom: 16 }}>
-                  <h2 className="k-display" style={{ fontSize: 20, margin: 0, fontWeight: 700 }}>
-                    {title}
-                  </h2>
-                </header>
-              )}
+              {/* El cierre va primero en el DOM (primer focuseable del trap, como antes); < 640 se ve a la derecha
+                  del título por `order`. Sin título el encabezado igual existe: en la hoja del celular es el lugar
+                  sticky del cierre. */}
+              <div className="k-drawer-head" data-titled={title ? "" : undefined}>
+                <button type="button" className="k-drawer-close" onClick={() => void requestClose()} aria-label="Cerrar">
+                  <IconX size={14} />
+                </button>
+                {title && <h2 className="k-display k-drawer-title">{title}</h2>}
+              </div>
               {children}
             </m.aside>
           </>

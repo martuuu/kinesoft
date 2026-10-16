@@ -2,8 +2,11 @@
 
 /**
  * Menú del workspace bajo 768 px (PF1.0-a, S1 de VX0-b): el mismo contenido del sidebar (`SidebarBody`, una sola
- * lista) dentro de un `Drawer`, como el «Menú» de `PlatformShell`. Lo carga `MobileBar` con `next/dynamic` recién al
- * abrir: en escritorio nunca se baja. Sin barra inferior ni gestos: eso es del bloque MB (D-PF-D).
+ * lista) dentro de un `Drawer`, como el «Menú» de `PlatformShell`: el nav completo (también lo que no entra en la barra
+ * inferior), consultorio activo / cambiar de consultorio, Plataforma, Configuración, Apariencia y Cerrar sesión.
+ *
+ * MB-0c (C-MB1): lo abre «Más» de la barra inferior (`bottom-nav.tsx`, antes el botón «Menú» de `MobileBar`), con
+ * `next/dynamic` recién al primer toque: en escritorio nunca se baja. Al cerrarse, el Drawer devuelve el foco a «Más».
  */
 import { Drawer } from "@/components/ui/drawer";
 import type { Capability } from "@/lib/capabilities";

@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import type { Viewport } from "next";
 import type { Role } from "@prisma/client";
 import { headers } from "next/headers";
 import { TweaksProvider } from "@/components/layout/tweaks-context";
@@ -22,6 +23,19 @@ import { decideAppGate } from "@/lib/onboarding-logic";
 import { modulesFor } from "@/lib/tenant-modules";
 import { capabilitiesForActor } from "@/lib/authz";
 import { realtimeBootstrap } from "@/lib/realtime-bootstrap";
+
+/**
+ * MB-0b (C-MB5, MB-D13): `viewportFit: "cover"` SOLO en el workspace: la barra inferior (C-MB1) necesita que
+ * `env(safe-area-inset-bottom)` valga lo que mide el indicador de inicio del iPhone (sin `cover` vale 0 y la barra
+ * queda debajo). Las superficies públicas siguen con el viewport del root. Nunca `maximumScale`/`userScalable`: el
+ * zoom al 200 % es requisito de accesibilidad.
+ */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#1F4FBE",
+};
 
 /**
  * Guard for the entire authenticated workspace. Renders the AppShell only

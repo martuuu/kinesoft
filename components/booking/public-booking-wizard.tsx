@@ -42,6 +42,7 @@ import {
   filterPractitioners,
   findLocation,
   formatLocationAddress,
+  initialWizardSelection,
   locationsForPractitioner,
   nextAttempt,
   reconcileSelection,
@@ -104,6 +105,7 @@ export function PublicBookingWizard({
   session,
   prefill,
   googleEnabled = true,
+  initialPractitionerId = null,
 }: {
   clinic: WizardClinic;
   session: { email: string; fullName: string | null } | null;
@@ -114,17 +116,20 @@ export function PublicBookingWizard({
    * —Supabase caído— lo muestran, igual que el login).
    */
   googleEnabled?: boolean;
+  /** DIR-2d: `?pro=` del deep link del directorio. No reservable acá = se ignora (`initialWizardSelection`). */
+  initialPractitionerId?: string | null;
 }) {
   const singlePractitioner = clinic.practitioners.length === 1;
+  // Piso del «Volver»: con el deep link se arranca en el paso 1 pero se puede volver a elegir profesional.
   const firstStep: Step = singlePractitioner ? 1 : 0;
-  const [step, setStep] = useState<Step>(firstStep);
+  // Estado inicial en lógica pura (testeada): deep link válido o un solo profesional → paso 1 con él; si no, paso 0.
+  const [initial] = useState(() => initialWizardSelection(clinic, initialPractitionerId));
+  const [step, setStep] = useState<Step>(initial.step);
   // "pick" = eligió profesional; "any" = primer turno disponible con
   // cualquiera (el profesional lo resuelve `findFirstPublicSlot` en el paso 3).
-  const [mode, setMode] = useState<"pick" | "any">("pick");
+  const [mode, setMode] = useState<"pick" | "any">(initial.mode);
   const [filters, setFilters] = useState<WizardFilters>({ insurerId: null, locationId: null });
-  const [practitionerId, setPractitionerId] = useState<string | null>(
-    singlePractitioner ? clinic.practitioners[0].id : null
-  );
+  const [practitionerId, setPractitionerId] = useState<string | null>(initial.practitionerId);
   const [serviceId, setServiceId] = useState<string | null>(null);
   // Hoy en calendario AR: `toISOString().slice(0,10)` pasadas las 21:00 AR
   // (00:00 UTC) arrancaba el wizard en mañana.

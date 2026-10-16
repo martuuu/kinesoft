@@ -17,7 +17,7 @@
  * El switch de UI lo hace PL-3b; esta action no depende de que el turnero del consultorio esté prendido: el valor
  * queda guardado y rige cuando se prenda.
  */
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { z } from "zod";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
@@ -26,6 +26,7 @@ import { auditInTx } from "@/lib/audit";
 import { isActorPractitioner } from "@/lib/practitioner-scope";
 import { withSupportWritable } from "@/lib/support-writable";
 import { withReadOnlyResult } from "@/lib/read-only-result";
+import { tags } from "@/lib/cache-tags";
 import type { ActionResult } from "@/lib/validation";
 
 const FORBIDDEN_MSG = "Solo el titular, quien tenga permiso de Configuración o el propio profesional pueden cambiar esto.";
@@ -91,6 +92,8 @@ async function setPractitionerPublicBookingImpl(
     revalidatePath("/configuracion");
     // PL-Z (FX4): el mismo switch vive en el menú de perfil del dashboard (`DashboardData.ownPublicBooking`).
     revalidatePath("/dashboard");
+    // DIR-2b (C-DIR4): el switch decide si el profesional es reservable y, por lo tanto, si aparece en el directorio.
+    revalidateTag(tags.directory());
   }
   return { ok: true, data: { enabled: input.enabled } };
 }

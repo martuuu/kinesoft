@@ -1,0 +1,81 @@
+<!doctype html>
+<!-- [MB-0a · C-MB5] Página «Sin conexión» del service worker (public/sw.js la precachea y la sirve solo cuando una
+     navegación falla por red). Autocontenida a propósito: CSS y logo inline, sin JS de Next ni fuentes externas,
+     porque offline no hay nada más para cargar. Sin datos de nadie: es lo único que el SW guarda en disco.
+     Sin nombre de marca en el texto: el rename (lib/brand.ts) no llega a un HTML estático. -->
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#1F4FBE">
+<title>Sin conexión</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: max(24px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px))
+      max(24px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+    /* Mismo degradé que --bg-app de la paleta sky (app/globals.css), con el tono medio de respaldo. */
+    background: #e5eef8;
+    background: linear-gradient(165deg, #c7dbef 0%, #e5eef8 35%, #f2f6fc 100%);
+    color: #0f1e33;
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  main {
+    width: min(100%, 420px);
+    padding: 32px 24px;
+    border-radius: 22px;
+    background: #f6f9fd;
+    border: 1px solid #c6cfdd;
+    box-shadow: 0 12px 32px rgba(15, 30, 51, 0.08);
+    text-align: center;
+  }
+  svg { display: block; margin: 0 auto 16px; }
+  h1 { margin: 0 0 8px; font-size: 22px; line-height: 1.25; font-weight: 700; }
+  /* navy-500 sobre el panel: 8.1:1 (AA). */
+  p { margin: 0 0 24px; color: #3a4d6c; }
+  button {
+    min-height: 48px;
+    min-width: 160px;
+    padding: 12px 24px;
+    border: 0;
+    border-radius: 12px;
+    background: #1f4fbe; /* blanco encima: 7.2:1 */
+    color: #fff;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:hover { background: #1b45a6; }
+  button:focus-visible { outline: 3px solid #0f1e33; outline-offset: 3px; }
+</style>
+</head>
+<body>
+<main>
+  <svg width="56" height="56" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+    <defs>
+      <linearGradient id="ks-offline-g" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#1f4fbe"/>
+        <stop offset="1" stop-color="#5e92cc"/>
+      </linearGradient>
+    </defs>
+    <rect width="32" height="32" rx="10" fill="url(#ks-offline-g)"/>
+    <g transform="translate(5.5 5.5) scale(0.875)" fill="none">
+      <circle cx="7" cy="6" r="2.5" fill="#fff"/>
+      <path d="M6 9.5C6 12 7.5 13 8 14.5L6 21" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+      <path d="M9 11.5L13 12.5L16 10.5L19 16" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="17.5" cy="6.5" r="1.6" fill="#c8f564"/>
+    </g>
+  </svg>
+  <h1>Sin conexión</h1>
+  <p>Revisá tu conexión a internet. Los datos del consultorio no se guardan en este dispositivo.</p>
+  <button type="button" onclick="location.reload()">Reintentar</button>
+</main>
+</body>
+</html>

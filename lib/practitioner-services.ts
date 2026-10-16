@@ -20,10 +20,11 @@
  * saltean RLS, así que sin esto un admin podría colgar el servicio de otro
  * consultorio de su profesional (IDOR).
  */
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { runWithRls } from "@/lib/rls";
 import { requireCapability } from "@/lib/authz";
 import { logger } from "@/lib/logger";
+import { tags } from "@/lib/cache-tags";
 import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import type { ActionResult } from "@/lib/validation";
 import {
@@ -180,5 +181,7 @@ async function upsertPractitionerServiceImpl(
   // la agenda y Configuración se re-renderizan por path.
   revalidatePath("/agenda");
   revalidatePath("/configuracion");
+  // DIR-2b (C-DIR4): la visibilidad PUBLIC de un servicio decide si el profesional es reservable (directorio).
+  revalidateTag(tags.directory());
   return { ok: true, data: { id: result.id } };
 }

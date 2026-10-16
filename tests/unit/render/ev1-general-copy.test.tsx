@@ -124,8 +124,8 @@ describe("[EV1-C2] copy por vertical", () => {
       legalName: null,
       palette: "sky",
       practitioners: [
-        { id: "A", name: "Lic. A", specialty: null, licenseNumber: "123", yearsExp: null, rating: null },
-        { id: "B", name: "Lic. B", specialty: null, licenseNumber: null, yearsExp: null, rating: null },
+        { id: "A", name: "Lic. A", specialty: null, licenseNumber: "123", yearsExp: null },
+        { id: "B", name: "Lic. B", specialty: null, licenseNumber: null, yearsExp: null },
       ],
       services: [],
       vertical,

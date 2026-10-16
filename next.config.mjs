@@ -108,6 +108,10 @@ const cspReportOnly = [
   "frame-src 'self' https://www.youtube-nocookie.com https://*.mercadopago.com https://*.mercadolibre.com",
   // VX F-e: sin fonts.gstatic.com, mismo motivo que style-src (next/font sirve los woff2 desde 'self').
   "font-src 'self' data:",
+  // MB-0b (C-MB5): el service worker (/sw.js) y el manifest son same-origin. `default-src 'self'` ya los cubre por
+  // fallback, pero se declaran explícitos para que un cambio futuro de `script-src`/`default-src` no rompa el SW.
+  "worker-src 'self'",
+  "manifest-src 'self'",
   "base-uri 'self'",
   // form-action también rige los REDIRECTS de un submit: el portal postea a
   // /api/auth/google, que redirige a Supabase /auth/v1/authorize y de ahí a
@@ -156,6 +160,9 @@ const cspPlatformEnforced = [
   `connect-src 'self' ${SUPA} ${SUPA_WS}${isDevServer ? " ws://localhost:*" : ""}`,
   "frame-src https://www.youtube-nocookie.com",
   "font-src 'self' data:",
+  // MB-0b (C-MB5): mismo motivo que en la Report-Only (el SW también se registra desde PlatformShell, MB-D5).
+  "worker-src 'self'",
+  "manifest-src 'self'",
   "base-uri 'self'",
   "form-action 'self'",
   "object-src 'none'",
@@ -214,6 +221,16 @@ const nextConfig = {
         source,
         headers: [{ key: "Content-Security-Policy", value: cspPlatformEnforced }],
       })),
+      // MB-0b (C-MB5): el navegador revisa /sw.js en cada navegación; sin caché HTTP un deploy nuevo del SW llega en
+      // la próxima carga (riesgo «SW viejo pegado», junto con `updateViaCache: "none"` y `skipWaiting`). Va después
+      // de las CSP: el índice 0 sigue siendo la global (lo leen los tests de observability/realtime/CSP).
+      {
+        source: "/sw.js",
+        headers: [
+          { key: "Cache-Control", value: "no-cache, no-store, must-revalidate" },
+          { key: "Content-Type", value: "application/javascript; charset=utf-8" },
+        ],
+      },
     ];
   },
 };

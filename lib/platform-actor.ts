@@ -101,6 +101,9 @@ export const PLATFORM_ACTION_POLICY = {
   "inbox.reply": { risk: "medium", rateLimit: { limit: 60, windowMs: 10 * MIN } },
   "user.two_factor.reset": { risk: "high", rateLimit: { limit: 10, windowMs: 10 * MIN } },
   "tenant.plan.change": { risk: "high", rateLimit: { limit: 20, windowMs: 10 * MIN } },
+  // DIR-2c (C-DIR8): moderar el directorio público (ocultar/mostrar consultorio o perfil, verificar matrícula).
+  // Medium: es reversible y no corta acceso a la app (el turnero sigue andando); solo cambia qué se ve en /profesionales.
+  "directory.moderate": { risk: "medium", rateLimit: { limit: 60, windowMs: 10 * MIN } },
 } as const satisfies Record<string, PlatformActionPolicy>;
 
 /** C-BO2: `string` en el contrato; en la práctica, las claves de la política (las demás se rechazan). */

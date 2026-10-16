@@ -179,7 +179,8 @@ describe("[PL-F1c] AppShell: «Barra lateral / Barra superior» de Apariencia ap
     const html = shell();
     expect(html).toContain("<aside");
     expect(html).toContain('aria-label="Apariencia"');
-    expect(html).not.toContain("Menú de cuenta");
+    // MB-0c (C-MB1): la barra móvil (oculta en escritorio) también lleva el avatar; el chrome de escritorio no.
+    expect(html.replace(/<header[^>]*data-mobile-bar[\s\S]*?<\/header>/, "")).not.toContain("Menú de cuenta");
   });
 
   it("barra superior: monta el TopBar con el usuario real y no el Sidebar", () => {

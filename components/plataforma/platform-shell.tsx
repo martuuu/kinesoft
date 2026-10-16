@@ -9,6 +9,7 @@ import { Drawer } from "@/components/ui/drawer";
 import { IconArrow, IconLogout, IconMenu } from "@/components/ui/icons";
 import type { ActionResult } from "@/lib/validation";
 import { PlatformNav } from "./platform-nav";
+import { SwRegister } from "@/components/pwa/sw-register";
 
 /**
  * Shell de Plataforma (BO3-A, plan §19.5 «Superadmin sin consultorio casa»).
@@ -48,7 +49,10 @@ export function PlatformShell({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   return (
-    <div className="k-app" style={{ minHeight: "100vh", background: "var(--bg-app)", display: "flex" }}>
+    // MB-0d (C-MB2): `.k-vh-full` = 100dvh con 100vh de respaldo (en iOS/standalone `100vh` no es el alto real).
+    <div className="k-app k-vh-full" style={{ background: "var(--bg-app)", display: "flex" }}>
+      {/* MB-0a/0d (C-MB5, MB-D5): el SW de instalación se registra con sesión; Plataforma es una de las dos superficies. */}
+      <SwRegister />
       <aside
         className="k-glass k-plat-side"
         aria-label="Plataforma"

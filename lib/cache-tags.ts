@@ -36,6 +36,15 @@ const TENANT_PREFIX = "tenant:";
  */
 export const SAAS_PLANS_TAG = "saas-plans";
 
+/**
+ * DIR (C-DIR4): snapshot del directorio público (`getDirectorySnapshot`, `lib/directory-internal.ts`). Global: es UNA
+ * entrada con todos los consultorios y perfiles publicados. Lo invalida cualquier cosa que cambie quién aparece: está
+ * en `tenantEntitlementTags` (turnero, estado, cobro, plan, onboarding) y lo revalidan después del commit los
+ * escritores propios del directorio (opt-in, perfil, consentimiento, moderación) y los del switch por profesional,
+ * la suspensión de un miembro, la visibilidad de servicios y el cambio de slug.
+ */
+export const DIRECTORY_TAG = "global:directory";
+
 function t(tenantId: string, surface: string) {
   return `${TENANT_PREFIX}${tenantId}:${surface}`;
 }
@@ -55,6 +64,7 @@ export const tags = {
   catalog: () => "global:catalog",
   anatomy: () => "global:anatomy",
   saasPlans: () => SAAS_PLANS_TAG,
+  directory: () => DIRECTORY_TAG,
 } as const;
 
 /**
@@ -67,6 +77,11 @@ export const tags = {
  *
  * `catalog()` es global: invalidarlo le cuesta un refetch a todos los tenants,
  * pero es raro (cambio de plan) y el scope del catálogo depende del plan.
+ *
+ * DIR (C-DIR4): + `directory()`. Todo lo que pasa por acá (switch del turnero, estado/ciclo de vida, entitlements,
+ * cobro y solo lectura, onboarding) decide si un consultorio es reservable y, por lo tanto, si aparece en el
+ * directorio: sumarlo acá cubre a todos esos escritores con una línea. Mismo costo global que `catalog()`: un rebuild
+ * del snapshot en el próximo request, a lo sumo cada vez que alguien toca algo de esto.
  */
 export function tenantEntitlementTags(tenantId: string): string[] {
   return [
@@ -75,6 +90,7 @@ export function tenantEntitlementTags(tenantId: string): string[] {
     tags.dashboard(tenantId),
     tags.conditions(tenantId),
     tags.catalog(),
+    tags.directory(),
   ];
 }
 
