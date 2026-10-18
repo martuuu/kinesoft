@@ -999,8 +999,8 @@ que M8b convierte, decide Martin caso por caso). Excepción nueva en §5.50 (exp
 **Ronda 26 — RX: escritorio de Recepción (15/16-oct-2026):** RX-0 (`a762130`), RX-1 (`ee97af3`) y RX-2 + RX-Z
 (caras «Lista y panel» y «Flujo», revisor con 14 hallazgos, 3 fixers, integrador; `a5ca20a`) commiteados. **Sin
 migración** (`agendaPrefs.receptionLayout`). Tabla «Hallazgos y filas de RX» en §2. Abiertos: nombres cortados en «Por
-cobrar» a 1024 con sidebar (PF/MB) y sidebar sin modo móvil a 390 (MB); `toggleBilling` sin `billing.manage` sigue en
-C0 (`plf-toggle-billing-sin-cap`), RX solo esconde «Cobrar» en la UI.
+cobrar» a 1024 con sidebar (PF/MB) y sidebar sin modo móvil a 390 (MB); `toggleBilling` sin `billing.manage` quedó en
+C0 (`plf-toggle-billing-sin-cap`) hasta T3c-1c `f8b739f`, donde el server pasó a exigir `billing.collect`/`collectOwn`.
 
 **Ronda 27 — EV2: evoluciones de HC (15/16-oct-2026):** EV2-0 M9 (`8e3e9f6`), EV2-1 (`5e11c95`), EV2-2 (`1597903`) y
 EV2-3 (`55042c5`) commiteados; EV2-Z (2 revisores + 3 fixers + integrador) sin commitear. Tabla «Hallazgos de EV2» en
@@ -1060,6 +1060,13 @@ tanda: **logo elegido por Martin → renombrado (OPS-4)**. QA en [QA «Tanda B»
 UTC y AR · guards OK · integración `kinesoft_app` 2650 (+26 skip) · owner 2619 (+57 skip) · perf 52/52 sin regresiones ·
 `next build` OK · bundle OK, **`/agenda` 178,1/180: al límite, riesgo para T3** (AS-1/AS-2 suman UI a la agenda: medir
 antes de sumar y mover a chunk diferido lo que no sea de la primera pintura) · E2E 15/15 (Playwright, no bloqueante).
+
+**Ronda 32 · T3 (19-oct-2026):** agenda, Secretaria, cobros y módulos (plan §23; C-AS1..3). **Con migración M12**
+(`20261020120000_agenda_secretaria_config`, solo en local; orden para prod en RUNBOOK «M12 en prod»). Commits
+`fd5e6af`..`d25c5a7` sobre `3159539` (T3a bundle, T3b M12 + contratos, T3c server, T3d write paths y UI, T3e tope,
+OS y Ocupación), **sin push**. Tabla «Ronda T3» en §2; §5.27, §5.28, §5.35 y §5.40 enmendados. Abiertos: Hallazgo B
+(lookback 240 vs 480, C1), invitar como ADMIN sin step-up y contacto sin audit (deciden Martin). El gate de T3-Z (suite
+completa, bundle final de `/agenda`) se anota al cerrarlo.
 
 ## Cómo leer la severidad
 
@@ -1634,7 +1641,7 @@ E0/E1): 0 fugas nuevas; los H-b son preexistentes.
 | Slug | Sev | Bloque | Ubicación | Estado | Destino |
 |---|---|---|---|---|---|
 | search-condition-sin-tenant-y-email-basic | baja | C | lib/search.ts:76-83,126 | 🟡 condiciones 🟢 en EV0 (EV-G) | C (queda el email) — la búsqueda de `condition` no filtra por tenant (con BYPASSRLS ve los nombres de condiciones privadas de otros consultorios; sin PHI) y a nivel basic muestra el email del paciente si no hay DNI |
-| secretaria-edita-contacto-cobertura | media | C0 | lib/patients.ts (`updatePatient`, cobertura) · perfil `admin` | 🔴 | C0 (ES4 S26b lo confirma: celdas `it.fails` en `authz-matrix.test.ts`; aprueba el pedido del portal pero no edita a mano) — PD-13 dice que `admin` ve contacto y cobertura; en ES1 el perfil `admin` es **solo lectura**. También: selector "Profesional a cargo" al crear desde el directorio (hoy la Secretaria crea solo desde el modal del turno) y `getPatientBillingPreview` sigue pidiendo full (la Secretaria ve copago null en el modal) |
+| secretaria-edita-contacto-cobertura | media | C0 → T3 | lib/patients.ts (`updatePatient`, cobertura) · perfil `admin` | 🟢 T3c-1b `287ce14` + T3d-1u `bae6c00` | Era: el perfil `admin` solo leía (celdas `it.fails` de ES4 S26b). T3: rama `admin` + `patients.editAdmin` con lista cerrada (`.strict()`), clave clínica → rechazo sin escribir; alta con «Profesional a cargo» desde /pacientes; `getPatientBillingPreview` con `admin`; celdas de `authz-matrix.test.ts` dadas vuelta en T3c-1i. Ver «Ronda T3» |
 | ui-filtros-y-selector-sin-clinical | baja | C0 | profile/hero.tsx (selector "Profesional a cargo") · PatientsSearchBar | 🔴 | C0 — el selector del hero debería listar solo roles clínicos (el server ya rechaza los otros) y la barra del directorio debería ocultar "Con plan/Sin plan" y el filtro de diagnóstico sin `clinical.read` (el server ya devuelve vacío) |
 | directorio-admin-sin-contacto | baja | C0 | lib/patients.ts (`listPatients`) · patients-list.tsx:44 · recent-patients.tsx | 🔴 | C0 (no entró en ES3) — el directorio para `admin` sigue con la proyección básica (sin contacto); al sumar `admin` a `PatientRow`, los chequeos de UI pasan a la forma positiva `=== "full"` |
 | deshacer-atendido-no-reabre-sesion-a-medida | media | B | lib/sessions.ts (`addCustomSession`) | 🟢 | P2-S12b (Ronda 17) — el título va a `Session.title` (M1), no a `notes`: la sesión a medida queda "untouched" y "Deshacer Atendido" la reabre. Desde P2.Z `addCustomSession` delega en el motor (H-a3) |
@@ -1970,7 +1977,7 @@ auditoría) + el revisor del diff (b). Commiteado en 74642cf; sin migraciones nu
 | a3#7 export-titular-sin-agenda | media | PL | app/api/consultorio/export/route.ts | 🟢 (excepción §5.50) | El Titular que no atiende baja la HC en el export completo: excepción de **portabilidad** (Ley 25.326) documentada en §5.50; el export pide la 2FA (a2#2). Martin puede revertirla |
 | a3#9 capacidad-por-rol | baja | PL | lib/programs.ts · lib/plans-lifecycle-state.ts · app/(app)/pacientes/[id]/page.tsx | 🟢 PL-Z | Quedaban chequeos por rol: pasan a `memberCapabilitiesForActor(actor).has("tenant.admin")`. `canRestoreProgram(caps)` ya no acepta un `Role`: sus tres callers (`plans-lifecycle-internal`, `plans-edit-internal`, `plan-editor-types`) pasan las capabilities del miembro |
 | a3#10 / b-M1 admin-clinico-en-lectura | media | PL | lib/roles.ts (`isClinicalMember`) · lib/practitioner-scope.ts (`clinicalMembershipWhere`) | 🟢 PL-Z | ADMIN → `false` siempre (ver `PL-admin-nunca-atiende`) + tests |
-| a3#12 m8b-admin-pierde-permisos | media | PL (migración) | prisma/migrations/20261015200000_pl_admin_consultorio | 🟡 **decide Martin** | Los ADMIN con agenda que M8b pasa a PRACTITIONER + `grantSettings` pierden cobros (`billing.manage`), operar turnos de otros, bloqueos y ver todos los pacientes. Aviso y opciones en el precheck (b) de RUNBOOK «M8b en prod» |
+| a3#12 m8b-admin-pierde-permisos | media | PL (migración) | prisma/migrations/20261015200000_pl_admin_consultorio | 🟢 decidido 19-oct (§23.1 #2) | Los ADMIN con agenda que M8b pasa a PRACTITIONER + `grantSettings` pierden cobros (`billing.manage`), operar turnos de otros, bloqueos y ver todos los pacientes. Aviso y opciones en el precheck (b) de RUNBOOK «M8b en prod» · M12 backfillea «Planes y pagos» a los ADMIN; el precheck (b) de M8b sigue antes de migrar |
 | a3#13 runbook-frase-compat | baja | docs | .docs/MIGRACIONES-RUNBOOK.md | 🟢 PL-Z | Frase de compatibilidad hacia atrás de M8b corregida |
 | a3#15 switch-turnero-forbidden | baja | PL | lib/practitioner-public.ts | 🟢 PL-Z | Ver `PL-3 switch-turnero-sin-ui-propia` |
 | a4#1 lead-global-por-una-ip | media | PL | lib/leads.ts | 🟢 PL-Z | El contador `lead:global` se consumía aunque cortara el de la IP: una IP sola bloqueaba los leads del día. `lead:global` salió del limitador; el tope global es el conteo de leads guardados en la base (200 en 24 h) |
@@ -2029,8 +2036,8 @@ Soporte para todos. Commiteado (`cb99c06` M8c, `7e97ba5` UI). H/M/B = ítems del
 | B3 aviso-llega-mas-adelante | baja | PL-F | components/agenda/day-lock/day-lock-dialog.tsx | 🟢 PL-F | «El paciente no recibe aviso: avisale vos.» |
 | B4 nueva-plantilla-muerta | baja | PL-F | components/planes/templates/template-list.tsx | 🟢 PL-F | Sin botón deshabilitado: queda solo el aviso del plan |
 | plf-soporte-para-todos | media | PL | components/global/profile-menu.tsx · configuracion-client.tsx · support-access-panel.tsx · lib/support-threads*.ts | 🟢 PL-F | Decisión de Martin (16-oct): Mensajes y Accesos de soporte para cualquier miembro (desde el menú de perfil / del topbar); los accesos son solo lectura. Riesgo aceptado: cualquier miembro ve el email del superadmin y el motivo del acceso (sin datos de pacientes) |
-| plf-terminar-acceso-soporte | media | PL (soporte) | components/configuracion/panels/support-access-panel.tsx | 🟡 **decide Martin** | Desde el consultorio no se puede terminar un acceso de soporte abierto (termina cuando soporte sale o cierra sesión; la RLS de M7 es FOR SELECT). Recomendado: action con `tenant.admin` que llame a `closeOpenSessionsInTx` |
-| plf-toggle-billing-sin-cap | alta | **C0** (permisos, plata) | lib/bookings.ts:1686 (`toggleBilling`) | 🔴 abierto · **decide Martin** | `toggleBilling` no exige `billing.manage`: un PRACTITIONER con acceso full al paciente marca cobros (copago/obra social) como pagados. Recomendado: `requireCapability("billing.manage")` (o la capability que decida Martin para el profesional que cobra en mano), con test de rol; `lib/bookings.ts` es serial |
+| plf-terminar-acceso-soporte | media | PL (soporte) | components/configuracion/panels/support-access-panel.tsx | 🟢 T3c-1s `0914a9b` + T3d-1g `2fbb471` | Desde el consultorio no se puede terminar un acceso de soporte abierto (termina cuando soporte sale o cierra sesión; la RLS de M7 es FOR SELECT). Recomendado: action con `tenant.admin` que llame a `closeOpenSessionsInTx` · `endSupportAccessForTenant` con `tenant.sensitive` por el canal service (ARCHITECTURE ADR-024) |
+| plf-toggle-billing-sin-cap | alta | **C0** → T3 (permisos, plata) | lib/bookings.ts:1869 (`toggleBilling`) | 🟢 T3c-1c `f8b739f` (C-AS2) | Era: `toggleBilling` solo miraba `hasFullAccess` (cualquier profesional con acceso full marcaba cobros). Ahora: copago con `canCollectCopago` (`billing.collect` / `collectOwn`), obra social con `billing.manage`, sin `hasFullAccess`. Ver «Ronda T3» |
 
 ### Hallazgos y filas de RX (15/16-oct-2026)
 
@@ -2055,7 +2062,7 @@ los cerraron los fixers FX-A (Lista), FX-B (Flujo) y FX-C (shell) y el integrado
 | rxz-blancos-literales | baja | RX-Z | components/sala/desk/desk-css.ts · reception-view.tsx | 🟢 FX-C | Los fondos `#fff` de `desk-css.ts` y del link de `reception-view` → `var(--card-bg)`; el verde `rgba(27,112,75,…)` → token. Quedan grises `rgba(15,30,51,…)` de bordes, como en el resto de la app |
 | rx-por-cobrar-nombres-1024 | baja | **PF/MB** | components/sala/desk/desk-list.tsx | 🟢 PF1.1 | Nombres largos de «Por cobrar» en 2 líneas / apellido + inicial con `title` (PF1.1-sala). Verificación visual: revisor B de PF1-Z |
 | rx-sidebar-sin-movil-390 | media | **MB** | components/layout (sidebar) | 🟢 MB-0c/0d | Bajo 768 el sidebar se esconde y quedan la barra inferior fija (C-MB1) y «Menú» → Drawer (`mobile-nav-drawer.tsx`); ver «DIR y MB (16-oct)» |
-| rx-toggle-billing-sin-cap | alta | **C0** | lib/bookings.ts (`toggleBilling`) | ↪ ver `plf-toggle-billing-sin-cap` | RX esconde «Cobrar» y «Por cobrar» a quien no tiene `billing.manage`; el server todavía no lo exige |
+| rx-toggle-billing-sin-cap | alta | **C0** | lib/bookings.ts (`toggleBilling`) | 🟢 T3c-1c `f8b739f` | RX esconde «Cobrar» y «Por cobrar» a quien no tiene `billing.manage`; el server todavía no lo exige |
 
 ### Hallazgos de EV2 (EV2-Z, 15/16-oct-2026)
 
@@ -2075,7 +2082,7 @@ real — (a) seguridad/RLS/PHI: 0 altos ni medios; (b) UX/copy — + 3 fixers + 
 | b-M1..M10 copy-y-layout | media | EV2 | components/clinical-notes/** · components/seguimiento/** · components/patients/profile/views/evoluciones-view.tsx · components/planes/plan-history.tsx | 🟢 EV2-Z | Hint de «Sin evolución»; header que envuelve; deep link con nota existente = scroll + resaltado `[data-note-id]` sin abrir el editor; la enmienda copia el borrador; fecha redondeada a 5 min y el picker muestra el minuto fuera de grilla; contador accesible (aria-live solo cerca del límite), fieldset de fecha, tipo con 44 px y roving tabindex; Alta/Anulada con borde; `session.evolution` → «Sesión registrada» |
 | b-bajos impresion-y-copy | baja | EV2 | app/(app)/pacientes/[id]/imprimir/** · lib/bookings-constants.ts · booking-drawer/** | 🟢 EV2-Z | Impresión (shell con `display:none`, anulada sin tachar con quién y motivo, «Turno: …», aviso de corte a 2000, pie con paciente y DNI, sin botón si no hay notas, «Cerrar» = `window.close`); «Eliminar turno» deshabilitado con hint si hay evolución; error de red ≠ sin acceso; búsqueda 16 px en mobile; copy de acciones y `SESSION_KEPT_DONE_NOTICE` |
 | ev2z-future-sin-turno | baja | EV2 | lib/clinical-notes-types.ts (`futureNoBooking`) · lib/clinical-notes.ts · components/clinical-notes/clinical-notes-ui.ts | 🟢 integrador EV2-Z | «Todavía no llegó la hora del turno…» salía también en notas sin turno: sin turno el copy es «La fecha de la evolución no puede ser más de 12 h en el futuro.» (cliente y server, crear y editar; tests unit + integración) |
-| a6 kine-atiende-paciente-ajeno | media | **C0** | lib/clinical-notes-internal.ts (gate) · components/agenda/reception/** (toast) | 🔴 abierto — **decide Martin** | Un profesional que atiende un turno de un paciente asignado a otro kine, sin share, recibe `forbidden` al cargar la evolución (falla cerrado, correcto) pero el toast «Cargar evolución» se le ofrece igual. Opciones: share automático al atender (C0), o esconder el toast si no hay `canCreate`. *Recomendado:* C0 con el modelo de visibilidad por registro (EV2-D7) |
+| a6 kine-atiende-paciente-ajeno | media | **C0** | lib/clinical-notes-internal.ts (gate) · components/agenda/reception/** (toast) | 🟡 (b) hecho en T3c-1s `0914a9b` | Un profesional que atiende un turno de un paciente asignado a otro kine, sin share, recibe `forbidden` al cargar la evolución (falla cerrado, correcto) pero el toast «Cargar evolución» se le ofrece igual. Opciones: share automático al atender (C0), o esconder el toast si no hay `canCreate`. *Recomendado:* C0 con el modelo de visibilidad por registro (EV2-D7) · el toast pide `patientAccess === "full"` (`components/agenda/reception/attended-note-toast.ts:15`); el share automático (a) sigue en C0 |
 | ev2-seguimiento-detalle-1024 | baja | **PF/MB** | components/seguimiento/session-detail.tsx | 🟢 PF1.2 + MB-1d | Grilla del detalle responsive a 1024 con sidebar abierto (PF1.2-planes-bib); la fila de ejercicio a 390 va en 2 líneas por clase (`.exRow`, MB-1d) |
 | ev2-drawer-modal-sin-portal | baja | **PF** | components/ui/Drawer · components/ui/Modal | 🔴 abierto | Sin portal: el «Historial» abierto desde el drawer del turno queda dentro del panel. Evaluar portal en las primitivas (toca todo) |
 | ev2-perf-update-booking | baja | **PF** | tests/perf | 🟢 | **PF-M (16-oct)** — `loaders.perf.test.ts`: `updateBooking.patientChange` (sin evolución, re-vincula) y `updateBooking.patientChange.withNote` (con evolución, se rechaza sin escribir), regla estricta de `compare.ts` con referencia en `tests/perf/pf.json` (además del techo de S26s en `plans.perf`). [PERF.md §PF-M](PERF.md) |
@@ -2170,7 +2177,7 @@ del revisor B de PF1-Z; PF-Z integrador. Números en [PERF.md §PF2](PERF.md).
 | pf2-perfil-planes-copiados | baja | C | lib/patient-profile-loader.ts:174-189 (`patientPlansAndBalancesInTx`) | 🔴 abierto | Réplica en tx de `getPatientPlans` + `getPatientPlanBalances` (`lib/plans-read.ts`, "use server"); la paridad la fija `pf2-profile-budget`. Mudar a `plans-read-internal.ts` |
 | session-exercise-count-full-scan | media | C1 | lib/plans-read-internal.ts:114 (`_count: { exercises }`) | 🔴 re-verificar | El lector nuevo de planes sigue con `_count` de ejercicios por sesión; falta medir si el plan agrega `SessionExercise` entera como el retirado (A1) |
 | pf2-seguimiento-2-tx | baja | PF / C | /seguimiento (request entero) | 🟡 | `ttfb.mjs`: 1 → 2 tx por request desde PF-0b (la página no cambió desde VX-Z: probablemente el layout). Presupuesto «no sube» |
-| pf2-agenda-bundle-176 | baja | PF | /agenda | 🟡 | 176,9 kB (presupuesto 180, +0,7 % sobre baseline): poco margen |
+| pf2-agenda-bundle-176 | baja | PF | /agenda | ↪ T3 | 176,9 kB (presupuesto 180, +0,7 % sobre baseline): poco margen · T3a recortó el first load (meta ≤173,1 tras T3a, ≤174,5 al cierre de T3; guard `tests/unit/agenda-first-load-guard.test.ts`); medida final en el gate de T3-Z |
 | pf1z-toast-tapa-drawer | baja | MB | components/ui/toast.tsx (`ToastRegion`) | 🟢 MB (resto abierto abajo) | Con un Drawer abierto (marca `data-k-drawer-open` de drawer.tsx) el toast va arriba a la izquierda ≥ 768 y sobre el pie del drawer < 768. Queda `mbz-toast-drawer-768-880` en «DIR y MB» |
 | pf1z-cls-390 | baja | MB | agenda Semana 390 | 🟢 integrador MB-Z | CLS **0** en Semana/Lista/Recepción y drawer a 360/390 (causa y medición en «DIR y MB (16-oct)», `mbz-cls-hidratacion`) |
 
@@ -2238,7 +2245,7 @@ visual de MB, fixers DIR-Z-F1 y MB-Z-F2/F3, orquestador (`74ff0f9` = parte 1) e 
 | mbz-sala-total-columna | baja | MB (decide Martin) | components/sala | 🟡 | Decisión a mostrar (MB-1c): en el celular el header de columna del Tablero lleva el total con dos números. Default: queda como está hasta que Martin decida |
 | dir-b1-alias-sin-rate-limit | baja | C | app/(directory)/consultorios/[slug]/page.tsx (`resolveSlugAlias`) | 🔴 | Cada slug nuevo inexistente hace una lectura por PK (el 404 sí queda en ISR 600 s). Opción: cache por slug o rate limit |
 | dir-b2-public-profile-sin-rate-limit | baja | C | lib/public-profile.ts | 🔴 | Actions sin rate limit (exigen sesión + 2FA; riesgo de abuso, no de fuga). Opción: limiter por usuario de `/cuenta/seguridad` |
-| turnero-usuario-deshabilitado-reservable | media | C0 | lib/practitioner-scope.ts (`bookablePractitionerWhere`) | 🔴 | Pre-DIR: un usuario deshabilitado por Plataforma sigue reservable en el turnero (solo se mira `Membership.disabledAt`) |
+| turnero-usuario-deshabilitado-reservable | media | C0 | lib/practitioner-scope.ts (`bookablePractitionerWhere`) | 🟢 T3c-1s `0914a9b` | Pre-DIR: un usuario deshabilitado por Plataforma sigue reservable en el turnero (solo se mira `Membership.disabledAt`) · `bookablePractitionerWhere` filtra `user.disabledAt` siempre (`lib/practitioner-scope.ts:21`) |
 | dir-ver-mi-perfil-link | baja | DIR | components/account/public-profile-form.tsx | 🔴 | Falta el link «Ver mi perfil público» (`MyPublicProfile` no trae `profileId`) |
 | dir-menu-perfil-otro-consultorio | baja | DIR | layout de `/cuenta` (`TenantOption` sin `clinical`) | 🔴 | La entrada «Perfil público» no aparece para un Titular/Admin que atiende solo en otro consultorio |
 | dir-tagcombobox-aria | baja | C | components (TagCombobox de especialidades) | 🔴 C | Sin roles ARIA `combobox`/`listbox` |
@@ -2268,7 +2275,7 @@ tandas. «M*/B*» = hallazgos de (a), «b-*» = de (b). Decisiones con default e
 | b-portal-ux | media/baja | ES4 | app/(portal)/** · components/portal/** · lib/portal-copy.ts | 🟢 P4.Z (2) | «Buscar mis fichas» (ES4-D2, 5/h); General ve sus próximos turnos en «Tu consultorio»; «← Mis consultorios» unificado; estado real del turno (Confirmado / A confirmar); «Próxima sesión · Sesión n de N»; aviso de pedidos también a quien tiene `agenda.operateAll`; vincular sin form cuando no hay arreglo; error del callback con destino portal vuelve a `/portal?error=`; esqueleto `loading.tsx`; «Mis datos» |
 | portal-vincular-consultorio-suspendido | baja | ES4 — **decide Martin** | lib/portal-vincular.ts | 🟡 default: vincula | Vincular con el consultorio suspendido **vincula** (solo habilita lecturas, que la suspensión permite); el `it` lo afirma |
 | aviso-pedido-a-secretaria | baja | ES4 — **decide Martin** | lib/notifications-internal.ts · lib/portal-profile.ts | 🟢 default | El aviso del pedido de «Mis datos» llega también a quien tiene `agenda.operateAll` (Secretaria, activa) |
-| billing-aprueba-cobertura | baja | ES4 — **decide Martin** | lib/patient-portal-requests.ts (`canDecide`) | 🔴 abierto | BILLING aprueba pedidos de cobertura del portal (contrato §3.6) pero no edita cobertura a mano. Recomendado: restringir `decidePatientPortalRequest` a ASSISTANT/OWNER/ADMIN (C0 o ya) |
+| billing-aprueba-cobertura | baja | ES4 — **decide Martin** | lib/patient-portal-requests.ts (`canDecide`) | 🟢 T3c-1b `287ce14` (decidido 19-oct, #26) | BILLING aprueba pedidos de cobertura del portal (contrato §3.6) pero no edita cobertura a mano. Recomendado: restringir `decidePatientPortalRequest` a ASSISTANT/OWNER/ADMIN (C0 o ya) · `canDecide = full || (admin && patients.editAdmin)`: Facturación afuera |
 | patientUniqueError-sin-campo | baja | C | lib/patients.ts (`patientUniqueError`) | 🔴 abierto | Tras `updateMany` el P2002 llega con `meta.target = null` y el mensaje no nombra el campo. El portal ya hace pre-check; falta en `updatePatient` |
 | p2002-reintento-ruido-log | baja | C | lib/portal-profile-internal.ts | 🟡 aceptado | El P2002 del INSERT de la PENDING (carrera) se reintenta como UPDATE, pero Prisma lo loguea como `prisma:error`: ruido, no falla |
 | portal-checkin-sin-js | baja | PF | components/portal/check-in-form.tsx | 🔴 abierto | El check-in sigue necesitando JS (los otros forms del portal no). Pasar a `useFormState` con action directa |
@@ -2321,6 +2328,53 @@ cerraron en su tabla de origen («DIR y MB», «SV»).
 | env-service-url-heredada-local | media | OPS/C1 | `.env` (Prisma lo lee siempre) · `DATABASE_URL_SERVICE` | 🟡 latente | Si `.env` tiene la `DATABASE_URL_SERVICE` de prod y `.env.local` no la define, Prisma la hereda en local (carga `.env` además de `.env.local`): un test o script del canal service escribiría en prod. Hoy latente: ninguno de los dos la define (verificado solo por nombre de clave). Fix: guard en `lib/env.ts` o en los scripts que falle si local apunta a un host remoto |
 | server-action-import-dinamico | baja | C (convención) | components/agenda/booking-drawer/share-actions.tsx | 🟢 `b1272b8` (regla) | `import()` dinámico de un módulo `"use server"` desde un client component falla en build («Failed to find Server Action»). **Regla:** las server actions se importan estático; diferir el componente, no la action |
 | sesion-restaurada-por-chrome | baja | C | navegador | 🟡 límite conocido | Chrome/Edge con «Continuar donde lo dejaste» restauran las cookies de sesión: «Mantenerme conectado» destildado no cierra la sesión ahí. Cierre por inactividad para PCs compartidas en backlog C |
+
+### Ronda T3 (19-oct): agenda, Secretaria, cobros y módulos
+
+Ronda 32. T3 = AS (§23 del plan; contratos C-AS1 permisos, C-AS2 cobros, C-AS3 tope por intervalo), commits
+`fd5e6af`..`d25c5a7` sobre `3159539`, **local, sin push**; M12 `20261020120000_agenda_secretaria_config` aplicada solo en
+el Docker local (orden para prod en RUNBOOK «M12 en prod»). Lo cerrado se verificó en el diff de cada commit; los
+hallazgos de origen (§23.2) que ya tenían fila en otra tabla se cerraron en su lugar (`plf-toggle-billing-sin-cap`,
+`rx-toggle-billing-sin-cap`, `secretaria-edita-contacto-cobertura`, `billing-aprueba-cobertura`,
+`plf-terminar-acceso-soporte`, `turnero-usuario-deshabilitado-reservable`, `a3#12`, `a6`). Enmiendas de §5: 27, 28, 35
+y 40. Revisores de T3-Z: (a) seguridad/plata/concurrencia, (b) UX/copy/a11y; sus fixes van en los fixers Z-* (B10 de
+(b) → C2).
+
+**Cerrado por T3 (§23.2)**
+
+| Slug | Sev | Bloque | Ubicación | Estado | Cierre |
+|---|---|---|---|---|---|
+| H-AS nadie-no-clinico-cobra | alta | B | lib/bookings.ts:1869 (`toggleBilling`) · lib/capabilities.ts:92,198 · lib/booking-collect.ts | 🟢 T3b-1k1 `ca62b11` + T3c-1c `f8b739f` + T3d-1r `7735e60` | `billing.collect` (Titular, Admin, Secretaria, Facturación) y `billing.collectOwn` (profesional, solo sus turnos) vía `canCollectCopago`; obra social con `billing.manage`; sin `hasFullAccess`. Un cobro por turno con medio (`setBookingCopagoPaid`, `CopagoMarkInput`); re-marcar corrige solo el medio (audit `booking.copago_method_change`); turno pagado por MP → «Este turno se pagó por Mercado Pago: el cobro no se cambia a mano.» (`lib/booking-collect.ts:50`). Drawer, /sala, Facturación y la ficha cobran |
+| H-AS delicado-en-tenant-admin | alta | B | lib/capabilities.ts:112,131-140 · lib/authz.ts:150 · lib/invitations.ts · lib/tenant-settings.ts · lib/practitioner-public.ts · lib/conditions.ts | 🟢 T3c-1t `e267d2a` + T3d-1g `2fbb471` | `tenant.sensitive` (Titular; quien tenga Configuración salvo Secretaria y Facturación: corte de staff `STAFF_ROLES`). Turnero, directorio, «quién ve la HC», datos del consultorio, equipo, diagnósticos propios y terminar soporte pasan a `requireTenantSensitive`. Configuración esconde lo delicado por capability, no por rol |
+| H-AS sin-gate-diagnosticos-planes-os | media | B | lib/conditions.ts:58 · lib/catalog.ts:292 | 🟢 T3c-1t + T3c-1b `287ce14` | Diagnósticos propios con `tenant.sensitive`; `proposePayerPlan` con `patients.editAdmin` o `clinical.read` |
+| H-AS updatePatient-borra-notas | alta | B | lib/patients.ts (`updatePatient`) · components/patients/edit-patient-drawer.tsx | 🟢 T3c-1b + T3d-1u `bae6c00` | Rama `admin` con lista cerrada `.strict()`; cualquier clave clínica → rechazo sin escribir («Las notas y el diagnóstico los edita el profesional a cargo.»); el drawer en modo admin no manda `notes`/`diagnosis*` |
+| H-AS check-medio-refunded | media | B | prisma/migrations/20261020120000_agenda_secretaria_config | 🟢 T3b-1m `12bb08b` | CHECK `Booking_copago_method_check`: medio ⇒ `PAID` o `REFUNDED` (el webhook de MP de T5 no rompe) |
+| H-AS soporte-sin-cierre | media | B | lib/support-session-tenant{,-internal}.ts | 🟢 T3c-1s `0914a9b` + T3d-1g | Canal service con `where {id, tenantId, endedAt:null}`, audit doble (ARCHITECTURE ADR-024) |
+| H-AS write-paths-sin-reservable | media | B | lib/services.ts:88,180 · lib/practitioner-services.ts:52,138 · lib/practitioner-schedule.ts · lib/practitioner-payers.ts · lib/patients.ts | 🟢 T3c-1s | Validan profesional reservable (`bookablePractitionerWhere` con `user.disabledAt`, `lib/practitioner-scope.ts:21`) |
+| H-AS cupo-por-servicio | media | B | lib/booking-cap-lock.ts:295,347 · lib/bookings-core.ts:301,335 · lib/availability/interval-cap.ts | 🟢 T3b-2k `73909c4` + T3c-2e `68c35d6` + T3c-2l `9b39fc6` + T3d-2w `b8503c9` | Tope «N turnos cada X min» de cualquier servicio con la clave `kinesoft:phour:` (enmienda §5.28/§5.40); `countAgendaOccupancy` con 0 sentencias nuevas, `countCapacityOverlaps` byte a byte igual (§5); `RescheduleForce` suma `allowIntervalCap`. UI de aviso/sobreturno en T3e-2u1 `e815e45` y 2u2 `7c06642`; configuración en T3e-2c `698d020` |
+| H-AS filas-15-a-60 | media | B | lib/agenda-utils.ts · components/agenda/views/week-grid-view.tsx | 🟢 T3d-2g `bdee4e1` | `normalizeSlotMinutes`/`effectiveRowMinutes`; el zoom por usuario cambia la grilla solo si lo eligió (`zoomSet`) |
+| H-AS bundle-agenda-178 | media | PF | /agenda | 🟢 T3a `fd5e6af` `a880ffa` `a2c84af` (meta) | KPIs, diálogo del candado, roles e `INSTANT_CLASS_LABEL` fuera del first load; guard `tests/unit/agenda-first-load-guard.test.ts`. Meta ≤173,1 tras T3a y ≤174,5 al cierre: el número final lo da el gate de T3-Z |
+| H-AS filtro-os | baja | B | lib/bookings.ts:474 · lib/patients.ts:195 · lib/patients-os-filter.ts | 🟢 T3e-2o `d25c5a7` + T3e-2p `f9be4a5` | `insurerKey` en la agenda (`null` nunca matchea y se cuenta); /pacientes por `insurerId` de la cobertura vigente (reemplaza el ILIKE) |
+| H-AS toast-evolucion-sin-acceso | baja | B | components/agenda/reception/attended-note-toast.ts:15 | 🟢 T3c-1s | `attendedNoteHref` exige `patientAccess === "full"` (cierra a6 (b)) |
+| H-AS modulos-a-medida | — | B (feature) | lib/tenant-modules.ts:52-58,137 · lib/tenant-entitlements-internal.ts · lib/platform-tenant-modules.ts · lib/tenant-module-deps.ts | 🟢 T3b-1k2 `3070d42` + T3c-1p `25bdcd4` | `moduleGrants`/`moduleRevokes` obligatorios; escritor único con dependencias; `tenant.modules.update` con step-up; muro «no está habilitado» (ARCHITECTURE ADR-005, enmienda T3) |
+| H-AS ocupacion | — | B (feature) | app/(app)/agenda/ocupacion/* · lib/agenda-occupancy.ts | 🟢 T3e-3h `29f770d` + `4519ddb` | «Lo que pasó» (4/8/12 semanas) y «Lo que viene» (1/2/4), una sentencia, sin claves de paciente, scope por rol |
+
+**Abiertos y para decidir**
+
+| Slug | Sev | Bloque | Ubicación | Estado | Detalle / destino |
+|---|---|---|---|---|---|
+| Hallazgo B cupo-lookback-240 | media | **C1** | lib/availability/types.ts:84 (`BOOKING_LOOKBACK_MIN = 240`) · lib/services.ts (duración ≤ 480) | 🔴 abierto | El loader trae turnos que empezaron hasta 240' antes de la ventana, pero un servicio puede durar 480': un turno de más de 4 h que arrancó antes de la ventana no entra al conteo de cupo ni al de solapes. Fix en C1 con su test de paridad (el oráculo no se edita, §5.27) |
+| t3z-a1 email-autovinculo-portal | alta | B | lib/patients.ts (`updatePatientImpl`, rama admin) | 🟡 **en fix T3-Z (default), confirma Martin** | Secretaria/Admin cambia el email de una ficha **sin** portal vinculado → el portal se auto-vincularía a la cuenta de ese email. Default: con `userId == null` y email distinto → rechazo sin escribir «El email lo cambia el profesional a cargo o el paciente desde el portal.»; la UI lo muestra deshabilitado |
+| t3z-m2 compartir-reasignar-con-admin | media | B | lib/patients.ts (`requireShareAuthority`, `assignPatientToPractitioner`) | 🟡 **en fix T3-Z (default), confirma Martin** | Compartir y reasignar pacientes colgaban de `tenant.admin`: una Secretaria con Configuración decidía quién ve la HC de un paciente. Default: `tenant.sensitive`; `createPatient` con `assignTo` sigue igual |
+| t3z-m1 export-csv-contactos | media | C1 | lib/patients-export-internal.ts:39-75,89 | 🟡 **en fix T3-Z** (Z-s1) | El CSV de la Secretaria traía email/teléfono de las filas `admin` y el audit `basicCount` no las contaba. Fix: contactos solo con `full` o `patients.editAdmin` (Facturación sin contactos) y audit con `adminCount` |
+| invite-admin-sin-step-up | media | C0 | lib/invitations.ts:183 (`createInvitationImpl`) vs :282 (`changeMemberRole`) | 🔴 abierto · **decide Martin** | Pasar a alguien a Administrador/a pide step-up (PL-Z a2#7), pero **invitar** directamente como ADMIN no. Con T3 el ADMIN trae «Planes y pagos» (decisión 2), así que una sesión robada del Titular invita una cuenta propia como ADMIN sin código. Recomendado: `requireStepUp` en `createInvitation` con rol ADMIN |
+| contacto-sin-audit | baja | C1 — **decide Martin** | lib/patients.ts (`updatePatient`, ramas full y admin) | 🔴 abierto | Las ediciones de contacto y DNI no dejan audit (igual que la rama full desde PL-A). Ahora la Secretaria también edita: recomendado auditar `patient.contact_update` con los nombres de campo, sin valores |
+| os-texto-libre-es-particular | baja | C2 | lib/bookings.ts:474 · lib/patients.ts:195 | 🟡 por diseño | Una cobertura de texto libre sin vincular (`insurerId` null) cae en «Particular» en los dos filtros, igual que cobra (`resolveBookingCopagoCents`). Se arregla vinculando la cobertura; si molesta, un ítem «Sin vincular» en el filtro |
+| t3z-b4 plan-sin-clave-de-hora | baja | B (riesgo aceptado) | lib/plans-engine-internal.ts · lib/booking-cap-lock.ts | 🟡 aceptado | Planes no toman `kinesoft:phour:` (el tope es aviso, precedente SR-D3): un turno de plan y uno del turnero concurrentes en el mismo intervalo pueden pasar el tope **duro** del turnero. Sin sentencias nuevas en Planes; se revisa si aparece en la agenda real |
+| dashboard-filas-admin-basico | baja | C2 | lib/dashboard.ts:95 | 🔴 | Las filas `admin` se rotulan «Acceso básico» (copy) |
+| t3z-b10 franja-del-consultorio | baja | C2 | franja de la agenda | 🔴 | Volver a «Del consultorio» (revisor (b) B10) |
+| t3z-b-ux-fixes | baja | B | components/billing/* · facturacion-view · week-grid-view · occupancy-view · access-wall | 🟡 **en fix T3-Z** | Revisor (b) A1-A3, M1-M9, B1-B9: Semana 15' (`WEEK_ROW_PX[15]`), deshacer cobro con `useConfirm` en Facturación, vista de cobro MP compartida, copy único de cobro, targets de 44, copy del tope y del muro |
+| t3z-a-bajos | baja | B | lib/team-internal.ts:~1000 · lib/bookings-core.ts:~1755 · lib/bookings.ts:~1882 | 🟡 **en fix T3-Z** | Revisor (a) B1 (carrera de grants en `changeMemberRoleInTx`), B2 (alargar un turno no lo marca sobreturno por un intervalo ya lleno), B3 (`FOR UPDATE` del turno antes de leer el pago, serializa con el webhook) |
 
 ### Resumen del checklist (al 2026-09-29)
 
@@ -2536,7 +2590,13 @@ era intencional.
     `patientConflictsAt` exportado desde `lib/availability/classify.ts` y `nextFreeSlot({until?})` (cota exclusiva);
     `availability-*.test.ts` y `public-slots.test.ts` siguen sin cambios. **Fallback permanente:** profesional
     sin franjas = horario del tenant lun-sáb en la sede principal; `Booking.locationId` null = principal. Sin
-    cache de disponibilidad a propósito.
+    cache de disponibilidad a propósito. **Enmienda T3 (AS-D9, T3c-2l `9b39fc6`):** el paso del turnero es por servicio,
+    `publicSlotStepFor(d) = clamp(ceil15(d), 15, 60)` (`lib/public-booking-slots.ts:66-79`: 15→15, 20→30, 50→60, 90→60);
+    el paso fijo `PUBLIC_SLOT_STEP_MIN = 45` queda solo para `buildPublicSlots` (envoltorio de A2b, oráculo de paridad,
+    `:56`) y `public-booking-engine.test.ts` se reescribió
+    con el paso nuevo. El paso del staff sigue en 15 y el lookback en 240 (Hallazgo B, «Ronda T3»). **T3 (aditivo):**
+    `SlotUnavailableReason`/`InstantClass` suman `"tope-intervalo"` y `BuildSlotsInput.intervalCap?`; sin tope la salida
+    es la de antes.
 28. **Orden de locks en escrituras de agenda (B-pre).** Siempre **cupo → sedes (compartido) → filas**: (1)
     `lockCapacityWindow` (`lib/booking-cap-lock.ts`: `pg_advisory_xact_lock` por tenant + profesional + servicio
     + **día AR**, todos los días que toca el turno, en orden ascendente), (2) `lockTenantLocationsShared` y
@@ -2548,7 +2608,13 @@ era intencional.
     el **orden global**, no "un turno por tx": una tx puede tomar los cupos de N turnos si los ordena
     (`lockCapacityMany`); Planes antepone `lockPlanPatient` y fija el orden de filas Booking → Session →
     TreatmentProgram. **Enmienda SR (C2 (1b), ADR-004):** la sala va entre cupo y sedes, en la misma sentencia que el
-    cupo (`lockCapacityAndRoomsMany`).
+    cupo (`lockCapacityAndRoomsMany`). **Enmienda T3 (C2 (1c), ADR-004, C-AS3):** **cupo → hora del profesional → sala →
+    sedes → filas**. La clave `kinesoft:phour:<t>:<profesional>:<hora AR>` (`lib/booking-cap-lock.ts:295`; la hora contiene
+    cualquier intervalo de 15/30/60, así que no depende de la config) va **en la misma sentencia** que el cupo y las salas
+    (`lockAgendaKeysMany`, `:347`: todo el cupo, después todas las horas, después todas las salas, cada grupo ordenado);
+    `lockCapacityMany`/`Window`/`AndRoomsMany` quedan como envoltorios con su firma. La toman siempre altas, lote, edición
+    que cambia de intervalo o reactiva y el submit del turnero; no la toman bloqueos, candado, promoción del hold ni
+    Planes (B4, riesgo aceptado).
 29. **`Booking.isOverbooked` + prefijo `[SOBRETURNO]` hasta el contract.** `isOverbooked` es la fuente; los
     write-paths **siguen escribiendo** el prefijo en `notes` (el código viejo que convive durante el deploy y las
     notas que ve el usuario lo usan) hasta la migración contract posterior a B-pre. No dejar de escribirlo ni borrarlo de las notas existentes.
@@ -2586,7 +2652,12 @@ era intencional.
     (crear, reprogramar, estado, cancelar) sin campos clínicos. Se consume **solo** por los predicados puros
     `canOperateBooking` = `full || agenda.operateAll` y `canWriteClinical` = `clinical.read && full`
     (`lib/capabilities.ts:182,192`), más `bookingFieldAccess` (un campo se escribe si y solo si se lee). Borrar turnos
-    y cobros siguen pidiendo full. `plans.manage`/`plans.schedule`/`plans.authorize` están en la matriz y se usan desde
+    sigue pidiendo full. **Enmienda T3 (C-AS1/C-AS2):** los cobros **no** piden full: el copago con `billing.collect`
+    (OWNER, ADMIN, ASSISTANT, BILLING; cualquier turno, invitado incluido) o `billing.collectOwn` (PRACTITIONER, solo sus
+    turnos) por el predicado puro `canCollectCopago`, y la obra social con `billing.manage` (`canConfirmInsurer`);
+    `toggleBilling` sin `hasFullAccess` (`lib/bookings.ts:1869`). Lo delicado de Configuración es `tenant.sensitive`
+    (corte de staff: ASSISTANT y BILLING nunca, ni con `grantSettings`) y la edición de contacto y cobertura del perfil
+    `admin` es `patients.editAdmin`. `plans.manage`/`plans.schedule`/`plans.authorize` están en la matriz y se usan desde
     ES2b (el "con full" va en la action, no en la matriz): `assertPlan*InTx` de `lib/plan-authz-internal.ts`, nunca un
     gate reimplementado.
 36. **Keys de turno de plan `plan:<generationId>:<index>` (ES2b, PLANES C3).** Las escribe solo el motor
@@ -2609,7 +2680,9 @@ era intencional.
     turno"*); sacar del plan con cobro → rechazo. La red es la FK RESTRICT (P2003/23503) y las FKs compuestas: no
     cambiar a CASCADE ni mapear el P2003 a un borrado.
 40. **Orden de locks de Planes (ES2b, ADR-004 = PLANES C2; enmienda de §5.28).** `lockPlanPatient` primero (solo
-    operaciones de estructura del plan) → cupos `lockCapacityMany` (una sentencia, claves ordenadas) → sedes
+    operaciones de estructura del plan) → cupos `lockCapacityMany` (una sentencia, claves ordenadas; desde T3, C2 (1c),
+    seguido de las horas `kinesoft:phour:` y las salas en esa misma sentencia cuando el write-path las toma:
+    `lockAgendaKeysMany`; el motor de Planes no toma la de hora) → sedes
     compartidas → `Booking` `FOR UPDATE` id asc → `Session` → `TreatmentProgram` (CAS al final). Seguimiento y
     `rescheduleSession` lockean el plan con `FOR NO KEY UPDATE`; el motor lockea las sesiones que escribe; un
     reintento de la tx ante P2034/40P01. No invertir Program/Session ni escribir `Session` después de un INSERT de

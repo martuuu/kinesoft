@@ -14,7 +14,7 @@
 > 3. **Etapa 3 — Productiva final.** Guía de diagnóstico completa, planes, IA local, módulo
 >    contable, features Pro.
 
-## ⭐ Plan vigente (18-oct): §22.13
+## ⭐ Plan vigente (18-oct): §22.13 (T3 detallado en §23, 19-oct)
 
 > **Manda sobre §20 y §21 donde choque.** Feedback del 17-oct del cliente principal (turnero que no dejaba terminar,
 > agenda que nunca entraba en vivo, «Llegó», 2FA, ventana de 5 días, cobro de turnos por profesional, video en la TV).
@@ -25,15 +25,16 @@
 | # | Tanda | Qué incluye | Migración | Estado |
 |---|---|---|---|---|
 | 1 | **A** | HF-1a/1b realtime (secreto recortado, huella y prueba en Sistema, agenda en vivo en **todos los planes**, diagnóstico y polling con driver off) · HF-2a/2c «Llegó» en el drawer + latido · HF-3 2FA del superadmin en pausa · TP-0 turnero sin cobro · TP-1 ventana de 5 días hábiles | — | ✅ commiteada (`59ca0a7`..`4e504ee`); falta el QA de prod ([QA «Tanda A»](QA.md)) y lo de Martin en [EXTERNAL-CONFIG §0.8](EXTERNAL-CONFIG.md) |
-| 2 | **B** | OPS-1 (Resend, pooler, guard de Preview, guard de marca) · AS-0 (bug del modal, campana, Recepción) · WA-0 (`wa.me` al celular) · prototipo de logo y marca → Martin elige → OPS-4 · «Mantenerme conectado» (tildado = sesión persistente) · pulido mobile (AS-3a..d) · E2E Playwright (OPS-6, no bloqueante 2 semanas) | — | ✅ commiteada (`7e71aa7`..`b1272b8`, [AUDIT Ronda 31](AUDIT.md)); **falta el logo elegido por Martin → renombrado (OPS-4)**. QA en [QA «Tanda B»](QA.md), consola en [EXTERNAL-CONFIG §0.9](EXTERNAL-CONFIG.md). Riesgo para T3: `/agenda` en 178,1/180 KB |
-| 3 | **T3** | AS-1 / AS-2 / AS-3h | **M12** `agenda_secretaria_config` | ⏭ **siguiente**: planificar (presupuesto de bundle de `/agenda` al límite) |
-| 4 | **T4** | FC fichas clínicas | **M14** `fichas_clinicas` | planificar al llegar |
+| 2 | **B** | OPS-1 (Resend, pooler, guard de Preview, guard de marca) · AS-0 (bug del modal, campana, Recepción) · WA-0 (`wa.me` al celular) · prototipo de logo y marca → Martin elige → OPS-4 · «Mantenerme conectado» (tildado = sesión persistente) · pulido mobile (AS-3a..d) · E2E Playwright (OPS-6, no bloqueante 2 semanas) | — | ✅ commiteada (`7e71aa7`..`b1272b8`, [AUDIT Ronda 31](AUDIT.md)); **falta el logo elegido por Martin → renombrado (OPS-4)**. QA en [QA «Tanda B»](QA.md), consola en [EXTERNAL-CONFIG §0.9](EXTERNAL-CONFIG.md) |
+| 3 | **T3** | AS (§23): cobros con medio de pago (Secretaria, Admin, Facturación; profesional sus turnos), lo delicado de Configuración con `tenant.sensitive`, Secretaria edita contacto y cobertura y da de alta pacientes, tope «N turnos cada X min», filas y servicios de 15', paso del turnero por duración, filtro por obra social, Ocupación, módulos y precio por consultorio desde Plataforma, terminar soporte desde el consultorio, bundle de `/agenda` | **M12** `agenda_secretaria_config` | ✅ **local, sin push** (`fd5e6af`..`d25c5a7` + T3-Z); **M12 solo en el Docker local**, a prod al final del planning ([RUNBOOK «M12 en prod»](MIGRACIONES-RUNBOOK.md)). Hallazgos en [AUDIT «Ronda T3»](AUDIT.md), QA en [QA «T3»](QA.md) |
+| 4 | **T4** | FC fichas clínicas; catálogo base **CIE-11 MMS en español de la OMS** + propios + kine (§23.12, FC-D17; Martin confirma con la OMS antes del import) | **M14** `fichas_clinicas` | ⏭ **siguiente**: planificar (§22.13/§23.12); se le consultan a Martin las decisiones del bloque (#11, #17, #21-#23) |
 | 5 | **T5** | TP-M / TP-2 / TP-3: cobro online por profesional (OAuth MP), política por consultorio, links de cobro; el sandbox S3 sin staging se resuelve en su planning | **M18** `turnero_cobros_mp` | planificar al llegar |
 | 6 | **T7** | TV (pantalla de sala + video de YouTube) + CSP enforce | **M17** `reception_displays` | planificar al llegar |
 | 7 | **T6** + infra (las últimas dos) | WA (M15) + MPS (M16, cobro el día 4, MPS-D7) · staging, Google OAuth, Upstash, Sentry, roles RLS en prod | **M15**, **M16** | planificar al llegar |
 
-- **Prod:** las Tandas A y B no tienen migración; van a prod apenas pasen su gate (§22.11). M18 se aplica **antes** que M14..M17
-  (el orden lo da el timestamp, no el número).
+- **Prod:** las Tandas A y B no tenían migración (pusheadas por Martin el 19-oct). **M12** va al final de todo el planning
+  (§22.14: consolas, push y migraciones juntos), con precheck → backup → `db:prod:deploy` **antes** del deploy de T3, y
+  **antes que M18**. M18 se aplica **antes** que M14..M17 (el orden lo da el timestamp, no el número).
 - **Decisiones con default** de la Tanda A (D-HF1..7, D-LL1, TP-D1..3) en §22.10; las de T5 (TP-D5..D16) se firman en su
   planning. En paralelo a la Tanda A quedó el documento de decisiones pendientes (EV2-D*, RX-D2, C0, §21.11, §22.10)
   para que Martin las firme.

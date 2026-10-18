@@ -262,6 +262,18 @@ QA en [QA «Tanda B»](QA.md).
 | Rechazo de Resend | Terminal de Martin, con las variables de prod en su shell (el agente no corre nada contra prod) | `RESEND_API_KEY=… EMAIL_FROM="…" EMAIL_TRANSPORT=resend npx tsx --conditions=react-server scripts/diagnose-email.ts --to <vos> --url https://<dominio> --from-name "" --expect-domain <dominio verificado> --confirm`. Avisa si `EMAIL_FROM` es de otro dominio o está mal pegada; con `--from-name ""` y con el nombre del consultorio se ve si el problema es el display-name. Después mirar `/plataforma/sistema` → «Últimos mails que no salieron»: el motivo (401 key, 403 dominio sin verificar o cuenta en prueba, 422 remitente) dice qué corregir en Resend o en `EMAIL_FROM` |
 | Logo y marca | — | Martin elige el logo del prototipo → recién ahí se hace el renombrado (OPS-4) |
 
+### 0.10 T3 — Secretaria, cobros y módulos (19-oct-2026) 🔴
+
+**Con migración M12** (sin variables de entorno nuevas). Orden en [RUNBOOK «M12 en prod»](MIGRACIONES-RUNBOOK.md);
+QA en [QA «T3»](QA.md).
+
+| Qué | Dónde | Cuándo / cómo |
+|---|---|---|
+| M12 `agenda_secretaria_config` | Terminal de Martin (`db:prod:*`) | Al final de todo el planning (§22.14), **antes** del push de T3 (el build de Production migra) y antes que M18: precheck (a)-(g) → `db:prod:backup` → `db:prod:deploy` → postcheck |
+| Admins y staff | Precheck (d) y (e) de M12 | (d) = los ADMIN que pasan a tener «Planes y pagos»; (e) = Secretaria/Facturación con «Planes y pagos» o «Configuración» que con T3 pierden lo delicado: avisarle al Titular del cliente vivo antes del deploy |
+| Módulos a medida | `/plataforma` → consultorio → Suscripción → «Módulos» | Opcional, después del deploy (pide 2FA). Nada cambia mientras no se toque |
+| «Sin conexión en vivo» en el Chrome de la Secretaria | Navegador de la Secretaria → indicador → «Ver detalle» | Pendiente desde §23.0: Martin pasa el paso que falla para decidir si hace falta un fix |
+
 ### 1. Hosting / plataforma de despliegue — Vercel
 - **Qué configura:** proyecto en Vercel (región `gru1` ya fijada en `vercel.json`); env vars de prod;
   branch protection en `main` exigiendo el check de CI como required; `KINESOFT_ALLOW_DEMO_ACTOR`

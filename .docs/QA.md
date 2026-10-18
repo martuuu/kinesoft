@@ -2043,3 +2043,53 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] `/plataforma/sistema` → «Últimos mails que no salieron»: fecha, tipo, motivo en castellano (por ejemplo, 403 = dominio sin verificar) y solo el **dominio** del destinatario.
 - [ ] `npm run diagnose:db` en local: rol, BYPASSRLS y modo de pool de cada URL, sin contraseñas.
 - [ ] `npm run test:e2e` en local: 15/15.
+
+## T3 · Agenda, Secretaria, cobros y módulos (19-oct-2026)
+
+> T3a..T3e (`fd5e6af`..`d25c5a7`) + fixers de T3-Z. **Con migración M12** (`agenda_secretaria_config`, solo en local:
+> probar contra el Docker local o un preview con M12). Plan §23.13; hallazgos en [AUDIT «Ronda T3»](AUDIT.md). **🔴 P0** =
+> plata o permisos: no se pasa a prod con uno en ❌. Fechas con `TZ=UTC`. Usuarios: Titular, Admin (sin agenda),
+> Secretaria (con y sin «Configuración»), Facturación, Profesional (con y sin «Configuración»).
+
+### 🔴 P0 · Cobros (C-AS2)
+- [ ] 🔴 P0 **Secretaria** en `/sala` → «Cobrar» → «Registrar cobro»: elige **Efectivo** → «Marcar pagado · $ …» (el copago entero). La fila queda «Pagado · Efectivo»; en Facturación figura con medio y quién cobró.
+- [ ] 🔴 P0 **Secretaria** desde la **ficha** del paciente → pestaña «Facturación» → cobra un turno en efectivo. Lo mismo desde el drawer del turno («Cobrar» → «Pagado · Efectivo · Deshacer cobro»).
+- [ ] 🔴 P0 Sin elegir medio el botón no cobra («Elegí cómo pagó.»). Re-marcar con otro medio cambia solo el medio; «Deshacer cobro» pide confirmación y deja el turno por cobrar sin medio.
+- [ ] 🔴 P0 **Profesional** cobra sus turnos; en el turno de **otro** profesional no ve «Cobrar» (y el server lo rechaza).
+- [ ] 🔴 P0 La **Secretaria no confirma** el pago de obra social (solo Titular, Admin o Facturación).
+- [ ] 🔴 P0 Un turno pagado por **Mercado Pago** no se desmarca ni se le cambia el medio: «Este turno se pagó por Mercado Pago: el cobro no se cambia a mano.»
+- [ ] **Admin** y **Facturación** cobran desde `/sala` y Facturación igual que la Secretaria.
+
+### 🔴 P0 · Permisos (C-AS1)
+- [ ] 🔴 P0 **Admin cambia el plan** desde Suscripción: pide el código de 2FA (step-up) y ve la facturación de la suscripción. Si el Titular le saca «Planes y pagos», deja de verla.
+- [ ] 🔴 P0 **Secretaria con «Configuración»** maneja servicios, obras sociales, horarios, sedes, salas y topes, pero **no ve** el switch del turnero (del consultorio ni de profesionales), Directorio, «quién ve la HC», datos del consultorio, Usuarios, diagnósticos propios ni «Terminar acceso» de soporte. Lo mismo Facturación con «Configuración».
+- [ ] 🔴 P0 **Profesional con «Configuración»** sí ve y usa todo lo delicado.
+- [ ] 🔴 P0 **Secretaria** edita teléfono, email, DNI y cobertura del paciente («Editar datos»); **no** ve ni manda notas ni diagnóstico. Facturación no edita datos.
+- [ ] 🔴 P0 Secretaria cambia el email de una ficha **sin** portal vinculado → rechazo «El email lo cambia el profesional a cargo o el paciente desde el portal.» (fix T3-Z A1); con portal vinculado sí puede.
+- [ ] 🔴 P0 Facturación no aprueba ni rechaza pedidos del portal (no ve los botones).
+- [ ] 🔴 P0 Export CSV de pacientes como **Facturación**: sin email ni teléfono; como Secretaria, con contactos (fix T3-Z M1).
+- [ ] Secretaria da de alta un paciente en `/pacientes` con «Profesional a cargo» obligatorio.
+- [ ] Titular → Configuración → Accesos de soporte → «Terminar acceso» (con confirmación): la fila dice «Lo terminó el consultorio» y el superadmin cae en su próxima acción.
+
+### 🔴 P0 · Módulos desde Plataforma
+- [ ] 🔴 P0 Plataforma → consultorio → Suscripción → «Módulos»: deshabilitar a mano un módulo (por ejemplo, Planes) pide 2FA; el consultorio ve el muro «Módulo no habilitado» y el ítem desaparece del menú (recargar). El núcleo tiene candado. Sacar Planes ofrece sacar Sesiones y Plantillas juntos.
+- [ ] Habilitar a mano un módulo que el plan no trae: aparece. La fila «Precio» muestra «a medida» con link a Facturación.
+
+### Tope de turnos por intervalo (C-AS3)
+- [ ] 🔴 P0 Configuración: «Máximo de turnos por profesional: **2 cada 15** min». En el modal: el **2.º** turno a las 10:00 muestra el aviso «Ya hay 1 turno de {Profesional} a las 10:00» sin pedir confirmación; el **3.º** pide «Cargar como sobreturno» y queda con el chip «Sobreturno».
+- [ ] Profesional con «Sin tope» y con tope propio: manda el suyo sobre el del consultorio.
+- [ ] Turnero: con el tope lleno ese horario **no se ofrece**. Paso del turnero: servicio de 30' ofrece cada 30, de 50' cada 60.
+- [ ] Lote/serie: «{n} fechas llegan al tope» + «Agendar igual esas fechas». Drawer, Turnos y plan-card avisan y permiten sobreturno.
+
+### Agenda en 15'
+- [ ] Configuración → granularidad **15**: Día y Semana muestran filas de 15' (Semana legible, con el conteo en la celda). Un usuario que nunca tocó el zoom ve la grilla del consultorio; el que eligió zoom conserva el suyo.
+- [ ] Duraciones de servicios de 15 en 15 (servicios, editor por profesional y onboarding); uno viejo de 50 se ve «50 min (actual)».
+
+### Filtro por obra social
+- [ ] Agenda `?os=` → **OSDE**: solo turnos de pacientes con OSDE vigente; «Particular» incluye sin cobertura y texto libre sin vincular. Como profesional sin acceso a la cobertura de algunos turnos: «{n} turnos no se muestran con este filtro…».
+- [ ] `/pacientes` filtra por la obra social **vigente** (no por una cobertura vieja).
+
+### Ocupación
+- [ ] Agenda → «Más opciones» → **Ocupación**: «Lo que pasó» (4/8/12 semanas) y «Lo que viene» (1/2/4) con número en cada celda y «x de tope». Secretaria/Titular ven todos; un profesional, solo lo suyo.
+- [ ] A **390**: lista por día, sin scroll horizontal, targets de 44. A **1366×768**: la tabla entra sin scroll horizontal.
+- [ ] Un turno a las 23:30 AR cae en su día y hora AR (probar con `TZ=UTC`).

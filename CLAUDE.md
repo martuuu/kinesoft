@@ -81,6 +81,12 @@
     - «Tanda A» / «Tanda B» = las dos primeras tandas sin migración de §22.13; «T3..T7» las siguientes (T3 = AS M12,
       T4 = FC M14, T5 = TP M18, T6 = WA M15 + MPS M16, T7 = TV M17). Se ejecutan T3 → T4 → T5 → T7 → T6 + infra:
       el número no es el orden. «T*» no son los «S01…S32» de Planes.
+  - **§23 del plan (19-oct; T3 = AS):** «T3a..T3e» son sus tandas y «T3-Z» el cierre (revisores → fixers Z-* → gate →
+    docs); las sesiones se nombran «T3c-1c», «T3d-2w», etc. (IDs de test `[AS-1c]`, `[AS-2w]`…). «M12» =
+    `agenda_secretaria_config`. «C-AS1» = modelo de permisos (`billing.collect`/`collectOwn`, `patients.editAdmin`,
+    `tenant.sensitive`), «C-AS2» = cobros con medio de pago, «C-AS3» = tope de turnos por intervalo (clave
+    `kinesoft:phour:`); no son los C1-C14 de Planes. «AS-D*» son sus decisiones con default; «Hallazgo B» (lookback 240'
+    del cupo) es un hallazgo de §23.2, no el revisor B de T3-Z.
   - «Plan» choca en tres sentidos: plan de tratamiento, plan SaaS del tenant y plan de la obra social.
   - «Vertical» (`Tenant.vertical`: General / Kinesiología) es el tipo de consultorio: no es la «disciplina» de un
     servicio o plan (Kine / Osteo) ni el plan SaaS (`Tenant.plan`). «Kine PRO» = vertical Kinesiología + plan PRO.

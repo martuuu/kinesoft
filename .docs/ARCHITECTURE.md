@@ -943,6 +943,18 @@ write and read reuses instead of re-implementing.
 patients ×3, configuración). Unknown role → empty set (fails closed). UI only
 hides; the action is the barrier. Details in SECURITY.md §13.
 
+**T3 (19-oct, C-AS1; `lib/capabilities.ts:92-140`).** New caps: `billing.collect` (OWNER, ADMIN, ASSISTANT, BILLING:
+copago of any booking) and `billing.collectOwn` (PRACTITIONER: own bookings only), consumed only through the pure
+`canCollectCopago(caps, actorPractitionerId, bookingPractitionerId)`; `patients.editAdmin` (OWNER, ADMIN, ASSISTANT:
+contact, DNI, birth date, coverage, own copago, portal requests); `tenant.sensitive` (OWNER, plus any role with
+`grantSettings` **except** ASSISTANT and BILLING), guarded by `requireTenantSensitive` (`lib/authz.ts:150`): public
+booking switch (tenant and other practitioners), directory, who sees the clinical record, clinic data, team, own
+diagnoses, support end. `tenant.admin` keeps services, insurers, schedules, locations, rooms and booking caps.
+`capabilitiesForMember` delegates `CONFIG_DELEGATED = [tenant.admin, schedule.configure, tenant.sensitive]` and then
+applies the **staff cut** (`STAFF_ROLES = {ASSISTANT, BILLING}` lose `tenant.sensitive` and `account.billing`), the same
+shape as the clinical cut. ADMIN gets `grantSettings` **and** `grantBilling` by default (invite, role change,
+ownership transfer; M12 backfills existing ADMINs); an ADMIN without «Planes y pagos» can't hand it out.
+
 ### Global catalog: RLS, import, curation
 
 - **RLS GLOBAL_READONLY**: Specialty/Practice/PracticeSpecialty/Payer/
@@ -1130,13 +1142,25 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
   4. **Filas:** `Booking` (`FOR UPDATE`, id asc) → `Session` → `TreatmentProgram`. El CAS del `updatedAt` del plan
      va al final. Toda escritura multi-fila hace antes `SELECT … FOR UPDATE ORDER BY id` de sus candidatas.
   - **Enmienda C2 (1b), SR (08-oct):** entre (2) y (3) va la **sala**: paciente → cupo → **sala** → sedes → filas.
-    Cupo y sala en **una** sentencia (`lockCapacityAndRoomsMany`, `lib/booking-cap-lock.ts:252`, claves
+    Cupo y sala en **una** sentencia (`lockCapacityAndRoomsMany`, `lib/booking-cap-lock.ts:256`, claves
     `kinesoft:room:<t>:<roomId>:<día AR>`); con sala por defecto en la edición, una 2.ª sentencia después del cupo y
     antes de las sedes. La sala se valida después del compartido de sedes y se cuenta solo con su clave tomada.
     **Configuración:** sedes compartido → `kinesoft:room-schedule:<t>` (solo si hay sala) → `schedule`/`schedexc`
     (`lib/practitioner-schedule.ts:184-196`); ningún write-path de turnos lo toma. **Bloqueo de sala:** clave de sala →
     sedes → validar (`lib/time-blocks.ts:189-203`). `archiveRoom`/`updateRoom`/`restoreRoom`: sedes exclusivo. Planes,
     serie y turnero no toman clave de sala (SR-D3). Literal en [PLANES.md §4 C2](PLANES.md).
+  - **Enmienda C2 (1c), T3 (19-oct; C-AS3, tope «N turnos cada X min»):** paciente → cupo → **hora del profesional** →
+    sala → sedes → filas. Clave `kinesoft:phour:<t>:<profesional>:<hora AR "YYYY-MM-DDTHH">` (`hourLockKey`,
+    `lib/booking-cap-lock.ts:295`): la hora contiene cualquier intervalo de 15/30/60 alineado a la hora, así que el lock
+    no depende de la configuración del tope. Cupo, horas y salas van en **una** sentencia, `lockAgendaKeysMany` (`:347`:
+    todo el cupo → todas las horas → todas las salas, cada grupo ordenado, `WITH ORDINALITY … ORDER BY o`);
+    `lockCapacityMany` / `lockCapacityWindow` / `lockCapacityAndRoomsMany` quedan como envoltorios con su firma de C8.
+    0 sentencias nuevas (techos de perf 35 / 186 intactos). La toman **siempre** altas, lote, edición que cambia de
+    intervalo o reactiva y el submit del turnero; **no** la toman bloqueos/candado, la promoción del hold ni Planes
+    (avisan con `overIntervalCap` sin lock: una carrera plan vs turnero puede pasar el tope duro, riesgo aceptado, AUDIT
+    «Ronda T3» B4). `capLocksHeld` = «el caller ya tomó cupo y hora». Carreras en
+    `tests/integration/locks-interval.test.ts` y `as2-interval-cap.test.ts` (quien espera la hora tiene todo su cupo y
+    ninguna sala). Enmienda AUDIT §5.28/§5.40.
   - **Seguimiento y `rescheduleSession`** lockean el plan con **`FOR NO KEY UPDATE`** (`lib/sessions.ts:706,996`),
     no `FOR UPDATE`: el INSERT de un turno con FK al plan pide `FOR KEY SHARE` sobre el plan, que choca con
     `FOR UPDATE` pero no con `FOR NO KEY UPDATE`. Sigue serializando dos cierres concurrentes (A4 de ES1).
@@ -1196,6 +1220,19 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
   `noindex`, con el contacto del consultorio), slots `[]`, submit rechazado sin escribir y sin prefill; el estado de
   un turno existente sigue. Se prende desde Configuración → General ("Funciones del consultorio",
   `setPublicBookingEnabled`, último gana) o desde /plataforma (Drawer con CAS).
+- **Módulos y precio por consultorio (enmienda T3, M12; T3b-1k2 `3070d42`, T3c-1p `25bdcd4`).** `TenantEntitlements`
+  suma `moduleGrants` y `moduleRevokes` **obligatorios** (`lib/tenant-modules.ts:52-58`: con opcionales, un sitio que
+  arma entitlements a mano los perdía en silencio; `NO_MODULE_OVERRIDES` para los que no los leen). `modulesFor` = base
+  del plan + grants válidos en la vertical − revokes fuera del núcleo (`:137`); `turneroPublico` no entra en los
+  overrides (sigue siendo el switch); la clave del memo suma los overrides. Columnas `Tenant.moduleGrants/moduleRevokes`
+  `TEXT[]` con CHECK sin intersección y ≤ 32 (M12). El escritor sigue siendo único (`applyTenantEntitlementsInTx`,
+  `source: "platform"` solamente): listas únicas y ordenadas, sin núcleo, y rechaza un estado final con dependencias rotas
+  (`lib/tenant-module-deps.ts`: sesiones/plantillas ⇒ planes, favoritos/ejerciciosGlobales ⇒ ejercicios; el Drawer
+  ofrece sacar los dependientes juntos). Action `setTenantModuleOverrides` (`lib/platform-tenant-modules.ts`)
+  con `requirePlatformAdmin("tenant.modules.update")` (clave **high** → step-up), CAS y audit doble. Un módulo revocado
+  da el muro «Este módulo no está habilitado para tu consultorio…» (`moduleWallFor → {disabled:true}`,
+  `components/ui/access-wall.tsx`). El **precio a medida** no es otra columna: Suscripción muestra el efectivo («a
+  medida» si hay `customPriceCents`) y linkea a Facturación, donde se cambia (ADR-016).
 - **Consecuencias.** Kine FREE/STARTER dejan de ver los globales `isBasic` (solo PRO ve el catálogo de Plataforma;
   `isBasic` queda muerto hasta EV1). Toda sesión pendiente que agregue un export en un área con módulo lleva su gate
   (enmiendas de VERTICALES §5). El webhook de billing SaaS futuro entra como `source:"billing"`.
@@ -1461,6 +1498,32 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
 - **Consecuencias.** Cambiar `DIRECTORY_MODE` pide redeploy (las páginas ya generadas pueden vivir hasta 600 s). Un 404
   de ficha también se cachea 600 s, pero lleva el tag del snapshot: publicar algo lo purga. Un componente nuevo de la
   ruta que lea la sesión rompe el ISR: va por cliente o fuera del grupo.
+
+### ADR-024 — Escritura de `SupportSession` desde el consultorio por el canal service (status: ACCEPTED, T3c-1s, 19-oct-2026)
+
+- **Contexto.** Un acceso de soporte no vence (ADR-012, decisión 3 de Martin) y solo terminaba cuando el superadmin salía
+  o cerraba sesión: el consultorio lo veía «En curso» sin poder cortarlo (#27, `plf-terminar-acceso-soporte`). Con
+  `runWithRls` no se puede: `SupportSession` es TENANT_READONLY desde M7 (una policy **FOR SELECT** por tenant) y
+  `guard:isolation` **prohíbe** policies de escritura en esas tablas. Como RLS no tira en UPDATE sino que filtra, el
+  UPDATE afectaría 0 filas en silencio: el botón «andaría» y el acceso seguiría abierto. El audit doble va a
+  `PlatformAuditEvent`, que es SERVICE_ONLY, y tiene que ir en la **misma** tx que el cierre.
+- **Decisión.** `endSupportAccessForTenant({id})` (`lib/support-session-tenant.ts:28`): actor → corte de soporte (el
+  propio soporte sale con «Salir de soporte», no por acá) → `tenant.sensitive` → zod → `endSupportSessionForTenantInTx`
+  (`lib/support-session-tenant-internal.ts`) dentro de `prismaService.$transaction`, con
+  `updateMany({ where: { id, tenantId: actor.tenantId, endedAt: null } })` (`:51-52`) → `endedReason: "tenant"` →
+  `auditPlatformInTx` (`platform.support.end`). Es la excepción a «cada action con Actor: `runWithRls`» (AGENTS §4):
+  **la barrera es el `where` a mano**, nunca un `update` por id solo (el id lo manda el cliente y en este canal no hay RLS
+  que frene el de otro consultorio). `updateMany` condicional en vez de leer-y-escribir: el doble clic re-evalúa el WHERE
+  después del commit del primero y afecta 0 filas (un solo audit). Sin policy nueva en M12 (§23.10).
+- **Descartado.** Policy FOR UPDATE en `SupportSession` (rompe la clasificación TENANT_READONLY y el guard); función
+  `SECURITY DEFINER` (otra superficie de SQL para un caso); dejarlo al superadmin (el consultorio no controla quién lo ve).
+- **Consecuencias.** El superadmin no se entera en el momento: cae en su **próximo** request, porque
+  `resolveSupportTarget` (`lib/support-session-internal.ts`) exige `endedAt: null` en cada request y borra la cookie. En
+  Configuración → Accesos de soporte la fila dice «Lo terminó el consultorio» y el botón «Terminar acceso» (con
+  `useConfirm`) se ve solo con `tenant.sensitive` y sin soporte. Cualquier otra escritura de un consultorio sobre una
+  tabla TENANT_READONLY o SERVICE_ONLY repite este patrón (service + `tenantId` e `id` a mano + test de aislamiento) y
+  lleva su ADR. Test: `tests/integration/as1s-support-end.test.ts` (titular cierra con audit doble, doble clic, Secretaria
+  con Configuración no puede, el id de otro consultorio no se toca, soporte no se cierra por acá).
 
 ## Cache & cookies (what is implemented — updated 30-sep-2026)
 
