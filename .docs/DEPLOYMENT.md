@@ -192,6 +192,7 @@ From `lib/env.ts` (all optional in the schema, but prod needs the real ones):
 | `TENANT_ACCESS_ENFORCEMENT` | BO1: `off` \| `banner` (default) \| `enforce`. Qué pasa con un consultorio en prueba vencida o impago (`banner` avisa; suspendido/baja se respetan igual) | 🆕 dejar vacía (= `banner`); `enforce` cuando Martin decida |
 | `PLATFORM_MFA_ENFORCEMENT` | BO4: `off` (default) \| `enforce`. TOTP obligatorio para superadmins + re-verificación en acciones de riesgo | 🆕 `off` al deployar → enrolar → `enforce` + redeploy |
 | `MAINTENANCE_MODE` / `MAINTENANCE_MESSAGE` | BO5-B: `on` cierra la app con 503 (`/mantenimiento`); webhooks MP, `/api/health` y crons pasan. El mensaje es público (máx. 280) | 🆕 vacías (= `off`); se leen en el edge: cambiar pide **redeploy** |
+| `PROD_SUPABASE_REF` | OPS-1c: ref del proyecto Supabase de prod (no es secreto). Activa el [guard de Preview](#guard-de-preview-ops-1c) | 🆕 mismo valor en **todos** los scopes |
 | `CRON_SECRET` | BO5-A: `Authorization: Bearer` que Vercel manda a `/api/cron/*`. Sin él: 503 en Production y los crons no corren | 🆕 required (`openssl rand -hex 32`, Production) |
 
 ## Prod one-time setup (owner)
@@ -314,3 +315,24 @@ local Docker (.env.local)  →  test  →  commit (owner)  →  staging (Preview
 
 Preview deploys must use **staging**, not the prod DB (A0d, owner). Keep
 migrations additive/backward-compatible (expand/contract) anyway.
+
+### Guard de Preview (OPS-1c)
+
+`lib/env.ts` hace **fallar el build de Preview** (`VERCEL_ENV=preview`) si `DATABASE_URL`, `DIRECT_URL`,
+`DATABASE_URL_SERVICE` o `NEXT_PUBLIC_SUPABASE_URL` contienen `PROD_SUPABASE_REF`. En las URLs de base mira el host
+**y el usuario**: en el pooler de Supabase el host es compartido y el ref va en `postgres.<ref>`. El error nombra la
+variable, nunca la URL. Production, Development y local no se miran (Production apunta a prod a propósito).
+
+- Sin `PROD_SUPABASE_REF` en Preview: solo `console.warn` en el log del build (el guard queda apagado).
+- Un ref con forma inválida (no 15-40 `[a-z0-9]`) frena el Preview: un valor roto apagaría el guard en silencio.
+- Si un Preview sale rojo por esto: el scope Preview de esa variable apunta a prod → cambiala a staging (OPS-0) y
+  redeployá. No se saltea borrando `PROD_SUPABASE_REF`.
+
+### Pooler en modo transacción (OPS-1b)
+
+Prod va por el pooler de transacción (6543, `pgbouncer=true&connection_limit=3`); `migrate deploy` necesita sesión
+(`DIRECT_URL` al 5432). Para reproducirlo en local: `docker compose --profile pooler up -d pgbouncer` (127.0.0.1:6433)
+y `npm run test:pooler` (los dos roles: GUC de `runWithRls`, advisory locks, `SET LOCAL`, `transaction_read_only`).
+`npm run diagnose:db` (solo lectura; otro entorno: `npx dotenv -e <archivo> -- npx tsx scripts/diagnose-db.ts`) muestra
+por cada URL el rol, si saltea RLS, el modo de pool y avisos (6543 sin `pgbouncer=true`, `DIRECT_URL` en 6543, sin
+`connection_limit`). Nunca imprime la contraseña.

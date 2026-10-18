@@ -58,5 +58,62 @@ services:
     environment:
       MP_MAX_MESSAGES: 500
 
+  # OPS-1b · pgbouncer en modo TRANSACCIÓN delante de `db`, como el pooler de Supabase en prod (6543,
+  # `pgbouncer=true&connection_limit`). Lo usa `tests/integration/pooler.test.ts` (`npm run test:pooler`): prueba que
+  # el GUC de `runWithRls`, los advisory locks xact-level, `SET LOCAL` y `transaction_read_only` no sobreviven a la
+  # transacción cuando el backend vuelve al pool. Perfil opcional: NO se levanta con `up -d db` ni con un `up` pelado.
+  #   docker compose --profile pooler up -d pgbouncer     (nombrar el servicio: un `up` sin nombre también intenta
+  #                                                        levantar adminer, y su 8080 puede estar ocupado)
+  #   docker compose --profile pooler stop pgbouncer
+  # Escucha solo en 127.0.0.1:6433. Usuarios y contraseñas = los de la base (`auth_query` contra pg_shadow con el
+  # superusuario local `kinesoft`), así que kinesoft_app y el owner entran con sus URLs de siempre cambiando host,
+  # puerto y base (`tests/helpers/pooler.ts`).
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.25.2-p0
+    container_name: kinesoft-pgbouncer
+    profiles: ["pooler"]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:6433:6432"
+    configs:
+      - source: pgbouncer_ini
+        target: /etc/pgbouncer/pgbouncer.ini
+        mode: 0444 # la imagen corre como `postgres`; sin esto el archivo queda solo para root
+      - source: pgbouncer_userlist
+        target: /etc/pgbouncer/userlist.txt
+        mode: 0444
+
+configs:
+  # `$$` = un `$` literal (compose interpola `$`).
+  pgbouncer_ini:
+    content: |
+      [databases]
+      ; pool de 3 backends por usuario (= connection_limit=3 de prod, plan §21.3 OPS-3)
+      kinesoft = host=db port=5432 dbname=kinesoft pool_size=3
+      ; pool de UN backend: cada transacción reusa el mismo pg_backend_pid y los chequeos de fuga son deterministas
+      kinesoft_single = host=db port=5432 dbname=kinesoft pool_size=1
+
+      [pgbouncer]
+      listen_addr = 0.0.0.0
+      listen_port = 6432
+      pool_mode = transaction
+      ; md5 negocia SCRAM solo cuando el secreto de pg_shadow es SCRAM (default de Postgres 16) y lo pasa al server
+      auth_type = md5
+      auth_file = /etc/pgbouncer/userlist.txt
+      auth_user = kinesoft
+      auth_query = SELECT usename, passwd FROM pg_shadow WHERE usename = $$1
+      max_client_conn = 200
+      ; 0 = sin prepared statements entre transacciones, igual que Supavisor: si Prisma dejara de mandar unnamed
+      ; statements con pgbouncer=true, el test se rompe acá y no en prod
+      max_prepared_statements = 0
+      ignore_startup_parameters = extra_float_digits,options
+      admin_users = kinesoft
+  pgbouncer_userlist:
+    content: |
+      "kinesoft" "kinesoft"
+
 volumes:
   kinesoft_pgdata:

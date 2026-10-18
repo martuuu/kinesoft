@@ -247,3 +247,105 @@ describe("[PL-1a] SAAS_BILLING_MODE y PLATFORM_INBOX_EMAIL", () => {
     }
   });
 });
+
+// OPS-1c (OPS-D1, plan §21.3): un Preview que apunta a la base o al Supabase de PRODUCCIÓN no puede buildear. Vercel
+// copia las variables entre scopes con un clic y, hasta OPS-0, Preview compartía la base de prod (AUDIT H6): un
+// branch empujado escribía datos reales. El ref del proyecto no es secreto (está en la URL pública de Supabase).
+describe("[OPS-1c] guard de Preview contra el proyecto de prod", () => {
+  const REF = "abcdefghijklmnopqrst";
+  const STAGING = "zyxwvutsrqponmlkjihg";
+  const PREVIEW_STAGING = {
+    VERCEL_ENV: "preview",
+    PROD_SUPABASE_REF: REF,
+    DATABASE_URL: `postgresql://postgres.${STAGING}:x@aws-0-sa-east-1.pooler.supabase.com:6543/postgres?pgbouncer=true`,
+    DIRECT_URL: `postgresql://postgres.${STAGING}:x@aws-0-sa-east-1.pooler.supabase.com:5432/postgres`,
+    NEXT_PUBLIC_SUPABASE_URL: `https://${STAGING}.supabase.co`,
+  };
+  const quietWarn = () => vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  it("Preview apuntando a staging pasa sin avisos", () => {
+    const spy = quietWarn();
+    expect(() => parseEnv(PREVIEW_STAGING)).not.toThrow();
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+  it("Preview con DATABASE_URL del pooler de prod (el ref va en el usuario, no en el host) falla", () => {
+    expect(() =>
+      parseEnv({
+        ...PREVIEW_STAGING,
+        DATABASE_URL: `postgresql://postgres.${REF}:x@aws-0-sa-east-1.pooler.supabase.com:6543/postgres?pgbouncer=true`,
+      })
+    ).toThrow(/DATABASE_URL: .*PRODUCCIÓN.*Preview/);
+  });
+  it("Preview con DIRECT_URL directa a prod (db.<ref>.supabase.co) falla", () => {
+    expect(() =>
+      parseEnv({ ...PREVIEW_STAGING, DIRECT_URL: `postgresql://postgres:x@db.${REF}.supabase.co:5432/postgres` })
+    ).toThrow(/DIRECT_URL: .*PRODUCCIÓN/);
+  });
+  it("Preview con DATABASE_URL_SERVICE de prod falla", () => {
+    expect(() =>
+      parseEnv({
+        ...PREVIEW_STAGING,
+        DATABASE_URL_SERVICE: `postgresql://kinesoft_service.${REF}:x@aws-0-sa-east-1.pooler.supabase.com:6543/postgres`,
+      })
+    ).toThrow(/DATABASE_URL_SERVICE: .*PRODUCCIÓN/);
+  });
+  it("Preview con NEXT_PUBLIC_SUPABASE_URL de prod falla (mayúsculas y espacios del ref tolerados)", () => {
+    expect(() =>
+      parseEnv({
+        ...PREVIEW_STAGING,
+        PROD_SUPABASE_REF: ` ${REF.toUpperCase()} `,
+        NEXT_PUBLIC_SUPABASE_URL: `https://${REF}.supabase.co`,
+      })
+    ).toThrow(/NEXT_PUBLIC_SUPABASE_URL: .*PRODUCCIÓN/);
+  });
+  it("el mensaje nunca incluye la URL ni la contraseña", () => {
+    let msg = "";
+    try {
+      parseEnv({ ...PREVIEW_STAGING, DATABASE_URL: `postgresql://postgres.${REF}:s3cr3t@db.host.example:6543/postgres` });
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toMatch(/DATABASE_URL/);
+    expect(msg).not.toMatch(/s3cr3t|postgresql:\/\/|db\.host\.example/);
+  });
+  it("Preview con un ref con forma inválida falla (un ref roto apagaría el guard en silencio)", () => {
+    expect(() => parseEnv({ ...PREVIEW_STAGING, PROD_SUPABASE_REF: "abc" })).toThrow(/PROD_SUPABASE_REF/);
+  });
+  it("Preview sin PROD_SUPABASE_REF: no falla, solo avisa por console.warn", () => {
+    const spy = quietWarn();
+    expect(() => parseEnv({ ...PREVIEW_STAGING, PROD_SUPABASE_REF: undefined })).not.toThrow();
+    expect(() => parseEnv({ ...PREVIEW_STAGING, PROD_SUPABASE_REF: "" })).not.toThrow();
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy.mock.calls[0]?.[0]).toMatch(/PROD_SUPABASE_REF/);
+    spy.mockRestore();
+  });
+  it("Production apuntando a prod (lo normal) no hace nada, ni con un ref inválido", () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warn = quietWarn();
+    const prodToProd = {
+      ...PROD_OK,
+      PROD_SUPABASE_REF: REF,
+      DATABASE_URL: `postgresql://postgres.${REF}:x@aws-0-sa-east-1.pooler.supabase.com:6543/postgres?pgbouncer=true`,
+      NEXT_PUBLIC_SUPABASE_URL: `https://${REF}.supabase.co`,
+    };
+    expect(() => parseEnv(prodToProd)).not.toThrow();
+    expect(() => parseEnv({ ...prodToProd, PROD_SUPABASE_REF: "abc" })).not.toThrow();
+    expect(warn).not.toHaveBeenCalled();
+    err.mockRestore();
+    warn.mockRestore();
+  });
+  it("local/CI (sin VERCEL_ENV) y Development de Vercel no hacen nada aunque apunten a prod", () => {
+    const warn = quietWarn();
+    const toProd = {
+      PROD_SUPABASE_REF: REF,
+      DATABASE_URL: `postgresql://postgres:x@db.${REF}.supabase.co:5432/postgres`,
+      NEXT_PUBLIC_SUPABASE_URL: `https://${REF}.supabase.co`,
+    };
+    expect(() => parseEnv(toProd)).not.toThrow();
+    expect(() => parseEnv({ ...toProd, VERCEL_ENV: "development" })).not.toThrow();
+    expect(() => parseEnv({ VERCEL_ENV: "development" })).not.toThrow();
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});

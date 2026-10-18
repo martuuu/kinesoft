@@ -170,9 +170,66 @@ const schema = z.object({
     z.enum(["off", "platform"]).default("off")
   ),
 
+  // OPS-1c (OPS-D1, plan §21.3): ref del proyecto Supabase de PRODUCCIÓN (no es secreto: es el subdominio de
+  // `NEXT_PUBLIC_SUPABASE_URL`). Va en TODOS los scopes de Vercel con el mismo valor; solo lo usa el guard de Preview
+  // (`previewTargetsProd`). Acá se acepta cualquier string a propósito: la forma se valida solo en Preview, así un
+  // valor mal pegado nunca frena un deploy de Production.
+  PROD_SUPABASE_REF: z.preprocess(
+    (v) => (typeof v === "string" ? emptyAsUndefined(v.trim().toLowerCase()) : v),
+    z.string().optional()
+  ),
+
   // Set by Vercel: "production" | "preview" | "development". Unset locally/CI.
   VERCEL_ENV: z.enum(["production", "preview", "development"]).optional(),
 });
+
+/**
+ * OPS-1c · guard de Preview (OPS-D1). Por qué: hasta A0b los Preview compartían la base de prod y migraban (AUDIT
+ * H6); el scope Preview → staging (OPS-0) se configura a mano en Vercel y un «copiar de Production» lo deshace sin que
+ * nada avise. Con el guard, un build de Preview que apunta al proyecto de prod sale ROJO en vez de dejar un deploy
+ * que escribe datos reales desde un branch sin revisar.
+ *
+ * Qué mira: host Y usuario de cada URL de base. El usuario importa: en el pooler de Supabase (Supavisor) el host es
+ * compartido (`aws-0-<región>.pooler.supabase.com`) y el ref va en el usuario (`postgres.<ref>`): mirar solo el host
+ * dejaba pasar justo la `DATABASE_URL` de prod. La contraseña, el path y la query no se miran (ni se imprimen).
+ */
+const PREVIEW_GUARDED_DB_KEYS = ["DATABASE_URL", "DIRECT_URL", "DATABASE_URL_SERVICE"] as const;
+/** Los refs de Supabase son 20 caracteres [a-z0-9]; con un margen por si cambian, pero nunca algo corto como «prod». */
+const SUPABASE_REF_SHAPE = /^[a-z0-9]{15,40}$/;
+
+function urlMentionsRef(raw: string | undefined, ref: string): boolean {
+  if (!raw) return false;
+  try {
+    const u = new URL(raw);
+    return u.hostname.toLowerCase().includes(ref) || decodeURIComponent(u.username).toLowerCase().includes(ref);
+  } catch {
+    return false; // la forma de la URL ya la valida el schema
+  }
+}
+
+function previewTargetsProd(e: z.infer<typeof schema>, ctx: z.RefinementCtx): void {
+  if (e.VERCEL_ENV !== "preview" || !e.PROD_SUPABASE_REF) return;
+  const ref = e.PROD_SUPABASE_REF;
+  if (!SUPABASE_REF_SHAPE.test(ref)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["PROD_SUPABASE_REF"],
+      message: "no tiene forma de ref de Supabase (20 letras/números, el subdominio de <ref>.supabase.co)",
+    });
+    return;
+  }
+  const hits: string[] = PREVIEW_GUARDED_DB_KEYS.filter((k) => urlMentionsRef(e[k], ref));
+  if (urlMentionsRef(e.NEXT_PUBLIC_SUPABASE_URL, ref)) hits.push("NEXT_PUBLIC_SUPABASE_URL");
+  for (const key of hits) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [key],
+      message:
+        "apunta al proyecto de PRODUCCIÓN (PROD_SUPABASE_REF) desde un deploy de Preview; " +
+        "Preview tiene que usar staging (.docs/DEPLOYMENT.md «Guard de Preview»)",
+    });
+  }
+}
 
 /**
  * Fail-fast for the Production environment only (AUDIT 2026-09-23,
@@ -211,6 +268,7 @@ const RECOMMENDED_IN_PRODUCTION = [
 ] as const;
 
 const productionSchema = schema.superRefine((e, ctx) => {
+  previewTargetsProd(e, ctx);
   if (e.VERCEL_ENV !== "production") return;
   for (const key of REQUIRED_IN_PRODUCTION) {
     if (!e[key]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: "obligatoria en Production" });
@@ -273,6 +331,11 @@ export function parseEnv(raw: Record<string, string | undefined>): Env {
     const detail = r.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
     throw new Error(`[env] configuración inválida — ${detail}`);
   }
+  // OPS-1c: sin el ref el guard no puede mirar nada. Aviso y no error: hasta que Martin lo cargue (OPS-0) un Preview
+  // no puede caerse por eso.
+  if (r.data.VERCEL_ENV === "preview" && !r.data.PROD_SUPABASE_REF && typeof window === "undefined") {
+    console.warn("[env] Preview sin PROD_SUPABASE_REF: el guard contra la base de producción está apagado.");
+  }
   if (r.data.VERCEL_ENV === "production" && typeof window === "undefined") {
     const missing = RECOMMENDED_IN_PRODUCTION.filter((k) => !r.data[k]);
     if (missing.length) {
@@ -324,6 +387,7 @@ export const env = parseEnv({
   PLATFORM_INBOX_EMAIL: process.env.PLATFORM_INBOX_EMAIL,
   DIRECTORY_MODE: process.env.DIRECTORY_MODE,
   TURNERO_CHECKOUT: process.env.TURNERO_CHECKOUT,
+  PROD_SUPABASE_REF: process.env.PROD_SUPABASE_REF,
 });
 
 /**
