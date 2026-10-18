@@ -9,7 +9,9 @@
  *     una franja del profesional, no pisa un bloqueo, hay cupo y — si se pasa
  *     `patientId` — el paciente no está ocupado. Con la plantilla fallback
  *     (lun-sáb, horario del tenant) y sin bloqueos reproduce el suggest viejo
- *     (paridad en `tests/unit/availability-next-free.test.ts`).
+ *     (paridad en `tests/unit/availability-next-free.test.ts`). Con
+ *     `intervalCap` (T3, C-AS3) un intervalo con el tope lleno no es "libre"
+ *     ("tope-intervalo") y se saltea; sin tope, la de siempre.
  *   • `firstFreeAcrossPractitioners`: "cualquier profesional" — el hueco más
  *     temprano entre los profesionales habilitados para el servicio
  *     (PractitionerService enabled) y, si viene cobertura, que la acepten
@@ -29,6 +31,7 @@
 import { toARDateKey } from "@/lib/datetime-ar";
 import { dayWindow } from "@/lib/availability/day";
 import type { ClassifyInstantInput, RangesFor } from "@/lib/availability/classify";
+import type { IntervalCap } from "@/lib/availability/interval-cap";
 import { classifyInstantAt, fitsInRanges } from "@/lib/availability/classify";
 import {
   NEXT_FREE_HORIZON_DAYS,
@@ -94,9 +97,14 @@ function firstCursor(from: Date): number {
  *  en `NEXT_FREE_HORIZON_DAYS` días (o antes de `until`, si se pasa). */
 export function nextFreeSlot(input: NextFreeSlotInput): string | null {
   const { from, practitionerId, serviceId, patientId } = input;
-  // Solo importan los turnos del cupo (profesional + servicio) y los del paciente.
+  // Solo importan los turnos del cupo (profesional + servicio) y los del paciente. Con tope por intervalo (T3,
+  // C-AS3) se conservan TODOS los del profesional: el tope cuenta cualquier servicio, y recortarlos al servicio
+  // sugería un horario con el tope lleno. El cupo no cambia: `classifyInstant` filtra el servicio para `used`.
+  const capAll = input.intervalCap != null;
   const bookings = input.bookings.filter(
-    (b) => (b.practitionerId === practitionerId && b.serviceId === serviceId) || (patientId && b.patientId === patientId)
+    (b) =>
+      (b.practitionerId === practitionerId && (capAll || b.serviceId === serviceId)) ||
+      (patientId && b.patientId === patientId)
   );
   const rangesFor = memoRanges(input.rangesFor);
   const base: ClassifyInstantInput = { ...input, bookings, rangesFor, when: from };
@@ -228,6 +236,9 @@ export type FirstFreeAcrossInput = {
   blocks: ReadonlyArray<TimeBlockInput>;
   bookings: ReadonlyArray<AvailabilityBooking>;
   now: Date;
+  /** T3 (C-AS3): tope efectivo por profesional (`AvailabilityInput.intervalCaps`). Ausente del mapa o null = sin
+   *  tope; sin el mapa, la búsqueda de siempre. */
+  intervalCaps?: Readonly<Record<string, IntervalCap | null>>;
 };
 
 export type FirstFreeResult = {
@@ -266,6 +277,7 @@ export function firstFreeAcrossPractitioners(input: FirstFreeAcrossInput): First
       blocks: input.blocks,
       bookings: input.bookings,
       now: input.now,
+      ...(input.intervalCaps ? { intervalCap: input.intervalCaps[practitionerId] ?? null } : {}),
     });
     if (iso && (!best || Date.parse(iso) < Date.parse(best.iso))) {
       best = { practitionerId, iso, durationMin, cap: eff.cap };

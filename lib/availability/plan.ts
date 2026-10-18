@@ -49,6 +49,12 @@
  *   H5: las fechas pasadas quedan "sin turno" (o "marcar realizada").
  *   Un `force` tiene que cubrir TODAS las flags forzables presentes (una fila
  *   fuera de horario y con cupo lleno pide `outOfHours` y `capacity`).
+ *   T3 (C-AS3, decisión 6): el tope «N turnos cada X min» del profesional en
+ *   Planes es SOLO AVISO (`overIntervalCap`), como las flags E2: una fila que
+ *   para la agenda sería "tope-intervalo" acá es "libre" (se crea sin force, no
+ *   cuenta como sobreturno y no toma lock). El plan ya fija los horarios con el
+ *   paciente; frenarlo por el tope obligaría a mover sesiones que el staff
+ *   eligió a sabiendas.
  *
  * Fold de turnos virtuales: las filas se procesan por `index` y cada una que
  * va a crear un turno (create / force / move, por su resolución o por la de
@@ -71,6 +77,7 @@ import {
   type RangesFor,
 } from "@/lib/availability/classify";
 import { nextFreeSlot } from "@/lib/availability/next-free";
+import type { IntervalCap } from "@/lib/availability/interval-cap";
 import {
   NEXT_FREE_STEP_MIN,
   NO_LOCATION_ID,
@@ -251,6 +258,12 @@ export type PlanRowFlags = {
   /** E2: SOLO AVISO, nunca bloquean. Ausentes sin autorización. */
   overAuthorization?: boolean;
   afterAuthorizationExpiry?: boolean;
+  /**
+   * T3 (C-AS3): el intervalo AR de la fila ya tiene el tope del profesional (contando los turnos de cualquier
+   * servicio y las filas previas de la corrida). SOLO AVISO: no bloquea, no pide force ni marca sobreturno.
+   * Ausente sin tope (`ClassifyPlanRowsInput.intervalCap` null/ausente).
+   */
+  overIntervalCap?: boolean;
 };
 
 /** Entrada pura del clasificador (E2). */
@@ -403,6 +416,9 @@ export type ClassifyPlanRowsInput = {
   /** Turnos que no cuentan para ninguna fila (p. ej. los activos de las
    *  sesiones que se re-planifican juntas). */
   excludeBookingIds?: ReadonlyArray<string>;
+  /** T3 (C-AS3): tope efectivo del profesional (`effectiveIntervalCap`); solo produce `flags.overIntervalCap`.
+   *  `bookings` ya trae todos los del profesional. Ausente / null = sin tope (salida de siempre). */
+  intervalCap?: IntervalCap | null;
 };
 
 /** Por qué una resolución explícita no vale (→ stale de la fila, C7). */
@@ -613,6 +629,7 @@ export function classifyPlanRows(
       bookings: pool,
       now,
       excludeBookingId,
+      ...(input.intervalCap ? { intervalCap: input.intervalCap } : {}),
     });
     const rest = excludeBookingId ? pool.filter((b) => b.id !== excludeBookingId) : pool;
     // Duplicado: preferir el turno real (adoptable) sobre una fila virtual.
@@ -626,9 +643,11 @@ export function classifyPlanRows(
       patientOverlapIds: patientConflictsAt(rest, { patientId, when, durationMin }).map((b) => b.id),
       past,
     };
+    if (input.intervalCap) flags.overIntervalCap = c.intervalCapped === true;
     if (dup) flags.duplicate = { bookingId: dup.id, updatedAt: toIso(dup.updatedAt), adoptable: isAdoptable(dup) };
     if (priorPaid) flags.priorPaid = priorPaid;
-    const cls: PlanRowClass = dup ? "duplicado" : past ? "pasado" : c.class;
+    // "tope-intervalo" es aviso en Planes: la fila queda "libre" (Crear por defecto, sin force) con la flag.
+    const cls: PlanRowClass = dup ? "duplicado" : past ? "pasado" : c.class === "tope-intervalo" ? "libre" : c.class;
     const firstBlock = c.blockIds.length ? input.blocks.find((b) => b.id === c.blockIds[0]) : undefined;
     return { cls, flags, blockIds: [...c.blockIds], blockReason: firstBlock?.reason ?? null, used: c.used };
   };

@@ -11,12 +11,18 @@
  *   • `available=false` con `reason`, en este orden: `pasado` (t < now) >
  *     `anticipacion-minima` (t < now + minLead) > `fuera-de-horizonte`
  *     (t > now + maxDays · 24 h; justo en el tope todavía entra) >
- *     `cupo-completo`;
+ *     `cupo-completo` > `tope-intervalo` (T3, C-AS3: con `intervalCap`, el
+ *     intervalo AR del slot ya tiene `cap.count` turnos del profesional que
+ *     retienen cupo, de cualquier servicio; va último porque con el cupo del
+ *     servicio también lleno el motivo de siempre gana);
  *   • `used` = turnos que sostienen cupo (`isHoldingCapacity`: una reserva
  *     pública impaga de más de 30 min ya no cuenta) y solapan el slot;
  *     `cap` null = ilimitado; lleno = `overlapBlocks(used, cap)`. Las dos
  *     funciones son las de `lib/booking-capacity.ts` sin cambios (AUDIT
  *     §5.18). El caller ya filtró profesional + servicio (decisión 5).
+ *
+ * Sin `intervalCap` (ausente o null) la salida es la de antes de T3, sin la
+ * clave `intervalCapUse`: la paridad de abajo no cambia.
  *
  * Con la plantilla de fallback, paso 45 y anticipación 60 reproduce
  * `buildPublicSlots` (paridad en `tests/unit/availability-slots.test.ts`):
@@ -25,6 +31,7 @@
  */
 import { isHoldingCapacity, overlapBlocks } from "@/lib/booking-capacity";
 import { formatWallTime, instantAt } from "@/lib/availability/day";
+import { intervalCapState, intervalStartsUsed } from "@/lib/availability/interval-cap";
 import type { BuildSlotsInput, SlotResult, SlotUnavailableReason } from "@/lib/availability/types";
 
 const MIN_MS = 60_000;
@@ -32,6 +39,7 @@ const DAY_MS = 24 * 60 * MIN_MS;
 
 export function buildSlots(input: BuildSlotsInput): SlotResult[] {
   const { dayKey, stepMin, durationMin, lead, now, cap } = input;
+  const ic = input.intervalCap ?? null;
   // Sin esto un paso 0 (config rota) cuelga el request.
   if (!(stepMin > 0) || !(durationMin > 0)) return [];
 
@@ -58,6 +66,19 @@ export function buildSlots(input: BuildSlotsInput): SlotResult[] {
       else if (at < earliest) reason = "anticipacion-minima";
       else if (at > latest) reason = "fuera-de-horizonte";
       else if (overlapBlocks(used, cap)) reason = "cupo-completo";
+      // T3 (C-AS3): `m` ya es el reloj de pared AR del slot (minutos desde la medianoche de `dayKey`), así el
+      // bucket sale sin un `Intl` por slot. Se cuenta contra `ic.bookings` (todos los del profesional), no contra
+      // `input.bookings` (ya filtrados al servicio).
+      const used2 = ic
+        ? intervalStartsUsed(ic.bookings, {
+            practitionerId: ic.practitionerId,
+            when: new Date(at),
+            intervalMin: ic.cap.intervalMin,
+            now,
+            wallMin: m,
+          })
+        : 0;
+      if (reason == null && ic && intervalCapState(used2, ic.cap) === "full") reason = "tope-intervalo";
       out.push({
         at,
         iso: new Date(at).toISOString(),
@@ -66,6 +87,7 @@ export function buildSlots(input: BuildSlotsInput): SlotResult[] {
         reason,
         used,
         cap,
+        ...(ic ? { intervalCapUse: { used: used2, cap: ic.cap } } : {}),
       });
     }
   }

@@ -4,7 +4,7 @@
  * el batch (`classifyBatchInstant`), `nextFreeSlot` y, más adelante, Planes.
  *
  * Precedencia (contrato `InstantClass` de `types.ts`):
- *   duplicado > bloqueado > fuera-de-horario > paciente-superpuesto > sobreturno > libre
+ *   duplicado > bloqueado > fuera-de-horario > paciente-superpuesto > sobreturno > tope-intervalo > libre
  * "paciente-superpuesto" antes que "sobreturno" porque así lo chequea el
  * clasificador del batch de hoy (`classifyBatchSlot`: primero el paciente,
  * después el cupo) y el batch los muestra a los dos como "sobreturno".
@@ -32,6 +32,13 @@
  *     de UNA sede del día AR de `when` (franjas contiguas de la misma sede se
  *     unen, de sedes distintas no: el turno lleva una sede). Un turno que
  *     cruza la medianoche AR siempre queda fuera.
+ * T3 (C-AS3, decisión 6):
+ *   • tope-intervalo: con `intervalCap`, el intervalo AR de `when` (alineado a
+ *     la hora) ya tiene `count` turnos del profesional que retienen cupo, de
+ *     CUALQUIER servicio (`intervalStartsUsed`). Va justo antes de "libre":
+ *     cualquier otra clase lo tapa, pero `intervalCapped` se informa igual
+ *     (forzar el cupo no fuerza el tope: cada uno tiene su flag). Sin
+ *     `intervalCap` la salida es la de antes, sin claves nuevas.
  *
  * Franjas: `rangesFor(practitionerId, dayKey)` inyectada — normalmente
  * `workingRanges` de `ranges.ts` (B2.1a) sobre el `AvailabilityInput`. OJO:
@@ -44,10 +51,12 @@ import { isHoldingCapacity, overlapBlocks } from "@/lib/booking-capacity";
 import type { BatchSlotStatus } from "@/lib/booking-schedule";
 import { toARDateKey, toARMinutes } from "@/lib/datetime-ar";
 import { dayKeyOf, dayWindow } from "@/lib/availability/day";
+import { intervalCapState, intervalStartsUsed, type IntervalCap } from "@/lib/availability/interval-cap";
 import type {
   AvailabilityBooking,
   DayKey,
   InstantClassification,
+  IntervalCapUse,
   ScheduleRange,
   TimeBlockInput,
 } from "@/lib/availability/types";
@@ -76,6 +85,12 @@ export type ClassifyInstantInput = {
   now: Date;
   /** Turno que se está editando: no cuenta contra sí mismo. */
   excludeBookingId?: string | null;
+  /**
+   * T3 (C-AS3): tope por intervalo EFECTIVO del profesional (`effectiveIntervalCap`). Con tope, `bookings` TIENE
+   * que traer todos los turnos no cancelados del profesional (cualquier servicio): el tope cruza servicios, y un
+   * prefiltro por servicio (como el de `nextFreeSlot` sin tope) lo subcontaría. Ausente / null = sin tope.
+   */
+  intervalCap?: IntervalCap | null;
 };
 
 const MIN_MS = 60_000;
@@ -182,6 +197,10 @@ type Parts = {
   blockIds: string[];
   used: number;
   atCapacity: boolean;
+  /** T3: turnos del profesional que empiezan en el intervalo AR de `when` (0 sin tope). */
+  intervalUsed: number;
+  /** T3: `intervalCapState(intervalUsed, cap) === "full"` (false sin tope). */
+  intervalCapped: boolean;
 };
 
 /** Reloj de pared AR de `when`, ya calculado (ver `classifyInstantAt`). */
@@ -243,7 +262,33 @@ function evaluate(input: ClassifyInstantInput, wall: ArWall): Parts {
     }
   }
 
-  return { duplicate, patientOverlap, outOfHours, blockIds, used, atCapacity: overlapBlocks(used, input.cap) };
+  // T3 (C-AS3): el conteo reusa `rows` (ya sin el turno editado) y el reloj de pared ya calculado (`wallMin`):
+  // en el barrido de `nextFreeSlot` no agrega `Intl` por paso. Sin tope no se recorre nada.
+  const ic = input.intervalCap;
+  const intervalUsed = ic
+    ? intervalStartsUsed(rows, { practitionerId, when, intervalMin: ic.intervalMin, now, wallMin: startMin })
+    : 0;
+  const intervalCapped = ic ? intervalCapState(intervalUsed, ic) === "full" : false;
+
+  return {
+    duplicate,
+    patientOverlap,
+    outOfHours,
+    blockIds,
+    used,
+    atCapacity: overlapBlocks(used, input.cap),
+    intervalUsed,
+    intervalCapped,
+  };
+}
+
+/** Las claves del tope, SOLO con tope: sin él la salida queda byte a byte la de antes de T3 (paridad). */
+function intervalCapFields(
+  input: ClassifyInstantInput,
+  p: Parts
+): { intervalCapped?: boolean; intervalCapUse?: IntervalCapUse } {
+  const ic = input.intervalCap;
+  return ic ? { intervalCapped: p.intervalCapped, intervalCapUse: { used: p.intervalUsed, cap: ic } } : {};
 }
 
 /**
@@ -273,8 +318,18 @@ export function classifyInstantAt(input: ClassifyInstantInput, wall: ArWall): In
           ? "paciente-superpuesto"
           : p.atCapacity
             ? "sobreturno"
-            : "libre";
-  return { class: cls, outOfHours: p.outOfHours, blocked, blockIds: p.blockIds, used: p.used, cap: input.cap };
+            : p.intervalCapped
+              ? "tope-intervalo"
+              : "libre";
+  return {
+    class: cls,
+    outOfHours: p.outOfHours,
+    blocked,
+    blockIds: p.blockIds,
+    used: p.used,
+    cap: input.cap,
+    ...intervalCapFields(input, p),
+  };
 }
 
 /** Lo que el batch necesita por fecha: el status de hoy + los flags nuevos. */
@@ -285,6 +340,11 @@ export type BatchInstantClassification = {
   blockIds: ReadonlyArray<string>;
   used: number;
   cap: number | null;
+  /** T3 (C-AS3): el intervalo ya está en el tope. NO cambia `status` (paridad con `classifyBatchSlot`): el lote
+   *  lo muestra como «{n} fechas superan el tope» y se fuerza con su propio flag. Solo con tope. */
+  intervalCapped?: boolean;
+  /** Uso del tope en esa fecha. Solo con tope. */
+  intervalCapUse?: IntervalCapUse;
 };
 
 /**
@@ -303,5 +363,13 @@ export function classifyBatchInstant(input: ClassifyInstantInput): BatchInstantC
     : p.patientOverlap || p.atCapacity || blocked
       ? "sobreturno"
       : "libre";
-  return { status, outOfHours: p.outOfHours, blocked, blockIds: p.blockIds, used: p.used, cap: input.cap };
+  return {
+    status,
+    outOfHours: p.outOfHours,
+    blocked,
+    blockIds: p.blockIds,
+    used: p.used,
+    cap: input.cap,
+    ...intervalCapFields(input, p),
+  };
 }
