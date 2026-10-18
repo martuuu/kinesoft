@@ -21,6 +21,9 @@ import { vi, describe, it, expect, beforeAll, afterAll } from "vitest";
 
 vi.hoisted(() => {
   process.env.MP_ACCESS_TOKEN = "TEST-access-token";
+  // TP-0: el default es `off` (reserva sin cobro, tests/integration/tp0-turnero-sin-cobro.test.ts); este archivo
+  // prueba el checkout.
+  process.env.TURNERO_CHECKOUT = "platform";
 });
 vi.mock("mercadopago", () => {
   class MercadoPagoConfig {

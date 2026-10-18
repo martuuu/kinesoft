@@ -24,9 +24,12 @@
  */
 import { headers } from "next/headers";
 // No-Actor surface (anonymous turnero) → service channel (BYPASSRLS). See lib/db.ts#prismaService.
-import { Prisma } from "@prisma/client";
+import { NotificationKind, Prisma } from "@prisma/client";
 import { prismaService as prisma } from "@/lib/db";
+import { env, turneroCheckout } from "@/lib/env";
 import { createCheckoutPreference } from "@/lib/mercadopago";
+import { notifyTenantOwners } from "@/lib/notifications-internal";
+import { decidePublicCheckout, isOnlineCheckoutAvailable, publicStatusAmountCents } from "@/lib/public-booking-payment";
 import { afterBookingsCommitted, type BookingChangeRef } from "@/lib/booking-events-internal";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rate-limit";
@@ -48,6 +51,7 @@ import {
 import {
   PUBLIC_BOOKING_SWITCH_SELECT,
   isPublicTurneroOpen,
+  promoteHeldPublicBookingInTx,
   releaseOwnExpiredPublicHold,
   resolvePublicPatient,
 } from "@/lib/public-booking-internal";
@@ -67,6 +71,7 @@ import {
   type PublicSlot,
   type PublicBookingStatus,
   type SubmitPublicBookingInput,
+  type SubmitPublicBookingResult,
 } from "@/lib/public-booking-types";
 
 function callerIp(): string {
@@ -271,6 +276,8 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
     })),
     locations,
     insurers,
+    // TP-0: solo el copy del wizard («Confirmar turno» vs pagar); cada submit lo decide `decidePublicCheckout`.
+    onlineCheckout: isOnlineCheckoutAvailable({ mode: turneroCheckout(), mpConfigured: !!env.MP_ACCESS_TOKEN }),
   };
 }
 
@@ -400,6 +407,39 @@ const PUBLIC_BOOKING_CLOSED_ERROR = "Este consultorio no toma turnos online.";
 const SLOT_UNAVAILABLE_ERROR ="Ese horario se acaba de ocupar o ya no se puede reservar online. Elegí otro.";
 const SAME_SLOT_ERROR = "Ya tenés un turno reservado en ese horario.";
 const GENERIC_SUBMIT_ERROR = "No pudimos registrar la reserva. Probá de nuevo en unos minutos.";
+const CANCELLED_REPLAY_ERROR = "Ese turno fue cancelado. Recargá la página para reservar de nuevo.";
+/** TP-0: el reintento de un PENDING cuyo plazo de 30 min ya pasó (el cupo se pudo dar a otro). */
+const HOLD_EXPIRED_ERROR = "Tu reserva venció. Volvé a elegir el horario.";
+/** TP-0: hay un pago AUTHORIZED en curso sobre ese turno; lo resuelve el webhook, no un reintento del wizard. */
+const PAYMENT_IN_FLIGHT_ERROR = "Ya hay un pago en proceso para este turno. Esperá la confirmación de Mercado Pago.";
+
+/**
+ * TP-0 (H-TP3): una reserva online sin cobro no le avisaba a nadie (el único aviso era el del webhook al acreditar).
+ * Al titular/administradores, al profesional del turno y a quien opera la agenda (la Secretaria). Lo llama el caller
+ * UNA vez, después del commit que dejó el turno CONFIRMED (alta o promoción con count 1), nunca en un replay.
+ */
+async function notifyPublicReservation(
+  tenantId: string,
+  b: { practitionerId: string; scheduledFor: Date; serviceName: string; who: string }
+) {
+  await notifyTenantOwners({
+    tenantId,
+    kind: NotificationKind.BOOKING_CREATED,
+    title: "Turno online reservado",
+    body: `${b.serviceName} · ${b.who} · ${b.scheduledFor.toLocaleString("es-AR", {
+      weekday: "short",
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+      timeZone: "America/Argentina/Buenos_Aires",
+    })}`,
+    link: `/agenda?date=${toARDateKey(b.scheduledFor)}`,
+    alsoPractitionerId: b.practitionerId,
+    alsoAgendaOperators: true,
+  });
+}
 
 /** La sede de la franja se archivó entre la validación y el INSERT (B3.2). */
 class PublicLocationGoneError extends Error {}
@@ -431,11 +471,20 @@ class PublicSlotGoneError extends Error {}
  *   - Ficha: `resolvePublicPatient` (H4): match por DNI normalizado, nunca
  *     parchea una ficha existente; el contacto distinto va al snapshot
  *     `guest*` del turno + nota para el kine.
- *   - Mercado Pago: preferencia de Checkout Pro; se devuelve `init_point`.
+ *   - Cobro (TP-0, H-TP0): `decidePublicCheckout` (lib/public-booking-payment.ts). Solo con `TURNERO_CHECKOUT=platform`,
+ *     MP configurado y precio ≥ $1 el turno nace PENDING y se devuelve el `init_point` de Checkout Pro
+ *     (`next: "checkout"`). Si no, nace CONFIRMED/UNPAID sin `Payment` (`next: "reserved"`, se paga en el
+ *     consultorio): retiene el cupo siempre, porque `isHoldingCapacity` solo libera PENDING. Antes se mandaba SIEMPRE
+ *     a pagar con el precio crudo: con servicios de $0 o sin token MP fallaba y nadie podía terminar una reserva.
+ *   - Replay sin checkout: CONFIRMED → `reserved` sin escribir ni avisar. PENDING vigente (nació con el checkout o
+ *     antes de TP-0) → se promueve una vez (`promoteHeldPublicBookingInTx`); vencido → «Tu reserva venció».
+ *   - Preferencia caída → se degrada a reservado con la misma promoción (`booking.public.checkout_degraded`): el
+ *     consultorio nunca eligió el pago obligatorio (eso llega con TP-2), no se le traba la reserva al paciente.
+ *   - Aviso `BOOKING_CREATED` (H-TP3) una vez, después del commit que lo dejó CONFIRMED; nunca en replay.
  */
 export async function submitPublicBooking(
   raw: SubmitPublicBookingInput
-): Promise<ActionResult<{ bookingId: string; initPoint: string }>> {
+): Promise<ActionResult<SubmitPublicBookingResult>> {
   // Aggressive rate limit — a single visitor submitting twice in a few
   // seconds is almost always a bot.
   const ip = callerIp();
@@ -492,6 +541,14 @@ export async function submitPublicBooking(
   }
 
   const idempotencyKey = `pub:${tenant.id}:${data.idempotencyKey}`;
+  // TP-0: monto = precio del servicio (TP-2 lo cambia por la política del consultorio y `resolveBookingCopagoCents`).
+  // `TURNERO_CHECKOUT` default `off` (HF-1a): la única cuenta MP de hoy es la de la plataforma (H-TP1).
+  const checkout = decidePublicCheckout({
+    amountCents: service.priceCents,
+    mode: turneroCheckout(),
+    mpConfigured: !!env.MP_ACCESS_TOKEN,
+  });
+  const who = `${data.patient.firstName} ${data.patient.lastName}`.trim();
 
   // ── Reintento del MISMO intento (doble click, error de MP) → mismo turno.
   const prior = await prisma.booking.findUnique({
@@ -507,7 +564,10 @@ export async function submitPublicBooking(
     },
   });
   let bookingId: string;
-  let patientId: string | null;
+  /** Estado de la fila al salir de este bloque: el alta de esta llamada, el replay o el twin del P2002. */
+  let rowStatus: string;
+  /** Esta llamada escribió el turno (no es replay ni twin): es la única que puede avisar del alta. */
+  let createdHere = false;
   if (prior) {
     const sameAttempt =
       prior.tenantId === tenant.id &&
@@ -519,11 +579,9 @@ export async function submitPublicBooking(
     }
     // Un CANCELLED no se revive (antes el upsert devolvía el turno cancelado y
     // el paciente pagaba un turno que la agenda ya no mostraba como activo).
-    if (prior.status === "CANCELLED") {
-      return { ok: false, error: "Ese turno fue cancelado. Recargá la página para reservar de nuevo." };
-    }
+    if (prior.status === "CANCELLED") return { ok: false, error: CANCELLED_REPLAY_ERROR };
     bookingId = prior.id;
-    patientId = prior.patientId;
+    rowStatus = prior.status;
   } else {
     // ── Horario: tiene que ser de la grilla y tener cupo (misma función que
     // la lista del wizard). Antes se aceptaba cualquier instante futuro.
@@ -673,20 +731,26 @@ export async function submitPublicBooking(
             guestEmail: resolution.contactSnapshot?.guestEmail ?? null,
             guestPhone: resolution.contactSnapshot?.guestPhone ?? null,
             idempotencyKey,
+            // TP-0: sin checkout nace reservado (se paga en el consultorio). PENDING solo si se va a mandar a pagar:
+            // es el único estado que vence a los 30 min (`isHoldingCapacity`).
+            status: checkout.kind === "checkout" ? "PENDING" : "CONFIRMED",
+            paymentStatus: "UNPAID",
           },
-          select: { id: true, patientId: true, practitionerId: true, scheduledFor: true, roomId: true },
+          select: { id: true, status: true, practitionerId: true, scheduledFor: true, roomId: true },
         });
         return { ...row, released };
       });
       bookingId = created.id;
-      patientId = created.patientId;
+      rowStatus = created.status;
+      createdHere = true;
       // SV06a · Sala de Espera realtime: una sola llamada por commit, JUSTO
       // después de la tx y ANTES de `createCheckoutPreference`. Por qué ahí:
       //   - fuera de la tx (contrato del hook): adentro, un rollback dejaba un
       //     evento publicado de un turno que no existe;
       //   - antes de MP: la preferencia puede fallar (red, token) y el turno
-      //     igual quedó escrito y reteniendo cupo 30 min; si el aviso fuera
-      //     después, la agenda no se enteraba hasta el polling de 60 s.
+      //     igual quedó escrito y reteniendo cupo; si el aviso fuera
+      //     después, la agenda no se enteraba hasta el polling de 60 s. (TP-0:
+      //     si falla, la promoción de abajo es otro commit y avisa aparte.)
       // Superficie sin Actor: el tenant sale del slug ya resuelto (`tenant.id`).
       // La reserva vencida que se canceló en la misma tx va como 2.º ref.
       // Los dos caminos de replay (key ya existente arriba y el twin del
@@ -725,11 +789,12 @@ export async function submitPublicBooking(
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
         const twin = await prisma.booking.findUnique({
           where: { idempotencyKey },
-          select: { id: true, status: true, patientId: true },
+          select: { id: true, status: true },
         });
         if (twin && twin.status !== "CANCELLED") {
+          // El otro submit escribió y avisa; este solo devuelve su turno (sin checkout, el twin ya nació CONFIRMED).
           bookingId = twin.id;
-          patientId = twin.patientId;
+          rowStatus = twin.status;
         } else {
           return { ok: false, error: SAME_SLOT_ERROR };
         }
@@ -743,34 +808,102 @@ export async function submitPublicBooking(
     }
   }
 
-  let pref: Awaited<ReturnType<typeof createCheckoutPreference>>;
-  try {
-    pref = await createCheckoutPreference({
+  const logDone = (next: SubmitPublicBookingResult["next"]) =>
+    // VX2-d1 (AUDIT `turnero-revalidatepath-doble`): sin `revalidatePath("/agenda", "/dashboard")`. La invalidación
+    // la hace `afterBookingsCommitted` (tags `bookingDays` + `dashboard`) justo después de cada commit; los replays no
+    // escribieron nada y no tienen qué invalidar.
+    logger.info("booking.public.create", {
       bookingId,
-      title: `${service.name} · ${tenant.name}`,
-      amountCents: service.priceCents,
-      currency: tenant.currency,
-      payer: { email: data.patient.email, name: data.patient.firstName },
+      tenant: tenant.slug,
+      replay: !createdHere,
+      next,
+      checkout: checkout.kind === "checkout" ? "checkout" : checkout.reason,
     });
-  } catch (e) {
-    // El turno queda PENDING/UNPAID: retiene el cupo 30 min y un reintento con
-    // la misma key lo reencuentra (no duplica).
-    logger.error("booking.public.preference_failed", {
-      bookingId,
-      err: e instanceof Error ? e.message : String(e),
-    });
-    return { ok: false, error: "No pudimos iniciar el pago. Probá de nuevo en unos segundos." };
+  const reserved = (): ActionResult<SubmitPublicBookingResult> => {
+    logDone("reserved");
+    return { ok: true, data: { bookingId, next: "reserved", initPoint: null } };
+  };
+
+  // ── Ya reservado (alta CONFIRMED de esta llamada, o replay/twin que ya no está PENDING: lo promovió otro submit, lo
+  // pagó el webhook, lo confirmó la recepción). El replay no escribe ni avisa; tampoco arma una preferencia nueva
+  // sobre un turno que ya no espera pago.
+  if (rowStatus !== "PENDING") {
+    if (createdHere) {
+      await notifyPublicReservation(tenant.id, {
+        practitionerId: data.practitionerId,
+        scheduledFor,
+        serviceName: service.name,
+        who,
+      });
+    }
+    return reserved();
   }
 
-  // VX2-d1 (AUDIT `turnero-revalidatepath-doble`): sin `revalidatePath("/agenda", "/dashboard")`. La
-  // invalidación la hace `afterBookingsCommitted` (tags `bookingDays` + `dashboard`) justo después del commit; los
-  // replays no escribieron nada y no tienen qué invalidar.
-  logger.info("booking.public.create", { bookingId, tenant: tenant.slug, replay: !!prior });
+  // ── PENDING con checkout: la preferencia, como antes de TP-0.
+  if (checkout.kind === "checkout") {
+    try {
+      const pref = await createCheckoutPreference({
+        bookingId,
+        title: `${service.name} · ${tenant.name}`,
+        amountCents: checkout.amountCents,
+        currency: tenant.currency,
+        payer: { email: data.patient.email, name: data.patient.firstName },
+      });
+      logDone("checkout");
+      return { ok: true, data: { bookingId, next: "checkout", initPoint: pref.initPoint } };
+    } catch (e) {
+      // Antes: el turno quedaba PENDING 30 min y cada reintento volvía a fallar (H-TP0). Ahora se degrada a reservado
+      // (promoción de abajo): el consultorio no eligió el pago obligatorio. warn, no error: es un camino previsto.
+      logger.warn("booking.public.checkout_degraded", {
+        bookingId,
+        tenant: tenant.slug,
+        err: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
 
-  return {
-    ok: true,
-    data: { bookingId, initPoint: pref.initPoint },
-  };
+  // ── PENDING sin checkout (replay de un hold del checkout, o la preferencia cayó): se promueve una sola vez.
+  let promotion: Awaited<ReturnType<typeof promoteHeldPublicBookingInTx>>;
+  try {
+    promotion = await prisma.$transaction((tx) => promoteHeldPublicBookingInTx(tx, { tenantId: tenant.id, bookingId }));
+  } catch (e) {
+    logger.error("booking.public.promote_failed", {
+      bookingId,
+      tenant: tenant.slug,
+      err: e instanceof Error ? e.message : String(e),
+    });
+    return { ok: false, error: GENERIC_SUBMIT_ERROR };
+  }
+  switch (promotion.kind) {
+    case "promoted":
+      // Otro commit: su propio evento realtime (el del alta PENDING, si lo hubo, ya salió arriba) y el aviso.
+      await afterBookingsCommitted(tenant.id, [
+        {
+          bookingId: promotion.ref.id,
+          practitionerId: promotion.ref.practitionerId,
+          scheduledFor: promotion.ref.scheduledFor,
+          roomId: promotion.ref.roomId,
+          kind: "booking",
+        },
+      ]);
+      await notifyPublicReservation(tenant.id, {
+        practitionerId: promotion.ref.practitionerId,
+        scheduledFor: promotion.ref.scheduledFor,
+        serviceName: service.name,
+        who,
+      });
+      return reserved();
+    case "already-confirmed":
+      return reserved();
+    case "cancelled":
+      return { ok: false, error: CANCELLED_REPLAY_ERROR };
+    case "expired":
+      return { ok: false, error: HOLD_EXPIRED_ERROR };
+    case "payment-in-flight":
+      return { ok: false, error: PAYMENT_IN_FLIGHT_ERROR };
+    case "not-public":
+      return { ok: false, error: GENERIC_SUBMIT_ERROR };
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -811,7 +944,7 @@ export async function getPublicBookingStatus(
         },
       },
       patient: { select: { firstName: true, lastName: true } },
-      payment: { select: { amountCents: true } },
+      payment: { select: { amountCents: true, expectedAmountCents: true, status: true } },
       guestName: true,
     },
   });
@@ -834,7 +967,9 @@ export async function getPublicBookingStatus(
     scheduledFor: b.scheduledFor.toISOString(),
     durationMin: b.durationMin,
     patientInitials,
-    amountCents: b.payment?.amountCents ?? b.service.priceCents,
+    // H-TP2: antes `payment?.amountCents ?? price`, y `amountCents` vale 0 hasta que acredita («$ 0» pendiente).
+    amountCents: publicStatusAmountCents({ priceCents: b.service.priceCents, payment: b.payment }),
+    onlinePayment: !!b.payment,
   };
 }
 

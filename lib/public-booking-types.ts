@@ -69,6 +69,13 @@ export type PublicClinic = {
   locations?: PublicLocation[];
   /** B3.2: coberturas activas del consultorio (sin montos). */
   insurers?: { id: string; name: string; isParticular: boolean }[];
+  /**
+   * TP-0 (H-TP0, plan §22.5): ¿el turnero PODRÍA mandar a pagar online? `TURNERO_CHECKOUT=platform` y Mercado Pago
+   * configurado. Aun en true, un servicio de menos de $1 (`MIN_ONLINE_CHARGE_CENTS`, `lib/public-booking-payment.ts`)
+   * se reserva sin cobro: el wizard lo cruza con `priceCents`. Ausente/false = «Confirmar turno» y «Lo pagás en el
+   * consultorio». Lo decide el server en cada submit (`decidePublicCheckout`): esto es solo para el copy.
+   */
+  onlineCheckout?: boolean;
 };
 
 export type PublicLocation = {
@@ -136,7 +143,25 @@ export type PublicBookingStatus = {
   durationMin: number;
   /** Initials only — never the full name, since this endpoint is unauth. */
   patientInitials: string | null;
+  /**
+   * H-TP2: con pago online, lo cobrado (PAID) o lo que se espera cobrar (`Payment.expectedAmountCents`); antes mostraba
+   * `Payment.amountCents`, que vale 0 hasta que el webhook acredita («$ 0» con el pago pendiente). Sin pago online, el
+   * precio del servicio (lo que se paga en el consultorio).
+   */
   amountCents: number | null;
+  /** TP-0: true si el turno pasó por el checkout (existe fila `Payment`). false = reservado sin cobro online. */
+  onlinePayment?: boolean;
+};
+
+/**
+ * Resultado de `submitPublicBooking` (contrato TP-0a ↔ TP-0b, plan §22.5, literal):
+ *   - `next: "checkout"` → `initPoint` es el link de Checkout Pro; el wizard redirige.
+ *   - `next: "reserved"` → turno CONFIRMED/UNPAID sin cobro online (`initPoint` null): «¡Turno reservado!».
+ */
+export type SubmitPublicBookingResult = {
+  bookingId: string;
+  next: "checkout" | "reserved";
+  initPoint: string | null;
 };
 
 export type PrefillPatient = {

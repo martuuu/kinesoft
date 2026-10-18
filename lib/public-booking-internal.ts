@@ -11,7 +11,8 @@ import "server-only";
 // Cross-tenant prefill lookup, no single-tenant Actor → service channel (BYPASSRLS). See lib/db.ts#prismaService.
 import { prismaService as prisma } from "@/lib/db";
 import { Prisma } from "@prisma/client";
-import { isHoldingCapacity } from "@/lib/booking-capacity";
+import { PENDING_PUBLIC_HOLD_MS, isHoldingCapacity, isPublicReservation } from "@/lib/booking-capacity";
+import { lockCapacityWindow } from "@/lib/booking-cap-lock";
 import { isPublicBookingOpen, type TenantEntitlements } from "@/lib/tenant-modules";
 import { tenantAccessEnforcement } from "@/lib/env";
 import {
@@ -513,4 +514,123 @@ export async function releaseOwnExpiredPublicHold(
   return res.count === 1
     ? { id: own.id, practitionerId: own.practitionerId, scheduledFor: own.scheduledFor, roomId: own.roomId }
     : null;
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Reserva sin cobro online (TP-0, H-TP0, plan §22.5)
+// ──────────────────────────────────────────────────────────────────────
+
+export type PublicHoldPromotion =
+  /** Esta llamada la pasó a CONFIRMED (count 1): el caller avisa (realtime + campana), una sola vez. */
+  | { kind: "promoted"; ref: { id: string; practitionerId: string; scheduledFor: Date; roomId: string | null } }
+  /** Ya no estaba PENDING (otro submit la promovió, el webhook la pagó, la confirmó la recepción): no se escribe. */
+  | { kind: "already-confirmed" }
+  | { kind: "cancelled" }
+  /** Pasaron los 30 min (`isHoldingCapacity`): el cupo ya se pudo dar a otro. No se escribe. */
+  | { kind: "expired" }
+  /** Hay un pago en curso (AUTHORIZED: efectivo, revisión): lo resuelve el webhook, no esta reserva. */
+  | { kind: "payment-in-flight" }
+  /** No existe, es de otro tenant o no es una reserva pública (key `pub:`): no se toca. */
+  | { kind: "not-public" };
+
+/**
+ * Promueve UNA VEZ un hold público PENDING vigente a CONFIRMED/UNPAID (reservado, se paga en el consultorio).
+ *
+ * Dos caminos lo usan (`submitPublicBooking`):
+ *   - replay con la misma key de un PENDING que nació con el checkout prendido (o anterior a TP-0) y ahora no hay
+ *     checkout: el paciente reintentó porque MP fallaba (H-TP0) y su turno no puede seguir venciendo;
+ *   - la preferencia falla (`checkout_degraded`): el consultorio nunca eligió el pago obligatorio, así que no se le
+ *     traba la reserva al paciente por una caída de MP.
+ *
+ * Condiciones (las mismas del `updateMany`, que las repite para no pisar una carrera): de este tenant, key pública
+ * (`isPublicReservation`: nunca un PENDING de la agenda), PENDING, UNPAID|FAILED, sin `Payment` AUTHORIZED y DENTRO del
+ * plazo de 30 min (`createdAt >= now - PENDING_PUBLIC_HOLD_MS`, el complemento exacto de `publicHoldExpired`). Un
+ * FAILED promovido pasa a UNPAID: el turno ya no espera pago online, se cobra en el consultorio; la fila `Payment`
+ * FAILED queda como historia.
+ *
+ * Lock: el de cupo de (profesional, servicio, ventana), la MISMA clave que el create público y la agenda, ANTES del
+ * `updateMany` y con `now` tomado después del lock. Sin él, un hold que vence entre el chequeo y el commit podía
+ * quedar CONFIRMED mientras otro submit ya había tomado el cupo que veía libre (dos turnos en un cupo 1). Con él,
+ * quien entró antes ya escribió (y para nosotros el hold también venció: `now` es posterior) y quien entra después ve
+ * el CONFIRMED.
+ *
+ * Con count 0 (otro escritor en el medio) se relee y se clasifica SIN escribir: el aviso sale solo del que ganó.
+ */
+export async function promoteHeldPublicBookingInTx(
+  tx: Prisma.TransactionClient,
+  o: { tenantId: string; bookingId: string }
+): Promise<PublicHoldPromotion> {
+  const select = {
+    id: true,
+    tenantId: true,
+    status: true,
+    paymentStatus: true,
+    createdAt: true,
+    updatedAt: true,
+    patientId: true,
+    idempotencyKey: true,
+    practitionerId: true,
+    serviceId: true,
+    scheduledFor: true,
+    durationMin: true,
+    roomId: true,
+    payment: { select: { status: true } },
+  } satisfies Prisma.BookingSelect;
+  type Row = Prisma.BookingGetPayload<{ select: typeof select }>;
+  const read = () => tx.booking.findFirst({ where: { id: o.bookingId, tenantId: o.tenantId }, select });
+
+  const classify = (b: Row | null, now: Date): PublicHoldPromotion | null => {
+    // Solo la key actual `pub:<tenant>:<uuid>` (la que puede llegar acá: el replay busca por ella); una legada no se
+    // promueve.
+    if (!b || !b.idempotencyKey.startsWith("pub:") || !isPublicReservation(b)) return { kind: "not-public" };
+    if (b.status === "CANCELLED") return { kind: "cancelled" };
+    if (b.status !== "PENDING") return { kind: "already-confirmed" };
+    if (b.paymentStatus === "AUTHORIZED" || b.payment?.status === "AUTHORIZED") return { kind: "payment-in-flight" };
+    // PAID/REFUNDED sobre un PENDING no lo deja el webhook (pasa a CONFIRMED): ante la duda, no se toca.
+    if (b.paymentStatus !== "UNPAID" && b.paymentStatus !== "FAILED") return { kind: "payment-in-flight" };
+    if (!isHoldingCapacity(b, now)) return { kind: "expired" };
+    return null; // promovible
+  };
+
+  let row = await read();
+  const early = classify(row, new Date());
+  if (early || !row) return early ?? { kind: "not-public" };
+
+  await lockCapacityWindow(tx, {
+    tenantId: o.tenantId,
+    practitionerId: row.practitionerId,
+    serviceId: row.serviceId,
+    start: row.scheduledFor,
+    end: new Date(row.scheduledFor.getTime() + row.durationMin * 60_000),
+  });
+  // Dos vueltas: la segunda cubre un write ajeno que solo movió `updatedAt` (p. ej. la recepción editó la nota) y
+  // dejó el hold promovible. Profesional, servicio y horario de un PENDING público no los cambia nadie sin pasar por
+  // la agenda, que toma este mismo lock: el lock de arriba sigue siendo el correcto.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const now = new Date();
+    if (attempt > 0) {
+      row = await read();
+      const verdict = classify(row, now);
+      if (verdict || !row) return verdict ?? { kind: "not-public" };
+    }
+    const b: Row = row!;
+    const res = await tx.booking.updateMany({
+      where: {
+        id: b.id,
+        tenantId: o.tenantId,
+        updatedAt: b.updatedAt,
+        status: "PENDING",
+        paymentStatus: { in: ["UNPAID", "FAILED"] },
+        idempotencyKey: { startsWith: "pub:" },
+        createdAt: { gte: new Date(now.getTime() - PENDING_PUBLIC_HOLD_MS) },
+        NOT: { payment: { is: { status: "AUTHORIZED" } } },
+      },
+      data: { status: "CONFIRMED", paymentStatus: "UNPAID" },
+    });
+    if (res.count === 1) {
+      return { kind: "promoted", ref: { id: b.id, practitionerId: b.practitionerId, scheduledFor: b.scheduledFor, roomId: b.roomId } };
+    }
+  }
+  // Dos carreras seguidas: se informa lo que hay, sin escribir.
+  return classify(await read(), new Date()) ?? { kind: "expired" };
 }
