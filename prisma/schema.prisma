@@ -101,6 +101,10 @@ model Tenant {
   // base (drift aceptado). NULL/NULL = sin tope.
   bookingCapCount             Int?
   bookingCapIntervalMin       Int?
+  // FC M14 (fichas_clinicas, §24.3, decisión 2 del 19-oct): logo del membrete del PDF (bucket privado practice-assets).
+  // Los dos o ninguno (CHECK Tenant_logo_check en la base, drift aceptado). El ALTER va al final de M14 (lock corto).
+  logoStorageKey              String?
+  logoUpdatedAt               DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -148,6 +152,10 @@ model Tenant {
   // EV2 (M9 clinical_notes)
   clinicalNotes           ClinicalNote[]
   clinicalNoteRevisions   ClinicalNoteRevision[]
+  // FC M14 (fichas_clinicas)
+  tenantDiagnoses         TenantDiagnosis[]
+  diagnosisFavorites      DiagnosisFavorite[]
+  patientDocuments        PatientDocument[]
 
   @@index([slug])
 }
@@ -233,6 +241,8 @@ model UserProfile {
   supportThreadReads     SupportThreadRead[]
   // DIR-1 (M11): perfil público del directorio, POR PERSONA (no por consultorio).
   publicProfile          ProfessionalPublicProfile?
+  // FC M14: favoritos de diagnóstico, por usuario Y consultorio (CASCADE: un favorito no es HC).
+  diagnosisFavorites     DiagnosisFavorite[]
 }
 
 // DIR-1 (M11 public_directory, §20.10, DIR-D12): perfil del directorio público POR
@@ -334,6 +344,11 @@ model Practitioner {
   bookingCapMode        BookingCapMode @default(INHERIT)
   bookingCapCount       Int?
   bookingCapIntervalMin Int?
+  // FC M14 (§24.3, hallazgo 5): honorífico de la firma (LIC/KLGO/KLGA/DR/DRA, CHECK Practitioner_honorific_check) y
+  // firma escaneada (bucket practice-assets; los dos o ninguno, CHECK Practitioner_signature_check). Drift aceptado.
+  honorific             String?
+  signatureStorageKey   String?
+  signatureUpdatedAt    DateTime?
   createdAt     DateTime @default(now())
 
   tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -356,6 +371,8 @@ model Practitioner {
   programs             TreatmentProgram[]
   // EV2 (M9): autor congelado de cada evolución. RESTRICT (la baja es lógica).
   clinicalNotes        ClinicalNote[]
+  // FC M14: quién compartió cada documento con el paciente. RESTRICT.
+  sharedDocuments      PatientDocument[]
 
   @@unique([tenantId, userId])
   @@unique([id, tenantId], map: "Practitioner_id_tenantId_key") // EV2 M9: destino de FK compuesta
@@ -408,6 +425,8 @@ model Patient {
   changeRequests PatientChangeRequest[]
   // EV2 (M9): evoluciones de HC. RESTRICT (un paciente con HC no se borra en duro).
   clinicalNotes  ClinicalNote[]
+  // FC M14: fichas compartidas con el paciente (lo único de la HC que lee el portal). RESTRICT.
+  documents      PatientDocument[]
 
   // Uniqueness within a tenant. On PostgreSQL a composite UNIQUE treats
   // NULLs as distinct, so these enforce "no duplicate VALUE" while still
@@ -1089,6 +1108,8 @@ model Condition {
   anatomy   ConditionAnatomy[]
   exercises ConditionExerciseLink[]
   diagnoses Diagnosis[]
+  // FC M14: favoritos de diagnóstico que apuntan a esta condición (CASCADE).
+  diagnosisFavorites DiagnosisFavorite[]
 
   @@index([tenantId])
   // M10 (PF-M): FK sin índice (ON DELETE del autor).
@@ -1636,6 +1657,16 @@ model ClinicalNote {
   voidedByUserId       String?
   voidReason           String?
   idempotencyKey       String
+  // FC M14 (§24.3): CONTENIDO (generan revisión y respetan las 24 h, trigger): `bodyDoc` = JSON del editor
+  // (subconjunto ProseMirror de lib/hc-doc.ts; `body` sigue siendo el texto plano derivado en el server) y
+  // `diagnoses` = snapshot congelado de 1..5 (el primero es el principal; CIE-11 lleva código + título + URI).
+  // IDENTIDAD (inmutables, trigger): `authorLicense` = matrícula con la que firmó; `importSource` = ficha importada
+  // de Word (sin turno ni enmienda, CHECK). CHECKs ClinicalNote_{bodyDoc,diagnoses,authorLicense,importSource}_check
+  // (drift aceptado). Para limpiar un Json? se usa Prisma.DbNull (nunca JsonNull: viola el CHECK).
+  bodyDoc              Json?
+  diagnoses            Json?
+  authorLicense        String?
+  importSource         Json?
   createdAt            DateTime         @default(now())
   updatedAt            DateTime         @updatedAt
 
@@ -1646,6 +1677,8 @@ model ClinicalNote {
   amends     ClinicalNote?          @relation("ClinicalNoteAmends", fields: [amendsNoteId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   amendments ClinicalNote[]         @relation("ClinicalNoteAmends")
   revisions  ClinicalNoteRevision[]
+  // FC M14: lo compartido con el paciente (solo de raíces; anular la raíz lo revoca en la base).
+  documents  PatientDocument[]
 
   @@unique([tenantId, idempotencyKey], map: "ClinicalNote_tenantId_idempotencyKey_key")
   // Destinos de FK compuesta (revisión y enmienda).
@@ -1666,6 +1699,9 @@ model ClinicalNoteRevision {
   kind       ClinicalNoteKind
   title      String?
   body       String
+  // FC M14: la versión anterior del doc del editor y de los diagnósticos (las copia el trigger).
+  bodyDoc    Json?
+  diagnoses  Json?
   occurredAt DateTime
   savedAt    DateTime
   createdAt  DateTime         @default(now())
@@ -1674,6 +1710,137 @@ model ClinicalNoteRevision {
   note   ClinicalNote @relation(fields: [noteId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@unique([noteId, revision])
+}
+
+// ── FC M14 (fichas_clinicas, plan §24.3; ADR-025) ─────────────────────────────
+// Diagnósticos (CIE-11 MMS de la OMS + propios + favoritos) y documentos compartidos con el paciente. FKs compuestas,
+// CHECKs, parciales, triggers y policies: drift aceptado (ver «FC M14: DRIFT ACEPTADO» al final).
+enum DiagnosisSystem {
+  ICD11_MMS
+}
+
+enum PatientDocumentKind {
+  FICHA
+}
+
+enum PatientDocumentRevokeReason {
+  REPLACED    // se volvió a compartir la ficha
+  NOTE_VOIDED // la ficha se anuló (lo revoca el trigger de ClinicalNote, en la base)
+  MANUAL      // el profesional dejó de compartirla
+}
+
+// CIE-11 MMS en español (OMS, CC BY-ND 3.0 IGO): GLOBAL_READONLY (ENABLE + FORCE + solo SELECT); lo escribe solo
+// scripts/diagnosis-import.ts por el owner. `title` es el oficial, SIN TOCAR (ni acortar ni traducir); en la ficha va
+// código + título + URI (§1.2.3 de la licencia). `searchText` es NUESTRO (campo agregado, «no OMS»). Nunca se borra:
+// se retira (`retiredAt` + `retiredInRelease`, los dos o ninguno).
+model DiagnosisCode {
+  id               String          @id @default(cuid())
+  system           DiagnosisSystem @default(ICD11_MMS)
+  code             String
+  title            String
+  uri              String
+  foundationUri    String?
+  chapter          String?
+  isLeaf           Boolean         @default(true)
+  isResidual       Boolean         @default(false)
+  release          String
+  language         String          @default("es")
+  searchText       String
+  retiredAt        DateTime?
+  retiredInRelease String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  favorites DiagnosisFavorite[]
+
+  @@unique([system, code])
+}
+
+// Diagnósticos propios del consultorio. Un título vivo por consultorio sin distinguir mayúsculas (único PARCIAL +
+// expresión, drift aceptado). Archivar en vez de borrar: las fichas guardan su snapshot, no el id.
+model TenantDiagnosis {
+  id              String    @id @default(cuid())
+  tenantId        String
+  title           String
+  code            String?
+  searchText      String
+  createdByUserId String? // sin FK: rastro para «editar el propio» (FC-D22)
+  archivedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  tenant    Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  favorites DiagnosisFavorite[]
+
+  @@unique([id, tenantId], map: "TenantDiagnosis_id_tenantId_key") // destino de la FK compuesta del favorito
+  @@index([tenantId])
+}
+
+// Favorito de diagnóstico por usuario y consultorio, con EXACTAMENTE un destino (CHECK DiagnosisFavorite_target_check):
+// CIE-11, propio o Condition (global o de este consultorio: lo valida la app).
+model DiagnosisFavorite {
+  id                String   @id @default(cuid())
+  tenantId          String
+  userId            String
+  diagnosisCodeId   String?
+  tenantDiagnosisId String?
+  conditionId       String?
+  createdAt         DateTime @default(now())
+
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user            UserProfile      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  diagnosisCode   DiagnosisCode?   @relation(fields: [diagnosisCodeId], references: [id], onDelete: Restrict)
+  tenantDiagnosis TenantDiagnosis? @relation(fields: [tenantDiagnosisId], references: [id], onDelete: Cascade)
+  condition       Condition?       @relation(fields: [conditionId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId, diagnosisCodeId])
+  @@unique([tenantId, userId, tenantDiagnosisId])
+  @@unique([tenantId, userId, conditionId])
+  @@index([userId])
+  @@index([diagnosisCodeId])
+  @@index([tenantDiagnosisId])
+  @@index([conditionId])
+}
+
+// Lo COMPARTIDO con el paciente: foto HcPrintable v1 + PDF (bucket privado patient-documents, «stub:<id>» sin Storage).
+// Inalterable por trigger (patient_document_guard): nunca DELETE/TRUNCATE; nace vigente y solo de una RAÍZ VIVA del
+// mismo paciente y consultorio; lo único que cambia es la revocación, una vez. Uno VIVO por ficha (único PARCIAL).
+// Sin `updatedAt` a propósito. El portal lee SOLO esta tabla, con `select` explícito y sin `noteId`.
+model PatientDocument {
+  id                     String                       @id @default(cuid())
+  tenantId               String
+  patientId              String
+  kind                   PatientDocumentKind          @default(FICHA)
+  noteId                 String
+  noteRevision           Int
+  sourceDigest           String // sha256(hcSourceVersion(raíz, enmiendas)): si cambia → «desactualizada»
+  title                  String
+  occurredAt             DateTime
+  snapshot               Json
+  snapshotVersion        Int                          @default(1)
+  snapshotSha256         String
+  pdfStorageKey          String
+  pdfSha256              String
+  pdfSizeBytes           Int
+  sharedByUserId         String
+  sharedByPractitionerId String
+  sharedAt               DateTime
+  revokedAt              DateTime?
+  revokedByUserId        String?
+  revokeReason           PatientDocumentRevokeReason?
+  idempotencyKey         String
+  createdAt              DateTime                     @default(now())
+
+  tenant   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  patient  Patient      @relation(fields: [patientId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  note     ClinicalNote @relation(fields: [noteId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  sharedBy Practitioner @relation(fields: [sharedByPractitionerId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, patientId, sharedAt(sort: Desc)])
+  @@index([patientId])
+  @@index([noteId])
+  @@index([sharedByPractitionerId])
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -2483,3 +2650,26 @@ model PatientChangeRequest {
 //       ("ClinicalNote_guard", "ClinicalNote_no_truncate", "ClinicalNoteRevision_insert_guard"), más
 //       "ClinicalNoteRevision_append_only" / "ClinicalNoteRevision_no_truncate" con kinesoft_append_only() (de M8).
 //   • Policies RLS: ClinicalNote_tenant_isolation, ClinicalNoteRevision_tenant_isolation.
+
+// ── FC M14: DRIFT ACEPTADO ───────────────────────────────────────────────
+// Estos objetos viven SOLO en prisma/migrations/20261021120000_fichas_clinicas y
+// Prisma no los expresa. Si `migrate dev` / `migrate diff` propone borrarlos, NO
+// se borran (y `migrate dev` está prohibido en este repo):
+//   • Únicos PARCIALES:
+//       PatientDocument_noteId_live_key            ON PatientDocument(noteId) WHERE revokedAt IS NULL
+//       TenantDiagnosis_tenantId_title_active_key  ON TenantDiagnosis(tenantId, lower(btrim(title))) WHERE archivedAt IS NULL
+//   • FKs COMPUESTAS (las FK saltean RLS y prod es BYPASSRLS):
+//       PatientDocument_patient_tenant_fkey            (patientId, tenantId)              → Patient(id, tenantId)                 ON DELETE RESTRICT
+//       PatientDocument_note_tenant_patient_fkey       (noteId, tenantId, patientId)      → ClinicalNote(id, tenantId, patientId) ON DELETE RESTRICT
+//       PatientDocument_sharer_tenant_fkey             (sharedByPractitionerId, tenantId) → Practitioner(id, tenantId)            ON DELETE RESTRICT
+//       DiagnosisFavorite_tenantDiagnosis_tenant_fkey  (tenantDiagnosisId, tenantId)      → TenantDiagnosis(id, tenantId)         ON DELETE CASCADE
+//   • CHECKs: DiagnosisCode_{code,title,uri,release,language,searchText,retired}_check,
+//       TenantDiagnosis_{title,code,searchText}_check, DiagnosisFavorite_target_check,
+//       PatientDocument_{noteRevision,title,snapshotVersion,snapshot,digests,pdf,revoke,idempotencyKey}_check,
+//       ClinicalNote_{bodyDoc,diagnoses,authorLicense,importSource}_check, Practitioner_{honorific,signature}_check,
+//       Tenant_logo_check.
+//   • Funciones clinical_note_guard() (REEMPLAZADA sobre la de M9: + identidad authorLicense/importSource, + contenido
+//       bodyDoc/diagnoses, anular revoca los PatientDocument vivos) y patient_document_guard() con sus triggers
+//       ("PatientDocument_guard", "PatientDocument_no_truncate").
+//   • Policies RLS: DiagnosisCode_read (FOR SELECT USING true), TenantDiagnosis_tenant_isolation,
+//       DiagnosisFavorite_tenant_isolation, PatientDocument_tenant_isolation.

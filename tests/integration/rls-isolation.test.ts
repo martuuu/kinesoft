@@ -1171,3 +1171,202 @@ describe.skipIf(!RUN || BYPASS)("RLS evoluciones (EV2-0 M9 ClinicalNote / Clinic
     expect(await runWithRls(B.tenantId, (tx) => tx.clinicalNoteRevision.count({ where: { noteId: created.id } }))).toBe(0);
   });
 });
+
+describe.skipIf(!RUN || BYPASS)("[FC-0] RLS fichas (M14 PatientDocument / TenantDiagnosis / DiagnosisFavorite / DiagnosisCode, app role)", () => {
+  const prismaOwner = new PrismaClient({
+    datasources: { db: { url: process.env.DIRECT_URL ?? process.env.DATABASE_URL } },
+  });
+  const TENANT_TABLES = ["DiagnosisFavorite", "PatientDocument", "TenantDiagnosis"] as const;
+  const SHA = "c".repeat(64);
+
+  let A: EphemeralTenant;
+  let B: EphemeralTenant;
+  const ids: Record<"A" | "B", { pat: string; note: string; doc: string; td: string; fav: string }> = {} as never;
+  let codeId: string;
+
+  const docData = (t: EphemeralTenant, patientId: string, noteId: string) => ({
+    tenantId: t.tenantId,
+    patientId,
+    noteId,
+    noteRevision: 1,
+    sourceDigest: SHA,
+    title: "Ficha compartida",
+    occurredAt: new Date(),
+    snapshot: { v: 1 },
+    snapshotSha256: SHA,
+    pdfStorageKey: `stub:${randomUUID()}`,
+    pdfSha256: SHA,
+    pdfSizeBytes: 100,
+    sharedByUserId: t.userId,
+    sharedByPractitionerId: t.practitionerId,
+    sharedAt: new Date(),
+    idempotencyKey: `fc0-${randomUUID()}`,
+  });
+
+  /** Paciente + ficha raíz + documento vivo + diagnóstico propio + favorito. Todo con el owner. */
+  async function seed(t: EphemeralTenant, label: "A" | "B") {
+    const pat = await prismaOwner.patient.create({
+      data: { tenantId: t.tenantId, firstName: "FC0", lastName: label, assignedPractitionerId: t.practitionerId },
+    });
+    const note = await prismaOwner.clinicalNote.create({
+      data: {
+        tenantId: t.tenantId,
+        patientId: pat.id,
+        body: `Ficha ${label}`,
+        bodyDoc: { type: "doc", content: [] },
+        diagnoses: [{ source: "tenant", title: `Propio ${label}` }],
+        authorLicense: "MN 1",
+        occurredAt: new Date(),
+        authorUserId: t.userId,
+        authorPractitionerId: t.practitionerId,
+        authorName: "Kine Titular",
+        idempotencyKey: `fc0-${randomUUID()}`,
+      },
+    });
+    const doc = await prismaOwner.patientDocument.create({ data: docData(t, pat.id, note.id) });
+    const td = await prismaOwner.tenantDiagnosis.create({
+      data: { tenantId: t.tenantId, title: `Propio ${label}`, searchText: `propio ${label.toLowerCase()}` },
+    });
+    const fav = await prismaOwner.diagnosisFavorite.create({
+      data: { tenantId: t.tenantId, userId: t.userId, tenantDiagnosisId: td.id },
+    });
+    ids[label] = { pat: pat.id, note: note.id, doc: doc.id, td: td.id, fav: fav.id };
+  }
+
+  beforeAll(async () => {
+    A = await createEphemeralTenant(prismaOwner);
+    B = await createEphemeralTenant(prismaOwner);
+    await seed(A, "A");
+    await seed(B, "B");
+    codeId = (
+      await prismaOwner.diagnosisCode.create({
+        data: {
+          code: `Z${randomUUID().replace(/[^0-9]/g, "").slice(0, 3).padEnd(3, "0")}`,
+          title: "Código de prueba FC-0",
+          uri: "http://id.who.int/icd/release/11/mms/fc0",
+          release: "2025-01",
+          searchText: "codigo de prueba fc0",
+        },
+      })
+    ).id;
+  });
+
+  afterAll(async () => {
+    // deleteTenantDeep borra PatientDocument en modo réplica (el trigger rechaza DELETE incluso al owner).
+    await A?.cleanup();
+    await B?.cleanup();
+    await prismaOwner.diagnosisCode.deleteMany({ where: { id: codeId } });
+    await prismaOwner.$disconnect();
+  });
+
+  it("[FC-0] catálogo: ENABLE + FORCE en las 4; `<T>_tenant_isolation` (ALL) en las 3 por tenant y DiagnosisCode solo SELECT", async () => {
+    const rel = await prismaOwner.$queryRaw<{ relname: string; rls: boolean; force: boolean }[]>`
+      SELECT relname, relrowsecurity AS rls, relforcerowsecurity AS force FROM pg_class
+      WHERE relnamespace = 'public'::regnamespace AND relname = ANY(${[...TENANT_TABLES, "DiagnosisCode"]}) ORDER BY relname`;
+    expect(rel).toEqual(
+      ["DiagnosisCode", ...TENANT_TABLES].sort().map((relname) => ({ relname, rls: true, force: true }))
+    );
+    const pol = await prismaOwner.$queryRaw<{ tablename: string; policyname: string; cmd: string }[]>`
+      SELECT tablename, policyname, cmd FROM pg_policies
+      WHERE schemaname = 'public' AND tablename = ANY(${[...TENANT_TABLES, "DiagnosisCode"]}) ORDER BY tablename`;
+    expect(pol.map((p) => [p.tablename, p.policyname, p.cmd])).toEqual([
+      ["DiagnosisCode", "DiagnosisCode_read", "SELECT"],
+      ["DiagnosisFavorite", "DiagnosisFavorite_tenant_isolation", "ALL"],
+      ["PatientDocument", "PatientDocument_tenant_isolation", "ALL"],
+      ["TenantDiagnosis", "TenantDiagnosis_tenant_isolation", "ALL"],
+    ]);
+  });
+
+  it("[FC-0] lectura: A ve su documento, su propio y su favorito; no los de B (y B no ve los de A), ni buscando por id", async () => {
+    const seen = await runWithRls(A.tenantId, async (tx) => [
+      (await tx.patientDocument.findMany({ where: { id: { in: [ids.A.doc, ids.B.doc] } }, select: { id: true } })).map((r) => r.id),
+      (await tx.tenantDiagnosis.findMany({ where: { id: { in: [ids.A.td, ids.B.td] } }, select: { id: true } })).map((r) => r.id),
+      (await tx.diagnosisFavorite.findMany({ where: { id: { in: [ids.A.fav, ids.B.fav] } }, select: { id: true } })).map((r) => r.id),
+    ]);
+    expect(seen).toEqual([[ids.A.doc], [ids.A.td], [ids.A.fav]]);
+    const fromB = await runWithRls(B.tenantId, async (tx) => [
+      await tx.patientDocument.count({ where: { patientId: ids.A.pat } }),
+      await tx.tenantDiagnosis.count({ where: { tenantId: A.tenantId } }),
+      await tx.diagnosisFavorite.count({ where: { tenantId: A.tenantId } }),
+    ]);
+    expect(fromB).toEqual([0, 0, 0]);
+  });
+
+  it("[FC-0] B no revoca el documento de A ni anula su ficha (0 filas); el documento de A sigue vivo", async () => {
+    const counts = await runWithRls(B.tenantId, async (tx) => [
+      (await tx.patientDocument.updateMany({
+        where: { id: ids.A.doc },
+        data: { revokedAt: new Date(), revokedByUserId: B.userId, revokeReason: "MANUAL" },
+      })).count,
+      (await tx.clinicalNote.updateMany({
+        where: { id: ids.A.note },
+        data: { voidedAt: new Date(), voidedByUserId: B.userId, voidReason: "Anulada por B" },
+      })).count,
+    ]);
+    expect(counts).toEqual([0, 0]);
+    const doc = await prismaOwner.patientDocument.findUniqueOrThrow({ where: { id: ids.A.doc } });
+    expect(doc.revokedAt).toBeNull();
+  });
+
+  it("[FC-0] INSERT con el tenantId de A desde B → rechazado (documento por el trigger, propio y favorito por el WITH CHECK)", async () => {
+    // El BEFORE INSERT de patient_document_guard corre ANTES del WITH CHECK y su `FOR SHARE` sobre la nota pasa por
+    // RLS (no es SECURITY DEFINER): con el GUC de B la ficha de A no existe → P0001 «no es una raíz vigente».
+    await expect(
+      runWithRls(B.tenantId, (tx) => tx.patientDocument.create({ data: docData(A, ids.A.pat, ids.A.note) }))
+    ).rejects.toThrow(/no es una raíz vigente/);
+    expect(await prismaOwner.patientDocument.count({ where: { tenantId: A.tenantId } })).toBe(1);
+    await expect(
+      runWithRls(B.tenantId, (tx) => tx.tenantDiagnosis.create({ data: { tenantId: A.tenantId, title: "Colado", searchText: "colado" } }))
+    ).rejects.toThrow(/row-level security/i);
+    await expect(
+      runWithRls(B.tenantId, (tx) => tx.diagnosisFavorite.create({ data: { tenantId: A.tenantId, userId: A.userId, diagnosisCodeId: codeId } }))
+    ).rejects.toThrow(/row-level security/i);
+    expect(await prismaOwner.tenantDiagnosis.count({ where: { tenantId: A.tenantId } })).toBe(1);
+  });
+
+  it("[FC-0] sin GUC (fuera de runWithRls): 0 filas en las 3 por tenant, y el catálogo CIE-11 sí se lee", async () => {
+    const app = new PrismaClient();
+    try {
+      expect(await app.patientDocument.count({ where: { id: { in: [ids.A.doc, ids.B.doc] } } })).toBe(0);
+      expect(await app.tenantDiagnosis.count({ where: { id: { in: [ids.A.td, ids.B.td] } } })).toBe(0);
+      expect(await app.diagnosisFavorite.count({ where: { id: { in: [ids.A.fav, ids.B.fav] } } })).toBe(0);
+      expect(await app.diagnosisCode.count({ where: { id: codeId } })).toBe(1);
+    } finally {
+      await app.$disconnect();
+    }
+  });
+
+  it("[FC-0] DiagnosisCode (GLOBAL_READONLY): la app lo lee con cualquier GUC y no lo escribe (INSERT rechazado, UPDATE/DELETE 0 filas)", async () => {
+    expect(await runWithRls(B.tenantId, (tx) => tx.diagnosisCode.count({ where: { id: codeId } }))).toBe(1);
+    await expect(
+      runWithRls(A.tenantId, (tx) =>
+        tx.diagnosisCode.create({
+          data: { code: "ZZ97", title: "Forjado", uri: "http://id.who.int/icd/x", release: "2025-01", searchText: "forjado" },
+        })
+      )
+    ).rejects.toThrow(/row-level security/i);
+    const counts = await runWithRls(A.tenantId, async (tx) => [
+      (await tx.diagnosisCode.updateMany({ where: { id: codeId }, data: { title: "Pisado" } })).count,
+      (await tx.diagnosisCode.deleteMany({ where: { id: codeId } })).count,
+    ]);
+    expect(counts).toEqual([0, 0]);
+    expect((await prismaOwner.diagnosisCode.findUniqueOrThrow({ where: { id: codeId } })).title).toBe("Código de prueba FC-0");
+  });
+
+  it("[FC-0] intra-tenant: A comparte y revoca lo propio (REPLACED) y crea/archiva su propio (la policy no es deny-all)", async () => {
+    const created = await runWithRls(A.tenantId, async (tx) => {
+      await tx.$queryRaw`SELECT 1 FROM "ClinicalNote" WHERE id = ${ids.A.note} FOR SHARE`;
+      const r = await tx.patientDocument.updateMany({
+        where: { noteId: ids.A.note, revokedAt: null },
+        data: { revokedAt: new Date(), revokedByUserId: A.userId, revokeReason: "REPLACED" },
+      });
+      const d = await tx.patientDocument.create({ data: docData(A, ids.A.pat, ids.A.note) });
+      const td = await tx.tenantDiagnosis.create({ data: { tenantId: A.tenantId, title: "Otro propio", searchText: "otro propio" } });
+      await tx.tenantDiagnosis.update({ where: { id: td.id }, data: { archivedAt: new Date() } });
+      return { revoked: r.count, doc: d.id };
+    });
+    expect(created.revoked).toBe(1);
+    expect(await runWithRls(B.tenantId, (tx) => tx.patientDocument.count({ where: { id: created.doc } }))).toBe(0);
+    expect(await prismaOwner.patientDocument.count({ where: { noteId: ids.A.note, revokedAt: null } })).toBe(1);
+  });
+});

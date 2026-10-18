@@ -123,7 +123,8 @@ const M11 = `ALTER TABLE "ProfessionalPublicProfile" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "ProfessionalPublicProfile" FORCE ROW LEVEL SECURITY;`;
 
 // GLOBAL_READONLY (B-pre M-cat + PL-0 SaasPlanConfig) exige sus modelos: se declaran sin tenantId con su policy SELECT.
-const CATALOG = ["Specialty", "Practice", "PracticeSpecialty", "Payer", "CatalogImportRun", "SaasPlanConfig"];
+// FC-0 (M14): + DiagnosisCode (CIE-11 MMS, global, solo lectura para la app).
+const CATALOG = ["Specialty", "Practice", "PracticeSpecialty", "Payer", "CatalogImportRun", "SaasPlanConfig", "DiagnosisCode"];
 const CATALOG_SCHEMA = CATALOG.map((m) => `model ${m} {\n  id String @id\n}`).join("\n");
 const CATALOG_SQL = CATALOG.map(
   (m) => `ALTER TABLE "${m}" ENABLE ROW LEVEL SECURITY;
@@ -163,7 +164,7 @@ function runGuard(p: { schemaExtra?: string; m7?: string; extraMigration?: strin
 describe("guard de aislamiento · SERVICE_ONLY / TENANT_READONLY (BO0)", () => {
   it("control: el repo de juguete con M7 tal cual pasa", () => {
     const r = runGuard({});
-    expect(r.out).toContain("GLOBAL_READONLY (6): ENABLE + FORCE, SELECT-only policies");
+    expect(r.out).toContain("GLOBAL_READONLY (7): ENABLE + FORCE, SELECT-only policies");
     expect(r.out).toContain("SERVICE_ONLY (7): ENABLE + FORCE, zero policies. TENANT_READONLY (4)");
     expect(r.code).toBe(0);
   });

@@ -120,6 +120,11 @@ describe.skipIf(!RUN)("M9 clinical_notes · objetos", () => {
       idempotencyKey: "text NO",
       createdAt: "timestamp NO CURRENT_TIMESTAMP",
       updatedAt: "timestamp NO",
+      // FC-0 (M14 fichas_clinicas): contenido (bodyDoc, diagnoses) e identidad (authorLicense, importSource). Nullable.
+      bodyDoc: "jsonb YES",
+      diagnoses: "jsonb YES",
+      authorLicense: "text YES",
+      importSource: "jsonb YES",
     });
     expect(await columns(db, "ClinicalNoteRevision")).toEqual({
       id: "text NO",
@@ -132,6 +137,9 @@ describe.skipIf(!RUN)("M9 clinical_notes · objetos", () => {
       occurredAt: "timestamp NO",
       savedAt: "timestamp NO",
       createdAt: "timestamp NO CURRENT_TIMESTAMP",
+      // FC-0 (M14): la versión anterior del doc y de los diagnósticos.
+      bodyDoc: "jsonb YES",
+      diagnoses: "jsonb YES",
     });
   });
 
@@ -215,6 +223,11 @@ describe.skipIf(!RUN)("M9 clinical_notes · objetos", () => {
         "ClinicalNote_amends_self_check",
         "ClinicalNote_idempotencyKey_check",
         "ClinicalNoteRevision_revision_check",
+        // FC-0 (M14): 12 en total.
+        "ClinicalNote_bodyDoc_check",
+        "ClinicalNote_diagnoses_check",
+        "ClinicalNote_authorLicense_check",
+        "ClinicalNote_importSource_check",
       ].sort()
     );
   });
@@ -436,12 +449,16 @@ describe.skipIf(!RUN)("M9 clinical_notes · comportamiento", () => {
       ["authorName", () => `"authorName" = 'Otro Nombre'`],
       ["idempotencyKey", () => `"idempotencyKey" = '${randomUUID()}'`],
       ["createdAt", () => `"createdAt" = "createdAt" - interval '1 second'`],
+      // FC-0 (M14): la matrícula con la que firmó y el origen de una importación también son identidad.
+      ["authorLicense", () => `"authorLicense" = 'MN 1234'`],
+      ["importSource", () => `"importSource" = '{"kind":"docx"}'::jsonb`],
     ];
     for (const [col, set] of sets) {
       const r = await sqlError(
         inTx(db, async (tx) => {
-          // amendsNoteId: se prueba des-enlazar una enmienda (NULL ← raíz).
-          const root = await note(tx);
+          // amendsNoteId: se prueba des-enlazar una enmienda (NULL ← raíz). importSource: sobre una nota SIN turno
+          // (una importada no va atada a un turno, CHECK): así el P0001 es del trigger y no un 23514 escondido.
+          const root = await note(tx, col === "importSource" ? { bookingId: null } : {});
           const id = col === "amendsNoteId" ? await note(tx, { amendsNoteId: root }) : root;
           await tx.$executeRawUnsafe(`UPDATE "ClinicalNote" SET ${set(id)} WHERE id = $1`, id);
         })

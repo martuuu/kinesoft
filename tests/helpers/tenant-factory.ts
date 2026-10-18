@@ -83,8 +83,12 @@ export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Prom
   // PlatformAuditEvent: modo réplica LOCAL a esta tx (los triggers comunes no disparan; requiere superusuario, el
   // owner del Docker local lo es; en prod no, y esto nunca corre ahí). Las FKs compuestas tampoco garantizan nada
   // en réplica, por eso el orden hijo → padre es explícito.
+  // FC-0 (M14 fichas_clinicas): PatientDocument tampoco se borra nunca (trigger patient_document_guard) y es RESTRICT
+  // hacia ClinicalNote, Patient, Practitioner y Tenant: va PRIMERO, en la misma tx de réplica. TenantDiagnosis y
+  // DiagnosisFavorite cascadean de Tenant (no son HC).
   await db.$transaction([
     db.$executeRawUnsafe(`SET LOCAL session_replication_role = replica`),
+    db.$executeRaw`DELETE FROM "PatientDocument" WHERE "tenantId" = ${tenantId}`,
     db.$executeRaw`DELETE FROM "ClinicalNoteRevision" WHERE "tenantId" = ${tenantId}`,
     db.$executeRaw`DELETE FROM "ClinicalNote" WHERE "tenantId" = ${tenantId}`,
   ]);

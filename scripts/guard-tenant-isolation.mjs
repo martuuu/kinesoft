@@ -70,6 +70,9 @@ const GLOBAL_READONLY = new Set([
   // PL-0 (M8 pl_accounts_billing): catálogo de planes (precios, límites). La app
   // lo lee (catálogo público, cupos); lo escribe solo Plataforma por el canal service.
   "SaasPlanConfig",
+  // FC-0 (M14 fichas_clinicas): CIE-11 MMS de la OMS (~17k filas, sin tenantId). La app lo lee en el selector de
+  // diagnósticos; lo escribe solo scripts/diagnosis-import.ts por el owner. Nunca se borra: se retira.
+  "DiagnosisCode",
 ]);
 const WRITE_CMDS = new Set(["ALL", "INSERT", "UPDATE", "DELETE"]);
 

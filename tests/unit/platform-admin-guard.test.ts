@@ -68,6 +68,8 @@ const PHI_MODELS = [
   // EV2: la HC (evoluciones y sus versiones). Plataforma nunca baja PHI.
   "clinicalNote",
   "clinicalNoteRevision",
+  // FC-0 (M14): la ficha compartida con el paciente (foto + PDF) también es HC.
+  "patientDocument",
 ];
 const PHI_TABLES = PHI_MODELS.map((m) => m[0].toUpperCase() + m.slice(1));
 
