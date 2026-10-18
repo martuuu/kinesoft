@@ -18,7 +18,10 @@ import "server-only";
  * ajena, alterada o de una fila cerrada se ignora y se borra.
  *
  * Canal: `prismaService`. `SupportSession` es TENANT_READONLY (M7: solo una policy SELECT por tenant); la abre y la
- * cierra la plataforma, que cruza consultorios. La doble auditoría (`auditPlatformInTx`) también exige el canal
+ * cierra la plataforma, que cruza consultorios. Desde T3c-1s también la cierra el consultorio («Terminar acceso»,
+ * `endSupportAccessForTenant` en lib/support-session-tenant.ts, con `tenant.sensitive`): por el mismo canal service,
+ * con `tenantId` e `id` a mano, `endedReason "tenant"` y audit doble; el superadmin cae en su próximo request porque
+ * `resolveSupportSession` exige la fila abierta. La doble auditoría (`auditPlatformInTx`) también exige el canal
  * service (`PlatformAuditEvent` es SERVICE_ONLY).
  */
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";

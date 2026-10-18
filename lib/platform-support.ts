@@ -79,8 +79,9 @@ export async function endSupport(): Promise<ActionResult<{ redirectTo: string }>
  * CUALQUIER miembro activo del consultorio, no solo `tenant.admin`. Es transparencia de quién de KineSoft entró y por
  * qué (el registro que promete el mail al titular), no configuración: el DTO es cerrado y no trae PHI. `getActor()` ya
  * exige membresía aceptada y habilitada en ESTE consultorio; `where: { tenantId }` a mano + RLS de M7.
- * Solo lectura para todos: desde el consultorio no hay action para terminar un acceso (la policy de M7 es FOR SELECT;
- * termina cuando soporte sale o cierra sesión).
+ * Esta lista es solo lectura para todos. Un acceso termina cuando soporte sale o cierra sesión, o desde el consultorio
+ * con `endSupportAccessForTenant` (lib/support-session-tenant.ts, `tenant.sensitive`; T3c-1s): la policy de M7 es FOR
+ * SELECT, así que ese cierre va por el canal service con `tenantId` e `id` a mano y queda `endedReason "tenant"`.
  */
 export async function listSupportSessionsForTenant(): Promise<SupportSessionRow[]> {
   const actor = await getActor();

@@ -30,7 +30,7 @@ import { randomBytes } from "node:crypto";
 import type { Prisma, Role, SaasPlan, TenantVertical } from "@prisma/client";
 import { prismaService } from "@/lib/db";
 import { runWithRls, type DbClient } from "@/lib/rls";
-import { capabilitiesFor } from "@/lib/capabilities";
+import { MEMBER_ACCESS_SELECT, capabilitiesFor, capabilitiesForMembership } from "@/lib/capabilities";
 import { liveProgramWhere } from "@/lib/plan-predicates";
 import { auditInTx, auditPlatformInTx, type PlatformActorRef } from "@/lib/audit";
 import { env } from "@/lib/env";
@@ -127,6 +127,7 @@ const fail = (error: string): { ok: false; error: string } => ({ ok: false, erro
  *    Titular se los puede sacar después con `setMemberGrantsInTx`). Vale al aceptar una invitación de ADMIN
  *    (`activateInvitation`), al pasar a ADMIN (`changeMemberRoleInTx`) y para el ex Titular que queda ADMIN en la
  *    transferencia. Antes el ADMIN entraba solo con «Configuración» y «Planes y pagos» lo delegaba el Titular a mano.
+ *    T3c-1i: «Planes y pagos» por default solo si quien decide la entrada la puede dar (`mayGrantBilling`).
  *  - Secretaria y Facturación: nunca «Planes y pagos» (el corte de staff de `capabilitiesForMember` ya se la niega; acá
  *    se limpia la fila para que no quede un permiso colgado que la UI mostraría tildado y que `setMemberGrantsInTx`
  *    rechazaría al volver a guardar). «Configuración» se conserva: es del miembro, no del rol.
@@ -140,12 +141,83 @@ const ROLE_ENTRY_GRANTS: Partial<Record<Role, MemberGrants>> = {
   ADMIN: { grantSettings: true, grantBilling: true },
 };
 
-/** Puro: las delegaciones con las que queda alguien que entra a `role` y tenía `current`. */
-export function grantsOnEnterRole(role: Role, current: MemberGrants): MemberGrants {
+/**
+ * Puro: las delegaciones con las que queda alguien que entra a `role` y tenía `current`.
+ *
+ * `mayGrantBilling` (T3c-1i, seguridad): si quien decide la entrada puede dar «Planes y pagos» (Titular, superadmin de
+ * Plataforma o alguien con `account.billing` en este consultorio; ver `actorMayGrantBillingInTx` e
+ * `inviterMayGrantBillingInTx`). El bug: gestionar el equipo pide `tenant.sensitive`, que también tienen un Admin al que
+ * el Titular le sacó «Planes y pagos» y un Profesional con «Configuración». Con el default incondicional de T3, cualquiera
+ * de los dos invitaba (o pasaba) a OTRA cuenta suya como ADMIN y recuperaba por la puerta de atrás el plan y la
+ * facturación que el Titular le negó; delegar a mano (`setMemberGrantsInTx`) es solo del Titular, y el default del rol
+ * no puede ser un atajo para eso. Sin poder darla, el ADMIN entra con «Configuración» y conserva el «Planes y pagos»
+ * que ya tuviera (lo delegó el Titular antes: el cambio de rol no se lo saca).
+ */
+export function grantsOnEnterRole(role: Role, current: MemberGrants, mayGrantBilling: boolean): MemberGrants {
   const entry = ROLE_ENTRY_GRANTS[role];
-  if (entry) return { ...entry };
+  if (entry) {
+    return {
+      grantSettings: entry.grantSettings,
+      grantBilling: entry.grantBilling ? mayGrantBilling || current.grantBilling : current.grantBilling,
+    };
+  }
   if (STAFF_NO_BILLING_ROLES.has(role)) return { grantSettings: current.grantSettings, grantBilling: false };
   return { grantSettings: current.grantSettings, grantBilling: current.grantBilling };
+}
+
+/** ¿Entrar a `role` trae «Planes y pagos» por default? Para no leer las caps de quien actúa cuando no hace falta. */
+export function roleEntryGrantsBilling(role: Role): boolean {
+  return ROLE_ENTRY_GRANTS[role]?.grantBilling === true;
+}
+
+/** ¿El miembro ACTIVO `userId` de `tenantId` tiene `account.billing`? Falla cerrado: sin membresía usable, no. */
+async function memberHasAccountBillingInTx(tx: DbClient, tenantId: string, userId: string): Promise<boolean> {
+  const m = await tx.membership.findFirst({
+    where: { tenantId, userId, acceptedAt: { not: null }, disabledAt: null },
+    select: MEMBER_ACCESS_SELECT,
+  });
+  return capabilitiesForMembership(m).has("account.billing");
+}
+
+/**
+ * T3c-1i: ¿quien actúa (cambio de rol, transferencia) puede dar «Planes y pagos»? El Titular y el superadmin de
+ * Plataforma (`actsAsOwner`) sí; soporte nunca (`SUPPORT_CAPS` sin `account.*`; hoy ni llega a ADMIN por
+ * `supportRoleError`, esto es la segunda barrera); el resto, si tiene `account.billing` en ESTE consultorio. La
+ * membresía se lee en la MISMA tx (como `clinicalAssignError`): un cambio en paralelo de sus permisos no la saltea.
+ */
+export async function actorMayGrantBillingInTx(tx: DbClient, ctx: TeamActorCtx): Promise<boolean> {
+  if (ctx.support) return false;
+  if (actsAsOwner(ctx)) return true;
+  if (ctx.via !== "tenant") return false;
+  return memberHasAccountBillingInTx(tx, ctx.tenantId, ctx.actorUserId);
+}
+
+/**
+ * T3c-1i: lo mismo para una invitación, resuelto AL ACTIVAR (`joinTenantInTx`) con quien la invitó (o la re-invitó
+ * por última vez: `createInvitationInTx` reescribe `invitedById` cuando cambia los datos de una viva). Por qué al
+ * activar y no al crear: `Invitation` no tiene dónde guardar la decisión (sumarle una columna sería una migración
+ * fuera de M12), y resolverla al activar falla cerrado: si entre la invitación y la aceptación a quien invitó lo
+ * suspendieron, lo sacaron o le quitaron «Planes y pagos», el invitado entra sin. Se lee en la tx de la unión, después
+ * del CAS de la invitación (la fila ya está tomada: un re-invitar en paralelo espera).
+ * Sin membresía en el consultorio: si es un superadmin vigente, la invitó desde Plataforma (actúa como Titular) → sí.
+ * Soporte no llega acá con un ADMIN: `supportRoleError` lo frena al crear y al re-invitar.
+ */
+export async function inviterMayGrantBillingInTx(
+  tx: DbClient,
+  inv: { id: string; tenantId: string }
+): Promise<boolean> {
+  const row = await tx.invitation.findFirst({ where: { id: inv.id, tenantId: inv.tenantId }, select: { invitedById: true } });
+  if (!row) return false;
+  const member = await tx.membership.findFirst({
+    where: { tenantId: inv.tenantId, userId: row.invitedById },
+    select: { id: true },
+  });
+  if (member) return memberHasAccountBillingInTx(tx, inv.tenantId, row.invitedById);
+  const profile = await tx.userProfile.findUnique({
+    where: { id: row.invitedById },
+    select: { isPlatformAdmin: true, disabledAt: true },
+  });
+  return !!profile?.isPlatformAdmin && !profile.disabledAt;
 }
 
 /**
@@ -584,6 +656,10 @@ export async function createInvitationInTx(
         ...next,
         token: hashInviteToken(input.rawToken),
         priorTokens: appendPriorToken(live.priorTokens, live.token),
+        // T3c-1i: quien re-invita (y puede cambiar el rol) pasa a ser quien decide. Sin esto, un Admin sin «Planes y
+        // pagos» re-invitaba como ADMIN una invitación viva del Titular y el invitado entraba con las caps del Titular
+        // (`inviterMayGrantBillingInTx` lee este campo al activar).
+        invitedById: ctx.actorUserId,
         expiresAt,
         lastSentAt: input.now,
         sendCount: { increment: 1 },
@@ -914,7 +990,9 @@ export async function changeMemberRoleInTx(
     }
   }
   // T3 (C-AS1): las delegaciones del rol destino (ADMIN trae las dos; Secretaria/Facturación pierden «Planes y pagos»).
-  const nextGrants = grantsOnEnterRole(nextRole, m);
+  // T3c-1i: «Planes y pagos» solo si quien actúa la puede dar (ver `grantsOnEnterRole`); se lee solo si el rol la trae.
+  const mayGrantBilling = roleEntryGrantsBilling(nextRole) && (await actorMayGrantBillingInTx(tx, ctx));
+  const nextGrants = grantsOnEnterRole(nextRole, m, mayGrantBilling);
   const grantsChanged = nextGrants.grantSettings !== m.grantSettings || nextGrants.grantBilling !== m.grantBilling;
   // CAS sobre el rol leído: si otro cambio ganó en el medio, no se pisa. Tirar (no devolver) revierte el
   // Practitioner/agenda que se haya creado arriba en esta misma tx.
@@ -940,7 +1018,8 @@ export async function changeMemberRoleInTx(
       (
         await tx.membership.updateMany({
           where: { ...where, role: "OWNER", clinical: false },
-          data: { role: "ADMIN", ...grantsOnEnterRole("ADMIN", { grantSettings: true, grantBilling: false }) },
+          // Transferir es solo del Titular o del superadmin (arriba), así que `actsAsOwner` es la regla de T3c-1i acá.
+          data: { role: "ADMIN", ...grantsOnEnterRole("ADMIN", { grantSettings: true, grantBilling: false }, actsAsOwner(ctx)) },
         })
       ).count;
     if (ctx.via === "tenant") {

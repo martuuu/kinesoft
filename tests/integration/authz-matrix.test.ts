@@ -17,6 +17,8 @@ import {
   updateBooking,
   deleteBooking,
   setBookingStatus,
+  setBookingCopagoPaid,
+  setBookingInsurerPaid,
 } from "@/lib/bookings";
 import {
   setPatientCoverage,
@@ -40,6 +42,7 @@ import {
   createEphemeralTenant,
   addPatient,
   addPractitioner,
+  addStaff,
   type EphemeralTenant,
 } from "@/tests/helpers/tenant-factory";
 import { asUser } from "@/tests/helpers/actor";
@@ -65,6 +68,8 @@ import { SUPPORT_COOKIE } from "@/lib/support-session-internal";
 import { __rateLimitInternals } from "@/lib/rate-limit";
 import { uniqueSuffix } from "@/tests/helpers/tenant-factory";
 import { createPlan as insertPlan, addPlanBooking } from "@/tests/helpers/plan-factory";
+import { endSupportAccessForTenant } from "@/lib/support-session-tenant";
+import { createInvitation } from "@/lib/invitations";
 
 // ES4-S26b: abrir la sesión de soporte y cambiar el plan SaaS piden step-up de 2FA (frontera externa: TOTP/cookie).
 // Se mockea SOLO eso, como patient-portal-requests.test.ts; la barrera bajo test (capabilities, solo lectura) es real.
@@ -525,8 +530,11 @@ for (const who of ["PRACTITIONER", "ASSISTANT"] as const) describe.skipIf(!RUN)(
 // ES4-S26b · matriz de autorización del staff (brief ES4 §5)
 //
 // Columnas: X-tenant (Titular de OTRO consultorio con ids de K) · OWNER Kine · PRACTITIONER en acceso básico ·
-// ASSISTANT (Secretaria) · BILLING · OWNER de un consultorio GENERAL (sobre lo suyo) · SUPPORT (superadmin con una
-// sesión REAL de `startSupport` sobre K). Cada celda llama al símbolo real que corre en prod con el `getActor()` real.
+// ASSISTANT (Secretaria) · ASSISTANT_CFG (Secretaria con «Configuración») · BILLING · ADMIN (Administrador/a de hoy: no
+// atiende, con «Configuración» y «Planes y pagos», T3c-1i) · PRO_CFG (Profesional con «Configuración», decisión 4 del
+// 19-oct) · OWNER de un consultorio GENERAL (sobre lo suyo) · SUPPORT (superadmin con una sesión REAL de `startSupport`
+// sobre K). Cada celda llama al símbolo real que corre en prod con el `getActor()` real. Las columnas nuevas de T3 solo
+// llevan celda en las filas donde el rol cambia algo (cobros, pacientes, lo delicado de Configuración, portal, HC).
 //
 // Regla de la sesión (brief §5): se afirma lo que hace el código HOY. Si eso contradice PD-13 o C-PL, la celda va
 // con `it.fails("[ES4-S26b] …")` y es un hallazgo (no se arregla en una sesión de tests). Si solo difiere del brief
@@ -537,8 +545,8 @@ for (const who of ["PRACTITIONER", "ASSISTANT"] as const) describe.skipIf(!RUN)(
 // rechazo depende de lo que dejó la celda anterior.
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-type Col = "XT" | "OWNER" | "BASIC" | "ASSISTANT" | "BILLING" | "GENERAL" | "SUPPORT";
-const COLS: readonly Col[] = ["XT", "OWNER", "BASIC", "ASSISTANT", "BILLING", "GENERAL", "SUPPORT"];
+type Col = "XT" | "OWNER" | "BASIC" | "ASSISTANT" | "ASSISTANT_CFG" | "BILLING" | "ADMIN" | "PRO_CFG" | "GENERAL" | "SUPPORT";
+const COLS: readonly Col[] = ["XT", "OWNER", "BASIC", "ASSISTANT", "ASSISTANT_CFG", "BILLING", "ADMIN", "PRO_CFG", "GENERAL", "SUPPORT"];
 /**
  * ok = ✅ (escribe / ve) · deny = ⛔ sin escribir / sin ver · ro = solo lectura de soporte (`ok:false`, intacto) ·
  * isolated = action sin ids de entrada: el actor de otro consultorio opera el SUYO, y K queda intacto.
@@ -625,6 +633,13 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
   let basic: { userId: string; practitionerId: string };
   let assistant: { userId: string; practitionerId: string };
   let billing: { userId: string; practitionerId: string };
+  /** T3c-1i: Administrador/a de hoy (sin `Practitioner`, no atiende) con «Configuración» y «Planes y pagos». */
+  let admin: { userId: string };
+  /** T3c-1i: Secretaria con «Configuración» (sin lo delicado: corte de staff) y Profesional con «Configuración» (con). */
+  let assistantCfg: { userId: string };
+  let proCfg: { userId: string; practitionerId: string };
+  /** Superadmin de las sesiones de soporte que la fila `endSupportAccessForTenant` termina (no el de la columna SUPPORT). */
+  let fxSuperadminId = "";
   let supportCookie = "";
   let globalExerciseId = "";
   const portalUsers: string[] = [];
@@ -637,7 +652,10 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
       OWNER: K.userId,
       BASIC: basic.userId,
       ASSISTANT: assistant.userId,
+      ASSISTANT_CFG: assistantCfg.userId,
       BILLING: billing.userId,
+      ADMIN: admin.userId,
+      PRO_CFG: proCfg.userId,
       GENERAL: G.userId,
       SUPPORT: H.userId,
     };
@@ -697,7 +715,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "write",
       name: "Turnos · createBooking",
-      cells: { XT: "deny", OWNER: "ok", BASIC: { exp: "deny", note: "E1: el profesional opera turnos con acceso full; en básico, ni en su propia agenda" }, ASSISTANT: "ok", BILLING: "deny", GENERAL: "ok", SUPPORT: "ro" },
+      cells: { XT: "deny", OWNER: "ok", BASIC: { exp: "deny", note: "E1: el profesional opera turnos con acceso full; en básico, ni en su propia agenda" }, ASSISTANT: "ok", BILLING: "deny", ADMIN: "ok", GENERAL: "ok", SUPPORT: "ro" },
       act: (fx) => {
         fx.at = s26bAt().toISOString();
         // X-tenant: profesional y servicio propios (de Other) con el paciente de K.
@@ -716,7 +734,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "write",
       name: "Turnos · updateBooking (reprogramar)",
-      cells: { XT: "deny", OWNER: "ok", BASIC: { exp: "deny", note: "E1: sin full no modifica, aunque el turno sea de su agenda" }, ASSISTANT: "ok", BILLING: "deny", GENERAL: "ok", SUPPORT: "ro" },
+      cells: { XT: "deny", OWNER: "ok", BASIC: { exp: "deny", note: "E1: sin full no modifica, aunque el turno sea de su agenda" }, ASSISTANT: "ok", BILLING: "deny", ADMIN: "ok", GENERAL: "ok", SUPPORT: "ro" },
       setup: (fx) => fxBooking(fx),
       act: (fx) => {
         fx.to = s26bAt().toISOString();
@@ -727,7 +745,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "write",
       name: "Turnos · setBookingStatus (cancelar)",
-      cells: { XT: "deny", OWNER: "ok", BASIC: { exp: "deny", note: "E1: sin full no cancela, aunque el turno sea de su agenda" }, ASSISTANT: "ok", BILLING: "deny", GENERAL: "ok", SUPPORT: "ro" },
+      cells: { XT: "deny", OWNER: "ok", BASIC: { exp: "deny", note: "E1: sin full no cancela, aunque el turno sea de su agenda" }, ASSISTANT: "ok", BILLING: "deny", ADMIN: "ok", GENERAL: "ok", SUPPORT: "ro" },
       setup: (fx) => fxBooking(fx),
       act: (fx) => setBookingStatus(fx.bookingId as string, "CANCELLED", fx.bookingUpdatedAt as string),
       effect: async (fx, db) => (await db.booking.findUniqueOrThrow({ where: { id: fx.bookingId as string } })).status === "CANCELLED",
@@ -735,16 +753,68 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "write",
       name: "Turnos · Recepción (markReceptionAction «ausente» de un turno de ayer)",
-      cells: { XT: "deny", OWNER: "ok", BASIC: { exp: "ok", note: "propios: Recepción es administrativa (B4.1), sus turnos sin full" }, ASSISTANT: "ok", BILLING: "deny", GENERAL: "ok", SUPPORT: "ro" },
+      cells: { XT: "deny", OWNER: "ok", BASIC: { exp: "ok", note: "propios: Recepción es administrativa (B4.1), sus turnos sin full" }, ASSISTANT: "ok", BILLING: "deny", ADMIN: "ok", GENERAL: "ok", SUPPORT: "ro" },
       setup: (fx) => fxBooking(fx, { scheduledFor: new Date(Date.now() - 26 * 3_600_000) }),
       act: (fx) => markReceptionAction(fx.bookingId as string, "ausente", fx.bookingUpdatedAt as string),
       effect: async (fx, db) => (await db.booking.findUniqueOrThrow({ where: { id: fx.bookingId as string } })).status === "NO_SHOW",
+    },
+    // ─────────────────────────────────────────── Cobros (T3, C-AS2) ───────────────────────────────────────────
+    {
+      kind: "write",
+      name: "Cobros · setBookingCopagoPaid (efectivo)",
+      // `canCollectCopago`: billing.collect (Titular, Admin, Secretaria, Facturación) cobra cualquier turno;
+      // billing.collectOwn (Profesional) solo los suyos. En BASIC el turno es del propio profesional (`baseFx`).
+      cells: {
+        XT: "deny",
+        OWNER: "ok",
+        BASIC: { exp: "ok", note: "propio: billing.collectOwn" },
+        ASSISTANT: { exp: "ok", note: "billing.collect (decisión 1 del 19-oct)" },
+        BILLING: "ok",
+        ADMIN: "ok",
+        PRO_CFG: { exp: "deny", note: "turno del Titular: «Configuración» no suma billing.collect" },
+        GENERAL: "ok",
+        SUPPORT: { exp: "deny", note: "SUPPORT_CAPS sin billing.*" },
+      },
+      setup: (fx) => fxBooking(fx),
+      act: (fx) => setBookingCopagoPaid(fx.bookingId as string, { paid: true, method: "CASH" }, fx.bookingUpdatedAt as string),
+      effect: async (fx, db) => {
+        const b = await db.booking.findUniqueOrThrow({ where: { id: fx.bookingId as string } });
+        return b.paymentStatus === "PAID" && b.copagoPaymentMethod === "CASH";
+      },
+    },
+    {
+      kind: "write",
+      name: "Cobros · setBookingCopagoPaid de un turno ajeno",
+      cells: { BASIC: { exp: "deny", note: "billing.collectOwn: solo sus turnos" } },
+      setup: async (fx) => {
+        fx.practitionerId = K.practitionerId;
+        await fxBooking(fx);
+      },
+      act: (fx) => setBookingCopagoPaid(fx.bookingId as string, { paid: true, method: "CASH" }, fx.bookingUpdatedAt as string),
+      effect: async (fx, db) => (await db.booking.findUniqueOrThrow({ where: { id: fx.bookingId as string } })).paymentStatus === "PAID",
+    },
+    {
+      kind: "write",
+      name: "Cobros · setBookingInsurerPaid (billing.manage)",
+      cells: {
+        XT: "deny",
+        OWNER: "ok",
+        BASIC: "deny",
+        ASSISTANT: { exp: "deny", note: "la Secretaria cobra el copago, no confirma la OS" },
+        BILLING: "ok",
+        ADMIN: "ok",
+        GENERAL: "ok",
+        SUPPORT: { exp: "deny", note: "SUPPORT_CAPS sin billing.*" },
+      },
+      setup: (fx) => fxBooking(fx),
+      act: (fx) => setBookingInsurerPaid(fx.bookingId as string, true, fx.bookingUpdatedAt as string),
+      effect: async (fx, db) => (await db.booking.findUniqueOrThrow({ where: { id: fx.bookingId as string } })).insurerPaidAt !== null,
     },
     // ─────────────────────────────────────────── Planes ───────────────────────────────────────────
     {
       kind: "write",
       name: "Planes · agendar sesión (previewGeneratePlanBookings → generatePlanBookings)",
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "ok", BILLING: "deny", GENERAL: { exp: "deny", note: "sin `planes`" }, SUPPORT: "ro" },
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "ok", BILLING: "deny", ADMIN: "ok", GENERAL: { exp: "deny", note: "sin `planes`" }, SUPPORT: "ro" },
       setup: async (fx) => {
         if (fx.host === G) return fxPlan(fx); // GENERAL no puede crear planes: el gate de módulo corta antes del motor.
         asUser(K.userId);
@@ -780,7 +850,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "write",
       name: "Planes · updatePlanDetails (plans.manage)",
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", GENERAL: "deny", SUPPORT: "ro" },
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: { exp: "deny", note: "no atiende: sin plans.manage (§20.17)" }, GENERAL: "deny", SUPPORT: "ro" },
       setup: fxPlan,
       act: (fx) => updatePlanDetails({ programId: fx.programId as string, expectedUpdatedAt: fx.programUpdatedAt as string, title: "S26b manage" }),
       effect: async (fx, db) => (await db.treatmentProgram.findUniqueOrThrow({ where: { id: fx.programId as string } })).title === "S26b manage",
@@ -788,7 +858,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "write",
       name: "Planes · renewPlanAuthorization (plans.authorize)",
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "ok", BILLING: "deny", GENERAL: "deny", SUPPORT: "ro" },
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "ok", BILLING: "deny", ADMIN: "ok", GENERAL: "deny", SUPPORT: "ro" },
       setup: fxPlan,
       act: (fx) => renewPlanAuthorization({ programId: fx.programId as string, expectedCurrentId: null, authorizedSessions: 5, startsOnDayKey: "2031-01-01" }),
       effect: async (fx, db) => (await db.programAuthorization.count({ where: { programId: fx.programId as string } })) > 0,
@@ -796,7 +866,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "read",
       name: "Planes · getPlanDetail completo",
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", GENERAL: "deny", SUPPORT: { exp: "deny", note: "soporte = proyección de la Secretaria (sin clinical.read): nunca el detalle full" } },
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: { exp: "deny", note: "sin clinical.read" }, GENERAL: "deny", SUPPORT: { exp: "deny", note: "soporte = proyección de la Secretaria (sin clinical.read): nunca el detalle full" } },
       setup: fxPlan,
       seen: async (fx) => {
         const r = await getPlanDetail({ programId: fx.programId as string });
@@ -806,7 +876,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "read",
       name: "Planes · getPatientPlanBalances",
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "ok", BILLING: "ok", GENERAL: { exp: "deny", note: "sin `planes` → vacío" }, SUPPORT: "ok" },
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "ok", BILLING: "ok", ADMIN: "ok", GENERAL: { exp: "deny", note: "sin `planes` → vacío" }, SUPPORT: "ok" },
       setup: fxPlan,
       seen: async (fx) => {
         const r = await getPatientPlanBalances({ patientId: fx.patientId });
@@ -816,17 +886,42 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     // ─────────────────────────────────────────── Paciente ───────────────────────────────────────────
     {
       kind: "write",
-      name: "Paciente · updatePatient",
-      // PD-13: la Secretaria (`admin`) maneja el dato administrativo; hoy `updatePatient` pide full. Ya figura en AUDIT
-      // como `secretaria-edita-contacto-cobertura` (C0): la celda queda como it.fails hasta que C0 lo dé vuelta.
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: { exp: "ok", fails: "ES4-S26b", note: "admin (PD-13) · AUDIT secretaria-edita-contacto-cobertura" }, BILLING: "deny", GENERAL: "ok", SUPPORT: "ro" },
+      name: "Paciente · updatePatient (teléfono)",
+      // T3c-1b (§23.5): la rama `admin` + `patients.editAdmin` edita contacto, DNI y nacimiento (lista cerrada). Antes
+      // la fixture mandaba `notes` y la celda de la Secretaria era el it.fails de S26b; ahora lo clínico es otra fila.
+      cells: {
+        XT: "deny",
+        OWNER: "ok",
+        BASIC: "deny",
+        ASSISTANT: { exp: "ok", note: "admin + patients.editAdmin (T3c-1b)" },
+        BILLING: { exp: "deny", note: "sin patients.editAdmin" },
+        ADMIN: "ok",
+        GENERAL: "ok",
+        SUPPORT: { exp: "ro", note: "SUPPORT_CAPS sin patients.editAdmin" },
+      },
+      // Teléfono único por celda: el chequeo de duplicados de `updatePatient` mira nombre + contacto y las fixtures se
+      // llaman igual; con un número fijo, la segunda celda chocaba con la primera («Ya existe un paciente…»).
+      setup: async (fx) => {
+        fx.phone = `11${10_000_000 + Math.floor(Math.random() * 89_999_999)}`;
+      },
+      act: (fx) => updatePatient({ id: fx.patientId, phone: fx.phone as string }),
+      effect: async (fx, db) => (await db.patient.findUniqueOrThrow({ where: { id: fx.patientId } })).phone === fx.phone,
+    },
+    {
+      kind: "write",
+      name: "Paciente · updatePatient con notas (clínico)",
+      // T3c-1b: una clave clínica desde la rama `admin` → rechazo SIN escribir nada (ni el resto de los campos).
+      cells: {
+        ASSISTANT: { exp: "deny", note: "«Las notas y el diagnóstico los edita el profesional a cargo.»" },
+        ADMIN: { exp: "deny", note: "no atiende: rama admin" },
+      },
       act: (fx) => updatePatient({ id: fx.patientId, notes: "S26b admin" }),
       effect: async (fx, db) => (await db.patient.findUniqueOrThrow({ where: { id: fx.patientId } })).notes === "S26b admin",
     },
     {
       kind: "write",
       name: "Paciente · setPatientCoverage",
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: { exp: "ok", fails: "ES4-S26b", note: "admin (PD-13) · AUDIT secretaria-edita-contacto-cobertura" }, BILLING: "deny", GENERAL: "ok", SUPPORT: "ro" },
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: { exp: "ok", note: "admin + patients.editAdmin (T3c-1b)" }, BILLING: "deny", ADMIN: "ok", GENERAL: "ok", SUPPORT: "ro" },
       act: (fx) => setPatientCoverage({ patientId: fx.patientId, insurerName: "OS S26b" }),
       effect: async (fx, db) => (await db.coverage.count({ where: { patientId: fx.patientId, insurer: "OS S26b" } })) > 0,
     },
@@ -834,7 +929,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
       kind: "write",
       name: "Paciente · setPatientDiagnosis (clínico)",
       // Hallazgo S26b `diagnostico-sin-gate-de-modulo`, cerrado en ES4 P4.Z: un GENERAL escribía el diagnóstico por RPC.
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny",
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "deny",
       GENERAL: { exp: "deny", note: "sin `diagnostico` → ok:false (P4.Z)" }, SUPPORT: "ro" },
       act: (fx) => setPatientDiagnosis(fx.patientId, "S26b dx", "x"),
       effect: async (fx, db) => (await db.patient.findUniqueOrThrow({ where: { id: fx.patientId } })).diagnosisTitle === "S26b dx",
@@ -842,7 +937,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "write",
       name: "Paciente · recordEvaScore (clínico)",
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", GENERAL: { exp: "deny", note: "sin `evaluaciones` → ok:false, no tira (P4.Z)" }, SUPPORT: "ro" },
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "deny", GENERAL: { exp: "deny", note: "sin `evaluaciones` → ok:false, no tira (P4.Z)" }, SUPPORT: "ro" },
       // Sin `settle`: desde P4.Z ninguna celda tira; si volviera a tirar ForbiddenError, la celda falla.
       act: (fx) => recordEvaScore({ patientId: fx.patientId, value: 5, source: "s26b" }),
       effect: async (fx, db) => (await db.evaScore.count({ where: { patientId: fx.patientId, source: "s26b" } })) > 0,
@@ -850,7 +945,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "write",
       name: "Paciente · sendPatientPortalInvite (requiere full)",
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", GENERAL: "ok", SUPPORT: "ro" },
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "deny", GENERAL: "ok", SUPPORT: "ro" },
       setup: async () => __rateLimitInternals.reset(),
       act: (fx) => sendPatientPortalInvite({ patientId: fx.patientId }),
       // El único write de la invitación es el audit (el vínculo lo hace el login): con Supabase admin nulo el mail
@@ -860,9 +955,17 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "write",
       name: "S24r · decidePatientPortalRequest (REJECT)",
-      // BILLING: el contrato §3.6 es `patientAccessFor ∈ {admin, full}` y PD-13 le da `admin` a todo rol sin
-      // clinical.read → Facturación también decide (el brief decía ⛔). Asimetría con setPatientCoverage: decide Martin.
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: { exp: "ok", note: "admin (PD-13)" }, BILLING: { exp: "ok", note: "admin por PD-13 + contrato §3.6" }, GENERAL: "ok", SUPPORT: "ro" },
+      // T3c-1b (§23.5, #26): `canDecide = full || (admin && patients.editAdmin)`: Facturación ya no decide.
+      cells: {
+        XT: "deny",
+        OWNER: "ok",
+        BASIC: "deny",
+        ASSISTANT: { exp: "ok", note: "admin + patients.editAdmin" },
+        BILLING: { exp: "deny", note: "sin patients.editAdmin (T3c-1b)" },
+        ADMIN: "ok",
+        GENERAL: "ok",
+        SUPPORT: "ro",
+      },
       setup: async (fx) => {
         const userId = `portal-${uniqueSuffix()}`;
         await db.userProfile.create({ data: { id: userId, email: `${userId}@test.local`, fullName: "Ana Paciente" } });
@@ -881,14 +984,14 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "write",
       name: "EV2 · createClinicalNote",
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", GENERAL: { exp: "ok", note: "núcleo `evoluciones`" }, SUPPORT: "ro" },
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "deny", GENERAL: { exp: "ok", note: "núcleo `evoluciones`" }, SUPPORT: "ro" },
       act: (fx) => createClinicalNote({ patientId: fx.patientId, body: "S26b evolución", idempotencyKey: randomUUID() }),
       effect: async (fx, db) => (await db.clinicalNote.count({ where: { patientId: fx.patientId } })) > 0,
     },
     {
       kind: "write",
       name: "EV2 · voidClinicalNote",
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", GENERAL: "ok", SUPPORT: "ro" },
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "deny", GENERAL: "ok", SUPPORT: "ro" },
       setup: (fx) => fxNote(fx, "S26b a anular"),
       act: (fx) => voidClinicalNote({ noteId: fx.noteId as string, expectedRevision: fx.noteRevision as number, reason: "Cargada por error" }),
       effect: async (fx, db) => (await db.clinicalNote.findUniqueOrThrow({ where: { id: fx.noteId as string } })).voidedAt !== null,
@@ -896,14 +999,14 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "read",
       name: "EV2 · getPatientTimeline",
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: { exp: "deny", note: "nunca HC (PD-13)" }, BILLING: "deny", GENERAL: "ok", SUPPORT: { exp: "deny", note: "SUPPORT_CAPS sin clinical.read → null" } },
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: { exp: "deny", note: "nunca HC (PD-13)" }, BILLING: "deny", ADMIN: { exp: "deny", note: "nunca HC (§20.17)" }, GENERAL: "ok", SUPPORT: { exp: "deny", note: "SUPPORT_CAPS sin clinical.read → null" } },
       setup: (fx) => fxNote(fx, "S26b timeline secreta"),
       seen: async (fx) => JSON.stringify(await getPatientTimeline({ patientId: fx.patientId })).includes("S26b timeline secreta"),
     },
     {
       kind: "read",
       name: "EV2 · getPatientClinicalSummary",
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", GENERAL: "ok", SUPPORT: "deny" },
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "deny", GENERAL: "ok", SUPPORT: "deny" },
       setup: (fx) => fxNote(fx, "S26b resumen"),
       seen: async (fx) => (await getPatientClinicalSummary(fx.patientId)) !== null,
     },
@@ -916,6 +1019,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
         BASIC: "deny",
         ASSISTANT: "deny",
         BILLING: { exp: "deny", note: "C-PL5: `account.billing` solo por titularidad o `grantBilling`, no por el rol" },
+        ADMIN: { exp: "ok", note: "«Planes y pagos» por default (decisión 2 del 19-oct)" },
         GENERAL: "ok",
         SUPPORT: { exp: "deny", note: "C-PL5: soporte nunca `account.*` (el brief decía ✅ RO)" },
       },
@@ -924,13 +1028,13 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "read",
       name: "PL · previewPlanChange",
-      cells: { OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", GENERAL: "ok", SUPPORT: "deny" },
+      cells: { OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "ok", GENERAL: "ok", SUPPORT: "deny" },
       seen: async () => (await settle(previewPlanChange("CLINICA"))).ok,
     },
     {
       kind: "write",
       name: "PL · applyPlanChange (→ CLINICA)",
-      cells: { XT: "isolated", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", GENERAL: "ok", SUPPORT: { exp: "ro", note: "soporte nunca `account.*`" } },
+      cells: { XT: "isolated", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: { exp: "ok", note: "decisión 2 (con step-up)" }, GENERAL: "ok", SUPPORT: { exp: "ro", note: "soporte nunca `account.*`" } },
       act: async (fx) =>
         settle(
           applyPlanChange({
@@ -980,7 +1084,18 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "write",
       name: "PL · setSharedPatientView",
-      cells: { XT: "isolated", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", GENERAL: "ok", SUPPORT: "ro" },
+      cells: {
+        XT: "isolated",
+        OWNER: "ok",
+        BASIC: "deny",
+        ASSISTANT: "deny",
+        ASSISTANT_CFG: { exp: "deny", note: "«quién ve la HC» es tenant.sensitive (T3c-1t)" },
+        BILLING: "deny",
+        ADMIN: "ok",
+        PRO_CFG: { exp: "ok", note: "decisión 4 del 19-oct" },
+        GENERAL: "ok",
+        SUPPORT: "ro",
+      },
       act: () => settle(setSharedPatientView(true)),
       effect: async (fx, db) => {
         const changed = (await tenantRow(fx.host.tenantId)).sharedPatientView;
@@ -996,7 +1111,10 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
         OWNER: "ok",
         BASIC: "deny",
         ASSISTANT: "deny",
+        ASSISTANT_CFG: { exp: "deny", note: "el turnero es tenant.sensitive (T3c-1t)" },
         BILLING: "deny",
+        ADMIN: "ok",
+        PRO_CFG: { exp: "ok", note: "decisión 4 del 19-oct" },
         GENERAL: "ok",
         SUPPORT: { exp: "ok", note: "BO decisión 3: está en SUPPORT_WRITABLE_ACTIONS (el brief decía RO)" },
       },
@@ -1015,7 +1133,10 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
         OWNER: "ok",
         BASIC: "deny",
         ASSISTANT: "deny",
+        ASSISTANT_CFG: { exp: "deny", note: "datos del consultorio: tenant.sensitive (T3c-1t)" },
         BILLING: "deny",
+        ADMIN: "ok",
+        PRO_CFG: "ok",
         GENERAL: "ok",
         SUPPORT: { exp: "ok", note: "BO decisión 3: está en SUPPORT_WRITABLE_ACTIONS (el brief decía RO)" },
       },
@@ -1031,11 +1152,74 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
         return changed;
       },
     },
+    // ─────────────────────────────────────────── Equipo y soporte (lo delicado, T3c-1t / 1s) ───────────────────────────────────────────
+    {
+      kind: "write",
+      name: "Equipo · createInvitation (Secretaria)",
+      // `requireTeamManager` = tenant.sensitive. Se invita un rol NO clínico: sumar a alguien que atiende tiene su propia
+      // barrera (`clinicalAssignError`, PL-Z a3#5), que no es lo que mide esta fila.
+      cells: {
+        XT: "isolated",
+        OWNER: "ok",
+        BASIC: "deny",
+        ASSISTANT: "deny",
+        ASSISTANT_CFG: { exp: "deny", note: "equipo: tenant.sensitive (decisión 3 del 19-oct)" },
+        BILLING: "deny",
+        ADMIN: "ok",
+        PRO_CFG: { exp: "ok", note: "decisión 4 del 19-oct" },
+        GENERAL: "ok",
+        SUPPORT: { exp: "ok", note: "BO decisión 3: usuarios desde Configuración (SUPPORT_WRITABLE_ACTIONS)" },
+      },
+      setup: async (fx) => {
+        __rateLimitInternals.reset();
+        fx.inviteEmail = `s26b-inv-${uniqueSuffix()}@example.com`;
+        // La fila mide el permiso, no el cupo: K tiene 7 miembros (Consultorio admite 5). Clínica mientras dura la
+        // celda; `effect` la devuelve a Consultorio y borra la invitación, para no contaminar las filas de PL.
+        await db.tenant.update({ where: { id: fx.host.tenantId }, data: { saasPlan: "CLINICA" } });
+      },
+      act: (fx) => settle(createInvitation({ email: fx.inviteEmail as string, firstName: "In", lastName: "Vitada", role: "ASSISTANT" })),
+      effect: async (fx, db) => {
+        const where = { tenantId: fx.host.tenantId, email: fx.inviteEmail as string };
+        const created = (await db.invitation.count({ where })) > 0;
+        await db.invitation.deleteMany({ where });
+        await db.tenant.update({ where: { id: fx.host.tenantId }, data: { saasPlan: "CONSULTORIO" } });
+        return created;
+      },
+    },
+    {
+      kind: "write",
+      name: "Soporte · endSupportAccessForTenant (terminar un acceso desde el consultorio)",
+      cells: {
+        XT: { exp: "deny", note: "id de K desde otro consultorio: `tenantId` a mano en el canal service" },
+        OWNER: "ok",
+        BASIC: "deny",
+        ASSISTANT: "deny",
+        ASSISTANT_CFG: { exp: "deny", note: "tenant.sensitive (corte de staff)" },
+        BILLING: "deny",
+        ADMIN: "ok",
+        PRO_CFG: { exp: "ok", note: "decisión 4 del 19-oct" },
+        GENERAL: "ok",
+        SUPPORT: { exp: "deny", note: "soporte sale con «Salir de soporte», no termina accesos" },
+      },
+      setup: async (fx) => {
+        // Una abierta por superadmin (índice parcial de M7): se cierra la de la celda anterior antes de abrir otra.
+        await db.supportSession.updateMany({ where: { superadminId: fxSuperadminId, endedAt: null }, data: { endedAt: new Date(), endedReason: "test" } });
+        const row = await db.supportSession.create({
+          data: { tenantId: fx.host.tenantId, superadminId: fxSuperadminId, reason: "Fixture S26b" },
+        });
+        fx.supportSessionId = row.id;
+      },
+      act: (fx) => settle(endSupportAccessForTenant({ id: fx.supportSessionId as string })),
+      effect: async (fx, db) => {
+        const row = await db.supportSession.findUniqueOrThrow({ where: { id: fx.supportSessionId as string } });
+        return row.endedAt !== null && row.endedReason === "tenant";
+      },
+    },
     // ─────────────────────────────────────────── Ejercicios globales ───────────────────────────────────────────
     {
       kind: "write",
       name: "Ejercicios globales · addSessionExercise con un global",
-      cells: { XT: "deny", OWNER: { exp: "ok", note: "desde Consultorio" }, ASSISTANT: "deny", BILLING: "deny", GENERAL: "deny", SUPPORT: "ro" },
+      cells: { XT: "deny", OWNER: { exp: "ok", note: "desde Consultorio" }, ASSISTANT: "deny", BILLING: "deny", ADMIN: "deny", GENERAL: "deny", SUPPORT: "ro" },
       setup: fxPlan,
       act: (fx) => addSessionExercise({ sessionId: (fx.sessionIds as string[])[0], exerciseId: globalExerciseId }),
       effect: async (fx, db) => (await db.sessionExercise.count({ where: { sessionId: (fx.sessionIds as string[])[0] } })) > 0,
@@ -1050,6 +1234,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
         BASIC: { exp: "deny", note: "sin título" },
         ASSISTANT: "deny",
         BILLING: "deny",
+        ADMIN: { exp: "deny", note: "sin clinical.read" },
         GENERAL: "ok",
         SUPPORT: { exp: "deny", note: "según destino: soporte no tiene clinical.read" },
       },
@@ -1077,6 +1262,15 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     basic = await addPractitioner(db, K, "PRACTITIONER");
     assistant = await addPractitioner(db, K, "ASSISTANT");
     billing = await addPractitioner(db, K, "BILLING");
+    // T3c-1i: las columnas de T3 (las filas se insertan directo: K queda con más miembros de los que admite
+    // Consultorio, y la fila de invitar lo sube a Clínica mientras dura la celda).
+    admin = await addStaff(db, K, "ADMIN", { grantSettings: true, grantBilling: true });
+    assistantCfg = await addStaff(db, K, "ASSISTANT", { grantSettings: true });
+    proCfg = await addPractitioner(db, K, "PRACTITIONER");
+    await db.membership.update({ where: { userId_tenantId: { userId: proCfg.userId, tenantId: K.tenantId } }, data: { grantSettings: true } });
+    fxSuperadminId = `test-user-sa-${uniqueSuffix()}`;
+    portalUsers.push(fxSuperadminId);
+    await db.userProfile.create({ data: { id: fxSuperadminId, email: `${fxSuperadminId}@test.local`, fullName: "Soporte S26b", isPlatformAdmin: true } });
     globalExerciseId = (
       await db.exercise.create({ data: { slug: `s26b-global-${uniqueSuffix()}`, name: "Global S26b", isBasic: true } })
     ).id;

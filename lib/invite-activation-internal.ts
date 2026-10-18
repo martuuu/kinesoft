@@ -27,6 +27,8 @@ import {
   checkSeatForJoinInTx,
   grantsOnEnterRole,
   invitationClinical,
+  inviterMayGrantBillingInTx,
+  roleEntryGrantsBilling,
   SeatLimitError,
   SEAT_LIMIT_JOIN_MESSAGE,
 } from "@/lib/team-internal";
@@ -248,7 +250,11 @@ export async function joinTenantInTx(
   // invitación. El resto de los roles entra sin delegaciones. Al re-entrar (membresía suspendida o deshabilitada) los
   // permisos se recalculan desde la invitación nueva: quien invitó decide el rol, no hereda delegaciones de antes; y
   // se limpia el motivo de la deshabilitación. La regla por rol vive en `grantsOnEnterRole` (lib/team-internal.ts).
-  const grants = grantsOnEnterRole(inv.role, { grantSettings: false, grantBilling: false });
+  // T3c-1i (seguridad): «Planes y pagos» solo si quien invitó la puede dar (Titular, superadmin de Plataforma o
+  // `account.billing` en este consultorio), resuelto ACÁ con sus permisos de ahora: un Admin sin «Planes y pagos» que
+  // invitaba a otra cuenta suya como ADMIN se la devolvía por la puerta de atrás. Ver `inviterMayGrantBillingInTx`.
+  const mayGrantBilling = roleEntryGrantsBilling(inv.role) && (await inviterMayGrantBillingInTx(tx, inv));
+  const grants = grantsOnEnterRole(inv.role, { grantSettings: false, grantBilling: false }, mayGrantBilling);
   await tx.membership.upsert({
     where: { userId_tenantId: { userId, tenantId: inv.tenantId } },
     create: { userId, tenantId: inv.tenantId, role: inv.role, clinical, ...grants, acceptedAt: now },

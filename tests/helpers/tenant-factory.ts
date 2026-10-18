@@ -301,6 +301,38 @@ export async function addPractitioner(
   return { userId, practitionerId: p.id };
 }
 
+/**
+ * T3c-1i: miembro SIN `Practitioner` (Secretaria, Facturación, Administrador/a de §20.17) con las delegaciones
+ * explícitas. `addPractitioner` crea el `Practitioner` y prende «Configuración» al ADMIN como el backfill de M8 (la forma de un ADMIN de antes de §20.17):
+ * para la matriz de T3 hace falta el Administrador/a de hoy (no atiende, «Configuración» y «Planes y pagos» como lo
+ * deja `grantsOnEnterRole`) y la Secretaria con «Configuración» sin que el rol la decida.
+ * No atiende (`clinical: false`): un PRACTITIONER sin `Practitioner` es una membresía inusable (`missing_practitioner`),
+ * así que para un Profesional con «Configuración» va `addPractitioner` + el update de la delegación.
+ */
+export async function addStaff(
+  prisma: PrismaClient,
+  t: EphemeralTenant,
+  role: TenantRole,
+  grants: { grantSettings?: boolean; grantBilling?: boolean } = {}
+): Promise<{ userId: string; membershipId: string }> {
+  const s = uniqueSuffix();
+  const userId = `test-user-${s}`;
+  await prisma.userProfile.create({ data: { id: userId, email: `${userId}@test.local`, fullName: `Staff ${role} ${s}` } });
+  const m = await prisma.membership.create({
+    data: {
+      userId,
+      tenantId: t.tenantId,
+      role,
+      clinical: false,
+      grantSettings: grants.grantSettings ?? false,
+      grantBilling: grants.grantBilling ?? false,
+      acceptedAt: new Date(),
+    },
+    select: { id: true },
+  });
+  return { userId, membershipId: m.id };
+}
+
 export async function addPatient(
   prisma: PrismaClient,
   t: EphemeralTenant,
