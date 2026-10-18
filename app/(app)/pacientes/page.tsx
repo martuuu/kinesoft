@@ -3,6 +3,10 @@ import { listPatients } from "@/lib/patients";
 import { listInsurers } from "@/lib/insurers";
 import { loadFilterFacets } from "@/lib/exercises";
 import { getCapabilities, getTenantModules } from "@/lib/authz";
+import { getActor } from "@/lib/session";
+import { listPractitioners } from "@/lib/bookings";
+import { displayMemberName } from "@/lib/display-name";
+import { newPatientMode } from "@/components/patients/patient-form-payload";
 import { patientsGridColumns } from "@/components/patients/patients-grid";
 import type { PatientSort } from "@/lib/patients-types";
 import { Card } from "@/components/ui/card";
@@ -67,7 +71,11 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
   // Conditions list — reusing `loadFilterFacets` keeps the catalog
   // cached (1h TTL) so the page renders without an extra DB roundtrip
   // on warm cache hits.
-  const [patients, facets, insurers, caps] = await Promise.all([
+  // T3d-1u: la lista de profesionales del alta de la recepción sale de `listPractitioners` (cacheada por tag
+  // `practitioners`, reservables y sin suspender: el mismo filtro que valida `createPatient`). Solo se pide en ese modo,
+  // y en paralelo con el resto (encadenada a las capabilities, que ya están en el cache del request).
+  const capsP = getCapabilities();
+  const [patients, facets, insurers, caps, actor, assigneeRows] = await Promise.all([
     listPatients({
       q,
       filter,
@@ -81,13 +89,21 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
     }),
     loadFilterFacets(),
     listInsurers({ onlyActive: true }),
-    getCapabilities(),
+    capsP,
+    getActor(),
+    Promise.all([capsP, getActor()]).then(([c, a]) =>
+      newPatientMode(c, { support: !!a.support }) === "admin" ? listPractitioners() : null
+    ),
   ]);
-  // P0-S07sp: sin clinical.read, `createPatient` exige `assignTo` (el
-  // profesional a cargo) y este alta no lo pide → se oculta el botón para la
-  // Secretaria/BILLING. Ella da de alta desde el modal del turno, que manda el
-  // profesional del turno. Un selector "Profesional a cargo" acá queda para C0.
-  const canCreateHere = caps.has("clinical.read");
+  // T3d-1u (plan §23.5): sin clinical.read, `createPatient` exige `assignTo` (el profesional a cargo). Antes (P0-S07sp)
+  // el botón se escondía para la Secretaria y ella daba de alta solo desde el modal del turno; ahora el alta de la
+  // recepción pide «Profesional a cargo» obligatorio y no tiene notas ni diagnóstico. Facturación sigue sin alta.
+  const createMode = newPatientMode(caps, { support: !!actor.support });
+  const canCreateHere = createMode !== null;
+  const assignees =
+    createMode === "admin"
+      ? (assigneeRows ?? []).map((p) => ({ id: p.id, name: displayMemberName(p.user.fullName) }))
+      : undefined;
   // S32: «Con plan» = al menos un plan ACTIVE y vivo (`activePlans`, mismo
   // predicado que el filtro `active`/`no-program` de `listPatients`), así el
   // número del pill coincide con la lista que abre. Una fila `basic` sale con
@@ -150,7 +166,10 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
               Exportar CSV
             </a>
             {canCreateHere && (
-              <NewPatientButton insurers={insurers.filter((i) => !i.isParticular).map((i) => ({ id: i.id, name: i.name }))} />
+              <NewPatientButton
+                insurers={insurers.filter((i) => !i.isParticular).map((i) => ({ id: i.id, name: i.name }))}
+                assignees={assignees}
+              />
             )}
           </>
         }
@@ -279,8 +298,8 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
 /**
  * Vacío del directorio (C-PF5.5). Antes decía «Usá el botón “Nuevo paciente”» en un `<span>` con ícono que parecía
  * un botón y no hacía nada. Con filtros: «Quitar filtros» (link real a la vista sin filtros). Sin filtros: el
- * texto apunta al botón del encabezado, que solo existe si el rol puede crear (la Secretaria da de alta desde el
- * turno).
+ * texto apunta al botón del encabezado, que solo existe si el rol puede crear (desde T3d-1u también la Secretaria;
+ * Facturación no da de alta).
  */
 function EmptyState({ filtered, canCreate }: { filtered: boolean; canCreate: boolean }) {
   return (

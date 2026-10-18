@@ -206,6 +206,11 @@ export type PatientProfileProps = {
   /** EV2-3a: `?turno=` del deep link de evoluciones (`clinicalNoteDeepLink`) y el turno si es de este paciente. */
   noteBookingId?: string | null;
   noteBooking?: DeepLinkBooking | null;
+  /**
+   * T3d-1u (handoff H2 de T3c-1c): profesional del VIEWER (`actor.practitionerId`), para que Facturación muestre el
+   * toggle de copago solo donde el server lo acepta (`canCollectCopago`: un profesional cobra sus turnos).
+   */
+  viewerPractitionerId?: string | null;
 };
 
 export function PatientProfile({
@@ -227,11 +232,16 @@ export function PatientProfile({
   canWriteNotes = false,
   noteBookingId = null,
   noteBooking = null,
+  viewerPractitionerId = null,
 }: PatientProfileProps) {
   const modules = useTenantModules();
   const toast = useToast();
   const plansEnabled = modules.has("planes");
   const caps = useMemo(() => new Set<Capability>(capabilities), [capabilities]);
+  const billingAccess = useMemo(
+    () => ({ capabilities, practitionerId: viewerPractitionerId }),
+    [capabilities, viewerPractitionerId]
+  );
   const clinicalRead = caps.has("clinical.read");
   const allowedTabs = useMemo(
     () => profileTabsFor(modules.list, { clinicalRead }),
@@ -640,6 +650,7 @@ export function PatientProfile({
               planBalances={planBalances}
               showPlanTitles={showPlanTitles}
               onBillingChanged={reloadBalances}
+              billingAccess={billingAccess}
             />
           )}
           {tab === "actividad" && <ActivityView patientId={patient.id} />}
@@ -691,8 +702,11 @@ export function PatientProfile({
 // P0-S07v · Perfil administrativo (nivel `admin`, PD-13 / Planes E1)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Pestañas del perfil administrativo: datos y turnos, nada clínico. */
-export const ADMIN_PROFILE_TABS = ["resumen", "turnos"] as const satisfies readonly Tab[];
+/**
+ * Pestañas del perfil administrativo: datos, turnos y cobros, nada clínico. T3d-1u (plan §23.4): «Facturación» se suma
+ * para que la Secretaria y Facturación cobren desde la ficha (antes solo desde /sala o el turno).
+ */
+export const ADMIN_PROFILE_TABS = ["resumen", "turnos", "fact"] as const satisfies readonly Tab[];
 type AdminTab = (typeof ADMIN_PROFILE_TABS)[number];
 
 export type AdminBookingsPage = {
@@ -718,10 +732,12 @@ export type AdminBookingsPage = {
  *  - Los turnos llegan de `getPatientBookingsAll` (S07sp lo habilita para
  *    `admin` con título/descripción/notas redactados). Igual, esta tabla no
  *    renderiza esos campos: si el server los mandara por error, no se ven.
- *  - Solo lectura: `updatePatient`, `setPatientCoverage` y los toggles de cobro
- *    exigen acceso `full` (lib/patients.ts, lib/bookings.ts). Operar un turno
- *    (estado, reprogramar, cancelar) se hace en la agenda: cada fila tiene
- *    "Ver en agenda".
+ *  - T3d-1u: con `patients.editAdmin` (Secretaria, Admin) el hero ofrece
+ *    «Editar datos» (contacto, cobertura, copago propio; nunca notas ni
+ *    diagnóstico) y la pestaña «Facturación» es la `FacturacionView` real con
+ *    los toggles que el viewer puede usar (`billingAccess`). Operar un turno
+ *    (estado, reprogramar, cancelar) sigue en la agenda: cada fila de Turnos
+ *    tiene "Ver en agenda".
  *  - S22b (handoff H1 de S22f): la tabla de turnos es la misma `TurnosView` del
  *    perfil completo en modo `admin` (antes era una copia, `AdminTurnosView`).
  *    Con el módulo `planes` agrupa por plan con la proyección administrativa
@@ -734,7 +750,10 @@ export function PatientAdminProfile({
   canBook,
   initialTab = "resumen",
   plans = null,
-  planBalances = null,
+  planBalances: initialPlanBalances = null,
+  capabilities = [],
+  viewerPractitionerId = null,
+  insurers = [],
 }: {
   patient: PatientAdminCore;
   initialBookings: AdminBookingsPage;
@@ -745,10 +764,40 @@ export function PatientAdminProfile({
   plans?: PlanDTO[] | null;
   /** `getPatientPlanBalances` (data); `null` sin el módulo `planes`. */
   planBalances?: PatientPlanBalances | null;
+  /** T3d-1u: capabilities del MIEMBRO (`memberCapabilitiesForActor`, las mismas que chequea el server). */
+  capabilities?: readonly Capability[];
+  /** T3d-1u: `actor.practitionerId` (Facturación: `canCollectCopago`). */
+  viewerPractitionerId?: string | null;
+  /** T3d-1u: obras sociales activas para «Editar datos» (la página las pide solo con `patients.editAdmin`). */
+  insurers?: InsurerOption[];
 }) {
   const plansEnabled = useTenantModules().has("planes");
+  const canEdit = capabilities.includes("patients.editAdmin");
+  const billingAccess = useMemo(
+    () => ({ capabilities, practitionerId: viewerPractitionerId }),
+    [capabilities, viewerPractitionerId]
+  );
   const [tab, setTab] = useState<AdminTab>(initialTab);
   const [bookings, setBookings] = useState<PatientBookingFull[]>(initialBookings.rows);
+  // Facturación patchea la fila después de cada toggle (estado de cobro, medio, `updatedAt` del lock) y Turnos/Datos
+  // leen la misma lista: el «Copago pendiente» de Datos baja apenas se cobra.
+  const patchBooking = useCallback((id: string, partial: Partial<PatientBookingFull>) => {
+    setBookings((prev) => prev.map((b) => (b.id === id ? { ...b, ...partial } : b)));
+  }, []);
+  // El saldo de cada plan es del server (P7): después de un cobro se vuelve a pedir, como en el perfil completo.
+  const [planBalances, setPlanBalances] = useState<PatientPlanBalances | null>(initialPlanBalances);
+  const balancesSeq = useRef(0);
+  const reloadBalances = useCallback(async () => {
+    if (!plansEnabled) return;
+    const seq = ++balancesSeq.current;
+    try {
+      const r = await getPatientPlanBalances({ patientId: patient.id });
+      if (seq === balancesSeq.current && r.ok) setPlanBalances(r.data);
+    } catch (e) {
+      // Queda el saldo anterior hasta la próxima visita.
+      console.error("getPatientPlanBalances (admin) failed", e);
+    }
+  }, [plansEnabled, patient.id]);
   const [nextCursor, setNextCursor] = useState<string | null>(
     initialBookings.hasMore ? initialBookings.nextCursor : null
   );
@@ -776,7 +825,7 @@ export function PatientAdminProfile({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <PatientAdminHero patient={patient} canBook={canBook} />
+      <PatientAdminHero patient={patient} canBook={canBook} canEdit={canEdit} insurers={insurers} />
 
       <TabsBar
         active={tab}
@@ -784,11 +833,11 @@ export function PatientAdminProfile({
         onPreload={preloadProfileTab}
         only={ADMIN_PROFILE_TABS}
         labels={{ resumen: "Datos" }}
-        counts={{ turnos: bookings.length }}
+        counts={{ turnos: bookings.length, fact: bookings.filter(isBillable).length }}
       />
 
       {tab === "resumen" && (
-        <AdminDatosView patient={patient} bookings={bookings} partial={nextCursor !== null} />
+        <AdminDatosView patient={patient} bookings={bookings} partial={nextCursor !== null} canEdit={canEdit} />
       )}
       {tab === "turnos" && (
         <TurnosView
@@ -796,15 +845,29 @@ export function PatientAdminProfile({
           patientId={patient.id}
           bookings={bookings}
           loading={false}
-          patchBooking={() => {}}
+          patchBooking={patchBooking}
           dropBooking={() => {}}
           plansEnabled={plansEnabled}
           plans={plansEnabled ? plans : null}
           planBalances={plansEnabled ? planBalances : null}
         />
       )}
+      {tab === "fact" && (
+        <FacturacionView
+          bookings={bookings}
+          loading={false}
+          patchBooking={patchBooking}
+          plansEnabled={plansEnabled}
+          plans={plansEnabled ? plans : null}
+          planBalances={plansEnabled ? planBalances : null}
+          // Proyección admin: el grupo muestra la disciplina, nunca el título del plan (HC).
+          showPlanTitles={false}
+          onBillingChanged={reloadBalances}
+          billingAccess={billingAccess}
+        />
+      )}
 
-      {tab === "turnos" && nextCursor && (
+      {(tab === "turnos" || tab === "fact") && nextCursor && (
         <div
           role="status"
           style={{
@@ -849,11 +912,14 @@ function AdminDatosView({
   patient,
   bookings,
   partial,
+  canEdit,
 }: {
   patient: PatientAdminCore;
   bookings: PatientBookingFull[];
   /** Hay turnos más viejos sin cargar: el total de cobro es parcial. */
   partial: boolean;
+  /** `patients.editAdmin`: el viewer edita los datos desde «Editar datos». */
+  canEdit: boolean;
 }) {
   const unpaid = bookings.filter((b) => isBillable(b) && b.paymentStatus !== "PAID");
   const unpaidCents = unpaid.reduce((s, b) => s + b.copagoCents, 0);
@@ -921,8 +987,12 @@ function AdminDatosView({
         </Section>
       </Grid2>
       <p style={{ margin: 0, fontSize: 12, color: "var(--navy-500)" }}>
-        Profesional a cargo: <strong>{patient.assignedPractitionerName ?? "Consultorio común"}</strong>. Los datos
-        del paciente y los cobros los actualiza el profesional a cargo.
+        Profesional a cargo: <strong>{patient.assignedPractitionerName ?? "Consultorio común"}</strong>.{" "}
+        {/* T3d-1u: antes decía que los datos y los cobros los actualizaba el profesional; desde T3 la recepción edita
+            los datos y la cobertura, y la Secretaria y Facturación cobran desde la pestaña Facturación. */}
+        {canEdit
+          ? "Las notas y el diagnóstico los carga el profesional a cargo."
+          : "Los datos del paciente los actualiza la recepción o el profesional a cargo."}
       </p>
     </Card>
   );

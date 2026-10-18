@@ -45,6 +45,7 @@ vi.mock("react", async (importOriginal) => {
 const data = vi.hoisted(() => ({
   load: vi.fn(),
   getCapabilities: vi.fn(),
+  listInsurers: vi.fn(),
 }));
 const entitlements = vi.hoisted(() => ({
   current: { vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false } as {
@@ -67,16 +68,27 @@ vi.mock("@/lib/patient-profile-loader", async (importOriginal) => ({
   loadPatientProfilePage: data.load,
 }));
 vi.mock("@/lib/plans-read", () => ({ getPatientPlans: vi.fn(), getPatientPlanBalances: vi.fn() }));
-vi.mock("@/lib/insurers", () => ({ listInsurers: vi.fn() }));
+vi.mock("@/lib/insurers", () => ({ listInsurers: data.listInsurers }));
 vi.mock("@/lib/clinical-notes-read", () => ({ getPatientClinicalSummary: vi.fn() }));
 vi.mock("@/lib/rls", () => ({ runWithRls: vi.fn() }));
+// T3d-1u: el miembro es configurable (la rama admin de la página lee las capabilities del MIEMBRO, como el server).
+const member = vi.hoisted(() => ({
+  current: { role: "PRACTITIONER", clinical: true, grantSettings: false, grantBilling: false } as {
+    role: "PRACTITIONER" | "ASSISTANT" | "BILLING" | "ADMIN" | "OWNER";
+    clinical: boolean;
+    grantSettings: boolean;
+    grantBilling: boolean;
+  },
+  practitionerId: "pr_me" as string | null,
+}));
 vi.mock("@/lib/session", () => ({
   getActor: async () => ({
     userId: "u1",
     tenantId: "t1",
     entitlements: entitlements.current,
+    practitionerId: member.practitionerId,
     // PL-1 (H1b-17): el miembro viaja en el Actor; la página ya no lo lee con una query.
-    membership: { role: "PRACTITIONER", clinical: true, grantSettings: false, grantBilling: false },
+    membership: member.current,
   }),
 }));
 // `getMemberAccess`/`memberCapabilitiesForActor` con la lógica real (capabilitiesForMember sobre el miembro del
@@ -168,7 +180,8 @@ function Providers({ children }: { children: ReactNode }) {
   );
 }
 
-const CLINICAL_TABS = ["Evoluciones", "EVA", "Evolución", "Plan", "Sesiones", "Seguimiento", "Archivos", "Antecedentes", "Actividad", "Facturación", "Resumen"];
+// «Facturación» ya no está: desde T3d-1u el perfil admin cobra desde la ficha (plan §23.4).
+const CLINICAL_TABS = ["Evoluciones", "EVA", "Evolución", "Plan", "Sesiones", "Seguimiento", "Archivos", "Antecedentes", "Actividad", "Resumen"];
 
 /** Etiquetas de los botones de pestaña (la barra de tabs del perfil). */
 function tabLabels(html: string) {
@@ -176,10 +189,10 @@ function tabLabels(html: string) {
 }
 
 describe("[P0-S07v] PatientAdminProfile", () => {
-  it("solo pestañas Datos y Turnos; ninguna clínica", () => {
-    expect(ADMIN_PROFILE_TABS).toEqual(["resumen", "turnos"]);
+  it("solo pestañas Datos, Turnos y Facturación (T3d-1u); ninguna clínica", () => {
+    expect(ADMIN_PROFILE_TABS).toEqual(["resumen", "turnos", "fact"]);
     const labels = tabLabels(render());
-    expect(labels).toEqual(["Datos", "Turnos"]);
+    expect(labels).toEqual(["Datos", "Turnos", "Facturación"]);
     for (const t of CLINICAL_TABS) expect(labels).not.toContain(t);
   });
 
@@ -190,7 +203,8 @@ describe("[P0-S07v] PatientAdminProfile", () => {
     }
     // Copago pendiente: solo bk_1 (COMPLETED, UNPAID).
     expect(html).toContain("1 turno");
-    // Nada de plan (el título/estado del plan es HC) ni acciones que exigen full.
+    // Nada de plan (el título/estado del plan es HC) ni acciones que exigen full. Sin `capabilities` (default `[]`)
+    // tampoco «Editar datos» (T3d-1u: exige `patients.editAdmin`).
     for (const s of ["Plan activo", "Sin plan", "Plan pausado", "Editar", "Compartir", "Archivar", "portal", "HC-"]) {
       expect(html).not.toContain(s);
     }
@@ -231,6 +245,12 @@ describe("[P0-S07v] página del paciente con nivel admin", () => {
   beforeEach(() => {
     for (const f of Object.values(data)) f.mockReset();
     entitlements.current = { vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false };
+    member.current = { role: "ASSISTANT", clinical: false, grantSettings: false, grantBilling: false };
+    member.practitionerId = null;
+    data.listInsurers.mockResolvedValue([
+      { id: "os_1", name: "OSDE", isParticular: false, payerId: null },
+      { id: "os_p", name: "Particular", isParticular: true, payerId: null },
+    ]);
     data.load.mockResolvedValue({
       access: "admin",
       core: admin,
@@ -241,7 +261,6 @@ describe("[P0-S07v] página del paciente con nivel admin", () => {
   });
 
   it("renderiza el perfil administrativo con UNA carga (actor, id, sin deep link)", async () => {
-    data.getCapabilities.mockResolvedValue(capabilitiesFor("ASSISTANT"));
     const el = await PatientPage({ params: { id: admin.id } });
     const html = renderToStaticMarkup(<Providers>{el}</Providers>);
 
@@ -249,18 +268,33 @@ describe("[P0-S07v] página del paciente con nivel admin", () => {
     expect(html).toContain("+54 11 5555-0001");
     expect(html).not.toContain("Sin acceso");
     expect(html).toContain("Agregar turno");
-    expect(tabLabels(html)).toEqual(["Datos", "Turnos"]);
+    expect(tabLabels(html)).toEqual(["Datos", "Turnos", "Facturación"]);
 
     expect(data.load).toHaveBeenCalledTimes(1);
     expect(data.load).toHaveBeenCalledWith(expect.objectContaining({ tenantId: "t1" }), admin.id, null);
   });
 
-  it("BILLING: mismo perfil, sin Agregar turno", async () => {
-    data.getCapabilities.mockResolvedValue(capabilitiesFor("BILLING"));
+  it("BILLING: mismo perfil, sin Agregar turno ni Editar datos (y no pide obras sociales)", async () => {
+    member.current = { role: "BILLING", clinical: false, grantSettings: false, grantBilling: false };
     const el = await PatientPage({ params: { id: admin.id } });
     const html = renderToStaticMarkup(<Providers>{el}</Providers>);
     expect(html).toContain("Ficha administrativa");
     expect(html).not.toContain("Agregar turno");
+    expect(html).not.toContain("Editar datos");
+    expect(data.listInsurers).not.toHaveBeenCalled();
+  });
+
+  it("[AS-1u] Secretaria: «Editar datos», obras sociales sin Particular, capabilities del miembro y su profesional", async () => {
+    member.practitionerId = "pr_sec";
+    const el = await PatientPage({ params: { id: admin.id } });
+    expect(renderToStaticMarkup(<Providers>{el}</Providers>)).toContain("Editar datos");
+    const kids = (el as ReactElement<{ children: ReactNode }>).props.children as ReactNode[];
+    const profile = kids.find((k) => isValidElement(k) && (k.props as Record<string, unknown>).initialBookings);
+    const props = (profile as ReactElement<Record<string, unknown>>).props;
+    expect(props.viewerPractitionerId).toBe("pr_sec");
+    expect(props.capabilities).toEqual(expect.arrayContaining(["patients.editAdmin", "billing.collect"]));
+    expect(props.insurers).toEqual([{ id: "os_1", name: "OSDE", payerId: null }]);
+    expect(data.listInsurers).toHaveBeenCalledWith({ onlyActive: true });
   });
 
   it("basic sigue en la vista básica (sin turnos ni capabilities)", async () => {
@@ -301,6 +335,8 @@ describe("[S22b] página del paciente con acceso full", () => {
 
   beforeEach(() => {
     for (const f of Object.values(data)) f.mockReset();
+    member.current = { role: "PRACTITIONER", clinical: true, grantSettings: false, grantBilling: false };
+    member.practitionerId = "pr_me";
     data.load.mockResolvedValue(fullLoad());
   });
 
@@ -324,6 +360,8 @@ describe("[S22b] página del paciente con acceso full", () => {
   it("Kinesiología: planes, saldos y capacidades del miembro llegan al perfil", async () => {
     entitlements.current = { vertical: "KINESIOLOGY", plan: "INDIVIDUAL", publicBookingEnabled: false };
     const props = profileProps(await PatientPage({ params: { id: admin.id } }));
+    // [AS-1u] (handoff H2 de T3c-1c): el profesional del viewer llega para `billingAccess` de Facturación.
+    expect(props.viewerPractitionerId).toBe("pr_me");
     expect(data.load).toHaveBeenCalledTimes(1);
     expect(props.initialPlans).toEqual([]);
     expect(props.initialPlanBalances).toEqual(EMPTY_BALANCES);

@@ -189,18 +189,27 @@ export function PatientHero({
  *
  * Qué NO tiene, a propósito:
  *  - chip de plan: el título y el estado del plan son HC;
- *  - "Editar": `updatePatient` y `setPatientCoverage` exigen acceso `full`
- *    (lib/patients.ts) → para `admin` la ficha es de solo lectura;
- *  - Compartir, Archivar y Portal: también exigen `full` en el server.
+ *  - Compartir, Archivar y Portal: exigen `full` en el server.
  * "Agregar turno" solo con `canBook` (`agenda.operateAll`): BILLING no crea turnos.
+ *
+ * T3d-1u (plan §23.5): «Editar datos» con `canEdit` (= `patients.editAdmin`: Secretaria, Admin, Titular sin agenda;
+ * Facturación no). Abre el mismo drawer de edición en modo `admin`: datos personales, cobertura y copago propio, sin
+ * notas ni diagnóstico (antes la ficha admin era de solo lectura porque `updatePatient` exigía `full`). El mismo
+ * `canEdit` decide si el pedido del portal se puede aprobar (`decidePatientPortalRequest`, #26).
  */
 export function PatientAdminHero({
   patient,
   canBook,
+  canEdit = false,
+  insurers = [],
 }: {
   patient: PatientAdminCore;
   canBook: boolean;
+  canEdit?: boolean;
+  /** Obras sociales activas del consultorio (sin «Particular»), para el select de cobertura. Solo con `canEdit`. */
+  insurers?: InsurerOption[];
 }) {
+  const [editing, setEditing] = useState(false);
   const age = patient.dateOfBirth
     ? Math.floor((Date.now() - +new Date(patient.dateOfBirth)) / (365.25 * 86_400_000))
     : null;
@@ -231,15 +240,35 @@ export function PatientAdminHero({
             <HeroFact label={practitionerFact} value={patient.assignedPractitionerName ?? "Consultorio común"} />
           </div>
         </div>
-        {canBook && (
-          // PF1-Z-F2: un solo <a> con aspecto de botón (antes <Link><Button/></Link>: <button> dentro de <a>).
-          <ButtonLink href={`/agenda?new=1&patient=${patient.id}`} variant="primary" className={heroStyles.action} style={{ fontSize: 12, padding: "8px 14px" }}>
-            <IconPlus size={12} /> Agregar turno
-          </ButtonLink>
+        {(canBook || canEdit) && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            {canBook && (
+              // PF1-Z-F2: un solo <a> con aspecto de botón (antes <Link><Button/></Link>: <button> dentro de <a>).
+              <ButtonLink href={`/agenda?new=1&patient=${patient.id}`} variant="primary" className={heroStyles.action} style={{ fontSize: 12, padding: "8px 14px" }}>
+                <IconPlus size={12} /> Agregar turno
+              </ButtonLink>
+            )}
+            {canEdit && (
+              <Button
+                variant="ghost"
+                onClick={() => setEditing(true)}
+                className={heroStyles.action}
+                onPointerEnter={preloadEditPatient}
+                onFocus={preloadEditPatient}
+                style={{ fontSize: 12, padding: "8px 14px" }}
+              >
+                Editar datos
+              </Button>
+            )}
+          </div>
         )}
       </Card>
-      {/* ES4 S24r · PD-13: la Secretaria aprueba contacto y cobertura del pedido del portal. */}
-      <PortalRequestBanner patientId={patient.id} />
+      {/* ES4 S24r · PD-13: la Secretaria aprueba contacto y cobertura del pedido del portal; Facturación solo lo ve. */}
+      <PortalRequestBanner patientId={patient.id} canDecide={canEdit} />
+      {/* Hermano del Card glass, como en el hero completo (el backdrop-filter atrapa los position:fixed). */}
+      {editing && canEdit && (
+        <EditPatientModal mode="admin" patient={patient} insurers={insurers} onClose={() => setEditing(false)} />
+      )}
     </>
   );
 }

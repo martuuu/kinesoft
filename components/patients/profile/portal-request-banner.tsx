@@ -14,6 +14,11 @@
  * cobertura («Cambia el copago de N turnos impagos») o un copago propio cargado que se borra (ES4-Z M2: antes, sin
  * turnos impagos, el copago propio se borraba sin preguntar). Los datos salen de `previewPortalRequestImpact` en el
  * momento del clic, no del listado (puede haber cambiado mientras la ficha estaba abierta).
+ *
+ * T3d-1u (plan §23.5, #26): Aprobar/Rechazar solo con `canDecide` (= acceso `full`, o `admin` con
+ * `patients.editAdmin`: el mismo predicado que `decidePatientPortalRequest`). Facturación es `admin` sin `editAdmin`:
+ * ve el pedido (para saber que el teléfono está por cambiar) pero no lo decide; antes veía los botones y el server la
+ * rechazaba al hacer clic.
  */
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { Card } from "@/components/ui/card";
@@ -73,7 +78,7 @@ function diffOf(row: PortalRequestRow, field: PortalPendingChangeField): [string
   }
 }
 
-export function PortalRequestBanner({ patientId }: { patientId: string }) {
+export function PortalRequestBanner({ patientId, canDecide = true }: { patientId: string; canDecide?: boolean }) {
   const [rows, setRows] = useState<PortalRequestRow[]>([]);
   // Vive acá y no en la tarjeta: si el pedido ya se resolvió en otra sesión, la tarjeta desaparece al recargar y el
   // aviso tiene que quedar.
@@ -91,7 +96,9 @@ export function PortalRequestBanner({ patientId }: { patientId: string }) {
 
   // La tarjeta (y su `useConfirm`) solo se monta con un pedido: el perfil sin pedido no depende del ConfirmProvider.
   const row = rows[0];
-  if (row) return <PortalRequestCard key={row.id} row={row} reload={load} error={error} setError={setError} />;
+  if (row) {
+    return <PortalRequestCard key={row.id} row={row} reload={load} error={error} setError={setError} canDecide={canDecide} />;
+  }
   return error ? (
     <p role="alert" style={{ margin: 0, fontSize: 13, color: "var(--danger-fg)" }}>
       {error}
@@ -99,16 +106,19 @@ export function PortalRequestBanner({ patientId }: { patientId: string }) {
   ) : null;
 }
 
-function PortalRequestCard({
+export function PortalRequestCard({
   row,
   reload,
   error,
   setError,
+  canDecide,
 }: {
   row: PortalRequestRow;
   reload: () => Promise<void>;
   error: string | null;
   setError: (e: string | null) => void;
+  /** Ver la nota de T3d-1u arriba. Sin esto la tarjeta es solo informativa. */
+  canDecide: boolean;
 }) {
   const confirm = useConfirm();
   const toast = useToast();
@@ -227,16 +237,22 @@ function PortalRequestCard({
         </p>
       )}
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {row.changes && (
-          <Button variant="primary" size="sm" disabled={busy} onClick={() => void approve()}>
-            Aprobar y aplicar
+      {canDecide ? (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {row.changes && (
+            <Button variant="primary" size="sm" disabled={busy} onClick={() => void approve()}>
+              Aprobar y aplicar
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" disabled={busy} onClick={() => void reject()}>
+            Rechazar
           </Button>
-        )}
-        <Button variant="ghost" size="sm" disabled={busy} onClick={() => void reject()}>
-          Rechazar
-        </Button>
-      </div>
+        </div>
+      ) : (
+        <p style={{ margin: 0, fontSize: 12, color: "var(--navy-500)" }}>
+          Lo aprueba la recepción o el profesional a cargo.
+        </p>
+      )}
     </Card>
   );
 }

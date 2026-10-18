@@ -3,7 +3,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { canWriteClinicalNotes } from "@/lib/clinical-notes-logic";
 import { getActor } from "@/lib/session";
-import { getCapabilities, getMemberAccess, memberCapabilitiesForActor } from "@/lib/authz";
+import { getMemberAccess, memberCapabilitiesForActor } from "@/lib/authz";
+import { listInsurers } from "@/lib/insurers";
 import { modulesFor } from "@/lib/tenant-modules";
 import { parseProfilePlanParams, type SearchParamsLike } from "@/lib/plans-deeplink";
 import { loadPatientProfilePage, profileNoteBookingId } from "@/lib/patient-profile-loader";
@@ -53,8 +54,14 @@ export default async function PatientPage({
   // estado de cobro) y capabilities; ningún slice clínico (EVA, plantillas).
   // Con el módulo `planes`, los planes en su proyección `admin` (sin título ni
   // notas, S14) y los saldos, para agrupar Turnos por plan (H1 de S22f).
+  //
+  // T3d-1u: las capabilities son las del MIEMBRO (`memberCapabilitiesForActor`), las mismas que chequean
+  // `updatePatient`/`setPatientCoverage` y los cobros: con `getCapabilities` el soporte (SUPPORT_CAPS) y el miembro
+  // podían diferir del server. Con `patients.editAdmin` se piden las obras sociales para «Editar datos»
+  // (`listInsurers`, cacheada por tag: sin query en caliente); Facturación no edita y no las pide.
   if (data.access === "admin") {
-    const caps = await getCapabilities();
+    const caps = await memberCapabilitiesForActor(actor);
+    const insurers = caps.has("patients.editAdmin") ? await listInsurers({ onlyActive: true }) : [];
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <Breadcrumbs name={`${data.core.firstName} ${data.core.lastName}`} />
@@ -64,6 +71,11 @@ export default async function PatientPage({
           canBook={caps.has("agenda.operateAll")}
           plans={data.plans?.ok ? data.plans.data : null}
           planBalances={data.balances?.ok ? data.balances.data : null}
+          capabilities={Array.from(caps)}
+          viewerPractitionerId={actor.practitionerId ?? null}
+          insurers={insurers
+            .filter((i) => !i.isParticular)
+            .map((i) => ({ id: i.id, name: i.name, payerId: i.payerId }))}
         />
       </div>
     );
@@ -127,6 +139,7 @@ export default async function PatientPage({
         clinicalSummary={data.clinicalSummary}
         canWriteNotes={canWriteNotes}
         noteBookingId={noteBookingId}
+        viewerPractitionerId={actor.practitionerId ?? null}
         noteBooking={
           noteBookingRow
             ? {

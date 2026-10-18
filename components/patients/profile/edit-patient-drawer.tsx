@@ -6,36 +6,167 @@ import { Drawer } from "@/components/ui/drawer";
 import { useFormDirty } from "@/components/ui/use-form-dirty";
 import { FormField } from "@/components/ui/form-field";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { formatARS } from "@/lib/format";
-import { assignPatientToPractitioner, setPatientCoverage, updatePatient } from "@/lib/patients";
+import { formatARS, parseARS } from "@/lib/format";
+import {
+  assignPatientToPractitioner,
+  setPatientCoverage,
+  setPatientDefaultCopago,
+  updatePatient,
+} from "@/lib/patients";
+import type { PatientAdminCore } from "@/lib/patients-types";
+import { parseCopagoField, patientUpdatePayload, type PatientFormMode } from "@/components/patients/patient-form-payload";
 import { listPayerPlans, proposePayerPlan } from "@/lib/catalog";
 import type { PayerPlanOption } from "@/lib/catalog-schemas";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { Section, Grid2 } from "./ui";
 import type { PatientWithRelations, InsurerOption, PractitionerOption } from "./types";
 
+/**
+ * T3d-1u: lo que «Editar datos» necesita de la ficha `admin`. Es `PatientAdminCore` (que se le pasa tal cual) con
+ * extras OPCIONALES de la cobertura y del lock: la proyección admin hoy no trae `updatedAt`, `insurerId`, `payerPlanId`
+ * ni `copagoCents` (ver el handoff al loader). Sin `insurerId` la OS del catálogo se reconoce por nombre; sin
+ * `copagoCents` el copago propio arranca vacío (= no se toca) y cambiar la OS lo conserva (el server no lo borra sin
+ * `resetCopago`); sin `updatedAt` no hay optimistic lock (es opcional en `updatePatient`).
+ */
+export type AdminEditablePatient = Pick<
+  PatientAdminCore,
+  "id" | "firstName" | "lastName" | "documentId" | "email" | "phone" | "dateOfBirth"
+> & {
+  updatedAt?: Date | string | null;
+  coverage:
+    | (NonNullable<PatientAdminCore["coverage"]> & {
+        insurerId?: string | null;
+        payerPlanId?: string | null;
+        copagoCents?: number | null;
+      })
+    | null;
+};
+
+/** La ficha que edita el formulario, igual en los dos modos. */
+type EditableCoverage = {
+  insurer: string;
+  insurerId: string | null;
+  planName: string | null;
+  payerPlanId: string | null;
+  memberId: string | null;
+  copagoCents: number | null;
+};
+type EditablePatient = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  documentId: string | null;
+  email: string | null;
+  phone: string | null;
+  dateOfBirth: Date | string | null;
+  updatedAt: string | null;
+  coverage: EditableCoverage | null;
+  assignedPractitionerId: string | null;
+  diagnosisTitle: string | null;
+  diagnosisNote: string | null;
+  notes: string | null;
+};
+
+const toIso = (d: Date | string) => new Date(d).toISOString();
+
+function fromFull(p: PatientWithRelations): EditablePatient {
+  const c = p.coverages[0];
+  return {
+    id: p.id,
+    firstName: p.firstName,
+    lastName: p.lastName,
+    documentId: p.documentId,
+    email: p.email,
+    phone: p.phone,
+    dateOfBirth: p.dateOfBirth,
+    updatedAt: toIso(p.updatedAt),
+    coverage: c
+      ? {
+          insurer: c.insurer,
+          insurerId: c.insurerId,
+          planName: c.planName,
+          payerPlanId: c.payerPlanId ?? null,
+          memberId: c.memberId,
+          copagoCents: c.copagoCents ?? null,
+        }
+      : null,
+    assignedPractitionerId: p.assignedPractitionerId,
+    diagnosisTitle: p.diagnosisTitle,
+    diagnosisNote: p.diagnosisNote,
+    notes: p.notes,
+  };
+}
+
+function fromAdmin(p: AdminEditablePatient, insurers: InsurerOption[]): EditablePatient {
+  const c = p.coverage;
+  const norm = (v: string) => v.trim().toLowerCase();
+  // La proyección admin ya resuelve el nombre del catálogo (`insurerRef.name ?? insurer`): por nombre se reconoce.
+  const insurerId = c ? (c.insurerId ?? insurers.find((i) => norm(i.name) === norm(c.insurer))?.id ?? null) : null;
+  return {
+    id: p.id,
+    firstName: p.firstName,
+    lastName: p.lastName,
+    documentId: p.documentId,
+    email: p.email,
+    phone: p.phone,
+    dateOfBirth: p.dateOfBirth,
+    updatedAt: p.updatedAt ? toIso(p.updatedAt) : null,
+    coverage: c
+      ? {
+          insurer: c.insurer,
+          insurerId,
+          planName: c.planName,
+          payerPlanId: c.payerPlanId ?? null,
+          memberId: c.memberId,
+          copagoCents: c.copagoCents ?? null,
+        }
+      : null,
+    assignedPractitionerId: null,
+    diagnosisTitle: null,
+    diagnosisNote: null,
+    notes: null,
+  };
+}
+
+type EditPatientModalProps =
+  | {
+      mode?: "full";
+      patient: PatientWithRelations;
+      insurers: InsurerOption[];
+      practitioners: PractitionerOption[];
+      canReassign: boolean;
+      onClose: () => void;
+    }
+  | {
+      /**
+       * T3d-1u (plan §23.5): «Editar datos» de la ficha `admin` (Secretaria, Admin con `patients.editAdmin`). Datos
+       * personales, cobertura y copago propio; NO manda `notes`/`diagnosisTitle`/`diagnosisNote` (ni vacías:
+       * `updatePatient` rechaza el pedido entero) ni reasigna.
+       */
+      mode: "admin";
+      patient: AdminEditablePatient;
+      insurers: InsurerOption[];
+      onClose: () => void;
+    };
+
 /*
  * PF1.1 (C-PF2): el drawer «Editar paciente» salió de `hero.tsx` a su propio módulo para cargarlo con `next/dynamic`
  * (precarga en hover/foco de «Editar»). Son ~400 líneas de formulario (cobertura, planes de la prestadora, profesional
  * a cargo) que la mayoría de las visitas a la ficha no abre. El código es el mismo de antes; solo cambió de archivo.
  */
-export function EditPatientModal({
-  patient,
-  insurers,
-  practitioners,
-  canReassign,
-  onClose,
-}: {
-  patient: PatientWithRelations;
-  insurers: InsurerOption[];
-  practitioners: PractitionerOption[];
-  canReassign: boolean;
-  onClose: () => void;
-}) {
+export function EditPatientModal(props: EditPatientModalProps) {
+  const { insurers, onClose } = props;
+  const mode: PatientFormMode = props.mode === "admin" ? "admin" : "full";
+  const practitioners = props.mode === "admin" ? [] : props.practitioners;
+  const canReassign = props.mode === "admin" ? false : props.canReassign;
+  // Se normaliza una vez (la ficha no cambia mientras el drawer está abierto: al guardar se cierra).
+  const [patient] = useState<EditablePatient>(() =>
+    props.mode === "admin" ? fromAdmin(props.patient, insurers) : fromFull(props.patient)
+  );
   const confirm = useConfirm();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const currentCoverage = patient.coverages[0];
+  const currentCoverage = patient.coverage;
   const initialCoverageMode = currentCoverage
     ? currentCoverage.insurerId
       ? `ins:${currentCoverage.insurerId}`
@@ -112,7 +243,7 @@ export function EditPatientModal({
   // Optimistic lock (A2a-S08): el `updatedAt` que vio este formulario. Se
   // actualiza tras un guardado OK, así un reintento (p. ej. si falló la
   // cobertura después de guardar los datos) no choca contra sí mismo.
-  const expectedUpdatedAt = useRef(patient.updatedAt.toISOString());
+  const expectedUpdatedAt = useRef<string | null>(patient.updatedAt);
   // Dirty-guard (A2b-S-ui): Esc / fondo / X piden confirmación si hay cambios.
   const formRef = useRef<HTMLFormElement | null>(null);
   const { dirty, onFormInput } = useFormDirty(formRef, {
@@ -130,6 +261,15 @@ export function EditPatientModal({
     setError(null);
     const planName = String(formData.get("coveragePlan") ?? "").trim();
     const memberId = String(formData.get("coverageMember") ?? "").trim();
+    // Copago propio (solo modo admin; el profesional lo cambia desde el modal del turno, como siempre).
+    const copago =
+      mode === "admin"
+        ? parseCopagoField(String(formData.get("ownCopago") ?? ""), currentCoverage?.copagoCents ?? null, parseARS)
+        : ({ kind: "none" } as const);
+    if (copago.kind === "invalid") {
+      setError("Revisá el copago propio: tiene que ser un monto en pesos, por ejemplo 6.000.");
+      return;
+    }
     // H2 (A2a-S08): dirty-check de la cobertura. Antes se re-guardaba siempre
     // con OS "Otra" (y el server hacía delete+create), borrando el copago
     // propio del paciente sin avisar.
@@ -161,19 +301,10 @@ export function EditPatientModal({
     }
 
     start(async () => {
-      const updateResult = await updatePatient({
-        id: patient.id,
-        expectedUpdatedAt: expectedUpdatedAt.current,
-        firstName: String(formData.get("firstName") ?? ""),
-        lastName: String(formData.get("lastName") ?? ""),
-        email: String(formData.get("email") ?? ""),
-        phone: String(formData.get("phone") ?? ""),
-        documentId: String(formData.get("documentId") ?? ""),
-        dateOfBirth: String(formData.get("dateOfBirth") ?? ""),
-        notes: String(formData.get("notes") ?? ""),
-        diagnosisTitle: String(formData.get("diagnosisTitle") ?? ""),
-        diagnosisNote: String(formData.get("diagnosisNote") ?? ""),
-      });
+      // T3d-1u: en modo admin el payload sale SIN claves clínicas (`patientUpdatePayload`).
+      const updateResult = await updatePatient(
+        patientUpdatePayload(mode, patient.id, expectedUpdatedAt.current, formData)
+      );
       if (!updateResult.ok) {
         setError(updateResult.error);
         return;
@@ -230,6 +361,16 @@ export function EditPatientModal({
         }
       }
 
+      // Copago propio, después de la cobertura: si la OS cambió y el copago viejo se borró (`resetCopago`), el monto
+      // nuevo queda sobre la cobertura nueva.
+      if (copago.kind === "set") {
+        const r = await setPatientDefaultCopago({ patientId: patient.id, copagoCents: copago.cents });
+        if (!r.ok) {
+          setError(r.error);
+          return;
+        }
+      }
+
       // Re-assignment (OWNER/ADMIN only).
       if (canReassign && assignedKine !== (patient.assignedPractitionerId ?? "")) {
         const r = await assignPatientToPractitioner({
@@ -249,10 +390,11 @@ export function EditPatientModal({
     });
   };
 
-  const dobIso = patient.dateOfBirth ? patient.dateOfBirth.toISOString().slice(0, 10) : "";
+  // `dateOfBirth` es fecha civil (excepción de AGENTS §4): el ISO tal cual, sin TZ.
+  const dobIso = patient.dateOfBirth ? toIso(patient.dateOfBirth).slice(0, 10) : "";
 
   return (
-    <Drawer open onClose={onClose} title="Editar paciente" width={560} dirty={dirty}>
+    <Drawer open onClose={onClose} title={mode === "admin" ? "Editar datos" : "Editar paciente"} width={560} dirty={dirty}>
       <form
         ref={formRef}
         action={submit}
@@ -334,6 +476,15 @@ export function EditPatientModal({
               hint="Si no está en la lista, lo sumamos para este consultorio."
             />
           )}
+          {mode === "admin" && (
+            <FormField
+              label="Copago propio (opcional)"
+              name="ownCopago"
+              defaultValue={currentCoverage?.copagoCents != null ? formatARS(currentCoverage.copagoCents) : ""}
+              placeholder="Ej: 6.000"
+              hint="Reemplaza el copago de la cobertura en los próximos turnos de este paciente. Vacío: queda como está."
+            />
+          )}
         </Section>
 
         {canReassign && (
@@ -355,27 +506,32 @@ export function EditPatientModal({
           </Section>
         )}
 
-        <Section title={isKine ? "Diagnóstico (opcional)" : "Motivo de consulta (opcional)"}>
-          <FormField
-            label="Título"
-            name="diagnosisTitle"
-            placeholder={isKine ? "ej: Lumbalgia" : "ej: Control anual"}
-            defaultValue={patient.diagnosisTitle ?? ""}
-            hint="Máx. 80 caracteres."
-          />
-          <FormField
-            as="textarea"
-            label="Descripción"
-            name="diagnosisNote"
-            placeholder="Detalle del cuadro, objetivos, indicaciones…"
-            defaultValue={patient.diagnosisNote ?? ""}
-            hint="Autocompleta el título y la descripción de los turnos nuevos del paciente."
-          />
-        </Section>
+        {/* Modo admin: sin notas ni diagnóstico (los carga el profesional a cargo). */}
+        {mode === "full" && (
+          <>
+            <Section title={isKine ? "Diagnóstico (opcional)" : "Motivo de consulta (opcional)"}>
+              <FormField
+                label="Título"
+                name="diagnosisTitle"
+                placeholder={isKine ? "ej: Lumbalgia" : "ej: Control anual"}
+                defaultValue={patient.diagnosisTitle ?? ""}
+                hint="Máx. 80 caracteres."
+              />
+              <FormField
+                as="textarea"
+                label="Descripción"
+                name="diagnosisNote"
+                placeholder="Detalle del cuadro, objetivos, indicaciones…"
+                defaultValue={patient.diagnosisNote ?? ""}
+                hint="Autocompleta el título y la descripción de los turnos nuevos del paciente."
+              />
+            </Section>
 
-        <Section title="Notas generales">
-          <FormField as="textarea" label="" name="notes" defaultValue={patient.notes ?? ""} />
-        </Section>
+            <Section title="Notas generales">
+              <FormField as="textarea" label="" name="notes" defaultValue={patient.notes ?? ""} />
+            </Section>
+          </>
+        )}
 
         {error && (
           <div

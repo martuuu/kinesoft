@@ -10,14 +10,31 @@ import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { Section } from "@/components/patients/profile/ui";
 import { createPatient } from "@/lib/patients";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
+import { patientCreatePayload } from "@/components/patients/patient-form-payload";
 
 type InsurerOption = { id: string; name: string };
+type PractitionerOption = { id: string; name: string };
 
 /*
  * PF1.1 (C-PF2): el formulario de alta salió de `new-patient-button.tsx` para cargarlo con `next/dynamic` (precarga
  * en hover/foco de «Nuevo paciente»). El código es el mismo; solo cambió de archivo.
  */
-export function NewPatientModal({ insurers, onClose }: { insurers: InsurerOption[]; onClose: () => void }) {
+export function NewPatientModal({
+  insurers,
+  assignees,
+  onClose,
+}: {
+  insurers: InsurerOption[];
+  /**
+   * T3d-1u (plan §23.5): presente = alta de la recepción (`agenda.operateAll` sin `clinical.read`). Son los
+   * profesionales reservables (`listPractitioners`, cacheado) y «Profesional a cargo» es obligatorio: `createPatient`
+   * exige `assignTo` sin `clinical.read`. Sin notas ni diagnóstico (los carga el profesional). Ausente = el alta del
+   * profesional de siempre, que queda a su cargo.
+   */
+  assignees?: PractitionerOption[];
+  onClose: () => void;
+}) {
+  const mode = assignees ? "admin" : "full";
   const router = useRouter();
   const [pending, start] = useTransition();
   // EV1-C2: Clínica general no tiene `diagnostico` (lib/tenant-modules.ts). Los
@@ -28,27 +45,24 @@ export function NewPatientModal({ insurers, onClose }: { insurers: InsurerOption
   // Coverage (obra social): "particular" | "ins:<id>" | "other".
   const [coverage, setCoverage] = useState("particular");
   const [otherInsurer, setOtherInsurer] = useState("");
+  // Sin preselección aunque haya uno solo: la ficha queda a cargo de quien se elija y decide quién ve la HC.
+  const [assignTo, setAssignTo] = useState("");
   // Dirty-guard (A2b-S-ui): Esc / fondo / X ya no tiran la ficha a medio cargar.
   const formRef = useRef<HTMLFormElement | null>(null);
-  const { dirty, onFormInput } = useFormDirty(formRef, { coverage, otherInsurer });
+  const { dirty, onFormInput } = useFormDirty(formRef, { coverage, otherInsurer, assignTo });
 
   const submit = (formData: FormData) => {
     setError(null);
     setFieldErrors({});
+    if (mode === "admin" && !assignTo) {
+      setFieldErrors({ assignTo: ["Elegí el profesional a cargo."] });
+      return;
+    }
     start(async () => {
-      const result = await createPatient({
-        firstName: String(formData.get("firstName") ?? ""),
-        lastName: String(formData.get("lastName") ?? ""),
-        email: String(formData.get("email") ?? ""),
-        phone: String(formData.get("phone") ?? ""),
-        documentId: String(formData.get("documentId") ?? ""),
-        dateOfBirth: String(formData.get("dateOfBirth") ?? ""),
-        notes: String(formData.get("notes") ?? ""),
-        diagnosisTitle: String(formData.get("diagnosisTitle") ?? ""),
-        diagnosisNote: String(formData.get("diagnosisNote") ?? ""),
-        insurerId: coverage.startsWith("ins:") ? coverage.slice(4) : undefined,
-        insurerName: coverage === "other" ? otherInsurer.trim() || undefined : undefined,
-      });
+      const result = await createPatient(
+        patientCreatePayload(mode, formData, coverage, otherInsurer),
+        mode === "admin" ? { assignTo } : undefined
+      );
       if (!result.ok) {
         setError(result.error);
         if (result.fieldErrors) setFieldErrors(result.fieldErrors);
@@ -104,25 +118,49 @@ export function NewPatientModal({ insurers, onClose }: { insurers: InsurerOption
           />
         )}
 
-        <Section title={isKine ? "Diagnóstico (opcional)" : "Motivo de consulta (opcional)"}>
+        {assignees && (
           <FormField
-            label="Título"
-            name="diagnosisTitle"
-            placeholder={isKine ? "ej: Lumbalgia" : "ej: Control anual"}
-            error={fieldErrors.diagnosisTitle?.[0]}
-            hint="Máx. 80 caracteres."
+            as="select"
+            label="Profesional a cargo"
+            required
+            value={assignTo}
+            onChange={(v) => setAssignTo(v)}
+            error={fieldErrors.assignTo?.[0]}
+            hint={
+              assignees.length === 0
+                ? "No hay profesionales que atiendan en el consultorio: sumá uno en Configuración para dar de alta pacientes."
+                : "Es quien atiende al paciente y carga su historia clínica."
+            }
+            options={[
+              { value: "", label: "Elegí un profesional" },
+              ...assignees.map((p) => ({ value: p.id, label: p.name })),
+            ]}
           />
-          <FormField
-            as="textarea"
-            label="Descripción"
-            name="diagnosisNote"
-            placeholder="Detalle del cuadro, objetivos, indicaciones…"
-            error={fieldErrors.diagnosisNote?.[0]}
-            hint="Autocompleta el título y la descripción de los turnos nuevos del paciente."
-          />
-        </Section>
+        )}
 
-        <FormField as="textarea" label="Notas generales" name="notes" error={fieldErrors.notes?.[0]} />
+        {mode === "full" && (
+          <>
+            <Section title={isKine ? "Diagnóstico (opcional)" : "Motivo de consulta (opcional)"}>
+              <FormField
+                label="Título"
+                name="diagnosisTitle"
+                placeholder={isKine ? "ej: Lumbalgia" : "ej: Control anual"}
+                error={fieldErrors.diagnosisTitle?.[0]}
+                hint="Máx. 80 caracteres."
+              />
+              <FormField
+                as="textarea"
+                label="Descripción"
+                name="diagnosisNote"
+                placeholder="Detalle del cuadro, objetivos, indicaciones…"
+                error={fieldErrors.diagnosisNote?.[0]}
+                hint="Autocompleta el título y la descripción de los turnos nuevos del paciente."
+              />
+            </Section>
+
+            <FormField as="textarea" label="Notas generales" name="notes" error={fieldErrors.notes?.[0]} />
+          </>
+        )}
 
         {error && (
           <div
@@ -142,7 +180,7 @@ export function NewPatientModal({ insurers, onClose }: { insurers: InsurerOption
           <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
             Cancelar
           </Button>
-          <Button type="submit" variant="primary" disabled={pending}>
+          <Button type="submit" variant="primary" disabled={pending || assignees?.length === 0}>
             {pending ? "Creando…" : "Crear paciente"}
           </Button>
         </div>

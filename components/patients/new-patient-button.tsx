@@ -7,6 +7,7 @@ import { IconPlus } from "@/components/ui/icons";
 import styles from "./patients-directory.module.css";
 
 type InsurerOption = { id: string; name: string };
+type PractitionerOption = { id: string; name: string };
 
 /**
  * PF1.1 (C-PF2): el drawer de alta (`new-patient-drawer.tsx`) se baja recién al abrirlo, y se precarga en
@@ -26,7 +27,14 @@ function preload() {
  * esconde; en escritorio, al revés. Los dos se pintan en el SSR y los alterna el CSS (`patients-directory.module.css`):
  * el server no conoce el ancho y así no hay salto al hidratar. Abren el mismo drawer.
  */
-export function NewPatientButton({ insurers = [] }: { insurers?: InsurerOption[] }) {
+export function NewPatientButton({
+  insurers = [],
+  assignees,
+}: {
+  insurers?: InsurerOption[];
+  /** T3d-1u: alta de la recepción con «Profesional a cargo» (ver `NewPatientModal`). Ausente = alta del profesional. */
+  assignees?: PractitionerOption[];
+}) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -48,7 +56,7 @@ export function NewPatientButton({ insurers = [] }: { insurers?: InsurerOption[]
           <IconPlus size={24} />
         </button>
       </span>
-      {open && <NewPatientModal insurers={insurers} onClose={() => setOpen(false)} />}
+      {open && <NewPatientModal insurers={insurers} assignees={assignees} onClose={() => setOpen(false)} />}
     </>
   );
 }
