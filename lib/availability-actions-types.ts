@@ -61,15 +61,8 @@ export const STAFF_SLOT_STEPS = [15, 30, 45, 60] as const;
 /** Profesionales por pedido (la agenda de un consultorio grande ronda 10). */
 export const AVAILABILITY_MAX_PRACTITIONERS = 50;
 
-/** Copy es-AR de cada clase, para el aviso en vivo del modal (B5.x). */
-export const INSTANT_CLASS_LABEL: Record<InstantClass, string> = {
-  libre: "Libre",
-  sobreturno: "Sobreturno: el cupo de ese horario está completo",
-  "paciente-superpuesto": "El paciente ya tiene otro turno en ese horario",
-  "fuera-de-horario": "Fuera del horario del profesional",
-  bloqueado: "Horario bloqueado",
-  duplicado: "El paciente ya tiene un turno a esa hora",
-};
+// T3a-0z2: `INSTANT_CLASS_LABEL` (copy del aviso en vivo del modal) se mudó a `lib/slot-picker-state.ts`: este archivo
+// lo importan componentes del first-load de /agenda y el copy viajaba ahí aunque solo lo muestra el modal diferido.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Entrada: los zod (`AgendaAvailabilityQuery`, `ListSlotsQuery`, `ClassifyInstantQuery`, `RecurrencePreviewQuery`)

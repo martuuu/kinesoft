@@ -18,7 +18,7 @@ import { toARDateKey } from "@/lib/datetime-ar";
 import { arDayStart } from "@/lib/time-blocks-window";
 
 // PF1-Z (D-PF5): `TIME_BLOCK_MAX_DAYS` y `arDayStart` viven en `lib/time-blocks-window.ts` (sin zod) y se re-exportan
-// acá. Los componentes cliente de la agenda (`day-lock-state`, `block-mode-state`) los importan de allá: importarlos de
+// acá. Los componentes cliente de la agenda (`day-lock-form`, `block-mode-state`) los importan de allá: importarlos de
 // este archivo arrastraba zod (~13 kB gz) al JS inicial de /agenda.
 export { TIME_BLOCK_MAX_DAYS, arDayStart } from "@/lib/time-blocks-window";
 /** Tope de la ventana de `listTimeBlocks` (una vista mensual + bordes). */

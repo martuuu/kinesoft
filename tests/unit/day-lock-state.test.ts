@@ -1,9 +1,11 @@
 /**
- * B4.4 AG-lock — lógica pura del candado de día (`lib/day-lock-state.ts`) y
+ * B4.4 AG-lock — lógica pura del candado de día (`lib/day-lock-state.ts` el botón,
+ * `lib/day-lock-form.ts` el diálogo; T3a-0z2) y
  * la ventana/zod de `lib/time-blocks-schemas.ts`. Corre en TZ=UTC (npm test)
  * y TZ=AR (test:tz-ar): las horas de pared tienen que salir AR en los dos.
  */
 import { describe, it, expect } from "vitest";
+import { dayLockTooltip, lockReasonOf, lockStatusOf } from "@/lib/day-lock-state";
 import {
   affectedHeadline,
   affectedLines,
@@ -12,11 +14,8 @@ import {
   buildDayLockScope,
   canLockRoom,
   dayKeyLongLabel,
-  dayLockTooltip,
   initialDayLockForm,
   isDayLockFormDirty,
-  lockReasonOf,
-  lockStatusOf,
   minutesLabel,
   removableBlocks,
   removeDayLockRequests,
@@ -27,7 +26,7 @@ import {
   roomNameOf,
   withRoomScope,
   ROOM_SCOPE_NOTE,
-} from "@/lib/day-lock-state";
+} from "@/lib/day-lock-form";
 import {
   DayLockApply,
   DayLockPreviewQuery,

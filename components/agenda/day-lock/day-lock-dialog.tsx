@@ -23,7 +23,7 @@
  *
  * Dirty-guard: cerrar con algo cargado (o con la decisión pendiente) pide
  * confirmación con `useConfirm`. Después de aplicar no hay nada que perder.
- * La lógica (estado inicial, validación, copy) vive en `lib/day-lock-state.ts`.
+ * La lógica (estado inicial, validación, copy) vive en `lib/day-lock-form.ts`.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Modal } from "@/components/ui/modal";
@@ -66,7 +66,7 @@ import {
   type DayLockFormErrors,
   type DayLockFormState,
   type ExistingDayBlock,
-} from "@/lib/day-lock-state";
+} from "@/lib/day-lock-form";
 
 type Step = "form" | "affected" | "done" | "unlocked";
 

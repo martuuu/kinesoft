@@ -22,8 +22,9 @@ import {
   slotQueryKey,
   summarizeSlots,
   todayDayKey,
+  INSTANT_CLASS_LABEL,
 } from "@/lib/slot-picker-state";
-import { INSTANT_CLASS_LABEL, type AnySlots, type InstantCheck, type StaffSlot } from "@/lib/availability-actions-types";
+import type { AnySlots, InstantCheck, StaffSlot } from "@/lib/availability-actions-types";
 
 const slot = (time: string, over: Partial<StaffSlot> = {}): StaffSlot => ({
   // 2026-10-05 (lunes) a esa hora AR = +3 h en UTC.

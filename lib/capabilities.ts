@@ -18,7 +18,7 @@
  */
 import type { Role } from "@prisma/client";
 import type { MemberAccess } from "@/lib/saas-plans-types";
-import { isClinicalMember } from "@/lib/roles";
+import { isClinicalMember } from "@/lib/roles-core";
 
 export const CAPABILITIES = [
   /** Ver la agenda de todos los profesionales del tenant (vista "Por profesional"). */

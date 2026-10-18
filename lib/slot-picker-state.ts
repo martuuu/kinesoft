@@ -16,14 +16,23 @@
  *     del profesional lo pone la UI con su propio mapa (`labelOf`).
  */
 import { addDays, dayKeyDiff, dowOfDayKey, formatWallTime } from "@/lib/availability/day";
-import type { DayKey, SlotUnavailableReason } from "@/lib/availability/types";
-import {
-  INSTANT_CLASS_LABEL,
-  type AnySlots,
-  type InstantCheck,
-  type StaffSlot,
-} from "@/lib/availability-actions-types";
+import type { DayKey, InstantClass, SlotUnavailableReason } from "@/lib/availability/types";
+import type { AnySlots, InstantCheck, StaffSlot } from "@/lib/availability-actions-types";
 import { toARDateKey, toARMinutes } from "@/lib/datetime-ar";
+
+/**
+ * Copy es-AR de cada clase, para el aviso en vivo del modal (B5.x).
+ * T3a-0z2 (19-oct): vivía en `lib/availability-actions-types.ts`, que entra al first-load de /agenda; acá solo lo
+ * carga el modal (diferido con `next/dynamic`).
+ */
+export const INSTANT_CLASS_LABEL: Record<InstantClass, string> = {
+  libre: "Libre",
+  sobreturno: "Sobreturno: el cupo de ese horario está completo",
+  "paciente-superpuesto": "El paciente ya tiene otro turno en ese horario",
+  "fuera-de-horario": "Fuera del horario del profesional",
+  bloqueado: "Horario bloqueado",
+  duplicado: "El paciente ya tiene un turno a esa hora",
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Días
