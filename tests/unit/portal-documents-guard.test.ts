@@ -116,7 +116,7 @@ describe("[FC-1e] red del portal: grafo de imports y lectura de documentos", () 
 
   // ── Lo que crea FC-2h (lectura + ruta del PDF) ─────────────────────────────────────────────────────────────────
 
-  it.fails("[FC-2h] portal-documents-internal sin noteId, sourceDigest, pdfStorageKey ni include:", () => {
+  it("[FC-2h] portal-documents-internal sin noteId, sourceDigest, pdfStorageKey ni include:", () => {
     expect(existsSync(abs(PORTAL_DOCUMENTS_INTERNAL)), `${PORTAL_DOCUMENTS_INTERNAL} no existe`).toBe(true);
     const src = read(PORTAL_DOCUMENTS_INTERNAL);
     expect(src).toMatch(/^import "server-only";/m);
@@ -134,7 +134,7 @@ describe("[FC-1e] red del portal: grafo de imports y lectura de documentos", () 
     }
   });
 
-  it.fails("[FC-2h] la ruta del PDF es server, pasa por requirePortalPatient y audita patientDocument.download", () => {
+  it("[FC-2h] la ruta del PDF es server, pasa por requirePortalPatient y audita patientDocument.download", () => {
     const route = DOCUMENTOS_FILES[2];
     expect(existsSync(abs(route)), `${route} no existe`).toBe(true);
     const src = read(route);

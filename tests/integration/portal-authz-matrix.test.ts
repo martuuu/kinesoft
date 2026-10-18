@@ -865,7 +865,7 @@ describe.skipIf(!RUN)("[ES4-S26p] matriz de autorización del portal", () => {
       expect(rows.filter((r) => r.revokedAt).map((r) => r.id)).toEqual([dRevoked]);
     });
 
-    it.fails("[FC-2h] matriz del portal: P ve el suyo (centinela SHARED_BODY); revocado y ajeno → null", async () => {
+    it("[FC-2h] matriz del portal: P ve el suyo (centinela SHARED_BODY); revocado y ajeno → null", async () => {
       as(P);
       const ref = await requirePortalPatient(K.slug);
       if (!ref) throw new Error("P debería tener ficha en K");
@@ -933,7 +933,7 @@ describe.skipIf(!RUN)("[ES4-S26p] matriz de autorización del portal", () => {
       });
     }
 
-    it.fails("[FC-2h] descarga: audit (ip/ua) antes de los bytes; revocado y ajeno → 404", async () => {
+    it("[FC-2h] descarga: audit (ip/ua) antes de los bytes; revocado y ajeno → 404", async () => {
       const GET = await pdfRoute();
       as(P);
       const res = await GET(pdfRequest(K.slug, dLive), { params: { slug: K.slug, id: dLive } });
@@ -952,7 +952,7 @@ describe.skipIf(!RUN)("[ES4-S26p] matriz de autorización del portal", () => {
       }
     });
 
-    it.fails("[FC-2h] descarga: audit caído → 503 sin bytes", async () => {
+    it("[FC-2h] descarga: audit caído → 503 sin bytes", async () => {
       const GET = await pdfRoute();
       as(P);
       auditFault.on = true;

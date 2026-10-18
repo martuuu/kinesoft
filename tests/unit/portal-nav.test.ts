@@ -12,17 +12,17 @@ const sections = (vertical: TenantVertical, plan: SaasPlan, publicBookingEnabled
   [...portalSectionsFor(modulesFor({ vertical, plan, publicBookingEnabled, moduleGrants: [], moduleRevokes: [] }))].sort();
 
 describe("[P4-C] portalSectionsFor", () => {
-  it("General Individual sin turnero = {inicio, cuenta}", () => {
-    expect(sections("GENERAL", "INDIVIDUAL", false)).toEqual(["cuenta", "inicio"]);
+  it("General Individual sin turnero = {inicio, cuenta, documentos}", () => {
+    expect(sections("GENERAL", "INDIVIDUAL", false)).toEqual(["cuenta", "documentos", "inicio"]);
   });
 
   it("General con turnero suma solo reservar (sin plan, checkin ni ejercicios)", () => {
-    for (const plan of PLANS) expect(sections("GENERAL", plan, true)).toEqual(["cuenta", "inicio", "reservar"]);
+    for (const plan of PLANS) expect(sections("GENERAL", plan, true)).toEqual(["cuenta", "documentos", "inicio", "reservar"]);
   });
 
   it("Kine sin turnero = sin reservar; con todo lo clínico del portal", () => {
     for (const plan of PLANS) {
-      expect(sections("KINESIOLOGY", plan, false)).toEqual(["checkin", "cuenta", "ejercicios", "inicio", "plan"]);
+      expect(sections("KINESIOLOGY", plan, false)).toEqual(["checkin", "cuenta", "documentos", "ejercicios", "inicio", "plan"]);
       expect(sections("KINESIOLOGY", plan, true)).toContain("reservar");
     }
   });
@@ -38,21 +38,16 @@ describe("[P4-C] portalSectionsFor", () => {
           for (const x of s) expect(allowed.has(x)).toBe(true);
           expect(s).toContain("inicio");
           expect(s).toContain("cuenta");
+          expect(s).toContain("documentos");
         }
     expect(n).toBe(16);
   });
 
-  it("el enum no tiene sección de historia clínica", () => {
-    expect(PORTAL_SECTIONS as readonly string[]).not.toContain("evoluciones");
-    // FC-2h: al sumar «documentos», esta lista exacta se borra (la fija la fila [FC-2h] de abajo).
-    expect([...PORTAL_SECTIONS].sort()).toEqual(["checkin", "cuenta", "ejercicios", "inicio", "plan", "reservar"]);
-  });
-
   // [FC-1e] T4 (C-FC8): el portal suma «Documentos» = lo que el profesional compartió (PatientDocument), nunca la HC.
   // La historia clínica (`evoluciones`) es CORE (todas las verticales y planes), así que la sección sale en las 16
-  // combinaciones; sin documentos compartidos la página muestra el vacío. Al darla vuelta, FC-2h suma "documentos" a
-  // las listas exactas de arriba y borra la lista exacta vieja de «el enum no tiene sección de historia clínica».
-  it.fails("[FC-2h] PORTAL_SECTIONS + documentos (nunca evoluciones)", () => {
+  // combinaciones; sin documentos compartidos la página muestra el vacío. La lista exacta del enum vive acá: sumar una
+  // sección es una decisión de producto (y de PHI, si toca la HC), no un cambio de una línea.
+  it("[FC-2h] PORTAL_SECTIONS + documentos (nunca evoluciones)", () => {
     expect(PORTAL_SECTIONS as readonly string[]).not.toContain("evoluciones");
     expect([...PORTAL_SECTIONS].sort()).toEqual(["checkin", "cuenta", "documentos", "ejercicios", "inicio", "plan", "reservar"]);
     for (const v of VERTICALS)
@@ -62,15 +57,17 @@ describe("[P4-C] portalSectionsFor", () => {
 
   it("checkin y ejercicios dependen de planes (sin planes no salen aunque estén sus módulos)", () => {
     const s = portalSectionsFor(new Set(["evaluaciones", "ejercicios", "evoluciones"] as const));
-    expect([...s].sort()).toEqual<PortalSection[]>(["cuenta", "inicio"]);
+    expect([...s].sort()).toEqual<PortalSection[]>(["cuenta", "documentos", "inicio"]);
     expect([...portalSectionsFor(new Set(["planes", "evaluaciones"] as const))].sort()).toEqual([
       "checkin",
       "cuenta",
+      "documentos",
       "inicio",
       "plan",
     ]);
     expect([...portalSectionsFor(new Set(["planes", "ejercicios"] as const))].sort()).toEqual([
       "cuenta",
+      "documentos",
       "ejercicios",
       "inicio",
       "plan",

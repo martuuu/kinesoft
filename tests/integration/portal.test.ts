@@ -430,7 +430,7 @@ describe.skipIf(!RUN)("portal · identidad y check-in", () => {
     const auth = await getPortalAuth();
     if (!auth.signedIn) throw new Error("sin sesión");
     const byTenant = new Map(auth.patients.map((p) => [p.tenantSlug, [...p.sections].sort()]));
-    expect(byTenant.get(A.slug)).toEqual(["checkin", "cuenta", "ejercicios", "inicio", "plan", "reservar"]);
-    expect(byTenant.get(G.slug)).toEqual(["cuenta", "inicio"]);
+    expect(byTenant.get(A.slug)).toEqual(["checkin", "cuenta", "documentos", "ejercicios", "inicio", "plan", "reservar"]);
+    expect(byTenant.get(G.slug)).toEqual(["cuenta", "documentos", "inicio"]);
   });
 });

@@ -9,14 +9,18 @@
  *   reservar   ⇐ turneroPublico
  *   cuenta     siempre (los turnos sueltos existen también en General)
  *   inicio     siempre
+ *   documentos siempre (T4, C-FC8: la historia clínica es CORE en todas las verticales y planes; sin nada compartido
+ *              la página muestra el vacío)
  *
- * NUNCA hay sección de historia clínica en el portal (EV2-D5): no está en el enum a propósito.
+ * NUNCA hay sección de historia clínica en el portal (EV2-D5, enmendada en T4): «documentos» es SOLO lo que el
+ * profesional compartió con el paciente (la foto ya impresa de una ficha, `PatientDocument`), nunca la HC ni sus notas.
+ * Por eso no hay ni habrá una sección «evoluciones» en el enum (lo fija `tests/unit/portal-nav.test.ts`).
  *
  * Puro (solo `import type`): lo pueden importar las superficies del portal sin sumar bundle.
  */
 import type { TenantModule } from "./tenant-modules";
 
-export const PORTAL_SECTIONS = ["inicio", "plan", "cuenta", "ejercicios", "checkin", "reservar"] as const;
+export const PORTAL_SECTIONS = ["inicio", "plan", "cuenta", "documentos", "ejercicios", "checkin", "reservar"] as const;
 export type PortalSection = (typeof PORTAL_SECTIONS)[number];
 
 // `modulesFor` devuelve sets memoizados: con un WeakMap el mismo set de módulos da el mismo set de secciones (identidad
@@ -26,7 +30,7 @@ const memo = new WeakMap<ReadonlySet<TenantModule>, ReadonlySet<PortalSection>>(
 export function portalSectionsFor(modules: ReadonlySet<TenantModule>): ReadonlySet<PortalSection> {
   const hit = memo.get(modules);
   if (hit) return hit;
-  const out = new Set<PortalSection>(["inicio", "cuenta"]);
+  const out = new Set<PortalSection>(["inicio", "cuenta", "documentos"]);
   if (modules.has("planes")) {
     out.add("plan");
     if (modules.has("evaluaciones")) out.add("checkin");
