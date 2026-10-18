@@ -3,6 +3,7 @@ import { sendViaResend, RESEND_ENDPOINT, RESEND_TIMEOUT_MS, parseRetryAfter } fr
 import { sendEmail, registerEmailSink, __setEmailTransportForTests } from "@/lib/email/index";
 import type { SendEmailInput, SendEmailResult } from "@/lib/email/types";
 import { makeEmailFetchFake } from "@/tests/helpers/email-fetch-fake";
+import { emailLogReason } from "@/lib/email/transport";
 
 // [IAM-0b] Resend por fetch (sin SDK) y `sendEmail`, el único punto de envío.
 //
@@ -336,5 +337,88 @@ describe("sendEmail", () => {
     const r = await sendEmail({ ...INPUT, html: '<a href="http://127.0.0.1:3000/x">x</a>', text: "" });
     expect(r.transport).toBe("blocked");
     expect(seen).toHaveLength(0);
+  });
+});
+
+// ── OPS-1a · el rechazo de Resend se puede diagnosticar ──────────────────────
+//
+// Por qué: Resend rechazaba los mails de prod y lo único que quedaba era `provider_error` a secas. `resend.ts` ya
+// extraía el `name` del body (`validation_error`, `invalid_from_address`…), pero `index.ts` lo tiraba. Ahora viaja en
+// `SendEmailResult.errorName`, sale en el log `email.failed` y EmailLog lo guarda como `provider_error:<name>:<status>`
+// (sin el mensaje del body, que puede repetir el destinatario).
+
+describe("[OPS-1a] errorName de Resend", () => {
+  let out: ReturnType<typeof captureStdout>;
+  let sinkCalls: SinkCall[];
+
+  beforeEach(() => {
+    for (const k of ENV_KEYS) vi.stubEnv(k, "");
+    vi.stubEnv("VERCEL_ENV", "production");
+    vi.stubEnv("RESEND_API_KEY", "re_supersecreta");
+    vi.stubEnv("EMAIL_FROM", "KineSoft <no-reply@mail.kinesoft.com.ar>");
+    out = captureStdout();
+    sinkCalls = [];
+    registerEmailSink(async (input, result, linkHost) => {
+      sinkCalls.push({ input, result, linkHost });
+    });
+  });
+  afterEach(() => {
+    out.restore();
+    registerEmailSink(null);
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("[OPS-1a] 403 de Resend → SendEmailResult lleva errorName y status; el sink lo recibe", async () => {
+    vi.stubGlobal(
+      "fetch",
+      makeEmailFetchFake({ status: 403, json: { name: "validation_error", message: "The kinesoft.app domain is not verified juana.perez@gmail.com" } }).fetch
+    );
+    const r = await sendEmail(INPUT);
+    expect(r).toEqual({ ok: false, transport: "resend", skipped: false, reason: "provider_error", status: 403, errorName: "validation_error" });
+    expect(sinkCalls[0].result).toEqual(r);
+  });
+
+  it("[OPS-1a] el log email.failed dice el errorName y el status, nunca el mensaje del body ni el destinatario", async () => {
+    vi.stubGlobal(
+      "fetch",
+      makeEmailFetchFake({ status: 422, json: { name: "invalid_from_address", message: "Invalid `from` field juana.perez@gmail.com" } }).fetch
+    );
+    await sendEmail(INPUT);
+    const log = out.lines.join("");
+    expect(log).toContain("email.failed");
+    expect(log).toContain("invalid_from_address");
+    expect(log).toContain("422");
+    expect(log).not.toContain("Invalid `from` field");
+    expect(log).not.toContain("juana.perez");
+  });
+
+  it("[OPS-1a] sin name en el body el resultado no inventa uno", async () => {
+    vi.stubGlobal("fetch", makeEmailFetchFake({ status: 502 }).fetch);
+    expect(await sendEmail(INPUT)).toEqual({ ok: false, transport: "resend", skipped: false, reason: "provider_error", status: 502 });
+  });
+});
+
+describe("[OPS-1a] emailLogReason · lo que guarda EmailLog.reason", () => {
+  it("[OPS-1a] con status: <reason>:<name>:<status>; sin name → unknown", () => {
+    expect(emailLogReason({ ok: false, transport: "resend", skipped: false, reason: "provider_error", status: 403, errorName: "validation_error" })).toBe(
+      "provider_error:validation_error:403"
+    );
+    expect(emailLogReason({ ok: false, transport: "resend", skipped: false, reason: "rate_limited", status: 429, errorName: "rate_limit_exceeded" })).toBe(
+      "rate_limited:rate_limit_exceeded:429"
+    );
+    expect(emailLogReason({ ok: false, transport: "resend", skipped: false, reason: "provider_error", status: 500 })).toBe("provider_error:unknown:500");
+  });
+
+  it("[OPS-1a] sin status queda el reason pelado; enviado → null", () => {
+    expect(emailLogReason({ ok: false, transport: "log", skipped: true, reason: "no_api_key" })).toBe("no_api_key");
+    expect(emailLogReason({ ok: false, transport: "resend", skipped: false, reason: "timeout" })).toBe("timeout");
+    expect(emailLogReason({ ok: true, transport: "resend", providerId: "re_1" })).toBeNull();
+  });
+
+  it("[OPS-1a] un errorName que no es identificador no entra (podría ser texto del body)", () => {
+    expect(
+      emailLogReason({ ok: false, transport: "resend", skipped: false, reason: "provider_error", status: 403, errorName: "ana@x.com no permitido" })
+    ).toBe("provider_error:unknown:403");
   });
 });

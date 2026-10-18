@@ -25,7 +25,7 @@ vi.mock("@/components/plataforma/reauth-modal", () => ({
 import { AuditView } from "@/components/plataforma/audit/audit-view";
 import { SystemView } from "@/components/plataforma/system/system-view";
 import { sanitizeAuditPayload, type PlatformAuditPage } from "@/lib/platform-audit-logic";
-import { buildSystemStatus } from "@/lib/platform-system-logic";
+import { buildRecentEmailFailures, buildSystemStatus } from "@/lib/platform-system-logic";
 import {
   CATALOG_PREFS_STORAGE_KEY,
   catalogHref,
@@ -120,9 +120,10 @@ describe("[BO3-E] SystemView", () => {
       { available: true, applied: 87, last: "20261014000000_platform_backoffice" },
       { up: true, ms: 5 }
     );
-    const html = renderToStaticMarkup(<SystemView status={status} />);
+    const html = renderToStaticMarkup(<SystemView status={{ ...status, emailFailures: { available: true, items: [] } }} />);
     expect(html).not.toMatch(/SECRETO/);
     expect(html).toContain("Correo (Resend)");
+    expect(html).toContain("Ninguno: todos los mails registrados salieron.");
     expect(html).toContain("Mercado Pago");
     expect(html).toContain(">OK<");
     expect(html).toContain(">Falta<");
@@ -142,14 +143,38 @@ describe("[BO3-E] SystemView", () => {
       { available: false },
       { up: true, ms: 5 }
     );
-    const html = renderToStaticMarkup(<SystemView status={status} />);
+    const html = renderToStaticMarkup(<SystemView status={{ ...status, emailFailures: { available: false } }} />);
     expect(html).not.toMatch(/SECRETO/);
     expect(html).toContain("Tiempo real (Supabase)");
+    expect(html).toContain("No se pudo leer el registro de mails");
     expect(html).toContain("Revisar · huella 0badf00d");
     expect(html).toContain("41 caracteres · espacios o saltos de línea al borde: sí");
     expect(html).toContain(">sin kid<");
     expect(html).toContain(">publishable<");
     expect(html).toContain("Probar desde el servidor");
+  });
+});
+
+describe("[OPS-1a] tarjeta «Últimos mails que no salieron»", () => {
+  it("[OPS-1a] fecha AR, tipo, código crudo + motivo y dominio; nunca el usuario de la dirección", () => {
+    const base = buildSystemStatus({}, { available: false }, { up: true, ms: 1 });
+    const items = buildRecentEmailFailures([
+      {
+        createdAt: new Date("2026-10-17T13:05:00Z"),
+        kind: "staff_invite",
+        status: "failed",
+        transport: "resend",
+        reason: "provider_error:validation_error:403",
+        toMasked: "j***@gmail.com",
+      },
+    ]);
+    const html = renderToStaticMarkup(<SystemView status={{ ...base, emailFailures: { available: true, items } }} />);
+    expect(html).toContain("Últimos mails que no salieron");
+    expect(html).toContain("10:05"); // 13:05 UTC = 10:05 AR, con TZ=UTC también
+    expect(html).toContain("staff_invite");
+    expect(html).toContain("provider_error:validation_error:403");
+    expect(html).toContain("a @gmail.com");
+    expect(html).not.toContain("j***");
   });
 });
 

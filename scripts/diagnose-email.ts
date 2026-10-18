@@ -26,12 +26,21 @@
  *     npx tsx --conditions=react-server scripts/diagnose-email.ts \
  *     --to vos@ejemplo.com --url https://tudominio --confirm
  *
+ * OPS-1a (rechazo de Resend en prod):
+ *   --from-name "<nombre>"  nombre del consultorio en el remitente («<nombre> vía …»). `--from-name ""` manda con
+ *                           EMAIL_FROM pelado: si así sale y con nombre no, el problema es el display-name.
+ *   --expect-domain <dom>   dominio VERIFICADO en Resend (exacto, p. ej. mail.tudominio). Sin él se compara por
+ *                           dominio base contra el host de --url / NEXT_PUBLIC_APP_URL.
+ *   Antes de mandar avisa si EMAIL_FROM es de otro dominio, si está vacía y cae al default de `transport.ts`, o si está
+ *   mal pegada (`lib/email/diagnose-logic.ts`). Con un rechazo muestra el `name` de Resend y qué suele significar.
+ *
  * `--conditions=react-server` porque `lib/email/index.ts` es `server-only`
  * (molde de `scripts/plans-dedupe-session-index.ts`). Sale con código 1 si el
  * mail no salió.
  */
 import { decideEmailTransport, maskEmail, normalizeEmailAddress, resolveBaseFrom, composeFrom, DEFAULT_EMAIL_FROM } from "../lib/email/transport";
 import { sendEmail } from "../lib/email/index";
+import { emailFromWarnings, expectedEmailDomain } from "../lib/email/diagnose-logic";
 import type { EmailKind, RenderedEmail } from "../lib/email/types";
 import {
   staffInviteEmail,
@@ -184,16 +193,24 @@ async function main(): Promise<number> {
   const probe = table[kinds[0]]();
   const route = decideEmailTransport(env, probe);
   const baseFrom = resolveBaseFrom(env);
+  // `--from-name` sin valor (o "") = sin nombre de consultorio: EMAIL_FROM tal cual.
+  const fromNameArg = arg("from-name");
+  const fromName = fromNameArg === undefined ? TENANT : fromNameArg.trim() || null;
+  const expected = expectedEmailDomain({ expectDomain: arg("expect-domain"), appUrl: base });
+  const warnings = emailFromWarnings(env, expected);
 
   console.log("\n── Diagnóstico del canal de mail ──\n");
   console.log(`Entorno         VERCEL_ENV=${env.VERCEL_ENV ?? "(sin setear)"} NODE_ENV=${env.NODE_ENV ?? "(sin setear)"}`);
   console.log(`RESEND_API_KEY  ${env.RESEND_API_KEY?.trim() ? "presente" : "ausente"}`);
   console.log(`EMAIL_FROM      ${baseFrom ?? "(ausente: en Production no sale nada)"}`);
-  console.log(`Remitente       ${composeFrom(baseFrom ?? DEFAULT_EMAIL_FROM, TENANT)}`);
+  console.log(`Remitente       ${composeFrom(baseFrom ?? DEFAULT_EMAIL_FROM, fromName)}`);
+  console.log(`Dominio esperado ${expected ? `${expected.domain}${expected.exact ? " (exacto, --expect-domain)" : " (por dominio base, de la URL)"}` : "(sin dato: pasá --expect-domain)"}`);
   console.log(`EMAIL_TRANSPORT ${env.EMAIL_TRANSPORT?.trim() || "(sin setear)"}`);
   console.log(`Base de links   ${base}`);
   console.log(`Destinatario    ${maskEmail(to)}`);
   console.log(`Transporte      ${route.transport} — ${route.why}`);
+
+  for (const w of warnings) console.log(`AVISO           ${w.text}`);
 
   if (route.transport === "resend" && arg("confirm") === undefined) {
     console.error(`\nEl transporte es Resend: esto manda ${kinds.length} mail(s) REAL(es). Repetí con --confirm.`);
@@ -204,17 +221,22 @@ async function main(): Promise<number> {
   console.log("");
   for (const kind of kinds) {
     const m = table[kind]();
-    const r = await sendEmail({ ...m, kind, to, fromName: TENANT, entity: "diagnose-email" });
+    const r = await sendEmail({ ...m, kind, to, fromName, entity: "diagnose-email" });
     if (r.ok) {
       console.log(`OK    ${kind.padEnd(21)} ${r.transport} id=${r.providerId ?? "(sin id)"}`);
     } else {
       // skipped (log) no es un fallo del canal si el entorno lo decidió a propósito.
       const isFailure = !r.skipped || r.reason === "no_api_key" || r.reason === "no_from";
       if (isFailure) failures++;
-      console.log(`${isFailure ? "FALLA" : "NO SE MANDÓ"} ${kind.padEnd(21)} ${r.transport} reason=${r.reason}${r.status ? ` status=${r.status}` : ""}`);
+      console.log(`${isFailure ? "FALLA" : "NO SE MANDÓ"} ${kind.padEnd(21)} ${r.transport} reason=${r.reason}${r.status ? ` status=${r.status}` : ""}${r.errorName ? ` name=${r.errorName}` : ""}`);
       if (r.status === 401) console.log("      401: API key inválida o revocada.");
       if (r.status === 403) console.log("      403: dominio sin verificar en Resend, o key restringida a otro dominio.");
       if (r.status === 422) console.log("      422: EMAIL_FROM mal formado o de un dominio no autorizado.");
+      // OPS-1a: los `name` que más aparecen. El mensaje del body no se muestra (puede repetir el destinatario).
+      if (r.errorName === "validation_error") console.log("      validation_error: casi siempre el dominio del remitente no es el verificado, o la cuenta está en modo prueba (solo manda a tu propio mail).");
+      if (r.errorName === "invalid_from_address") console.log("      invalid_from_address: EMAIL_FROM mal pegado (comillas, espacios, sin <casilla>). Probá con --from-name \"\".");
+      if (r.errorName === "invalid_api_key" || r.errorName === "restricted_api_key") console.log(`      ${r.errorName}: la key no sirve para mandar (revocada, de otra cuenta o solo lectura).`);
+      if (r.errorName && warnings.length) console.log("      Revisá los AVISO de arriba: suelen ser la causa.");
       if (r.reason === "unsafe_link_host") console.log("      Links a localhost: pasá --url https://tu-dominio.");
       if (r.reason === "mailpit_unreachable") console.log("      Mailpit no responde: docker compose --profile mail up -d mailpit");
     }

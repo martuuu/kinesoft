@@ -38,10 +38,121 @@ export type SystemCheck = {
 
 export type SystemGroup = { id: string; title: string; checks: SystemCheck[] };
 
-export type PlatformSystemStatus = {
+/** Lo que arma `buildSystemStatus` (la configuración de este deploy). */
+export type SystemConfigStatus = {
   generatedAt: string;
   groups: SystemGroup[];
 };
+
+/**
+ * OPS-1a · una fila de la tarjeta «Últimos mails que no salieron». Solo lo que sirve para diagnosticar sin datos de
+ * nadie: cuándo, qué tipo de mail, por qué (el `reason` de EmailLog, re-validado) y el DOMINIO del destinatario (para
+ * ver si fallan solo los de un proveedor). Nunca el usuario de la dirección (ni enmascarado), ni el cuerpo (EmailLog
+ * no lo guarda), ni el link.
+ */
+export type RecentEmailFailure = {
+  at: string;
+  kind: string;
+  status: string;
+  reason: string;
+  /** El motivo en castellano (`emailFailureLabel`). */
+  label: string;
+  recipientDomain: string | null;
+};
+
+export type EmailFailuresInfo = { available: true; items: RecentEmailFailure[] } | { available: false };
+
+export type PlatformSystemStatus = SystemConfigStatus & { emailFailures: EmailFailuresInfo };
+
+/** Fila de EmailLog tal como la lee `platform-system-read.ts` (el `select` exacto). */
+export type EmailFailureRow = {
+  createdAt: Date;
+  kind: string;
+  status: string;
+  transport: string;
+  reason: string | null;
+  toMasked: string;
+};
+
+/** Techo de la tarjeta: los últimos 10 alcanzan para ver un patrón; el historial completo está en EmailLog. */
+export const EMAIL_FAILURES_LIMIT = 10;
+
+/**
+ * Qué filas de EmailLog cuentan como «no salió»: `failed` y `blocked` siempre; `skipped` solo por config faltante
+ * (`no_api_key`, `no_from`), que en Production significa que nadie recibe sus mails. `log_only` (Preview, dev) y
+ * `mailpit_unreachable` son el entorno decidiendo no mandar: llenarían la tarjeta de ruido.
+ */
+export const EMAIL_FAILURE_SKIP_REASONS = ["no_api_key", "no_from"] as const;
+
+/** `reason` de EmailLog: `provider_error` o `provider_error:validation_error:403` (`emailLogReason`). Otra cosa no sale. */
+const EMAIL_REASON = /^([a-z_]{1,32})(?::([a-z_]{1,48}):(\d{3}))?$/;
+const EMAIL_KIND = /^[a-z_]{1,48}$/;
+const EMAIL_STATUS = ["failed", "blocked", "skipped"];
+const DOMAIN = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/;
+
+/** El motivo, en una línea, con la causa más probable. Pensado para Martin mirando por qué Resend rechaza. */
+export function emailFailureLabel(reason: string): string {
+  const m = EMAIL_REASON.exec(reason);
+  if (!m) return "Motivo no reconocido.";
+  const [, base, name, statusRaw] = m;
+  const status = statusRaw ? Number(statusRaw) : null;
+  if (base === "provider_error" || base === "rate_limited") {
+    if (status === 429 || base === "rate_limited") return "Resend frenó por límite de envíos (429). Se reintenta solo con el próximo envío.";
+    if (status === 401) return "Resend rechazó la clave (401): API key inválida o revocada.";
+    if (status === 403)
+      return name === "validation_error"
+        ? "Resend rechazó (403): el dominio del remitente no es el verificado, la key es de otro dominio o la cuenta está en modo prueba."
+        : "Resend rechazó (403): dominio sin verificar o key restringida a otro dominio.";
+    if (status === 422) return "Resend rechazó el remitente o el destinatario (422): EMAIL_FROM mal pegado o de un dominio no autorizado.";
+    if (status !== null && status >= 500) return `Resend falló de su lado (${status}). Suele ser pasajero.`;
+    return status !== null ? `El proveedor rechazó el envío (${status}).` : "El proveedor rechazó el envío.";
+  }
+  switch (base) {
+    case "no_api_key":
+      return "No salió: falta la clave de Resend (RESEND_API_KEY).";
+    case "no_from":
+      return "No salió: falta el remitente (EMAIL_FROM).";
+    case "unsafe_link_host":
+      return "Bloqueado: el mail llevaba un link a localhost (revisá NEXT_PUBLIC_APP_URL).";
+    case "invalid_to":
+      return "El destinatario no es una dirección válida.";
+    case "timeout":
+      return "Resend no contestó en 5 s.";
+    case "network_error":
+      return "No se pudo conectar con Resend (red o DNS).";
+    case "internal_error":
+      return "Error interno al armar o mandar el mail.";
+    default:
+      return "Motivo no reconocido.";
+  }
+}
+
+/** `j***@gmail.com` → `gmail.com`. null si la máscara no tiene la forma esperada. */
+function domainOfMasked(masked: string): string | null {
+  const at = masked.lastIndexOf("@");
+  if (at < 0) return null;
+  const d = masked.slice(at + 1).trim().toLowerCase();
+  return DOMAIN.test(d) ? d : null;
+}
+
+/**
+ * OPS-1a · arma la tarjeta a partir de las filas de EmailLog. Puro (lo prueba el unit con filas marcadas): todo campo
+ * se re-valida por forma, porque `reason` y `kind` son TEXT libres en la base y una fila escrita por otro camino podría
+ * traer cualquier cosa.
+ */
+export function buildRecentEmailFailures(rows: EmailFailureRow[]): RecentEmailFailure[] {
+  return rows.slice(0, EMAIL_FAILURES_LIMIT).map((r) => {
+    const reason = r.reason && EMAIL_REASON.test(r.reason) ? r.reason : "desconocido";
+    return {
+      at: r.createdAt.toISOString(),
+      kind: EMAIL_KIND.test(r.kind) ? r.kind : "desconocido",
+      status: EMAIL_STATUS.includes(r.status) ? r.status : "desconocido",
+      reason,
+      label: emailFailureLabel(reason),
+      recipientDomain: domainOfMasked(r.toMasked),
+    };
+  });
+}
 
 /** Entrada del builder: las variables tal como las tiene `lib/env.ts` (+ CRON_SECRET, que todavía no está ahí). */
 export type SystemConfigInput = {
@@ -176,7 +287,7 @@ export function buildSystemStatus(
   migrations: MigrationsInfo,
   health: HealthInfo,
   now: Date = new Date()
-): PlatformSystemStatus {
+): SystemConfigStatus {
   const realtime = enumValue(input.REALTIME_DRIVER, REALTIME_DRIVERS, "off");
   const access = enumValue(input.TENANT_ACCESS_ENFORCEMENT, ACCESS_ENFORCEMENTS as readonly string[], "banner");
   const vercelEnv = enumValue(input.VERCEL_ENV, ["production", "preview", "development"], "local");

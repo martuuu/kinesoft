@@ -8,7 +8,7 @@
  *     (`requirePlatformAdmin`), la base (`prismaService.$queryRaw`) y el ping; nunca la función bajo test.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { buildSystemStatus, type SystemConfigInput } from "@/lib/platform-system-logic";
+import { buildSystemStatus, buildRecentEmailFailures, emailFailureLabel, type SystemConfigInput } from "@/lib/platform-system-logic";
 
 const MARKED: Required<SystemConfigInput> = {
   RESEND_API_KEY: "re_SECRETO-RESEND-1234567890",
@@ -114,6 +114,17 @@ describe("[BO3-E] getPlatformSystemStatus · el export real con env marcado", ()
     vi.doUnmock("@/lib/db-ping");
   });
 
+  const emailLogFindMany = vi.fn(async (_args: unknown) => [
+    {
+      createdAt: new Date("2026-10-17T13:00:00Z"),
+      kind: "staff_invite",
+      status: "failed",
+      transport: "resend",
+      reason: "provider_error:validation_error:403",
+      toMasked: "j***@gmail.com",
+    },
+  ]);
+
   async function load(requireImpl: () => Promise<unknown>) {
     vi.resetModules();
     // VERCEL_ENV no se setea: el fail-fast de Production de `lib/env.ts` no aplica (no es lo que se prueba acá).
@@ -122,7 +133,11 @@ describe("[BO3-E] getPlatformSystemStatus · el export real con env marcado", ()
     vi.doMock("@/lib/platform-actor", () => ({ requirePlatformAdmin }));
     vi.doMock("@/lib/db", () => ({
       prisma: {},
-      prismaService: { $queryRaw: vi.fn(async () => [{ applied: BigInt(42), last: "20261014000000_identity_access" }]) },
+      prismaService: {
+        $queryRaw: vi.fn(async () => [{ applied: BigInt(42), last: "20261014000000_identity_access" }]),
+        // OPS-1a: la tarjeta de mails que no salieron lee EmailLog por el canal service.
+        emailLog: { findMany: emailLogFindMany },
+      },
     }));
     vi.doMock("@/lib/db-ping", () => ({ pingDb: vi.fn(async () => ({ up: true, ms: 3 })) }));
     const mod = await import("@/lib/platform-system-read");
@@ -140,6 +155,20 @@ describe("[BO3-E] getPlatformSystemStatus · el export real con env marcado", ()
     expect(byKey.REALTIME_DRIVER.value).toBe("supabase");
     expect(byKey.TENANT_ACCESS_ENFORCEMENT.value).toBe("enforce");
     expect(byKey.migrations.value).toBe("42");
+    // OPS-1a: la tarjeta trae el motivo y el dominio, nunca el usuario enmascarado.
+    expect(s.emailFailures).toMatchObject({ available: true, items: [{ kind: "staff_invite", reason: "provider_error:validation_error:403", recipientDomain: "gmail.com" }] });
+    expect(JSON.stringify(s)).not.toContain("j***");
+    const args = emailLogFindMany.mock.calls[0][0] as { take: number; orderBy: unknown; select: Record<string, boolean> };
+    expect(args.take).toBe(10);
+    expect(args.orderBy).toEqual({ createdAt: "desc" });
+    expect(Object.keys(args.select).sort()).toEqual(["createdAt", "kind", "reason", "status", "toMasked", "transport"]);
+  });
+
+  it("[OPS-1a] si EmailLog no se puede leer, la página no se cae (tarjeta «no disponible»)", async () => {
+    emailLogFindMany.mockRejectedValueOnce(new Error("permission denied"));
+    const { mod } = await load(async () => ({ userId: "u", email: "e", homeTenantId: null }));
+    const s = await mod.getPlatformSystemStatus();
+    expect(s.emailFailures).toEqual({ available: false });
   });
 
   it("sin superadmin → tira y no lee nada", async () => {
@@ -147,5 +176,54 @@ describe("[BO3-E] getPlatformSystemStatus · el export real con env marcado", ()
       throw new Error("platform_admin_required");
     });
     await expect(mod.getPlatformSystemStatus()).rejects.toThrow("platform_admin_required");
+  });
+});
+
+describe("[OPS-1a] buildRecentEmailFailures · «Últimos mails que no salieron»", () => {
+  const row = (over: Partial<Parameters<typeof buildRecentEmailFailures>[0][number]> = {}) => ({
+    createdAt: new Date("2026-10-17T13:00:00Z"),
+    kind: "password_reset",
+    status: "failed",
+    transport: "resend",
+    reason: "provider_error:validation_error:403",
+    toMasked: "j***@gmail.com",
+    ...over,
+  });
+
+  it("[OPS-1a] fecha, tipo, motivo y dominio del destinatario; nunca el usuario", () => {
+    const out = buildRecentEmailFailures([row()]);
+    expect(out).toEqual([
+      {
+        at: "2026-10-17T13:00:00.000Z",
+        kind: "password_reset",
+        status: "failed",
+        reason: "provider_error:validation_error:403",
+        label: emailFailureLabel("provider_error:validation_error:403"),
+        recipientDomain: "gmail.com",
+      },
+    ]);
+    expect(JSON.stringify(out)).not.toContain("j***");
+  });
+
+  it("[OPS-1a] reason, kind o dominio con forma rara no salen tal cual (alguien metió otra cosa en la fila)", () => {
+    const [x] = buildRecentEmailFailures([row({ reason: "provider_error: SECRETO ana@x.com", kind: "SECRETO kind", toMasked: "SECRETO sin arroba" })]);
+    expect(JSON.stringify(x)).not.toMatch(/SECRETO|ana@x\.com/);
+    expect(x).toMatchObject({ reason: "desconocido", kind: "desconocido", recipientDomain: null });
+  });
+
+  it("[OPS-1a] techo de 10 filas", () => {
+    expect(buildRecentEmailFailures(Array.from({ length: 15 }, () => row()))).toHaveLength(10);
+  });
+
+  it("[OPS-1a] los motivos más comunes del rechazo se leen en castellano", () => {
+    expect(emailFailureLabel("provider_error:validation_error:403")).toMatch(/dominio/i);
+    expect(emailFailureLabel("provider_error:unknown:401")).toMatch(/clave/i);
+    expect(emailFailureLabel("provider_error:invalid_from_address:422")).toMatch(/remitente/i);
+    expect(emailFailureLabel("rate_limited:rate_limit_exceeded:429")).toMatch(/límite/i);
+    expect(emailFailureLabel("no_api_key")).toMatch(/clave/i);
+    expect(emailFailureLabel("no_from")).toMatch(/remitente/i);
+    expect(emailFailureLabel("unsafe_link_host")).toMatch(/localhost|local/i);
+    expect(emailFailureLabel("timeout")).toMatch(/5 s/);
+    expect(emailFailureLabel("desconocido")).toBeTruthy();
   });
 });

@@ -16,6 +16,12 @@ import "server-only";
  *
  * Migraciones: `_prisma_migrations` por `prismaService`. En prod el canal service es un rol BYPASSRLS que puede no
  * tener SELECT sobre esa tabla (la crea el owner): si falla, el panel dice «no se pudo leer», no se cae.
+ *
+ * OPS-1a: «Últimos mails que no salieron» lee los últimos 10 EmailLog fallidos de TODOS los consultorios (y los sin
+ * consultorio: auth, Plataforma) por `prismaService`; es la vista del superadmin, la misma barrera
+ * `requirePlatformAdmin`. El `select` trae solo fecha, tipo, estado, transporte, motivo y la máscara (de la que la
+ * lógica pura se queda con el dominio). Sin índice por `createdAt` solo: hoy EmailLog es chica y la página es de
+ * consulta ocasional; si crece, un índice `(status, createdAt)` va en una migración propia (no en esta tanda).
  */
 import { prismaService } from "@/lib/db";
 import { env, tenantAccessEnforcement } from "@/lib/env";
@@ -23,7 +29,15 @@ import { pingDb } from "@/lib/db-ping";
 import { logger } from "@/lib/logger";
 import { requirePlatformAdmin } from "@/lib/platform-actor";
 import { describeRealtimeSecret } from "@/lib/realtime-token-internal";
-import { buildSystemStatus, type MigrationsInfo, type PlatformSystemStatus } from "@/lib/platform-system-logic";
+import {
+  buildRecentEmailFailures,
+  buildSystemStatus,
+  EMAIL_FAILURE_SKIP_REASONS,
+  EMAIL_FAILURES_LIMIT,
+  type EmailFailuresInfo,
+  type MigrationsInfo,
+  type PlatformSystemStatus,
+} from "@/lib/platform-system-logic";
 
 export type { PlatformSystemStatus } from "@/lib/platform-system-logic";
 
@@ -40,12 +54,29 @@ async function readMigrations(): Promise<MigrationsInfo> {
   }
 }
 
+async function readEmailFailures(): Promise<EmailFailuresInfo> {
+  try {
+    const rows = await prismaService.emailLog.findMany({
+      where: {
+        OR: [{ status: { in: ["failed", "blocked"] } }, { status: "skipped", reason: { in: [...EMAIL_FAILURE_SKIP_REASONS] } }],
+      },
+      orderBy: { createdAt: "desc" },
+      take: EMAIL_FAILURES_LIMIT,
+      select: { createdAt: true, kind: true, status: true, transport: true, reason: true, toMasked: true },
+    });
+    return { available: true, items: buildRecentEmailFailures(rows) };
+  } catch (err) {
+    logger.warn("platform.system.email_log_unavailable", { error: err instanceof Error ? err.name : "unknown" });
+    return { available: false };
+  }
+}
+
 export async function getPlatformSystemStatus(): Promise<PlatformSystemStatus> {
   await requirePlatformAdmin("platform.read");
-  const [migrations, ping] = await Promise.all([readMigrations(), pingDb()]);
+  const [migrations, ping, emailFailures] = await Promise.all([readMigrations(), pingDb(), readEmailFailures()]);
   if (!ping.up) logger.error("platform.system.db_down", { reason: ping.reason });
 
-  return buildSystemStatus(
+  const config = buildSystemStatus(
     {
       RESEND_API_KEY: env.RESEND_API_KEY,
       EMAIL_FROM: env.EMAIL_FROM,
@@ -67,4 +98,5 @@ export async function getPlatformSystemStatus(): Promise<PlatformSystemStatus> {
     migrations,
     { up: ping.up, ms: ping.ms }
   );
+  return { ...config, emailFailures };
 }

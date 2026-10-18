@@ -39,7 +39,7 @@ import type { Prisma } from "@prisma/client";
 import { prismaService } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { registerEmailSink, type EmailSink } from "@/lib/email/index";
-import { maskEmail } from "@/lib/email/transport";
+import { emailLogReason, maskEmail } from "@/lib/email/transport";
 import { normalizeEmail } from "@/lib/email-match";
 import type { SendEmailInput, SendEmailResult } from "@/lib/email/types";
 
@@ -74,7 +74,8 @@ export function emailLogRowFor(
     transport: result.transport,
     status: emailLogStatus(result),
     providerId: result.ok ? result.providerId : null,
-    reason: result.ok ? null : result.reason,
+    // OPS-1a: `provider_error:<name>:<status>` cuando el proveedor contestó (ver `emailLogReason`).
+    reason: emailLogReason(result),
     linkHost,
     actorId: input.actorId ?? null,
   };

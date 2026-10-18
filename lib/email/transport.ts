@@ -32,7 +32,7 @@
  *     de Traze: el dev mandaba invitaciones reales con links a localhost
  *     porque la key de prod "se colaba" desde `.env`). Si no, `log`.
  */
-import type { EmailTransportName } from "@/lib/email/types";
+import type { EmailTransportName, SendEmailResult } from "@/lib/email/types";
 
 /** Variables de entorno como entran (`process.env` o un objeto de test). */
 export type EnvLike = Record<string, string | undefined>;
@@ -262,4 +262,24 @@ export function maskEmail(addr: string): string {
   const at = addr.lastIndexOf("@");
   if (at < 1) return "***";
   return `${addr[0]}***@${addr.slice(at + 1)}`;
+}
+
+// ── EmailLog.reason ──────────────────────────────────────────────────────────
+
+/** Un `name` de error de Resend: identificador en minúsculas. La misma forma que acepta `resend.ts`. */
+const PROVIDER_ERROR_NAME = /^[a-z_]{1,48}$/;
+
+/**
+ * OPS-1a · el `reason` que guarda EmailLog. Con respuesta HTTP del proveedor: `<reason>:<name>:<status>`
+ * (`provider_error:validation_error:403`, `rate_limited:rate_limit_exceeded:429`; `unknown` si el body no traía
+ * `name`). Sin status queda el reason pelado (`no_api_key`, `timeout`…), así los que comparan contra esos valores
+ * (`inviteEmailStatusCopy`) no cambian. Por qué el compuesto: el rechazo de prod quedaba como `provider_error` y no se
+ * podía distinguir dominio sin verificar (403) de key inválida (401) o remitente mal formado (422) sin abrir Vercel.
+ * Ni el mensaje del body ni direcciones: solo el código y el número.
+ */
+export function emailLogReason(result: SendEmailResult): string | null {
+  if (result.ok) return null;
+  if (result.status === undefined) return result.reason;
+  const name = result.errorName && PROVIDER_ERROR_NAME.test(result.errorName) ? result.errorName : "unknown";
+  return `${result.reason}:${name}:${result.status}`;
 }

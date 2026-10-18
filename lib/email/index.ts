@@ -69,7 +69,7 @@ export function __setEmailTransportForTests(t: TestTransport | null): void {
 function fail(
   transport: SendEmailResult["transport"],
   reason: EmailNotSentReason,
-  extra: { skipped?: boolean; status?: number } = {}
+  extra: { skipped?: boolean; status?: number; errorName?: string | null } = {}
 ): SendEmailResult {
   return {
     ok: false,
@@ -77,6 +77,8 @@ function fail(
     skipped: extra.skipped ?? false,
     reason,
     ...(extra.status !== undefined ? { status: extra.status } : {}),
+    // OPS-1a: solo si vino (un `errorName: null` en cada resultado ensuciaría los `toEqual` y la UI).
+    ...(extra.errorName ? { errorName: extra.errorName } : {}),
   };
 }
 
@@ -105,7 +107,8 @@ async function dispatch(input: SendEmailInput, to: string): Promise<SendEmailRes
   if (r.ok) return { ok: true, transport: "resend", providerId: r.id };
   if (r.reason === "no_api_key") return fail("log", "no_api_key", { skipped: true });
   if (!("status" in r)) return fail("resend", r.reason);
-  return fail("resend", r.reason, { status: r.status });
+  // OPS-1a: el `errorName` que extrae `resend.ts` antes se tiraba acá; es lo que dice POR QUÉ rechazó Resend.
+  return fail("resend", r.reason, { status: r.status, errorName: r.errorName });
 }
 
 function logResult(input: SendEmailInput, to: string, result: SendEmailResult, linkHost: string | null): void {
@@ -131,7 +134,7 @@ function logResult(input: SendEmailInput, to: string, result: SendEmailResult, l
     logger[lvl]("email.skipped", { ...ctx, reason: result.reason });
   } else {
     const lvl = result.reason === "internal_error" ? "error" : "warn";
-    logger[lvl]("email.failed", { ...ctx, reason: result.reason, status: result.status });
+    logger[lvl]("email.failed", { ...ctx, reason: result.reason, status: result.status, errorName: result.errorName });
   }
 }
 

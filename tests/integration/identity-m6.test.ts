@@ -399,7 +399,7 @@ describe.skipIf(!RUN)("M6 · EmailLog sink (lib/email/log.ts) enchufado al sendE
     });
     expect(
       emailLogRowFor(base, { ok: false, transport: "resend", skipped: false, reason: "provider_error", status: 500 }, null)
-    ).toMatchObject({ status: "failed", reason: "provider_error" });
+    ).toMatchObject({ status: "failed", reason: "provider_error:unknown:500" });
     expect(
       emailLogRowFor(base, { ok: false, transport: "blocked", skipped: false, reason: "unsafe_link_host" }, "localhost")
     ).toMatchObject({ status: "blocked", linkHost: "localhost" });

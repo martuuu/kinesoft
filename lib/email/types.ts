@@ -71,4 +71,16 @@ export type SendEmailInput = RenderedEmail & {
  */
 export type SendEmailResult =
   | { ok: true; transport: EmailTransportName; providerId: string | null }
-  | { ok: false; transport: EmailTransportName; skipped: boolean; reason: string; status?: number };
+  | {
+      ok: false;
+      transport: EmailTransportName;
+      skipped: boolean;
+      reason: string;
+      status?: number;
+      /**
+       * OPS-1a: el `name` del body de error de Resend (`validation_error`, `invalid_from_address`, …), solo cuando vino
+       * y tiene forma de identificador. Antes se descartaba y en prod solo quedaba `provider_error` a secas, sin forma
+       * de saber si era el dominio, la key o el remitente. Nunca el `message` (puede repetir el destinatario).
+       */
+      errorName?: string;
+    };
