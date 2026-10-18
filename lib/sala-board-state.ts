@@ -164,8 +164,10 @@ export function salaActions(
 ): ReceptionAction[] {
   if (!who.canReception) return [];
   const mine = who.practitionerId != null && entry.row.practitionerId === who.practitionerId;
+  // SV-D2: el profesional opera sus filas; quien opera la agenda, todas. AS-0d: el turno propio no depende de
+  // `canOperate` (el server deja operar al profesional del turno aunque el paciente sea `basic`, `markReceptionAction`).
   if (!mine && !who.canOperateAll) return [];
-  if (entry.row.canOperate === false) return [];
+  if (!mine && entry.row.canOperate === false) return [];
   const isToday = dayKeyOf(new Date(entry.row.scheduledFor)) === dayKeyOf(now);
   return visibleActions(entry.actions, isToday);
 }

@@ -136,6 +136,10 @@ const PractitionerDayView = dynamic(() =>
 // llega renderizada.
 const RoomDayPanel = dynamic(() => import("./views/room-day-panel").then((m) => m.RoomDayPanel));
 const RoomFilter = dynamic(() => import("./room-filter").then((m) => m.RoomFilter));
+// AS-0d (mbz-roomfilter-cls): mismo patrón que las vistas. Sin `SsrHold`, un re-render del padre antes de que llegue el
+// chunk borraba el HTML del server del filtro (chips que desaparecen y vuelven = CLS).
+let roomFilterModule: typeof import("./room-filter") | undefined;
+const loadRoomFilter = () => import("./room-filter").then((m) => void (roomFilterModule = m));
 // PF1-Z (D-PF-B): Semana y Lista también fuera del first load (con SSR: si es la vista inicial llega renderizada y su
 // chunk se precarga desde el HTML). Día es la vista por defecto; con esto /agenda baja de 180,9 a ≤ 180 kB gz. Se
 // precargan en idle (`prefetchAgendaChunks`) para que el cambio de vista no espere red.
@@ -192,6 +196,7 @@ const RoomDayPanelC = preferLoaded(RoomDayPanel, () => viewModules.room?.RoomDay
 const WeekGridViewC = preferLoaded(WeekGridView, () => viewModules["week-grid"]?.WeekGridView);
 const ListViewC = preferLoaded(ListView, () => viewModules.list?.ListView);
 const WeekDayListC = preferLoaded(WeekDayList, () => viewModules["week-list"]?.WeekDayList);
+const RoomFilterC = preferLoaded(RoomFilter, () => roomFilterModule?.RoomFilter);
 /** Precarga en idle de los chunks que se abren con un click. Idempotente: el
  *  bundler cachea el `import()`. */
 function prefetchAgendaChunks() {
@@ -607,6 +612,17 @@ export function AgendaClient(props: Props) {
     [rooms, locationId, primaryLocationId]
   );
   const roomCount = scopeRooms.length;
+  const [roomFilterReady, setRoomFilterReady] = useState(() => !!roomFilterModule);
+  useEffect(() => {
+    if (roomCount < 2 || roomFilterReady) return;
+    let on = true;
+    loadRoomFilter()
+      .catch(() => {})
+      .finally(() => on && setRoomFilterReady(true));
+    return () => {
+      on = false;
+    };
+  }, [roomCount, roomFilterReady]);
   // SRZ B4: parado en "Por sala" en una sede sin salas (se cambió de sede con
   // la página abierta), el toggle igual ofrece "Por sala" marcado y la salida
   // a "Por día"; si no, quedaban opciones sin marcar (o ningún toggle con un
@@ -1125,13 +1141,15 @@ export function AgendaClient(props: Props) {
           <>
             <LocationFilter locations={props.locations ?? EMPTY} value={locationId} onChange={onLocationChange} />
             {roomCount >= 2 && (
-              <RoomFilter
-                rooms={scopeRooms}
-                value={roomId}
-                onChange={(id) => persistPrefs({ roomId: id })}
-                counts={roomCounts?.counts}
-                total={roomCounts?.total}
-              />
+              <SsrHold ready={roomFilterReady}>
+                <RoomFilterC
+                  rooms={scopeRooms}
+                  value={roomId}
+                  onChange={(id) => persistPrefs({ roomId: id })}
+                  counts={roomCounts?.counts}
+                  total={roomCounts?.total}
+                />
+              </SsrHold>
             )}
           </>
         }

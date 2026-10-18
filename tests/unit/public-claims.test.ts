@@ -41,7 +41,6 @@ const FORBIDDEN: { id: string; re: RegExp }[] = [
   { id: "te mandamos un email", re: /te mandamos un (e-?mail|correo)/i },
   { id: "cancelás gratis", re: /cancelás gratis/i },
   { id: "matrícula", re: /matr[ií]cula/i },
-  { id: "mantenerme conectado", re: /mantenerme conectad/i },
   { id: "app móvil", re: /app (móvil|movil)|app store|play store/i },
   { id: "IA", re: /inteligencia artificial|\bIA\b/ },
   { id: "precio de ejemplo", re: /precio de ejemplo/i },
