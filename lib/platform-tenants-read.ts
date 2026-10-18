@@ -33,6 +33,7 @@ import { displayUserName } from "@/lib/display-name";
 import { effectiveMode, tenantAccessFor } from "@/lib/tenant-access";
 import { modulesFor, parseModuleOverrides, TENANT_MODULES } from "@/lib/tenant-modules";
 import { PLAN_DEFAULTS, SAAS_PLANS, effectiveLimits } from "@/lib/saas-plans-logic";
+import { chargeAmountFor } from "@/lib/saas-billing-logic";
 import type { PlanLimits } from "@/lib/saas-plans-types";
 import {
   PlatformTenantId,
@@ -51,6 +52,7 @@ import {
   type PlatformActivityPage,
   type PlatformAuditChange,
   type PlatformAuditEventRow,
+  type PlatformAuditValue,
   type PlatformOverview,
   type PlatformTenantDetail,
   type PlatformTenantPage,
@@ -293,10 +295,15 @@ export async function listPlatformTenants(raw: PlatformTenantListQueryInput = {}
   };
 }
 
-/** Solo valores primitivos (lo que escribe `applyTenantEntitlementsInTx`); cualquier otra cosa se descarta. */
-function primitive(v: unknown): string | boolean | number | null | undefined {
+/**
+ * Solo valores primitivos (lo que escribe `applyTenantEntitlementsInTx`); cualquier otra cosa se descarta.
+ * T3c-1p: también listas de strings (los módulos a medida, `moduleGrants` / `moduleRevokes`); sin esto el cambio se
+ * veía «— → —» en «Actividad». Una lista con algo que no es string se descarta entera (no es lo que escribe el escritor).
+ */
+function primitive(v: unknown): PlatformAuditValue | undefined {
   // BO1-B: `seatLimitOverride` es numérico; sin esto el cambio se veía como null en «Actividad».
   if (v === null || typeof v === "string" || typeof v === "boolean" || typeof v === "number") return v;
+  if (Array.isArray(v) && v.every((x) => typeof x === "string")) return [...(v as string[])];
   return undefined;
 }
 
@@ -376,7 +383,7 @@ export async function getPlatformTenantDetail(rawId: string): Promise<PlatformTe
   if (!t) return null;
 
   const now = new Date();
-  const [homes, pendingInvitations, bookingsLast30Days, bookingsUpcoming, lastActivity, events, limitsByPlan] = await Promise.all([
+  const [homes, pendingInvitations, bookingsLast30Days, bookingsUpcoming, lastActivity, events, limitsByPlan, planPrice, sub] = await Promise.all([
     platformHomeIds([t.id]),
     prismaService.invitation.count({ where: { tenantId, acceptedAt: null, revokedAt: null, expiresAt: { gt: now } } }),
     // Booking tiene PHI: solo count (contrato PHI).
@@ -392,7 +399,13 @@ export async function getPlatformTenantDetail(rawId: string): Promise<PlatformTe
       take: PLATFORM_RECENT_EVENTS,
     }),
     planLimitsByPlan(),
+    // T3c-1p: fila «Precio» de Suscripción (precio de lista del plan y el a medida). Mismo cálculo que el estado de
+    // cuenta (`chargeAmountFor`); en paralelo con el resto, sin sentencias en el camino de la lista.
+    prismaService.saasPlanConfig.findUnique({ where: { plan: t.saasPlan }, select: { priceCents: true } }),
+    prismaService.saasSubscription.findUnique({ where: { tenantId }, select: { customPriceCents: true } }),
   ]);
+  const planPriceCents = planPrice ? planPrice.priceCents : PLAN_DEFAULTS[t.saasPlan].priceCents;
+  const customPriceCents = sub?.customPriceCents ?? null;
 
   const recentPlatformEvents: PlatformAuditEventRow[] = (await toEventRows(events)).map(
     ({ payloadKeys: _keys, ...e }) => e
@@ -400,11 +413,12 @@ export async function getPlatformTenantDetail(rawId: string): Promise<PlatformTe
 
   // C-PL1: `TenantEntitlements.plan` es el plan SaaS.
   // T3b-1k2: con los overrides de Plataforma: la ficha muestra lo que el consultorio ve de verdad.
+  const overrides = parseModuleOverrides(t);
   const modules = modulesFor({
     vertical: t.vertical,
     plan: t.saasPlan,
     publicBookingEnabled: t.publicBookingEnabled,
-    ...parseModuleOverrides(t),
+    ...overrides,
   });
   return {
     ...toRow(t, homes, now, limitsByPlan),
@@ -415,6 +429,13 @@ export async function getPlatformTenantDetail(rawId: string): Promise<PlatformTe
     publicEmail: t.publicEmail,
     sharedPatientView: t.sharedPatientView,
     modules: TENANT_MODULES.filter((m) => modules.has(m)),
+    moduleGrants: overrides.moduleGrants,
+    moduleRevokes: overrides.moduleRevokes,
+    price: {
+      planPriceCents,
+      customPriceCents,
+      effectivePriceCents: chargeAmountFor({ customPriceCents, planPriceCents }),
+    },
     counts: {
       members: t._count.memberships,
       pendingInvitations,

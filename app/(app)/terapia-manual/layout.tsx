@@ -19,6 +19,7 @@ import { moduleWall } from "@/lib/module-wall";
 export default async function TerapiaManualLayout({ children }: { children: React.ReactNode }) {
   const wall = await moduleWall("ejercicios");
   if (wall === "redirect") redirect("/dashboard");
-  if (wall !== "ok") return <AccessWall module="ejercicios" plan={wall.plan} canBuy={wall.canBuy} />;
+  // T3c-1p: `wall` es el upsell (`plan` + `canBuy`) o `{ disabled: true }` si Plataforma lo deshabilitó a mano.
+  if (wall !== "ok") return <AccessWall module="ejercicios" {...wall} />;
   return <>{children}</>;
 }

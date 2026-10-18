@@ -13,7 +13,7 @@ import { PLAN_DEFAULTS, SAAS_PLAN_OF_LEGACY } from "@/lib/saas-plans-logic";
 import type { PlanLimits } from "@/lib/saas-plans-types";
 import type { TenantAccessMode } from "@/lib/tenant-access";
 import type { StatusReasonCode } from "@/lib/platform-tenants-schemas";
-import type { PlatformStatusReason } from "@/lib/platform-tenants-types";
+import type { PlatformAuditValue, PlatformStatusReason } from "@/lib/platform-tenants-types";
 
 /**
  * PL-1d: «Individual / Consultorio / Clínica / Libre» (`SAAS_PLAN_LABEL` de `lib/tenant-modules.ts`, C-PL1).
@@ -56,6 +56,18 @@ export const MODULE_LABEL: Record<TenantModule, string | null> = {
   favoritos: "Favoritos",
   ejerciciosGlobales: "Catálogo de la plataforma",
 };
+
+/**
+ * T3c-1p: nombre de los módulos sin chip (`null` en `MODULE_LABEL`) para los lugares donde igual hay que nombrarlos
+ * (tabla «Módulos» de Suscripción, «Actividad», copy de dependencias): ahí esconderlos dejaría una fila o un cambio
+ * sin nombre.
+ */
+export const MODULE_NAME_FALLBACK: Partial<Record<string, string>> = { evoluciones: "Evoluciones", reportes: "Reportes" };
+
+/** Nombre de un módulo para Plataforma, con chip o sin chip. */
+export function moduleName(m: TenantModule): string {
+  return MODULE_LABEL[m] ?? MODULE_NAME_FALLBACK[m] ?? m;
+}
 
 /** Módulos con chip visible (sin los `null` de `MODULE_LABEL`), en el orden recibido. */
 export function visibleModuleChips(mods: readonly TenantModule[]): { module: TenantModule; label: string }[] {
@@ -284,6 +296,9 @@ const AUDIT_KEY_LABEL: Record<string, string> = {
   maxUsersOverride: "Usuarios a medida",
   maxProfessionalsOverride: "Profesionales a medida",
   maxStaffOverride: "No clínicos a medida",
+  // T3c-1p (plan §23.6)
+  moduleGrants: "Módulos habilitados a mano",
+  moduleRevokes: "Módulos deshabilitados a mano",
   slug: "Slug",
   name: "Nombre",
   legalName: "Razón social",
@@ -303,7 +318,14 @@ export function auditKeyLabel(key: string): string {
  * label; un valor que no reconocemos (enum nuevo, payload viejo) se muestra
  * crudo en vez de esconderse: es un log de auditoría.
  */
-export function formatAuditValue(key: string, v: string | boolean | number | null): string {
+export function formatAuditValue(key: string, v: PlatformAuditValue): string {
+  // T3c-1p: listas de módulos a medida. Vacía = «Ninguno»; un nombre que no conocemos (módulo renombrado) sale crudo.
+  if (Array.isArray(v)) {
+    if (v.length === 0) return "Ninguno";
+    return v
+      .map((m) => (Object.prototype.hasOwnProperty.call(MODULE_LABEL, m) ? moduleName(m as TenantModule) : m))
+      .join(", ");
+  }
   if (key === "trialEndsAt") {
     if (v === null) return "Sin prueba";
     if (typeof v !== "string") return String(v);

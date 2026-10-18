@@ -2,7 +2,8 @@ import type { SaasPlan } from "@prisma/client";
 import { ButtonLink } from "@/components/ui/button";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { MODULE_UI_LABEL } from "@/lib/saas-billing-view";
-import { SAAS_PLAN_LABEL, type TenantModule } from "@/lib/tenant-modules";
+import { MODULE_REVOKED_COPY, SAAS_PLAN_LABEL, type TenantModule } from "@/lib/tenant-modules";
+import { SUPPORT_HELP_HREF } from "@/components/layout/shell-links";
 import styles from "./access-wall.module.css";
 
 /**
@@ -22,7 +23,58 @@ export function accessWallTitle(m: TenantModule, plan: SaasPlan): string {
   return `${label} está en el plan ${SAAS_PLAN_LABEL[plan]}`;
 }
 
-export function AccessWall({ module: m, plan, canBuy }: { module: TenantModule; plan: SaasPlan; canBuy: boolean }) {
+/**
+ * T3c-1p (plan §23.6): título del muro de un módulo que Plataforma deshabilitó a mano. Mismo nombre de módulo que el
+ * del upsell; sin nombre en «Plan y uso», el genérico.
+ */
+export function accessWallDisabledTitle(m: TenantModule): string {
+  const label = MODULE_UI_LABEL[m];
+  return label ? `${label} no está disponible` : "Este módulo no está disponible";
+}
+
+/** Upsell (`plan` + `canBuy`) o módulo deshabilitado a mano (`disabled`): el layout pasa tal cual lo de `moduleWall`. */
+export type AccessWallProps =
+  | { module: TenantModule; plan: SaasPlan; canBuy: boolean; disabled?: never }
+  | { module: TenantModule; disabled: true; plan?: never; canBuy?: never };
+
+const wallStyle = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 14,
+  padding: "48px 16px",
+  minHeight: 320,
+  textAlign: "center",
+} as const;
+
+const titleStyle = { fontSize: 24, margin: 0, color: "var(--navy-900)", maxWidth: 480, overflowWrap: "anywhere" } as const;
+
+export function AccessWall(props: AccessWallProps) {
+  if (props.disabled) {
+    // T3c-1p: sin «Ver planes» ni «Pedile a quien administra»: ningún plan lo devuelve y el Titular tampoco puede
+    // prenderlo. La salida es Soporte (`MODULE_REVOKED_COPY`, el mismo texto que el `ForbiddenError` de
+    // `assertModule`, `moduleDeniedCopy`), con el mismo link que «Ayuda y soporte» del menú (cualquier miembro, PL-F1b).
+    return (
+      <section aria-labelledby="access-wall-title" style={wallStyle}>
+        <EyebrowLabel tone="accent">Módulo deshabilitado</EyebrowLabel>
+        <h1 id="access-wall-title" className="k-display" style={titleStyle}>
+          {accessWallDisabledTitle(props.module)}
+        </h1>
+        <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0, maxWidth: 420 }}>{MODULE_REVOKED_COPY}</p>
+        <div className={styles.actions} style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
+          <ButtonLink href={SUPPORT_HELP_HREF}>Escribir a Soporte</ButtonLink>
+          <ButtonLink href="/dashboard" variant="ghost">
+            Volver al inicio
+          </ButtonLink>
+        </div>
+      </section>
+    );
+  }
+  return <PlanWall module={props.module} plan={props.plan} canBuy={props.canBuy} />;
+}
+
+function PlanWall({ module: m, plan, canBuy }: { module: TenantModule; plan: SaasPlan; canBuy: boolean }) {
   return (
     <section
       aria-labelledby="access-wall-title"

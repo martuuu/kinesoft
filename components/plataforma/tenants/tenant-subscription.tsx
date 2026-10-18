@@ -6,6 +6,9 @@
  * PL-3c: el plan se cambia con «Cambiar de plan» (`PlatformPlanChangeDrawer`, mismo núcleo que el consultorio: elegir
  * a quiénes deshabilitar, Libre permitido); «Editar suscripción» queda para tipo, estado, prueba, turnos online y
  * cupos a medida. El estado de cuenta vive en la pestaña «Facturación».
+ *
+ * T3c-1p (plan §23.6): fila «Precio» (el que se cobra por mes; «a medida» si hay `customPriceCents`, que se cambia en
+ * Facturación) y la tabla «Módulos» (`TenantModulesSection`, con su Drawer de overrides).
  */
 import type { PlatformTenantDetail } from "@/lib/platform-tenants-types";
 import { SAAS_PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
@@ -14,10 +17,29 @@ import {
   SUBSCRIPTION_STATUS_LABEL,
   formatDayKeyAR,
   seatLimitLabel,
+  tenantTabHref,
 } from "@/components/plataforma/tenants/labels";
 import { Facts, Section, muted } from "@/components/plataforma/tenants/detail-ui";
 import { TenantEditDrawer } from "@/components/plataforma/tenants/tenant-edit-drawer";
 import { PlatformPlanChangeDrawer } from "@/components/plataforma/billing/plan-change-launcher";
+import { priceText } from "@/components/plataforma/tenants/module-overrides-form";
+import { TenantModulesSection } from "@/components/plataforma/tenants/tenant-modules-table";
+
+/** Fila «Precio»: el efectivo, «a medida» marcado, y el link a donde se cambia (la pestaña Facturación). */
+export function PriceFact({ detail: d }: { detail: PlatformTenantDetail }) {
+  const p = priceText(d.price);
+  return (
+    <span style={{ display: "grid", gap: 4 }}>
+      <span>{p.text}</span>
+      <a
+        href={tenantTabHref(d.id, "facturacion")}
+        style={{ fontSize: 12.5, fontWeight: 600, color: "var(--sky-700)", textDecoration: "none", justifySelf: "start" }}
+      >
+        Cambiar en Facturación →
+      </a>
+    </span>
+  );
+}
 
 /** «Acceso completo» / «En gracia · quedan 3 días». Es lo que vive el consultorio, no lo que se cargó. */
 export function accessText(d: Pick<PlatformTenantDetail, "access" | "effectiveAccessMode">): string {
@@ -32,27 +54,31 @@ export function accessText(d: Pick<PlatformTenantDetail, "access" | "effectiveAc
 
 export function TenantSubscriptionView({ detail: d }: { detail: PlatformTenantDetail }) {
   return (
-    <Section
-      title="Suscripción"
-      description="El acceso lo calcula la app con el estado del consultorio, la suscripción y la prueba. Los cargos y pagos están en la pestaña Facturación."
-      action={
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <PlatformPlanChangeDrawer tenantId={d.id} tenantName={d.name} current={d.saasPlan} vertical={d.vertical} />
-          <TenantEditDrawer detail={d} />
-        </div>
-      }
-    >
-      <Facts
-        items={[
-          ["Tipo", VERTICAL_LABEL[d.vertical]],
-          ["Plan", SAAS_PLAN_LABEL[d.saasPlan]],
-          ["Estado de la suscripción", SUBSCRIPTION_STATUS_LABEL[d.subscriptionStatus]],
-          ["Prueba", d.trialEndsOn ? `Hasta el ${formatDayKeyAR(d.trialEndsOn)}` : muted("Sin prueba")],
-          ["Turnos online", d.publicBookingEnabled ? "Activo" : "Apagado"],
-          ["Usuarios del plan", seatLimitLabel(d)],
-          ["Acceso del consultorio", accessText(d)],
-        ]}
-      />
-    </Section>
+    <div style={{ display: "grid", gap: 16, minWidth: 0 }}>
+      <Section
+        title="Suscripción"
+        description="El acceso lo calcula la app con el estado del consultorio, la suscripción y la prueba. Los cargos y pagos están en la pestaña Facturación."
+        action={
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <PlatformPlanChangeDrawer tenantId={d.id} tenantName={d.name} current={d.saasPlan} vertical={d.vertical} />
+            <TenantEditDrawer detail={d} />
+          </div>
+        }
+      >
+        <Facts
+          items={[
+            ["Tipo", VERTICAL_LABEL[d.vertical]],
+            ["Plan", SAAS_PLAN_LABEL[d.saasPlan]],
+            ["Precio", <PriceFact key="price" detail={d} />],
+            ["Estado de la suscripción", SUBSCRIPTION_STATUS_LABEL[d.subscriptionStatus]],
+            ["Prueba", d.trialEndsOn ? `Hasta el ${formatDayKeyAR(d.trialEndsOn)}` : muted("Sin prueba")],
+            ["Turnos online", d.publicBookingEnabled ? "Activo" : "Apagado"],
+            ["Usuarios del plan", seatLimitLabel(d)],
+            ["Acceso del consultorio", accessText(d)],
+          ]}
+        />
+      </Section>
+      <TenantModulesSection detail={d} />
+    </div>
   );
 }

@@ -83,8 +83,11 @@ const DETAIL_KEYS = [
   "counts",
   "lastActivityAt",
   "legalName", // BO3-B
+  "moduleGrants", // T3c-1p: overrides de Plataforma (nombres de módulo)
+  "moduleRevokes", // T3c-1p
   "modules",
   "phone",
+  "price", // T3c-1p: precio del plan / a medida / efectivo (centavos, datos del negocio)
   "publicBookingPath",
   "publicEmail",
   "recentPlatformEvents",

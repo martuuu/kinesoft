@@ -77,6 +77,7 @@ import {
   type TenantModule,
 } from "@/lib/tenant-modules";
 import { LEGACY_PLAN_OF } from "@/lib/saas-plans-logic";
+import { ModuleDependencyError, moduleDependencyViolations } from "@/lib/tenant-module-deps";
 
 export type EntitlementSource = "platform" | "onboarding" | "tenant-settings" | "billing";
 
@@ -233,7 +234,13 @@ function validateModuleList(key: "moduleGrants" | "moduleRevokes", v: unknown): 
  */
 function assertModuleOverrides(
   patch: Partial<EntitlementValues>,
-  current: { vertical: TenantVertical; moduleGrants: string[]; moduleRevokes: string[] }
+  current: {
+    vertical: TenantVertical;
+    saasPlan: SaasPlan;
+    publicBookingEnabled: boolean;
+    moduleGrants: string[];
+    moduleRevokes: string[];
+  }
 ): void {
   if (patch.moduleGrants === undefined && patch.moduleRevokes === undefined) return;
   const vertical = patch.vertical ?? current.vertical;
@@ -247,6 +254,19 @@ function assertModuleOverrides(
   const revokes = new Set(patch.moduleRevokes ?? stored.moduleRevokes);
   const both = grants.filter((m) => revokes.has(m));
   if (both.length > 0) programmingError(`moduleGrants y moduleRevokes se pisan: ${both.join(", ")}`);
+  // T3c-1p (regla 4 del brief, `lib/tenant-module-deps.ts`): sin Planes, Sesiones y Plantillas quedan sin pantalla;
+  // sin Ejercicios, Favoritos y el catálogo global. Se mira el set EFECTIVO final (vertical y plan del patch o los
+  // guardados) y solo cuando el patch toca las listas: un cambio de plan o de vertical nunca queda bloqueado por un
+  // override viejo. No es `programmingError`: la action no ve la fila bajo lock, así que es un rechazo con copy
+  // (`ModuleDependencyError`, la action lo traduce). Tira antes del UPDATE: ni write ni audit.
+  const violations = moduleDependencyViolations({
+    vertical,
+    plan: patch.saasPlan ?? current.saasPlan,
+    publicBookingEnabled: patch.publicBookingEnabled ?? current.publicBookingEnabled,
+    moduleGrants: grants,
+    moduleRevokes: [...revokes],
+  });
+  if (violations.length > 0) throw new ModuleDependencyError(violations);
 }
 
 /**

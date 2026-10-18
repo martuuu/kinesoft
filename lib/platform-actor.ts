@@ -104,6 +104,10 @@ export const PLATFORM_ACTION_POLICY = {
   // DIR-2c (C-DIR8): moderar el directorio público (ocultar/mostrar consultorio o perfil, verificar matrícula).
   // Medium: es reversible y no corta acceso a la app (el turnero sigue andando); solo cambia qué se ve en /profesionales.
   "directory.moderate": { risk: "medium", rateLimit: { limit: 60, windowMs: 10 * MIN } },
+  // T3c-1p (plan §23.6): módulos a medida por consultorio (`setTenantModuleOverrides`). High: sacar un módulo le corta
+  // a todo el equipo una parte de la app en el acto (y concederlo regala lo que se cobra en un plan mayor); es el
+  // mismo peso que cambiar el plan, así que pide el step-up / la re-verificación TOTP.
+  "tenant.modules.update": { risk: "high", rateLimit: { limit: 20, windowMs: 10 * MIN } },
 } as const satisfies Record<string, PlatformActionPolicy>;
 
 /** C-BO2: `string` en el contrato; en la práctica, las claves de la política (las demás se rechazan). */

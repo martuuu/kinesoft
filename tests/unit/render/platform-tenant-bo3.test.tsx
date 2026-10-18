@@ -120,6 +120,10 @@ const detail = (over: Partial<PlatformTenantDetail> = {}): PlatformTenantDetail 
   publicEmail: "hola@movare.test",
   sharedPatientView: false,
   modules: ["agenda"],
+  // T3c-1p: overrides de módulos y precio efectivo (fila «Precio» de Suscripción).
+  moduleGrants: [],
+  moduleRevokes: [],
+  price: { planPriceCents: null, customPriceCents: null, effectivePriceCents: null },
   counts: {
     members: 3,
     pendingInvitations: 0,

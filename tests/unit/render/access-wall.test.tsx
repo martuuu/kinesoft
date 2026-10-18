@@ -42,3 +42,22 @@ describe("[VX2-b2] 404 del workspace", () => {
     expect(html).toContain('href="/dashboard"');
   });
 });
+
+describe("[AS-1p] AccessWall de un módulo deshabilitado a mano", () => {
+  it("copy de Soporte (el mismo de assertModule), sin upsell ni «Pedile a quien administra», un solo h1", async () => {
+    const { MODULE_REVOKED_COPY } = await import("@/lib/tenant-modules");
+    const { accessWallDisabledTitle } = await import("@/components/ui/access-wall");
+    const html = render(<AccessWall module="planes" disabled />);
+    expect(MODULE_REVOKED_COPY).toBe("Este módulo no está habilitado para tu consultorio. Si lo necesitás, escribinos desde Soporte.");
+    expect(html).toContain(MODULE_REVOKED_COPY);
+    expect(html).toContain(accessWallDisabledTitle("planes"));
+    expect(accessWallDisabledTitle("planes")).toBe("Planes de tratamiento no está disponible");
+    expect(accessWallDisabledTitle("reportes")).toBe("Este módulo no está disponible");
+    expect(html).toContain('href="/configuracion?tab=soporte"');
+    expect(html).toContain('href="/dashboard"');
+    expect(html).not.toContain("Ver planes");
+    expect(html).not.toContain("Pedile a quien administra");
+    expect(html).not.toContain("está en el plan");
+    expect(html.match(/<h1\b/g)).toHaveLength(1);
+  });
+});

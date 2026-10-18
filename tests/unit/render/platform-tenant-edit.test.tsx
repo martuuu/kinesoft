@@ -15,6 +15,8 @@ vi.mock("@/lib/platform-tenants", () => ({ updatePlatformTenant: vi.fn() }));
 vi.mock("@/lib/platform-tenant-lifecycle", () => ({ updatePlatformTenantProfile: vi.fn() }));
 // PL-3c: la pestaña Suscripción monta «Cambiar de plan» (actions de Plataforma → Facturación); sin DB en unit.
 vi.mock("@/lib/platform-billing", () => ({ platformPreviewPlanChange: vi.fn(), platformApplyPlanChange: vi.fn() }));
+// T3c-1p: la pestaña Suscripción monta «Editar módulos» (`setTenantModuleOverrides`); sin DB en unit.
+vi.mock("@/lib/platform-tenant-modules", () => ({ setTenantModuleOverrides: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/toast", () => ({
   useToast: () => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), show: vi.fn(), dismiss: vi.fn() }),
@@ -80,6 +82,10 @@ const detail = (over: Partial<PlatformTenantDetail> = {}): PlatformTenantDetail 
   publicEmail: "hola@movare.test",
   sharedPatientView: true,
   modules: ["agenda", "pacientes", "planes"],
+  // T3c-1p: overrides de módulos y precio efectivo (fila «Precio» de Suscripción).
+  moduleGrants: [],
+  moduleRevokes: [],
+  price: { planPriceCents: null, customPriceCents: null, effectivePriceCents: null },
   counts: {
     members: 3,
     pendingInvitations: 1,

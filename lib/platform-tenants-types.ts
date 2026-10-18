@@ -104,11 +104,29 @@ export type PlatformTenantCounts = {
   bookingsUpcoming: number;
 };
 
-/** Un cambio de entitlement de un evento `platform.*` (enums, booleanos o fecha ISO). */
+/**
+ * Un valor de un before/after de `platform.*`: enums, booleanos, cupos, fechas ISO y, desde T3c-1p, las listas de
+ * módulos a medida (`moduleGrants` / `moduleRevokes`: nombres de módulo, sin PHI).
+ */
+export type PlatformAuditValue = string | boolean | number | null | string[];
+
+/** Un cambio de entitlement de un evento `platform.*`. */
 export type PlatformAuditChange = {
   key: string;
-  before: string | boolean | number | null;
-  after: string | boolean | number | null;
+  before: PlatformAuditValue;
+  after: PlatformAuditValue;
+};
+
+/**
+ * T3c-1p (plan §23.6): precio mensual del consultorio para la fila «Precio» de Suscripción. Centavos. `planPriceCents`
+ * null = el plan es «Consultá» (PL-D19); `customPriceCents` = el precio a medida de `SaasSubscription` (se cambia en
+ * la pestaña Facturación); `effectivePriceCents` = lo que se cobra (`chargeAmountFor`: a medida > lista; null = no se
+ * cobra). Datos del negocio, no PHI.
+ */
+export type PlatformTenantPrice = {
+  planPriceCents: number | null;
+  customPriceCents: number | null;
+  effectivePriceCents: number | null;
 };
 
 export type PlatformAuditEventRow = {
@@ -131,8 +149,13 @@ export type PlatformTenantDetail = PlatformTenantRow & {
   publicEmail: string | null;
   /** Solo lectura desde /plataforma (EV-D6). */
   sharedPatientView: boolean;
-  /** `modulesFor({ vertical, plan: saasPlan, publicBookingEnabled })`, en el orden de `TENANT_MODULES`. */
+  /** `modulesFor({ vertical, plan: saasPlan, publicBookingEnabled, …overrides })`, en el orden de `TENANT_MODULES`. */
   modules: TenantModule[];
+  /** T3c-1p: módulos a medida guardados (`parseModuleOverrides`: conocidos, sin repetidos, ordenados). */
+  moduleGrants: TenantModule[];
+  moduleRevokes: TenantModule[];
+  /** T3c-1p: precio efectivo (fila «Precio» de Suscripción). */
+  price: PlatformTenantPrice;
   counts: PlatformTenantCounts;
   /** ISO de `max(AuditEvent.createdAt)` del consultorio; null = sin actividad registrada. */
   lastActivityAt: string | null;
