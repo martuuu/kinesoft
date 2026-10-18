@@ -9,6 +9,7 @@
 import type { SlotCell as SlotCellData } from "@/lib/agenda-layout";
 import { matchesHighlight, type AgendaHighlight } from "@/lib/agenda-highlight";
 import { isOutOfPlan } from "@/lib/plan-display";
+import { waitingPulse } from "@/lib/agenda-client-state";
 import type { BookingDTO } from "@/components/agenda/agenda-utils";
 
 /** Cards visibles por celda antes del "+N más". */
@@ -57,6 +58,8 @@ export type DenseOverflow<B> = {
   hiddenMatches: number;
   /** De las ocultas, cuántas son "Fuera de plan". */
   hiddenOutOfPlan: number;
+  /** [HF-2a] De las ocultas, cuántas están en sala de espera hoy (0 sin `now`). */
+  hiddenWaiting: number;
 };
 
 /**
@@ -81,19 +84,30 @@ export function denseOverflow<B extends BookingDTO>(
   bookings: readonly B[],
   limit: number,
   expanded: boolean,
-  highlight: AgendaHighlight | null
+  highlight: AgendaHighlight | null,
+  /**
+   * [HF-2a] (H-LL2): con el reloj, los que están en sala de espera hoy (`waitingPulse`) pasan adelante DESPUÉS de los
+   * resaltados: el resaltado es un pedido explícito de la Secretaria, la espera es el aviso operativo. Un paciente
+   * en sala quedaba detrás del «+6 más» y nadie veía el punto. Sin `now`, el orden de siempre.
+   */
+  now?: Date
 ): DenseOverflow<B> {
-  const ordered =
-    highlight == null
-      ? bookings.slice()
-      : [...bookings.filter((b) => matchesHighlight(highlight, b)), ...bookings.filter((b) => !matchesHighlight(highlight, b))];
+  const isMatch = (b: B) => highlight != null && matchesHighlight(highlight, b);
+  const isWaiting = (b: B) => now != null && waitingPulse(b, now) != null;
+  // Partición estable en tres grupos (dentro de cada uno, el orden del caller, que es por hora).
+  const ordered = [
+    ...bookings.filter(isMatch),
+    ...bookings.filter((b) => !isMatch(b) && isWaiting(b)),
+    ...bookings.filter((b) => !isMatch(b) && !isWaiting(b)),
+  ];
   const shown = expanded ? ordered : ordered.slice(0, limit);
   const rest = ordered.slice(shown.length);
   return {
     shown,
     hidden: rest.length,
-    hiddenMatches: highlight == null ? 0 : rest.filter((b) => matchesHighlight(highlight, b)).length,
+    hiddenMatches: highlight == null ? 0 : rest.filter(isMatch).length,
     hiddenOutOfPlan: rest.filter(bookingOutOfPlan).length,
+    hiddenWaiting: rest.filter(isWaiting).length,
   };
 }
 
@@ -103,16 +117,20 @@ export function denseOverflow<B extends BookingDTO>(
  * son "Fuera de plan". El aria-label dice todo.
  */
 export function overflowButtonText(
-  o: Pick<DenseOverflow<unknown>, "hidden" | "hiddenMatches" | "hiddenOutOfPlan">,
+  o: Pick<DenseOverflow<unknown>, "hidden" | "hiddenMatches" | "hiddenOutOfPlan"> & { hiddenWaiting?: number },
   highlightActive: boolean,
   where: string
 ): { text: string; ariaLabel: string } {
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const waiting = o.hiddenWaiting ?? 0;
+  // Un solo sufijo visible (la columna compacta mide 148 px): resaltado > en sala (HF-2a) > fuera de plan.
   let suffix = "";
   if (highlightActive && o.hiddenMatches > 0) suffix = ` · ${plural(o.hiddenMatches, "resaltado", "resaltados")}`;
+  else if (waiting > 0) suffix = ` · ${waiting} en sala`;
   else if (o.hiddenOutOfPlan > 0) suffix = ` · ${o.hiddenOutOfPlan} fuera de plan`;
   const details = [
     highlightActive && o.hiddenMatches > 0 ? plural(o.hiddenMatches, "resaltado", "resaltados") : null,
+    waiting > 0 ? `${waiting} en sala de espera` : null,
     o.hiddenOutOfPlan > 0 ? `${o.hiddenOutOfPlan} fuera de plan` : null,
   ].filter(Boolean);
   return {

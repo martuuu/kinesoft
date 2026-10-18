@@ -182,7 +182,16 @@ describe("AgendaClient render (B4.3)", () => {
     await Promise.all(dynamicLoads);
   });
   it("Día multi-profesional: chips, toggle, iniciales, badges, sede", () => {
-    const html = r(base, "day");
+    // [HF-2a] Reloj en el día de los fixtures: «En sala» / «En atención» son solo de HOY AR (antes se veían en
+    // cualquier día y este test pasaba con el reloj real).
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-05T13:30:00.000Z"));
+    let html: string;
+    try {
+      html = r(base, "day");
+    } finally {
+      vi.useRealTimers();
+    }
     expect(html).toContain('aria-label="Profesionales a mostrar"');
     expect(html).toContain('role="radiogroup" aria-label="Modo de la agenda"');
     expect(html).toContain('data-initials="AP"');

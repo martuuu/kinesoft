@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { isPastUnclosed, visibleSlotWindow } from "@/lib/agenda-slot-helpers";
+import { denseOverflow, isPastUnclosed, overflowButtonText, visibleSlotWindow } from "@/lib/agenda-slot-helpers";
+import type { BookingDTO } from "@/components/agenda/agenda-utils";
 
 /** [PF1.1-agenda-a] Lógica pura de las vistas de la agenda (G3, G5). */
 
@@ -56,5 +57,56 @@ describe("[PF1.1-agenda-a] isPastUnclosed (G5)", () => {
     for (const status of ["COMPLETED", "NO_SHOW", "CANCELLED"]) {
       expect(isPastUnclosed({ status, scheduledFor: at("09:00"), durationMin: 45 }, now)).toBe(false);
     }
+  });
+});
+
+// [HF-2a] Un paciente en sala no puede quedar escondido detrás del «+N más» (H-LL2).
+describe("[HF-2a] denseOverflow con los que esperan", () => {
+  const at = (h: string) => new Date(`2026-10-18T${h}:00-03:00`).toISOString();
+  const now = new Date("2026-10-18T10:20:00-03:00");
+  const mk = (id: string, extra: Partial<BookingDTO> = {}): BookingDTO =>
+    ({
+      id,
+      scheduledFor: at("10:00"),
+      durationMin: 30,
+      status: "CONFIRMED",
+      serviceId: "s1",
+      serviceName: "Kine",
+      serviceColor: null,
+      practitionerId: "p1",
+      patientId: "pat",
+      patientName: id,
+      patientCondition: null,
+      obraSocial: "Particular",
+      copagoCents: 0,
+      updatedAt: at("08:00"),
+      notes: null,
+      title: null,
+      description: null,
+      patientAccess: "full",
+      ...extra,
+    }) as BookingDTO;
+
+  it("[HF-2a] denseOverflow promueve los en sala y cuenta los ocultos", () => {
+    const list = [mk("a"), mk("b"), mk("c"), mk("s1", { arrivedAt: at("10:08") }), mk("s2", { arrivedAt: at("10:02") })];
+    const o = denseOverflow(list, 2, false, null, now);
+    expect(o.shown.map((b) => b.id)).toEqual(["s1", "s2"]);
+    expect(o.hidden).toBe(3);
+    expect(o.hiddenWaiting).toBe(0);
+    // Con tope 1, uno de los que esperan queda oculto y se cuenta.
+    const o1 = denseOverflow(list, 1, false, null, now);
+    expect(o1.shown.map((b) => b.id)).toEqual(["s1"]);
+    expect(o1.hiddenWaiting).toBe(1);
+    expect(overflowButtonText(o1, false, "a las 10:00").text).toBe("+4 más · 1 en sala");
+    expect(overflowButtonText(o1, false, "a las 10:00").ariaLabel).toContain("1 en sala de espera");
+    // Sin `now` (callers viejos): orden y conteo de siempre.
+    const legacy = denseOverflow(list, 2, false, null);
+    expect(legacy.shown.map((b) => b.id)).toEqual(["a", "b"]);
+    expect(legacy.hiddenWaiting).toBe(0);
+    // Con resaltado: primero los resaltados, después los que esperan.
+    const hl = { kind: "service", serviceId: "s9" } as const;
+    const withHl = [mk("a"), mk("x", { serviceId: "s9" }), mk("s1", { arrivedAt: at("10:08") }), mk("b")];
+    const oh = denseOverflow(withHl, 3, false, hl as never, now);
+    expect(oh.shown.map((b) => b.id)).toEqual(["x", "s1", "a"]);
   });
 });

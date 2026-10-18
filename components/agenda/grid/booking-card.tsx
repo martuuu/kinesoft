@@ -3,7 +3,7 @@
 import { createContext, useContext, type CSSProperties } from "react";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { PAYMENT_HOLD_LABEL, paymentHoldState } from "@/lib/agenda-filters";
-import { receptionCardBadge } from "@/lib/agenda-client-state";
+import { receptionCardBadge, waitingPulse, type WaitingPulse } from "@/lib/agenda-client-state";
 import { highlightState, type AgendaHighlight } from "@/lib/agenda-highlight";
 import { isOutOfPlan, planChip } from "@/lib/plan-display";
 import type { Discipline } from "@/lib/plans-constants";
@@ -165,15 +165,52 @@ export function PlanMarks({ b, size = "xs" }: { b: BookingDTO; size?: "xs" | "sm
 export const BookingFlashContext = createContext<ReadonlySet<string> | null>(null);
 
 /**
- * Colores del badge de recepción. "Llamado" usa los tokens `--rc-called-*`
- * (SV03u, contraste AA probado en `design-tokens.test.ts`), los mismos que la
- * vista Recepción: el mismo estado se ve igual en las dos pantallas.
+ * [HF-2a] Ids de los turnos cuyo punto «En sala» LATE (D-HF5: tope de 12, los de más espera; `animatedPulseIds`).
+ * Lo provee cada vista con todos sus turnos (una celda no ve a las otras); `null` (sin provider) = todos laten.
+ */
+export const WaitingPulseContext = createContext<ReadonlySet<string> | null>(null);
+
+/**
+ * Colores del badge de recepción: los tokens `--rc-*` de la vista Recepción y
+ * de /sala (SV03u, contraste AA probado en `design-tokens.test.ts`), así el
+ * mismo estado se ve igual en las tres pantallas. [HF-2a] (H-LL2): «En sala»
+ * y «En atención» eran literales sueltos (un gris y `--navy-700`) que no
+ * coincidían con Recepción.
  */
 const RECEPTION_BADGE_STYLE: Record<"en-sala" | "llamado" | "en-atencion", CSSProperties> = {
-  "en-sala": { color: "var(--navy-900)", background: "rgba(15,30,51,0.08)" },
+  "en-sala": { color: "var(--rc-insala-fg)", background: "var(--rc-insala-bg)" },
   llamado: { color: "var(--rc-called-fg)", background: "var(--rc-called-bg)" },
-  "en-atencion": { color: "#fff", background: "var(--navy-700)" },
+  "en-atencion": { color: "var(--rc-attending-fg)", background: "var(--rc-attending-bg)" },
 };
+
+/**
+ * [HF-2a] Punto del latido «En sala» (D-LL1, `.k-wait-dot` de `app/globals.css`): lima con aro blanco; late con el
+ * halo de `.k-live-dot` (transform/opacity) si está dentro del tope (`animated`), si no queda fijo. Con
+ * `prefers-reduced-motion` siempre fijo. `size="sm"` = 6 px en línea (Semana, lista mobile); sin él, 8 px arriba a la
+ * derecha del contenedor (que tiene que ser `.k-wait-host`, `position: relative`). El texto va en `aria-label`: el
+ * color no es el único canal.
+ */
+export function WaitingDot({ pulse, animated, size }: { pulse: WaitingPulse; animated: boolean; size?: "sm" }) {
+  return (
+    <span
+      className="k-live-dot k-wait-dot"
+      role="img"
+      aria-label={pulse.aria}
+      title={pulse.aria}
+      data-pulse={animated ? "true" : "false"}
+      data-level={pulse.level}
+      data-size={size}
+    />
+  );
+}
+
+/**
+ * Atributos del contenedor de un turno que espera (card, línea de Semana, fila mobile): `data-waiting` lo lee el CSS
+ * del «Borde que late» (Apariencia) y `data-pulse` el tope de animados. Sin espera, nada (markup de siempre).
+ */
+export function waitingHostProps(pulse: WaitingPulse | null, animated: boolean) {
+  return pulse ? { "data-waiting": pulse.level, "data-pulse": animated ? "true" : "false" } : {};
+}
 
 /**
  * Fondo y borde de un turno según su ESTADO (AGENTS §5: el fondo es el estado). Lo comparten la card y las líneas
@@ -230,6 +267,7 @@ export function BookingCard({
   className?: string;
 }) {
   const flashIds = useContext(BookingFlashContext);
+  const pulseIds = useContext(WaitingPulseContext);
   const isFlashing = flash ?? flashIds?.has(b.id) ?? false;
   const date = new Date(b.scheduledFor);
   const clock = now ?? new Date();
@@ -241,6 +279,9 @@ export function BookingCard({
   // explícito, para que la recepción sepa que puede dar ese horario.
   const hold = paymentHoldState(b, clock);
   const reception = receptionCardBadge(b, clock);
+  // [HF-2a] Latido «Llegó»: solo en sala de espera y solo hoy AR (`waitingPulse`).
+  const pulse = waitingPulse(b, clock);
+  const pulseAnimated = pulse != null && (pulseIds == null || pulseIds.has(b.id));
   const isExpiredHold = hold === "vencida";
   const tone = bookingStatusTone(b.status, isExpiredHold);
   // G3 (VX0-b): la card dice el FIN («08:00–08:45»). Las cards van en fila por franja, no proporcionales a la
@@ -264,7 +305,7 @@ export function BookingCard({
   const marks = bookingPlanMarks(b);
   const extras = [
     b.isOverbooked ? "sobreturno" : null,
-    reception?.label ?? null,
+    pulse ? pulse.aria : (reception?.label ?? null),
     b.isTelemedicine ? "telemedicina" : null,
     practitioner ? practitioner.name : null,
     room ? `en ${room.name}` : null,
@@ -275,11 +316,16 @@ export function BookingCard({
     <button
       type="button"
       onClick={() => onEdit(b)}
-      className={[isFlashing ? "k-flash" : null, className].filter(Boolean).join(" ") || undefined}
+      className={[isFlashing ? "k-flash" : null, pulse ? "k-wait-host" : null, className].filter(Boolean).join(" ") || undefined}
       data-flash={isFlashing ? "true" : undefined}
+      {...waitingHostProps(pulse, pulseAnimated)}
       title={`${fmtHour(date)} · ${b.durationMin} min · ${b.patientName}${hold ? ` · ${PAYMENT_HOLD_LABEL[hold]}` : ""}${extras.length ? ` · ${extras.join(" · ")}` : ""}${cardLabel ? ` · ${cardLabel}` : ""}`}
       style={{
         ...sizing,
+        // [HF-2a] Contenedor del punto (`.k-wait-dot`, absoluto) y del «Borde que late». Inline además de la clase:
+        // el `position` inline gana a cualquier estilo de vista y no depende del orden del CSS. Solo con espera: sin
+        // ella el markup es el de siempre.
+        ...(pulse ? { position: "relative" as const } : null),
         borderRadius: 12,
         padding: compact ? "6px 9px" : "8px 10px",
         background: tone.background,
@@ -298,6 +344,7 @@ export function BookingCard({
         transition: "transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease",
       }}
     >
+      {pulse && <WaitingDot pulse={pulse} animated={pulseAnimated} />}
       <div
         style={{
           width: 3,
@@ -377,7 +424,13 @@ export function BookingCard({
           {reception && (
             <span
               data-badge={reception.kind}
-              style={{ ...miniBadge, ...RECEPTION_BADGE_STYLE[reception.kind] }}
+              // [HF-2a] Espera larga (≥15′, D-HF4): los minutos en negrita más fuerte, sin cambiar de color (el ámbar
+              // es «demorado»).
+              style={{
+                ...miniBadge,
+                ...RECEPTION_BADGE_STYLE[reception.kind],
+                ...(pulse?.level === "long" ? { fontWeight: 800 } : null),
+              }}
             >
               {reception.label}
             </span>

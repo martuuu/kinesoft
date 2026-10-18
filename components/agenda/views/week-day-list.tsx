@@ -5,12 +5,12 @@ import { toARDateKey } from "@/lib/datetime-ar";
 import { dowOfDayKey } from "@/lib/availability/day";
 import { paymentHoldState } from "@/lib/agenda-filters";
 import { highlightState, type AgendaHighlight } from "@/lib/agenda-highlight";
-import type { AggregatedDayLock } from "@/lib/agenda-client-state";
+import { animatedPulseIds, waitingPulse, type AggregatedDayLock } from "@/lib/agenda-client-state";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { StatusTag } from "@/components/ui/status-tag";
 import { fmtHour, roomNameOf, type BookingDTO } from "../agenda-utils";
 import { PractitionerBadge } from "../grid/practitioner-badge";
-import { PlanMarks, bookingStatusTone } from "../grid/booking-card";
+import { PlanMarks, WaitingDot, bookingStatusTone, waitingHostProps } from "../grid/booking-card";
 import styles from "./views.module.css";
 
 /** Nombre del día por índice de la semana (0 = lunes). Fijo y no `toLocaleDateString`: el ICU de Node y el del
@@ -66,6 +66,8 @@ export function WeekDayList({
   now?: Date;
 }) {
   const clock = now ?? new Date();
+  // [HF-2a] D-HF5: tope de puntos que laten (los de más espera).
+  const pulseIds = animatedPulseIds(bookings, clock);
   const byDay = useMemo(() => {
     const m = new Map<string, BookingDTO[]>();
     for (const b of bookings) {
@@ -136,6 +138,9 @@ export function WeekDayList({
                   const prac = practitionerById?.[b.practitionerId] ?? null;
                   const roomName = roomNameOf(roomById, b);
                   const sub = [b.serviceName, roomName, b.isOverbooked ? "Sobreturno" : null].filter(Boolean).join(" · ");
+                  // [HF-2a] (H-LL2): la lista mobile no mostraba la recepción. Punto + «En sala 12′» en texto.
+                  const pulse = waitingPulse(b, clock);
+                  const pulseAnimated = pulse != null && pulseIds.has(b.id);
                   return (
                     <li key={b.id}>
                       <button
@@ -143,7 +148,8 @@ export function WeekDayList({
                         onClick={() => onEdit(b)}
                         data-week-list-row
                         data-highlight={hl === "none" ? undefined : hl}
-                        className={styles.wlRow}
+                        {...waitingHostProps(pulse, pulseAnimated)}
+                        className={pulse ? `${styles.wlRow} k-wait-host` : styles.wlRow}
                         style={{
                           background: tone.background,
                           border: tone.border,
@@ -160,6 +166,22 @@ export function WeekDayList({
                             <PlanMarks b={b} />
                           </span>
                           <span className={styles.wlService}>{sub}</span>
+                          {pulse && (
+                            <span
+                              data-waiting-text
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 5,
+                                fontSize: 11,
+                                fontWeight: pulse.level === "long" ? 800 : 600,
+                                color: "var(--rc-insala-fg)",
+                              }}
+                            >
+                              <WaitingDot pulse={pulse} animated={pulseAnimated} size="sm" />
+                              <span aria-hidden="true">En sala {pulse.minutes}′</span>
+                            </span>
+                          )}
                         </span>
                         {prac && <PractitionerBadge initials={prac.initials} name={prac.name} size={22} />}
                         <StatusTag s={b.status} hold={paymentHoldState(b, clock)} />

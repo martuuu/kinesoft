@@ -15,7 +15,7 @@
  * las 22:00 AR = 01:00 UTC del día siguiente) corría el día. Con DayKeys la
  * aritmética es de calendario y no depende de la TZ del host.
  */
-import { addDays, dayWindow, dowOfDayKey, isDayKey } from "@/lib/availability/day";
+import { addDays, dayKeyOf, dayWindow, dowOfDayKey, isDayKey } from "@/lib/availability/day";
 import type { DayKey, DayLockState } from "@/lib/availability/types";
 import { canManageBlocksFor, CAPABILITIES, type Capability } from "@/lib/capabilities";
 import type { AgendaMode } from "@/lib/preferences-constants";
@@ -621,6 +621,10 @@ export function receptionCardBadge(
   b: ReceptionBooking,
   now: Date
 ): { kind: "en-sala" | "llamado" | "en-atencion"; label: string } | null {
+  // [HF-2a] (H-LL2): solo turnos de HOY en día AR. Una llegada de ayer que nadie cerró seguía diciendo «En sala» en
+  // la Semana y en la Lista de días anteriores: el estado de recepción es del día, no del turno para siempre (las
+  // acciones de recepción ya eran solo de hoy, `TODAY_ONLY` de `lib/reception-state.ts`).
+  if (!isTodayAR(b.scheduledFor, now)) return null;
   const state = receptionState(b, now);
   // SV09 (§18.4): el llamado se ve en la grilla — el profesional que llamó y la
   // Secretaria tienen que saber que ya se lo llamó (si no, lo llaman dos veces).
@@ -632,6 +636,63 @@ export function receptionCardBadge(
   }
   if (state === "en-atencion") return { kind: "en-atencion", label: "En atención" };
   return null;
+}
+
+/**
+ * ¿El turno es de HOY en día AR? Por `dayKeyOf` (pared AR), nunca por el día del host: en Vercel (UTC) un turno de
+ * las 23:30 AR es del día siguiente y con `toISOString().slice(0,10)` el latido se apagaba a las 21:00 AR.
+ */
+export function isTodayAR(scheduledFor: Date | string, now: Date): boolean {
+  const d = scheduledFor instanceof Date ? scheduledFor : new Date(scheduledFor);
+  return Number.isFinite(d.getTime()) && dayKeyOf(d) === dayKeyOf(now);
+}
+
+/** D-HF4 (§22.10): desde acá la espera es «larga» (latido más rápido y minutos en negrita). */
+export const WAITING_LONG_MIN = 15;
+/**
+ * D-HF5 (§22.10): como mucho esta cantidad de puntos LATEN a la vez (los de más espera); el resto queda fijo. Un
+ * gimnasio con 20 pacientes en sala era una grilla entera titilando: el latido deja de señalar nada y cuesta
+ * composición en la PC de recepción.
+ */
+export const WAITING_PULSE_ANIMATED_MAX = 12;
+
+export type WaitingPulse = {
+  /** `long` desde `WAITING_LONG_MIN`. Nunca ámbar: el ámbar ya es «demorado» (no llegó). */
+  level: "waiting" | "long";
+  minutes: number;
+  /** Texto para `aria-label`/`title` del punto: el color no es el único canal (AGENTS §5). */
+  aria: string;
+};
+
+/**
+ * [HF-2a] Latido «Llegó» de la agenda (H-LL2, D-LL1). Solo en sala de espera (`en-sala`: llegó y nadie lo llamó ni
+ * lo atiende) y solo HOY AR; al llamarlo o pasarlo a atención se apaga. Puro: el `now` es el reloj de minuto de la
+ * agenda, así los minutos avanzan solos.
+ */
+export function waitingPulse(b: ReceptionBooking, now: Date): WaitingPulse | null {
+  if (!isTodayAR(b.scheduledFor, now)) return null;
+  const minutes = waitingMinutes(b, now);
+  if (minutes == null) return null;
+  return {
+    level: minutes >= WAITING_LONG_MIN ? "long" : "waiting",
+    minutes,
+    aria: `En sala de espera · ${minutes} min`,
+  };
+}
+
+/** Ids cuyo punto late (D-HF5): los `max` que más esperan. El resto de los que esperan se ve con el punto fijo. */
+export function animatedPulseIds(
+  bookings: ReadonlyArray<ReceptionBooking>,
+  now: Date,
+  max = WAITING_PULSE_ANIMATED_MAX
+): Set<string> {
+  const waiting: { id: string; minutes: number }[] = [];
+  for (const b of bookings) {
+    const p = waitingPulse(b, now);
+    if (p) waiting.push({ id: b.id, minutes: p.minutes });
+  }
+  waiting.sort((a, z) => z.minutes - a.minutes);
+  return new Set(waiting.slice(0, max).map((w) => w.id));
 }
 
 /** Conteo de una celda de la Semana partido por profesional, en el orden de las columnas. */

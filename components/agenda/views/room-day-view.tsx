@@ -8,6 +8,8 @@ import { formatWallTime } from "@/lib/availability/day";
 import type { AgendaHighlight } from "@/lib/agenda-highlight";
 import { ROOM_KIND_LABEL, roomCapacityText } from "@/lib/rooms-constants";
 import { SlotCell, slotStateText, type PractitionerDayBooking } from "../grid/slot-cell";
+import { WaitingPulseContext } from "../grid/booking-card";
+import { animatedPulseIds } from "@/lib/agenda-client-state";
 import { LockIcon } from "../grid/unavailable-overlay";
 import { DayColumnsGrid, gridDayLabel } from "./day-columns-grid";
 import { blockedRunStarts, columnHighlightCount, columnMinWidth } from "./practitioner-day-view";
@@ -134,6 +136,11 @@ export function RoomDayView<B extends PractitionerDayBooking>({
 }: RoomDayViewProps<B>) {
   const { rows, columns } = layout;
   const runStarts = useMemo(() => columns.map((c) => blockedRunStarts(c)), [columns]);
+  // [HF-2a] D-HF5: tope de puntos que laten sobre todas las salas.
+  const pulseIds = useMemo(
+    () => animatedPulseIds(columns.flatMap((c) => c.slots.flatMap((s) => s.bookings)), now),
+    [columns, now]
+  );
   const practitionerOf = useMemo(
     () => (b: B) => practitionerById[b.practitionerId] ?? null,
     [practitionerById]
@@ -197,20 +204,23 @@ export function RoomDayView<B extends PractitionerDayBooking>({
             onBookingClick={onBookingClick}
             onFocusCell={nav.onFocusCell}
             onGridKeyDown={nav.onGridKeyDown}
+            now={now}
           />
         );
       }}
     />
   );
 
-  if (!fallbackLocationName) return grid;
+  if (!fallbackLocationName) return <WaitingPulseContext.Provider value={pulseIds}>{grid}</WaitingPulseContext.Provider>;
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", gap: 8, minHeight: 0 }}>
-      <p role="status" style={{ margin: 0, fontSize: 12, color: "var(--navy-500)" }}>
-        Mostrando las salas de {fallbackLocationName}. Elegí otra sede arriba.
-      </p>
-      <div style={{ flex: 1, minHeight: 0 }}>{grid}</div>
-    </div>
+    <WaitingPulseContext.Provider value={pulseIds}>
+      <div style={{ height: "100%", display: "flex", flexDirection: "column", gap: 8, minHeight: 0 }}>
+        <p role="status" style={{ margin: 0, fontSize: 12, color: "var(--navy-500)" }}>
+          Mostrando las salas de {fallbackLocationName}. Elegí otra sede arriba.
+        </p>
+        <div style={{ flex: 1, minHeight: 0 }}>{grid}</div>
+      </div>
+    </WaitingPulseContext.Provider>
   );
 }
 

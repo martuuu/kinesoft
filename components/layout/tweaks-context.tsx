@@ -16,6 +16,12 @@ import type { AgendaPrefs, ReceptionLayout } from "@/lib/preferences-constants";
 
 export type Palette = "sky" | "mint" | "coral" | "violet";
 export type DashChrome = "sidebar" | "topbar";
+/**
+ * [HF-2a] (D-LL1) Cómo avisa la agenda que un paciente está en sala de espera: el punto lima que late (default) o el
+ * borde de la card que late. Lo lee el CSS (`data-waiting-cue` de `<html>`, `app/globals.css`), no React: cambiarlo
+ * no re-renderiza ninguna card.
+ */
+export type WaitingCue = "dot" | "border";
 
 /**
  * Lo que guarda «Apariencia» (ex «Tweaks», §20.18: se mantiene y se arreglan sus opciones rotas).
@@ -28,6 +34,8 @@ export type TweaksState = {
   palette: Palette;
   dashChrome: DashChrome;
   sidebarCollapsed: boolean;
+  /** [HF-2a] «Aviso de espera» de la agenda (D-LL1). Solo localStorage: es una preferencia de esta pantalla. */
+  waitingCue: WaitingCue;
   /** Panel cerrado. No se persiste: cada carga arranca cerrado (el panel abierto tapaba contenido). */
   minimised: boolean;
 };
@@ -36,6 +44,7 @@ const DEFAULTS: TweaksState = {
   palette: "sky",
   dashChrome: "sidebar",
   sidebarCollapsed: true,
+  waitingCue: "dot",
   minimised: true,
 };
 
@@ -66,6 +75,7 @@ export function hydrateTweaks(raw: string | null, serverPalette?: Palette | null
     palette,
     dashChrome: stored.dashChrome === "topbar" ? "topbar" : "sidebar",
     sidebarCollapsed: typeof stored.sidebarCollapsed === "boolean" ? stored.sidebarCollapsed : DEFAULTS.sidebarCollapsed,
+    waitingCue: stored.waitingCue === "border" ? "border" : "dot",
     minimised: true,
   };
 }
@@ -136,7 +146,13 @@ type Ctx = {
 const TweaksContext = createContext<Ctx | null>(null);
 
 function sameTweaks(a: TweaksState, b: TweaksState): boolean {
-  return a.palette === b.palette && a.dashChrome === b.dashChrome && a.sidebarCollapsed === b.sidebarCollapsed && a.minimised === b.minimised;
+  return (
+    a.palette === b.palette &&
+    a.dashChrome === b.dashChrome &&
+    a.sidebarCollapsed === b.sidebarCollapsed &&
+    a.waitingCue === b.waitingCue &&
+    a.minimised === b.minimised
+  );
 }
 
 export function TweaksProvider({
@@ -192,10 +208,18 @@ export function TweaksProvider({
   const initialTRef = useRef(t);
   useEffect(() => {
     document.documentElement.setAttribute("data-palette", t.palette);
+    // [HF-2a] Sin atributo = punto (el default también en el SSR, antes de hidratar).
+    if (t.waitingCue === "border") document.documentElement.setAttribute("data-waiting-cue", "border");
+    else document.documentElement.removeAttribute("data-waiting-cue");
     if (t === initialTRef.current) return;
     try {
       // `minimised` no se guarda: cada carga arranca con el panel cerrado.
-      const persisted = { palette: t.palette, dashChrome: t.dashChrome, sidebarCollapsed: t.sidebarCollapsed };
+      const persisted = {
+        palette: t.palette,
+        dashChrome: t.dashChrome,
+        sidebarCollapsed: t.sidebarCollapsed,
+        waitingCue: t.waitingCue,
+      };
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
     } catch {
       /* ignore */

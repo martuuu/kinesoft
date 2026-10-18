@@ -112,6 +112,7 @@ export function SlotCell<B extends PractitionerDayBooking>({
   onBookingClick,
   onFocusCell,
   onGridKeyDown,
+  now,
 }: {
   cell: SlotCellData<B>;
   dayKey: string;
@@ -149,11 +150,17 @@ export function SlotCell<B extends PractitionerDayBooking>({
   onBookingClick: (booking: B) => void;
   onFocusCell: (rowIndex: number, colIndex: number) => void;
   onGridKeyDown: (e: KeyboardEvent<HTMLElement>, rowIndex: number, colIndex: number) => void;
+  /**
+   * [HF-2a] (H-LL2): reloj de minuto de la agenda. Antes la celda no lo recibía y la card caía a `new Date()` del
+   * render: en «Por profesional» y «Por sala» los minutos de «En sala 12′» quedaban congelados hasta que algo
+   * re-renderizara la celda. Con él, además, los que esperan pasan adelante del «+N más» (`denseOverflow`).
+   */
+  now?: Date;
 }) {
   const [expanded, setExpanded] = useState(false);
   const compact = density === "compact";
   const limit = visibleCardLimit(density);
-  const overflow = denseOverflow(cell.bookings, limit, expanded, highlight);
+  const overflow = denseOverflow(cell.bookings, limit, expanded, highlight, now);
   const { shown, hidden } = overflow;
   const where = `${columnKind === "room" ? "en" : "de"} ${columnLabel} a las ${cell.time}`;
   const more = overflowButtonText(overflow, highlight != null, where);
@@ -293,6 +300,7 @@ export function SlotCell<B extends PractitionerDayBooking>({
               sizing={stackedCardSizing}
               practitioner={practitionerOf?.(b) ?? null}
               room={roomOf?.(b) ?? null}
+              now={now}
             />
           ))}
         </div>
@@ -306,6 +314,7 @@ export function SlotCell<B extends PractitionerDayBooking>({
           aria-label={expanded ? `Ver menos turnos ${where}` : more.ariaLabel}
           data-overflow-matches={!expanded && overflow.hiddenMatches > 0 ? overflow.hiddenMatches : undefined}
           data-overflow-out-of-plan={!expanded && overflow.hiddenOutOfPlan > 0 ? overflow.hiddenOutOfPlan : undefined}
+          data-overflow-waiting={!expanded && overflow.hiddenWaiting > 0 ? overflow.hiddenWaiting : undefined}
           style={{
             position: "relative",
             zIndex: 2,

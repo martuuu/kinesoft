@@ -98,20 +98,21 @@ describe("[PL-F1c] Apariencia: estado inicial", () => {
       patientCard: "rich",
     });
     const t = hydrateTweaks(raw, "mint");
-    expect(t).toEqual({ palette: "mint", dashChrome: "topbar", sidebarCollapsed: false, minimised: true });
+    expect(t).toEqual({ palette: "mint", dashChrome: "topbar", sidebarCollapsed: false, waitingCue: "dot", minimised: true });
     expect(hydrateTweaks(raw, null).palette).toBe("coral");
     // Basura → defaults (nunca tira).
     expect(hydrateTweaks("{no json", null)).toEqual({
       palette: "sky",
       dashChrome: "sidebar",
       sidebarCollapsed: true,
+      waitingCue: "dot",
       minimised: true,
     });
     expect(hydrateTweaks(JSON.stringify({ palette: "neon", dashChrome: "x" }), null).palette).toBe("sky");
   });
 
   it("el contexto ya no tiene agendaView ni patientCard", () => {
-    expect(Object.keys(probe().t ?? {}).sort()).toEqual(["dashChrome", "minimised", "palette", "sidebarCollapsed"]);
+    expect(Object.keys(probe().t ?? {}).sort()).toEqual(["dashChrome", "minimised", "palette", "sidebarCollapsed", "waitingCue"]);
   });
 });
 
@@ -184,5 +185,25 @@ describe("[PL-F1c] Apariencia: cada opción aplica", () => {
       </TenantModulesProvider>
     );
     expect(without).not.toContain("Apariencia");
+  });
+});
+
+describe("[HF-2a] Apariencia → Aviso de espera (D-LL1)", () => {
+  it("[HF-2a] opción «Punto / Borde que late», default Punto, se guarda en el navegador y la lee el CSS", () => {
+    const html = openPanel();
+    expect(html).toContain("Aviso de espera");
+    expect(html).toMatch(/aria-pressed="true"[^>]*>Punto</);
+    expect(html).toMatch(/aria-pressed="false"[^>]*>Borde que late</);
+    expect(probe().t?.waitingCue).toBe("dot");
+    expect(hydrateTweaks(JSON.stringify({ waitingCue: "border" }), null).waitingCue).toBe("border");
+    expect(hydrateTweaks(JSON.stringify({ waitingCue: "neon" }), null).waitingCue).toBe("dot");
+    const { set } = probe();
+    set?.("waitingCue", "border");
+    expect(prefs.calls).toEqual([]);
+    // Lector real: el provider escribe `data-waiting-cue` en <html> y globals.css lo usa.
+    const src = readFileSync(join(process.cwd(), "components/layout/tweaks-context.tsx"), "utf8");
+    expect(src).toContain('setAttribute("data-waiting-cue", "border")');
+    const css = readFileSync(join(process.cwd(), "app/globals.css"), "utf8");
+    expect(css).toContain(':root[data-waiting-cue="border"] .k-wait-host[data-waiting]::after');
   });
 });

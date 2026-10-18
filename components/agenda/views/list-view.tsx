@@ -5,7 +5,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { StatusTag } from "@/components/ui/status-tag";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { paymentHoldState } from "@/lib/agenda-filters";
-import { receptionCardBadge } from "@/lib/agenda-client-state";
+import { receptionCardBadge, waitingPulse } from "@/lib/agenda-client-state";
 import { highlightState, type AgendaHighlight } from "@/lib/agenda-highlight";
 import { fmtHour, fmtMoney, osLabel, roomNameOf, type BookingDTO } from "../agenda-utils";
 import { PractitionerBadge } from "../grid/practitioner-badge";
@@ -97,6 +97,9 @@ export function ListView({
         const prac = practitionerById?.[b.practitionerId] ?? null;
         const roomName = roomNameOf(roomById, b);
         const reception = receptionCardBadge(b, clock);
+        // [HF-2a] La Lista lleva el latido solo como texto («En sala 12′», lo da `receptionCardBadge`): es la vista
+        // de lectura/impresión del día y una columna de puntos titilando no suma. `data-waiting` para el QA y el CSS.
+        const pulse = waitingPulse(b, clock);
         const marks = [
           b.isOverbooked ? "Sobreturno" : null,
           reception?.label ?? null,
@@ -108,6 +111,7 @@ export function ListView({
             type="button"
             onClick={() => onEdit(b)}
             className={styles.listRow}
+            data-waiting={pulse?.level}
             style={{
               alignItems: "center",
               fontSize: 13,
@@ -139,7 +143,7 @@ export function ListView({
                   <div style={{ fontSize: 11, color: "var(--navy-300)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }}>{sub}</div>
                 )}
                 {marks.length > 0 && (
-                  <div style={{ fontSize: 10.5, fontWeight: 700, color: b.isOverbooked ? "var(--warn-fg)" : "var(--navy-500)" }}>
+                  <div style={{ fontSize: 10.5, fontWeight: pulse?.level === "long" ? 800 : 700, color: b.isOverbooked ? "var(--warn-fg)" : "var(--navy-500)" }}>
                     {marks.join(" · ")}
                   </div>
                 )}

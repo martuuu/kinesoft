@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { useTweaks, type Palette } from "./tweaks-context";
+import { useTweaks, type Palette, type WaitingCue } from "./tweaks-context";
 import { useTenantModules } from "./tenant-modules-context";
 import { IconX } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
@@ -16,6 +16,8 @@ import { PALETTE_OPTIONS } from "./appearance-options";
  *   - Navegación «Barra lateral / Barra superior» → `dashChrome`, lo lee `AppShell` (monta `Sidebar` o `TopBar`).
  *   - «Barra lateral contraída» → `sidebarCollapsed`, prop `collapsed` del `Sidebar` (solo con barra lateral).
  *   - Vista semanal (encabezado, sábado, domingo) → prefs del server (`setAgenda`), las lee la agenda semanal.
+ *   - [HF-2a] Agenda → «Aviso de espera: Punto / Borde que late» → `waitingCue` (localStorage), `data-waiting-cue` de
+ *     `<html>`; lo lee el CSS del latido (`.k-wait-host` en `app/globals.css`).
  *   - RX-1e «Recepción» → «Escritorio de recepción» (`receptionLayout`, server-backed), lo lee `SalaClient` para
  *     elegir la cara de `/sala`. Solo con el módulo `salaEspera` y la capacidad `agenda.reception` (`canReception`,
  *     la calcula `AppShell` con sus `caps`); test en `tests/unit/render/tweaks-panel.test.tsx`.
@@ -33,6 +35,12 @@ export const RECEPTION_LAYOUT_OPTIONS: ReadonlyArray<{ value: ReceptionLayout; l
   { value: "board", label: "Tablero", hint: "Columnas por estado, como hasta ahora." },
   { value: "list", label: "Lista y panel", hint: "Los turnos del día en una tabla y la sala de espera al costado." },
   { value: "flow", label: "Flujo", hint: "La línea del día a la izquierda y la sala en carriles." },
+];
+
+/** [HF-2a] (D-LL1) Opciones de «Aviso de espera» (orden = el default primero). */
+export const WAITING_CUE_OPTIONS: { value: WaitingCue; label: string }[] = [
+  { value: "dot", label: "Punto" },
+  { value: "border", label: "Borde que late" },
 ];
 
 export const RECEPTION_SAVE_ERROR = "No pudimos guardar la vista. Probá de nuevo.";
@@ -201,6 +209,16 @@ export function TweaksPanel({ canReception = false }: { canReception?: boolean }
           label="Mostrar domingo"
           value={agenda.agendaShowSunday}
           onChange={(v) => setAgenda("agendaShowSunday", v)}
+        />
+      </Section>
+
+      {/* [HF-2a] (D-LL1): cómo marca la agenda a quien está en sala de espera. «Punto» es el default. */}
+      <Section label="Agenda">
+        <div style={{ fontSize: 12.5, color: "var(--navy-700)", padding: "0 4px 6px" }}>Aviso de espera</div>
+        <Radio
+          value={t.waitingCue}
+          options={WAITING_CUE_OPTIONS}
+          onChange={(v) => set("waitingCue", v)}
         />
       </Section>
 

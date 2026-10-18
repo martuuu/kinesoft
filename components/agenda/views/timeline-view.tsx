@@ -12,7 +12,8 @@ import {
   type BookingDTO,
 } from "../agenda-utils";
 import type { AgendaHighlight } from "@/lib/agenda-highlight";
-import { BookingCard, type BookingCardSizing } from "../grid/booking-card";
+import { BookingCard, WaitingPulseContext, type BookingCardSizing } from "../grid/booking-card";
+import { animatedPulseIds } from "@/lib/agenda-client-state";
 import { BLOCKED_STRIPES, LockIcon } from "../grid/unavailable-overlay";
 import { denseOverflow, overflowButtonText, visibleSlotWindow } from "@/lib/agenda-slot-helpers";
 import viewStyles from "./views.module.css";
@@ -156,6 +157,8 @@ export function TimelineView({
     () => visibleSlotWindow(slots, [...bySlot.keys(), ...ongoing.keys()], slotMinutes),
     [slots, bySlot, ongoing, slotMinutes]
   );
+  // [HF-2a] D-HF5: de todo el día, solo los 12 que más esperan laten (el resto, punto fijo).
+  const pulseIds = useMemo(() => animatedPulseIds(bookings, now ?? new Date()), [bookings, now]);
   const from = showAllRows ? 0 : rowWindow.from;
   const to = showAllRows ? slots.length - 1 : rowWindow.to;
   const foldButton = (a: number, b: number) => (
@@ -183,6 +186,7 @@ export function TimelineView({
   );
 
   return (
+    <WaitingPulseContext.Provider value={pulseIds}>
     <Card style={{ padding: 14, height: "100%", display: "flex", flexDirection: "column" }}>
       <div className="k-scroll" style={{ flex: 1, overflowY: "auto" }}>
         {before.length > 0 && (
@@ -226,6 +230,7 @@ export function TimelineView({
         )}
       </div>
     </Card>
+    </WaitingPulseContext.Provider>
   );
 }
 
@@ -268,7 +273,7 @@ function SlotRow({
   const createIso = localToARIso(`${dayKey}T${label}`);
   const create = () => onCreate(createIso);
 
-  const overflow = denseOverflow(items, COLLAPSED_LIMIT, expanded, highlight);
+  const overflow = denseOverflow(items, COLLAPSED_LIMIT, expanded, highlight, now);
   const { shown, hidden } = overflow;
   const more = overflowButtonText(overflow, highlight != null, `a las ${label}`);
   // Half-hour rows: the :30 label is muted so the hour still reads as the anchor.
@@ -353,6 +358,7 @@ function SlotRow({
               aria-label={more.ariaLabel}
               data-overflow-matches={overflow.hiddenMatches > 0 ? overflow.hiddenMatches : undefined}
               data-overflow-out-of-plan={overflow.hiddenOutOfPlan > 0 ? overflow.hiddenOutOfPlan : undefined}
+              data-overflow-waiting={overflow.hiddenWaiting > 0 ? overflow.hiddenWaiting : undefined}
               style={{
                 alignSelf: "center",
                 border: "1px solid rgba(31,79,190,0.25)",

@@ -108,6 +108,13 @@
   --rc-late-bg: rgba(255, 176, 32, 0.2);
   --rc-late-fg: #9a5b00;
   --rc-late-border: rgba(154, 91, 0, 0.35);
+  /* [HF-2a] Punto del latido «En sala» en la agenda (D-LL1). Lima oscuro, no el
+     verde success (= «Hecho» / «En vivo») ni el ámbar (= demorado): el lima es
+     el «en sala» de siempre. Es un componente no textual (WCAG 1.4.11): 4.2:1
+     sobre blanco, 3.9:1 sobre el panel, 3.8:1 sobre --rc-insala-bg y 3.4:1
+     sobre --lime-300. Más claro que --lime-700 (6:1) a propósito: con el aro
+     blanco tiene que leerse «lima» y no oliva. Probado en design-tokens.test.ts. */
+  --rc-insala-dot: #4d8a0e;
   --card-bg: #ffffff;
   /* [RX-Z] Línea de «ahora» (grilla de la agenda y escritorio de Recepción en
      /sala). Era #E4572E en la grilla, que con texto blanco encima (la etiqueta
@@ -624,6 +631,68 @@ body {
   }
 }
 
+/* [HF-2a] Latido «Llegó» en la agenda (H-LL2, D-LL1). Reusa .k-live-dot: el
+   punto quieto y el halo (::after) que crece y se desvanece, solo transform y
+   opacity (compositor). Va arriba a la derecha de la card, con aro blanco de
+   1.5 px para separarse de cualquier fondo de estado. El tope de 12 puntos
+   que laten (D-HF5) lo decide la vista (data-pulse="false" = punto fijo).
+   - long (≥15′): el mismo latido, más rápido. Sin ámbar (= demorado).
+   - Apariencia → «Aviso de espera: Borde que late» (data-waiting-cue en
+     <html>): se esconde el punto y late un borde ::after de la card, en
+     opacidad y sin box-shadow (el box-shadow de la card es el resaltado). */
+.k-wait-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  color: var(--rc-insala-dot);
+  box-shadow: 0 0 0 1.5px #fff;
+  pointer-events: none;
+  z-index: 1;
+}
+/* Semana (línea de 22 px) y lista mobile: en línea con el texto, 6 px. */
+.k-wait-dot[data-size="sm"] {
+  position: relative;
+  top: auto;
+  right: auto;
+  width: 6px;
+  height: 6px;
+}
+.k-wait-dot[data-pulse="true"][data-level="long"]::after {
+  animation-duration: 1.1s;
+}
+.k-wait-host {
+  position: relative;
+}
+:root[data-waiting-cue="border"] .k-wait-host .k-wait-dot {
+  display: none;
+}
+:root[data-waiting-cue="border"] .k-wait-host[data-waiting]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 2px solid var(--rc-insala-dot);
+  pointer-events: none;
+  opacity: 1;
+}
+:root[data-waiting-cue="border"] .k-wait-host[data-waiting][data-pulse="true"]::after {
+  animation: k-wait-border 2s ease-in-out infinite;
+}
+:root[data-waiting-cue="border"] .k-wait-host[data-waiting="long"][data-pulse="true"]::after {
+  animation-duration: 1.1s;
+}
+@keyframes k-wait-border {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
 /* Fila que cambió por un evento remoto (agenda, data-flash en BookingCard).
    Sin keyframe `to`: el navegador interpola hasta el fondo propio del
    elemento (el de su estado, que la card pone inline). Con un `to`
@@ -741,9 +810,17 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .k-live-dot::after,
   .k-live-badge[data-state="live"] .k-live-dot::after,
-  .k-live-dot[data-pulse="true"]::after {
+  .k-live-dot[data-pulse="true"]::after,
+  .k-wait-dot[data-pulse="true"][data-level="long"]::after {
     animation: none;
     opacity: 0;
+  }
+  /* [HF-2a] Punto fijo (arriba); con «Borde que late», el borde entero y quieto. Mismo selector que la regla que
+     anima (misma especificidad, después en el archivo): uno más corto perdía contra el :root[…] de afuera. */
+  :root[data-waiting-cue="border"] .k-wait-host[data-waiting][data-pulse="true"]::after,
+  .k-wait-host[data-waiting]::after {
+    animation: none;
+    opacity: 1;
   }
   .k-flash {
     animation: none;

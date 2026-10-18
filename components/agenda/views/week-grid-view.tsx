@@ -6,14 +6,14 @@ import { Avatar } from "@/components/ui/avatar";
 import { Modal } from "@/components/ui/modal";
 import { toARDateKey, toARMinutes } from "@/lib/datetime-ar";
 import { dowOfDayKey } from "@/lib/availability/day";
-import { splitCountByPractitioner, type AggregatedDayLock } from "@/lib/agenda-client-state";
+import { animatedPulseIds, splitCountByPractitioner, waitingPulse, type AggregatedDayLock } from "@/lib/agenda-client-state";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { DAYS, fmtHour, fmtMoney, osLabel, buildSlots, roomNameOf, slotLabel, slotOf, type BookingDTO } from "../agenda-utils";
 import { StatusTag } from "@/components/ui/status-tag";
 import { paymentHoldState } from "@/lib/agenda-filters";
 import { anyHighlightMatch, type AgendaHighlight } from "@/lib/agenda-highlight";
 import { PractitionerBadge } from "../grid/practitioner-badge";
-import { PlanMarks, bookingStatusTone, planLooseSplit, planLooseSplitText } from "../grid/booking-card";
+import { PlanMarks, WaitingDot, bookingStatusTone, planLooseSplit, planLooseSplitText, waitingHostProps } from "../grid/booking-card";
 import { BLOCKED_STRIPES } from "../grid/unavailable-overlay";
 import styles from "./views.module.css";
 
@@ -123,22 +123,31 @@ function WeekBookingLine({
   practitioner,
   dimmed,
   roomName,
+  now,
+  pulseAnimated,
 }: {
   b: BookingDTO;
   onEdit: (b: BookingDTO) => void;
   practitioner: WeekPractitioner | null;
   dimmed: boolean;
   roomName: string | null;
+  now: Date;
+  /** [HF-2a] Dentro del tope de puntos que laten (D-HF5). */
+  pulseAnimated: boolean;
 }) {
   const date = new Date(b.scheduledFor);
-  const tone = bookingStatusTone(b.status, paymentHoldState(b, new Date()) === "vencida");
+  const tone = bookingStatusTone(b.status, paymentHoldState(b, now) === "vencida");
   const isCancelled = b.status === "CANCELLED";
+  // [HF-2a] (H-LL2): la Semana no mostraba la recepción. En la línea de 22 px entra solo el punto (6 px, en línea);
+  // los minutos van en el aria/tooltip.
+  const pulse = waitingPulse(b, now);
   const label = [
     `${fmtHour(date)} · ${b.durationMin} min · ${b.patientName}`,
     b.serviceName,
     roomName ? `en ${roomName}` : null,
     practitioner?.name ?? null,
     b.isOverbooked ? "sobreturno" : null,
+    pulse?.aria ?? null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -148,6 +157,8 @@ function WeekBookingLine({
       onClick={() => onEdit(b)}
       title={label}
       data-week-line
+      className={pulse ? "k-wait-host" : undefined}
+      {...waitingHostProps(pulse, pulseAnimated)}
       style={{
         display: "flex",
         alignItems: "center",
@@ -175,6 +186,7 @@ function WeekBookingLine({
       <span style={{ fontSize: 11, fontWeight: 600, minWidth: 0, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {b.patientName}
       </span>
+      {pulse && <WaitingDot pulse={pulse} animated={pulseAnimated} size="sm" />}
       {practitioner && (
         <span className="k-mono" aria-hidden="true" style={{ fontSize: 9, fontWeight: 700, color: "var(--navy-500)", flexShrink: 0 }}>
           {practitioner.initials}
@@ -218,6 +230,7 @@ export function WeekGridView({
   blockedByDay,
   renderDayLock,
   roomById = null,
+  now,
 }: {
   weekDays: ReadonlyArray<string>;
   bookings: BookingDTO[];
@@ -233,7 +246,12 @@ export function WeekGridView({
   blockedByDay?: Readonly<Record<string, ReadonlyMap<number, string | null> | undefined>>;
   renderDayLock?: (dayKey: string) => ReactNode;
   roomById?: Readonly<Record<string, { name: string }>> | null;
+  /** [HF-2a] Reloj de minuto de la agenda (latido «En sala»). Sin él, `new Date()` al render. */
+  now?: Date;
 }) {
+  const clock = now ?? new Date();
+  // [HF-2a] D-HF5: solo los 12 que más esperan laten; el resto, punto fijo.
+  const pulseIds = animatedPulseIds(bookings, clock);
   const practitionerById = useMemo(
     () => (practitioners && practitioners.length > 1 ? new Map(practitioners.map((p) => [p.id, p])) : null),
     [practitioners]
@@ -456,6 +474,8 @@ export function WeekGridView({
                       practitioner={practitionerById?.get(b.practitionerId) ?? null}
                       dimmed={highlight != null && !anyHighlightMatch(highlight, [b])}
                       roomName={roomNameOf(roomById, b)}
+                      now={clock}
+                      pulseAnimated={pulseIds.has(b.id)}
                     />
                   ))}
                 </div>

@@ -258,3 +258,32 @@ describe("[SV03u] clases de motion en CSS (C-SV10)", () => {
     expect(m![1]).toMatch(/animation:\s*none/);
   });
 });
+
+describe("[HF-2b] latido «En sala» (HF-2a, D-LL1)", () => {
+  it("[HF-2b] design-tokens: --rc-insala-dot ≥3:1; .k-live-dot sin animación en reduced-motion", () => {
+    const v = tokenValue("--rc-insala-dot");
+    expect(v).toMatch(/^#[0-9a-f]{6}$/i);
+    const dot = parseColor(v!).rgb;
+    // Componente no textual (WCAG 1.4.11): ≥3:1 contra lo que tiene alrededor. Sobre blanco y el panel (card), y
+    // sobre el lima de «En sala» (badge) y el lima de la paleta base.
+    const lime = [over(parseColor(tokenValue("--rc-insala-bg")!), WHITE), parseColor(tokenValue("--lime-300")!).rgb];
+    for (const base of [WHITE, PANEL, ...lime]) expect(contrast(dot, base)).toBeGreaterThanOrEqual(3);
+    // No es el verde de «Hecho» / «En vivo».
+    expect(v!.toLowerCase()).not.toBe(tokenValue("--st-completed-fg")!.toLowerCase());
+    expect(v!.toLowerCase()).not.toBe(tokenValue("--success-fg")!.toLowerCase());
+    // Ninguna paleta lo redefine (el estado no cambia con la paleta del tenant).
+    const palettes = Array.from(CSS.matchAll(/\[data-palette="[^"]+"\]\s*\{([^}]*)\}/g), (m) => m[1]);
+    for (const body of palettes) expect(body).not.toMatch(/--rc-insala-dot/);
+
+    // Clases del latido y su versión quieta.
+    expect(CSS).toContain(".k-wait-dot {");
+    expect(CSS).toMatch(/@keyframes k-wait-border\s*\{/);
+    const m = CSS.match(/@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*?)\n\}/);
+    expect(m).not.toBeNull();
+    expect(m![1]).toMatch(/\.k-live-dot\[data-pulse="true"\]::after[\s\S]*?animation:\s*none/);
+    expect(m![1]).toMatch(/\.k-wait-host\[data-waiting\]::after[\s\S]*?animation:\s*none/);
+    // Solo transform/opacity (compositor): ni box-shadow ni background en los keyframes del latido.
+    const kf = CSS.match(/@keyframes k-wait-border\s*\{([\s\S]*?)\n\}/)![1];
+    expect(kf).not.toMatch(/box-shadow|background/);
+  });
+});

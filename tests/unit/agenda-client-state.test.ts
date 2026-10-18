@@ -783,3 +783,68 @@ describe("[SV09] receptionCardBadge con «Llamado»", () => {
     });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [HF-2a] Latido «En sala» (H-LL2, §22.4): solo turnos de HOY en día AR.
+// Las fechas van con offset -03:00 explícito y el caso borde es un turno 23:30 AR (= 02:30 UTC del día siguiente):
+// con `toISOString().slice(0,10)` del host (UTC) ese turno "sería" de mañana y el latido se apagaba.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("[HF-2a] receptionCardBadge y waitingPulse: guarda de «hoy» AR", () => {
+  const ar = (d: string, h: string) => `${d}T${h}:00-03:00`;
+  const base = { id: "w", durationMin: 30, status: "CONFIRMED" };
+
+  it("[HF-2a] receptionCardBadge: llegada de ayer → null", async () => {
+    const now = new Date(ar("2026-10-18", "10:30"));
+    const ayer = { ...base, scheduledFor: ar("2026-10-17", "18:00"), arrivedAt: ar("2026-10-17", "17:55") };
+    expect(receptionCardBadge(ayer, now)).toBeNull();
+    // Tampoco un «En atención» olvidado de ayer.
+    expect(receptionCardBadge({ ...ayer, attendingAt: ar("2026-10-17", "18:05") }, now)).toBeNull();
+    // Hoy sigue igual.
+    const hoy = { ...base, scheduledFor: ar("2026-10-18", "10:00"), arrivedAt: ar("2026-10-18", "10:18") };
+    expect(receptionCardBadge(hoy, now)).toEqual({ kind: "en-sala", label: "En sala 12′" });
+  });
+
+  it("[HF-2a] waitingPulse: hoy en sala → waiting 12′; ≥15′ → long; llamado → null", async () => {
+    const { waitingPulse, WAITING_LONG_MIN } = await import("@/lib/agenda-client-state");
+    expect(WAITING_LONG_MIN).toBe(15);
+    // Turno 23:30 AR (02:30 UTC del 19): en TZ=UTC el día del host ya es otro.
+    const b = { ...base, scheduledFor: ar("2026-10-18", "23:30"), arrivedAt: ar("2026-10-18", "23:20") };
+    expect(waitingPulse(b, new Date(ar("2026-10-18", "23:32")))).toEqual({
+      level: "waiting",
+      minutes: 12,
+      aria: "En sala de espera · 12 min",
+    });
+    expect(waitingPulse(b, new Date(ar("2026-10-18", "23:34")))?.level).toBe("waiting");
+    expect(waitingPulse(b, new Date(ar("2026-10-18", "23:35")))).toEqual({
+      level: "long",
+      minutes: 15,
+      aria: "En sala de espera · 15 min",
+    });
+    // Se apaga al llamar y al pasar a atención.
+    expect(waitingPulse({ ...b, calledAt: ar("2026-10-18", "23:33") }, new Date(ar("2026-10-18", "23:34")))).toBeNull();
+    expect(waitingPulse({ ...b, attendingAt: ar("2026-10-18", "23:33") }, new Date(ar("2026-10-18", "23:34")))).toBeNull();
+    // Sin llegada, o de otro día AR (pasada la medianoche AR ya no late).
+    expect(waitingPulse({ ...base, scheduledFor: ar("2026-10-18", "23:30") }, new Date(ar("2026-10-18", "23:40")))).toBeNull();
+    expect(waitingPulse(b, new Date(ar("2026-10-19", "00:05")))).toBeNull();
+  });
+
+  it("[HF-2a] animatedPulseIds: tope de 12, los de más espera", async () => {
+    const { animatedPulseIds, WAITING_PULSE_ANIMATED_MAX } = await import("@/lib/agenda-client-state");
+    expect(WAITING_PULSE_ANIMATED_MAX).toBe(12);
+    const now = new Date(ar("2026-10-18", "11:00"));
+    const list = Array.from({ length: 14 }, (_, i) => ({
+      ...base,
+      id: `b${i}`,
+      scheduledFor: ar("2026-10-18", "10:30"),
+      // b0 llegó 10:00 (60′) … b13 llegó 10:13 (47′)
+      arrivedAt: ar("2026-10-18", `10:${String(i).padStart(2, "0")}`),
+    }));
+    const ids = animatedPulseIds([...list, { ...base, id: "nope", scheduledFor: ar("2026-10-18", "10:30") }], now);
+    expect(ids.size).toBe(12);
+    expect(ids.has("b0")).toBe(true);
+    expect(ids.has("b11")).toBe(true);
+    expect(ids.has("b12")).toBe(false);
+    expect(ids.has("b13")).toBe(false);
+    expect(ids.has("nope")).toBe(false);
+  });
+});

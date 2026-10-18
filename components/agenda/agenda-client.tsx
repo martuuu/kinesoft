@@ -1254,6 +1254,7 @@ export function AgendaClient(props: Props) {
               {view === "week" && (
                 <WeekGridViewC
                   weekDays={weekDays}
+                  now={now}
                   bookings={visibleBookings}
                   onEdit={setEditing}
                   businessHours={hours}

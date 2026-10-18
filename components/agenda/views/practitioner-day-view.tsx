@@ -7,6 +7,8 @@ import type { DayLockState } from "@/lib/availability/types";
 import { matchesHighlight, type AgendaHighlight } from "@/lib/agenda-highlight";
 import { PractitionerBadge } from "../grid/practitioner-badge";
 import { SlotCell, type PractitionerDayBooking } from "../grid/slot-cell";
+import { WaitingPulseContext } from "../grid/booking-card";
+import { animatedPulseIds } from "@/lib/agenda-client-state";
 import { LockIcon } from "../grid/unavailable-overlay";
 import { DayColumnsGrid, gridDayLabel } from "./day-columns-grid";
 
@@ -184,6 +186,11 @@ export function PractitionerDayView<B extends PractitionerDayBooking>({
     [roomById]
   );
   const runStarts = useMemo(() => columns.map((c) => blockedRunStarts(c)), [columns]);
+  // [HF-2a] D-HF5: tope de puntos que laten sobre TODAS las columnas (una celda no ve a las otras).
+  const pulseIds = useMemo(
+    () => animatedPulseIds(columns.flatMap((c) => c.slots.flatMap((s) => s.bookings)), now),
+    [columns, now]
+  );
 
   if (columns.length === 0) {
     return (
@@ -196,6 +203,7 @@ export function PractitionerDayView<B extends PractitionerDayBooking>({
   }
 
   return (
+    <WaitingPulseContext.Provider value={pulseIds}>
     <DayColumnsGrid<PractitionerColumn<B>>
       dayKey={dayKey}
       rows={rows}
@@ -236,9 +244,11 @@ export function PractitionerDayView<B extends PractitionerDayBooking>({
           onBookingClick={onBookingClick}
           onFocusCell={nav.onFocusCell}
           onGridKeyDown={nav.onGridKeyDown}
+          now={now}
         />
       )}
     />
+    </WaitingPulseContext.Provider>
   );
 }
 
