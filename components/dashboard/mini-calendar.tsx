@@ -162,6 +162,8 @@ export function MiniCalendar({ initialBookingDays, className }: { initialBooking
               onClick={() => openDay(n)}
               aria-label={`Ver agenda del ${n}${hasBooking ? " (con turnos)" : ""}`}
               aria-current={isToday ? "date" : undefined}
+              // T3a-3t: `.calCell` tesela el gap de la grilla < 768 (área táctil ~45 px a 390, sin cambiar la celda).
+              className={dash.calCell}
               style={{
                 aspectRatio: "1",
                 display: "flex",

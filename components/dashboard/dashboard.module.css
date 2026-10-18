@@ -431,3 +431,30 @@
     min-height: 44px;
   }
 }
+
+/* [T3a-3t] Áreas táctiles de 44 px que NO cambian lo visual (`mbz-tap-backlog-44`). Un `min-height` como el de `.tap`
+   agrandaba la caja: acá crece solo el pseudo-elemento transparente, así el tablero mobile se ve igual que antes.
+   - `.hit44`: «Ver todos →» (~70×16) y el link de cada fila de Pacientes recientes (alto 36 del avatar). Alto 44
+     centrado sobre la caja, sea cual sea su alto; ancho al menos 44. En el link de «Ver todos» cae dentro del padding
+     de la card (18) y del margen del encabezado (14); en la fila, dentro de su padding de 8.
+   - `.calCell`: celdas del mini-calendario. Con 7 columnas y gap 2, a 390 cada celda mide ~43 px; el pseudo se extiende
+     medio gap por lado (1 px) para que las celdas teselen la grilla sin solaparse (45 px a 390). Más no se puede sin
+     pisar a la vecina: a 360 el máximo geométrico es ~42. La celda ya es `position: relative` inline (punto de turnos). */
+@media (max-width: 767px) {
+  .hit44 {
+    position: relative;
+  }
+  .hit44::after {
+    content: "";
+    position: absolute;
+    top: calc(50% - 22px);
+    bottom: calc(50% - 22px);
+    left: min(0px, calc(50% - 22px));
+    right: min(0px, calc(50% - 22px));
+  }
+  .calCell::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+  }
+}

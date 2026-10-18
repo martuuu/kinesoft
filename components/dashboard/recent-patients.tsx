@@ -44,8 +44,10 @@ export function RecentPatients({ items, className }: { items: DashboardData["rec
             Últimas sesiones registradas
           </div>
         </div>
+        {/* T3a-3t: `.hit44` = 44 px de área táctil < 768 sin cambiar el link (~70×16). */}
         <Link
           href="/pacientes"
+          className={styles.hit44}
           style={{ fontSize: 12, color: "var(--sky-700)", fontWeight: 600, textDecoration: "none" }}
         >
           Ver todos →
@@ -101,8 +103,10 @@ function RecentRow({ p }: { p: DashboardData["recent"][number] }) {
         background: "rgba(246,249,253,0.7)",
       }}
     >
+      {/* T3a-3t: el link mide 36 (el avatar); `.hit44` lo lleva a 44 dentro del padding de la fila. */}
       <Link
         href={`/pacientes/${p.id}`}
+        className={styles.hit44}
         style={{
           display: "flex",
           alignItems: "center",

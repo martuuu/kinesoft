@@ -1,0 +1,15 @@
+/* [T3a-3t] Segmentado «Visual · Visual y sonido · Apagado»: cada opción mide 32 px de alto (`minHeight` inline) y el
+   grupo 38 con su padding de 3 (`mbz-tap-backlog-44`). Bajo 768 el área de toque llega a 44 con un pseudo-elemento
+   transparente, sin agrandar la píldora. Asimétrico a propósito: hacia abajo solo 4 px (3 del padding del grupo + 1)
+   porque debajo, a 4 px en el menú compacto, está «Probar sonido» y no hay que robarle toques; hacia arriba 8 px.
+   Horizontal 0: las opciones están pegadas y se pisarían. */
+@media (max-width: 767px) {
+  .seg {
+    position: relative;
+  }
+  .seg::before {
+    content: "";
+    position: absolute;
+    inset: -8px 0 -4px;
+  }
+}

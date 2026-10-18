@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { previewChime } from "@/lib/arrival-chime";
 import type { AlertMode } from "@/lib/preferences-constants";
 import { SOUND_BLOCKED_NOTE } from "@/components/providers/arrival-alerts-constants";
+import styles from "./alert-prefs-controls.module.css";
 
 export { SOUND_BLOCKED_NOTE };
 
@@ -80,6 +81,8 @@ export function AlertModeControl({
               aria-checked={on}
               tabIndex={i === checkedIdx ? 0 : -1}
               onClick={() => onChange(o.value)}
+              // T3a-3t: `.seg` = 44 px de área táctil < 768 sin cambiar el alto visual (ver el CSS Module).
+              className={styles.seg}
               style={{
                 flex: 1,
                 // ≥ 32 px de alto también en el compacto (target táctil del menú).

@@ -650,4 +650,9 @@ const PSE_CSS = `
   .pse .pse-name, .pse .pse-actions { grid-column: 1 / -1; }
   .pse .pse-actions { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 10px; }
 }
+/* T3a-3t: MiniSwitch 38×22 → 44×44 de área táctil < 768 con un pseudo transparente (el switch se ve igual). El botón
+   ya es position: relative inline (la perilla). Los vecinos en la celda son texto, no controles. */
+@media (max-width: 767px) {
+  .pse .pse-switch::before { content: ""; position: absolute; inset: -11px -3px; }
+}
 `;
