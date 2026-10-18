@@ -37,7 +37,7 @@ import { clientIp } from "@/lib/client-ip";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { loadAvailabilityInputs } from "@/lib/availability-loader";
 import { lockTenantLocationsShared } from "@/lib/location-lock";
-import { lockCapacityWindow } from "@/lib/booking-cap-lock";
+import { capacityKeysForWindow, hourKeyForStart, lockAgendaKeysMany } from "@/lib/booking-cap-lock";
 import { lockActiveRoomInTx } from "@/lib/booking-rooms-internal";
 import { defaultRoomFor } from "@/lib/availability/rooms";
 import { acceptsInsurer, addDays, eligiblePractitioners, isDayKey, resolvePractitionerService } from "@/lib/availability";
@@ -464,6 +464,14 @@ export async function findFirstPublicSlot(raw: FirstPublicSlotInput): Promise<Pu
 
 const PUBLIC_BOOKING_CLOSED_ERROR = "Este consultorio no toma turnos online.";
 const SLOT_UNAVAILABLE_ERROR ="Ese horario se acaba de ocupar o ya no se puede reservar online. Elegí otro.";
+const SLOT_OFF_GRID_ERROR = "Ese horario no está disponible para reservar online. Elegí otro.";
+/**
+ * T3 (AS-D9 / C-AS3): los rechazos «el horario ya no es reservable» llevan `fieldErrors.scheduledFor` además del copy,
+ * para que el wizard los distinga sin comparar textos y vuelva a pedir la ventana. Casos: el paso de la grilla cambió
+ * con el deploy (un asistente abierto con la grilla de 45 manda un 10:45 que en la de 30 es off-grid), se llenó el
+ * tope por intervalo o el cupo, o un bloqueo/sede nuevo sacó el horario. El copy no cambia.
+ */
+const slotGone = (error: string) => ({ ok: false as const, error, fieldErrors: { scheduledFor: [error] } });
 const SAME_SLOT_ERROR = "Ya tenés un turno reservado en ese horario.";
 const GENERIC_SUBMIT_ERROR = "No pudimos registrar la reserva. Probá de nuevo en unos minutos.";
 const CANCELLED_REPLAY_ERROR = "Ese turno fue cancelado. Recargá la página para reservar de nuevo.";
@@ -521,7 +529,9 @@ class PublicSlotGoneError extends Error {}
  *     anticipación `minLeadMinutes ?? 60`, tope `maxLeadDays` y cupo
  *     profesional + servicio contando solo lo que sigue reteniendo
  *     (`isHoldingCapacity`). Solo servicios habilitados y PUBLIC para ese
- *     profesional; la duración es la de su PractitionerService.
+ *     profesional; la duración es la de su PractitionerService. T3: paso
+ *     `publicSlotStepFor(duración)` (AS-D9) y tope «N turnos cada X min» del
+ *     profesional DURO (un intervalo lleno no se ofrece ni se acepta, C-AS3).
  *   - Sede: la de la franja del slot (el cliente no la elige ni la manda);
  *     se valida activa bajo el lock compartido de sedes dentro de la tx.
  *   - Re-reserva del propio slot vencido: si el paciente ya tenía en ese
@@ -662,10 +672,8 @@ export async function submitPublicBooking(
       now: new Date(),
     });
     const verdict = checkPublicSlot(scheduledFor, slots);
-    if (verdict === "off-grid") {
-      return { ok: false, error: "Ese horario no está disponible para reservar online. Elegí otro." };
-    }
-    if (verdict === "unavailable") return { ok: false, error: SLOT_UNAVAILABLE_ERROR };
+    if (verdict === "off-grid") return slotGone(SLOT_OFF_GRID_ERROR);
+    if (verdict === "unavailable") return slotGone(SLOT_UNAVAILABLE_ERROR);
     const slotLocationId = slots.find((s) => s.iso === scheduledFor.toISOString())?.locationId ?? null;
 
     let resolution: Awaited<ReturnType<typeof resolvePublicPatient>>;
@@ -711,13 +719,27 @@ export async function submitPublicBooking(
         // y la agenda también se serializan entre sí — y recién después se
         // recarga y re-chequea la grilla con este tx: en READ COMMITTED la
         // recarga ya ve la fila del que entró antes. Orden de locks igual que
-        // en lib/bookings.ts (cupo → sedes): sin ciclos.
-        await lockCapacityWindow(tx, {
-          tenantId: tenant.id,
-          practitionerId: data.practitionerId,
-          serviceId: service.id,
-          start: scheduledFor,
-          end: new Date(scheduledFor.getTime() + offer.durationMin * 60_000),
+        // en lib/bookings.ts (cupo → hora → sedes): sin ciclos.
+        //
+        // T3 (C-AS3, enmienda C2 (1c)): además del cupo, la HORA AR del inicio
+        // del profesional (`kinesoft:phour:…`), en la MISMA sentencia
+        // (`lockAgendaKeysMany`: 0 sentencias nuevas). El tope por intervalo
+        // cruza servicios y el lock de cupo lleva el servicio: sin la clave de
+        // hora, una reserva online y un alta de la agenda de servicios
+        // distintos en el mismo intervalo leían «0 de 1» las dos y entraban
+        // las dos. La clave de hora es la misma que toman los write-paths de
+        // la agenda, así que turnero y staff se serializan por el tope. Se
+        // toma SIEMPRE (con o sin tope): la clave no depende de la config, y
+        // un tope prendido en el medio no deja una ventana sin lock.
+        await lockAgendaKeysMany(tx, {
+          cap: capacityKeysForWindow({
+            tenantId: tenant.id,
+            practitionerId: data.practitionerId,
+            serviceId: service.id,
+            start: scheduledFor,
+            end: new Date(scheduledFor.getTime() + offer.durationMin * 60_000),
+          }),
+          hour: [hourKeyForStart({ tenantId: tenant.id, practitionerId: data.practitionerId, start: scheduledFor })],
         });
         const fresh = await loadAvailabilityInputs(tx, {
           tenantId: tenant.id,
@@ -737,7 +759,10 @@ export async function submitPublicBooking(
         );
         // "ok" es el único veredicto aceptable (PublicSlotVerdict = "ok" |
         // "off-grid" | "unavailable"): un bloqueo o un cambio de franja en el
-        // medio también sacan el slot de la grilla.
+        // medio también sacan el slot de la grilla. T3: la recarga trae el
+        // tope (`intervalCaps`) y TODOS los turnos del profesional, así que
+        // este mismo recuento con el motor rechaza el intervalo que se llenó
+        // mientras esperábamos el lock (`tope-intervalo` → "unavailable").
         if (freshVerdict !== "ok") throw new PublicSlotGoneError();
         if (slotLocationId) {
           // Lock compartido de sedes y RECIÉN DESPUÉS validar (lib/location-lock.ts):
@@ -837,7 +862,7 @@ export async function submitPublicBooking(
       // vencido) dejaron de auditarse: ruido operativo; queda el log de abajo.
     } catch (e) {
       if (e instanceof PublicLocationGoneError || e instanceof PublicSlotGoneError) {
-        return { ok: false, error: SLOT_UNAVAILABLE_ERROR };
+        return slotGone(SLOT_UNAVAILABLE_ERROR);
       }
       // P2002 distinguido por los DATOS, no por `meta.target` (que llega null
       // bajo RLS, ver `resolveUniqueViolation` en lib/bookings.ts):

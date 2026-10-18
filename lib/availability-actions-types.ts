@@ -22,6 +22,7 @@ import {
   type DayLockState,
   type Frequency,
   type InstantClass,
+  type IntervalCapUse,
   type ScheduleRange,
   type SlotResult,
 } from "@/lib/availability/types";
@@ -53,7 +54,7 @@ export const AGENDA_AVAILABILITY_MAX_DAYS = 14;
  *   • la grilla se ancla al inicio de cada franja (`buildSlots`), así que una
  *     franja 8:00 da 8:00, 8:15, 8:30…; la UI puede agrupar por hora.
  * El caller puede pedir 30/45/60 (`stepMin`) si quiere una lista más corta.
- * El turnero público NO usa esto (paso 45, `PUBLIC_SLOT_STEP_MIN`, B3.2).
+ * El turnero público NO usa esto: su paso es `publicSlotStepFor(duración)` (AS-D9, T3; antes fijo 45).
  */
 export const STAFF_SLOT_STEP_MIN = 15;
 export const STAFF_SLOT_STEPS = [15, 30, 45, 60] as const;
@@ -230,6 +231,14 @@ export type InstantCheck = {
    * `allowRoomConflict` (no es sobreturno). null/ausente = libre o sin sala.
    */
   roomBusy?: { roomName: string; blocked?: { reason: string | null } | null } | null;
+  /**
+   * T3 (C-AS3): el intervalo AR del inicio ya tiene `cap.count` turnos del profesional (cualquier servicio): el alta
+   * pide «Cargar como sobreturno» (`allowIntervalCap`). Se informa aunque `class` sea otra de mayor precedencia
+   * (forzar el cupo no fuerza el tope). Ausente = sin tope.
+   */
+  intervalCapped?: boolean;
+  /** T3: uso del tope en ese intervalo (aviso del 2.º turno con `used ≥ 1`, «x/tope»). Ausente = sin tope. */
+  intervalCapUse?: IntervalCapUse;
 };
 
 export type RecurrencePreviewItem = {
@@ -247,6 +256,11 @@ export type RecurrencePreviewItem = {
   blockReasons: string[];
   used: number;
   cap: number | null;
+  /** T3 (C-AS3): la fecha pasa el tope por intervalo del profesional (el lote la omite sin `allowIntervalCap`). No
+   *  cambia `status`. Ausente = sin tope. */
+  intervalCapped?: boolean;
+  /** T3: uso del tope en esa fecha. Ausente = sin tope. */
+  intervalCapUse?: IntervalCapUse;
 };
 
 export type RecurrencePreview = {

@@ -346,7 +346,8 @@ describe.skipIf(!RUN)("reserva pública · submitPublicBooking (A2b-S-pub)", () 
   // paciente). Ahora la tx toma `lockCapacityWindow` y re-chequea la grilla.
   it("[B4.1] cupo 1: tres submits concurrentes de pacientes distintos al mismo slot → exactamente uno ok", async () => {
     const day = futureWeekday(3);
-    const slot = at(day, "10:15");
+    // Osteopatía dura 60: desde T3 (AS-D9) su grilla pública es de 60 (antes 45 → 10:15 ya no es de la grilla).
+    const slot = at(day, "10:00");
     const results = await Promise.all(
       ["53100001", "53100002", "53100003"].map((dni) =>
         submitPublicBooking(input({ documentId: dni }, { slot, serviceId: osteoId }))
@@ -366,7 +367,8 @@ describe.skipIf(!RUN)("reserva pública · submitPublicBooking (A2b-S-pub)", () 
     // Misma clave de lock (`kinesoft:cap:<tenant>:<prof>:<servicio>:<día AR>`)
     // en `createBooking` y en el submit público: se serializan entre canales.
     const day = futureWeekday(3);
-    const slot = at(day, "13:15");
+    // En la grilla de 60 de Osteopatía (AS-D9): con 13:15 el turnero salía «off-grid» y el test pasaba sin competir.
+    const slot = at(day, "13:00");
     const deskPatient = await addPatient(db, T, { documentId: "53200001" });
     asUser(T.userId);
     const [desk, pub] = await Promise.all([
@@ -381,6 +383,8 @@ describe.skipIf(!RUN)("reserva pública · submitPublicBooking (A2b-S-pub)", () 
       submitPublicBooking(input({ documentId: "53200002" }, { slot, serviceId: osteoId })),
     ]);
     expect([desk.ok, pub.ok].filter(Boolean)).toHaveLength(1);
+    // No vacuo: si perdió el turnero fue por el cupo, no por un instante fuera de su grilla.
+    if (!pub.ok) expect(pub.error).toMatch(/se acaba de ocupar/);
     const live = await db.booking.count({
       where: { tenantId: T.tenantId, serviceId: osteoId, scheduledFor: new Date(slot), status: { not: "CANCELLED" } },
     });
@@ -411,7 +415,8 @@ describe.skipIf(!RUN)("reserva pública · submitPublicBooking (A2b-S-pub)", () 
 
   it("[revisión A2] mismo DNI re-reserva su slot vencido → ok: la vieja queda CANCELLED y la nueva retiene", async () => {
     const day = futureWeekday(2);
-    const slot = at(day, "08:45");
+    // Grilla de 60 de Osteopatía (AS-D9).
+    const slot = at(day, "09:00");
     const r1 = await submitPublicBooking(input({ documentId: "53444555" }, { slot, serviceId: osteoId }));
     expect(r1.ok).toBe(true);
     if (!r1.ok) return;
@@ -430,7 +435,7 @@ describe.skipIf(!RUN)("reserva pública · submitPublicBooking (A2b-S-pub)", () 
     // PL-A (plan §20.5.9): el reemplazo de un hold vencido ya no se audita (ruido); lo observable es el estado.
     // La nueva retiene el cupo 1.
     const slots = await listPublicSlots({ tenantSlug: T.slug, practitionerId: T.practitionerId, serviceId: osteoId, date: day });
-    expect(slots.find((s) => s.time === "08:45")!.available).toBe(false);
+    expect(slots.find((s) => s.time === "09:00")!.available).toBe(false);
   });
 
   it("[revisión A2] su reserva pública todavía VIGENTE (o ya pagada) no se reemplaza", async () => {

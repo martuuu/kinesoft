@@ -222,7 +222,7 @@ describe.skipIf(!RUN)("[AS-2w] tope de turnos por intervalo (C-AS3)", () => {
     }
   });
 
-  it.fails("[AS-2l] turnero: el intervalo con el tope lleno no se ofrece (duro)", async () => {
+  it("[AS-2l] turnero: el intervalo con el tope lleno no se ofrece (duro)", async () => {
     const day = futureDow(2); // martes
     await mk({ prac: PP.practitionerId, when: new Date(localToARIso(`${day}T10:00:00`)) });
     const slots = await listPublicSlots({ tenantSlug: T.slug, practitionerId: PP.practitionerId, serviceId: svcA, date: day });

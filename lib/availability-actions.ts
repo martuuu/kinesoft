@@ -201,6 +201,11 @@ function staffSlots(
   }
 ): StaffSlot[] {
   const opts = { locationId: q.locationId };
+  // T3 (C-AS3): el cupo cuenta profesional + servicio; el tope por intervalo cruza servicios, así que con tope se
+  // conservan TODOS los turnos del profesional y van aparte en `intervalCap`. El staff ve el slot `tope-intervalo`
+  // (no disponible, con `intervalCapUse` para «Tope completo (2/2)») y lo puede forzar como sobreturno en el alta.
+  const ofPractitioner = input.bookings.filter((b) => b.practitionerId === q.practitionerId);
+  const intervalCap = input.intervalCaps[q.practitionerId] ?? null;
   const slots: SlotResult[] = buildSlots({
     dayKey: q.dayKey,
     ranges: workingRanges(q.practitionerId, q.dayKey, input, opts),
@@ -210,8 +215,9 @@ function staffSlots(
     // de PractitionerService son del canal público). "pasado" sigue valiendo.
     lead: { minMinutes: 0, maxDays: null },
     now: q.now,
-    bookings: input.bookings.filter((b) => b.practitionerId === q.practitionerId && b.serviceId === q.serviceId),
+    bookings: ofPractitioner.filter((b) => b.serviceId === q.serviceId),
     cap: q.cap,
+    intervalCap: intervalCap ? { practitionerId: q.practitionerId, cap: intervalCap, bookings: ofPractitioner } : null,
   });
   return slots.map((s) => ({
     ...s,
@@ -471,6 +477,10 @@ export async function listAvailableSlots(raw: ListSlotsQueryInput): Promise<Acti
     blocks: input.blocks,
     bookings: input.bookings,
     now,
+    // T3 (C-AS3): el «primer hueco» saltea los intervalos con el tope lleno, igual que la grilla de arriba (que los
+    // marca `tope-intervalo`): si no, el modal sugería un horario que el alta después frena con «Cargar como
+    // sobreturno».
+    intervalCaps: input.intervalCaps,
   });
 
   return {
@@ -597,6 +607,9 @@ export async function classifyBookingInstant(raw: ClassifyInstantQueryInput): Pr
     bookings: input.bookings,
     now,
     excludeBookingId: q.excludeBookingId ?? null,
+    // T3 (C-AS3): `input.bookings` ya trae todos los turnos del profesional (el loader no acota por servicio), que
+    // es contra lo que se cuenta el tope.
+    intervalCap: input.intervalCaps[q.practitionerId] ?? null,
   });
   return {
     ok: true,
@@ -612,6 +625,9 @@ export async function classifyBookingInstant(raw: ClassifyInstantQueryInput): Pr
       serviceEnabled: eff.enabled,
       defaultRoomId: loaded.defaultRoomId,
       roomBusy: loaded.roomBusy,
+      // Solo con tope (sin tope el motor no los manda y el payload queda como antes).
+      ...(c.intervalCapped != null ? { intervalCapped: c.intervalCapped } : {}),
+      ...(c.intervalCapUse ? { intervalCapUse: c.intervalCapUse } : {}),
     },
   };
 }
@@ -692,6 +708,9 @@ export async function previewRecurrence(raw: RecurrencePreviewQueryInput): Promi
     blocks: input.blocks,
     bookings: input.bookings,
     now,
+    // T3 (C-AS3): el lote marca las fechas que pasan el tope («{n} fechas superan el tope»). No cambia `status`
+    // (el motor lo deja como el multi-turno de hoy) ni `counts`: van como flag aparte, como `outOfHours`.
+    intervalCap: input.intervalCaps[q.practitionerId] ?? null,
   };
   const items: RecurrencePreviewItem[] = dates.map((when) => {
     const batch = classifyBatchInstant({ ...base, when });
@@ -707,6 +726,8 @@ export async function previewRecurrence(raw: RecurrencePreviewQueryInput): Promi
       blockReasons: blockReasonsOf(input, batch.blockIds),
       used: batch.used,
       cap: batch.cap,
+      ...(batch.intervalCapped != null ? { intervalCapped: batch.intervalCapped } : {}),
+      ...(batch.intervalCapUse ? { intervalCapUse: batch.intervalCapUse } : {}),
     };
   });
 

@@ -20,6 +20,8 @@ import {
   checkPublicSlot,
   firstPublicSlotAcross,
   publicDaySlots,
+  publicSlotStepFor,
+  publicSlotWindow,
   resolvePublicOffer,
   type PublicSlotBooking,
 } from "@/lib/public-booking-slots";
@@ -94,7 +96,10 @@ describe("paridad buildPublicSlots (envoltorio del motor) ↔ A2b-S-pub", () => 
     [10, 10],
     [0, 24],
   ];
-  const durations = [30, 45, 60, 90];
+  // T3 (AS-D9): el turnero real usa `publicSlotStepFor(duración)`; `buildPublicSlots` quedó con el paso fijo de 45
+  // del oráculo. La paridad se afirma SOLO con 45', la única duración donde la grilla del oráculo y la del turnero
+  // real coinciden (`publicSlotStepFor(45) === 45`); con otra duración el oráculo ya no describe al turnero.
+  const durations = [45];
   const caps: Array<number | null> = [null, 1, 2];
   const nows = [
     new Date("2026-10-02T12:00:00.000Z"),
@@ -123,7 +128,7 @@ describe("paridad buildPublicSlots (envoltorio del motor) ↔ A2b-S-pub", () => 
                 );
                 cases++;
               }
-    expect(cases).toBeGreaterThan(1000);
+    expect(cases).toBeGreaterThan(300);
   });
 
   it("checkPublicSlot sigue siendo un lookup exacto sobre la grilla", () => {
@@ -310,9 +315,9 @@ describe("publicDaySlots (B3.2)", () => {
       practitionerServices: [psRule({ practitionerId: P1, durationMin: 90, minLeadMinutes: 0, maxLeadDays: 2 })],
     });
     expect(resolvePublicOffer(input, P1, S)).toMatchObject({ durationMin: 90, minLeadMinutes: 0, maxLeadDays: 2 });
-    // 14-18 con 90 min y paso 45: 14:00, 14:45, 15:30, 16:15 (17:00+90 > 18:00).
+    // 14-18 con 90 min: paso `publicSlotStepFor(90)` = 60 (AS-D9) → 14:00, 15:00, 16:00 (17:00+90 > 18:00).
     const far = publicDaySlots(input, q(P1));
-    expect(far.map((s) => s.time)).toEqual(["14:00", "14:45", "15:30", "16:15"]);
+    expect(far.map((s) => s.time)).toEqual(["14:00", "15:00", "16:00"]);
     // Lunes queda a más de 2 días del viernes 09:00 AR → fuera de horizonte.
     expect(far.every((s) => !s.available)).toBe(true);
     // Mismo lunes 13:50 AR: anticipación 0 → 14:00 disponible (con 60 por defecto, no).
@@ -403,5 +408,135 @@ describe("firstPublicSlotAcross (B3.2)", () => {
       ],
     });
     expect(firstPublicSlotAcross(input, base)).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. T3 (AS-D9 / C-AS3): paso del turnero por duración y tope por intervalo (duro)
+// ─────────────────────────────────────────────────────────────────────────────
+describe("[AS-2l] paso del turnero (AS-D9)", () => {
+  it("[AS-2l] clamp(ceil15(duración), 15, 60): 15→15, 20→30, 50→60, 90→60", () => {
+    expect([15, 20, 30, 45, 50, 60, 90, 120].map(publicSlotStepFor)).toEqual([15, 30, 30, 45, 60, 60, 60, 60]);
+    expect([1, 14, 16].map(publicSlotStepFor)).toEqual([15, 15, 30]);
+    // Inválidas (la config no las deja, pero llegan de un fixture) → el piso; el motor no arma grilla con ≤ 0.
+    expect([0, -5, Number.NaN].map(publicSlotStepFor)).toEqual([15, 15, 15]);
+  });
+
+  it("[AS-2l] resolvePublicOffer calcula stepMin con la duración EFECTIVA (override del profesional)", () => {
+    expect(resolvePublicOffer(baseInput(), P1, S)).toMatchObject({ durationMin: 45, stepMin: 45 });
+    const over = baseInput({ practitionerServices: [psRule({ practitionerId: P1, durationMin: 20 })] });
+    expect(resolvePublicOffer(over, P1, S)).toMatchObject({ durationMin: 20, stepMin: 30 });
+  });
+
+  it("[AS-2l] servicio de 30 → grilla de 30 (antes 45), y el submit acepta los de 30", () => {
+    const input = baseInput({ services: [{ id: S, durationMin: 30, maxConcurrent: 1, practitionerId: null }] });
+    const slots = publicDaySlots(input, q(P1));
+    expect(slots.map((s) => s.time)).toEqual(["14:00", "14:30", "15:00", "15:30", "16:00", "16:30", "17:00", "17:30"]);
+    expect(checkPublicSlot(at(MONDAY, "14:30"), slots)).toBe("ok");
+    // Un instante de la grilla vieja de 45 que no está en la de 30 → off-grid (asistente abierto durante el deploy).
+    expect(checkPublicSlot(at(MONDAY, "14:45"), slots)).toBe("off-grid");
+  });
+
+  it("[AS-2l] servicio de 15 → grilla de 15", () => {
+    const input = baseInput({ services: [{ id: S, durationMin: 15, maxConcurrent: 1, practitionerId: null }] });
+    const slots = publicDaySlots(input, q(P1));
+    expect(slots.slice(0, 5).map((s) => s.time)).toEqual(["14:00", "14:15", "14:30", "14:45", "15:00"]);
+    expect(slots).toHaveLength(16);
+  });
+});
+
+describe("[AS-2l] tope por intervalo en el turnero (duro)", () => {
+  const OTHER = "svc-otro";
+  const bk = (hhmm: string, extra: Partial<AvailabilityBooking> = {}): AvailabilityBooking => ({
+    id: `cap-${hhmm}-${extra.serviceId ?? OTHER}`,
+    scheduledFor: at(MONDAY, hhmm),
+    durationMin: 30,
+    status: "CONFIRMED",
+    paymentStatus: "UNPAID",
+    createdAt: NOW,
+    patientId: "pp",
+    idempotencyKey: `k-${hhmm}`,
+    practitionerId: P1,
+    // De OTRO servicio: el cupo del servicio del turnero (ilimitado acá) no lo ve; el tope sí (cruza servicios).
+    serviceId: OTHER,
+    locationId: LOC_B,
+    ...extra,
+  });
+  /** Servicio del turnero con cupo ilimitado: lo único que frena es el tope. */
+  const unlimited = (patch: Partial<AvailabilityInput> = {}) =>
+    baseInput({ services: [{ id: S, durationMin: 60, maxConcurrent: null, practitionerId: null }], ...patch });
+
+  it("[AS-2l] 1 cada 60': la hora con un turno de otro servicio no se ofrece; el resto del día sí", () => {
+    const input = unlimited({ bookings: [bk("15:10")], intervalCaps: { [P1]: { count: 1, intervalMin: 60 } } });
+    const slots = publicDaySlots(input, q(P1));
+    expect(slots.map((s) => [s.time, s.available])).toEqual([
+      ["14:00", true],
+      ["15:00", false],
+      ["16:00", true],
+      ["17:00", true],
+    ]);
+    // El submit lo rechaza con el veredicto de siempre («ya no se puede reservar online»), no como off-grid.
+    expect(checkPublicSlot(at(MONDAY, "15:00"), slots)).toBe("unavailable");
+  });
+
+  it("[AS-2l] sin tope (o NONE → null) la grilla es la de antes, byte a byte", () => {
+    const withBooking = { bookings: [bk("15:10")] };
+    const base = publicDaySlots(unlimited(withBooking), q(P1));
+    expect(publicDaySlots(unlimited({ ...withBooking, intervalCaps: { [P1]: null } }), q(P1))).toEqual(base);
+    expect(base.every((s) => s.available)).toBe(true);
+  });
+
+  it("[AS-2l] 2 cada 30': con 1 turno el intervalo sigue ofreciéndose (el aviso es del staff); con 2 no", () => {
+    const one = unlimited({ bookings: [bk("15:00")], intervalCaps: { [P1]: { count: 2, intervalMin: 30 } } });
+    expect(publicDaySlots(one, q(P1)).find((s) => s.time === "15:00")!.available).toBe(true);
+    const two = unlimited({
+      bookings: [bk("15:00"), bk("15:20", { id: "x2", serviceId: S })],
+      intervalCaps: { [P1]: { count: 2, intervalMin: 30 } },
+    });
+    const slots = publicDaySlots(two, q(P1));
+    expect(slots.find((s) => s.time === "15:00")!.available).toBe(false);
+    // 14:00 es otro intervalo: libre.
+    expect(slots.find((s) => s.time === "14:00")!.available).toBe(true);
+  });
+
+  it("[AS-2l] una reserva pública impaga vencida no retiene el tope (isHoldingCapacity)", () => {
+    const stale = bk("15:00", {
+      status: "PENDING",
+      createdAt: new Date("2026-09-01T00:00:00Z"),
+      idempotencyKey: "pub:t1:0b6f2c1e-3f7a-4d0e-9a51-2f7c1d9e8a10",
+    });
+    const input = unlimited({ bookings: [stale], intervalCaps: { [P1]: { count: 1, intervalMin: 60 } } });
+    expect(publicDaySlots(input, q(P1)).find((s) => s.time === "15:00")!.available).toBe(true);
+  });
+
+  it("[AS-2l] el tope de OTRO profesional no frena a este", () => {
+    const input = unlimited({
+      bookings: [bk("15:00", { practitionerId: P2 })],
+      intervalCaps: { [P1]: { count: 1, intervalMin: 60 }, [P2]: { count: 1, intervalMin: 60 } },
+    });
+    expect(publicDaySlots(input, q(P1)).every((s) => s.available)).toBe(true);
+  });
+
+  it("[AS-2l] día con todo topeado = «Completo» (hábil), no «no atiende»", () => {
+    const input = unlimited({
+      bookings: ["14:00", "15:00", "16:00", "17:00"].map((h) => bk(h)),
+      intervalCaps: { [P1]: { count: 1, intervalMin: 60 } },
+    });
+    const w = publicSlotWindow(input, { practitionerId: P1, serviceId: S, fromDay: MONDAY, lastDay: MONDAY, now: NOW });
+    expect(w.days).toEqual([{ date: MONDAY, status: "full", slots: [] }]);
+  });
+
+  it("[AS-2l] «cualquier profesional» saltea al topeado", () => {
+    const input = unlimited({
+      templates: [
+        { practitionerId: P1, isFallback: false, ranges: [tpl(1, 8 * 60, 9 * 60, LOC_B)] },
+        { practitionerId: P2, isFallback: false, ranges: [tpl(1, 10 * 60, 11 * 60, LOC_A)] },
+      ],
+      bookings: [bk("08:30")],
+      intervalCaps: { [P1]: { count: 1, intervalMin: 60 } },
+    });
+    expect(
+      firstPublicSlotAcross(input, { serviceId: S, practitionerIds: [P1, P2], fromDay: MONDAY, now: NOW })
+    ).toMatchObject({ practitionerId: P2, time: "10:00" });
   });
 });

@@ -10,7 +10,7 @@
  * B3.2 (B-pre): el turnero pasa al motor de disponibilidad (`lib/availability`):
  *   • `publicDaySlots` (lista + submit) = `workingRanges` (franjas del
  *     profesional, excepción del día, bloqueos RESTADOS: un bloqueo es duro
- *     para el público, decisión 1) + `buildSlots` (paso 45 anclado a cada
+ *     para el público, decisión 1) + `buildSlots` (paso `PublicOffer.stepMin`, AS-D9 desde T3, anclado a cada
  *     franja, anticipación `minLeadMinutes ?? 60`, tope `maxLeadDays`, cupo
  *     profesional + servicio con `isHoldingCapacity`/`overlapBlocks`, §5.18);
  *   • solo servicios habilitados y PUBLIC para ese profesional
@@ -51,8 +51,33 @@ import type { PublicFirstSlot, PublicSlot, PublicSlotWindow, PublicWindowDay } f
 /** Horario por defecto si el tenant no configuró `businessHoursStart/End`. */
 export const DEFAULT_OPEN_HOUR = 8;
 export const DEFAULT_CLOSE_HOUR = 19;
-/** Paso de la grilla pública (min). Independiente de la duración del servicio. */
+/**
+ * Paso FIJO de la grilla pública de antes de T3 (45 min). Desde T3 (AS-D9) el turnero real usa
+ * `publicSlotStepFor(duración)`; este valor queda solo para `buildPublicSlots`, el envoltorio con la firma de A2b que
+ * es el oráculo de paridad (`tests/unit/public-slots.test.ts`, `public-booking-engine.test.ts` §1).
+ */
 export const PUBLIC_SLOT_STEP_MIN = ENGINE_PUBLIC_SLOT_STEP_MIN;
+
+/** Cotas del paso del turnero (AS-D9). */
+export const PUBLIC_SLOT_STEP_FLOOR_MIN = 15;
+export const PUBLIC_SLOT_STEP_CEIL_MIN = 60;
+
+/**
+ * Paso de la grilla pública para un servicio de `durationMin` (AS-D9, T3): `clamp(ceil15(duración), 15, 60)`.
+ *
+ * Por qué: con el paso fijo de 45 un servicio de 30 min ofrecía huecos cada 45 (10:00, 10:45, 11:30…) y dejaba 15 min
+ * muertos entre turno y turno en la agenda que se llenaba online; uno de 60 con cupo 1 ofrecía 10:00 y 10:45, y
+ * reservado el primero, el segundo ya no entraba hasta las 11:30. Redondear a 15 alinea la grilla a las filas de la agenda (15/30/60) y a los intervalos del tope
+ * (`lib/availability/interval-cap.ts`, alineados a la hora). El techo de 60 es para que un servicio de 90 o 120 no
+ * deje al paciente con 4 horarios en todo el día: el cupo (`maxConcurrent`) sigue siendo el que decide si se pisan.
+ * 15→15, 20→30, 30→30, 45→45, 50→60, 90→60. Una duración inválida (0, NaN; la config la rechaza) cae al piso: el
+ * motor igual no arma grilla con duración ≤ 0.
+ */
+export function publicSlotStepFor(durationMin: number): number {
+  if (!Number.isFinite(durationMin) || durationMin <= 0) return PUBLIC_SLOT_STEP_FLOOR_MIN;
+  const up = Math.ceil(durationMin / 15) * 15;
+  return Math.min(PUBLIC_SLOT_STEP_CEIL_MIN, Math.max(PUBLIC_SLOT_STEP_FLOOR_MIN, up));
+}
 /** Anticipación mínima por defecto para reservar online: 1 h desde `now`
  *  (`minLeadMinutes ?? 60` del motor; un PractitionerService puede cambiarla). */
 export const PUBLIC_MIN_LEAD_MS = PUBLIC_DEFAULT_MIN_LEAD_MINUTES * 60_000;
@@ -162,6 +187,9 @@ export type PublicOffer = {
   minLeadMinutes: number;
   /** null = sin tope. */
   maxLeadDays: number | null;
+  /** Paso de la grilla (`publicSlotStepFor(durationMin)`, AS-D9). Lo calcula SOLO `resolvePublicOffer`: lista,
+   *  ventana, «cualquier profesional» y submit leen el mismo, así lo que se ofrece es lo que se acepta. */
+  stepMin: number;
 };
 
 /**
@@ -199,6 +227,7 @@ export function resolvePublicOffer(
     cap: eff.cap,
     minLeadMinutes: rule?.minLeadMinutes ?? PUBLIC_DEFAULT_MIN_LEAD_MINUTES,
     maxLeadDays: rule?.maxLeadDays ?? null,
+    stepMin: publicSlotStepFor(eff.durationMin),
   };
 }
 
@@ -253,18 +282,24 @@ function slotResultsForOffer(
 ): Array<PublicSlot & { reason: SlotUnavailableReason | null }> {
   const ranges = workingRanges(offer.practitionerId, dayKey, input, { locationId });
   if (ranges.length === 0) return [];
-  const bookings = input.bookings.filter(
-    (b) => b.practitionerId === offer.practitionerId && b.serviceId === offer.serviceId
-  );
+  // T3 (C-AS3): el prefiltro de B3.2 dejaba solo profesional + servicio, que es lo que cuenta el CUPO; el tope por
+  // intervalo cruza servicios, así que con tope se conservan TODOS los turnos del profesional y van aparte en
+  // `intervalCap` (el motor cuenta ahí con `intervalStartsUsed`). Sin tope no se arma nada: la grilla de siempre.
+  const ofPractitioner = input.bookings.filter((b) => b.practitionerId === offer.practitionerId);
+  const bookings = ofPractitioner.filter((b) => b.serviceId === offer.serviceId);
+  const intervalCap = input.intervalCaps?.[offer.practitionerId] ?? null;
   return buildSlots({
     dayKey,
     ranges,
-    stepMin: PUBLIC_SLOT_STEP_MIN,
+    stepMin: offer.stepMin,
     durationMin: offer.durationMin,
     lead: { minMinutes: offer.minLeadMinutes, maxDays: offer.maxLeadDays },
     now,
     bookings,
     cap: offer.cap,
+    // Turnero: DURO. Un slot `tope-intervalo` sale `available: false` del motor y no se ofrece ni se acepta en el
+    // submit (`checkPublicSlot` → "unavailable"); el staff es el único que puede cargarlo como sobreturno.
+    intervalCap: intervalCap ? { practitionerId: offer.practitionerId, cap: intervalCap, bookings: ofPractitioner } : null,
   }).map(({ iso, time, available, reason }) => {
     const [hh, mm] = time.split(":").map(Number);
     return { iso, time, available, locationId: slotLocation(ranges, hh * 60 + mm, offer.durationMin), reason };
@@ -283,7 +318,8 @@ export const PUBLIC_WINDOW_SCAN_DAYS = 42;
 export const PUBLIC_MAX_AHEAD_DAYS = 90;
 
 /** Motivos que dejan un horario DETRÁS de la ventana de reserva: un día con solo estos no es hábil. `cupo-completo`
- *  no está: un día con todo ocupado sí es hábil, se muestra «Completo». */
+ *  no está: un día con todo ocupado sí es hábil, se muestra «Completo». `tope-intervalo` (T3) tampoco, por lo mismo:
+ *  el profesional atiende ese día, solo que ya llegó a su tope en cada intervalo → «Completo», no «no atiende». */
 const NOT_AHEAD: ReadonlySet<SlotUnavailableReason> = new Set(["pasado", "anticipacion-minima", "fuera-de-horizonte"]);
 
 const EMPTY_WINDOW: PublicSlotWindow = { days: [], nextFrom: null, reachedEnd: true, skippedFrom: null };
@@ -388,9 +424,9 @@ export const PUBLIC_FIRST_FREE_HORIZON_DAYS = NEXT_FREE_HORIZON_DAYS;
  *
  * Decisión: elegibilidad con `eligiblePractitioners` (lo mismo que
  * `firstFreeAcrossPractitioners`), pero el hueco se busca sobre la grilla
- * PÚBLICA (`publicDaySlots`: paso 45 anclado a la franja, anticipación del
+ * PÚBLICA (`publicDaySlots`: paso del servicio anclado a la franja, anticipación del
  * canal) y no con `nextFreeSlot` (paso 15, sin anticipación): un instante de
- * la grilla de 15 que no esté en la de 45 lo rechazaría el submit
+ * la grilla de 15 que no esté en la del turnero lo rechazaría el submit
  * ("off-grid"). Así lo que se ofrece siempre se puede reservar.
  */
 export function firstPublicSlotAcross(
