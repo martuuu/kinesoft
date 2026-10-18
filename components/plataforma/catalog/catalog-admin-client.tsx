@@ -6,7 +6,7 @@
  * es la fuente de verdad de búsqueda, filtros y página; archivar/restaurar va
  * en la fila; editar y fusionar, en el drawer.
  */
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition, type CSSProperties } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
@@ -27,6 +27,7 @@ import {
   formatARDate,
 } from "@/components/plataforma/catalog/catalog-copy";
 import ctl from "../controls.module.css";
+import table from "../responsive-table.module.css";
 
 export type CatalogListState = {
   q: string;
@@ -41,6 +42,13 @@ const colsFor = (entity: CatalogEntityKind) =>
   entity === "specialty"
     ? "minmax(220px,2.4fr) 170px 150px 150px"
     : "minmax(220px,2.4fr) 118px 120px 150px 150px 150px";
+/**
+ * B4b (mbz-plataforma-tablas-scroll): las columnas van como variables de la grilla compartida
+ * (`responsive-table.module.css`, MB-1f): desde 768 la tabla de siempre con scroll propio; bajo 768 cada fila es una
+ * card con rótulos (a 390 la tabla medía 900 px y había que arrastrarla para llegar a «Editar»).
+ */
+const tableVars = (entity: CatalogEntityKind) =>
+  ({ "--pt-cols": colsFor(entity), "--pt-min-w": `${entity === "specialty" ? 720 : 900}px` }) as CSSProperties;
 
 export function CatalogAdminClient({
   entity,
@@ -98,7 +106,7 @@ export function CatalogAdminClient({
   return (
     <div style={{ display: "grid", gap: 12 }}>
       {/* ── Toolbar ───────────────────────────────────────────────────── */}
-      <Card style={{ padding: 12, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+      <Card className={table.tapScope} style={{ padding: 12, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
         <div style={{ position: "relative", flex: "1 1 260px", minWidth: 200 }}>
           <span
             style={{
@@ -165,13 +173,12 @@ export function CatalogAdminClient({
       </Card>
 
       {/* ── Table ─────────────────────────────────────────────────────── */}
-      <Card style={{ padding: 0, overflow: "hidden" }}>
-        <div style={{ overflowX: "auto" }}>
-          <div style={{ minWidth: entity === "specialty" ? 720 : 900 }}>
+      <Card className={table.tapScope} style={{ padding: 0, overflow: "hidden" }}>
+        <div className={table.scroller} style={tableVars(entity)}>
+          <div className={table.inner}>
             <div
+              className={table.head}
               style={{
-                display: "grid",
-                gridTemplateColumns: colsFor(entity),
                 gap: 12,
                 padding: "10px 16px",
                 borderBottom: "1px solid rgba(15,30,51,0.07)",
@@ -204,7 +211,7 @@ export function CatalogAdminClient({
       </Card>
 
       {/* ── Pager ─────────────────────────────────────────────────────── */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+      <div className={table.tapScope} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <span style={{ fontSize: 12, color: "var(--navy-500)" }}>
           {total === 0 ? "Sin resultados" : `Mostrando ${from}–${to} de ${total}`}
         </span>
@@ -229,6 +236,7 @@ export function CatalogAdminClient({
 /* ── Row ─────────────────────────────────────────────────────────────── */
 
 function Row({ entity, r, onEdit }: { entity: CatalogEntityKind; r: CatalogAdminRow; onEdit: () => void }) {
+  const copy = ENTITY_COPY[entity];
   const router = useRouter();
   const toast = useToast();
   const [pending, start] = useTransition();
@@ -248,9 +256,8 @@ function Row({ entity, r, onEdit }: { entity: CatalogEntityKind; r: CatalogAdmin
 
   return (
     <div
+      className={table.row}
       style={{
-        display: "grid",
-        gridTemplateColumns: colsFor(entity),
         gap: 12,
         padding: "11px 16px",
         alignItems: "center",
@@ -285,27 +292,27 @@ function Row({ entity, r, onEdit }: { entity: CatalogEntityKind; r: CatalogAdmin
         </div>
       </div>
       {entity !== "specialty" && (
-        <div style={{ fontSize: 12, color: "var(--navy-700)" }}>{r.detail ?? <Muted />}</div>
+        <div data-label={copy.detailHead} style={{ fontSize: 12, color: "var(--navy-700)" }}>{r.detail ?? <Muted />}</div>
       )}
       {entity !== "specialty" && (
-        <div className="k-mono" style={{ fontSize: 11.5, color: "var(--navy-700)", overflow: "hidden", textOverflow: "ellipsis" }}>
+        <div data-label={copy.codeHead} className="k-mono" style={{ fontSize: 11.5, color: "var(--navy-700)", overflow: "hidden", textOverflow: "ellipsis" }}>
           {r.code ?? <Muted />}
         </div>
       )}
-      <div style={{ display: "grid", gap: 2 }}>
+      <div data-label="Fuente" style={{ display: "grid", gap: 2 }}>
         <span style={{ fontSize: 12, color: "var(--navy-700)" }}>{SOURCE_LABEL[r.source] ?? r.source}</span>
         <span style={{ fontSize: 10.5, color: r.curatedAt ? "var(--sky-700)" : "var(--navy-300)" }}>
           {r.curatedAt ? `Curada ${formatARDate(r.curatedAt)}` : `Oficial ${formatARDate(r.sourceDate)}`}
         </span>
       </div>
-      <div style={{ fontSize: 11.5, color: "var(--navy-500)", display: "grid", gap: 1 }}>
+      <div data-label="Uso" style={{ fontSize: 11.5, color: "var(--navy-500)", display: "grid", gap: 1 }}>
         {r.usage.map((u) => (
           <span key={u.label}>
             <strong style={{ color: u.count ? "var(--navy-900)" : "var(--navy-300)" }}>{u.count}</strong> {u.label}
           </span>
         ))}
       </div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
+      <div className={table.wide} style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
         <button type="button" onClick={onEdit} style={editBtn}>
           Editar
         </button>

@@ -18,7 +18,7 @@
  * en las prefs guardadas lo descarta `sanitizeCatalogPrefs` (lib/preferences-constants.ts).
  */
 import { PageHeader } from "@/components/ui/page-header";
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -40,9 +40,24 @@ import {
 import { ExerciseDrawer } from "@/components/plataforma/exercise-drawer";
 import { TagFilterMenu, type TagOpt } from "@/components/plataforma/tag-filter-menu";
 import ctl from "./controls.module.css";
+import table from "./responsive-table.module.css";
 
 /** Column track shared by the header and every row so the two never drift. */
 const COLS = "minmax(190px,2.3fr) 108px 58px minmax(150px,1.7fr) 96px 176px";
+/**
+ * B4b (mbz-plataforma-tablas-scroll): grilla compartida de Plataforma (MB-1f). Desde 768 la tabla de siempre con
+ * scroll propio; bajo 768 cada fila es una card con rótulos (a 390 la tabla medía 880 px y «Editar» quedaba fuera).
+ * El orden vive en el encabezado (que la card oculta): en el celular lo reemplaza el select «Ordenar por».
+ */
+const TABLE_VARS = { "--pt-cols": COLS, "--pt-min-w": "880px" } as CSSProperties;
+const MOBILE_SORTS: { v: `${CatalogSortCol}:${CatalogSortDir}`; l: string }[] = [
+  { v: "name:asc", l: "Nombre (A-Z)" },
+  { v: "name:desc", l: "Nombre (Z-A)" },
+  { v: "kind:asc", l: "Tipo" },
+  { v: "difficulty:asc", l: "Dificultad (menor primero)" },
+  { v: "difficulty:desc", l: "Dificultad (mayor primero)" },
+  { v: "createdAt:desc", l: "Más nuevos primero" },
+];
 
 type CatalogTagOptions = { muscle: TagOpt[]; equipment: TagOpt[]; discipline: TagOpt[] };
 
@@ -199,14 +214,14 @@ export function ExerciseAdminClient({
         title="Catálogo de ejercicios"
         description="Ejercicios y terapias manuales globales: la base compartida por todos los consultorios."
         actions={
-          <Button variant="primary" onClick={() => setCreating(true)}>
+          <Button variant="primary" onClick={() => setCreating(true)} className={table.chip}>
             <IconPlus size={13} /> Nuevo ejercicio
           </Button>
         }
       />
 
       {/* ── Toolbar ───────────────────────────────────────────────────── */}
-      <Card style={{ padding: 12, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+      <Card className={table.tapScope} style={{ padding: 12, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
         <div style={{ position: "relative", flex: "1 1 240px", minWidth: 200 }}>
           <span
             style={{
@@ -244,6 +259,7 @@ export function ExerciseAdminClient({
         </div>
 
         <Select
+          label="Tipo"
           value={filters.kind}
           onChange={(v) => apply({ filters: { kind: v as CatalogFilters["kind"] } })}
           options={[
@@ -253,11 +269,13 @@ export function ExerciseAdminClient({
           ]}
         />
         <Select
+          label="Dificultad"
           value={filters.difficulty == null ? "" : String(filters.difficulty)}
           onChange={(v) => apply({ filters: { difficulty: v ? Number(v) : null } })}
           options={[{ v: "", l: "Toda dificultad" }, ...[1, 2, 3, 4, 5].map((n) => ({ v: String(n), l: `Nivel ${n}` }))]}
         />
         <Select
+          label="Estado"
           value={filters.archived}
           onChange={(v) => apply({ filters: { archived: v as CatalogFilters["archived"] } })}
           options={[
@@ -288,6 +306,23 @@ export function ExerciseAdminClient({
           onChange={(discipline) => apply({ filters: { discipline } })}
         />
 
+        <div className={table.mobileOnly}>
+          <Select
+            label="Ordenar por"
+            value={`${sortCol}:${sortDir}`}
+            onChange={(v) => {
+              const [col, dir] = v.split(":") as [CatalogSortCol, CatalogSortDir];
+              apply({ sortCol: col, sortDir: dir });
+            }}
+            options={
+              // Un orden guardado que no está en la lista (p. ej. «Tipo» descendente desde el encabezado) igual se ve.
+              MOBILE_SORTS.some((o) => o.v === `${sortCol}:${sortDir}`)
+                ? MOBILE_SORTS
+                : [...MOBILE_SORTS, { v: `${sortCol}:${sortDir}` as const, l: "Orden actual" }]
+            }
+          />
+        </div>
+
         {activeCount > 0 && (
           <button
             type="button"
@@ -309,13 +344,12 @@ export function ExerciseAdminClient({
       </Card>
 
       {/* ── Table ─────────────────────────────────────────────────────── */}
-      <Card style={{ padding: 0, overflow: "hidden" }}>
-        <div style={{ overflowX: "auto" }}>
-          <div style={{ minWidth: 880 }}>
+      <Card className={table.tapScope} style={{ padding: 0, overflow: "hidden" }}>
+        <div className={table.scroller} style={TABLE_VARS}>
+          <div className={table.inner}>
             <div
+              className={table.head}
               style={{
-                display: "grid",
-                gridTemplateColumns: COLS,
                 gap: 12,
                 padding: "10px 16px",
                 borderBottom: "1px solid rgba(15,30,51,0.07)",
@@ -367,6 +401,7 @@ export function ExerciseAdminClient({
 
       {/* ── Pager ─────────────────────────────────────────────────────── */}
       <div
+        className={table.tapScope}
         style={{
           display: "flex",
           alignItems: "center",
@@ -381,6 +416,7 @@ export function ExerciseAdminClient({
         </span>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Select
+            label="Ejercicios por página"
             value={String(pageSize)}
             onChange={(v) => apply({ pageSize: Number(v) })}
             options={CATALOG_PAGE_SIZES.map((n) => ({ v: String(n), l: `${n} / página` }))}
@@ -449,9 +485,8 @@ function Row({ e, onEdit }: { e: GlobalExerciseAdminRow; onEdit: () => void }) {
     <div
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      className={table.row}
       style={{
-        display: "grid",
-        gridTemplateColumns: COLS,
         gap: 12,
         padding: "11px 16px",
         alignItems: "center",
@@ -511,7 +546,7 @@ function Row({ e, onEdit }: { e: GlobalExerciseAdminRow; onEdit: () => void }) {
       </div>
 
       {/* Tipo — a coloured dot reads faster than a pill at this density */}
-      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--navy-700)" }}>
+      <div data-label="Tipo" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--navy-700)" }}>
         <span
           style={{
             width: 6,
@@ -525,13 +560,13 @@ function Row({ e, onEdit }: { e: GlobalExerciseAdminRow; onEdit: () => void }) {
       </div>
 
       {/* Dificultad */}
-      <div className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)" }}>
+      <div data-label="Dificultad" className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)" }}>
         {e.difficulty}
         <span style={{ color: "var(--navy-300)" }}>/5</span>
       </div>
 
       {/* Clasificación — grouped chips, muscle → equipment → discipline */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 3, minWidth: 0 }}>
+      <div data-label="Clasificación" className={table.wide} style={{ display: "flex", flexWrap: "wrap", gap: 3, minWidth: 0 }}>
         {muscle.slice(0, 2).map((t) => (
           <Chip key={t.slug} tone="sky">{t.label}</Chip>
         ))}
@@ -546,12 +581,12 @@ function Row({ e, onEdit }: { e: GlobalExerciseAdminRow; onEdit: () => void }) {
       </div>
 
       {/* Prescripción */}
-      <div className="k-mono" style={{ fontSize: 11.5, color: prescription === "—" ? "var(--navy-300)" : "var(--sky-700)" }}>
+      <div data-label="Prescripción" className="k-mono" style={{ fontSize: 11.5, color: prescription === "—" ? "var(--navy-300)" : "var(--sky-700)" }}>
         {prescription}
       </div>
 
       {/* Acciones — passive media/article badges + the two quick actions */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
+      <div className={table.wide} style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
         <span
           title={`${e.mediaCount} archivo${e.mediaCount === 1 ? "" : "s"} de media`}
           style={{
@@ -692,10 +727,13 @@ function SortHead({
 }
 
 function Select({
+  label,
   value,
   onChange,
   options,
 }: {
+  /** Nombre accesible: sin él el lector anunciaba solo la opción elegida («Todo tipo»). */
+  label?: string;
   value: string;
   onChange: (v: string) => void;
   options: { v: string; l: string }[];
@@ -703,6 +741,7 @@ function Select({
   return (
     <select
       className={ctl.field}
+      aria-label={label}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       style={{

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition, type CSSProperties } from "react";
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -31,6 +31,8 @@ import {
   shouldGroupByPlan,
   type PlanGroupMeta,
 } from "@/components/planes/plan-booking-groups";
+import tableStyles from "./profile-table.module.css";
+import heroStyles from "../hero.module.css";
 
 /** Turnos tab columns: Fecha+hora · Servicio · Obra social · Copago · Duración · Estado · acciones. */
 const TURNOS_COLS = "120px 1.2fr 1fr 90px 72px 96px 40px";
@@ -39,7 +41,8 @@ const TURNOS_COLS_ADMIN = "120px 1.2fr 1.1fr 1.1fr 72px 96px 90px";
 /**
  * P3.Z (F3b): con 7 columnas la grilla superaba los 360 px de un teléfono
  * dentro de una Card con `overflow:hidden` y "Ver en agenda" quedaba cortado.
- * La tabla scrollea DENTRO de la card (como Sesiones), la página no (AGENTS §5).
+ * Desde 768 la tabla scrollea DENTRO de la card; B4b: bajo 768 cada fila es una
+ * card con rótulos (`profile-table.module.css`), sin scroll de costado.
  */
 const TURNOS_MIN_WIDTH = 720;
 const TURNOS_MIN_WIDTH_ADMIN = 780;
@@ -113,7 +116,7 @@ export function TurnosView({
   const header = readOnly ? null : (
     <div style={{ display: "flex", justifyContent: "flex-end" }}>
       {/* PF1-Z-F2: un solo <a> con aspecto de botón (antes <Link><Button/></Link>: <button> dentro de <a>). */}
-      <ButtonLink href={`/agenda?new=1&patient=${patientId}`} variant="primary">
+      <ButtonLink href={`/agenda?new=1&patient=${patientId}`} variant="primary" className={heroStyles.action}>
         <IconPlus size={14} /> Nuevo turno
       </ButtonLink>
     </div>
@@ -218,9 +221,12 @@ export function TurnosView({
     ? groupBookingsByPlan(sorted, planGroupMetas({ plans, planBalances, showPlanTitles }))
     : null;
 
-  const cols = admin ? TURNOS_COLS_ADMIN : TURNOS_COLS;
+  const tableVars = {
+    "--pt-cols": admin ? TURNOS_COLS_ADMIN : TURNOS_COLS,
+    "--pt-min-w": `${admin ? TURNOS_MIN_WIDTH_ADMIN : TURNOS_MIN_WIDTH}px`,
+  } as CSSProperties;
   const columnsHeader = (
-    <div style={{ padding: "12px 18px", display: "grid", gridTemplateColumns: cols, gap: 14, fontSize: 10, fontWeight: 700, color: "var(--navy-300)", letterSpacing: "0.06em", textTransform: "uppercase", borderBottom: "1px solid rgba(15,30,51,0.06)" }}>
+    <div className={tableStyles.head} style={{ padding: "12px 18px", gap: 14, fontSize: 10, fontWeight: 700, color: "var(--navy-300)", letterSpacing: "0.06em", textTransform: "uppercase", borderBottom: "1px solid rgba(15,30,51,0.06)" }}>
       <span>Fecha y hora</span>
       <span>Servicio</span>
       <span>Obra social</span>
@@ -231,8 +237,8 @@ export function TurnosView({
     </div>
   );
   const table = (children: React.ReactNode) => (
-    <div data-testid="profile-table-scroll" style={{ overflowX: "auto" }}>
-      <div style={{ minWidth: admin ? TURNOS_MIN_WIDTH_ADMIN : TURNOS_MIN_WIDTH }}>{children}</div>
+    <div data-testid="profile-table-scroll" className={tableStyles.scroller} style={tableVars}>
+      <div className={tableStyles.inner}>{children}</div>
     </div>
   );
   const row = (b: PatientBookingFull, plan: PlanGroupMeta | null) => {
@@ -245,18 +251,19 @@ export function TurnosView({
         key={b.id}
         data-testid="turno-row"
         data-plan={b.programId ?? undefined}
-        style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: cols, gap: 14, alignItems: "center", fontSize: 13, borderBottom: "1px solid rgba(15,30,51,0.04)", opacity: cancelled ? 0.55 : 1 }}
+        className={tableStyles.row}
+        style={{ padding: "14px 18px", gap: 14, alignItems: "center", fontSize: 13, borderBottom: "1px solid rgba(15,30,51,0.04)", opacity: cancelled ? 0.55 : 1 }}
       >
         <span className="k-mono" style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-700)" }}>
           {d.toLocaleString("es-AR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "America/Argentina/Buenos_Aires" })}
         </span>
-        <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+        <span data-label="Servicio" className={tableStyles.wide} style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
           {ord && plan && (
             <DisciplineChip discipline={plan.discipline} ordinal={ord.ordinal} totalLive={ord.totalLive} size="xs" />
           )}
           <span style={{ color: "var(--navy-700)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.serviceName}</span>
         </span>
-        <span style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", color: "var(--navy-500)", fontSize: 12, minWidth: 0 }}>
+        <span data-label="Obra social" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", color: "var(--navy-500)", fontSize: 12, minWidth: 0 }}>
           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {b.obraSocial.toLowerCase() === "particular" ? "—" : b.obraSocial}
           </span>
@@ -264,33 +271,36 @@ export function TurnosView({
             <Tag tone={b.insurerPaidAt ? "lime" : "soft"}>{b.insurerPaidAt ? "OS cobrada" : "OS pendiente"}</Tag>
           )}
         </span>
-        <span style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <span data-label="Copago" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)", fontWeight: 600 }}>{formatARS(b.copagoCents)}</span>
           {admin && (billable || b.paymentStatus === "PAID") && (
             <Tag tone={b.paymentStatus === "PAID" ? "lime" : "soft"}>{b.paymentStatus === "PAID" ? "Cobrado" : "Pendiente"}</Tag>
           )}
         </span>
-        <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)" }}>{b.durationMin} min</span>
-        <BookingStatusTag status={b.status} />
-        {readOnly ? (
-          admin ? (
-            <Link
-              href={`/agenda?view=timeline&date=${toARDateKey(d)}`}
-              style={{ fontSize: 12, fontWeight: 600, color: "var(--sky-700)", textDecoration: "none", justifySelf: "end" }}
-            >
-              Ver en agenda
-            </Link>
+        <span data-label="Duración" className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)" }}>{b.durationMin} min</span>
+        <span data-label="Estado">
+          <BookingStatusTag status={b.status} />
+        </span>
+        {/* B4b: la acción es la última celda en escritorio y va arriba a la derecha de la card bajo 768 (`.actions`). */}
+        <span className={tableStyles.actions} style={{ justifySelf: "end" }}>
+          {readOnly ? (
+            admin ? (
+              <Link
+                href={`/agenda?view=timeline&date=${toARDateKey(d)}`}
+                style={{ fontSize: 12, fontWeight: 600, color: "var(--sky-700)", textDecoration: "none" }}
+              >
+                Ver en agenda
+              </Link>
+            ) : null
           ) : (
-            <span />
-          )
-        ) : (
-          <TurnoActionsMenu
-            booking={b}
-            onStatus={(s) => setStatus(b, s)}
-            onDelete={canDeleteFromProfile(b) ? () => void remove(b) : undefined}
-            disabled={pending}
-          />
-        )}
+            <TurnoActionsMenu
+              booking={b}
+              onStatus={(s) => setStatus(b, s)}
+              onDelete={canDeleteFromProfile(b) ? () => void remove(b) : undefined}
+              disabled={pending}
+            />
+          )}
+        </span>
       </div>
     );
   };
@@ -364,7 +374,9 @@ function TurnoActionsMenu({
   const dateKey = toARDateKey(new Date(booking.scheduledFor));
   const itemStyle: React.CSSProperties = {
     width: "100%", textAlign: "left", border: "none", background: "transparent", cursor: "pointer",
-    fontSize: 12.5, fontWeight: 600, color: "var(--navy-700)", padding: "8px 10px", borderRadius: 8, display: "block",
+    fontSize: 12.5, fontWeight: 600, color: "var(--navy-700)", padding: "8px 10px", borderRadius: 8,
+    // B4b: flex (no block) para que el `min-height: 44px` de la fila bajo 768 centre el texto del ítem.
+    display: "flex", alignItems: "center", boxSizing: "border-box", textDecoration: "none",
   };
   const Item = ({ label, onClick, danger }: { label: string; onClick: () => void; danger?: boolean }) => (
     <button type="button" disabled={disabled} onClick={() => { setOpen(false); onClick(); }} style={{ ...itemStyle, color: danger ? "var(--danger-fg)" : "var(--navy-700)" }}>
@@ -385,7 +397,7 @@ function TurnoActionsMenu({
         ⋯
       </button>
       {open && (
-        <div role="menu" className="k-glass-strong" style={{ position: "absolute", top: 32, right: 0, width: 190, borderRadius: 12, padding: 6, zIndex: 30, display: "grid", gap: 2 }}>
+        <div role="menu" className="k-glass-strong" style={{ position: "absolute", top: "calc(100% + 2px)", right: 0, width: 190, borderRadius: 12, padding: 6, zIndex: 30, display: "grid", gap: 2 }}>
           <Item label="Confirmar" onClick={() => onStatus("CONFIRMED")} />
           <Item label="Marcar hecho" onClick={() => onStatus("COMPLETED")} />
           <Item label="Marcar ausente" onClick={() => onStatus("NO_SHOW")} />

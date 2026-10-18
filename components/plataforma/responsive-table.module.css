@@ -64,9 +64,15 @@
     text-transform: uppercase;
     color: var(--navy-500);
   }
-  /* Alineación a la derecha de las columnas numéricas: en la card el número va debajo de su rótulo. */
+  /* Alineación a la derecha de las columnas numéricas: en la card el número va debajo de su rótulo. B4b: las celdas
+     que son `display:flex` en línea (tipo con su punto, chips de clasificación) ponían el rótulo AL LADO del contenido;
+     con `flex-wrap` + `flex-basis: 100%` el rótulo va arriba como en las demás. */
   .row > [data-label] {
     text-align: left !important;
+    flex-wrap: wrap;
+  }
+  .row > [data-label]::before {
+    flex-basis: 100%;
   }
 
   /* Pasada de targets (AGENTS §5, 44 px): links con forma de botón y controles de los filtros. El texto inline no
@@ -93,6 +99,20 @@
     display: none;
   }
   .filtersTrigger {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+}
+
+/* [B4b] Controles que solo existen bajo 768: el orden de Ejercicios vive en el encabezado (botones ordenables) y el
+   encabezado se oculta en la card; un select «Ordenar por» lo reemplaza en el celular. */
+.mobileOnly {
+  display: none;
+}
+@media (max-width: 767px) {
+  .mobileOnly {
     display: flex;
     gap: 8px;
     align-items: center;

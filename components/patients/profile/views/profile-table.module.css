@@ -1,0 +1,83 @@
+/* [B4b · mbz-perfil-tabs-tablas-390] Tablas de las pestañas Turnos, Facturación y Sesiones del perfil → cards < 768 px.
+   Antes (P3.Z F3b) scrolleaban de costado DENTRO de la card con un ancho mínimo de 700-780 px: a 390 entraba la fecha
+   y el servicio, y para ver el estado o tocar «Confirmar» del copago había que arrastrar la tabla (y el arrastre
+   horizontal competía con el scroll de la página). Es el mismo patrón de las tablas de Plataforma (MB-1f,
+   `components/plataforma/responsive-table.module.css`); se copia y no se importa porque Plataforma y el perfil tienen
+   dueños distintos y la card del perfil tiene su acción arriba a la derecha.
+   Desde 768: la grilla de siempre, con columnas en `--pt-cols` y ancho mínimo en `--pt-min-w` (inline por tabla: una
+   media query no puede pisar un `gridTemplateColumns` inline, por eso pasan a variables) y scroll horizontal propio.
+   Bajo 768: el encabezado se oculta, cada fila es una card de 2 columnas, la primera celda (fecha / número de sesión)
+   arriba a la izquierda, la acción (`.actions`) arriba a la derecha, `.wide` a lo ancho, y cada celda muestra su
+   rótulo desde `data-label`. */
+.scroller {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.inner {
+  min-width: var(--pt-min-w, 0);
+}
+.head,
+.row {
+  display: grid;
+  grid-template-columns: var(--pt-cols);
+}
+
+@media (max-width: 767px) {
+  .scroller {
+    overflow-x: visible;
+  }
+  .inner {
+    min-width: 0;
+  }
+  .head {
+    display: none;
+  }
+  .row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    row-gap: 10px;
+    align-items: start;
+  }
+  .row > :first-child {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: center;
+  }
+  /* La acción va al lado de la primera celda; el resto de las celdas fluye desde la fila 2 (la colocación automática
+     saltea las celdas ya ocupadas). */
+  .actions {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+    align-self: center;
+  }
+  .wide {
+    grid-column: 1 / -1;
+  }
+  .row > [data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--navy-500);
+  }
+  /* Celdas que en escritorio son `display:flex` en línea: en la card el rótulo va arriba y el contenido abajo. */
+  .row > [data-label] {
+    text-align: left !important;
+    justify-content: flex-start !important;
+    flex-wrap: wrap;
+  }
+  .row > [data-label]::before {
+    flex-basis: 100%;
+  }
+  /* Pasada de targets (AGENTS §5, 44 px): «⋯», «Confirmar / Cobrado», «Agendar», «Abrir →», «Ver en agenda» y los
+     ítems del menú del turno. `min-height` no compite con el padding inline. */
+  .row :is(button, a[href]) {
+    min-height: 44px;
+    min-width: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+}

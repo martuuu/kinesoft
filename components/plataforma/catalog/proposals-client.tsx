@@ -6,7 +6,7 @@
  * los pasa al catálogo; si ya hay un plan global con el mismo nombre normalizado
  * (slug), se fusiona en ese y se repuntan las coberturas del consultorio.
  */
-import { useTransition } from "react";
+import { useTransition, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -16,18 +16,20 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { promotePayerPlan } from "@/lib/catalog-admin";
 import type { PayerPlanProposal } from "@/lib/catalog-admin-types";
 import { formatARDate } from "@/components/plataforma/catalog/catalog-copy";
+import table from "@/components/plataforma/responsive-table.module.css";
 
 const COLS = "minmax(180px,1.6fr) minmax(160px,1.3fr) minmax(150px,1.2fr) 96px minmax(170px,1.3fr)";
+/** B4b: grilla compartida de Plataforma (cards con rótulos bajo 768, tabla con scroll propio desde 768). */
+const TABLE_VARS = { "--pt-cols": COLS, "--pt-min-w": "820px" } as CSSProperties;
 
 export function ProposalsClient({ proposals }: { proposals: PayerPlanProposal[] }) {
   return (
-    <Card style={{ padding: 0, overflow: "hidden" }}>
-      <div style={{ overflowX: "auto" }}>
-        <div style={{ minWidth: 820 }}>
+    <Card className={table.tapScope} style={{ padding: 0, overflow: "hidden" }}>
+      <div className={table.scroller} style={TABLE_VARS}>
+        <div className={table.inner}>
           <div
+            className={table.head}
             style={{
-              display: "grid",
-              gridTemplateColumns: COLS,
               gap: 12,
               padding: "10px 16px",
               borderBottom: "1px solid rgba(15,30,51,0.07)",
@@ -83,9 +85,8 @@ function ProposalRow({ p }: { p: PayerPlanProposal }) {
 
   return (
     <div
+      className={table.row}
       style={{
-        display: "grid",
-        gridTemplateColumns: COLS,
         gap: 12,
         padding: "11px 16px",
         alignItems: "center",
@@ -99,15 +100,15 @@ function ProposalRow({ p }: { p: PayerPlanProposal }) {
           <span className="k-mono">{p.slug}</span> · {formatARDate(p.createdAt)}
         </div>
       </div>
-      <div style={{ fontSize: 12.5, color: "var(--navy-700)", display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+      <div data-label="Prestadora" style={{ fontSize: 12.5, color: "var(--navy-700)", display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
         {p.payerName}
         {p.payerArchived && <Tag tone="soft">archivada</Tag>}
       </div>
-      <div style={{ fontSize: 12.5, color: "var(--navy-700)" }}>{p.tenantName}</div>
-      <div className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)" }}>
+      <div data-label="Consultorio" style={{ fontSize: 12.5, color: "var(--navy-700)" }}>{p.tenantName}</div>
+      <div data-label="Coberturas" className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)" }}>
         {p.coverages}
       </div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+      <div className={table.wide} style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
         {p.globalMatch && <Tag tone="sky">Ya existe global</Tag>}
         <Button type="button" variant="ghost" onClick={promote} disabled={pending || p.payerArchived}>
           {p.globalMatch ? "Fusionar" : "Promover"}

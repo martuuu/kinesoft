@@ -1,6 +1,6 @@
 "use client";
 
-import { useTransition } from "react";
+import { useTransition, type CSSProperties } from "react";
 import { Card } from "@/components/ui/card";
 import { IconCheck } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
@@ -20,15 +20,18 @@ import {
   shouldGroupByPlan,
   type PlanGroupMeta,
 } from "@/components/planes/plan-booking-groups";
+import tableStyles from "./profile-table.module.css";
 
 /** Facturación columns: Fecha · Servicio · Obra social · OS · Copago · Turno. */
 const FACT_COLS = "92px 1fr 0.9fr 1.25fr 1.25fr 96px";
 /**
  * P3.Z (F3b): la grilla superaba los 360 px de un teléfono dentro de una Card
- * con `overflow:hidden` y los toggles de cobro quedaban cortados. La tabla
- * scrollea DENTRO de la card (como Sesiones), la página no (AGENTS §5).
+ * con `overflow:hidden` y los toggles de cobro quedaban cortados. Desde 768 la
+ * tabla scrollea DENTRO de la card; B4b: bajo 768 cada fila es una card con
+ * rótulos (`profile-table.module.css`) y los toggles miden 44 px.
  */
 const FACT_MIN_WIDTH = 720;
+const FACT_TABLE_VARS = { "--pt-cols": FACT_COLS, "--pt-min-w": `${FACT_MIN_WIDTH}px` } as CSSProperties;
 
 /** Fecha de la fila de Facturación (D8, puro): `dd/mm/aa` en hora AR. */
 export function factDateLabel(d: Date | string): string {
@@ -42,8 +45,8 @@ export function factDateLabel(d: Date | string): string {
 
 function TableScroll({ children }: { children: React.ReactNode }) {
   return (
-    <div data-testid="profile-table-scroll" style={{ overflowX: "auto" }}>
-      <div style={{ minWidth: FACT_MIN_WIDTH }}>{children}</div>
+    <div data-testid="profile-table-scroll" className={tableStyles.scroller} style={FACT_TABLE_VARS}>
+      <div className={tableStyles.inner}>{children}</div>
     </div>
   );
 }
@@ -181,7 +184,7 @@ export function FacturacionView({
   };
 
   const columnsHeader = (
-    <div style={{ padding: "12px 18px", display: "grid", gridTemplateColumns: FACT_COLS, gap: 14, fontSize: 10, fontWeight: 700, color: "var(--navy-500)", letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap", borderBottom: "1px solid rgba(15,30,51,0.06)" }}>
+    <div className={tableStyles.head} style={{ padding: "12px 18px", gap: 14, fontSize: 10, fontWeight: 700, color: "var(--navy-500)", letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap", borderBottom: "1px solid rgba(15,30,51,0.06)" }}>
       <span>Fecha</span>
       <span>Servicio</span>
       <span>Obra social</span>
@@ -203,24 +206,30 @@ export function FacturacionView({
         key={b.id}
         data-testid="fact-row"
         data-plan={b.programId ?? undefined}
-        style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: FACT_COLS, gap: 14, alignItems: "center", fontSize: 13, borderBottom: "1px solid rgba(15,30,51,0.04)", opacity: offStatus ? 0.75 : 1 }}
+        className={tableStyles.row}
+        style={{ padding: "14px 18px", gap: 14, alignItems: "center", fontSize: 13, borderBottom: "1px solid rgba(15,30,51,0.04)", opacity: offStatus ? 0.75 : 1 }}
       >
         {/* D8: `dd/mm/aa` en una línea (con `month: "short"` salía «27 de jul de / 26» partido en dos). */}
         <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)", whiteSpace: "nowrap" }}>
           {factDateLabel(b.scheduledFor)}
         </span>
-        <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+        <span data-label="Servicio" className={tableStyles.wide} style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
           {ord && plan && (
             <DisciplineChip discipline={plan.discipline} ordinal={ord.ordinal} totalLive={ord.totalLive} size="xs" />
           )}
           <span style={{ color: "var(--navy-700)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.serviceName}</span>
         </span>
-        <span style={{ color: "var(--navy-500)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <span data-label="Obra social" className={tableStyles.wide} style={{ color: "var(--navy-500)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {insured ? b.obraSocial : "Particular"}
         </span>
-        <PaidCell amountCents={b.osAmountCents} paid={!!b.insurerPaidAt} available={hasOS} pending={pending} onToggle={(n) => confirmOS(b, n)} />
-        <PaidCell amountCents={b.copagoCents} paid={b.paymentStatus === "PAID"} available pending={pending} onToggle={(n) => confirmCopago(b, n)} />
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <div data-label="OS (prestadora)">
+          <PaidCell amountCents={b.osAmountCents} paid={!!b.insurerPaidAt} available={hasOS} pending={pending} onToggle={(n) => confirmOS(b, n)} />
+        </div>
+        <div data-label="Copago (paciente)">
+          <PaidCell amountCents={b.copagoCents} paid={b.paymentStatus === "PAID"} available pending={pending} onToggle={(n) => confirmCopago(b, n)} />
+        </div>
+        {/* B4b: el estado del turno va arriba a la derecha de la card bajo 768, al lado de la fecha. */}
+        <div className={tableStyles.actions} style={{ display: "flex", justifyContent: "flex-end" }}>
           <BookingStatusTag status={b.status} />
         </div>
       </div>
@@ -295,7 +304,7 @@ export function FacturacionView({
       <Card style={{ padding: 0, overflow: "hidden" }}>
         {visible.length === 0 ? (
           <>
-            {columnsHeader}
+            <div style={FACT_TABLE_VARS}>{columnsHeader}</div>
             <div style={{ padding: 24, textAlign: "center", color: "var(--navy-500)", fontSize: 13 }}>
               Sin turnos confirmados para facturar todavía.
             </div>

@@ -6,4 +6,9 @@
   .action {
     min-height: 44px;
   }
+  /* B4b (mbz-tap-backlog-44): chips de plan del hero («Kine 3/10», «3 planes activos») cuando abren el plan. Medían
+     ~24 px de alto a 390. Solo bajo 768: en escritorio el chip queda chico al lado del HC. */
+  .chip {
+    min-height: 44px;
+  }
 }

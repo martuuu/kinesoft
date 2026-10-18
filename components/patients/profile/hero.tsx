@@ -524,6 +524,7 @@ function HeroPlanChips({
         onClick={() => onOpenPlan(plans[0].programId)}
         title={detail}
         aria-label={`${ariaLabel}: ${detail}. Ver los planes`}
+        className={heroStyles.chip}
         style={{ ...style, cursor: "pointer" }}
       >
         {text}
@@ -573,6 +574,7 @@ function HeroPlanChips({
                 type="button"
                 onClick={() => onOpenPlan(p.programId)}
                 aria-label={`${ariaLabel}. Ver el plan`}
+                className={heroStyles.chip}
                 style={{ ...boxStyle, cursor: "pointer" }}
               >
                 {body}

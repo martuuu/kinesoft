@@ -9,15 +9,19 @@
  * cache de los consultorios (`tags.catalog()`); sin el botón, lo importado
  * aparece en los pickers recién cuando vence el ttl (1 h).
  */
-import { useTransition } from "react";
+import { useTransition, type CSSProperties } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { refreshCatalogCache } from "@/lib/catalog-admin";
 import type { CatalogImportRunRow } from "@/lib/catalog-admin-types";
 import { formatARDateTime } from "@/components/plataforma/catalog/catalog-copy";
+import table from "@/components/plataforma/responsive-table.module.css";
 
 const COLS = "150px minmax(180px,1.6fr) 110px 70px 70px 70px 90px minmax(110px,1fr)";
+/** B4b: grilla compartida de Plataforma (cards con rótulos bajo 768, tabla con scroll propio desde 768). */
+const TABLE_VARS = { "--pt-cols": COLS, "--pt-min-w": "880px" } as CSSProperties;
+const HEADS = ["Fecha", "Archivo", "Tipo", "Nuevas", "Act.", "Omit.", "Conflictos", "Corrió"] as const;
 
 export function ImportRunsClient({ runs }: { runs: CatalogImportRunRow[] }) {
   return (
@@ -43,7 +47,7 @@ function RefreshCatalogBar() {
       });
     });
   return (
-    <Card style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+    <Card className={table.tapScope} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
       <div style={{ fontSize: 12.5, color: "var(--navy-700)", maxWidth: 560 }}>
         Después de correr el import con <span className="k-mono">--apply</span>, refrescá el catálogo para que los
         consultorios vean los cambios ya (si no, tardan hasta una hora).
@@ -58,19 +62,18 @@ function RefreshCatalogBar() {
 function RunsTable({ runs }: { runs: CatalogImportRunRow[] }) {
   return (
     <Card style={{ padding: 0, overflow: "hidden" }}>
-      <div style={{ overflowX: "auto" }}>
-        <div style={{ minWidth: 880 }}>
+      <div className={table.scroller} style={TABLE_VARS}>
+        <div className={table.inner}>
           <div
+            className={table.head}
             style={{
-              display: "grid",
-              gridTemplateColumns: COLS,
               gap: 12,
               padding: "10px 16px",
               borderBottom: "1px solid rgba(15,30,51,0.07)",
               background: "rgba(246,249,253,0.6)",
             }}
           >
-            {["Fecha", "Archivo", "Tipo", "Nuevas", "Act.", "Omit.", "Conflictos", "Corrió"].map((h) => (
+            {HEADS.map((h) => (
               <span key={h} style={headStyle}>
                 {h}
               </span>
@@ -84,9 +87,8 @@ function RunsTable({ runs }: { runs: CatalogImportRunRow[] }) {
             runs.map((r) => (
               <div
                 key={r.id}
+                className={table.row}
                 style={{
-                  display: "grid",
-                  gridTemplateColumns: COLS,
                   gap: 12,
                   padding: "10px 16px",
                   alignItems: "center",
@@ -98,7 +100,7 @@ function RunsTable({ runs }: { runs: CatalogImportRunRow[] }) {
                 <span className="k-mono" style={{ fontSize: 11.5 }}>
                   {formatARDateTime(r.ranAt)}
                 </span>
-                <span style={{ minWidth: 0 }}>
+                <span data-label="Archivo" className={table.wide} style={{ minWidth: 0, overflowWrap: "anywhere" }}>
                   <span style={{ fontWeight: 600, color: "var(--navy-900)" }}>{r.file}</span>
                   <span
                     className="k-mono"
@@ -108,14 +110,14 @@ function RunsTable({ runs }: { runs: CatalogImportRunRow[] }) {
                     {r.sha256.slice(0, 12)}
                   </span>
                 </span>
-                <span>{r.kind}</span>
-                <span className="k-mono">{r.created}</span>
-                <span className="k-mono">{r.updated}</span>
-                <span className="k-mono">{r.skipped}</span>
-                <span className="k-mono" style={{ color: r.conflictCount ? "var(--danger-fg)" : "var(--navy-300)", fontWeight: r.conflictCount ? 700 : 400 }}>
+                <span data-label="Tipo">{r.kind}</span>
+                <span data-label="Nuevas" className="k-mono">{r.created}</span>
+                <span data-label="Actualizadas" className="k-mono">{r.updated}</span>
+                <span data-label="Omitidas" className="k-mono">{r.skipped}</span>
+                <span data-label="Conflictos" className="k-mono" style={{ color: r.conflictCount ? "var(--danger-fg)" : "var(--navy-300)", fontWeight: r.conflictCount ? 700 : 400 }}>
                   {r.conflictCount}
                 </span>
-                <span style={{ fontSize: 12, color: "var(--navy-500)" }}>{r.ranBy ?? "—"}</span>
+                <span data-label="Corrió" style={{ fontSize: 12, color: "var(--navy-500)" }}>{r.ranBy ?? "—"}</span>
               </div>
             ))
           )}

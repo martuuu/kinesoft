@@ -414,14 +414,16 @@ describe("[S22f] TurnosView", () => {
 // P3.Z (F3b): las grillas de Turnos (7 columnas) y Facturación (6) superaban
 // los 360 px de un teléfono dentro de una Card con `overflow:hidden`, y "Ver en
 // agenda" quedaba cortado. La tabla scrollea DENTRO de la card (como Sesiones),
-// la página no (AGENTS §5).
+// la página no (AGENTS §5). B4b: el scroll y el ancho mínimo pasaron a
+// `profile-table.module.css` (`--pt-min-w`); bajo 768 la fila es una card
+// (tests/unit/render/b4b-mobile.test.tsx).
 describe("[P3-Z-F3b] mobile: las tablas scrollean dentro de la card", () => {
   const bks = [
     booking({ scheduledFor: "2026-09-10T13:00:00Z", programId: "p1", sessionId: "s1", status: "COMPLETED", paymentStatus: "PAID" }),
     booking({ scheduledFor: "2026-09-20T13:00:00Z", serviceName: "Consulta suelta" }),
   ];
   const common = { patientId: "pat_1", loading: false, patchBooking: noop, dropBooking: noop };
-  const SCROLL = /<div data-testid="profile-table-scroll" style="overflow-x:auto"><div style="min-width:(\d+)px">/g;
+  const SCROLL = /<div data-testid="profile-table-scroll" class="[^"]+" style="[^"]*--pt-min-w:(\d+)px[^"]*">/g;
 
   function scrollers(html: string): number[] {
     return Array.from(html.matchAll(SCROLL), (m) => Number(m[1]));

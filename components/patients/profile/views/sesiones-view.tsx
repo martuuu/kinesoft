@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import type { CSSProperties } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
@@ -12,6 +13,7 @@ import { disciplineLabel } from "@/lib/plan-display";
 import type { PlanDTO, PlanSessionDTO, SesionesViewProps } from "@/components/planes/plan-editor-types";
 
 import heroStyles from "../hero.module.css";
+import tableStyles from "./profile-table.module.css";
 /**
  * Tab Sesiones del perfil (S22h, ES3). Historia:
  *   - P0-S02u-perfil: listaba solo las del primer plan mientras el badge
@@ -103,15 +105,14 @@ export function SesionesView({ patient, plans, permissions, onOpenEditor, onOpen
   const empty = groups.every((g) => g.sessions.length === 0);
   return (
     <Card style={{ padding: 0, overflow: "hidden" }}>
-      {/* Mobile: la tabla scrollea DENTRO de la card, la página no (AGENTS §5). */}
-      <div style={{ overflowX: "auto" }}>
-      <div style={{ minWidth: 700 }}>
+      {/* Desde 768 la tabla scrollea DENTRO de la card; B4b: bajo 768 cada fila es una card con rótulos. */}
+      <div className={tableStyles.scroller} style={TABLE_VARS}>
+      <div className={tableStyles.inner}>
       <div
         aria-hidden
+        className={tableStyles.head}
         style={{
           padding: "12px 18px",
-          display: "grid",
-          gridTemplateColumns: COLUMNS,
           gap: 12,
           fontSize: 10,
           fontWeight: 700,
@@ -161,6 +162,7 @@ export function SesionesView({ patient, plans, permissions, onOpenEditor, onOpen
 }
 
 const COLUMNS = "120px 1fr 130px 1fr 150px";
+const TABLE_VARS = { "--pt-cols": COLUMNS, "--pt-min-w": "700px" } as CSSProperties;
 
 function PlanGroup({
   group,
@@ -206,6 +208,7 @@ function PlanGroup({
             variant="ghost"
             onClick={() => onOpenEditor({ mode: "generate", patientId, programId: plan.id })}
             style={{ fontSize: 12, padding: "6px 10px" }}
+            className={heroStyles.action}
           >
             Generar turnos para pendientes ({plan.sinTurno})
           </Button>
@@ -253,10 +256,9 @@ function SessionRow({
   return (
     <div
       data-testid="sesion-row"
+      className={tableStyles.row}
       style={{
         padding: "14px 18px",
-        display: "grid",
-        gridTemplateColumns: COLUMNS,
         alignItems: "center",
         gap: 12,
         fontSize: 13,
@@ -268,7 +270,7 @@ function SessionRow({
       <span className="k-mono" style={{ fontWeight: 700, color: "var(--navy-700)", fontSize: 12, whiteSpace: "nowrap" }}>
         {counter}
       </span>
-      <span style={{ color: "var(--navy-700)" }}>
+      <span data-label="Fecha" style={{ color: "var(--navy-700)" }}>
         {new Date(session.scheduledFor).toLocaleString("es-AR", {
           weekday: "short",
           day: "2-digit",
@@ -279,7 +281,7 @@ function SessionRow({
           timeZone: "America/Argentina/Buenos_Aires",
         })}
       </span>
-      <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
+      <span data-label="Estado" style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
         <Tag tone={state.tone}>
           {done && <IconCheck size={10} stroke={3} />} {state.label}
         </Tag>
@@ -290,6 +292,8 @@ function SessionRow({
         )}
       </span>
       <span
+        data-label="Notas"
+        className={tableStyles.wide}
         style={{
           color: "var(--navy-500)",
           fontSize: 12,
@@ -300,7 +304,7 @@ function SessionRow({
       >
         {note}
       </span>
-      <span style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8 }}>
+      <span className={tableStyles.actions} style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8 }}>
         {onSchedule && (
           <Button
             variant="ghost"

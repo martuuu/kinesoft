@@ -14,3 +14,22 @@
     min-height: 44px;
   }
 }
+
+/* [B4b · mbz-diagnostico-wizard-390] Asistente mobile de /diagnostico (`components/screens/diagnostico-wizard.tsx`).
+   A 390 medido: «Atrás» 36×36, los chips de fase ~31 px de alto y el slider de intensidad ~16 px (el pulgar nativo es
+   lo único tocable). Y el asistente pedía `min-height: 100dvh` DEBAJO del PageHeader de la página: el alto total
+   pasaba la pantalla y «Continuar» quedaba bajo el pliegue o tapado por la barra inferior fija (C-MB1).
+   Ahora el pie es sticky arriba de la barra inferior (`--k-bottom-nav-h`, 0 en escritorio) y los controles miden 44. */
+.wizardFooter {
+  position: sticky;
+  bottom: calc(var(--k-bottom-nav-h, 0px) + 8px);
+  z-index: 2;
+}
+@media (max-width: 767px) {
+  .wizard :is(button, input[type="range"]) {
+    min-height: 44px;
+  }
+  .wizard button {
+    min-width: 44px;
+  }
+}

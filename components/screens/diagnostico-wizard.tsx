@@ -35,6 +35,7 @@ import {
   wizardDiagnosisExerciseIds,
   type DiagnosisDoor,
 } from "@/components/diagnostico/assign-plan-modal";
+import styles from "@/components/diagnostico/diagnostico.module.css";
 
 export const WIZARD_STEPS = ["Zona", "Síntoma", "Cuándo", "Intensidad", "Diagnóstico"] as const;
 const STEPS = WIZARD_STEPS;
@@ -122,7 +123,9 @@ export function DiagnosticoWizard({
   };
 
   return (
-    <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14, minHeight: "100dvh" }}>
+    // B4b: sin `minHeight: 100dvh` (va debajo del PageHeader: el alto pasaba la pantalla y «Continuar» quedaba bajo el
+    // pliegue); el pie es sticky arriba de la barra inferior (`styles.wizardFooter`). Targets de 44 en `styles.wizard`.
+    <div className={styles.wizard} style={{ padding: "4px 0 16px", display: "flex", flexDirection: "column", gap: 14 }}>
       <header style={{ display: "flex", alignItems: "center", gap: 10 }}>
         {step > 0 && (
           <button
@@ -130,9 +133,13 @@ export function DiagnosticoWizard({
             aria-label="Atrás"
             onClick={back}
             style={{
-              width: 36,
-              height: 36,
+              width: 44,
+              height: 44,
               borderRadius: 12,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
               background: "rgba(255,255,255,0.7)",
               border: "1px solid rgba(15,30,51,0.06)",
             }}
@@ -189,7 +196,7 @@ export function DiagnosticoWizard({
         {step === 4 && <RankingStep ranking={ranking} confirmedSlug={confirmedSlug ?? top?.slug ?? null} setConfirmed={setConfirmedSlug} catalog={catalog} />}
       </main>
 
-      <footer>
+      <footer className={styles.wizardFooter}>
         {step < STEPS.length - 1 ? (
           <Button
             variant="primary"
@@ -233,6 +240,8 @@ function Choices({
         return (
           <button
             key={it.slug}
+            type="button"
+            aria-pressed={on}
             onClick={() => onChange(it.slug)}
             style={{
               padding: "16px 12px",
@@ -283,6 +292,8 @@ function IntensityStep({
             return (
               <button
                 key={p.slug}
+                type="button"
+                aria-pressed={on}
                 onClick={() => setPhase(on ? null : p.slug)}
                 style={{
                   padding: "8px 12px",
@@ -310,6 +321,7 @@ function IntensityStep({
           max={10}
           value={intensity}
           onChange={(e) => setIntensity(Number(e.target.value))}
+          aria-label="Intensidad del dolor, de 0 a 10"
           style={{ width: "100%", marginTop: 8 }}
         />
       </div>
@@ -346,6 +358,8 @@ function RankingStep({
         return (
           <button
             key={r.conditionId}
+            type="button"
+            aria-pressed={on}
             onClick={() => setConfirmed(r.slug)}
             style={{
               padding: 12,
