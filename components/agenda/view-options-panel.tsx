@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { AGENDA_PLAN_SCOPES, AGENDA_PLAN_SCOPE_LABEL, type AgendaPlanScope, type AgendaVisibility } from "@/lib/agenda-filters";
 import type { AgendaViewZoom } from "@/lib/preferences-constants";
 import { useAlertPrefs } from "@/components/providers/arrival-alerts";
@@ -190,6 +191,26 @@ export function ViewOptionsPanel({
         />
       </div>
       <AvisosMenuSection />
+      {/* [AS-3h] Ocupación (plan §23.9): ruta propia, server y sin JS; acá solo el link (0 kB en el first load). */}
+      <div style={menuLabel}>Más</div>
+      <Link
+        href="/agenda/ocupacion"
+        role="menuitem"
+        className="k-tap-m"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          padding: "6px 4px",
+          marginBottom: 10,
+          borderRadius: 8,
+          fontSize: 12.5,
+          fontWeight: 600,
+          color: "var(--navy-700)",
+          textDecoration: "none",
+        }}
+      >
+        Ocupación
+      </Link>
       <div style={{ fontSize: 11.5, color: "var(--navy-300)", padding: "2px 4px", lineHeight: 1.4 }}>
         El encabezado de días (tira + grilla) se controla desde Tweaks → «Vista semanal».
       </div>
