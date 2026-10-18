@@ -48,6 +48,9 @@ prod», «M11 en prod») y un backup antes de la primera. Todas son aditivas y c
 van **antes** del deploy; el deploy sale con `DIRECTORY_MODE` sin setear (= `off`) y `NEXT_PUBLIC_PWA` sin setear (=
 prendido, [EXTERNAL-CONFIG «Directorio y PWA»](EXTERNAL-CONFIG.md)). MB no trae migración.
 
+**T3 (18-oct) suma M12** (`agenda_secretaria_config`): va **después de M11 y antes que M18**, al final de todo el
+planning (§22.14 del plan), antes del deploy de T3. Detalle en «M12 en prod».
+
 | Migración | Corrida | Estado |
 |---|---|---|
 | … todas las anteriores (tabla de §2, #1-#12) | A, B-pre | commiteadas |
@@ -64,6 +67,7 @@ prendido, [EXTERNAL-CONFIG «Directorio y PWA»](EXTERNAL-CONFIG.md)). MB no tra
 | `20261017120000_clinical_notes` (**M9**) | EV2-0 (sola) | **commiteada (`8e3e9f6`), aplicada solo en el Docker local; re-verificada objeto por objeto en EV2-Z (5 triggers, 9 FKs, parcial, RLS ENABLE+FORCE, 2 policies)**. sha256 de `migration.sql` = `755ae1891bc3a989685bc37e4c4ba6903b23076889ac2d67f013d3730284fa3b`. Decisión 13 de Martin (evoluciones por consulta para todas las verticales; Ley 26.529: la inalterabilidad va en la base porque prod conecta con BYPASSRLS). Aditiva (expand), una tx, `lock_timeout` 5 s, sin backfill, sin ALTER de columnas existentes. Objetos: enum `ClinicalNoteKind` (EVOLUTION/FIRST_VISIT/DISCHARGE); únicos nuevos sobre tablas existentes `Booking_id_tenantId_patientId_key` y `Practitioner_id_tenantId_key` (destinos de FK compuesta; sobre `id`, no fallan por datos); tabla `ClinicalNote` (turno opcional, enmienda `amendsNoteId`, autor congelado, `revision`, anulación con motivo 3..500 todo-o-nada, `idempotencyKey` 8..100 única por consultorio; 9 FKs RESTRICT: 4 simples + 5 compuestas `(patientId, tenantId)`, `(bookingId, tenantId, patientId)`, `(authorPractitionerId, tenantId)`, `(amendsNoteId, tenantId, patientId)` y la de la revisión; índice **parcial** único `ClinicalNote_bookingId_live_key` = una raíz viva por turno; keyset `(tenantId, patientId, occurredAt DESC, id DESC)`); tabla `ClinicalNoteRevision` (versión anterior de cada edición, única `(noteId, revision)`); funciones `clinical_note_guard()` y `clinical_note_revision_insert_guard()` (`search_path` fijo, INVOKER) + 5 triggers: DELETE/TRUNCATE de la nota rechazados **también para el owner**, identidad inmutable, anulada = congelada, editar contenido solo dentro de 24 h 10 min y copia la versión anterior, la revisión solo nace del trigger y es solo inserción (`kinesoft_append_only()` de M8). RLS ENABLE + FORCE + `<T>_tenant_isolation` en las 2 tablas; sin GRANT (DEFAULT PRIVILEGES). Consecuencia buscada: un turno con evolución no se borra ni cambia de paciente (23503; la app lo traduce en EV2-2c). Parcial, FKs compuestas, CHECKs, funciones, triggers y policies no están en Prisma: drift aceptado («EV2 M9: DRIFT ACEPTADO» en el SQL y en `schema.prisma`; `migrate diff` solo propone borrar las 5 FKs compuestas, como las de M1/M4). Verificada objeto por objeto (psql + `tests/integration/clinical-notes-m9.test.ts`, 2 roles); `migrate status` al día (38); `guard:isolation` OK. Orden para prod abajo («M9») |
 | `20261018120000_perf_fk_indexes` (**M10**) | PF-M (sola) | **escrita y aplicada solo en el Docker local (16-oct), commiteada (`633cdee`)**. sha256 de `migration.sql` = `807a05097f9f021e0d6122b11f53a43fe0ac5fcbedb97e22383ca249cfda26c3`. Aditiva: solo 13 `CREATE INDEX IF NOT EXISTS` btree de una columna, sin `WHERE`, sin `UNIQUE`, sin backfill, una tx, `lock_timeout` 5 s, sin `CONCURRENTLY` (Prisma corre la migración en una tx; tablas chicas). Objetos: `Coverage_patientId_idx`, `EmergencyContact_patientId_idx`, `Patient_userId_idx`, `PatientTenantLink_tenantId_idx`, `Service_tenantId_idx`, `Service_practitionerId_idx`, `Session_practitionerId_idx`, `SessionExercise_exerciseId_idx`, `Booking_serviceId_idx`, `Favorite_exerciseId_idx`, `ExerciseTag_tagId_idx`, `ConditionTag_tagId_idx`, `Condition_createdById_idx`. Todos declarados en `schema.prisma` con `@@index` (mismo nombre): **sin drift nuevo** (`migrate diff` solo sigue proponiendo borrar las FKs compuestas aceptadas de M1/M4/M9). Verificada objeto por objeto (13 filas `USING btree (<col>)` en `pg_indexes`, `indisvalid`/`indisready`, sin predicado; la query de FKs sin índice pasó de 47 a 34 filas); `migrate status` al día (39); integración completa en los 2 roles. Orden para prod abajo («M10») |
 | `20261019120000_public_directory` (**M11**) | DIR-1 (sola) | **commiteada (`b45be05`), aplicada solo en el Docker local (16-oct); re-verificada en DIR-Z/MB-Z (hash igual, `migrate status` al día: 40)**. sha256 `a35fdd6b3f5fe8a9b4b9bbf8fcebb0cff8a82031a9721ddfca171c6af067177d`. Aditiva: 6 columnas en `Tenant` (`directoryListed` default false, `directoryListedAt`, `directoryHiddenAt/Reason/ById`, `publicDescription`), `Location.provinceCode` y la tabla `ProfessionalPublicProfile` (por persona, `userId` único, FK CASCADE). 11 CHECK (los de matrícula/ocultamiento con `COALESCE`), trigger que des-verifica la matrícula, RLS **SERVICE_ONLY** (ENABLE + FORCE, 0 policies). Drift aceptado: CHECK, función, trigger, ENABLE/FORCE. Verificada objeto por objeto; `migrate status` al día (40); integración completa en los 2 roles. Orden: «M11 en prod» |
+| `20261020120000_agenda_secretaria_config` (**M12**) | T3b-1m (sola) | **escrita y aplicada solo en el Docker local (18-oct), sin commitear**. sha256 de `migration.sql` = `a0849c4d28c7154acb3b9a0cf47075bbbde608161d32d126d7ae9d85f9fd7485`. Aditiva, una tx, `lock_timeout` 5 s, sin tablas nuevas (`guard:isolation` sin cambios), con backfill de datos en la misma tx. Objetos: `Tenant.moduleGrants`/`moduleRevokes` (`TEXT[] NOT NULL DEFAULT '{}'`, CHECK `Tenant_moduleOverrides_check`: sin intersección, ≤ 32 cada uno) y `bookingCapCount`/`bookingCapIntervalMin` (INT NULL, CHECK `Tenant_bookingCap_check`: los dos o ninguno, 1..60, 15/30/60); enum `BookingCapMode` (INHERIT/NONE/CUSTOM) + `Practitioner.bookingCapMode` (NOT NULL default INHERIT), `bookingCapCount`, `bookingCapIntervalMin` (CHECK `Practitioner_bookingCap_check`: CUSTOM ⇔ los dos presentes); enum `BookingPaymentMethod` (CASH/TRANSFER/CARD/WALLET/MERCADO_PAGO/OTHER) + `Booking.copagoPaymentMethod` y `Booking.copagoCollectedById TEXT` (**sin FK ni índice**: tabla caliente), CHECKs `Booking_copago_method_check` (medio ⇒ PAID/REFUNDED) y `Booking_copago_collector_check` (quién cobró ⇒ medio y PAID/REFUNDED). Los dos CHECK de tope van con `COALESCE(…, false)` (desvío del SQL del brief, precedente M11: sin eso entraba un tope sin intervalo). Datos: ADMIN con `grantBilling = false` → true, salvo los que tienen un audit `membership.grants.change` / `platform.membership.grants.change` con `from.grantBilling = true` y `to.grantBilling = false` (verificado contra `setMemberGrantsInTx`; desvío del brief: el brief no exigía `from = true`). Sin policy nueva en `SupportSession` (§23.10). Drift aceptado: los 5 CHECK (`migrate diff` no propone nada de M12). Verificada objeto por objeto (psql + `tests/integration/as-m12.test.ts`, 2 roles); `migrate status` al día (41). Orden: «M12 en prod» |
 
 **M3a en prod (ES3).** Prod se resetea antes del go-live (plan §15.6), así que M3a **no se aplica sola**: va dentro de la
 cadena completa del deploy único de B (`migrate deploy` desde vacío, paso 4 de abajo). Solo si Martin decidiera
@@ -531,6 +535,62 @@ que los CHECK validan sin backfill; va **antes** del deploy de DIR. sha256 de `m
 6. Rollback: revertir el código sin tocar M11 (columnas sin lector son inocuas). Sacarla = migración nueva con DROP y
    se pierden perfiles y consentimientos (backup del paso 2).
 
+**M12 en prod (T3b-1m).** Aditiva, sin reset y sin staging separado (AGENTS). Va **al final de todo el planning**
+(§22.14 del plan: consolas, push y migraciones juntos al final), **antes** del deploy de T3 y **antes que M18**
+(`turnero_cobros_mp`, T5). Compatible con el código anterior: nadie lee las columnas nuevas y nacen vacías/NULL/INHERIT;
+el único cambio visible con el código viejo es el backfill: los ADMIN pasan a ver «Planes y pagos» (decisión 2 del 19-oct).
+sha256 de `migration.sql` = `a0849c4d28c7154acb3b9a0cf47075bbbde608161d32d126d7ae9d85f9fd7485` (si T3-Z la toca, se
+recalcula acá).
+1. Precheck de solo lectura (guardar la salida de (d): es la lista exacta para un rollback del backfill):
+   ```sql
+   SELECT version();
+   SELECT migration_name FROM _prisma_migrations
+    WHERE migration_name IN ('20261019120000_public_directory', '20261020120000_agenda_secretaria_config')
+      AND finished_at IS NOT NULL;                                           -- (a) M11 sí, M12 no
+   SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'
+     AND ((table_name = 'Tenant' AND column_name IN ('moduleGrants','moduleRevokes','bookingCapCount','bookingCapIntervalMin'))
+       OR (table_name = 'Practitioner' AND column_name LIKE 'bookingCap%')
+       OR (table_name = 'Booking' AND column_name IN ('copagoPaymentMethod','copagoCollectedById')));  -- (b) 0 filas
+   SELECT to_regtype('"BookingCapMode"'), to_regtype('"BookingPaymentMethod"');  -- (c) NULL, NULL
+   SELECT m.id, m."tenantId", m."userId", m."disabledAt" IS NOT NULL AS disabled,
+          EXISTS (SELECT 1 FROM "AuditEvent" a WHERE a."tenantId" = m."tenantId" AND a."entityId" = m.id
+                    AND a.entity = 'Membership'
+                    AND a.action IN ('membership.grants.change','platform.membership.grants.change')
+                    AND a.payload->'from'->>'grantBilling' = 'true'
+                    AND a.payload->'to'->>'grantBilling' = 'false') AS titular_se_lo_saco
+     FROM "Membership" m WHERE m.role = 'ADMIN' AND NOT m."grantBilling"
+    ORDER BY m."tenantId";                                                   -- (d) false = se backfillea a true
+   SELECT m.role, count(*) FILTER (WHERE m."grantSettings") AS con_configuracion,
+          count(*) FILTER (WHERE m."grantBilling") AS con_planes_y_pagos
+     FROM "Membership" m WHERE m.role IN ('ASSISTANT','BILLING') GROUP BY m.role;
+     -- (e) staff que pierde lo delicado con el código de T3 (no la migración): `tenant.sensitive` y «Planes y pagos»
+     --     nunca para Secretaría/Facturación (C-AS1). Si hay filas con grantBilling, avisarle al Titular.
+   SELECT count(*) FROM "Booking" WHERE "paymentStatus" IN ('PAID','REFUNDED');  -- (f) informativo: quedan «Sin informar»
+   SELECT pid, state, now() - xact_start AS age, left(query, 80) FROM pg_stat_activity
+    WHERE xact_start < now() - interval '1 minute';                         -- (g) sin tx largas (Tenant/Booking calientes)
+   ```
+2. Backup: `npm run db:prod:backup`.
+3. `npm run db:prod:deploy` y `npm run db:prod:status` («Database schema is up to date!»). P3009 por `lock_timeout` (una
+   tx larga sobre Tenant/Booking) → §2.4 y reintentar sin uso.
+4. Postcheck de solo lectura:
+   ```sql
+   SELECT conname, convalidated FROM pg_constraint WHERE contype = 'c' AND conname IN
+     ('Tenant_moduleOverrides_check','Tenant_bookingCap_check','Practitioner_bookingCap_check',
+      'Booking_copago_method_check','Booking_copago_collector_check');      -- 5 filas, todas t
+   SELECT t.typname, array_agg(e.enumlabel ORDER BY e.enumsortorder) FROM pg_type t JOIN pg_enum e ON e.enumtypid = t.oid
+    WHERE t.typname IN ('BookingCapMode','BookingPaymentMethod') GROUP BY 1; -- {INHERIT,NONE,CUSTOM} / {CASH,…,OTHER}
+   SELECT count(*) FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+    WHERE c.conrelid = '"Booking"'::regclass AND c.contype = 'f' AND a.attname = 'copagoCollectedById';  -- 0 (sin FK)
+   SELECT count(*) FROM "Membership" WHERE role = 'ADMIN' AND NOT "grantBilling";  -- = filas con titular_se_lo_saco de (d)
+   SELECT checksum FROM _prisma_migrations WHERE migration_name = '20261020120000_agenda_secretaria_config';  -- el sha256 de arriba
+   ```
+5. Deploy de T3 (después de M12; el código nuevo lee las columnas). Con M12 aplicada y el código viejo, nada cambia salvo
+   el backfill.
+6. Rollback: revertir el código sin tocar M12 (columnas sin lector son inocuas; los CHECK solo restringen a los escritores
+   nuevos). Deshacer el backfill = `UPDATE "Membership" SET "grantBilling" = false WHERE id IN (…)` con los ids de (d)
+   que tenían `titular_se_lo_saco = false`. Sacar M12 = migración nueva con DROP (se pierden medios de pago y topes
+   cargados; backup del paso 2).
+
 **Deploy de BO** (código de `0d058bb`..`c60014f`, después de M7). Las variables nuevas nacen en su default seguro, así
 que el deploy no cambia el comportamiento de nadie salvo lo que se describe abajo.
 1. **Antes del deploy (solo lectura):**
@@ -771,6 +831,7 @@ En orden. Todas aplicadas y verificadas en local:
 | 23 | `20261017120000_clinical_notes` | M9: `ClinicalNote` (evoluciones de HC, nunca se borran) + `ClinicalNoteRevision` (solo inserción), triggers de inalterabilidad, FKs compuestas, una raíz viva por turno (parcial), RLS; únicos destino en `Booking`/`Practitioner` | EV2-0 — **ver «M9 en prod»** |
 | 24 | `20261018120000_perf_fk_indexes` | M10: 13 índices btree de una columna sobre FKs sin índice (`Coverage.patientId`, `Patient.userId`, `Service.tenantId`, `Booking.serviceId`, tags/favoritos…), sin parciales | PF-M — **ver «M10 en prod»** |
 | 25 | `20261019120000_public_directory` | M11: opt-in y moderación del directorio en `Tenant`, `Location.provinceCode` (24 jurisdicciones) y `ProfessionalPublicProfile` (perfil por persona con consentimiento, SERVICE_ONLY, CHECK listed ⇒ consentimiento, nombre sin «@», trigger que des-verifica la matrícula) | DIR-1 — **ver «M11 en prod»** |
+| 26 | `20261020120000_agenda_secretaria_config` | M12: módulos a medida (`Tenant.moduleGrants/moduleRevokes`), tope de turnos por intervalo (`Tenant` y `Practitioner.bookingCap*`, enum `BookingCapMode`), medio de pago y quién cobró el copago (`Booking.copagoPaymentMethod/copagoCollectedById`, enum `BookingPaymentMethod`), 5 CHECK; backfill: ADMIN con «Planes y pagos» salvo a quien el Titular se lo sacó | T3b-1m — **ver «M12 en prod»** |
 
 ⚠️ La #7 además crea políticas RLS (`ENABLE`/`FORCE` + `SELECT` en las dos tablas nuevas).
 ⚠️ La #3 falla si ya existieran dos turnos activos del **mismo paciente en el mismo instante**

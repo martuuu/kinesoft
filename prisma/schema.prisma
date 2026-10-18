@@ -90,6 +90,17 @@ model Tenant {
   directoryHiddenReason       String?
   directoryHiddenById         String?
   publicDescription           String?
+  // T3 (M12 agenda_secretaria_config, §23.6): módulos a medida por consultorio. `modulesFor` = base del plan +
+  // grants − revokes (núcleo y otra vertical se ignoran en el código). Los escribe solo el escritor único de
+  // entitlements (source "platform"). TEXT[] y no tabla: ≤ 32 claves que viajan con el Tenant en cada request.
+  // CHECK Tenant_moduleOverrides_check en la base (drift aceptado): sin intersección, ≤ 32 cada uno.
+  moduleGrants                String[]  @default([])
+  moduleRevokes               String[]  @default([])
+  // M12 (C-AS3): tope de turnos por intervalo del consultorio, default de cada profesional (INHERIT). Los dos o
+  // ninguno; 1..60 turnos por 15/30/60 min (buckets alineados a la hora AR). CHECK Tenant_bookingCap_check en la
+  // base (drift aceptado). NULL/NULL = sin tope.
+  bookingCapCount             Int?
+  bookingCapIntervalMin       Int?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -317,6 +328,12 @@ model Practitioner {
   // si el consultorio lo tiene prendido Y este flag Y ≥ 1 servicio PUBLIC. Nace
   // apagado (opt-in); M8 lo backfilleó en true para los profesionales existentes.
   publicBookingEnabled Boolean @default(false)
+  // M12 (C-AS3): tope de turnos por intervalo. INHERIT = el del consultorio, NONE = sin tope, CUSTOM = el propio
+  // (CUSTOM ⇔ los dos presentes, 1..60 y 15/30/60; si no, los dos NULL). CHECK Practitioner_bookingCap_check en la
+  // base (drift aceptado).
+  bookingCapMode        BookingCapMode @default(INHERIT)
+  bookingCapCount       Int?
+  bookingCapIntervalMin Int?
   createdAt     DateTime @default(now())
 
   tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1722,6 +1739,13 @@ model Booking {
   // desmarcar → null) y lo lee el widget de ingresos del dashboard por semana/
   // mes AR. No usar `updatedAt` para eso (lo mueve cualquier edición).
   copagoPaidAt    DateTime?
+  // M12 (C-AS2): cómo pagó el copago (la Secretaría cobra con medio) y quién lo registró (UserProfile.id). Los
+  // escribe/limpia solo setBookingCopagoPaid junto con paymentStatus/copagoPaidAt. CHECKs en la base (drift
+  // aceptado): medio solo con PAID/REFUNDED (REFUNDED: un reembolso de MP en T5 deja el medio puesto) y quién cobró
+  // exige medio. `copagoCollectedById` SIN FK, índice ni back-relation: Booking es la tabla caliente de la agenda y
+  // el dato es de auditoría, no de navegación.
+  copagoPaymentMethod BookingPaymentMethod?
+  copagoCollectedById String?
   // Groups the turnos created together in one multi-turno batch (the agenda
   // "Repetir / Múltiples turnos" flow). Null for single bookings. Lets a
   // future "plan" entity regroup a batch indirectly without a destructive
@@ -1816,6 +1840,24 @@ enum PaymentStatus {
   PAID
   REFUNDED
   FAILED
+}
+
+// M12 (C-AS2): medio de pago del copago del turno. Mismos valores que SaasPaymentMethod (M8c) pero enum propio: el
+// turno suma cobros online en T5 sin arrastrar a la suscripción. La paridad la fija el test de lib/payment-method.ts.
+enum BookingPaymentMethod {
+  CASH
+  TRANSFER
+  CARD
+  WALLET
+  MERCADO_PAGO
+  OTHER
+}
+
+// M12 (C-AS3): de dónde sale el tope de turnos por intervalo del profesional.
+enum BookingCapMode {
+  INHERIT
+  NONE
+  CUSTOM
 }
 
 model Payment {
