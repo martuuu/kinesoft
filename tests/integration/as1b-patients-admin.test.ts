@@ -30,6 +30,8 @@ import {
   setPatientDefaultCopago,
   updatePatient,
 } from "@/lib/patients";
+import { exportPatientsCsv } from "@/lib/patients-export-internal";
+import { getActor } from "@/lib/session";
 import { decidePatientPortalRequest, listPatientPortalRequests } from "@/lib/patient-portal-requests";
 import { proposePayerPlan } from "@/lib/catalog";
 import { matchKey } from "@/lib/catalog/normalize";
@@ -47,6 +49,7 @@ import { asUser } from "@/tests/helpers/actor";
 
 const RUN = process.env.INTEGRATION === "1";
 const CLINICAL_COPY = "Las notas y el diagnóstico los edita el profesional a cargo.";
+const EMAIL_LOCKED_COPY = "El email lo cambia el profesional a cargo o el paciente desde el portal.";
 
 // `Patient.phone` es único por consultorio: cada teléfono del test es distinto.
 let phoneSeq = Math.floor(Math.random() * 1_000_000);
@@ -63,6 +66,7 @@ describe.skipIf(!RUN)("[AS-1b] pacientes editados por Secretaria/Admin, portal y
   let kine: Staff;
   let disabledKine: Staff;
   const payerIds: string[] = [];
+  const portalUsers: string[] = [];
 
   beforeAll(async () => {
     db = ownerClient();
@@ -86,6 +90,7 @@ describe.skipIf(!RUN)("[AS-1b] pacientes editados por Secretaria/Admin, portal y
   afterAll(async () => {
     await A?.cleanup();
     if (db) {
+      if (portalUsers.length) await db.userProfile.deleteMany({ where: { id: { in: portalUsers } } });
       await db.payerPlan.deleteMany({ where: { payerId: { in: payerIds } } });
       await db.payer.deleteMany({ where: { id: { in: payerIds } } });
       await db.$disconnect();
@@ -94,6 +99,16 @@ describe.skipIf(!RUN)("[AS-1b] pacientes editados por Secretaria/Admin, portal y
 
   const clinicalPatient = () =>
     addPatient(db, A, { phone: ph(), email: `p-${uniqueSuffix()}@test.local`, notes: "Lumbalgia crónica" });
+
+  /** Ficha con cuenta del portal vinculada (`Patient.userId`): el email ya no decide el vínculo. */
+  const linkedPatient = async () => {
+    const id = await clinicalPatient();
+    const userId = `test-user-t3zs1-${uniqueSuffix()}`;
+    await db.userProfile.create({ data: { id: userId, email: `${userId}@test.local` } });
+    portalUsers.push(userId);
+    await db.patient.update({ where: { id }, data: { userId } });
+    return id;
+  };
 
   const snapshot = (id: string) =>
     db.patient.findUniqueOrThrow({
@@ -174,7 +189,8 @@ describe.skipIf(!RUN)("[AS-1b] pacientes editados por Secretaria/Admin, portal y
   });
 
   it("[AS-1b] el Admin no clínico edita contacto y tampoco toca notas", async () => {
-    const id = await clinicalPatient();
+    // T3-Z A1: el email solo lo cambia la rama admin en una ficha YA vinculada al portal.
+    const id = await linkedPatient();
     asUser(admin.userId);
     const email = `nuevo-${uniqueSuffix()}@test.local`;
     const phone = ph();
@@ -185,12 +201,79 @@ describe.skipIf(!RUN)("[AS-1b] pacientes editados por Secretaria/Admin, portal y
     expect(await updatePatient({ id, notes: "x" })).toEqual({ ok: false, error: CLINICAL_COPY });
   });
 
+  // T3-Z A1: el login del portal vincula la ficha cuyo email coincide (sin `userId` todavía). Si la recepción le pone
+  // a una ficha sin vincular el email de OTRA persona (o el suyo), esa persona entra al portal con la HC de este
+  // paciente. Por eso en la rama admin el email de una ficha sin vincular no se cambia; vinculada ya no decide nada.
+  it("[T3Z-s1] la Secretaria NO cambia el email de una ficha sin vincular: rechazo sin escribir (tampoco el teléfono)", async () => {
+    const id = await clinicalPatient();
+    const before = await snapshot(id);
+    asUser(sec.userId);
+    const r = await updatePatient({ id, email: `ajeno-${uniqueSuffix()}@test.local`, phone: ph() });
+    expect(r).toEqual({ ok: false, error: EMAIL_LOCKED_COPY });
+    expect(await snapshot(id)).toEqual(before);
+    // Vaciarlo también es cambiarlo.
+    expect(await updatePatient({ id, email: "" })).toEqual({ ok: false, error: EMAIL_LOCKED_COPY });
+    expect(await snapshot(id)).toEqual(before);
+    // Control: el mismo email que ya tenía (el drawer manda todo el form) no es cambio y el resto se guarda.
+    const phone = ph();
+    const same = await updatePatient({ id, email: before.email!.toUpperCase(), phone });
+    if (!same.ok) throw new Error(same.error);
+    expect(await snapshot(id)).toMatchObject({ email: before.email, phone });
+  });
+
+  it("[T3Z-s1] la Secretaria cambia el email de una ficha vinculada al portal", async () => {
+    const id = await linkedPatient();
+    asUser(sec.userId);
+    const email = `vinc-${uniqueSuffix()}@test.local`;
+    const r = await updatePatient({ id, email });
+    if (!r.ok) throw new Error(r.error);
+    expect((await snapshot(id)).email).toBe(email);
+  });
+
+  it("[T3Z-s1] control: la rama full (titular) cambia el email de una ficha sin vincular", async () => {
+    const id = await clinicalPatient();
+    asUser(A.userId);
+    const email = `full-${uniqueSuffix()}@test.local`;
+    const r = await updatePatient({ id, email });
+    if (!r.ok) throw new Error(r.error);
+    expect((await snapshot(id)).email).toBe(email);
+  });
+
   it("[AS-1b] control: el titular (full) sigue editando notas", async () => {
     const id = await clinicalPatient();
     asUser(A.userId);
     const r = await updatePatient({ id, notes: "Mejoró" });
     if (!r.ok) throw new Error(r.error);
     expect((await snapshot(id)).notes).toBe("Mejoró");
+  });
+
+  // ── export CSV ─────────────────────────────────────────────────────────
+
+  // T3-Z M1: el CSV salía con email y teléfono para todo `admin`; Facturación (sin `patients.editAdmin`) no ve los
+  // contactos en la ficha, así que tampoco los baja en masa. Secretaria y Admin (editAdmin) sí.
+  it("[T3Z-s1] exportPatientsCsv: Facturación sin email ni teléfono; la Secretaria con contactos; audit con adminCount", async () => {
+    const tag = uniqueSuffix();
+    const phone = ph();
+    const email = `csv-${tag}@test.local`;
+    const id = await addPatient(db, A, { lastName: `Csv ${tag}`, phone, email });
+
+    asUser(billing.userId);
+    const csvBilling = await exportPatientsCsv(await getActor(), { ids: [id] });
+    const lineBilling = csvBilling.split("\n").find((l) => l.includes(id))!;
+    expect(lineBilling).toContain(`Csv ${tag}`);
+    expect(lineBilling).not.toContain(email);
+    expect(lineBilling).not.toContain(phone);
+    const audit = await db.auditEvent.findFirstOrThrow({
+      where: { tenantId: A.tenantId, actorId: billing.userId, action: "patient.export" },
+      orderBy: { createdAt: "desc" },
+      select: { payload: true },
+    });
+    expect(audit.payload).toMatchObject({ count: 1, adminCount: 1 });
+
+    asUser(sec.userId);
+    const lineSec = (await exportPatientsCsv(await getActor(), { ids: [id] })).split("\n").find((l) => l.includes(id))!;
+    expect(lineSec).toContain(email);
+    expect(lineSec).toContain(phone);
   });
 
   // ── cobertura, copago propio y preview ─────────────────────────────────

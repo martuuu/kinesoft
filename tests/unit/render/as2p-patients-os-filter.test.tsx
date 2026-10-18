@@ -71,7 +71,7 @@ describe("[AS-2p] select «Obra social» de /pacientes", () => {
     { id: "os_2", name: "Swiss Medical" },
   ];
 
-  it("<select> nativo con «Todas», el catálogo y «Particular»; conserva el resto de la query", () => {
+  it("<select> nativo con «Todas», «Particular» y el catálogo (orden de la agenda, Z-u2 M9); conserva el resto de la query", () => {
     const html = renderToStaticMarkup(
       <InsurerFilterSelect value="os_2" insurers={INS} preserved={{ q: "ana", sort: "lastName.asc", ageMin: undefined }} />
     );
@@ -80,9 +80,9 @@ describe("[AS-2p] select «Obra social» de /pacientes", () => {
     const opts = [...html.matchAll(/<option value="([^"]*)"[^>]*>([^<]+)/g)].map((m) => [m[1], m[2]]);
     expect(opts).toEqual([
       ["", "Todas las obras sociales"],
+      ["particular", "Particular"],
       ["os_1", "OSDE"],
       ["os_2", "Swiss Medical"],
-      ["particular", "Particular"],
     ]);
     expect(html).toMatch(/<option value="os_2" selected/);
     expect(html).toContain('name="q" value="ana"');
@@ -93,6 +93,18 @@ describe("[AS-2p] select «Obra social» de /pacientes", () => {
   it("un ?os= que ya no está en el catálogo activo se muestra (no «Todas» con la lista filtrada)", () => {
     const html = renderToStaticMarkup(<InsurerFilterSelect value="os_viejo" insurers={INS} preserved={{}} />);
     expect(html).toMatch(/<option value="os_viejo" selected[^>]*>Obra social inactiva/);
+    // [Z-u2 M9] la inactiva va al final, después del catálogo.
+    const vals = [...html.matchAll(/<option value="([^"]*)"/g)].map((m) => m[1]);
+    expect(vals).toEqual(["", "particular", "os_1", "os_2", "os_viejo"]);
+  });
+
+  it("[Z-u2 M9] mobile: 44 px de alto y 16 px de letra bajo 768 (sin `style` inline que lo pise)", () => {
+    const html = renderToStaticMarkup(<InsurerFilterSelect value="" insurers={INS} preserved={{}} />);
+    expect(html).not.toMatch(/<select[^>]*style=/);
+    const css = src("components/patients/insurer-filter-select.module.css");
+    const mobile = css.slice(css.indexOf("@media (max-width: 767px)"));
+    expect(mobile).toMatch(/min-height: 44px/);
+    expect(mobile).toMatch(/font-size: 16px/);
   });
 
   it("la página manda `insurerKey` desde `?os=` y ya no tiene el input de texto", () => {
@@ -117,6 +129,7 @@ const core = (coverage: PatientAdminCore["coverage"]): PatientAdminCore => ({
   assignedPractitionerName: "Juan Kine",
   nextBookingAt: null,
   updatedAt: new Date("2026-09-01T12:00:00Z"),
+  portalLinked: true,
   access: "admin",
 });
 const INSURERS = [
@@ -135,7 +148,7 @@ describe("[AS-2p] «Editar datos» admin con la proyección nueva", () => {
       />
     );
     expect(html).toMatch(/<option value="ins:os_1"[^>]*selected/);
-    expect(html).toMatch(new RegExp(`name="ownCopago"[^>]*value="${formatARS(600000).replace(/[$.]/g, "\\$&")}"`));
+    expect(html).toMatch(/inputMode="decimal"[^>]*value="6\.000"/);
   });
 
   it("texto libre (sin insurerId) queda como «Otra», igual que el perfil completo (no se adivina por nombre)", () => {

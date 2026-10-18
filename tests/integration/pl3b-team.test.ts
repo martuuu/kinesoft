@@ -340,10 +340,15 @@ describe.skipIf(!RUN)("[PL-3b] equipo: Titular, «¿Atiende?», permisos delegad
     asUser(adminWith);
     expect((await listTeamMembers()).some((m) => m.isYou)).toBe(true);
 
-    // Secretaria con «Configuración»: reasigna (`tenant.admin`) pero ya no gestiona el equipo ([AS-1t], T3: el
-    // equipo es `tenant.sensitive`, decisión 3 del 19-oct).
+    // Secretaria con «Configuración»: ni equipo ni reasignación ([AS-1t] y T3-Z M2: los dos son `tenant.sensitive`,
+    // decisión 3 del 19-oct).
     asUser(secWithSettings);
     await expect(listTeamMembers()).rejects.toBeInstanceOf(ForbiddenError);
+    expect((await assignPatientToPractitioner({ patientId, practitionerId: kine.practitionerId })).ok).toBe(false);
+    expect((await db.patient.findUniqueOrThrow({ where: { id: patientId } })).assignedPractitionerId).not.toBe(kine.practitionerId);
+
+    // Administrador/a con «Configuración»: reasigna.
+    asUser(adminWith);
     expect(await assignPatientToPractitioner({ patientId, practitionerId: kine.practitionerId })).toEqual({
       ok: true,
       data: undefined,

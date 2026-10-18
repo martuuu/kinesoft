@@ -47,12 +47,11 @@ import { PatientAdminProfile, ADMIN_PROFILE_TABS } from "@/components/patients/p
 import {
   CLINICAL_FORM_KEYS,
   newPatientMode,
-  parseCopagoField,
+  copagoFieldFromCents,
   patientCreatePayload,
   patientUpdatePayload,
 } from "@/components/patients/patient-form-payload";
-import { PATIENT_CLINICAL_KEYS } from "@/lib/validation";
-import { parseARS } from "@/lib/format";
+import { PATIENT_CLINICAL_KEYS, PATIENT_EMAIL_LOCKED_COPY } from "@/lib/validation";
 import { TenantModulesProvider } from "@/components/layout/tenant-modules-context";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { ToastProvider } from "@/components/ui/toast";
@@ -143,6 +142,7 @@ const core: PatientAdminCore = {
   assignedPractitionerName: "Juan Kine",
   nextBookingAt: null,
   updatedAt: new Date("2026-09-01T12:00:00Z"),
+  portalLinked: true,
   access: "admin",
 };
 
@@ -207,12 +207,15 @@ describe("[AS-1u] perfil admin", () => {
     adminProfile("ASSISTANT", "fact");
     await import("@/components/patients/profile/views/facturacion-view");
     await new Promise((r) => setTimeout(r, 0));
-    const confirmButtons = (html: string) => html.match(/<button type="button"[^>]*>Confirmar<\/button>/g)?.length ?? 0;
+    const buttons = (html: string, label: string) => html.match(new RegExp(`<button type="button"[^>]*>${label}</button>`, "g"))?.length ?? 0;
     const sec = adminProfile("ASSISTANT", "fact");
     expect(sec).toContain("Kinesiología");
-    // Copago sí (`billing.collect`), obra social no (`billing.manage`): un solo toggle por la fila impaga.
-    expect(confirmButtons(sec)).toBe(1);
-    expect(confirmButtons(adminProfile("BILLING", "fact"))).toBe(2);
+    // Copago sí (`billing.collect`, «Cobrar» desde T3-Z M1), obra social no (`billing.manage`, «Confirmar»).
+    expect(buttons(sec, "Cobrar")).toBe(1);
+    expect(buttons(sec, "Confirmar")).toBe(0);
+    const fact = adminProfile("BILLING", "fact");
+    expect(buttons(fact, "Cobrar")).toBe(1);
+    expect(buttons(fact, "Confirmar")).toBe(1);
   });
 
   it("el perfil completo y el admin pasan `billingAccess` con el profesional del viewer", () => {
@@ -254,11 +257,43 @@ describe("[AS-1u] «Editar datos» en modo admin", () => {
   });
 
   it("copago propio: vacío o igual no escribe; monto nuevo sí; inválido avisa", () => {
-    expect(parseCopagoField("", 5000_00, parseARS)).toEqual({ kind: "none" });
-    expect(parseCopagoField("5.000", 5000_00, parseARS)).toEqual({ kind: "none" });
-    expect(parseCopagoField("6.000", 5000_00, parseARS)).toEqual({ kind: "set", cents: 6000_00 });
-    expect(parseCopagoField("6000", null, parseARS)).toEqual({ kind: "set", cents: 6000_00 });
-    expect(parseCopagoField("abc", null, parseARS)).toEqual({ kind: "invalid" });
+    // T3-Z B1: desde el `MoneyInput` (centavos); el texto inválido lo marca el control.
+    expect(copagoFieldFromCents(null, false, 5000_00)).toEqual({ kind: "none" });
+    expect(copagoFieldFromCents(5000_00, false, 5000_00)).toEqual({ kind: "none" });
+    expect(copagoFieldFromCents(6000_00, false, 5000_00)).toEqual({ kind: "set", cents: 6000_00 });
+    expect(copagoFieldFromCents(6000_00, false, null)).toEqual({ kind: "set", cents: 6000_00 });
+    expect(copagoFieldFromCents(null, true, null)).toEqual({ kind: "invalid" });
+    expect(copagoFieldFromCents(100_000_01, false, null)).toEqual({ kind: "invalid" });
+  });
+
+  it("[T3Z-s1] copago propio: teclado decimal, «ej: 6.000» y la ayuda de qué pasa si se borra", () => {
+    const html = wrap(
+      <EditPatientModal mode="admin" patient={core} insurers={[{ id: "os_1", name: "OSDE", payerId: null }]} onClose={() => {}} />
+    );
+    expect(html).toContain('inputMode="decimal"');
+    expect(html).toContain('placeholder="ej: 6.000"');
+    expect(html).toContain(
+      "Reemplaza el copago de la cobertura en los próximos turnos. Si lo borrás no cambia: para volver al de la obra social, cambiá la cobertura."
+    );
+  });
+
+  it("[T3Z-s1] ficha sin portal vinculado: el email se ve deshabilitado con la ayuda; vinculada, editable", () => {
+    const emailInput = (html: string) => html.match(/<input[^>]*name="email"[^>]*>/)?.[0] ?? "";
+    const locked = wrap(
+      <EditPatientModal mode="admin" patient={{ ...core, portalLinked: false }} insurers={[]} onClose={() => {}} />
+    );
+    expect(emailInput(locked)).toMatch(/disabled=""/);
+    expect(locked).toContain(PATIENT_EMAIL_LOCKED_COPY);
+    const linked = wrap(<EditPatientModal mode="admin" patient={core} insurers={[]} onClose={() => {}} />);
+    expect(emailInput(linked)).not.toMatch(/disabled/);
+    expect(linked).not.toContain(PATIENT_EMAIL_LOCKED_COPY);
+  });
+
+  it("[T3Z-s1] payload: un email que no viaja en el form (deshabilitado) no se manda; vacío sí (borrar)", () => {
+    const without = patientUpdatePayload("admin", "pat_1", null, form({ firstName: "Lucía", lastName: "Gómez", phone: "11" }));
+    expect("email" in without).toBe(false);
+    const cleared = patientUpdatePayload("admin", "pat_1", null, form({ firstName: "Lucía", lastName: "Gómez", email: "" }));
+    expect(cleared).toMatchObject({ email: "" });
   });
 });
 

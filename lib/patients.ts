@@ -68,6 +68,7 @@ import {
   PatientUpdate,
   PatientAdminUpdate,
   PATIENT_CLINICAL_KEYS,
+  PATIENT_EMAIL_LOCKED_COPY,
   CoverageSet,
   type ActionResult,
   type PatientCreateInput,
@@ -936,6 +937,7 @@ async function updatePatientImpl(
     | { kind: "noEditAdmin" }
     | { kind: "clinical" }
     | { kind: "invalid" }
+    | { kind: "emailLocked" }
     | { kind: "stale" }
     | { kind: "ok"; changed: string[]; updatedAt: Date };
   let outcome: Outcome;
@@ -946,6 +948,8 @@ async function updatePatientImpl(
         select: {
           id: true,
           updatedAt: true,
+          // T3-Z A1: el vínculo con el portal decide si la rama admin puede tocar el email.
+          userId: true,
           firstName: true,
           lastName: true,
           email: true,
@@ -980,6 +984,19 @@ async function updatePatientImpl(
       const same = (a: unknown, b: unknown) =>
         a instanceof Date || b instanceof Date ? +(a as Date) === +(b as Date) : (a ?? null) === (b ?? null);
       const changed = PATIENT_EDITABLE_FIELDS.filter((f) => data[f] !== undefined && !same(prev[f], data[f]));
+      // T3-Z A1: el login del portal vincula la ficha SIN `userId` cuyo email coincide con el de la cuenta. Si la
+      // recepción le cambiaba el email a una ficha sin vincular (un tipeo, o el de otra persona), quien tuviera ese
+      // email entraba al portal con los datos y turnos de este paciente. En la rama admin, entonces, el email de una
+      // ficha sin vincular no se cambia (ni se vacía): lo hace el profesional a cargo (full) o el paciente desde el
+      // portal. Vinculada, el email ya no decide el vínculo y la recepción lo corrige. Mandar el MISMO email (el
+      // drawer manda todo el form) no es cambio.
+      // Comparación como la del vínculo (`sameEmail`: normalizada): un email viejo con mayúsculas que vuelve igual no
+      // cuenta como cambio.
+      const emailChanged =
+        data.email !== undefined && !(before.email == null && data.email == null) && !sameEmail(before.email, data.email);
+      if (access === "admin" && before.userId == null && emailChanged) {
+        return { kind: "emailLocked" };
+      }
       // `updatedAt` leído en el WHERE: si otra tx lo movió entre el SELECT y
       // acá (READ COMMITTED), count = 0 → stale en vez de pisar.
       const res = await tx.patient.updateMany({
@@ -1003,6 +1020,9 @@ async function updatePatientImpl(
   if (outcome.kind === "noEditAdmin") return { ok: false, error: "Tu rol no edita los datos de los pacientes." };
   if (outcome.kind === "clinical") {
     return { ok: false, error: "Las notas y el diagnóstico los edita el profesional a cargo." };
+  }
+  if (outcome.kind === "emailLocked") {
+    return { ok: false, error: PATIENT_EMAIL_LOCKED_COPY };
   }
   if (outcome.kind === "invalid") {
     // Mismo shape que el parseo de arriba: los `fieldErrors` del `.strict()` (si la clave de más era la única
@@ -1512,6 +1532,13 @@ export async function assignPatientToPractitioner(...args: Parameters<typeof ass
  * PL-Z (pendiente b): `.strict()` — un campo de más es un caller roto, no algo que se ignora en silencio — y los ids
  * con tope de largo (antes llegaban crudos a Prisma).
  */
+/**
+ * T3-Z M2: quién decide «quién ve la HC» (reasignar, compartir) = `tenant.sensitive`. Copy alineado con el de
+ * `requireTenantSensitive` (lib/authz.ts) y con «el titular o el administrador» del resto de T3-Z.
+ */
+const SENSITIVE_WHO = "el titular o el administrador o profesional con «Configuración»";
+const SENSITIVE_PATIENT_ACCESS_COPY = (what: string) => `Solo ${SENSITIVE_WHO} puede ${what}.`;
+
 const AssignPatientInput = z
   .object({
     patientId: z.string().min(1).max(64),
@@ -1524,11 +1551,14 @@ async function assignPatientToPractitionerImpl(raw: {
   practitionerId: string | null;
 }): Promise<ActionResult> {
   const actor = await getActor();
-  // PL-3b (C-PL5): por MIEMBRO (`tenant.admin`: el Titular o quien tenga «Configuración» delegada), no por rol. Antes
-  // `isTenantAdminRole(role)` le dejaba reasignar a un ADMIN al que el Titular le sacó «Configuración» y no a una
-  // Secretaria que la tiene. Soporte vale como la Secretaria (`memberCapabilitiesForActor`): no reasigna.
-  if (!(await memberCapabilitiesForActor(actor)).has("tenant.admin")) {
-    return { ok: false, error: "Solo el titular o quien tenga permiso de Configuración puede reasignar pacientes." };
+  // PL-3b (C-PL5): por MIEMBRO, no por rol. Antes `isTenantAdminRole(role)` le dejaba reasignar a un ADMIN al que el
+  // Titular le sacó «Configuración». T3-Z M2: `tenant.sensitive` (lo delicado de Configuración), no `tenant.admin`:
+  // reasignar decide quién tiene la HC completa, y con `tenant.admin` la Secretaria con «Configuración» se la daba a
+  // cualquier profesional, aunque el corte de staff (T3) le saca justo «quién ve la HC». `memberCapabilitiesForActor`
+  // y no `requireTenantSensitive`: ahí soporte trae `SUPPORT_CAPS` (con `tenant.sensitive`); acá vale como la
+  // Secretaria y no reasigna. `createPatient` con `assignTo` no cambia (el alta de la recepción elige profesional).
+  if (!(await memberCapabilitiesForActor(actor)).has("tenant.sensitive")) {
+    return { ok: false, error: SENSITIVE_PATIENT_ACCESS_COPY("reasignar pacientes") };
   }
   const parsed = AssignPatientInput.safeParse(raw);
   if (!parsed.success) return { ok: false, error: "Datos inválidos" };
@@ -1910,8 +1940,10 @@ async function requireShareAuthority(patientId: string) {
   if (!patient) return { ok: false as const, error: "Paciente no encontrado." };
   // PL-1b: «dueño» exige que el MIEMBRO atienda (un Titular sin agenda con un paciente asignado de antes no lo es).
   const memberCaps = await memberCapabilitiesForActor(actor);
-  // PL-3b (C-PL5): «administrador» = `tenant.admin` del miembro (Titular o «Configuración» delegada), no el rol.
-  const isAdmin = memberCaps.has("tenant.admin");
+  // PL-3b (C-PL5): por miembro, no por rol. T3-Z M2: `tenant.sensitive` (antes `tenant.admin`): compartir abre la HC a
+  // otro profesional, que es «quién ve la HC», lo delicado que el corte de staff le saca a la Secretaria aunque tenga
+  // «Configuración». Soporte no comparte (en `memberCapabilitiesForActor` vale como la Secretaria).
+  const isAdmin = memberCaps.has("tenant.sensitive");
   // P0.Z (H-b2): "dueño" = asignado Y con `clinical.read`. En prod hay
   // pacientes asignados a la Secretaria (precheck 15): sin el chequeo de rol,
   // ella manejaba los shares y abría la HC a otros profesionales, aunque por
@@ -1922,7 +1954,7 @@ async function requireShareAuthority(patientId: string) {
   if (!isAdmin && !isOwner) {
     return {
       ok: false as const,
-      error: "Solo el kinesiólogo asignado o un administrador puede compartir este paciente.",
+      error: `Solo el profesional asignado, ${SENSITIVE_WHO} puede compartir este paciente.`,
     };
   }
   return { ok: true as const, actor, patient };

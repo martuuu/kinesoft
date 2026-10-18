@@ -136,6 +136,13 @@ export const PatientAdminUpdate = PatientUpdate.pick({
 }).strict();
 export type PatientAdminUpdateInput = z.input<typeof PatientAdminUpdate>;
 
+/**
+ * T3-Z A1: rechazo de la rama admin de `updatePatient` cuando cambia el email de una ficha SIN cuenta del portal
+ * vinculada (el login vincula por email: cambiarlo le abría la ficha a quien tuviera ese email). Lo muestra también
+ * el drawer de edición, que deja el campo deshabilitado con esta misma ayuda.
+ */
+export const PATIENT_EMAIL_LOCKED_COPY = "El email lo cambia el profesional a cargo o el paciente desde el portal.";
+
 // Input for `setPatientCoverage` (replace the patient's single active
 // coverage). Either `insurerId` resolves to a tenant Insurer row, or
 // `insurerName` is the free-form ("Otra") fallback; both optional so the

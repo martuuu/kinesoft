@@ -60,6 +60,8 @@ const ADMIN_CORE_KEYS = [
   "lastName",
   "nextBookingAt",
   "phone",
+  // T3-Z A1: solo el booleano del vínculo con el portal (el `userId` no sale).
+  "portalLinked",
   // T3e-2p (H-1u-1): optimistic lock de «Editar datos».
   "updatedAt",
 ].sort();

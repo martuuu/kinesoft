@@ -101,10 +101,11 @@ export default async function PatientPage({
   // Por MIEMBRO (PL-1, H-PL1): un Titular sin agenda no recibe `clinical.read`. Plantillas: el shell usa el
   // módulo `plantillas` (enmienda EV0, mismo criterio que `gatingForActor().canBuildTemplates`).
   const capabilities = Array.from(await memberCapabilitiesForActor(actor));
-  // PL-Z a3#9: reasignar = `tenant.admin` del miembro, el mismo criterio que `assignPatientToPractitioner`. Por rol,
+  // T3-Z M2: reasignar = `tenant.sensitive` del miembro, el mismo criterio que `assignPatientToPractitioner` (antes
+  // `tenant.admin`, PL-Z a3#9: por rol,
   // la UI le ofrecía el selector a un ADMIN sin «Configuración» (la action lo rechaza) y se lo escondía a un
   // Profesional que la tiene.
-  const canReassign = capabilities.includes("tenant.admin");
+  const canReassign = capabilities.includes("tenant.sensitive");
   // EV2-D3: escribe quien tiene `clinical.read` + acceso full + profesional (la action vuelve a chequearlo).
   const canWriteNotes = notesModule && canWriteClinicalNotes(new Set(capabilities), "full", actor.practitionerId);
 

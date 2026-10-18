@@ -123,6 +123,7 @@ const admin: PatientAdminCore = {
   assignedPractitionerName: "Juan Kine",
   nextBookingAt: new Date("2030-01-10T13:00:00Z"),
   updatedAt: new Date("2026-09-01T12:00:00Z"),
+  portalLinked: false,
   access: "admin",
 };
 

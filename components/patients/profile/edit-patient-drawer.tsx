@@ -6,7 +6,8 @@ import { Drawer } from "@/components/ui/drawer";
 import { useFormDirty } from "@/components/ui/use-form-dirty";
 import { FormField } from "@/components/ui/form-field";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { formatARS, parseARS } from "@/lib/format";
+import { MoneyInput } from "@/components/ui/money-input";
+import { formatARS } from "@/lib/format";
 import {
   assignPatientToPractitioner,
   setPatientCoverage,
@@ -14,7 +15,8 @@ import {
   updatePatient,
 } from "@/lib/patients";
 import type { PatientAdminCore } from "@/lib/patients-types";
-import { parseCopagoField, patientUpdatePayload, type PatientFormMode } from "@/components/patients/patient-form-payload";
+import { PATIENT_EMAIL_LOCKED_COPY } from "@/lib/validation";
+import { copagoFieldFromCents, patientUpdatePayload, type PatientFormMode } from "@/components/patients/patient-form-payload";
 import { listPayerPlans, proposePayerPlan } from "@/lib/catalog";
 import type { PayerPlanOption } from "@/lib/catalog-schemas";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
@@ -29,7 +31,7 @@ import type { PatientWithRelations, InsurerOption, PractitionerOption } from "./
  */
 export type AdminEditablePatient = Pick<
   PatientAdminCore,
-  "id" | "firstName" | "lastName" | "documentId" | "email" | "phone" | "dateOfBirth" | "updatedAt" | "coverage"
+  "id" | "firstName" | "lastName" | "documentId" | "email" | "phone" | "dateOfBirth" | "updatedAt" | "coverage" | "portalLinked"
 >;
 
 /**
@@ -65,6 +67,8 @@ type EditablePatient = {
   dateOfBirth: Date | string | null;
   updatedAt: string | null;
   coverage: EditableCoverage | null;
+  /** T3-Z A1: solo modo admin. `false` = email deshabilitado (el login del portal vincula por email). */
+  emailLocked: boolean;
   assignedPractitionerId: string | null;
   diagnosisTitle: string | null;
   diagnosisNote: string | null;
@@ -94,6 +98,8 @@ function fromFull(p: PatientWithRelations): EditablePatient {
           copagoCents: c.copagoCents ?? null,
         }
       : null,
+    // Rama full: el profesional a cargo cambia el email (vinculada o no).
+    emailLocked: false,
     assignedPractitionerId: p.assignedPractitionerId,
     diagnosisTitle: p.diagnosisTitle,
     diagnosisNote: p.diagnosisNote,
@@ -123,6 +129,7 @@ function fromAdmin(p: AdminEditablePatient): EditablePatient {
           copagoCents: c.copagoCents,
         }
       : null,
+    emailLocked: !p.portalLinked,
     assignedPractitionerId: null,
     diagnosisTitle: null,
     diagnosisNote: null,
@@ -178,6 +185,9 @@ export function EditPatientModal(props: EditPatientModalProps) {
   const [otherInsurerName, setOtherInsurerName] = useState(
     currentCoverage && !currentCoverage.insurerId ? currentCoverage.insurer : ""
   );
+  // T3-Z B1: copago propio en `MoneyInput` (centavos, teclado numérico en el celular) en vez de texto libre.
+  const [ownCopagoCents, setOwnCopagoCents] = useState<number | null>(currentCoverage?.copagoCents ?? null);
+  const [ownCopagoInvalid, setOwnCopagoInvalid] = useState(false);
   const [assignedKine, setAssignedKine] = useState<string>(
     patient.assignedPractitionerId ?? ""
   );
@@ -254,6 +264,7 @@ export function EditPatientModal(props: EditPatientModalProps) {
     assignedKine,
     planChoice,
     newPlanName,
+    ownCopagoCents,
   });
   const initialPlan = currentCoverage?.planName ?? "";
   const initialMember = currentCoverage?.memberId ?? "";
@@ -266,7 +277,7 @@ export function EditPatientModal(props: EditPatientModalProps) {
     // Copago propio (solo modo admin; el profesional lo cambia desde el modal del turno, como siempre).
     const copago =
       mode === "admin"
-        ? parseCopagoField(String(formData.get("ownCopago") ?? ""), currentCoverage?.copagoCents ?? null, parseARS)
+        ? copagoFieldFromCents(ownCopagoCents, ownCopagoInvalid, currentCoverage?.copagoCents ?? null)
         : ({ kind: "none" } as const);
     if (copago.kind === "invalid") {
       setError("Revisá el copago propio: tiene que ser un monto en pesos, por ejemplo 6.000.");
@@ -368,7 +379,7 @@ export function EditPatientModal(props: EditPatientModalProps) {
         }
       }
 
-      // Re-assignment (OWNER/ADMIN only).
+      // Reasignar: `tenant.sensitive` (T3-Z M2), lo decide `canReassign` del server.
       if (canReassign && assignedKine !== (patient.assignedPractitionerId ?? "")) {
         const r = await assignPatientToPractitioner({
           patientId: patient.id,
@@ -409,7 +420,15 @@ export function EditPatientModal(props: EditPatientModalProps) {
             <FormField label="Fecha de nacimiento" name="dateOfBirth" type="date" defaultValue={dobIso} />
           </Grid2>
           <Grid2>
-            <FormField label="Email" name="email" type="email" defaultValue={patient.email ?? ""} />
+            <FormField
+              label="Email"
+              name="email"
+              type="email"
+              defaultValue={patient.email ?? ""}
+              // T3-Z A1: sin portal vinculado, la recepción no cambia el email (el server tampoco lo acepta).
+              disabled={patient.emailLocked}
+              hint={patient.emailLocked ? PATIENT_EMAIL_LOCKED_COPY : undefined}
+            />
             <FormField label="Teléfono" name="phone" defaultValue={patient.phone ?? ""} />
           </Grid2>
         </Section>
@@ -474,12 +493,13 @@ export function EditPatientModal(props: EditPatientModalProps) {
             />
           )}
           {mode === "admin" && (
-            <FormField
+            <MoneyInput
               label="Copago propio (opcional)"
-              name="ownCopago"
-              defaultValue={currentCoverage?.copagoCents != null ? formatARS(currentCoverage.copagoCents) : ""}
-              placeholder="Ej: 6.000"
-              hint="Reemplaza el copago de la cobertura en los próximos turnos de este paciente. Vacío: queda como está."
+              value={ownCopagoCents}
+              onChange={setOwnCopagoCents}
+              onInvalidChange={setOwnCopagoInvalid}
+              placeholder="ej: 6.000"
+              hint="Reemplaza el copago de la cobertura en los próximos turnos. Si lo borrás no cambia: para volver al de la obra social, cambiá la cobertura."
             />
           )}
         </Section>
@@ -492,7 +512,7 @@ export function EditPatientModal(props: EditPatientModalProps) {
               // A2b: el hint anterior ("visible para todos los kines") era falso —
               // sin asignación, la HC completa la ven OWNER/ADMIN y los demás
               // profesionales solo ven datos básicos (salvo que se la compartan).
-              hint="«Consultorio común» = visible para OWNER/ADMIN; los profesionales ven datos básicos."
+              hint="«Consultorio común» = la ficha completa la ven el titular o el administrador; los profesionales ven datos básicos."
               value={assignedKine}
               onChange={(v) => setAssignedKine(v)}
               options={[

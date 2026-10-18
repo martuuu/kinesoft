@@ -19,6 +19,12 @@
  *    registra `patient.export` con cantidades e ids (recortados).
  *  - **Fórmulas**: cada celda de texto pasa por `csvCell` (lib/csv.ts).
  *
+ * T3-Z M1 (contactos): la proyección `admin` de `listPatients` trae email y teléfono para todo rol sin HC, y el CSV
+ * los bajaba en masa también para Facturación, que en la ficha no los edita (`patients.editAdmin`). Ahora una fila
+ * que no es `full` sale con contacto solo si el actor tiene `patients.editAdmin` (Secretaria, Admin, Titular sin
+ * agenda); Facturación baja nombre, DNI y turnos. `memberCapabilitiesForActor`: soporte vale como la Secretaria sin
+ * `editAdmin`, así que tampoco baja contactos. El audit suma `adminCount`.
+ *
  * `actor` es el que autenticó la ruta (audit). Las filas salen de
  * `listPatients`, que resuelve el MISMO actor de la sesión del request y aplica
  * el scope de tenant + visibilidad; con `ids` se filtra DESPUÉS de ese scope,
@@ -27,6 +33,7 @@
 import "server-only";
 import { listPatients } from "@/lib/patients";
 import { auditSecurityEvent } from "@/lib/audit";
+import { memberCapabilitiesForActor } from "@/lib/authz";
 import { csvRow } from "@/lib/csv";
 import type { Actor } from "@/lib/session";
 
@@ -40,6 +47,8 @@ export async function exportPatientsCsv(
     archived === "only" ? Promise.resolve([]) : listPatients({ filter: "all" }),
     archived === "exclude" ? Promise.resolve([]) : listPatients({ filter: "archived" }),
   ]);
+  const caps = await memberCapabilitiesForActor(actor);
+  const canSeeContacts = (p: { access: string }) => p.access === "full" || caps.has("patients.editAdmin");
   let rows = [...active, ...archivedRows];
   if (ids) {
     const set = new Set(ids);
@@ -66,8 +75,8 @@ export async function exportPatientsCsv(
         p.lastName,
         p.firstName,
         p.documentId,
-        p.email,
-        p.phone,
+        canSeeContacts(p) ? p.email : "",
+        canSeeContacts(p) ? p.phone : "",
         p.activeProgramTitle,
         p.sessionsTotal ? `${p.sessionsDone}/${p.sessionsTotal}` : "",
         p.upcomingAt ? p.upcomingAt.toISOString() : "",
@@ -87,6 +96,7 @@ export async function exportPatientsCsv(
     payload: {
       count: rows.length,
       basicCount: rows.filter((r) => r.access === "basic").length,
+      adminCount: rows.filter((r) => r.access === "admin").length,
       archived,
       requestedIds: ids?.length ?? null,
       ids: rows.slice(0, 50).map((r) => r.id),

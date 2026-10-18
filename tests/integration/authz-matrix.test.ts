@@ -28,6 +28,8 @@ import {
   setPatientArchived,
   bulkArchivePatients,
   getPatientActivity,
+  setPatientShares,
+  assignPatientToPractitioner,
 } from "@/lib/patients";
 import { setProgramStatus, deleteProgram, deleteSession } from "@/lib/programs";
 import { createPlan } from "@/lib/plans";
@@ -924,6 +926,36 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
       cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: { exp: "ok", note: "admin + patients.editAdmin (T3c-1b)" }, BILLING: "deny", ADMIN: "ok", GENERAL: "ok", SUPPORT: "ro" },
       act: (fx) => setPatientCoverage({ patientId: fx.patientId, insurerName: "OS S26b" }),
       effect: async (fx, db) => (await db.coverage.count({ where: { patientId: fx.patientId, insurer: "OS S26b" } })) > 0,
+    },
+    {
+      kind: "write",
+      name: "Paciente · setPatientShares (compartir la HC)",
+      // T3-Z M2: compartir decide quién ve la HC: es `tenant.sensitive` (lo delicado de Configuración), no `tenant.admin`.
+      // Antes la Secretaria con «Configuración» abría la HC a otro profesional; el corte de staff (T3) se la saca.
+      cells: {
+        OWNER: "ok",
+        ASSISTANT: "deny",
+        ASSISTANT_CFG: { exp: "deny", note: "«quién ve la HC» es tenant.sensitive (T3-Z M2)" },
+        ADMIN: { exp: "ok", note: "«Configuración» delegada con lo delicado" },
+        PRO_CFG: { exp: "ok", note: "no es el asignado: pasa por «Configuración»" },
+      },
+      act: (fx) => setPatientShares({ patientId: fx.patientId, practitionerIds: [basic.practitionerId] }),
+      effect: async (fx, db) => (await db.patientShare.count({ where: { patientId: fx.patientId, practitionerId: basic.practitionerId } })) > 0,
+    },
+    {
+      kind: "write",
+      name: "Paciente · assignPatientToPractitioner (reasignar)",
+      // T3-Z M2: reasignar cambia quién tiene la HC completa → `tenant.sensitive`, igual que compartir.
+      cells: {
+        OWNER: "ok",
+        ASSISTANT: "deny",
+        ASSISTANT_CFG: { exp: "deny", note: "«quién ve la HC» es tenant.sensitive (T3-Z M2)" },
+        ADMIN: "ok",
+        PRO_CFG: "ok",
+        SUPPORT: { exp: "deny", note: "soporte vale como la Secretaria (memberCapabilitiesForActor)" },
+      },
+      act: (fx) => assignPatientToPractitioner({ patientId: fx.patientId, practitionerId: basic.practitionerId }),
+      effect: async (fx, db) => (await db.patient.findUniqueOrThrow({ where: { id: fx.patientId } })).assignedPractitionerId === basic.practitionerId,
     },
     {
       kind: "write",

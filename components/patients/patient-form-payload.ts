@@ -48,10 +48,16 @@ export function patientUpdatePayload(
   expectedUpdatedAt: string | null,
   fd: FormLike
 ) {
+  const contact = contactFields(fd);
+  // T3-Z A1: un campo que no viaja en el form (el email deshabilitado de una ficha sin portal vinculado: un control
+  // `disabled` no entra en el FormData) es «no tocar», no «vaciar». Con `""` la rama admin lo leía como borrar el
+  // email y rechazaba el guardado entero.
+  const { email, ...rest } = contact;
   return {
     id,
     ...(expectedUpdatedAt ? { expectedUpdatedAt } : {}),
-    ...contactFields(fd),
+    ...rest,
+    ...(fd.get("email") === null ? {} : { email }),
     ...(mode === "full" ? clinicalFields(fd) : {}),
   };
 }
@@ -95,12 +101,15 @@ export function newPatientMode(caps: ReadonlySet<string>, opts: { support: boole
  */
 export type CopagoFieldResult = { kind: "none" } | { kind: "set"; cents: number } | { kind: "invalid" };
 
-export function parseCopagoField(raw: string, initialCents: number | null, parse: (s: string) => number | null): CopagoFieldResult {
-  const t = raw.trim();
-  if (!t) return { kind: "none" };
-  const cents = parse(t);
-  // Mismo tope que el server (`setPatientDefaultCopago`: 0..100.000,00 en centavos).
-  if (cents == null || cents < 0 || cents > 100_000_00) return { kind: "invalid" };
+/**
+ * T3-Z B1: lee el `MoneyInput` (controlado en centavos, teclado decimal) que reemplazó al texto libre parseado con
+ * `parseARS`. `invalid` = el texto que quedó tipeado no es un monto (el control avisa con `onInvalidChange`). Mismo
+ * tope que el server (`setPatientDefaultCopago`: 0..100.000,00 en centavos).
+ */
+export function copagoFieldFromCents(cents: number | null, invalid: boolean, initialCents: number | null): CopagoFieldResult {
+  if (invalid) return { kind: "invalid" };
+  if (cents == null) return { kind: "none" };
+  if (cents < 0 || cents > 100_000_00) return { kind: "invalid" };
   if (initialCents != null && cents === initialCents) return { kind: "none" };
   return { kind: "set", cents };
 }

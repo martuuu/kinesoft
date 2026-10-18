@@ -122,10 +122,11 @@ export async function patientCoreInTx(
 
   if (access === "admin") {
     // P0-S07sp (E1, PD-13): proyección `admin` con `select` explícito, así la
-    // HC (notes, diagnosisTitle/Note, userId del portal) ni siquiera sale de
-    // la DB. Antes `admin` caía en la rama básica (falla cerrado) y la
+    // HC (notes, diagnosisTitle/Note) ni siquiera sale de la DB. Antes `admin` caía en la rama básica (falla cerrado) y la
     // Secretaria no veía contacto ni cobertura para operar. El copago propio
     // de la cobertura sí sale desde T3e-2p: es administrativo (lo cobra).
+    // T3-Z A1: `userId` se lee solo para derivar `portalLinked` (booleano); el
+    // id de la cuenta no sale de acá.
     const patient = await tx.patient.findFirst({
       where: { id, tenantId: actor.tenantId },
       select: {
@@ -137,6 +138,7 @@ export async function patientCoreInTx(
         phone: true,
         dateOfBirth: true,
         updatedAt: true,
+        userId: true,
         // Misma regla que la rama full: la cobertura vigente es la más
         // reciente (cuid ordenable por tiempo). T3e-2p (H-1u-1): con
         // `insurerId`/`payerPlanId`/`copagoCents` (copago propio: lo cobra la
@@ -196,6 +198,7 @@ export async function patientCoreInTx(
       assignedPractitionerName: assignedUser ? displayMemberName(assignedUser.fullName) : null,
       nextBookingAt: nextBooking?.scheduledFor ?? null,
       updatedAt: patient.updatedAt,
+      portalLinked: patient.userId != null,
       access: "admin",
     };
     return core;
