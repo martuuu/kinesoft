@@ -87,6 +87,7 @@ import {
 } from "./status-actions";
 import type { BookingClinicalNoteView } from "@/lib/clinical-notes-types";
 import { sectionCard } from "./styles";
+import { successInfoText } from "./force-outcome";
 import {
   forcePromptConfirm,
   nextForcePrompt,
@@ -394,8 +395,9 @@ export function BookingDrawer({
       // S19c: en un turno de plan, Ausente / Cancelado avisan que la sesión
       // queda "sin turno" (C13, PQ-05); el `notice` del core (p. ej. "la sesión
       // queda realizada") manda si viene.
+      // T3e-2u2: al reactivar, el 2.º turno del intervalo bajo el tope suma el aviso informativo de C-AS3.
       const description =
-        r.notice ?? planStatusToastDescription(status, { isPlan: isPlanBooking, ordinal: planOrdinal });
+        successInfoText(r) ?? planStatusToastDescription(status, { isPlan: isPlanBooking, ordinal: planOrdinal });
       // EV2-3b: al marcar Realizado, si el actor puede crear la evolución de
       // ESTE turno (se relee después del cambio: `canCreate` depende del estado),
       // el toast ofrece «Cargar evolución». Solo para quien tiene acceso de
@@ -568,7 +570,8 @@ export function BookingDrawer({
       }
       setEditingDetails(false);
       setEditPatient(undefined);
-      if (r.notice) toast.info("Turno actualizado", { description: r.notice });
+      const info = successInfoText(r);
+      if (info) toast.info("Turno actualizado", { description: info });
       onSaved();
     });
   };
@@ -655,7 +658,9 @@ export function BookingDrawer({
         return;
       }
       setEditingWhen(false);
-      if (r.notice) toast.info("Turno reprogramado", { description: r.notice });
+      // T3e-2u2 (C-AS3): «Ya hay 1 turno de Ana a las 10:00.» es informativo (no se confirma ni manda flag).
+      const info = successInfoText(r);
+      if (info) toast.info("Turno reprogramado", { description: info });
       onSaved();
     });
   };

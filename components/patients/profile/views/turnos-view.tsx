@@ -9,12 +9,7 @@ import { IconPlus } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { setBookingStatus, deleteBooking } from "@/lib/bookings";
-import {
-  forcePromptConfirm,
-  nextForcePrompt,
-  withForce,
-  type ForceFlags,
-} from "@/lib/booking-force-flags";
+import { retryWithForce, successInfoText } from "@/components/agenda/booking-drawer/force-outcome";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { formatARS } from "@/lib/format";
 import { BookingStatusTag } from "../ui";
@@ -166,28 +161,20 @@ export function TurnosView({
     const expected = versionOf(b);
     patchBooking(b.id, { status });
     start(async () => {
-      let force: ForceFlags = {};
-      // Como mucho cuatro confirmaciones (bloqueo, fuera de horario, cupo y
-      // paciente superpuesto; B5.7 sumó las dos primeras). Un aviso ya
-      // aceptado que vuelve es un error real: `nextForcePrompt` no lo repite.
-      for (let attempt = 0; attempt < 5; attempt++) {
-        const r = await setBookingStatus(b.id, status, expected, force);
-        if (r.ok) {
-          patchBooking(b.id, { updatedAt: new Date(r.data.updatedAt) });
-          // S12/C4: aviso no bloqueante de la sincronía con la sesión del plan.
-          if (r.notice) toast.info(r.notice);
-          return;
-        }
-        const prompt = nextForcePrompt(r, force);
-        if (prompt) {
-          const ok = await confirm(forcePromptConfirm(prompt, "reactivate"));
-          if (!ok) break;
-          force = withForce(force, prompt);
-          continue;
-        }
-        toast.error("No pudimos actualizar el turno", { description: r.error });
-        break;
+      // Una confirmación por aviso forzable (bloqueo, fuera de horario, cupo,
+      // tope por intervalo de T3, paciente superpuesto, sala), acumulando los
+      // flags; un aviso ya aceptado que vuelve es error real. T3e-2u2: antes era
+      // un `for` fijo de 5 intentos que, con 6 clases, podía salir sin la última
+      // llamada y revertir la fila en silencio (ver `retryWithForce`).
+      const out = await retryWithForce((force) => setBookingStatus(b.id, status, expected, force), confirm, "reactivate");
+      if (out.kind === "ok") {
+        patchBooking(b.id, { updatedAt: new Date(out.result.data.updatedAt) });
+        // S12/C4 + T3 (C-AS3): aviso no bloqueante (sesión del plan, 2.º turno del intervalo).
+        const info = successInfoText(out.result);
+        if (info) toast.info(info);
+        return;
       }
+      if (out.kind === "error") toast.error("No pudimos actualizar el turno", { description: out.error });
       patchBooking(b.id, { status: prevStatus });
     });
   };

@@ -198,6 +198,8 @@ export type PreviewTableCounts = {
   /** E2: solo si el preview trae las flags. */
   overAuthorization: number;
   afterExpiry: number;
+  /** T3 (C-AS3): filas cuyo intervalo ya llegó al tope del profesional. SOLO AVISO (no cambia la resolución). */
+  overIntervalCap: number;
 };
 
 export function previewTableCounts(preview: PlanPreview, resolutions: PlanResolutionsByIndex): PreviewTableCounts {
@@ -213,6 +215,7 @@ export function previewTableCounts(preview: PlanPreview, resolutions: PlanResolu
     lastDayKey: null,
     overAuthorization: 0,
     afterExpiry: 0,
+    overIntervalCap: 0,
   };
   for (const row of preview.rows) {
     const r = effectiveRowResolution(row, resolutions);
@@ -226,6 +229,7 @@ export function previewTableCounts(preview: PlanPreview, resolutions: PlanResolu
     if (c.lastDayKey === null || dayKey > c.lastDayKey) c.lastDayKey = dayKey;
     if (row.flags.overAuthorization === true) c.overAuthorization++;
     if (row.flags.afterAuthorizationExpiry === true) c.afterExpiry++;
+    if (row.flags.overIntervalCap === true) c.overIntervalCap++;
   }
   c.bookings = c.created + c.moved;
   return c;
@@ -379,6 +383,13 @@ export function PlanPreviewTable({
             : `${counts.afterExpiry} sesiones caen después del vencimiento de la autorización.`}
         </p>
       )}
+      {counts.overIntervalCap > 0 && (
+        <p style={notice}>
+          {counts.overIntervalCap === 1
+            ? "1 sesión supera el tope de turnos del profesional."
+            : `${counts.overIntervalCap} sesiones superan el tope de turnos del profesional.`}
+        </p>
+      )}
       {preview.otherActivePlans.map((p) => (
         // Sin título (PHI): disciplina + contador, como el chip V1-D18.
         <p key={p.programId} style={notice}>
@@ -497,6 +508,8 @@ function PreviewRow({
         {f.priorPaid && <span style={note}>{`Ya pagada en el turno del ${ddmm(toARDateKey(f.priorPaid.at))}`}</span>}
         {f.overAuthorization === true && <span style={note}>Supera las sesiones autorizadas</span>}
         {f.afterAuthorizationExpiry === true && <span style={note}>Después del vencimiento de la autorización</span>}
+        {/* T3e-2u2 (C-AS3): en Planes el tope es aviso, sin bloqueo ni lock; el turno se crea igual. */}
+        {f.overIntervalCap === true && <span style={note}>Supera el tope de turnos del profesional</span>}
         {stale && (
           <span style={{ ...note, fontWeight: 700, color: "var(--navy-900)" }}>
             <span aria-hidden="true">! </span>Revisá esta fila

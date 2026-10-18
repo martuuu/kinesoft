@@ -27,7 +27,7 @@
  * es el server; `PlanPermissions` solo evita botones que van a rebotar.
  */
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { PRACTITIONER_CONFLICT_ERROR } from "@/lib/bookings-constants";
+import { PRACTITIONER_CONFLICT_ERROR, isIntervalCapError } from "@/lib/bookings-constants";
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -235,7 +235,9 @@ export type RescheduleForceFlag =
   | "allowBlocked"
   | "allowPatientOverlap"
   | "allowOverbooking"
-  | "allowRoomConflict";
+  | "allowRoomConflict"
+  // T3 (C-AS3): tope «N turnos cada X min» del profesional; forzarlo deja el turno como sobreturno (decisión 6).
+  | "allowIntervalCap";
 export type RescheduleForce = Partial<Record<RescheduleForceFlag, boolean>>;
 
 const BLOCKED_PREFIX = (() => {
@@ -270,6 +272,8 @@ export function rescheduleForceFor(error: string): RescheduleForceFlag | null {
   if (error.startsWith(BLOCKED_PREFIX)) return "allowBlocked";
   if (error === PATIENT_OVERLAP_ERROR) return "allowPatientOverlap";
   if (error === PRACTITIONER_CONFLICT_ERROR) return "allowOverbooking";
+  // T3e-2u2: el texto del tope lleva nombre y números (`INTERVAL_CAP_ERROR`), así que se reconoce por su forma.
+  if (isIntervalCapError(error)) return "allowIntervalCap";
   return null;
 }
 
@@ -279,6 +283,7 @@ export const RESCHEDULE_FORCE_LABEL: Readonly<Record<RescheduleForceFlag, string
   allowPatientOverlap: "Moverlo igual (se superpone)",
   allowOverbooking: "Moverlo igual (sobreturno)",
   allowRoomConflict: "Moverlo igual (sala ocupada)",
+  allowIntervalCap: "Moverlo igual (queda como sobreturno)",
 };
 
 // ─── Card ────────────────────────────────────────────────────────────────────
