@@ -136,6 +136,8 @@ export function ScheduleSessionModal({
                 {status.label}
               </span>
             </div>
+            {/* T3 (C-AS3): en Planes el tope por intervalo es solo aviso, igual que en el preview del plan. */}
+            {row.flags.overIntervalCap === true && <p style={notice}>Supera el tope de turnos del profesional</p>}
             {options.length === 0 || (options.length === 1 && options[0].value === "none") ? (
               <p style={notice}>{SEGUIMIENTO_COPY.scheduleNoSlot}</p>
             ) : (
