@@ -39,11 +39,14 @@ vi.mock("@/components/providers/arrival-alerts", () => ({
 }));
 vi.mock("@/components/providers/realtime-provider", () => ({
   RealtimeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  // AS-0c: la campana del topbar se suscribe a la agenda en vivo.
+  useRealtime: () => ({ subscribe: () => () => {} }),
 }));
 vi.mock("@/lib/preferences", () => ({ updateUserPreferences: async () => ({ ok: true, data: undefined }) }));
 vi.mock("@/lib/practitioner-public", () => ({ setPractitionerPublicBooking: async () => ({ ok: true, data: undefined }) }));
 vi.mock("@/lib/notifications", () => ({
   listNotifications: async () => ({ rows: [], unread: 0 }),
+  countUnreadNotifications: async () => 0,
   markAllNotificationsRead: async () => ({ ok: true }),
   markNotificationRead: async () => ({ ok: true }),
 }));

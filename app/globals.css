@@ -240,6 +240,10 @@
      mientras está abierto, para que el toast del celular quede encima). */
   --k-drawer-width: 480px;
   --k-drawer-footer-h: 0px;
+  /* [AS-0a] Ancho del drawer más ancho abierto (`--k-drawer-w`, 0 = ninguno) y de la pila de toasts a su lado
+     (`--k-toaster-w`): los publica drawer.tsx (`applyDrawerToasterMark`) mientras hay uno abierto. */
+  --k-drawer-w: 0px;
+  --k-toaster-w: 360px;
 
   /* Fondo público sin blur (D-VX9): gradientes pintados, no blobs con filter: blur (cuestan GPU en mobile). */
   --bg-public:
@@ -1086,10 +1090,18 @@ select.k-input { appearance: none; padding-right: 40px;
 }
 
 /* pf1z-toast-tapa-drawer: con un Drawer abierto el toast de arriba a la derecha tapaba la X y el título del panel
-   (drawer.tsx marca el <html> con `data-k-drawer-open`). Se va arriba a la izquierda, que el drawer nunca ocupa
-   desde 768 (panel ≤ 480 + 12 de margen a la derecha). Abajo no: ahí está el pie con «Guardar». */
+   (drawer.tsx marca el <html> con `data-k-drawer-open`). Se va arriba a la izquierda; si ahí no entra al lado del
+   panel (AS-0a, abajo), abajo a la izquierda pero sobre el pie con «Guardar», nunca encima. */
 @media (min-width: 768px) {
   html[data-k-drawer-open] .k-toaster { left: 16px; right: auto; }
+  /* [AS-0a] Eso suponía drawers ≤ 480: «Nuevo turno» (580) a 800-900 px quedaba debajo de la pila y el toast (que se
+     pausa con el mouse encima) tapaba Profesional y Servicio. drawer.tsx calcula si la pila entra al lado del panel
+     (`drawerToasterPlacement`): si entra, con el ancho que queda; si no, abajo a la izquierda, sobre el pie. */
+  html[data-k-drawer-open][data-k-toaster="beside"] .k-toaster { width: var(--k-toaster-w, 360px); }
+  html[data-k-drawer-open][data-k-toaster="bottom"] .k-toaster {
+    top: auto;
+    bottom: calc(var(--k-drawer-footer-h, 0px) + 24px);
+  }
 }
 
 /* < 768: el toast arriba tapaba la barra superior. Abajo y centrado, sobre la barra inferior. Con un Drawer abierto

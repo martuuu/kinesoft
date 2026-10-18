@@ -35,6 +35,14 @@ export function initialPractitionerId(
 export const NO_BOOKABLE_PRACTITIONERS_COPY =
   "No hay profesionales con agenda en este consultorio. Sumá uno desde Configuración → Usuarios.";
 
+/**
+ * [AS-0a] Profesional sin servicios habilitados (`enabledServiceIds[pid] = []`, todos sus PractitionerService
+ * apagados): el select quedaba con un placeholder genérico y parecía roto. Ahora dice quién y dónde se arregla.
+ */
+export function noServicesCopy(practitionerName: string): string {
+  return `${practitionerName} no tiene servicios habilitados · Configuración → Profesionales`;
+}
+
 export function ServiceSection({
   practitioners,
   practitionerId,
@@ -93,7 +101,11 @@ export function ServiceSection({
           onChange={onServiceChange}
         >
           <option value="" disabled>
-            {services.length === 0 ? "— Este profesional no tiene servicios habilitados —" : "— Seleccioná un servicio —"}
+            {services.length === 0
+              ? practitionerId
+                ? `— ${practitionerName} no tiene servicios habilitados —`
+                : "— No hay servicios para elegir —"
+              : "— Seleccioná un servicio —"}
           </option>
           {services.map((s) => (
             <option key={s.id} value={s.id}>
@@ -101,6 +113,11 @@ export function ServiceSection({
             </option>
           ))}
         </Select>
+        {practitionerId && services.length === 0 && (
+          <div role="status" style={{ fontSize: 12, color: "var(--warn-fg)" }}>
+            {noServicesCopy(practitionerName)}
+          </div>
+        )}
         {/* G6: la ayuda va pegada al control que la resuelve (antes quedaba abajo, entre Título y Fecha). */}
         {!serviceId && services.length > 0 && (
           <div style={{ fontSize: 12, color: "var(--navy-400)" }}>

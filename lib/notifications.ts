@@ -43,6 +43,17 @@ export async function listNotifications(limit = 20): Promise<{
   };
 }
 
+/**
+ * [AS-0c] Solo el contador de no leídas: es lo que la campana re-pide cada 60 s, al volver el foco y con cada evento
+ * de la agenda en vivo. `listNotifications(0)` hacía dos transacciones (una con `take: 0`) para tirar las filas.
+ */
+export async function countUnreadNotifications(): Promise<number> {
+  const actor = await getActor();
+  return runWithRls(actor.tenantId, (tx) =>
+    tx.notification.count({ where: { tenantId: actor.tenantId, userId: actor.userId, readAt: null } })
+  );
+}
+
 export async function markNotificationRead(id: string): Promise<ActionResult> {
   const actor = await getActor();
   const row = await runWithRls(actor.tenantId, (tx) => tx.notification.findFirst({

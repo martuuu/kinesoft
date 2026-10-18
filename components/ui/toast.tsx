@@ -392,7 +392,9 @@ function Toaster({
  * inline, porque cambia por ancho y por estado:
  * - escritorio: arriba a la derecha, como siempre;
  * - con un Drawer abierto (≥ 768): arriba a la izquierda. pf1z-toast-tapa-drawer: arriba a la derecha tapaba la X
- *   y el título del panel (la marca `data-k-drawer-open` del `<html>` la pone drawer.tsx);
+ *   y el título del panel (la marca `data-k-drawer-open` del `<html>` la pone drawer.tsx). [AS-0a] Angostada al lugar
+ *   que deja el panel, o abajo a la izquierda sobre su pie si no entra (`drawerToasterPlacement`, `data-k-toaster`):
+ *   con 360 fijos tapaba Profesional y Servicio de «Nuevo turno» (580) a 800-900 px;
  * - < 768: abajo y centrado, sobre la barra inferior (`--k-bottom-nav-h`) o sobre el pie del Drawer abierto.
  * Exportado para el render test (el `Toaster` solo pinta después de montar, y por portal).
  */

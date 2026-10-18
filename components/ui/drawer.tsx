@@ -53,6 +53,59 @@ export function drawerOpenMark(root: DrawerMarkRoot, delta: 1 | -1 | 0, footerHe
   if (footerHeight != null) root.style.setProperty("--k-drawer-footer-h", `${Math.ceil(footerHeight)}px`);
 }
 
+/** [AS-0a] Medidas de la pila de toasts (`.k-toaster`, globals.css) y del panel (`.k-drawer-panel`). */
+const TOASTER_MAX_W = 360;
+/** Más angosta que esto el aviso de llegada (nombre · hora + «Ver sala») parte en tres renglones: mejor abajo. */
+export const TOASTER_BESIDE_MIN_W = 260;
+const TOASTER_EDGE = 16; // `left: 16px` de la pila
+const TOASTER_GAP = 12; // aire entre la pila y el panel
+const PANEL_MARGIN = 12; // `right: 12px` del panel (y `max-width: calc(100vw - 24px)`)
+const MOBILE_MAX = 767; // < 768 manda el CSS móvil (abajo, sobre el pie del drawer)
+
+export type ToasterPlacement = { placement: "default" | "beside" | "bottom"; toastWidth: number | null };
+
+/**
+ * [AS-0a] Pura: dónde va la pila de toasts con un drawer de `drawerWidth` abierto. Bug «Servicio solo anda después
+ * de elegir Sala»: desde MB-0d la pila se corría arriba a la izquierda con 360 px fijos suponiendo drawers ≤ 480, pero
+ * «Nuevo turno» mide 580 y a 800/900 px de ancho el toast tapaba el borde izquierdo de Profesional y Servicio (medido
+ * con `elementFromPoint`). Como el toast se pausa con el mouse encima (12 s el de llegada), no se iba nunca mientras
+ * la Secretaria intentaba abrir el select. Ahora: al lado del panel si entra (angostada hasta `TOASTER_BESIDE_MIN_W`),
+ * y si no, abajo a la izquierda sobre el pie del drawer: tapa a lo sumo los últimos campos del form (que se scrollean),
+ * nunca los primeros que se cargan ni «Guardar».
+ */
+export function drawerToasterPlacement(o: { viewportWidth: number; drawerWidth: number | null | undefined }): ToasterPlacement {
+  if (!o.drawerWidth || o.drawerWidth <= 0 || o.viewportWidth <= MOBILE_MAX) return { placement: "default", toastWidth: null };
+  const panel = Math.min(o.drawerWidth, o.viewportWidth - 2 * PANEL_MARGIN);
+  const free = o.viewportWidth - PANEL_MARGIN - panel - TOASTER_EDGE - TOASTER_GAP;
+  const toastWidth = Math.min(TOASTER_MAX_W, Math.floor(free));
+  if (toastWidth >= TOASTER_BESIDE_MIN_W) return { placement: "beside", toastWidth };
+  return { placement: "bottom", toastWidth: null };
+}
+
+/**
+ * [AS-0a] Publica en el `<html>` el ancho del drawer más ancho abierto (`--k-drawer-w`) y el lugar de la pila
+ * (`data-k-toaster` + `--k-toaster-w`). Lo llama cada Drawer al abrirse, al cerrarse y en `resize`; con la lista
+ * vacía limpia todo. Lista y no un valor porque hay drawers que abren otro (Plataforma).
+ */
+export function applyDrawerToasterMark(root: DrawerMarkRoot, openWidths: readonly number[], viewportWidth: number): void {
+  if (openWidths.length === 0) {
+    delete root.dataset.kToaster;
+    root.style.removeProperty("--k-drawer-w");
+    root.style.removeProperty("--k-toaster-w");
+    return;
+  }
+  const w = Math.max(...openWidths);
+  root.style.setProperty("--k-drawer-w", `${w}px`);
+  const p = drawerToasterPlacement({ viewportWidth, drawerWidth: w });
+  if (p.placement === "default") delete root.dataset.kToaster;
+  else root.dataset.kToaster = p.placement;
+  if (p.toastWidth != null) root.style.setProperty("--k-toaster-w", `${p.toastWidth}px`);
+  else root.style.removeProperty("--k-toaster-w");
+}
+
+/** Anchos de los drawers abiertos (uno por instancia; ver `applyDrawerToasterMark`). */
+const openDrawerWidths: number[] = [];
+
 /**
  * PF1-Z-F1 (#4): enfoca el primer campo habilitado de `container` y lo trae a la vista (p. ej. «Reprogramar», que
  * se abre debajo de la tarjeta y quedaba fuera del panel). `preventScroll` + `scrollIntoView` suave: el foco solo
@@ -156,6 +209,22 @@ export function Drawer({
       drawerOpenMark(root, -1);
     };
   }, [armed, trapRef]);
+  // [AS-0a] Ancho del panel → lugar de la pila de toasts (ver `drawerToasterPlacement`). Se recalcula en `resize`
+  // (girar la tablet, achicar la ventana) porque el lugar depende del ancho de la ventana.
+  useEffect(() => {
+    if (!armed) return;
+    const root = document.documentElement as unknown as DrawerMarkRoot;
+    openDrawerWidths.push(width);
+    const apply = () => applyDrawerToasterMark(root, openDrawerWidths, window.innerWidth);
+    apply();
+    window.addEventListener("resize", apply);
+    return () => {
+      window.removeEventListener("resize", apply);
+      const at = openDrawerWidths.indexOf(width);
+      if (at >= 0) openDrawerWidths.splice(at, 1);
+      apply();
+    };
+  }, [armed, width]);
   const offset = width + 24;
   const confirm = useConfirm();
   // Evita apilar dos confirmaciones (Esc + click en el fondo seguidos).

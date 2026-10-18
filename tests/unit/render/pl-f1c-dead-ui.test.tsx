@@ -34,6 +34,8 @@ vi.mock("@/components/layout/tweaks-context", () => ({
 vi.mock("@/components/providers/arrival-alerts", () => ({ ArrivalAlerts: ({ children }: { children: ReactNode }) => <>{children}</> }));
 vi.mock("@/components/providers/realtime-provider", () => ({
   RealtimeProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  // AS-0c: la campana del topbar se suscribe a la agenda en vivo.
+  useRealtime: () => ({ subscribe: () => () => {} }),
 }));
 vi.mock("@/components/global/command-palette", () => ({ CommandPalette: () => null }));
 // PL-F (handoff 8): el menú de cuenta del topbar suma «Ayuda y soporte» (de profile-menu) y el switch del turnero

@@ -5,12 +5,15 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { AnimatePresence, m } from "framer-motion";
 import { DUR, EASE_OUT } from "@/lib/motion";
 import {
+  countUnreadNotifications,
   listNotifications,
   markAllNotificationsRead,
   markNotificationRead,
 } from "@/lib/notifications";
 import type { NotificationRow } from "@/lib/notifications-types";
 import { IconBell, IconCheck } from "@/components/ui/icons";
+import { useRealtime } from "@/components/providers/realtime-provider";
+import { createBellLive } from "@/lib/notifications-live";
 import dash from "./dashboard.module.css";
 
 /**
@@ -19,6 +22,10 @@ import dash from "./dashboard.module.css";
  * Lazy: only hits the server once the dropdown opens, then keeps a small
  * in-memory cache (refreshes on each open). Optimistic on mark-read so
  * the badge updates immediately.
+ *
+ * [AS-0c] En vivo: el contador se re-pide cada 60 s con la pestaña visible, al volver el foco y con cada lote de la
+ * agenda en vivo (`createBellLive`). Con el desplegable abierto se re-piden también las filas. Fuera del
+ * `RealtimeProvider` (`useRealtime` devuelve el valor apagado) queda solo el polling.
  */
 export function NotificationsBell() {
   const router = useRouter();
@@ -30,26 +37,53 @@ export function NotificationsBell() {
   const popRef = useRef<HTMLDivElement | null>(null);
   const btnRef = useRef<HTMLButtonElement | null>(null);
 
-  // Initial unread count.
+  const { subscribe } = useRealtime();
+  const openRef = useRef(open);
+  openRef.current = open;
+  // Secuencia: solo aplica la última respuesta (un poll lento no pisa un «marcar todas» o un refresco más nuevo).
+  const seq = useRef(0);
+
+  // Contador inicial + campana en vivo (AS-0c).
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const data = await listNotifications(0); // 0 → only fetch count, but our impl still returns rows; cheap enough
-      if (cancelled) return;
-      setUnread(data.unread);
-    })();
-    return () => {
-      cancelled = true;
+    let alive = true;
+    const refresh = () => {
+      const n = ++seq.current;
+      const withRows = openRef.current;
+      (withRows ? listNotifications(20) : countUnreadNotifications().then((unread) => ({ unread, rows: null })))
+        .then((data) => {
+          if (!alive || n !== seq.current) return;
+          setUnread(data.unread);
+          if (data.rows) setRows(data.rows);
+        })
+        .catch(() => {
+          // Sin red o sesión vencida: queda el número de antes; el próximo tick reintenta.
+        });
     };
-  }, []);
+    refresh();
+    const live = createBellLive({ refresh, isVisible: () => document.visibilityState !== "hidden" });
+    live.start();
+    const onVis = () => live.handleVisibility(document.visibilityState !== "hidden");
+    const onFocus = () => live.handleFocus();
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onFocus);
+    const unsub = subscribe(() => live.handleRealtime());
+    return () => {
+      alive = false;
+      live.stop();
+      unsub();
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [subscribe]);
 
   // Refresh on open.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    const n = ++seq.current;
     (async () => {
       const data = await listNotifications(20);
-      if (cancelled) return;
+      if (cancelled || n !== seq.current) return;
       setRows(data.rows);
       setUnread(data.unread);
       setLoaded(true);
