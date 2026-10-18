@@ -21,6 +21,7 @@ import { withSupportWritable } from "@/lib/support-writable";
 import { withReadOnlyResult } from "@/lib/read-only-result";
 import { auditInTx } from "@/lib/audit";
 import { syncDefaultSchedulesToTenantHours } from "@/lib/agenda-defaults";
+import { isAgendaSlotMinutes } from "@/lib/tenant-settings-constants";
 import { applyTenantEntitlementsInTx } from "@/lib/tenant-entitlements-internal";
 import { tenantEntitlementTags } from "@/lib/cache-tags";
 import { updateTenantProfileInTx } from "@/lib/tenant-profile-internal";
@@ -91,8 +92,8 @@ async function setBusinessHoursImpl(input: {
   const start = Math.floor(input.start);
   const end = Math.floor(input.end);
   const slotMinutes = input.slotMinutes == null ? null : Math.floor(input.slotMinutes);
-  if (slotMinutes != null && slotMinutes !== 30 && slotMinutes !== 60) {
-    return { ok: false, error: "La vista de agenda solo admite 30 o 60 minutos." };
+  if (slotMinutes != null && !isAgendaSlotMinutes(slotMinutes)) {
+    return { ok: false, error: "La vista de agenda admite 15, 30 o 60 minutos." };
   }
   // Constants live in lib/tenant-settings-constants.ts so the UI can
   // import them — "use server" files can only export async functions.

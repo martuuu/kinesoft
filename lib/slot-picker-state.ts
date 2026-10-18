@@ -32,6 +32,7 @@ export const INSTANT_CLASS_LABEL: Record<InstantClass, string> = {
   "fuera-de-horario": "Fuera del horario del profesional",
   bloqueado: "Horario bloqueado",
   duplicado: "El paciente ya tiene un turno a esa hora",
+  "tope-intervalo": "El profesional ya llegó a su tope de turnos en ese horario",
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -102,6 +103,7 @@ const REASON_LABEL: Record<SlotUnavailableReason, string> = {
   "anticipacion-minima": "Antes de la anticipación mínima",
   "fuera-de-horizonte": "Fuera del horizonte de reserva",
   "cupo-completo": "Cupo completo",
+  "tope-intervalo": "Tope completo",
 };
 
 /** Ocupación "usados/cupo". Ilimitado: solo si hay alguno ("2/∞"). */
@@ -368,6 +370,11 @@ export function instantStatusView(c: InstantCheck): InstantStatusView {
       tone = "warn";
       title = reasons.length ? `Bloqueado: ${reasons.join(", ")}` : "Bloqueado";
       details.push(`${INSTANT_CLASS_LABEL.bloqueado}: si lo cargás, queda como sobreturno`);
+      break;
+    case "tope-intervalo":
+      tone = "warn";
+      title = "Tope completo";
+      details.push(`${INSTANT_CLASS_LABEL["tope-intervalo"]}: si lo cargás, queda como sobreturno`);
       break;
     case "duplicado":
       tone = "danger";

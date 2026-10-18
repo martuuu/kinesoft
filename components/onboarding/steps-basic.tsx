@@ -320,7 +320,7 @@ export function StepHours({ tenant }: { tenant: OnboardingTenant }) {
                 }}
               >
                 <input type="radio" name="slot" value={m} defaultChecked={tenant.agendaSlotMinutes === m} />
-                {m === 60 ? "1 hora" : "30 minutos"}
+                {m === 60 ? "1 hora" : `${m} minutos`}
               </label>
             ))}
           </div>
