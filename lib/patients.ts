@@ -49,6 +49,7 @@ import { makePortalInviteToken } from "@/lib/portal-invite-token";
 import { portalVincularPath } from "@/lib/portal-vincular-copy";
 import type { EmailTransportName } from "@/lib/email/types";
 import { emailEqualsFilter, escapeLike, sameEmail } from "@/lib/email-match";
+import { matchesInsurerKey, PARTICULAR_INSURER_KEY } from "@/lib/patients-os-filter";
 import { hashKeyPart, rateLimitAll, rateLimitedMessage } from "@/lib/rate-limit";
 import { NotificationKind } from "@prisma/client";
 import { applyPatientArchivePlansInTx, PlanLifecycleStale } from "@/lib/plans-lifecycle-internal";
@@ -87,7 +88,12 @@ export async function listPatients(opts: {
   q?: string;
   filter?: "all" | "active" | "no-program" | "archived";
   sort?: PatientSort;
-  insurer?: string;
+  /**
+   * T3e-2p (§23.9): obra social VIGENTE, `?os=` de /pacientes. Id del catálogo del tenant (`Insurer.id`) o
+   * `"particular"`. Reemplaza el `insurer` de texto (ILIKE sobre el nombre cacheado de CUALQUIER cobertura): matcheaba
+   * coberturas viejas y nombres parecidos («OSDE» traía «OSDE Binario» y a quien había sido de OSDE).
+   */
+  insurerKey?: string;
   /** Inclusive age bounds in years. Translated to dateOfBirth ranges. */
   ageMin?: number;
   ageMax?: number;
@@ -183,7 +189,22 @@ export async function listPatients(opts: {
   // El post-filtro de filas basic de abajo usa `includes` sobre `q` crudo:
   // ahí no hay comodines.
   const qLike = q ? escapeLike(q) : undefined;
-  const insurerLike = opts.insurer ? escapeLike(opts.insurer) : undefined;
+  const insurerKey = opts.insurerKey?.trim() || undefined;
+  // T3e-2p: en SQL, un pre-filtro amplio sobre CUALQUIER cobertura (Prisma no expresa "la más reciente" en un
+  // `where`); el exacto sobre la vigente va en JS abajo (`matchesInsurerKey`). «Particular» = sin cobertura, texto
+  // libre (`insurerId` null: el turno cobra como particular, `resolveBookingCopagoCents`) o la fila `isParticular`.
+  // El id no se valida contra el catálogo: `where.tenantId` ya acota los pacientes y un id ajeno no matchea a nadie.
+  const insurerWhere: Prisma.PatientWhereInput = !insurerKey
+    ? {}
+    : insurerKey === PARTICULAR_INSURER_KEY
+      ? {
+          OR: [
+            { coverages: { none: {} } },
+            { coverages: { some: { insurerId: null } } },
+            { coverages: { some: { insurerRef: { isParticular: true } } } },
+          ],
+        }
+      : { coverages: { some: { insurerId: insurerKey } } };
 
   const activeLiveProgramWhere = { ...liveProgramWhere, status: "ACTIVE" } satisfies Prisma.TreatmentProgramWhereInput;
 
@@ -212,9 +233,8 @@ export async function listPatients(opts: {
       : filter === "no-program"
         ? { programs: { none: activeLiveProgramWhere } }
         : {}),
-    ...(insurerLike
-      ? { coverages: { some: { insurer: { contains: insurerLike, mode: "insensitive" } } } }
-      : {}),
+    // `AND` y no spread: `insurerWhere` de «Particular» es un `OR` y pisaría el de `q`.
+    AND: [insurerWhere],
     ...dobWhere,
     ...lastVisitWhere,
     ...diagnosisWhere,
@@ -334,9 +354,12 @@ export async function listPatients(opts: {
   const clinicalFilter =
     Boolean(diagnosisSlug) || filter === "active" || filter === "no-program";
   const maskedFilter =
-    Boolean(opts.insurer) || opts.ageMin != null || opts.ageMax != null || Boolean(lvFrom || lvTo);
+    Boolean(insurerKey) || opts.ageMin != null || opts.ageMax != null || Boolean(lvFrom || lvTo);
   const qLower = q?.toLowerCase();
   const visibleRows = rows.filter((p) => {
+    // T3e-2p: el pre-filtro SQL matchea cualquier cobertura; acá, solo la vigente (`coverages[0]`, el mismo orden
+    // que la columna «Obra social»). Va antes del acceso: vale igual para todas las filas que quedan.
+    if (insurerKey && !matchesInsurerKey(p.coverages[0], insurerKey)) return false;
     const access = accessMap.get(p.id) ?? "basic";
     if (access === "full") return true;
     if (clinicalFilter) return false;

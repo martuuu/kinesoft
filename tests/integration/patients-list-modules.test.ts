@@ -8,7 +8,7 @@
  *    null y 0 sesiones: el efecto observable de no consultar la relación) y
  *    "última visita" sale del último turno COMPLETED.
  *  - Sin `diagnostico`: `diagnosisSlug` se ignora.
- *  - Búsqueda (`q`) y obra social (`insurer`): `%` y `_` son literales. Prisma 5
+ *  - Búsqueda (`q`): `%` y `_` son literales (la obra social filtra por id desde T3e-2p). Prisma 5
  *    no escapa `contains` (param `"%%%"` medido contra el Docker).
  *  - Control Kine: los filtros de plan y diagnóstico siguen filtrando.
  *
@@ -157,8 +157,6 @@ describe.skipIf(!RUN)("EV1-B · listPatients por módulos + ILIKE", () => {
     );
   });
 
-  it("[EV1-B] obra social: «_» es literal", async () => {
-    asUser(K.userId);
-    expect(ids(await listPatients({ insurer: `OS_${sfx}` }))).toEqual([pUnderscore]);
-  });
+  // T3e-2p: «obra social: «_» es literal» salió con el ILIKE por nombre; el filtro va por id del catálogo
+  // (`insurerKey`, tests/integration/as2p-patients-os-filter.test.ts).
 });

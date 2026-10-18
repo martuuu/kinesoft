@@ -37,6 +37,7 @@ import {
   createEphemeralTenant,
   addPatient,
   addPractitioner,
+  addInsurer,
   uniqueSuffix,
   type EphemeralTenant,
 } from "@/tests/helpers/tenant-factory";
@@ -67,6 +68,8 @@ describe.skipIf(!RUN)("P0.Z · hallazgos del revisor (b) de ES1", () => {
   /** Paciente asignado a la Secretaria (dato de prod, precheck 15). */
   let pSec: string;
   let condSlug: string;
+  // T3e-2p: el filtro de obra social pasó de ILIKE por nombre a id del catálogo (`insurerKey`).
+  let osPz: string;
   let dxEmail: string;
 
   beforeAll(async () => {
@@ -86,7 +89,8 @@ describe.skipIf(!RUN)("P0.Z · hallazgos del revisor (b) de ES1", () => {
     pSec = await addPatient(db, T, { assignedPractitionerId: assistant.practitionerId, lastName: `Sec ${s}` });
 
     await db.patient.update({ where: { id: pDx }, data: { dateOfBirth: new Date("1980-05-10T00:00:00Z") } });
-    await db.coverage.create({ data: { patientId: pDx, insurer: "OSDE-PZ" } });
+    osPz = await addInsurer(db, T, { name: `OSDE-PZ ${s}` });
+    await db.coverage.create({ data: { patientId: pDx, insurer: "OSDE-PZ", insurerId: osPz } });
     const cond = await db.condition.create({ data: { slug: condSlug, name: "Lumbalgia P0.Z", tenantId: T.tenantId } });
     const kase = await db.clinicalCase.create({
       data: { tenantId: T.tenantId, authorId: kine.practitionerId, selectedZones: [], refinements: {}, patientId: pDx },
@@ -153,7 +157,7 @@ describe.skipIf(!RUN)("P0.Z · hallazgos del revisor (b) de ES1", () => {
 
   it("[P0-Z] H-b1 listPatients: obra social, edad, última visita y email no filtran filas basic (sí las `admin`, que ven esos datos)", async () => {
     const masked = [
-      { insurer: "OSDE-PZ" },
+      { insurerKey: osPz },
       { ageMin: 40, ageMax: 60 },
       { lastVisitFrom: "2030-01-15", lastVisitTo: "2030-02-15" },
       { q: dxEmail },

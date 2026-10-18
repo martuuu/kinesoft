@@ -53,7 +53,7 @@ const BUDGET = 3;
 /** Claves exactas de `PatientAdminCore` (congelado) y de la proyección básica. */
 const ADMIN_CORE_KEYS = [
   "access", "assignedPractitionerName", "coverage", "dateOfBirth", "documentId", "email", "emergency", "firstName",
-  "id", "lastName", "nextBookingAt", "phone",
+  "id", "lastName", "nextBookingAt", "phone", "updatedAt",
 ].sort();
 const BASIC_CORE_KEYS = ["access", "documentId", "firstName", "id", "lastName", "nextBookingAt"].sort();
 

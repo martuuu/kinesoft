@@ -18,6 +18,7 @@ import { NewPatientButton } from "@/components/patients/new-patient-button";
 import { PatientsSearchBar } from "@/components/patients/patients-search-bar";
 import { PatientsList } from "@/components/patients/patients-list";
 import { AdvancedPatientFilters } from "@/components/patients/advanced-filters";
+import { InsurerFilterSelect } from "@/components/patients/insurer-filter-select";
 import {
   BulkActionBar,
   BulkSelectProvider,
@@ -30,7 +31,8 @@ type SP = {
   q?: string;
   filter?: "all" | "active" | "no-program" | "archived";
   sort?: PatientSort;
-  insurer?: string;
+  /** T3e-2p: id del catálogo o `particular` (antes `?insurer=` de texto, que ya no se lee). */
+  os?: string;
   ageMin?: string;
   ageMax?: string;
   diagnosisSlug?: string;
@@ -61,7 +63,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
   const filter: NonNullable<SP["filter"]> =
     !plansEnabled && (rawFilter === "active" || rawFilter === "no-program") ? "all" : rawFilter;
   const sort = (searchParams.sort ?? "lastName.asc") as PatientSort;
-  const insurer = searchParams.insurer ?? "";
+  const os = searchParams.os?.trim() ?? "";
   const ageMin = searchParams.ageMin ? Number(searchParams.ageMin) : undefined;
   const ageMax = searchParams.ageMax ? Number(searchParams.ageMax) : undefined;
   const diagnosisSlug = diagnosisEnabled ? (searchParams.diagnosisSlug ?? "") : "";
@@ -80,7 +82,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
       q,
       filter,
       sort,
-      insurer: insurer || undefined,
+      insurerKey: os || undefined,
       ageMin: Number.isFinite(ageMin) ? ageMin : undefined,
       ageMax: Number.isFinite(ageMax) ? ageMax : undefined,
       diagnosisSlug: diagnosisSlug || undefined,
@@ -110,6 +112,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
   // `activePlans: []` (no se le ve el plan) y al filtrar no aparece (H-b1: los
   // filtros clínicos solo dejan filas `full`), así que «Sin plan» cuenta solo
   // filas `full` (ES4-Z: antes las contaba y el pill no coincidía con la lista).
+  const osOptions = insurers.filter((i) => !i.isParticular).map((i) => ({ id: i.id, name: i.name }));
   const hasPlan = (p: (typeof patients)[number]) => (p.activePlans?.length ?? 0) > 0;
   const totals = plansEnabled
     ? {
@@ -125,7 +128,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
       q,
       filter,
       sort,
-      insurer,
+      os,
       ageMin: ageMin?.toString(),
       ageMax: ageMax?.toString(),
       diagnosisSlug,
@@ -167,7 +170,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
             </a>
             {canCreateHere && (
               <NewPatientButton
-                insurers={insurers.filter((i) => !i.isParticular).map((i) => ({ id: i.id, name: i.name }))}
+                insurers={osOptions}
                 assignees={assignees}
               />
             )}
@@ -213,27 +216,21 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
           );
         })}
         <span style={{ marginLeft: 12, fontWeight: 600 }}>Cobertura:</span>
-        <form action="/pacientes" method="get" style={{ display: "inline-flex", gap: 4 }}>
-          <input type="hidden" name="filter" value={filter} />
-          <input type="hidden" name="sort" value={sort} />
-          {q && <input type="hidden" name="q" value={q} />}
-          <input
-            type="text"
-            name="insurer"
-            defaultValue={insurer}
-            placeholder="OSDE, Swiss…"
-            aria-label="Filtrar por cobertura"
-            className={directory.field}
-            style={{
-              padding: "5px 10px",
-              borderRadius: 999,
-              fontSize: 11.5,
-              border: "1px solid rgba(15,30,51,0.08)",
-              background: "rgba(255,255,255,0.7)",
-              width: 140,
-            }}
-          />
-        </form>
+        {/* T3e-2p (§23.9): `<select>` nativo con el catálogo activo (sin la fila Particular, que es su propia opción). */}
+        <InsurerFilterSelect
+          value={os}
+          insurers={osOptions}
+          preserved={{
+            q,
+            filter,
+            sort,
+            ageMin: ageMin?.toString(),
+            ageMax: ageMax?.toString(),
+            diagnosisSlug,
+            lastVisitFrom,
+            lastVisitTo,
+          }}
+        />
         <Link
           href={`/pacientes${baseQS({ filter: filter === "archived" ? "all" : "archived" })}`}
           scroll={false}
@@ -255,7 +252,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
 
       <AdvancedPatientFilters
         conditions={facets.conditions}
-        preservedParams={{ q, filter, sort, insurer }}
+        preservedParams={{ q, filter, sort, os }}
         current={{
           ageMin: searchParams.ageMin,
           ageMax: searchParams.ageMax,
@@ -267,7 +264,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
 
       {patients.length === 0 ? (
         <EmptyState
-          filtered={Boolean(q || insurer || ageMin != null || ageMax != null || diagnosisSlug || lastVisitFrom || lastVisitTo || filter !== "all")}
+          filtered={Boolean(q || os || ageMin != null || ageMax != null || diagnosisSlug || lastVisitFrom || lastVisitTo || filter !== "all")}
           canCreate={canCreateHere}
         />
       ) : (

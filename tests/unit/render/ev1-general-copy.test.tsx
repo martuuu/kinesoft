@@ -64,6 +64,7 @@ const admin: PatientAdminCore = {
   emergency: [],
   assignedPractitionerName: "Juan Pérez",
   nextBookingAt: null,
+  updatedAt: new Date("2026-09-01T12:00:00Z"),
   access: "admin",
 };
 

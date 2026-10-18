@@ -60,6 +60,8 @@ const ADMIN_CORE_KEYS = [
   "lastName",
   "nextBookingAt",
   "phone",
+  // T3e-2p (H-1u-1): optimistic lock de «Editar datos».
+  "updatedAt",
 ].sort();
 
 describe.skipIf(!RUN)("P0-S07sp · Secretaria en pacientes", () => {
@@ -247,7 +249,15 @@ describe.skipIf(!RUN)("P0-S07sp · Secretaria en pacientes", () => {
       expect(core?.access).toBe("admin");
       expect(Object.keys(core!).sort()).toEqual(ADMIN_CORE_KEYS);
       if (core?.access !== "admin") throw new Error("no admin");
-      expect(core.coverage).toEqual({ insurer: "OSDE", planName: "310", memberId: "99" });
+      // T3e-2p (H-1u-1): con ids y copago propio (administrativo) para «Editar datos».
+      expect(core.coverage).toEqual({
+        insurer: "OSDE",
+        insurerId: null,
+        planName: "310",
+        payerPlanId: null,
+        memberId: "99",
+        copagoCents: 1234,
+      });
       expect(core.emergency).toEqual([{ name: "Mamá", relation: "Madre", phone: "1155555555" }]);
       expect(core.assignedPractitionerName).toMatch(/^Kine /);
       expect(core.email).not.toBeNull();

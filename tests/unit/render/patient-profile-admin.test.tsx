@@ -118,10 +118,11 @@ const admin: PatientAdminCore = {
   email: "lucia@example.com",
   phone: "+54 11 5555-0001",
   dateOfBirth: new Date("1990-03-15T00:00:00Z"),
-  coverage: { insurer: "OSDE", planName: "310", memberId: "AF-998877" },
+  coverage: { insurer: "OSDE", insurerId: "os_1", planName: "310", payerPlanId: null, memberId: "AF-998877", copagoCents: null },
   emergency: [{ name: "Marta Gómez", relation: "Madre", phone: "+54 11 5555-0002" }],
   assignedPractitionerName: "Juan Kine",
   nextBookingAt: new Date("2030-01-10T13:00:00Z"),
+  updatedAt: new Date("2026-09-01T12:00:00Z"),
   access: "admin",
 };
 

@@ -138,10 +138,11 @@ const core: PatientAdminCore = {
   email: "lucia@example.com",
   phone: "1155550001",
   dateOfBirth: new Date("1990-03-15T00:00:00Z"),
-  coverage: { insurer: "OSDE", planName: "310", memberId: "AF-1" },
+  coverage: { insurer: "OSDE", insurerId: "os_1", planName: "310", payerPlanId: null, memberId: "AF-1", copagoCents: null },
   emergency: [],
   assignedPractitionerName: "Juan Kine",
   nextBookingAt: null,
+  updatedAt: new Date("2026-09-01T12:00:00Z"),
   access: "admin",
 };
 
@@ -245,7 +246,7 @@ describe("[AS-1u] «Editar datos» en modo admin", () => {
     for (const s of ["Datos personales", "Cobertura", "N° de afiliado", "Copago propio", "AF-1", "Lucía"]) {
       expect(html).toContain(s);
     }
-    // La OS del catálogo se reconoce por nombre aunque la proyección admin no traiga el id.
+    // T3e-2p: la proyección admin trae `insurerId` (antes se reconocía por nombre).
     expect(html).toMatch(/<option value="ins:os_1"[^>]*selected/);
     for (const s of ["Diagnóstico", "Motivo de consulta", "Notas generales", 'name="notes"', "Kinesiólogo asignado"]) {
       expect(html).not.toContain(s);

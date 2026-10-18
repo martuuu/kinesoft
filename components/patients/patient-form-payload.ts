@@ -40,7 +40,7 @@ function clinicalFields(fd: FormLike) {
 
 /**
  * Payload de `updatePatient`. `expectedUpdatedAt` sale solo si se conoce (el optimistic lock es opcional en el server):
- * la proyección `admin` de la ficha todavía no trae `updatedAt`.
+ * desde T3e-2p la proyección `admin` también trae `updatedAt`.
  */
 export function patientUpdatePayload(
   mode: PatientFormMode,

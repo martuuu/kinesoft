@@ -122,9 +122,10 @@ export async function patientCoreInTx(
 
   if (access === "admin") {
     // P0-S07sp (E1, PD-13): proyección `admin` con `select` explícito, así la
-    // HC (notes, diagnosisTitle/Note, userId del portal, montos de cobertura)
-    // ni siquiera sale de la DB. Antes `admin` caía en la rama básica (falla
-    // cerrado) y la Secretaria no veía contacto ni cobertura para operar.
+    // HC (notes, diagnosisTitle/Note, userId del portal) ni siquiera sale de
+    // la DB. Antes `admin` caía en la rama básica (falla cerrado) y la
+    // Secretaria no veía contacto ni cobertura para operar. El copago propio
+    // de la cobertura sí sale desde T3e-2p: es administrativo (lo cobra).
     const patient = await tx.patient.findFirst({
       where: { id, tenantId: actor.tenantId },
       select: {
@@ -135,12 +136,23 @@ export async function patientCoreInTx(
         email: true,
         phone: true,
         dateOfBirth: true,
+        updatedAt: true,
         // Misma regla que la rama full: la cobertura vigente es la más
-        // reciente (cuid ordenable por tiempo). Sin copago ni vigencia.
+        // reciente (cuid ordenable por tiempo). T3e-2p (H-1u-1): con
+        // `insurerId`/`payerPlanId`/`copagoCents` (copago propio: lo cobra la
+        // recepción) para «Editar datos»; sin vigencia.
         coverages: {
           orderBy: { id: "desc" },
           take: 1,
-          select: { insurer: true, planName: true, memberId: true, insurerRef: { select: { name: true } } },
+          select: {
+            insurer: true,
+            insurerId: true,
+            planName: true,
+            payerPlanId: true,
+            memberId: true,
+            copagoCents: true,
+            insurerRef: { select: { name: true } },
+          },
         },
         emergency: { orderBy: { id: "asc" }, select: { name: true, relation: true, phone: true } },
         assignedPractitioner: { select: { user: { select: { fullName: true, email: true } } } },
@@ -171,11 +183,19 @@ export async function patientCoreInTx(
       phone: patient.phone,
       dateOfBirth: patient.dateOfBirth,
       coverage: cov
-        ? { insurer: cov.insurerRef?.name ?? cov.insurer, planName: cov.planName, memberId: cov.memberId }
+        ? {
+            insurer: cov.insurerRef?.name ?? cov.insurer,
+            insurerId: cov.insurerId,
+            planName: cov.planName,
+            payerPlanId: cov.payerPlanId,
+            memberId: cov.memberId,
+            copagoCents: cov.copagoCents,
+          }
         : null,
       emergency: patient.emergency.map((e) => ({ name: e.name, relation: e.relation, phone: e.phone })),
       assignedPractitionerName: assignedUser ? displayMemberName(assignedUser.fullName) : null,
       nextBookingAt: nextBooking?.scheduledFor ?? null,
+      updatedAt: patient.updatedAt,
       access: "admin",
     };
     return core;

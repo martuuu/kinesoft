@@ -22,25 +22,29 @@ import { Section, Grid2 } from "./ui";
 import type { PatientWithRelations, InsurerOption, PractitionerOption } from "./types";
 
 /**
- * T3d-1u: lo que «Editar datos» necesita de la ficha `admin`. Es `PatientAdminCore` (que se le pasa tal cual) con
- * extras OPCIONALES de la cobertura y del lock: la proyección admin hoy no trae `updatedAt`, `insurerId`, `payerPlanId`
- * ni `copagoCents` (ver el handoff al loader). Sin `insurerId` la OS del catálogo se reconoce por nombre; sin
- * `copagoCents` el copago propio arranca vacío (= no se toca) y cambiar la OS lo conserva (el server no lo borra sin
- * `resetCopago`); sin `updatedAt` no hay optimistic lock (es opcional en `updatePatient`).
+ * T3d-1u: lo que «Editar datos» necesita de la ficha `admin` (se le pasa `PatientAdminCore` tal cual). T3e-2p (H-1u-1):
+ * la proyección trae `insurerId`, `payerPlanId`, `copagoCents` y `updatedAt`, así que el formulario arranca igual que
+ * el del perfil completo: la OS del catálogo por id (antes por nombre, que un renombre perdía), el copago propio
+ * cargado, el aviso antes de borrarlo al cambiar de OS y `expectedUpdatedAt` en `updatePatient`.
  */
 export type AdminEditablePatient = Pick<
   PatientAdminCore,
-  "id" | "firstName" | "lastName" | "documentId" | "email" | "phone" | "dateOfBirth"
-> & {
-  updatedAt?: Date | string | null;
-  coverage:
-    | (NonNullable<PatientAdminCore["coverage"]> & {
-        insurerId?: string | null;
-        payerPlanId?: string | null;
-        copagoCents?: number | null;
-      })
-    | null;
-};
+  "id" | "firstName" | "lastName" | "documentId" | "email" | "phone" | "dateOfBirth" | "updatedAt" | "coverage"
+>;
+
+/**
+ * Aviso antes de cambiar la OS de un paciente con copago propio (H2, A2a-S08): cambiar la cobertura lo borra
+ * (`resetCopago`). `null` = no hay copago propio, no se pregunta. Mismo texto en los dos modos del drawer.
+ */
+export function coverageChangeConfirm(ownCopagoCents: number | null) {
+  if (ownCopagoCents == null) return null;
+  return {
+    title: "Cambiar la obra social",
+    message: `Este paciente tiene un copago propio de ${formatARS(ownCopagoCents)}. Al cambiar la cobertura, el copago propio se va a borrar y los próximos turnos van a cobrar el de la nueva cobertura.`,
+    confirmLabel: "Cambiar y borrar el copago",
+    tone: "danger" as const,
+  };
+}
 
 /** La ficha que edita el formulario, igual en los dos modos. */
 type EditableCoverage = {
@@ -97,11 +101,8 @@ function fromFull(p: PatientWithRelations): EditablePatient {
   };
 }
 
-function fromAdmin(p: AdminEditablePatient, insurers: InsurerOption[]): EditablePatient {
+function fromAdmin(p: AdminEditablePatient): EditablePatient {
   const c = p.coverage;
-  const norm = (v: string) => v.trim().toLowerCase();
-  // La proyección admin ya resuelve el nombre del catálogo (`insurerRef.name ?? insurer`): por nombre se reconoce.
-  const insurerId = c ? (c.insurerId ?? insurers.find((i) => norm(i.name) === norm(c.insurer))?.id ?? null) : null;
   return {
     id: p.id,
     firstName: p.firstName,
@@ -110,15 +111,16 @@ function fromAdmin(p: AdminEditablePatient, insurers: InsurerOption[]): Editable
     email: p.email,
     phone: p.phone,
     dateOfBirth: p.dateOfBirth,
-    updatedAt: p.updatedAt ? toIso(p.updatedAt) : null,
+    updatedAt: toIso(p.updatedAt),
+    // Texto libre (`insurerId` null) queda como «Otra» con su nombre, igual que en el perfil completo.
     coverage: c
       ? {
           insurer: c.insurer,
-          insurerId,
+          insurerId: c.insurerId,
           planName: c.planName,
-          payerPlanId: c.payerPlanId ?? null,
+          payerPlanId: c.payerPlanId,
           memberId: c.memberId,
-          copagoCents: c.copagoCents ?? null,
+          copagoCents: c.copagoCents,
         }
       : null,
     assignedPractitionerId: null,
@@ -161,7 +163,7 @@ export function EditPatientModal(props: EditPatientModalProps) {
   const canReassign = props.mode === "admin" ? false : props.canReassign;
   // Se normaliza una vez (la ficha no cambia mientras el drawer está abierto: al guardar se cierra).
   const [patient] = useState<EditablePatient>(() =>
-    props.mode === "admin" ? fromAdmin(props.patient, insurers) : fromFull(props.patient)
+    props.mode === "admin" ? fromAdmin(props.patient) : fromFull(props.patient)
   );
   const confirm = useConfirm();
   const [pending, start] = useTransition();
@@ -287,15 +289,10 @@ export function EditPatientModal(props: EditPatientModalProps) {
       setError("Escribí el nombre del plan o elegí uno de la lista.");
       return;
     }
-    const ownCopago = currentCoverage?.copagoCents ?? null;
     let resetCopago = false;
-    if (osChanged && ownCopago != null) {
-      const ok = await confirm({
-        title: "Cambiar la obra social",
-        message: `Este paciente tiene un copago propio de ${formatARS(ownCopago)}. Al cambiar la cobertura, el copago propio se va a borrar y los próximos turnos van a cobrar el de la nueva cobertura.`,
-        confirmLabel: "Cambiar y borrar el copago",
-        tone: "danger",
-      });
+    const ask = osChanged ? coverageChangeConfirm(currentCoverage?.copagoCents ?? null) : null;
+    if (ask) {
+      const ok = await confirm(ask);
       if (!ok) return;
       resetCopago = true;
     }

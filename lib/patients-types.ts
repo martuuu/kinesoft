@@ -175,11 +175,25 @@ export type PatientAdminCore = {
   email: string | null;
   phone: string | null;
   dateOfBirth: Date | null;
-  /** Cobertura vigente (la más reciente), sin montos. null = sin cobertura. */
-  coverage: { insurer: string; planName: string | null; memberId: string | null } | null;
+  /**
+   * Cobertura vigente (la más reciente). null = sin cobertura. T3e-2p (H-1u-1): suma `insurerId`, `payerPlanId` y
+   * `copagoCents` (el copago propio del paciente, administrativo: lo cobra la recepción) para que «Editar datos»
+   * reconozca la OS por id (antes, por nombre: un renombre del catálogo la perdía), arranque con el copago propio y avise
+   * antes de borrarlo al cambiar de OS. Lo que reintegra la OS (`fixedFeeCents`) y la vigencia siguen afuera.
+   */
+  coverage: {
+    insurer: string;
+    insurerId: string | null;
+    planName: string | null;
+    payerPlanId: string | null;
+    memberId: string | null;
+    copagoCents: number | null;
+  } | null;
   emergency: { name: string; relation: string | null; phone: string }[];
   assignedPractitionerName: string | null;
   nextBookingAt: Date | null;
+  /** T3e-2p (H-1u-1): optimistic lock de «Editar datos» (`expectedUpdatedAt` de `updatePatient`). */
+  updatedAt: Date;
   access: "admin";
 };
 
