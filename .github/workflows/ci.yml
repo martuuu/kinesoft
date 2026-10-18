@@ -110,3 +110,53 @@ jobs:
         env:
           DATABASE_URL: ${{ env.OWNER_URL }}
           DIRECT_URL: ${{ env.OWNER_URL }}
+
+  # Capa 4 (OPS-6, plan §21.3.7): E2E con Playwright contra `next build && next start` (TZ=UTC en el server, browser en
+  # hora AR) + el Postgres efímero, con un GoTrue falso (tests/e2e/support/start-server.mjs) y datos de
+  # tests/helpers/tenant-factory.ts (nunca seeds). NO BLOQUEANTE las primeras 2 semanas (OPS-D5): `continue-on-error`
+  # deja el check en verde aunque falle; después se saca y pasa a bloquear.
+  e2e:
+    runs-on: ubuntu-latest
+    needs: verify
+    continue-on-error: true
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kinesoft
+          POSTGRES_PASSWORD: kinesoft
+          POSTGRES_DB: kinesoft
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U kinesoft -d kinesoft"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      # Owner (BYPASSRLS), como corre prod hoy. Solo credenciales del Postgres efímero del runner.
+      DATABASE_URL: postgresql://kinesoft:kinesoft@localhost:5432/kinesoft?schema=public
+      DIRECT_URL: postgresql://kinesoft:kinesoft@localhost:5432/kinesoft?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Migraciones
+        run: npx prisma migrate deploy
+      - name: Chromium de Playwright
+        run: npx playwright install --with-deps chromium
+      # Sin `.env.local` en el runner: se llama a playwright directo (el script npm usa dotenv con `.env.local`).
+      - name: E2E (Playwright)
+        run: npx playwright test
+      - name: Reporte de Playwright
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            tests/e2e/.report/
+            tests/e2e/.results/
+          retention-days: 14
+          if-no-files-found: ignore

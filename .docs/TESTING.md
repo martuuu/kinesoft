@@ -23,7 +23,7 @@
 >   `tenant-business-hours` y `time-blocks`. Corre las **server actions reales** con `getActor()` real; solo se
 >   mockean la cookie/headers, la red de Supabase (+ el admin client, para que ningún test mande mails reales) y
 >   el runtime de cache de Next (`tests/helpers/integration-setup.ts`). CI la corre con **los dos roles**.
-> - **E2E (capa 4):** Playwright no está instalado (Bloque B, S26).
+> - **E2E (capa 4):** Playwright (OPS-6, 18-oct): **14 tests en 9 specs** (+ el login del proyecto `setup`) (`tests/e2e/`), `npm run test:e2e`. Ver «Capa 4».
 > - **CI:** typecheck → unit (TZ=UTC y TZ=AR) → guard → build → reporte de bundle; y el job `integration`
 >   (Postgres efímero, migraciones desde cero, rol app + owner). En todas las PR y ramas de trabajo.
 > - **Performance:** baseline de A1 y multi-profesional de B4.6 en [PERF.md](PERF.md) (`npm run test:perf`, solo
@@ -438,11 +438,56 @@ Tests obligatorios de esta capa:
    no puede hard-delete" — sin un login real por combinación.
 4. **Regresión de copago** al reemplazar cobertura (valida `copago-snapshot`).
 
-### Capa 4 — E2E en navegador real (Playwright, gateado)
+### Capa 4 — E2E en navegador real (Playwright, OPS-6)
 
-Flujos completos: **wizard de reserva pública** (el que cobra por MP — camino dorado), login con
-feedback de error, y el portal del paciente. Cubre hidratación, navegación, prefetch, CSP real.
-Corre gateado (rama principal / pre-corte), porque es lo más lento y ruidoso.
+`@playwright/test` 1.63.0 (dev), `playwright.config.ts`, `tests/e2e/**`. Chromium contra `next build && next start` +
+el Docker local; el server en **TZ=UTC** (como Vercel) y el browser en `America/Argentina/Buenos_Aires` + `es-AR`.
+
+```bash
+npx playwright install chromium     # una vez
+npm run test:e2e                    # build + start en :3300 + suite (carga .env.local: la DB es la del Docker)
+npm run test:e2e -- agenda          # un spec
+E2E_SKIP_BUILD=1 npm run test:e2e   # reusa el .next que haya
+E2E_APP_DIR=<snapshot> npm run test:e2e   # buildea/sirve otro árbol (p. ej. `git archive HEAD`) si hay sesiones
+                                          # editando el repo: el .next es uno solo
+E2E_KEEP_DATA=1 npm run test:e2e    # no borra el tenant al final (para mirar un fallo)
+```
+
+- **Server** (`tests/e2e/support/start-server.mjs`, el `webServer` de la config): un **GoTrue falso** en
+  127.0.0.1:3299 + `next build` + `next start -p 3300`. El falso atiende `token?grant_type=password|refresh_token`,
+  `user` y `logout` contra `tests/e2e/.state/users.json`, y firma el JWT con un secreto propio que el server recibe como
+  `SUPABASE_JWT_SECRET`: el camino es el de prod (form de /login → cookie `sb-127-auth-token` → middleware →
+  `getSessionUser`). El actor demo **no sirve** (solo con `NODE_ENV !== "production"`, y cae en el seed). Se niega a
+  arrancar si la DB no es localhost, y pisa con vacío / `log` / `off` todas las claves con efecto externo (MP, Resend,
+  Sentry, Upstash, realtime) porque `next start` carga el `.env`, que puede ser de prod. `TURNERO_CHECKOUT=off`.
+- **Datos** (`tests/e2e/global-setup.ts`): un tenant efímero con `tests/helpers/tenant-factory.ts` (**nunca seeds**):
+  OWNER, sede, franjas 08-19 los 7 días, un servicio con cupo 1 (el de la factory es ilimitado: sin conflicto), un
+  paciente por familia de specs, turnos de hoy / mañana / ayer en hora AR, una evolución de hace 3 días (enmienda) y una
+  usuaria del portal sin Membership (`Patient.userId`). `global-teardown.ts` lo borra con `deleteTenantDeep`; una
+  corrida cortada la barre `sweepOrphanTestTenants` a los 30'. Los ids quedan en `tests/e2e/.state/fixture.json`.
+- **Auth:** el proyecto `setup` (`auth.setup.ts`) entra por el form real y guarda `storageState`. Login, turnero y
+  portal usan un contexto limpio.
+- **Serial** (`workers: 1`): los specs comparten tenant y agenda.
+- **Anti-false-green:** cada spec que escribe afirma la fila en la base (owner client), no solo el toast.
+
+| Spec | Qué prueba |
+|---|---|
+| `login` | clave mala → `?error=invalid_credentials` + copy, sin sesión; clave buena → `/dashboard`, sobrevive al reload |
+| `pacientes` | Drawer «Nuevo paciente» → `/pacientes/[id]` + fila con el DNI |
+| `agenda` | turno nuevo; segundo turno a la misma hora con cupo 1 → aviso + «Forzar sobreturno», no entra; «Reprogramar» 09→15 |
+| `recepcion` | «Llegó» en el drawer del turno de hoy → `arrivedAt`; WhatsApp: `wa.me/<E.164>?text=` con la hora AR |
+| `cobro` | Facturación → «Confirmar» el copago → «Cobrado» + `copagoPaidAt` |
+| `evoluciones` | evolución nueva; enmienda de una nota fuera de la ventana de 24 h (la original no cambia) |
+| `plan` | plan de 2 sesiones los lunes desde la ficha → 1 programa con 2 turnos |
+| `portal` | pantalla de entrada sin sesión; con sesión, «Hola, Ana» y el turno de mañana |
+| `turnero` | ventana de 5 días («Siguientes ›» / «‹ Anteriores»), reserva sin cobro → «¡Turno reservado!» + turno UNPAID |
+
+Fuera por ahora: «informar pago» y el turnero **con** MP fake (§21.3.7) — con `TURNERO_CHECKOUT=off` (TP-0) no hay
+checkout que probar; y la vista Recepción / `/sala` (módulo `salaEspera`, solo Clínica/Libre). El rate limit del
+turnero es 5 reservas cada 5' por IP: un spec nuevo que reserve tiene que contar con eso.
+
+**CI:** job `e2e` en `ci.yml`, después de `verify`, con Postgres efímero (owner) y **`continue-on-error: true`**
+(no bloqueante 2 semanas, OPS-D5); sube `tests/e2e/.report/` y `.results/` como artefacto.
 
 > **Qué NO testear** (decisión explícita, no descuido): no mockear los internals de Next para invocar
 > server actions "directo" (harness frágil); no reproducir el contrato de la API de Mercado Pago en
@@ -488,7 +533,7 @@ Sesión `ci-gate-minimo` arranca con los pasos 1 y 3; `ci-pipeline-completo-y-gu
 4. **Gate de credenciales** — verifica que la DB de integración / secretos estén presentes; si
    faltan, la etapa de integración se **saltea de forma visible** en vez de fallar confuso.
 5. **Integración serial** con concurrency group por rama (dos corridas no escriben el mismo entorno).
-6. **E2E gateado** — al final, solo en `main` / pre-corte.
+6. **E2E** — job `e2e` en paralelo a `integration`, no bloqueante (`continue-on-error`) hasta que se decida (OPS-D5).
 
 **Anti-false-green** (se revisa en cada test nuevo): (1) testear el **símbolo real** que corre en
 prod, no una réplica local — mockear la dependencia externa (reloj, cookie, cliente de red), no la

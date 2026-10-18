@@ -16,4 +16,9 @@ design_source/
 # NOTA: `.docs` NO se ignora — es la documentación canónica del proyecto y está
 # versionada (reemplazó al árbol `docs/`, que era un duplicado desactualizado).
 # Estuvo ignorado por error desde el "pre-production commit"; con la regla activa,
-# cualquier documento NUEVO en .docs/ quedaba fuera de git sin aviso.
+# cualquier documento NUEVO en .docs/ quedaba fuera de git sin aviso.# OPS-6 E2E (Playwright): estado de la corrida (usuarios del GoTrue falso, sesión guardada), resultados y reporte.
+tests/e2e/.state/
+tests/e2e/.results/
+tests/e2e/.report/
+playwright-report/
+test-results/
