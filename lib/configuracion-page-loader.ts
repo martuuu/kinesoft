@@ -134,31 +134,42 @@ export type ConfiguracionTxData = {
 
 type Gates = {
   tenantAdmin: boolean;
+  /** T3 (C-AS1): lo delicado (equipo, directorio, turnero, quién ve la HC, datos del consultorio). */
+  sensitive: boolean;
   team: boolean;
   rooms: boolean;
   diagnostico: boolean;
   support: boolean;
-  /** DIR-3c: pestaña «Directorio» + especialidades: `tenant.admin` (soporte la ve en solo lectura) y modo ≠ off. */
+  /**
+   * DIR-3c: pestaña «Directorio» + especialidades: `tenant.sensitive` desde T3 (antes `tenant.admin`; soporte la ve
+   * en solo lectura) y modo ≠ off.
+   */
   directory: boolean;
 };
 
 /**
  * Qué lee cada quien (puro). Copia del criterio de la página + el de cada lector:
- *   - `team`: `requireTeamManager` (lib/invitations.ts) = soporte (que tiene `tenant.admin` en `SUPPORT_CAPS`) o
- *     `tenant.admin`; la página solo lo pedía con `tenant.admin`, así que nunca caía en el `unlessForbidden`;
+ *   - `team`: `requireTeamManager` (lib/invitations.ts) = soporte (que tiene `tenant.sensitive` en `SUPPORT_CAPS`) o
+ *     `tenant.sensitive` (T3, C-AS1; antes `tenant.admin`). La Secretaria con «Configuración» ya no baja el equipo:
+ *     sin esto la página leía filas (emails, roles) de una pestaña cuyas actions la rechazan;
+ *   - `directory`: lo mismo (las actions del directorio exigen `tenant.sensitive`);
  *   - `rooms`: la página pide `schedule.configure` y `listRooms` devuelve `[]` sin el módulo `salas`;
  *   - `diagnostico`: `listCustomConditions` devuelve `[]` sin el módulo;
  *   - `support`: «Accesos de soporte» la lee cualquier miembro; el soporte no (su lector lo rechazaba → `null`).
  */
 function gatesFor(actor: Actor, caps: ReadonlySet<Capability>): Gates {
   const tenantAdmin = caps.has("tenant.admin");
+  const sensitive = caps.has("tenant.sensitive");
   return {
     tenantAdmin,
-    team: tenantAdmin,
+    sensitive,
+    team: sensitive,
     rooms: caps.has("schedule.configure") && roomsEnabled(actor.entitlements),
     diagnostico: modulesFor(actor.entitlements).has("diagnostico"),
     support: !actor.support,
-    directory: tenantAdmin && directoryMode() !== "off",
+    // `tenantAdmin` también: la pestaña se arma sobre la fila del Tenant, que se lee con `tenant.admin`. Hoy
+    // `tenant.sensitive` sin `tenant.admin` no existe (los dos vienen de «Configuración»), pero no se asume.
+    directory: tenantAdmin && sensitive && directoryMode() !== "off",
   };
 }
 
@@ -392,6 +403,12 @@ async function unlessForbidden<T>(p: () => Promise<T>): Promise<T | null> {
 }
 
 export type ConfiguracionPageData = Omit<ConfiguracionTxData, "directory"> & {
+  /**
+   * T3 (C-AS1): `tenant.sensitive` del actor, para que la UI esconda lo delicado (turnero, «quién ve la HC», datos del
+   * consultorio, directorio, equipo, diagnósticos propios) a la Secretaria con «Configuración». Es UX: cada action
+   * exige lo suyo (`requireTenantSensitive`).
+   */
+  sensitive: boolean;
   /** DIR-3c: pestaña «Directorio» (null = modo `off` o sin «Configuración»). */
   directory: ConfiguracionDirectoryData | null;
   planUsage: Awaited<ReturnType<typeof getTenantPlanUsage>> | null;
@@ -441,5 +458,13 @@ export async function loadConfiguracionPage(
     // DIR-3c: en paralelo con la tx (sin tx propia).
     g.directory ? loadProfileStatuses(actor.tenantId) : [],
   ]);
-  return { ...data, directory: finishDirectory(data.directory, profileStatuses), planUsage, billingOverview, catalog, snapshot };
+  return {
+    ...data,
+    sensitive: g.sensitive,
+    directory: finishDirectory(data.directory, profileStatuses),
+    planUsage,
+    billingOverview,
+    catalog,
+    snapshot,
+  };
 }

@@ -55,6 +55,7 @@ export default async function ConfiguracionPage({
     catalog,
     snapshot,
     directory,
+    sensitive,
   } = await loadConfiguracionPage(actor, caps);
   // BO3-F: el soporte entra con `getMembershipRole` = ASSISTANT (su nivel de lectura clínica), que en la UI le
   // apagaba horarios, turnero y la pestaña Usuarios aunque el server se los deja (allowlist `withSupportWritable`,
@@ -87,11 +88,16 @@ export default async function ConfiguracionPage({
     limitsLabel: p.limitsLabel,
   }));
 
+  // T3 (C-AS1): `sensitive` = `tenant.sensitive` (lo delicado de Configuración) para que la UI se lo esconda a la
+  // Secretaria con «Configuración» (T3d; el server ya se lo niega). Va en una variable y no como literal en el JSX
+  // hasta que `ConfigTabAccess` (components/configuracion/controls.tsx) sume el campo: el literal no compilaría.
+  const access = { tenantAdmin, billing, team: team !== null && pending !== null, sensitive };
+
   return (
     <ConfiguracionClient
       role={uiRole}
       support={!!actor.support}
-      access={{ tenantAdmin, billing, team: team !== null && pending !== null }}
+      access={access}
       initialTab={Array.isArray(searchParams?.tab) ? searchParams?.tab[0] : searchParams?.tab}
       planUsage={planUsage}
       billingOverview={billingOverview}

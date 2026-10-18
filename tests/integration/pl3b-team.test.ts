@@ -62,7 +62,7 @@ import {
   transferOwnership,
 } from "@/lib/invitations";
 import { platformSetMemberClinical, platformSetMemberGrants } from "@/lib/platform-team";
-import { CLINICAL_ASSIGN_MESSAGE } from "@/lib/team-internal";
+import { CLINICAL_ASSIGN_MESSAGE, STAFF_BILLING_GRANT_MESSAGE } from "@/lib/team-internal";
 import { assignPatientToPractitioner } from "@/lib/patients";
 import { __rateLimitInternals } from "@/lib/rate-limit";
 import { asUser } from "@/tests/helpers/actor";
@@ -237,22 +237,36 @@ describe.skipIf(!RUN)("[PL-3b] equipo: Titular, «¿Atiende?», permisos delegad
 
   // ── Permisos delegados ──────────────────────────────────────────────────────────────────────────────────────
 
-  it("setMemberGrants: el Titular delega a cualquier rol (audit de/a) y nunca sobre el Titular", async () => {
+  it("setMemberGrants: el Titular delega (audit de/a), «Planes y pagos» nunca a la Secretaria y nunca sobre el Titular", async () => {
     const secId = await staff(A, "ASSISTANT");
     const secMem = await membershipOf(A, secId);
     await withStepUp(A.userId);
+    // [AS-1t] (T3, decisión 3 del 19-oct): la Secretaria nunca maneja el plan; antes se le guardaba.
     expect(await setMemberGrants({ membershipId: secMem.id, grantSettings: true, grantBilling: true })).toEqual({
+      ok: false,
+      error: STAFF_BILLING_GRANT_MESSAGE,
+    });
+    expect(await membershipOf(A, secId)).toMatchObject({ grantSettings: false, grantBilling: false });
+    expect(await setMemberGrants({ membershipId: secMem.id, grantSettings: true, grantBilling: false })).toEqual({
       ok: true,
       data: undefined,
     });
-    expect(await membershipOf(A, secId)).toMatchObject({ role: "ASSISTANT", grantSettings: true, grantBilling: true });
+    expect(await membershipOf(A, secId)).toMatchObject({ role: "ASSISTANT", grantSettings: true, grantBilling: false });
     const ev = await db.auditEvent.findFirstOrThrow({
       where: { tenantId: A.tenantId, action: "membership.grants.change", entityId: secMem.id },
     });
     expect(ev.payload).toMatchObject({
       from: { grantSettings: false, grantBilling: false },
-      to: { grantSettings: true, grantBilling: true },
+      to: { grantSettings: true, grantBilling: false },
     });
+    // Al Administrador/a sí se le dan las dos (y se le sacan).
+    const admId = await staff(A, "ADMIN");
+    const admMem = await membershipOf(A, admId);
+    expect(await setMemberGrants({ membershipId: admMem.id, grantSettings: true, grantBilling: true })).toEqual({
+      ok: true,
+      data: undefined,
+    });
+    expect(await membershipOf(A, admId)).toMatchObject({ role: "ADMIN", grantSettings: true, grantBilling: true });
 
     const ownerMem = await membershipOf(A, A.userId);
     expect(await setMemberGrants({ membershipId: ownerMem.id, grantSettings: false, grantBilling: false })).toEqual({
@@ -315,15 +329,21 @@ describe.skipIf(!RUN)("[PL-3b] equipo: Titular, «¿Atiende?», permisos delegad
 
   // ── Por miembro, no por rol ─────────────────────────────────────────────────────────────────────────────────
 
-  it("gestionar el equipo y reasignar pacientes es de quien tiene «Configuración» (`tenant.admin`), no del rol", async () => {
+  it("gestionar el equipo y reasignar pacientes es de quien tiene «Configuración», no del rol", async () => {
     const kine = await addPractitioner(db, A);
     const patientId = await addPatient(db, A, { firstName: "Reasig", lastName: "Nable" });
     const secWithSettings = await staff(A, "ASSISTANT", { grantSettings: true });
+    const adminWith = await staff(A, "ADMIN", { grantSettings: true });
     const adminWithout = await staff(A, "ADMIN", { grantSettings: false });
 
-    // Secretaria con «Configuración»: ve el equipo y reasigna.
-    asUser(secWithSettings);
+    // Administrador/a con «Configuración»: gestiona el equipo (`tenant.sensitive`).
+    asUser(adminWith);
     expect((await listTeamMembers()).some((m) => m.isYou)).toBe(true);
+
+    // Secretaria con «Configuración»: reasigna (`tenant.admin`) pero ya no gestiona el equipo ([AS-1t], T3: el
+    // equipo es `tenant.sensitive`, decisión 3 del 19-oct).
+    asUser(secWithSettings);
+    await expect(listTeamMembers()).rejects.toBeInstanceOf(ForbiddenError);
     expect(await assignPatientToPractitioner({ patientId, practitionerId: kine.practitionerId })).toEqual({
       ok: true,
       data: undefined,
@@ -357,7 +377,9 @@ describe.skipIf(!RUN)("[PL-3b] equipo: Titular, «¿Atiende?», permisos delegad
   it("[PL-Z] a3#5: quien gestiona el equipo sin atender ni ser Titular no suma a nadie que atiende", async () => {
     const T = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
     try {
-      const secWithSettings = await staff(T, "ASSISTANT", { grantSettings: true });
+      // [AS-1t] (T3): era una Secretaria con «Configuración»; desde T3 ella no gestiona el equipo (`tenant.sensitive`).
+      // El caso vigente es el Administrador/a con «Configuración»: gestiona el equipo y no atiende.
+      const secWithSettings = await staff(T, "ADMIN", { grantSettings: true });
       const otherSec = await staff(T, "ASSISTANT");
       const otherSecMem = await membershipOf(T, otherSec);
       const kine = await addPractitioner(db, T);
@@ -440,13 +462,20 @@ describe.skipIf(!RUN)("[PL-3b] equipo: Titular, «¿Atiende?», permisos delegad
       try {
         const billId = await staff(T, "BILLING");
         const billMem = await membershipOf(T, billId);
+        const admId = await staff(T, "ADMIN");
+        const admMem = await membershipOf(T, admId);
         const ownerMem = await membershipOf(T, T.userId);
         // PL-Z (a2#4): las acciones `high` de Plataforma piden step-up si PLATFORM_MFA_ENFORCEMENT != enforce.
         await withStepUp(superadminId);
+        // [AS-1t] (T3): «Planes y pagos» a Facturación se rechaza también desde Plataforma (mismo núcleo).
         expect(
           await platformSetMemberGrants({ tenantId: T.tenantId, membershipId: billMem.id, grantSettings: false, grantBilling: true })
+        ).toEqual({ ok: false, error: STAFF_BILLING_GRANT_MESSAGE });
+        expect(await membershipOf(T, billId)).toMatchObject({ grantBilling: false, grantSettings: false });
+        expect(
+          await platformSetMemberGrants({ tenantId: T.tenantId, membershipId: admMem.id, grantSettings: false, grantBilling: true })
         ).toEqual({ ok: true, data: undefined });
-        expect(await membershipOf(T, billId)).toMatchObject({ grantBilling: true, grantSettings: false });
+        expect(await membershipOf(T, admId)).toMatchObject({ grantBilling: true, grantSettings: false });
         expect(
           await platformSetMemberGrants({ tenantId: T.tenantId, membershipId: ownerMem.id, grantSettings: false, grantBilling: false })
         ).toEqual({ ok: false, error: "El titular ya tiene todos los permisos." });
@@ -457,7 +486,7 @@ describe.skipIf(!RUN)("[PL-3b] equipo: Titular, «¿Atiende?», permisos delegad
         });
         expect(await membershipOf(T, T.userId)).toMatchObject({ role: "OWNER", clinical: false });
         const ev = await db.auditEvent.findFirstOrThrow({
-          where: { tenantId: T.tenantId, action: "platform.membership.grants.change", entityId: billMem.id },
+          where: { tenantId: T.tenantId, action: "platform.membership.grants.change", entityId: admMem.id },
         });
         expect(ev.payload).toMatchObject({ to: { grantBilling: true } });
         // Datos de más → inválido (strict).

@@ -111,9 +111,12 @@ export async function applyPlanChange(raw: unknown): Promise<PlanChangeActionRes
     const parsed = ApplyPlanChangeInput.safeParse(raw);
     if (!parsed.success) return { ok: false, error: PLAN_CHANGE_COPY.invalid_input, reason: "invalid_input" };
     // PL-Z a3#2: «Planes y pagos» alcanza para cambiar el plan, pero elegir A QUIÉN se le corta (o se le devuelve) el
-    // acceso es gestión del equipo: la misma barrera que deshabilitar/reactivar desde Usuarios (`tenant.admin`). Sin
-    // esto, alguien con solo «Planes y pagos» podía dejar afuera a cualquier miembro bajando de plan.
-    if ((parsed.data.disableMembershipIds.length > 0 || parsed.data.reactivateMembershipIds.length > 0) && !caps.has("tenant.admin")) {
+    // acceso es gestión del equipo: la misma barrera que deshabilitar/reactivar desde Usuarios. Sin esto, alguien con
+    // solo «Planes y pagos» podía dejar afuera a cualquier miembro bajando de plan. T3 (C-AS1): esa barrera pasó a
+    // `tenant.sensitive` (`requireTeamManager`); hoy nadie llega acá con `tenant.admin` sin `tenant.sensitive` (la
+    // Secretaria y Facturación pierden «Planes y pagos» por el corte de staff), pero las dos barreras tienen que ser
+    // la misma para que un cambio de la matriz no abra una sin la otra.
+    if ((parsed.data.disableMembershipIds.length > 0 || parsed.data.reactivateMembershipIds.length > 0) && !caps.has("tenant.sensitive")) {
       return { ok: false, error: PLAN_CHANGE_COPY.needs_settings, reason: "invalid_selection" };
     }
     const ctx = teamCtx(actor);

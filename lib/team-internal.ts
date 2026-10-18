@@ -122,6 +122,33 @@ function actsAsOwner(ctx: TeamActorCtx): boolean {
 const fail = (error: string): { ok: false; error: string } => ({ ok: false, error });
 
 /**
+ * T3 (C-AS1; decisiones 2 y 3 del 19-oct): delegaciones según el rol al que se ENTRA.
+ *  - Administrador/a: «Configuración» y «Planes y pagos» (puede cambiar el plan y ver la facturación por defecto; el
+ *    Titular se los puede sacar después con `setMemberGrantsInTx`). Vale al aceptar una invitación de ADMIN
+ *    (`activateInvitation`), al pasar a ADMIN (`changeMemberRoleInTx`) y para el ex Titular que queda ADMIN en la
+ *    transferencia. Antes el ADMIN entraba solo con «Configuración» y «Planes y pagos» lo delegaba el Titular a mano.
+ *  - Secretaria y Facturación: nunca «Planes y pagos» (el corte de staff de `capabilitiesForMember` ya se la niega; acá
+ *    se limpia la fila para que no quede un permiso colgado que la UI mostraría tildado y que `setMemberGrantsInTx`
+ *    rechazaría al volver a guardar). «Configuración» se conserva: es del miembro, no del rol.
+ *  - El resto (Profesional, y el Titular nuevo en una transferencia): sin cambios.
+ * Un mapa y un set, no comparaciones de rol (guard `tests/unit/pl-ownership-guard.test.ts`).
+ */
+export const STAFF_BILLING_GRANT_MESSAGE = "La Secretaría y Facturación no pueden tener «Planes y pagos».";
+const STAFF_NO_BILLING_ROLES: ReadonlySet<Role> = new Set<Role>(["ASSISTANT", "BILLING"]);
+type MemberGrants = { grantSettings: boolean; grantBilling: boolean };
+const ROLE_ENTRY_GRANTS: Partial<Record<Role, MemberGrants>> = {
+  ADMIN: { grantSettings: true, grantBilling: true },
+};
+
+/** Puro: las delegaciones con las que queda alguien que entra a `role` y tenía `current`. */
+export function grantsOnEnterRole(role: Role, current: MemberGrants): MemberGrants {
+  const entry = ROLE_ENTRY_GRANTS[role];
+  if (entry) return { ...entry };
+  if (STAFF_NO_BILLING_ROLES.has(role)) return { grantSettings: current.grantSettings, grantBilling: false };
+  return { grantSettings: current.grantSettings, grantBilling: current.grantBilling };
+}
+
+/**
  * BO-Z (A2, default seguro que Martin confirma): soporte gestionaba el equipo con los límites del ADMIN, y eso
  * incluía invitar/ascender/reactivar a PRACTITIONER o ADMIN. Un superadmin como soporte podía así invitarse a sí
  * mismo (u otra cuenta suya) con un rol clínico y darse acceso a la historia clínica, que soporte no tiene. Con
@@ -886,11 +913,14 @@ export async function changeMemberRoleInTx(
       return fail(`No se puede cambiar el rol: ${activePlansCopy(activePlans)}. Cambiá el responsable de esos planes primero.`);
     }
   }
+  // T3 (C-AS1): las delegaciones del rol destino (ADMIN trae las dos; Secretaria/Facturación pierden «Planes y pagos»).
+  const nextGrants = grantsOnEnterRole(nextRole, m);
+  const grantsChanged = nextGrants.grantSettings !== m.grantSettings || nextGrants.grantBilling !== m.grantBilling;
   // CAS sobre el rol leído: si otro cambio ganó en el medio, no se pisa. Tirar (no devolver) revierte el
   // Practitioner/agenda que se haya creado arriba en esta misma tx.
   const upd = await tx.membership.updateMany({
     where: { id: m.id, tenantId, role: m.role, clinical: m.clinical },
-    data: { role: nextRole, clinical: nextClinical },
+    data: { role: nextRole, clinical: nextClinical, ...(grantsChanged ? nextGrants : {}) },
   });
   if (upd.count !== 1) throw new RoleChangeRaceError();
   let demoted: number | undefined;
@@ -898,7 +928,8 @@ export async function changeMemberRoleInTx(
     // §20.17 (el Administrador/a nunca atiende): el Titular anterior queda con «Configuración» delegada y, según
     // atendía, como PROFESIONAL (conserva agenda, turnos y pacientes; el mismo criterio que la migración M8b para los
     // ADMIN con agenda) o como ADMIN sin agenda. Antes quedaba ADMIN a secas y seguía atendiendo. Mismo tipo de
-    // lugar que tenía, así que el cupo no cambia.
+    // lugar que tenía, así que el cupo no cambia. T3 (C-AS1, decisión 2): el que queda ADMIN trae también «Planes y
+    // pagos», como cualquier ADMIN nuevo (`ROLE_ENTRY_GRANTS`); el que queda Profesional, solo «Configuración».
     const demote = async (where: Prisma.MembershipWhereInput) =>
       (
         await tx.membership.updateMany({
@@ -909,7 +940,7 @@ export async function changeMemberRoleInTx(
       (
         await tx.membership.updateMany({
           where: { ...where, role: "OWNER", clinical: false },
-          data: { role: "ADMIN", grantSettings: true },
+          data: { role: "ADMIN", ...grantsOnEnterRole("ADMIN", { grantSettings: true, grantBilling: false }) },
         })
       ).count;
     if (ctx.via === "tenant") {
@@ -934,6 +965,9 @@ export async function changeMemberRoleInTx(
       from: m.role,
       role: nextRole,
       ...(nextClinical !== m.clinical ? { clinical: nextClinical } : {}),
+      // T3 (C-AS1): el cambio de delegaciones que trae el rol queda en el MISMO evento (el backfill de M12 y el
+      // historial del miembro lo leen de acá; no es un `membership.grants.change`: no lo decidió el Titular).
+      ...(grantsChanged ? { grants: nextGrants } : {}),
       ...(practitionerCreated ? { agendaProvisioned: true } : {}),
       ...(demoted !== undefined ? { userId: m.userId, previousOwnersDemoted: demoted } : {}),
     },
@@ -1091,6 +1125,9 @@ export async function setMemberClinicalInTx(
  * Solo quien actúa como dueño (el Titular o el superadmin): delegar es del Titular, y un ADMIN con «Configuración» no
  * se da «Planes y pagos» a sí mismo ni a otro. Nunca sobre la membresía del Titular (ya tiene todo; marcarlo no
  * significaría nada y desmarcarlo parecería que se lo saca). Sin step-up acá: lo pide la action (PL-D11).
+ * T3 (C-AS1, decisión 3): «Planes y pagos» a la Secretaria o a Facturación se rechaza (el corte de staff se la
+ * negaría igual; guardarla dejaría un permiso que no rige). El CAS mira el rol leído: si en el medio lo pasaron a
+ * Secretaria, no se le escribe «Planes y pagos».
  */
 export async function setMemberGrantsInTx(
   tx: DbClient,
@@ -1102,10 +1139,12 @@ export async function setMemberGrantsInTx(
   const m = await findMemberInTx(tx, tenantId, i.membershipId);
   if (!m) return fail("Miembro no encontrado.");
   if (m.role === "OWNER") return fail("El titular ya tiene todos los permisos.");
+  if (i.grantBilling && STAFF_NO_BILLING_ROLES.has(m.role)) return fail(STAFF_BILLING_GRANT_MESSAGE);
   if (m.grantSettings === i.grantSettings && m.grantBilling === i.grantBilling) return { ok: true, data: undefined };
-  // CAS sobre lo leído y el rol: si en el medio lo hicieron Titular (transferencia), no se escribe sobre el OWNER.
+  // CAS sobre lo leído y el rol (el leído, que no es OWNER): si en el medio lo hicieron Titular (transferencia) o lo
+  // pasaron a Secretaria/Facturación, no se escribe.
   const upd = await tx.membership.updateMany({
-    where: { id: m.id, tenantId, role: { not: "OWNER" }, grantSettings: m.grantSettings, grantBilling: m.grantBilling },
+    where: { id: m.id, tenantId, role: m.role, grantSettings: m.grantSettings, grantBilling: m.grantBilling },
     data: { grantSettings: i.grantSettings, grantBilling: i.grantBilling },
   });
   if (upd.count !== 1) throw new RoleChangeRaceError();

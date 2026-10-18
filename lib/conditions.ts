@@ -11,10 +11,12 @@
  * (editor de planes, S23).
  *
  * Auth model:
- *   - Any practitioner of the tenant can create / update / delete
- *     custom conditions (everything they create goes into the same
- *     consultorio pool — per the Sprint 17 brief "TODO lo que crea
- *     se va a una sola base de datos para el Consultorio").
+ *   - Everything goes into the same consultorio pool (Sprint 17 brief: "TODO lo que crea se va a una sola base de
+ *     datos para el Consultorio").
+ *   - T3 (C-AS1, plan §23.2): crear / editar / borrar exige `tenant.sensitive` (Titular, o Administrador/a o
+ *     Profesional con «Configuración»). Antes no había gate (solo el módulo): CUALQUIER miembro, Secretaria y
+ *     Facturación incluidas, editaba el catálogo de diagnósticos que usan los planes. El único llamador es la pestaña
+ *     «Diagnósticos» de Configuración; el editor de planes solo los lee. La lista sigue abierta (lectura compartida).
  *   - Global rows (tenantId == null) are read-only from the app.
  *   - EV0 (C-EV4): todo esto es del módulo `diagnostico` (un consultorio
  *     General no lo tiene). Las escrituras tiran `ForbiddenError` vía
@@ -27,7 +29,7 @@ import { z } from "zod";
 import { runWithRls } from "@/lib/rls";
 import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import { getActor } from "@/lib/session";
-import { requireModule } from "@/lib/authz";
+import { requireModule, requireTenantSensitive } from "@/lib/authz";
 import { modulesFor } from "@/lib/tenant-modules";
 import { tags as cacheTags } from "@/lib/cache-tags";
 import type { ActionResult } from "@/lib/validation";
@@ -45,6 +47,16 @@ export type CustomConditionRow = {
   createdAt: Date;
   updatedAt: Date;
 };
+
+/**
+ * Módulo ANTES que el permiso (un consultorio General recibe el Forbidden del módulo con cualquier actor, como
+ * siempre) y después `tenant.sensitive` (T3, C-AS1). Los dos tiran `ForbiddenError`, igual que el resto de
+ * Configuración.
+ */
+async function requireConditionsWriter() {
+  await requireModule("diagnostico");
+  return requireTenantSensitive();
+}
 
 function slugify(s: string): string {
   return s
@@ -105,7 +117,7 @@ async function createCustomConditionImpl(
 ): Promise<ActionResult<{ id: string; slug: string }>> {
   // Módulo antes que la validación: un consultorio sin `diagnostico` recibe
   // Forbidden con cualquier input.
-  const actor = await requireModule("diagnostico");
+  const actor = await requireConditionsWriter();
   const parsed = ConditionInput.safeParse(raw);
   if (!parsed.success) {
     return {
@@ -161,7 +173,7 @@ async function updateCustomConditionImpl(
   id: string,
   raw: Partial<z.input<typeof ConditionInput>>
 ): Promise<ActionResult> {
-  const actor = await requireModule("diagnostico");
+  const actor = await requireConditionsWriter();
   const owned = await runWithRls(actor.tenantId, (tx) => tx.condition.findFirst({
     where: { id, tenantId: actor.tenantId },
     select: { id: true },
@@ -205,7 +217,7 @@ export async function deleteCustomCondition(...args: Parameters<typeof deleteCus
 }
 
 async function deleteCustomConditionImpl(id: string): Promise<ActionResult> {
-  const actor = await requireModule("diagnostico");
+  const actor = await requireConditionsWriter();
   const owned = await runWithRls(actor.tenantId, (tx) => tx.condition.findFirst({
     where: { id, tenantId: actor.tenantId },
     select: { id: true, _count: { select: { diagnoses: true } } },

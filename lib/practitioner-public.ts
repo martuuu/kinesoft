@@ -8,8 +8,10 @@
  * prendió a los que ya existían para no cambiar lo que se veía). Un profesional aparece en el turnero solo con los
  * dos prendidos y ≥ 1 servicio PUBLIC (`publicPractitionerWhere` en `lib/public-booking.ts`).
  *
- * Authz: `tenant.admin` (el Titular o quien tenga «Configuración» delegada, `grantSettings`; soporte por
- * `SUPPORT_CAPS`) o el propio profesional sobre su ficha (decide si él toma turnos online). Otro profesional → 403.
+ * Authz: el propio profesional sobre su ficha (decide si él toma turnos online), o `tenant.sensitive` para el de
+ * otro (T3, C-AS1: el Titular, o un Administrador/a o Profesional con «Configuración»; soporte por `SUPPORT_CAPS`).
+ * Antes alcanzaba `tenant.admin`, y una Secretaria con «Configuración» prendía el turnero de cualquier profesional
+ * (decisión 3 del 19-oct: la Secretaria nunca toca el turnero online). Otro profesional → 403.
  * Es Configuración: `withSupportWritable` (soporte puede ayudar a prenderlo) y `withReadOnlyResult` (modo lectura →
  * su copy, no un error redactado). El cambio se audita en la MISMA tx del write (PL-A, `auditInTx`); sin cambio
  * real (mismo valor) no hay write ni audit.
@@ -29,7 +31,9 @@ import { withReadOnlyResult } from "@/lib/read-only-result";
 import { tags } from "@/lib/cache-tags";
 import type { ActionResult } from "@/lib/validation";
 
-const FORBIDDEN_MSG = "Solo el titular, quien tenga permiso de Configuración o el propio profesional pueden cambiar esto.";
+// T3 (C-AS1): la Secretaria con «Configuración» no pasa; «quien tenga permiso de Configuración» le prometía de más.
+const FORBIDDEN_MSG =
+  "Solo el titular, un administrador/a o profesional con «Configuración», o el propio profesional, pueden cambiar esto.";
 const NOT_FOUND = "Profesional no encontrado.";
 
 const Input = z.object({
@@ -62,7 +66,7 @@ async function setPractitionerPublicBookingImpl(
     const caps = await capabilitiesForActor(actor);
     // PL-Z a3#15: copy en el resultado, no un throw: el switch del turnero (Configuración y menú de perfil) muestra
     // `r.error`; un ForbiddenError llegaba redactado en prod («An error occurred…») y el switch quedaba mudo.
-    if (!caps.has("tenant.admin")) return { ok: false, error: FORBIDDEN_MSG };
+    if (!caps.has("tenant.sensitive")) return { ok: false, error: FORBIDDEN_MSG };
   }
   const res = await runWithRls(actor.tenantId, async (tx) => {
     // `where: { tenantId }` a mano: en prod la conexión es BYPASSRLS y es la única barrera (un id de otro

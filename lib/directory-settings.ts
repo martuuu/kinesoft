@@ -4,11 +4,12 @@
  * Directorio público desde Configuración (DIR-2b, contrato C-DIR8; DIR-D9, DIR-D19).
  *
  * - `setDirectoryListed` / `setPublicDescription`: el opt-in del consultorio y su descripción pública. Solo
- *   `tenant.admin` (el Titular o quien tenga «Configuración» delegada, `grantSettings`). **Soporte rechazado** con su
+ *   `tenant.sensitive` (T3, C-AS1: el Titular, o un Administrador/a o Profesional con «Configuración»; antes alcanzaba
+ *   `tenant.admin` y la Secretaria con «Configuración» publicaba el consultorio). **Soporte rechazado** con su
  *   copy (DIR-D9): publicar un consultorio en un directorio público es una decisión del consultorio, no algo con lo
  *   que soporte «ayuda»; por eso NO están en la allowlist de `lib/support-writable.ts` y además se cortan antes de
- *   abrir la tx (sin el corte, `SUPPORT_CAPS` trae `tenant.admin` y el error sería el genérico de solo lectura).
- * - `setPractitionerSpecialties`: especialidades del catálogo global de un profesional (≤ 5). `tenant.admin` o el
+ *   abrir la tx (sin el corte, `SUPPORT_CAPS` trae `tenant.sensitive` y el error sería el genérico de solo lectura).
+ * - `setPractitionerSpecialties`: especialidades del catálogo global de un profesional (≤ 5). `tenant.sensitive` o el
  *   propio profesional (como el switch del turnero, `lib/practitioner-public.ts`). Sin audit (C-DIR8: no es un dato
  *   sensible ni cambia quién ve qué).
  *
@@ -38,20 +39,22 @@ import {
 } from "@/lib/directory-constants";
 import type { ActionResult } from "@/lib/validation";
 
-const ADMIN_ONLY = "Solo el titular o quien tenga permiso de Configuración puede cambiar esto.";
+// T3 (C-AS1): mismo texto que el default de `requireTenantSensitive` (lib/authz.ts); acá vuelve en el resultado (el
+// switch muestra `r.error`; un ForbiddenError llega redactado en prod).
+const ADMIN_ONLY = "Solo el titular, o un administrador/a o profesional con «Configuración», puede cambiar esto.";
 const SPECIALTIES_FORBIDDEN =
-  "Solo el titular, quien tenga permiso de Configuración o el propio profesional pueden cambiar las especialidades.";
+  "Solo el titular, un administrador/a o profesional con «Configuración», o el propio profesional, pueden cambiar las especialidades.";
 const NOT_FOUND_TENANT = "No encontramos el consultorio. Recargá la página.";
 const NOT_FOUND_PRACTITIONER = "Profesional no encontrado.";
 const BAD_SPECIALTY = "Alguna de las especialidades elegidas no existe o ya no está disponible.";
 const TOO_MANY = `Podés elegir hasta ${MAX_PRACTITIONER_SPECIALTIES} especialidades.`;
 
-/** Corte común del opt-in: soporte primero (copy propio), después `tenant.admin`. */
+/** Corte común del opt-in: soporte primero (copy propio), después `tenant.sensitive` (T3, C-AS1). */
 async function requireDirectoryAdmin() {
   const actor = await getActor();
   if (actor.support) return { ok: false as const, error: DIRECTORY_SUPPORT_DENIED };
   const caps = await capabilitiesForActor(actor);
-  if (!caps.has("tenant.admin")) return { ok: false as const, error: ADMIN_ONLY };
+  if (!caps.has("tenant.sensitive")) return { ok: false as const, error: ADMIN_ONLY };
   return { ok: true as const, actor };
 }
 
@@ -190,10 +193,11 @@ async function setPractitionerSpecialtiesImpl(
     return { ok: false, error: tooMany ? TOO_MANY : "Datos inválidos." };
   }
   const input = parsed.data;
-  // El propio profesional sin query; el resto necesita `tenant.admin`.
+  // El propio profesional sin query; el de otro necesita `tenant.sensitive` (T3, C-AS1: lo que se publica en el
+  // directorio es lo delicado; la Secretaria con «Configuración» no lo toca).
   if (!isActorPractitioner(actor, input.practitionerId)) {
     const caps = await capabilitiesForActor(actor);
-    if (!caps.has("tenant.admin")) return { ok: false, error: SPECIALTIES_FORBIDDEN };
+    if (!caps.has("tenant.sensitive")) return { ok: false, error: SPECIALTIES_FORBIDDEN };
   }
 
   const res = await runWithRls(actor.tenantId, async (tx) => {

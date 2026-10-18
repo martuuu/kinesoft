@@ -369,7 +369,7 @@ describe.skipIf(!RUN)("[BO2-B → PL-1c] cupos del plan por tipo (PL-D3)", () =>
     await expect(join(`nadie-${uniqueSuffix()}`, "PRACTITIONER")).resolves.toBeUndefined();
   });
 
-  it("[§20.17] invitar a un ADMIN: entra SIN atender (sin Practitioner) y con «Configuración»; «atiende» se frena", async () => {
+  it("[§20.17] invitar a un ADMIN: entra SIN atender (sin Practitioner) y con «Configuración» y «Planes y pagos»; «atiende» se frena", async () => {
     const t = await tenant("CLINICA");
     const r = await invite("ADMIN", { clinical: true });
     expect(r).toEqual({ ok: false, error: INVITE_ADMIN_CLINICAL_MESSAGE });
@@ -398,7 +398,8 @@ describe.skipIf(!RUN)("[BO2-B → PL-1c] cupos del plan por tipo (PL-D3)", () =>
       role: "ADMIN",
       clinical: false,
       grantSettings: true,
-      grantBilling: false,
+      // [AS-1t] (T3, decisión 2 del 19-oct): el Administrador/a entra también con «Planes y pagos».
+      grantBilling: true,
     });
     expect(await db.practitioner.count({ where: { tenantId: t.tenantId, userId: a.userId } })).toBe(0);
   });
@@ -517,10 +518,14 @@ describe.skipIf(!RUN)("[BO2-B → PL-1c] cupos del plan por tipo (PL-D3)", () =>
       expect(
         (await runTeamTx(octx, (tx) => setMemberGrantsInTx(tx, octx, { membershipId: own.id, grantSettings: false, grantBilling: false }))).ok
       ).toBe(false);
+      // [AS-1t] (T3): «Planes y pagos» a la Secretaria se rechaza; «Configuración» sí se delega.
       expect(
-        await runTeamTx(octx, (tx) => setMemberGrantsInTx(tx, octx, { membershipId: sec.id, grantSettings: false, grantBilling: true }))
+        (await runTeamTx(octx, (tx) => setMemberGrantsInTx(tx, octx, { membershipId: sec.id, grantSettings: false, grantBilling: true }))).ok
+      ).toBe(false);
+      expect(
+        await runTeamTx(octx, (tx) => setMemberGrantsInTx(tx, octx, { membershipId: sec.id, grantSettings: true, grantBilling: false }))
       ).toEqual({ ok: true, data: undefined });
-      expect(await db.membership.findUniqueOrThrow({ where: { id: sec.id } })).toMatchObject({ grantSettings: false, grantBilling: true });
+      expect(await db.membership.findUniqueOrThrow({ where: { id: sec.id } })).toMatchObject({ grantSettings: true, grantBilling: false });
       expect(await db.auditEvent.count({ where: { tenantId: t.tenantId, action: "membership.grants.change" } })).toBe(1);
     });
   });

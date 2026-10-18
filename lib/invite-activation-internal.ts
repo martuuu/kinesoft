@@ -23,7 +23,13 @@ import { welcomeEmail } from "@/lib/email/templates";
 import { tags } from "@/lib/cache-tags";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
-import { checkSeatForJoinInTx, invitationClinical, SeatLimitError, SEAT_LIMIT_JOIN_MESSAGE } from "@/lib/team-internal";
+import {
+  checkSeatForJoinInTx,
+  grantsOnEnterRole,
+  invitationClinical,
+  SeatLimitError,
+  SEAT_LIMIT_JOIN_MESSAGE,
+} from "@/lib/team-internal";
 
 /**
  * Núcleo de la activación de una cuenta desde `/invite/<token>` y de la unión al consultorio (IAM-2b).
@@ -237,10 +243,12 @@ export async function joinTenantInTx(
   });
   const reactivated = !!prior?.disabledAt;
   // PL-1c (PL-D5): un ADMIN entra con «Configuración» delegada (la invitación de ADMIN viene tildada; es lo que
-  // hacía un ADMIN antes de PL). «Planes y pagos» nunca viene por invitación: la delega el Titular. Al re-entrar
-  // (membresía suspendida o deshabilitada) los permisos se recalculan desde la invitación nueva: quien invitó decide
-  // el rol, no hereda delegaciones de antes; y se limpia el motivo de la deshabilitación.
-  const grants = { grantSettings: inv.role === "ADMIN", grantBilling: false };
+  // hacía un ADMIN antes de PL). T3 (C-AS1, decisión 2 del 19-oct): y con «Planes y pagos» (el Administrador/a cambia
+  // el plan y ve la facturación por defecto; el Titular se lo puede sacar). Antes «Planes y pagos» nunca venía por
+  // invitación. El resto de los roles entra sin delegaciones. Al re-entrar (membresía suspendida o deshabilitada) los
+  // permisos se recalculan desde la invitación nueva: quien invitó decide el rol, no hereda delegaciones de antes; y
+  // se limpia el motivo de la deshabilitación. La regla por rol vive en `grantsOnEnterRole` (lib/team-internal.ts).
+  const grants = grantsOnEnterRole(inv.role, { grantSettings: false, grantBilling: false });
   await tx.membership.upsert({
     where: { userId_tenantId: { userId, tenantId: inv.tenantId } },
     create: { userId, tenantId: inv.tenantId, role: inv.role, clinical, ...grants, acceptedAt: now },

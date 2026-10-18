@@ -90,7 +90,8 @@ const ROLE_EQ_ALLOW: Record<string, number> = {
   // qué puede el actor. Eran 11 en HEAD 14eb013. Integrador PL-1: 19 en team-internal (§20.17: «¿Atiende?» solo
   // del Titular y el ADMIN legado que se apaga, también rol destino) y 2 en saas-plan-change-internal (el Titular
   // nunca es candidato a deshabilitar, C-PL4; también rol destino).
-  "lib/invite-activation-internal.ts": 1,
+  // T3-1t: 0 (era 1): el ADMIN invitado sale de `grantsOnEnterRole` (lib/team-internal.ts, un mapa por rol).
+  "lib/invite-activation-internal.ts": 0,
   "lib/saas-plan-change-internal.ts": 2,
   "lib/team-internal.ts": 19,
   "lib/tenant-export-logic.ts": 1,

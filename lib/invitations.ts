@@ -38,8 +38,8 @@ import { revalidatePath, revalidateTag } from "next/cache";
 import type { Role } from "@prisma/client";
 import { z } from "zod";
 import { runWithRls } from "@/lib/rls";
-import { getActor, ForbiddenError, writableError, type Actor } from "@/lib/session";
-import { capabilitiesForActor, requireAccountOwner } from "@/lib/authz";
+import { getActor, writableError, type Actor } from "@/lib/session";
+import { capabilitiesForActor, requireAccountOwner, requireTenantSensitive } from "@/lib/authz";
 import { requireStepUp } from "@/lib/two-factor-step-up";
 import { withSupportWritable } from "@/lib/support-writable";
 import { withReadOnlyResult } from "@/lib/read-only-result";
@@ -73,8 +73,12 @@ import type {
 import { listPendingInvitationsInTx, listTeamMembersInTx } from "@/lib/invitations-read";
 
 /**
- * Quién gestiona el equipo: quien tiene `tenant.admin` (IAM-D3 → PL-3b). Antes era «OWNER o ADMIN» por ROL; desde
- * PL-1b (C-PL5) «Configuración» es una delegación (`grantSettings`) que el Titular da a CUALQUIER rol y le saca a un
+ * Quién gestiona el equipo: quien tiene `tenant.sensitive` (IAM-D3 → PL-3b → T3). T3 (C-AS1, decisión 3 del 19-oct):
+ * la Secretaria (y Facturación) con «Configuración» ya no gestiona el equipo: con `tenant.admin` invitaba gente y le
+ * cambiaba el rol a cualquiera que no atendiera. El Titular, el Administrador/a o el Profesional con «Configuración»
+ * sí (decisión 4). Lo que sigue es la historia de PL-3b (donde dice `tenant.admin`, hoy rige `tenant.sensitive`).
+ *
+ * Antes era «OWNER o ADMIN» por ROL; desde PL-1b (C-PL5) «Configuración» es una delegación (`grantSettings`) que el Titular da a CUALQUIER rol y le saca a un
  * ADMIN, así que el rol solo ya no decía quién configura: `/configuracion` deja entrar a todo `tenant.admin` y su
  * página llama `listTeamMembers()`, que a un Profesional con «Configuración» le tiraba Forbidden (500 de la página),
  * mientras un ADMIN al que le sacaron la delegación seguía gestionando el equipo por las actions.
@@ -85,13 +89,13 @@ import { listPendingInvitationsInTx, listTeamMembersInTx } from "@/lib/invitatio
 async function requireTeamManager(): Promise<{ actor: Actor; role: "OWNER" | "ADMIN" }> {
   const actor = await getActor();
   // BO2-E (decisión 3): soporte gestiona usuarios/equipo desde Configuración con los límites del ADMIN (no toca al
-  // OWNER, no lo transfiere, no recibe la URL de la invitación). `SUPPORT_CAPS` tiene `tenant.admin` y nunca
+  // OWNER, no lo transfiere, no recibe la URL de la invitación). `SUPPORT_CAPS` tiene `tenant.sensitive` y nunca
   // `account.*`. La escritura igual exige `withSupportWritable` en cada action.
   if (actor.support) return { actor, role: "ADMIN" as const };
+  // T3 (C-AS1): `requireTenantSensitive` con su copy default (la misma barrera que el turnero y «quién ve la HC»).
+  // Devuelve el Actor ya resuelto (cacheado por request) y las capacidades salen de la misma caché.
+  await requireTenantSensitive();
   const caps = await capabilitiesForActor(actor);
-  if (!caps.has("tenant.admin")) {
-    throw new ForbiddenError("Solo el titular o quien tenga permiso de Configuración pueden gestionar el equipo.");
-  }
   return { actor, role: caps.has("account.owner") ? "OWNER" : "ADMIN" };
 }
 

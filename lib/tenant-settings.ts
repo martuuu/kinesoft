@@ -4,6 +4,11 @@
  * Tenant-level settings — OWNER/ADMIN only (`requireTenantAdmin`, lib/authz.ts;
  * B1.7 sacó de acá la copia local del chequeo de rol).
  *
+ * T3 (C-AS1, decisiones 3 y 4 del 19-oct): el horario y la granularidad siguen en `tenant.admin` (la Secretaria con
+ * «Configuración» los maneja); el turnero, «quién ve la HC» y los datos del consultorio pasan a
+ * `requireTenantSensitive` (Titular, o Administrador/a o Profesional con «Configuración»; nunca la Secretaria ni
+ * Facturación). Antes una Secretaria con «Configuración» abría la HC de todo el equipo con un switch.
+ *
  * Settings: datos del consultorio, horario, `sharedPatientView` y (EV0, EV-K)
  * el switch del turnero público. Las "funciones del consultorio" (entitlements:
  * vertical, plan, turnero) NO se escriben acá con `tx.tenant.update`: pasan por
@@ -16,7 +21,7 @@ import { z } from "zod";
 import type { SaasPlan, TenantPlan, TenantVertical } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
-import { requireTenantAdmin } from "@/lib/authz";
+import { requireTenantAdmin, requireTenantSensitive } from "@/lib/authz";
 import { withSupportWritable } from "@/lib/support-writable";
 import { withReadOnlyResult } from "@/lib/read-only-result";
 import { auditInTx } from "@/lib/audit";
@@ -153,7 +158,8 @@ export async function setSharedPatientView(...args: Parameters<typeof setSharedP
 }
 
 async function setSharedPatientViewImpl(value: boolean): Promise<ActionResult> {
-  const actor = await requireTenantAdmin();
+  // T3 (C-AS1): decide quién ve la HC de quién: lo delicado, no lo operativo.
+  const actor = await requireTenantSensitive();
   // PL-A2 (§20.5.9): abre o cierra el acceso del equipo a pacientes ajenos (seguridad) →
   // audit en la misma tx: el evento existe si y solo si el cambio existe.
   await runWithRls(actor.tenantId, async (tx) => {
@@ -192,7 +198,8 @@ export async function setPublicBookingEnabled(...args: Parameters<typeof setPubl
 }
 
 async function setPublicBookingEnabledImpl(enabled: boolean): Promise<ActionResult> {
-  const actor = await requireTenantAdmin();
+  // T3 (C-AS1, decisión 3): el turnero online abre la agenda al público; la Secretaria nunca lo prende.
+  const actor = await requireTenantSensitive();
   const parsed = publicBookingSchema.safeParse(enabled);
   if (!parsed.success) return { ok: false, error: "Valor inválido para el turnero público." };
 
@@ -239,7 +246,8 @@ async function updateTenantBasicsImpl(input: {
   taxId?: string | null;
   expectedUpdatedAt?: string;
 }): Promise<ActionResult> {
-  const actor = await requireTenantAdmin();
+  // T3 (C-AS1): nombre, razón social y CUIT salen en comprobantes y en el turnero: lo delicado.
+  const actor = await requireTenantSensitive();
   const parsed = TenantBasicsInput.safeParse(input);
   if (!parsed.success) {
     const fieldErrors: Record<string, string[]> = {};
