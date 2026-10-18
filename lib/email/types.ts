@@ -39,7 +39,10 @@ export type EmailKind =
   | "support_message_platform" // a PLATFORM_INBOX_EMAIL: mensaje nuevo de un consultorio
   | "support_reply_tenant" // al creador del hilo: Plataforma respondió
   | "lead_received" // a PLATFORM_INBOX_EMAIL: consulta nueva desde la landing
-  | "lead_reply"; // al lead: respuesta de Plataforma (sin respuesta automática, PL-D15)
+  | "lead_reply" // al lead: respuesta de Plataforma (sin respuesta automática, PL-D15)
+  // FC-2d (T4, §24.5): al paciente con portal vinculado, «tenés un documento nuevo». SIN título ni contenido clínico:
+  // el mail lo puede leer cualquiera con acceso al buzón; lo clínico se ve solo dentro del portal, con sesión.
+  | "portal_document";
 
 /**
  * Por dónde salió (o no) un mail:

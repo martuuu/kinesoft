@@ -690,3 +690,35 @@ export function tenantExportRequestEmail(p: { tenantName: string; url: string })
     ],
   });
 }
+
+// ── Documento compartido con el paciente (FC-2d, T4 §24.5, C-FC6) ─────────────────────────────────────────────
+
+/**
+ * FC-2d: aviso al paciente de que tiene un documento nuevo (o actualizado) en su portal. Decisión 4 de Martin (§24.1):
+ * **sin datos clínicos**. Ni el título de la ficha (puede ser «Lumbalgia» o «Post quirúrgico de LCA»), ni la fecha de
+ * la atención, ni el profesional: el mail lo lee cualquiera con acceso al buzón (una casilla compartida en la familia,
+ * el celular desbloqueado) y viaja por proveedores de terceros. Lo clínico se ve solo adentro del portal, con sesión
+ * verificada. La firma no recibe nada clínico a propósito: así un cambio futuro no puede colarlo por descuido.
+ *
+ * `replaced` = se volvió a compartir una ficha ya compartida (el documento viejo quedó `REPLACED`): otro asunto, para
+ * que el paciente no crea que es un documento distinto.
+ */
+export function portalDocumentEmail(p: { tenantName: string; url: string; replaced: boolean }): RenderedEmail {
+  const tenant = plain(p.tenantName);
+  const lead = `${tenant} compartió un documento con vos.`;
+  const leadHtml = `${strong(tenant)} compartió un documento con vos.`;
+  const second = "Lo podés ver y descargar desde tu portal de paciente.";
+  return compose({
+    subject: p.replaced ? `${tenant} actualizó un documento en tu portal` : `Tenés un documento nuevo de ${tenant}`,
+    preheader: "Entrá a tu portal de paciente para verlo.",
+    context: tenant,
+    title: p.replaced ? "Documento actualizado" : "Documento nuevo",
+    paragraphs: [lead, second],
+    htmlParagraphs: [leadHtml, escapeHtml(second)],
+    ctas: [{ label: "Ver mis documentos", url: p.url }],
+    footer: [
+      "Por tu privacidad, este mail no incluye el contenido: entrá a tu portal para verlo.",
+      `Te llegó este mail porque tenés un portal de paciente en ${tenant}.`,
+    ],
+  });
+}
