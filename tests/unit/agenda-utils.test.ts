@@ -6,6 +6,8 @@ import {
   slotLabel,
   slotOf,
   coveredSlots,
+  agendaGridZoom,
+  zoomChoicePatch,
 } from "@/components/agenda/agenda-utils";
 
 /** 13:30 AR → minutes-from-midnight. */
@@ -99,5 +101,46 @@ describe("billingLine", () => {
     const line = billingLine({ serviceName: "Consulta", obraSocial: "OSDE", copagoCents: 3000 });
     expect(line).toContain("OSDE");
     expect(line).toContain("Consulta");
+  });
+});
+
+// [AS-2g] T3d-2g (plan §23.8): filas de 15' en Día y Semana. Antes `=== 30 ? 30 : 60` leía un 15 como 60 (sin
+// error): el consultorio que eligió 15 seguía viendo filas de una hora.
+describe("[AS-2g] filas de 15'", () => {
+  const slots15 = buildSlots(8, 19, 15);
+
+  it("buildSlots a 15': 4 filas por hora (8→19 = 44)", () => {
+    expect(buildSlots(9, 10, 15)).toEqual([min(9), min(9, 15), min(9, 30), min(9, 45)]);
+    expect(slots15).toHaveLength(44);
+  });
+
+  it("granularidad desconocida = 60 (normalizeSlotMinutes), igual que antes", () => {
+    expect(buildSlots(8, 10, 45)).toEqual([min(8), min(9)]);
+    expect(slotOf(min(9, 50), buildSlots(8, 19, 45), 45).slot).toBe(min(9));
+  });
+
+  it("turnos en :15 y :45 caen en su fila", () => {
+    expect(slotOf(min(9, 15), slots15, 15)).toEqual({ slot: min(9, 15), outOfRange: null });
+    expect(slotOf(min(9, 45), slots15, 15)).toEqual({ slot: min(9, 45), outOfRange: null });
+    expect(slotOf(min(9, 59), slots15, 15).slot).toBe(min(9, 45));
+  });
+
+  it("coveredSlots a 15': un turno de 45' sigue en las 2 filas siguientes", () => {
+    expect(coveredSlots(min(9), 45, slots15, 15)).toEqual([min(9, 15), min(9, 30)]);
+  });
+
+  it("agendaGridZoom: Día/Semana siguen al consultorio salvo que el usuario eligió; columnas siguen el zoom", () => {
+    const def = { zoom: 30 as const };
+    expect(agendaGridZoom("timeline", def, 15)).toBe(15);
+    expect(agendaGridZoom("week", def, 60)).toBe(60);
+    expect(agendaGridZoom("timeline", { zoom: 15, zoomSet: true as const }, 60)).toBe(15);
+    expect(agendaGridZoom("week", { zoom: 60, zoomSet: true as const }, 15)).toBe(60);
+    expect(agendaGridZoom("practitioner", def, 15)).toBe(30);
+    expect(agendaGridZoom("room", { zoom: 60 }, 15)).toBe(60);
+    expect(agendaGridZoom("list", def, 15)).toBe(15);
+  });
+
+  it("zoomChoicePatch: elegir un zoom lo marca como elegido", () => {
+    expect(zoomChoicePatch(15)).toEqual({ zoom: 15, zoomSet: true });
   });
 });

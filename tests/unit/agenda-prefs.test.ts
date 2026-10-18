@@ -465,3 +465,28 @@ describe("[RX-0] tweaks-context: receptionLayout", () => {
     expect(applied).toEqual([]);
   });
 });
+
+// [AS-2g] T3d-2g (plan §23.8): `zoomSet` marca que el usuario ELIGIÓ el zoom. Sin él, Día y Semana siguen la grilla
+// del consultorio (el default 30 no le cambia la grilla a nadie). Solo se conserva si es `true`.
+describe("[AS-2g] zoomSet", () => {
+  it("lectura: se conserva solo si es true; ausente, false o basura → se omite", () => {
+    expect(sanitizeAgendaViewPrefs({ zoom: 15, zoomSet: true })).toEqual({ ...DEFAULT_AGENDA_VIEW_PREFS, zoom: 15, zoomSet: true });
+    for (const v of [false, "true", 1, null]) {
+      expect(sanitizeAgendaViewPrefs({ zoom: 15, zoomSet: v })).not.toHaveProperty("zoomSet");
+    }
+    expect(sanitizeAgendaViewPrefs({})).toEqual(DEFAULT_AGENDA_VIEW_PREFS);
+  });
+
+  it("escritura: acepta zoomSet: true y rechaza otro valor", () => {
+    expect(AgendaViewPrefsPatchSchema.parse({ zoom: 15, zoomSet: true })).toEqual({ zoom: 15, zoomSet: true });
+    for (const bad of [{ zoomSet: false }, { zoomSet: "true" }]) {
+      expect(AgendaViewPrefsPatchSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it("merge: elegir el zoom lo deja elegido; otro patch no lo borra", () => {
+    const set = mergeAgendaViewPrefs(DEFAULT_AGENDA_VIEW_PREFS, AgendaViewPrefsPatchSchema.parse({ zoom: 60, zoomSet: true }));
+    expect(set).toMatchObject({ zoom: 60, zoomSet: true });
+    expect(mergeAgendaViewPrefs(set, AgendaViewPrefsPatchSchema.parse({ density: "compact" })).zoomSet).toBe(true);
+  });
+});

@@ -15,7 +15,11 @@ import { anyHighlightMatch, type AgendaHighlight } from "@/lib/agenda-highlight"
 import { PractitionerBadge } from "../grid/practitioner-badge";
 import { PlanMarks, WaitingDot, bookingStatusTone, planLooseSplit, planLooseSplitText, waitingHostProps } from "../grid/booking-card";
 import { BLOCKED_STRIPES } from "../grid/unavailable-overlay";
+import { normalizeSlotMinutes, type AgendaSlotMinutes } from "@/lib/tenant-settings-constants";
 import styles from "./views.module.css";
+
+/** [AS-2g] Alto de fila de la Semana por minutos de fila (plan §23.8). 60/30 son los de antes de T3. */
+const WEEK_ROW_PX: Readonly<Record<AgendaSlotMinutes, number>> = { 60: 50, 30: 34, 15: 24 };
 
 /** Profesional visible con sus iniciales (orden de columnas/chips). */
 type WeekPractitioner = { id: string; initials: string; name: string };
@@ -256,15 +260,15 @@ export function WeekGridView({
     () => (practitioners && practitioners.length > 1 ? new Map(practitioners.map((p) => [p.id, p])) : null),
     [practitioners]
   );
-  // Same slot grid as the day view (60 or 30 minutes per row). Half-hour rows
-  // double the row count, so they get a shorter height to keep the week from
-  // growing twice as tall.
-  const slotMinutes = businessHours.slotMinutes === 30 ? 30 : 60;
+  // Same slot grid as the day view (60, 30 or 15 minutes per row; the caller already resolved the user's row).
+  // Sub-hour rows multiply the row count, so they get a shorter height to keep the week from growing 2-4× as tall.
+  // [AS-2g] `normalizeSlotMinutes` (desconocido = 60) en vez de `=== 30 ? 30 : 60`, que leía un 15 como 60.
+  const slotMinutes = normalizeSlotMinutes(businessHours.slotMinutes);
   const SLOTS = useMemo(
     () => buildSlots(businessHours.start, businessHours.end, slotMinutes),
     [businessHours.start, businessHours.end, slotMinutes]
   );
-  const ROW = slotMinutes === 30 ? 34 : 50;
+  const ROW = WEEK_ROW_PX[slotMinutes];
 
   // Which weekday columns to render (0=Mon … 6=Sun). Mon-Fri always show;
   // Saturday/Sunday are per-user opt-in. `colOf` maps a day index to its
@@ -374,12 +378,14 @@ export function WeekGridView({
                 gridColumn: 1,
                 gridRow: i + 1,
                 fontSize: 10,
-                // The :30 labels are muted so the hour still anchors the eye.
+                // The :30 labels are muted so the hour still anchors the eye. [AS-2g] A 15' (filas de 24 px) la hora
+                // va en negrita y las :15/:45 no llevan etiqueta: cuatro por hora no se leían.
+                fontWeight: slotMinutes === 15 && s % 60 === 0 ? 600 : undefined,
                 color: s % 60 === 0 ? "var(--navy-300)" : "rgba(15,30,51,0.28)",
                 paddingTop: 4,
               }}
             >
-              {slotLabel(s)}
+              {slotMinutes === 15 && s % 30 !== 0 ? null : slotLabel(s)}
             </div>
           ))}
           {SLOTS.map((slot, i) =>

@@ -95,7 +95,15 @@ import {
 import type { DayLockState } from "@/lib/availability/types";
 import { sameHighlight, toggleHighlight, type AgendaHighlight } from "@/lib/agenda-highlight";
 import type { Discipline } from "@/lib/plans-constants";
-import { expandPlanFields, serviceDisciplineMap, toBookingDTO, withArchivedRooms, type BookingDTO } from "./agenda-utils";
+import {
+  agendaGridZoom,
+  expandPlanFields,
+  serviceDisciplineMap,
+  toBookingDTO,
+  withArchivedRooms,
+  zoomChoicePatch,
+  type BookingDTO,
+} from "./agenda-utils";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { AgendaToolbar } from "./agenda-toolbar";
 import { AGENDA_MODE_OPTIONS, ModeToggle } from "./mode-toggle";
@@ -910,8 +918,15 @@ export function AgendaClient(props: Props) {
     : null;
 
   // ── Grilla: ventana, franjas y bloqueos ────────────────────────────────────
-  const hours = props.businessHours ?? AGENDA_HOURS_FALLBACK;
-  const rowStep = hours.slotMinutes === 30 ? 30 : 60;
+  const tenantHours = props.businessHours ?? AGENDA_HOURS_FALLBACK;
+  // [AS-2g] Filas de Día/Semana: `zoomSet ? zoom : agendaSlotMinutes` (plan §23.8; antes `=== 30 ? 30 : 60`, que
+  // leía un 15 como 60). Las vistas reciben la ventana con la fila ya resuelta, así las filas rayadas
+  // (`blockedRowsOf`) y las que dibujan Día/Semana son las mismas.
+  const rowStep = agendaGridZoom("timeline", prefs, tenantHours.slotMinutes);
+  const hours = useMemo(
+    () => ({ start: tenantHours.start, end: tenantHours.end, slotMinutes: rowStep }),
+    [tenantHours.start, tenantHours.end, rowStep]
+  );
   const tenantWindow: MinuteWindow = useMemo(
     () => availability?.tenantHours ?? { startMin: hours.start * 60, endMin: hours.end * 60 },
     [availability?.tenantHours, hours.start, hours.end]
@@ -1201,8 +1216,10 @@ export function AgendaClient(props: Props) {
             {liveIndicator}
           </>
         }
-        zoom={view === "practitioner" || view === "room" ? prefs.zoom : null}
-        onZoomChange={(zoom) => persistPrefs({ zoom })}
+        // [AS-2g] La «Franja» se ve en todos los modos (antes solo Por profesional/sala) y marca la de la vista:
+        // en Día/Semana, la del consultorio hasta que el usuario elige una (`zoomSet`, que escribe esta elección).
+        zoom={agendaGridZoom(view, prefs, tenantHours.slotMinutes)}
+        onZoomChange={(zoom) => persistPrefs(zoomChoicePatch(zoom))}
         planScope={planScope}
         onPlanScopeChange={setPlanScope}
       />

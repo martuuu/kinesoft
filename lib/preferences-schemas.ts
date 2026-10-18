@@ -74,7 +74,10 @@ export function sanitizeAgendaViewPrefs(
   });
   // `roomId` fuera del schema de arriba: null/ausente/inválido = todas = se omite.
   const room = idSchema.safeParse("roomId" in o ? o.roomId : defaults.roomId);
-  return room.success ? { ...parsed, roomId: room.data } : parsed;
+  const out: AgendaViewPrefs = room.success ? { ...parsed, roomId: room.data } : parsed;
+  // [AS-2g] `zoomSet` solo si es `true` (cualquier otra cosa = no eligió = se omite, como `roomId`): un blob roto no
+  // puede cambiarle la grilla de Día/Semana a nadie.
+  return ("zoomSet" in o ? o.zoomSet : defaults.zoomSet) === true ? { ...out, zoomSet: true } : out;
 }
 
 /** Escritura: patch parcial, estricto (campos desconocidos o fuera de dominio → error). */
@@ -93,6 +96,8 @@ export const AgendaViewPrefsPatchSchema = z
     callAlert: alertModeSchema,
     salaGroupBy: salaGroupBySchema,
     receptionLayout: receptionLayoutSchema,
+    // [AS-2g] Lo manda el menú «Vista» al elegir un zoom; `false` no existe (sin elegir = ausente).
+    zoomSet: z.literal(true),
   })
   .partial()
   .strict();

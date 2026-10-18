@@ -16,6 +16,7 @@ import { BookingCard, WaitingPulseContext, type BookingCardSizing } from "../gri
 import { animatedPulseIds } from "@/lib/agenda-client-state";
 import { BLOCKED_STRIPES, LockIcon } from "../grid/unavailable-overlay";
 import { denseOverflow, overflowButtonText, visibleSlotWindow } from "@/lib/agenda-slot-helpers";
+import { normalizeSlotMinutes, type AgendaSlotMinutes } from "@/lib/tenant-settings-constants";
 import viewStyles from "./views.module.css";
 
 /** Iniciales por profesional (solo con más de uno en pantalla; ver `BookingCard`). */
@@ -31,7 +32,7 @@ function cardRoom(roomById: RoomNameMap | null, b: BookingDTO): { name: string }
 }
 
 /**
- * Day timeline — one row per SLOT (60 or 30 minutes, per `Tenant.agendaSlotMinutes`),
+ * Day timeline — one row per SLOT (60, 30 or 15 minutes: `Tenant.agendaSlotMinutes`, or the user's zoom if chosen),
  * cards laid out IN FLOW.
  *
  * Turnos are bucketed into the slot they start in and rendered in a wrapping
@@ -57,6 +58,9 @@ function cardRoom(roomById: RoomNameMap | null, b: BookingDTO): { name: string }
  * profesional): con 10+ turnos en una franja del gimnasio, lo resaltado no
  * puede quedar oculto. Sin resaltado el orden sigue siendo por hora.
  */
+/** [AS-2g] Alto mínimo de fila del Día por minutos de fila (plan §23.8). 60/30 son los de antes de T3. */
+const DAY_ROW_COMFORTABLE: Readonly<Record<AgendaSlotMinutes, number>> = { 60: 58, 30: 44, 15: 36 };
+const DAY_ROW_COMPACT: Readonly<Record<AgendaSlotMinutes, number>> = { 60: 44, 30: 34, 15: 28 };
 const MAX_PER_ROW = 5;
 const CARD_MIN = 186;
 const CARD_MAX = 280;
@@ -113,12 +117,13 @@ export function TimelineView({
    */
   roomById?: RoomNameMap | null;
 }) {
-  const { start, end, slotMinutes } = businessHours;
+  const { start, end } = businessHours;
+  // [AS-2g] 60/30/15 (`normalizeSlotMinutes`, desconocido = 60). El caller ya resolvió la fila efectiva del usuario.
+  const slotMinutes = normalizeSlotMinutes(businessHours.slotMinutes);
   const cardExtras = { practitionerById, now, roomById };
-  const half = slotMinutes === 30;
-  // Half-hour rows double the row count, so they get a shorter minimum height
-  // to keep the day scannable without doubling the page length.
-  const ROW_MIN = density === "compact" ? (half ? 34 : 44) : half ? 44 : 58;
+  // Sub-hour rows multiply the row count, so they get a shorter minimum height to keep the day scannable without
+  // doubling (or quadrupling) the page length. Bajo 768 la hora de la fila (`.slotLabel`) ya lleva la fila a 44.
+  const ROW_MIN = (density === "compact" ? DAY_ROW_COMPACT : DAY_ROW_COMFORTABLE)[slotMinutes];
 
   const { slots, bySlot, before, after, ongoing } = useMemo(() => {
     const slots = buildSlots(start, end, slotMinutes);
@@ -218,7 +223,7 @@ export function TimelineView({
             highlight={highlight}
             compact={density === "compact"}
             rowMin={ROW_MIN}
-            half={half}
+            slotMinutes={slotMinutes}
           />
           );
         })}
@@ -244,7 +249,7 @@ function SlotRow({
   highlight,
   compact,
   rowMin,
-  half,
+  slotMinutes,
   blocked = false,
   blockLabel = null,
   practitionerById = null,
@@ -260,7 +265,7 @@ function SlotRow({
   highlight: AgendaHighlight | null;
   compact: boolean;
   rowMin: number;
-  half: boolean;
+  slotMinutes: AgendaSlotMinutes;
   blocked?: boolean;
   /** Texto del motivo, solo en la primera fila de un tramo bloqueado. */
   blockLabel?: string | null;
@@ -276,8 +281,13 @@ function SlotRow({
   const overflow = denseOverflow(items, COLLAPSED_LIMIT, expanded, highlight, now);
   const { shown, hidden } = overflow;
   const more = overflowButtonText(overflow, highlight != null, `a las ${label}`);
-  // Half-hour rows: the :30 label is muted so the hour still reads as the anchor.
-  const isHalfLabel = half && slot % 60 !== 0;
+  // Sub-hour rows: the :30 label is muted so the hour still reads as the anchor. [AS-2g] A 15' la hora va en negrita
+  // y las :15/:45 más tenues que la :30 (cuatro etiquetas iguales por hora saturaban la columna).
+  const isHalfLabel = slotMinutes !== 60 && slot % 60 !== 0;
+  const quarter = slotMinutes === 15;
+  const labelColor = !isHalfLabel
+    ? quarter ? "var(--navy-500)" : "var(--navy-300)"
+    : quarter && slot % 30 !== 0 ? "rgba(15,30,51,0.2)" : "rgba(15,30,51,0.28)";
 
   return (
     <div
@@ -308,7 +318,8 @@ function SlotRow({
           textAlign: "left",
           cursor: "pointer",
           fontSize: 11,
-          color: isHalfLabel ? "rgba(15,30,51,0.28)" : "var(--navy-300)",
+          fontWeight: quarter && !isHalfLabel ? 600 : undefined,
+          color: labelColor,
         }}
       >
         {label}

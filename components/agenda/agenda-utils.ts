@@ -3,6 +3,7 @@ import type { PaymentMethod } from "@/lib/payment-method";
 import { formatARS } from "@/lib/format";
 import type { AgendaBookingRow, AgendaPlanFields, BookingRow } from "@/lib/bookings-types";
 import type { Discipline } from "@/lib/plans-constants";
+import { effectiveRowMinutes, normalizeSlotMinutes, type AgendaSlotMinutes } from "@/lib/tenant-settings-constants";
 
 export type BookingDTO = {
   id: string;
@@ -337,14 +338,17 @@ export const DAYS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"];
 //
 // A "slot" is minutes-from-midnight in AR wall-clock. `Tenant.agendaSlotMinutes`
 // picks the granularity: 60 → one row per hour, 30 → half-hour rows so a 13:30
-// turno gets its own labelled row instead of being folded into 13:00.
+// turno gets its own labelled row instead of being folded into 13:00, 15 →
+// quarter-hour rows (T3d-2g, plan §23.8). [AS-2g] El paso sale de
+// `normalizeSlotMinutes` (desconocido = 60): antes era `=== 30 ? 30 : 60` y un
+// consultorio en 15 veía filas de una hora sin ningún aviso.
 // Pure + framework-free so the bucketing math is unit-testable (docs/TESTING.md
 // capa 1) — it replaced the old column-packing algorithm the timeline used.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Rows of the grid, as minutes-from-midnight: [480, 510, 540…] for 8→19 @30. */
 export function buildSlots(startHour: number, endHour: number, slotMinutes: number): number[] {
-  const step = slotMinutes === 30 ? 30 : 60;
+  const step = normalizeSlotMinutes(slotMinutes);
   const from = Math.max(0, Math.floor(startHour)) * 60;
   const to = Math.min(24, Math.floor(endHour)) * 60;
   const out: number[] = [];
@@ -371,7 +375,7 @@ export function slotOf(
   slots: number[],
   slotMinutes: number
 ): { slot: number; outOfRange: "before" | "after" | null } {
-  const step = slotMinutes === 30 ? 30 : 60;
+  const step = normalizeSlotMinutes(slotMinutes);
   const first = slots[0];
   const last = slots[slots.length - 1];
   const floored = Math.floor(arMinutes / step) * step;
@@ -390,7 +394,7 @@ export function coveredSlots(
   slots: number[],
   slotMinutes: number
 ): number[] {
-  const step = slotMinutes === 30 ? 30 : 60;
+  const step = normalizeSlotMinutes(slotMinutes);
   const startSlot = Math.floor(startArMinutes / step) * step;
   const end = startArMinutes + Math.max(0, durationMin);
   const out: number[] = [];
@@ -398,6 +402,27 @@ export function coveredSlots(
     if (s >= slots[0] && s <= slots[slots.length - 1]) out.push(s);
   }
   return out;
+}
+
+/**
+ * [AS-2g] Minutos por fila de la grilla de la vista (plan §23.8). Día y Semana: el zoom del usuario SOLO si lo eligió
+ * (`zoomSet`), si no la granularidad del consultorio — el default del zoom es 30 y seguirlo sin más le cambiaba la
+ * grilla a todo consultorio en 60 sin que nadie lo pidiera. Por profesional / Por sala siguen con `zoom` como desde
+ * B4.3 (ahí el zoom siempre mandó). Lista/Recepción no tienen filas: devuelve la del Día (es lo que muestra el
+ * control de «Franja»).
+ */
+export function agendaGridZoom(
+  view: string,
+  prefs: { zoom: number; zoomSet?: boolean },
+  tenantSlot: unknown
+): AgendaSlotMinutes {
+  if (view === "practitioner" || view === "room") return normalizeSlotMinutes(prefs.zoom);
+  return effectiveRowMinutes(prefs, tenantSlot);
+}
+
+/** [AS-2g] Patch al elegir un zoom en «Vista → Franja»: desde ahí Día y Semana siguen el del usuario. */
+export function zoomChoicePatch(zoom: AgendaSlotMinutes): { zoom: AgendaSlotMinutes; zoomSet: true } {
+  return { zoom, zoomSet: true };
 }
 
 export function fmtHour(d: Date) {

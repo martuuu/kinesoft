@@ -782,3 +782,71 @@ describe("[SV09] agenda en vivo", () => {
     expect(html).toContain("var(--rc-called-fg)");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [AS-2g] T3d-2g (plan §23.8): filas de 15' en Día y Semana + zoom por usuario.
+// Día/Semana dibujan `zoomSet ? zoom : agendaSlotMinutes`: quien no eligió zoom ve la grilla del consultorio.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("[AS-2g] filas de 15' y zoom por usuario", () => {
+  beforeAll(async () => {
+    await Promise.all(dynamicLoads);
+  });
+  const h15 = { start: 8, end: 19, slotMinutes: 15 };
+  const prefsOf = (over: Partial<NonNullable<Props["agendaPrefs"]>>) => ({ ...base.agendaPrefs!, ...over });
+  const dayLabels = (html: string) => (html.match(/aria-label="Nuevo turno (\d\d:\d\d)"/g) ?? []).map((m) => m.slice(-6, -1));
+
+  it("consultorio en 15' y zoom default (sin zoomSet): el Día dibuja 4 filas por hora", () => {
+    const html = r({ ...base, businessHours: h15 }, "day-15");
+    const labels = new Set(dayLabels(html));
+    for (const l of ["09:00", "09:15", "09:30", "09:45", "10:00"]) expect(labels.has(l), l).toBe(true);
+  });
+
+  it("consultorio en 15' y zoom default: la Semana dibuja 44 filas (8→19) de 24 px", () => {
+    const html = r({ ...base, view: "week", businessHours: h15 }, "week-15");
+    expect(html).toContain("repeat(44, 24px)");
+  });
+
+  it("zoom elegido (zoomSet): manda sobre el consultorio en Día y Semana", () => {
+    const day = r({ ...base, businessHours: h15, agendaPrefs: prefsOf({ zoom: 60, zoomSet: true }) }, "day-z60");
+    expect(dayLabels(day)).toContain("09:00");
+    expect(dayLabels(day)).not.toContain("09:15");
+    expect(dayLabels(day)).not.toContain("09:30");
+    const week = r({ ...base, view: "week", agendaPrefs: prefsOf({ zoom: 15, zoomSet: true }) }, "week-z15");
+    expect(week).toContain("repeat(44, 24px)");
+  });
+
+  it("zoom sin elegir (default 30, o 15 sin zoomSet): el consultorio en 60 sigue en 60", () => {
+    const h60 = { start: 8, end: 19, slotMinutes: 60 };
+    for (const zoom of [30, 15] as const) {
+      const day = r({ ...base, businessHours: h60, agendaPrefs: prefsOf({ zoom }) }, "day-60");
+      expect(dayLabels(day)).toContain("10:00");
+      expect(dayLabels(day)).not.toContain("09:30");
+      const week = r({ ...base, view: "week", businessHours: h60, agendaPrefs: prefsOf({ zoom }) }, "week-60");
+      expect(week).toContain("repeat(11, 50px)");
+    }
+  });
+
+  it("turnos en :15 y :45 caen en su fila (Día y Semana)", () => {
+    const at15 = bk("p1", "09:15", { patientName: "Quince Uno" });
+    const at45 = bk("p2", "09:45", { patientName: "Cuarenta Cinco" });
+    const p = { ...base, bookings: [at15, at45], businessHours: h15 };
+    const day = r(p, "day-15b");
+    const pos = (s: string) => day.indexOf(s);
+    expect(pos('aria-label="Nuevo turno 09:15"')).toBeLessThan(pos("Quince Uno"));
+    expect(pos("Quince Uno")).toBeLessThan(pos('aria-label="Nuevo turno 09:30"'));
+    expect(pos('aria-label="Nuevo turno 09:45"')).toBeLessThan(pos("Cuarenta Cinco"));
+    expect(pos("Cuarenta Cinco")).toBeLessThan(pos('aria-label="Nuevo turno 10:00"'));
+    // Semana: 08:00 = fila 1 → 09:15 = fila 6, 09:45 = fila 8 (45' = 3 filas, cortado por la celda de abajo).
+    const week = r({ ...p, view: "week" }, "week-15b");
+    expect(week).toMatch(/grid-row:6 \/ span 2/);
+    expect(week).toMatch(/grid-row:8 \/ span 3/);
+  });
+
+  it("15': solo las :00 en negrita; :15/:45 sin etiqueta en la Semana", () => {
+    const week = r({ ...base, view: "week", businessHours: h15 }, "week-15c");
+    expect(week).toMatch(/font-weight:600[^>]*>09:00</);
+    expect(week).toContain(">09:30<");
+    expect(week).not.toContain(">09:15<");
+    expect(week).not.toContain(">09:45<");
+  });
+});

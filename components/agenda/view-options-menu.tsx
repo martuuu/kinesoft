@@ -36,9 +36,10 @@ function ViewOptionsPanelC(props: ViewOptionsPanelProps) {
 //
 // B4.3: la densidad ahora se guarda por usuario (`agendaPrefs.density`) y se
 // suma el ZOOM de franja 15/30/60 (`agendaPrefs.zoom`, plan §11.3 punto 6).
-// El zoom solo se ofrece donde aplica (`zoom` presente = vista Por
-// profesional): Día y Semana siguen con `Tenant.agendaSlotMinutes` para no
-// cambiarle la grilla a quien no eligió nada.
+// [AS-2g] T3d-2g (plan §23.8): la «Franja» se ve en todos los modos. Día y
+// Semana siguen con `Tenant.agendaSlotMinutes` hasta que el usuario elige una
+// acá (`agenda-client` guarda `zoomSet: true` con la elección), así el deploy
+// no le cambió la grilla a nadie; Por profesional / Por sala, con `zoom`.
 //
 // S19b (ES3): "Turnos: Todos / De plan / Sueltos". Es el mismo resaltado que
 // la leyenda "Turnos" de abajo de la agenda (no oculta: atenúa). Solo aparece

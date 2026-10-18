@@ -263,6 +263,12 @@ export type AgendaViewPrefs = {
   salaGroupBy: SalaGroupBy;
   /** RX: cara de `/sala` (Apariencia → «Recepción»). */
   receptionLayout: ReceptionLayout;
+  /**
+   * [AS-2g] T3d-2g (plan §23.8): el usuario ELIGIÓ el zoom en «Vista → Franja». Solo entonces Día y Semana siguen
+   * `zoom`; sin él, la grilla del consultorio (`Tenant.agendaSlotMinutes`, `effectiveRowMinutes`). Ausente = no
+   * eligió (nunca `false` en el blob): así las prefs de quien nunca tocó el zoom quedan iguales que antes de T3.
+   */
+  zoomSet?: true;
 };
 
 export const DEFAULT_AGENDA_VIEW_PREFS: AgendaViewPrefs = {
