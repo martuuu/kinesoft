@@ -51,6 +51,9 @@ const SEGMENT_LABEL: Record<ViewSegment, string> = {
  * - `locationFilter`: el `<LocationFilter>` (no dibuja nada con una sede).
  * - `dayLock`: el candado del día (Día/Lista) junto al título.
  * - `zoom`/`onZoomChange`: franja 15/30/60 en el menú Vista (todos los modos; en Día/Semana la del consultorio hasta que el usuario elige, AS-2g).
+ * - `insurerFilter` (AS-2o): el `<InsurerFilter>` diferido (select de obra social), junto a la sede.
+ *   `insurerHiddenLabel`: «N turnos sin acceso a la cobertura no se muestran con este filtro» o null; va abajo del
+ *   título como el aviso de ocultos, sin «Mostrar todos» (no es la visibilidad: se resuelve sacando el filtro).
  *
  * PF1.1-agenda-a:
  * - C-PF1: sin `motion.button` (el `whileTap` es CSS `:active`) y la pastilla del
@@ -92,6 +95,8 @@ export function AgendaToolbar({
   onZoomChange,
   planScope,
   onPlanScopeChange,
+  insurerFilter,
+  insurerHiddenLabel,
 }: {
   anchor: Date;
   segment: ViewSegment;
@@ -119,6 +124,8 @@ export function AgendaToolbar({
   /** S19b: alcance De plan / Sueltos (null = sin módulo planes). */
   planScope?: AgendaPlanScope | null;
   onPlanScopeChange?: (s: AgendaPlanScope) => void;
+  insurerFilter?: React.ReactNode;
+  insurerHiddenLabel?: string | null;
 }) {
   const [moreOpen, setMoreOpen] = useState(false);
   return (
@@ -138,6 +145,11 @@ export function AgendaToolbar({
               <button type="button" onClick={onShowAll} className={styles.linkBtn}>
                 Mostrar todos
               </button>
+            </div>
+          )}
+          {insurerHiddenLabel && (
+            <div role="status" className={styles.hidden}>
+              <span>{insurerHiddenLabel}</span>
             </div>
           )}
         </div>
@@ -199,6 +211,8 @@ export function AgendaToolbar({
           )}
 
           {locationFilter}
+
+          {insurerFilter}
 
           <button
             type="button"

@@ -323,7 +323,7 @@ describe("[P3-S19b] objeto de filtros de la agenda", () => {
   it("una dimensión por clave del objeto (SR suma la sala acá)", () => {
     expect(Object.keys(AGENDA_FILTER_DIMENSIONS).sort()).toEqual(Object.keys(EMPTY_AGENDA_FILTERS).sort());
     // [SR-U3] la sala se sumó como tercera dimensión (lo anticipaba este test).
-    expect(Object.keys(EMPTY_AGENDA_FILTERS).sort()).toEqual(["locationId", "practitionerIds", "roomId"]);
+    expect(Object.keys(EMPTY_AGENDA_FILTERS).sort()).toEqual(["insurerKey", "locationId", "practitionerIds", "roomId"]);
   });
 
   it("vacío = todo, y devuelve una copia", () => {
@@ -846,5 +846,100 @@ describe("[HF-2a] receptionCardBadge y waitingPulse: guarda de «hoy» AR", () =
     expect(ids.has("b12")).toBe(false);
     expect(ids.has("b13")).toBe(false);
     expect(ids.has("nope")).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [AS-2o] T3e-2o (plan §23.9): filtro por obra social. Regla segura: `insurerKey` = id del catálogo,
+// "particular" o `null` (el actor no ve la cobertura). `undefined` nunca se esconde; `null` nunca matchea.
+// ─────────────────────────────────────────────────────────────────────────────
+import {
+  INSURER_FILTER_PARTICULAR,
+  countInsurerAccessHidden,
+  effectiveInsurerFilter,
+  insurerAccessHiddenLabel,
+  parseInsurerFilterParam,
+  showInsurerFilter,
+} from "@/lib/agenda-client-state";
+
+describe("[AS-2o] dimensión insurerKey (obra social)", () => {
+  const rows = [
+    { id: "osde", practitionerId: "a", insurerKey: "ins_osde" },
+    { id: "swiss", practitionerId: "a", insurerKey: "ins_swiss" },
+    { id: "part", practitionerId: "b", insurerKey: "particular" },
+    { id: "sinAcceso", practitionerId: "b", insurerKey: null },
+    { id: "noSe", practitionerId: "c" }, // proyección sin la clave: nunca se esconde
+  ];
+  const ctx = { primaryLocationId: null };
+  const ids = (xs: ReadonlyArray<{ id: string }>) => xs.map((x) => x.id);
+
+  it("[AS-2o] EMPTY trae la clave y sin filtro pasa todo (incluido null)", () => {
+    expect(EMPTY_AGENDA_FILTERS.insurerKey).toBeNull();
+    expect(ids(applyAgendaFilters(rows, EMPTY_AGENDA_FILTERS, ctx))).toEqual(["osde", "swiss", "part", "sinAcceso", "noSe"]);
+    expect(activeAgendaFilterKeys({ ...EMPTY_AGENDA_FILTERS, insurerKey: "ins_osde" })).toEqual(["insurerKey"]);
+  });
+
+  it("[AS-2o] por id: solo esa OS + los que no se saben; null nunca matchea", () => {
+    const f: AgendaFilters = { ...EMPTY_AGENDA_FILTERS, insurerKey: "ins_osde" };
+    expect(ids(applyAgendaFilters(rows, f, ctx))).toEqual(["osde", "noSe"]);
+  });
+
+  it("[AS-2o] «particular»: los particulares + los que no se saben; null tampoco matchea", () => {
+    const f: AgendaFilters = { ...EMPTY_AGENDA_FILTERS, insurerKey: INSURER_FILTER_PARTICULAR };
+    expect(INSURER_FILTER_PARTICULAR).toBe("particular");
+    expect(ids(applyAgendaFilters(rows, f, ctx))).toEqual(["part", "noSe"]);
+  });
+
+  it("[AS-2o] null en el turno no matchea NINGÚN valor de filtro (ni uno que «parezca» null)", () => {
+    const m = AGENDA_FILTER_DIMENSIONS.insurerKey.matches;
+    for (const v of ["ins_osde", "particular", "null", ""]) expect(m({ practitionerId: "a", insurerKey: null }, v)).toBe(false);
+    expect(m({ practitionerId: "a" }, "ins_osde")).toBe(true);
+  });
+
+  it("[AS-2o] conteo de ocultos por falta de acceso: solo null (no undefined), y 0 sin filtro", () => {
+    // La visibilidad (cancelados/ausentes) la aplica el caller antes: acá se cuenta lo que llega.
+    const two = [...rows, { id: "x", practitionerId: "a", insurerKey: null }];
+    expect(countInsurerAccessHidden(rows, "ins_osde")).toBe(1);
+    expect(countInsurerAccessHidden(two, "particular")).toBe(2);
+    expect(countInsurerAccessHidden(two, null)).toBe(0);
+    expect(insurerAccessHiddenLabel(0)).toBeNull();
+    expect(insurerAccessHiddenLabel(1)).toBe("1 turno sin acceso a la cobertura no se muestra con este filtro");
+    expect(insurerAccessHiddenLabel(3)).toBe("3 turnos sin acceso a la cobertura no se muestran con este filtro");
+  });
+});
+
+describe("[AS-2o] ?os= y filtro efectivo", () => {
+  const insurers = [
+    { id: "ins_osde", name: "OSDE" },
+    { id: "ins_swiss", name: "Swiss Medical" },
+  ];
+
+  it("[AS-2o] acepta un id del catálogo o «particular»; desconocido o vacío → null", () => {
+    expect(parseInsurerFilterParam("ins_osde", insurers)).toBe("ins_osde");
+    expect(parseInsurerFilterParam("particular", insurers)).toBe("particular");
+    expect(parseInsurerFilterParam("ins_ajena", insurers)).toBeNull();
+    expect(parseInsurerFilterParam("", insurers)).toBeNull();
+    expect(parseInsurerFilterParam(null, insurers)).toBeNull();
+    expect(parseInsurerFilterParam(undefined, insurers)).toBeNull();
+  });
+
+  it("[AS-2o] sin obras sociales (no Particular) no hay select ni filtro (nunca se esconde por algo que no se ve)", () => {
+    expect(showInsurerFilter(insurers)).toBe(true);
+    expect(showInsurerFilter([])).toBe(false);
+    const onlyParticular = [{ id: "p", name: "Particular", isParticular: true }];
+    expect(showInsurerFilter(onlyParticular)).toBe(false);
+    expect(effectiveInsurerFilter("particular", [])).toBeNull();
+    expect(effectiveInsurerFilter("ins_osde", insurers)).toBe("ins_osde");
+    expect(effectiveInsurerFilter("ins_ajena", insurers)).toBeNull();
+  });
+
+  it("[AS-2o] agendaHref conserva el filtro como ?os= (y lo omite sin filtro)", () => {
+    expect(agendaHref({ view: "week", dayKey: "2026-09-30", insurerKey: "ins_osde" })).toBe(
+      "/agenda?view=week&date=2026-09-30&os=ins_osde"
+    );
+    expect(agendaHref({ view: "timeline", dayKey: "2026-09-30", selectedIds: ["a"], insurerKey: "particular" })).toBe(
+      "/agenda?view=timeline&date=2026-09-30&pros=a&os=particular"
+    );
+    expect(agendaHref({ view: "week", dayKey: "2026-09-30", insurerKey: null })).toBe("/agenda?view=week&date=2026-09-30");
   });
 });

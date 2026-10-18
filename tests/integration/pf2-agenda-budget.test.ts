@@ -8,7 +8,7 @@
  *   - Sin cambio observable: lo que el loader entrega es igual a lo que la página armaba antes con los lectores de
  *     siempre (`listServices`, `listPractitioners`, `listInsurers`, `getTenantSettings`, `listLocations`,
  *     `listRoomOptions`, `getCapabilities`, `getAgendaAvailability`), y los turnos decodificados del cable son, byte
- *     a byte, `listAgendaBookings(...).map(toBookingDTO)`.
+ *     a byte, `listAgendaBookings(...).map(agendaRowToDTO)` (`toBookingDTO` + `insurerKey`, AS-2o).
  *   - Sin directorio de pacientes: `patients` es solo el del deep-link, leído por id (ajeno o archivado → vacío).
  *   - `previewRecurrence` mensual de 20 fechas: ≤ 40 sentencias y 1 tx (antes ~106: una carga del motor por ventana
  *     de 62 días). Resultado idéntico (`items`, `summary`, `counts`) al algoritmo anterior (`legacyPreview`, copia
@@ -29,7 +29,7 @@ vi.mock("@/lib/db", async (importOriginal) => {
 import type { PrismaClient } from "@prisma/client";
 import { measure } from "@/tests/helpers/query-counter";
 import { loadAgendaPage } from "@/lib/agenda-page-loader";
-import { decodeAgendaWire } from "@/lib/agenda-wire";
+import { agendaRowToDTO, decodeAgendaWire, encodeAgendaWire } from "@/lib/agenda-wire";
 import { listAgendaBookings, listPractitioners, listServices } from "@/lib/bookings";
 import { listInsurers } from "@/lib/insurers";
 import { getTenantSettings } from "@/lib/tenant-settings";
@@ -41,7 +41,6 @@ import { getAgendaAvailability, previewRecurrence } from "@/lib/availability-act
 import { getActor } from "@/lib/session";
 import { runWithRls } from "@/lib/rls";
 import { displayMemberName } from "@/lib/display-name";
-import { toBookingDTO } from "@/components/agenda/agenda-utils";
 import { loadAvailabilityInputs, type LoadedAvailabilityInput } from "@/lib/availability-loader";
 import {
   addDays,
@@ -98,7 +97,8 @@ async function legacyAgendaProps(monday: string) {
   const locationId = locations.some((l) => l.id === prefs.locationId) ? prefs.locationId : null;
   const av = await getAgendaAvailability({ from: monday, to: sunday, locationId });
   return {
-    bookings: bookings.map(toBookingDTO),
+    // [AS-2o] El DTO de la agenda lleva `insurerKey` (filtro por obra social): `toBookingDTO` + la clave al final.
+    bookings: bookings.map(agendaRowToDTO),
     services: services.map((s) => ({
       id: s.id,
       name: s.name,
@@ -277,7 +277,11 @@ describe.skipIf(!RUN)("PF2-c · /agenda ≤ 3 tx, sin directorio, cable idéntic
 
       const { result: before, m: mBefore } = await measure(() => legacyAgendaProps(MONDAY));
       console.log(`[PF2-c] /agenda antes (${who}, sin listPatients): ${mBefore.transactions} tx, ${mBefore.statements} sentencias`);
-      const decoded = decodeAgendaWire(data.bookings, { services: data.services, locations: data.locations });
+      const decoded = decodeAgendaWire(data.bookings, {
+        services: data.services,
+        locations: data.locations,
+        insurers: data.insurers,
+      });
       expect(decoded.length).toBe(5);
       expect(JSON.stringify(decoded)).toBe(JSON.stringify(before.bookings));
       expect(data.services).toEqual(before.services);
@@ -448,12 +452,26 @@ describe.skipIf(!RUN || !VOLUME)("PF2-c · payload de la semana ≤ 400 kB (fixt
     const monday = weekStartKey(toARDateKey(new Date()));
     const data = await loadAgendaPage(actor, { monday, patientId: null });
     const sunday = addDays(monday, 6);
-    const before = (await listAgendaBookings({ from: dayWindow(monday).start, to: dayWindow(sunday).end })).map(toBookingDTO);
+    const before = (await listAgendaBookings({ from: dayWindow(monday).start, to: dayWindow(sunday).end })).map(agendaRowToDTO);
     const bytes = JSON.stringify(data.bookings).length;
     console.log(`[PF2-c] agendaPayloadBytes: ${JSON.stringify(before).length} → ${bytes} (${data.bookings.length} turnos)`);
     expect(data.bookings.length).toBeGreaterThan(500);
     expect(bytes).toBeLessThanOrEqual(400_000);
-    const decoded = decodeAgendaWire(data.bookings, { services: data.services, locations: data.locations });
+    // [AS-2o] T3e-2o: el filtro por obra social no hace crecer el cable (techo del plan §23.9 = 317.049; medido
+    // 317.033 con este test solo). `oi` se deriva del nombre de la OS y del acceso, y la mitad del fixture tiene OS
+    // vinculada: ningún turno lo manda y el cable pesa EXACTAMENTE lo mismo que sin `insurerKey`. Se compara contra
+    // el cable sin la clave y no contra el número fijo porque el fixture varía unos bytes según lo que corrió antes
+    // en el mismo archivo (317.537 con la suite del archivo entera, igual con y sin la clave).
+    expect(data.bookings.filter((w) => "oi" in w)).toEqual([]);
+    const withoutKey = before.map(({ insurerKey: _k, ...rest }) => rest as typeof before[number]);
+    const bytesBefore = JSON.stringify(encodeAgendaWire(withoutKey, { services: data.services, locations: data.locations })).length;
+    console.log(`[AS-2o] cable sin insurerKey: ${bytesBefore} · con: ${bytes}`);
+    expect(bytes).toBe(bytesBefore);
+    const decoded = decodeAgendaWire(data.bookings, {
+      services: data.services,
+      locations: data.locations,
+      insurers: data.insurers,
+    });
     expect(JSON.stringify(decoded)).toBe(JSON.stringify(before));
   }, 120_000);
 });

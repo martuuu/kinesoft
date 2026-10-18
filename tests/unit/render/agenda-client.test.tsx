@@ -850,3 +850,63 @@ describe("[AS-2g] filas de 15' y zoom por usuario", () => {
     expect(week).not.toContain(">09:45<");
   });
 });
+
+// [AS-2o] T3e-2o (plan §23.9): filtro por obra social en la toolbar (select nativo diferido) y `?os=`.
+describe("[AS-2o] filtro por obra social", () => {
+  beforeAll(async () => {
+    await Promise.all(dynamicLoads);
+  });
+  const insurers = [
+    { id: "ins_osde", name: "OSDE" },
+    { id: "ins_swiss", name: "Swiss Medical" },
+  ];
+  const osRows = [
+    bk("p1", "09:00", { patientName: "Con Osde", insurerKey: "ins_osde" }),
+    bk("p1", "10:00", { patientName: "Es Particular", insurerKey: "particular" }),
+    bk("p2", "11:00", { patientName: "Sin Acceso Uno", insurerKey: null }),
+    bk("p2", "12:00", { patientName: "Sin Acceso Dos", insurerKey: null }),
+    bk("p3", "13:00", { patientName: "No Se Sabe" }), // sin la clave: nunca se esconde
+  ];
+  const withOs: Props = { ...base, bookings: osRows, insurers };
+
+  it("[AS-2o] sin obras sociales no hay select; con ≥1, select con «Todas» y «Particular»", () => {
+    expect(r({ ...withOs, insurers: [] }, "os-none")).not.toContain('aria-label="Filtrar por obra social"');
+    const html = r(withOs, "os-select");
+    expect(html).toContain('aria-label="Filtrar por obra social"');
+    expect(html).toContain(">Todas las obras sociales<");
+    expect(html).toContain('value="particular">Particular<');
+    expect(html).toContain('value="ins_swiss">Swiss Medical<');
+    // Sin filtro se ve todo, incluidos los que no tienen acceso, y no hay aviso.
+    for (const n of ["Con Osde", "Es Particular", "Sin Acceso Uno", "No Se Sabe"]) expect(html).toContain(n);
+    expect(html).not.toContain("sin acceso a la cobertura");
+  });
+
+  it("[AS-2o] ?os=<id>: esa OS + los que no se saben; los sin acceso se ocultan y se cuentan", () => {
+    const html = r({ ...withOs, initialInsurerFilter: "ins_osde" }, "os-id");
+    expect(html).toContain("Con Osde");
+    expect(html).toContain("No Se Sabe");
+    expect(html).not.toContain("Es Particular");
+    expect(html).not.toContain("Sin Acceso Uno");
+    expect(html).toContain("2 turnos sin acceso a la cobertura no se muestran con este filtro");
+    expect(html).toMatch(/<option value="ins_osde" selected="">OSDE</);
+  });
+
+  it("[AS-2o] ?os=particular: null tampoco matchea «Particular»", () => {
+    const html = r({ ...withOs, initialInsurerFilter: "particular" }, "os-part");
+    expect(html).toContain("Es Particular");
+    expect(html).not.toContain("Con Osde");
+    expect(html).not.toContain("Sin Acceso Dos");
+    expect(html).toContain("2 turnos sin acceso a la cobertura no se muestran con este filtro");
+  });
+
+  it("[AS-2o] id desconocido o sin select: se ignora (todo visible, sin aviso)", () => {
+    for (const p of [
+      { ...withOs, initialInsurerFilter: "ins_ajena" },
+      { ...withOs, insurers: [], initialInsurerFilter: "particular" },
+    ]) {
+      const html = r(p, "os-ignored");
+      for (const n of ["Con Osde", "Es Particular", "Sin Acceso Uno", "No Se Sabe"]) expect(html).toContain(n);
+      expect(html).not.toContain("sin acceso a la cobertura");
+    }
+  });
+});

@@ -72,15 +72,19 @@ import {
   weekFetchRange,
   countByPractitioner,
   countByRoom,
+  countInsurerAccessHidden,
   dayLockInitialScope,
   dayViewFor,
+  effectiveInsurerFilter,
   effectiveRoomFilter,
+  insurerAccessHiddenLabel,
   isDayScoped,
   mergeBookingOverrides,
   roomsInScope,
   segmentOf,
   shiftDayKey,
   showModeToggle,
+  showInsurerFilter,
   showPractitionerInitials,
   showRoomOnCards,
   viewForSegment,
@@ -99,11 +103,11 @@ import {
   agendaGridZoom,
   expandPlanFields,
   serviceDisciplineMap,
-  toBookingDTO,
   withArchivedRooms,
   zoomChoicePatch,
   type BookingDTO,
 } from "./agenda-utils";
+import { agendaRowToDTO } from "@/lib/agenda-wire";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { AgendaToolbar } from "./agenda-toolbar";
 import { AGENDA_MODE_OPTIONS, ModeToggle } from "./mode-toggle";
@@ -203,6 +207,12 @@ const WeekGridViewC = preferLoaded(WeekGridView, () => viewModules["week-grid"]?
 const ListViewC = preferLoaded(ListView, () => viewModules.list?.ListView);
 const WeekDayListC = preferLoaded(WeekDayList, () => viewModules["week-list"]?.WeekDayList);
 const RoomFilterC = preferLoaded(RoomFilter, () => roomFilterModule?.RoomFilter);
+// [AS-2o] Select de obra social: mismo patrón que `RoomFilter` (SSR + `SsrHold` + `preferLoaded`). Solo existe con ≥1
+// obra social no Particular; diferido para no sumar al first load de /agenda (T3: delta ≤ +0,6 kB por sesión).
+const InsurerFilter = dynamic(() => import("./insurer-filter").then((m) => m.InsurerFilter));
+let insurerFilterModule: typeof import("./insurer-filter") | undefined;
+const loadInsurerFilter = () => import("./insurer-filter").then((m) => void (insurerFilterModule = m));
+const InsurerFilterC = preferLoaded(InsurerFilter, () => insurerFilterModule?.InsurerFilter);
 // [AS-0z] T3a-0z3: la leyenda «Turnos: De plan · Sueltos» (solo módulo `planes`, abajo de la página) y los chips de
 // profesional (solo multi-profesional) salen del first load de /agenda con el mismo patrón que `RoomFilter`: SSR
 // (llegan en el HTML del server, su chunk se precarga desde ahí), `SsrHold` deja quieto ese HTML hasta que el chunk
@@ -236,6 +246,7 @@ function useChunkReady(enabled: boolean, isLoaded: () => boolean, load: () => Pr
 }
 const planLegendLoaded = () => !!planLegendModule;
 const practitionerChipsLoaded = () => !!practitionerChipsModule;
+const insurerFilterLoaded = () => !!insurerFilterModule;
 /** Precarga en idle de los chunks que se abren con un click. Idempotente: el
  *  bundler cachea el `import()`. */
 function prefetchAgendaChunks() {
@@ -291,6 +302,11 @@ export type Props = {
   autoCreatePatientId?: string | null;
   /** Chips elegidos al cargar (`?pros=` o el `?practitioner=` viejo); vacío = todos. */
   initialSelectedIds?: string[];
+  /**
+   * [AS-2o] `?os=` crudo de la URL (id de obra social o "particular"). Lo valida el cliente contra `insurers`
+   * (`effectiveInsurerFilter`): uno desconocido se ignora y se saca de la URL. Ausente = se lee de la URL al montar.
+   */
+  initialInsurerFilter?: string | null;
   bookings: BookingDTO[];
   /**
    * `discipline` (P3-C, C9): la disciplina del servicio. Con ella el cliente
@@ -578,12 +594,48 @@ export function AgendaClient(props: Props) {
   // Favoritos primero, en vivo (la estrella reordena sin recargar).
   const ordered = useMemo(() => practitionerOrder(badges, prefs), [badges, prefs]);
 
+  // ── Obra social (AS-2o, plan §23.9) ─────────────────────────────────────────
+  // En la URL (`?os=`) como los profesionales: un refresh, la navegación de día/semana (`go`) o un link compartido
+  // conservan el filtro. Solo aplica si el select se ve (≥1 obra social no Particular): nunca se esconde un turno
+  // por un filtro que no está en pantalla.
+  const [rawInsurer, setRawInsurer] = useState<string | null>(props.initialInsurerFilter ?? null);
+  const insurerKey = effectiveInsurerFilter(rawInsurer, props.insurers);
+  useEffect(() => {
+    // Una vez al montar: sin el valor de la página, se lee de la URL; uno desconocido (OS archivada, de otro
+    // consultorio, basura) se ignora y se saca de la URL, así un refresh no lo arrastra.
+    try {
+      const url = new URL(window.location.href);
+      const raw = url.searchParams.get("os");
+      if (props.initialInsurerFilter === undefined && raw) setRawInsurer(raw);
+      if (raw != null && effectiveInsurerFilter(raw, props.insurers) == null) {
+        url.searchParams.delete("os");
+        window.history.replaceState(null, "", url.toString());
+      }
+    } catch {
+      /* sin history: el filtro vale igual para esta pestaña */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const setInsurer = (next: string | null) => {
+    setRawInsurer(next);
+    try {
+      const url = new URL(window.location.href);
+      if (next) url.searchParams.set("os", next);
+      else url.searchParams.delete("os");
+      window.history.replaceState(null, "", url.toString());
+    } catch {
+      /* sin history: el filtro vale para esta pestaña */
+    }
+  };
+  const insurerFilterOn = showInsurerFilter(props.insurers);
+  const insurerFilterReady = useChunkReady(insurerFilterOn, insurerFilterLoaded, loadInsurerFilter);
+
   const [selectedIds, setSelectedIdsState] = useState<string[]>(props.initialSelectedIds ?? []);
   const setSelectedIds = (ids: string[]) => {
     setSelectedIdsState(ids);
     // En la URL (sin navegar): un refresh o un link conserva la selección.
     try {
-      window.history.replaceState(null, "", agendaHref({ view, dayKey, selectedIds: ids }));
+      window.history.replaceState(null, "", agendaHref({ view, dayKey, selectedIds: ids, insurerKey }));
     } catch {
       /* sin history: la selección vale para esta pestaña */
     }
@@ -733,7 +785,8 @@ export function AgendaClient(props: Props) {
     // Mientras volaba, el usuario navegó o llegó un `router.refresh()`: lo del
     // server manda y esta respuesta ya no corresponde.
     if (cur.bookings !== base || cur.weekStartKey !== wk) return;
-    const next = rows.map(toBookingDTO);
+    // [AS-2o] Mismo DTO que el loader (`insurerKey` incluido): la lista viva es intercambiable con `props.bookings`.
+    const next = rows.map(agendaRowToDTO);
     const changed = changedBookingIds(cur.shown, next);
     setLive({ base, weekStartKey: wk, rows: next });
     // Los overrides optimistas que el server ya superó, afuera (si no, el mapa
@@ -816,8 +869,8 @@ export function AgendaClient(props: Props) {
   // filtro (`except: ["roomId"]`) salen de lo mismo. `listAgendaBookings`
   // acepta `roomId`, pero usarlo acá sumaría un viaje por cambio de chip.
   const filters: AgendaFilters = useMemo(
-    () => ({ practitionerIds: selectedIds, locationId, roomId }),
-    [selectedIds, locationId, roomId]
+    () => ({ practitionerIds: selectedIds, locationId, roomId, insurerKey }),
+    [selectedIds, locationId, roomId, insurerKey]
   );
   const filterCtx: AgendaFilterContext = useMemo(() => ({ primaryLocationId }), [primaryLocationId]);
   // Base de los chips de profesionales: todos los filtros menos el de profesionales.
@@ -881,6 +934,17 @@ export function AgendaClient(props: Props) {
       : filteredBookings;
     return hiddenCountLabel(countHidden(scope, visibility));
   }, [filteredBookings, view, dayKey, visibility]);
+  // [AS-2o] Con filtro de obra social, los turnos cuya cobertura el actor no ve (`insurerKey` null) se ocultan y se
+  // cuentan: con los demás filtros (en «Por sala», sin el de profesionales, como `filteredBookings`) y la visibilidad
+  // puestos, en el alcance de la vista. Sin filtro no se calcula nada.
+  const insurerHiddenLabel = useMemo(() => {
+    if (insurerKey == null) return null;
+    const except: Array<keyof AgendaFilters> =
+      view === "room" ? ["insurerKey", "practitionerIds"] : ["insurerKey"];
+    const base = applyAgendaVisibility(applyAgendaFilters(allBookings, filters, filterCtx, { except }), visibility);
+    const scope = isDayScoped(view) ? base.filter((b) => toARDateKey(b.scheduledFor) === dayKey) : base;
+    return insurerAccessHiddenLabel(countInsurerAccessHidden(scope, insurerKey));
+  }, [insurerKey, allBookings, filters, filterCtx, visibility, view, dayKey]);
 
   // Conteo de la leyenda "Turnos" (S19b): lo que se ve en la vista (el día, o
   // la semana en Semana), sin cancelados.
@@ -1082,7 +1146,7 @@ export function AgendaClient(props: Props) {
 
   // ── Navegación (DayKeys AR, `lib/agenda-client-state`) ─────────────────────
   const go = (next: { view?: AgendaView; dayKey?: string }) =>
-    router.push(agendaHref({ view: next.view ?? view, dayKey: next.dayKey ?? dayKey, selectedIds }));
+    router.push(agendaHref({ view: next.view ?? view, dayKey: next.dayKey ?? dayKey, selectedIds, insurerKey }));
   const segment = segmentOf(view);
   const segments: ViewSegment[] = canReception ? ["day", "week", "list", "reception"] : ["day", "week", "list"];
   const onModeChange = (mode: AgendaMode) => {
@@ -1222,6 +1286,14 @@ export function AgendaClient(props: Props) {
         onZoomChange={(zoom) => persistPrefs(zoomChoicePatch(zoom))}
         planScope={planScope}
         onPlanScopeChange={setPlanScope}
+        insurerFilter={
+          insurerFilterOn ? (
+            <SsrHold ready={insurerFilterReady}>
+              <InsurerFilterC insurers={props.insurers} value={insurerKey} onChange={setInsurer} />
+            </SsrHold>
+          ) : null
+        }
+        insurerHiddenLabel={insurerHiddenLabel}
       />
 
       {showDayHeader && (

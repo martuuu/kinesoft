@@ -25,6 +25,8 @@ type SP = {
   practitioner?: string;
   /** B4.3: profesionales elegidos en los chips, separados por coma (vacío = todos). */
   pros?: string;
+  /** T3e-2o: filtro por obra social (id del catálogo o `particular`). */
+  os?: string;
 };
 
 export default async function AgendaPage({ searchParams }: { searchParams: SP }) {
@@ -87,6 +89,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
       dayKey={dayKey}
       weekStartKey={monday}
       autoCreate={searchParams.new === "1"}
+      initialInsurerFilter={searchParams.os ?? null}
       autoCreatePatientId={searchParams.patient ?? null}
       initialSelectedIds={parseSelectedPractitioners(
         { pros: searchParams.pros, practitioner: searchParams.practitioner },

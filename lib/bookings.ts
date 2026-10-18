@@ -434,7 +434,9 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
               patientId: true,
               insurer: true,
               copagoCents: true,
-              insurerRef: { select: { name: true, copagoCents: true } },
+              // [AS-2o] Clave del filtro por obra social: escalares en la MISMA sentencia (0 sentencias nuevas).
+              insurerId: true,
+              insurerRef: { select: { name: true, copagoCents: true, isParticular: true } },
             },
           })
         : Promise.resolve([]),
@@ -468,6 +470,17 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
     const insurer = coverage?.insurerRef;
     // Mismo cálculo que `listBookingsInRange` (precedencia §5.5; basic → precio).
     const obraSocial = seesBilling ? insurer?.name ?? coverage?.insurer ?? "Particular" : "Particular";
+    // [AS-2o] Filtro por obra social (plan §23.9), regla segura: el id del catálogo solo si la cobertura está
+    // vinculada a una OS que no es la Particular; sin cobertura, con la Particular, con texto libre sin vincular
+    // (`insurerId` null) o invitado → "particular"; sin ver facturación (acceso `basic`) → null, que el filtro
+    // nunca matchea (se oculta y se cuenta): ni el id ni «particular» filtrarían por algo que el actor no ve.
+    const insurerKey: string | null = !b.patientId
+      ? "particular"
+      : !seesBilling
+        ? null
+        : coverage?.insurerId && insurer && !insurer.isParticular
+          ? coverage.insurerId
+          : "particular";
     const copagoCents =
       seesBilling
         ? resolveBookingCopagoCents({
@@ -516,6 +529,7 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
       clinicalWritable,
       // La proyección devuelve una entrada por cada fila que recibe.
       ...loaded.c9.get(b.id)!,
+      insurerKey,
     };
   });
 }

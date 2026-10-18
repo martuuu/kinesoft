@@ -24,23 +24,43 @@
  *    ausentes cuando son neutras y `expandPlanFields` las expande como siempre).
  * Una clave del DTO que no esté en `FIELDS` (un campo nuevo) viaja con su nombre completo: nunca se pierde nada.
  *
+ * [AS-2o] T3e-2o (plan §23.9): `insurerKey` (filtro por obra social) viaja como `oi` SOLO si el catálogo trae
+ * `insurers` (el de la página, que ya viaja en las props para el modal): se DERIVA de lo que el turno ya manda
+ * (`deriveInsurerKey`: nombre de la OS contra el catálogo, invitado, acceso y `canOperate`) y viaja solo cuando la
+ * derivación no lo reproduce: índice en el catálogo, `-1` = "particular", `null` o el id de una OS fuera del
+ * catálogo (inactiva). Por qué derivar y no un default: con el fixture de volumen el cable estaba a 16 bytes del
+ * presupuesto (317.033/317.049) y la mitad de los turnos son de una OS; un `"oi":0` por turno eran ~3,5 kB.
+ * Sin `insurers` en el catálogo (un caller viejo), `insurerKey` viaja con su nombre completo y, al decodificar, un
+ * `oi` sin catálogo se descarta: la clave queda AUSENTE (= "no sé", el filtro nunca la esconde), nunca inventada.
+ *
  * Isomórfico (sin `server-only` ni `"use client"`): lo usan el loader de la página y el borde cliente.
  */
-import type { BookingDTO } from "@/components/agenda/agenda-utils";
+import { toBookingDTO, type BookingDTO } from "@/components/agenda/agenda-utils";
+import type { AgendaBookingRow } from "@/lib/bookings-types";
 
 /** Lo que el cliente ya recibe aparte (props `services` y `locations` de la agenda). */
 export type AgendaWireCatalog = {
   services: ReadonlyArray<{ id: string; name: string; color: string | null }>;
   locations: ReadonlyArray<{ id: string; name: string; isPrimary: boolean }>;
+  /** [AS-2o] Obras sociales de la página (activas, sin Particular). El MISMO array al codificar y al decodificar. */
+  insurers?: ReadonlyArray<{ id: string; name: string }>;
 };
 
 /** Un turno en el cable: claves cortas (`FIELDS`) más, si las hubiera, claves nuevas con su nombre completo. */
 export type AgendaWireBooking = Record<string, unknown>;
 
+type InsurerLookup = {
+  ids: ReadonlyArray<string>;
+  index: ReadonlyMap<string, number>;
+  /** Nombre → id, solo nombres que no se repiten en el catálogo (uno repetido no se puede derivar). */
+  byName: ReadonlyMap<string, string>;
+};
+
 type Lookup = {
   service: ReadonlyMap<string, { name: string; color: string | null }>;
   location: ReadonlyMap<string, string>;
   primaryName: string | undefined;
+  insurers: InsurerLookup | undefined;
 };
 
 type Field = {
@@ -105,14 +125,72 @@ const FIELDS: ReadonlyArray<Field> = [
   { key: "patientActiveLinkedPlanDisciplines", wire: "pd" },
 ];
 const KNOWN = new Set<string>(FIELDS.map((f) => f.key));
-const SHORT = new Set<string>(FIELDS.map((f) => f.wire));
+// `oi` es corta aunque no esté en `FIELDS`: un `oi` que llega sin catálogo de obras sociales se descarta, no se
+// cuela en el DTO como clave desconocida.
+const INSURER_WIRE = "oi";
+const SHORT = new Set<string>([...FIELDS.map((f) => f.wire), INSURER_WIRE]);
+const PARTICULAR = "particular";
+const PARTICULAR_WIRE = -1;
+
+function insurerLookupOf(insurers: AgendaWireCatalog["insurers"]): InsurerLookup | undefined {
+  if (!insurers) return undefined;
+  const count = new Map<string, number>();
+  for (const i of insurers) count.set(i.name, (count.get(i.name) ?? 0) + 1);
+  return {
+    ids: insurers.map((i) => i.id),
+    index: new Map(insurers.map((i, n) => [i.id, n])),
+    byName: new Map(insurers.filter((i) => count.get(i.name) === 1).map((i) => [i.name, i.id])),
+  };
+}
 
 function lookupOf(catalog: AgendaWireCatalog): Lookup {
   return {
     service: new Map(catalog.services.map((s) => [s.id, { name: s.name, color: s.color }])),
     location: new Map(catalog.locations.map((l) => [l.id, l.name])),
     primaryName: catalog.locations.find((l) => l.isPrimary)?.name,
+    insurers: insurerLookupOf(catalog.insurers),
   };
+}
+
+/**
+ * [AS-2o] La `insurerKey` más probable a partir de lo que el turno ya trae (es compresión: si no acierta, el valor
+ * viaja explícito y la ida y vuelta sigue exacta). Como lo arma `listAgendaBookings`:
+ *  - invitado (sin paciente) → particular;
+ *  - `obraSocial` = nombre (único) de una OS del catálogo → su id (`obraSocial` sale de `insurerRef.name`);
+ *  - acceso `basic` sin poder operar = profesional sin acceso al paciente → null (no ve la cobertura; su
+ *    `obraSocial` dice «Particular» por defecto). La Secretaria también viaja como `basic` (nivel `admin`), pero
+ *    opera (`agenda.operateAll`): ella sí ve la cobertura;
+ *  - el resto → particular.
+ */
+function deriveInsurerKey(dto: Partial<BookingDTO>, ins: InsurerLookup): string | null {
+  if (dto.patientId == null) return PARTICULAR;
+  const byName = dto.obraSocial != null ? ins.byName.get(dto.obraSocial) : undefined;
+  if (byName) return byName;
+  return dto.patientAccess === "basic" && dto.canOperate === false ? null : PARTICULAR;
+}
+
+function encodeInsurerKey(v: string | null, ins: InsurerLookup): unknown {
+  if (v === null) return null;
+  if (v === PARTICULAR) return PARTICULAR_WIRE;
+  return ins.index.get(v) ?? v;
+}
+
+/** `undefined` = no se puede resolver (índice fuera del catálogo): la clave queda ausente (nunca se esconde). */
+function decodeInsurerKey(w: unknown, ins: InsurerLookup): string | null | undefined {
+  if (w === null) return null;
+  if (w === PARTICULAR_WIRE) return PARTICULAR;
+  if (typeof w === "number") return ins.ids[w];
+  return typeof w === "string" ? w : undefined;
+}
+
+/**
+ * [AS-2o] Fila de `listAgendaBookings` → DTO con `insurerKey` (al final; ausente si la fila no la trae). Es
+ * `toBookingDTO` más la clave del filtro por obra social; lo usan el loader de la página y el refetch en vivo de la
+ * agenda, así las dos listas son intercambiables. Si `toBookingDTO` la sumara al final, este spread no cambia nada.
+ */
+export function agendaRowToDTO(row: AgendaBookingRow): BookingDTO {
+  const dto = toBookingDTO(row);
+  return row.insurerKey === undefined ? dto : { ...dto, insurerKey: row.insurerKey };
 }
 
 function encodeOne(dto: BookingDTO, l: Lookup): AgendaWireBooking {
@@ -128,7 +206,12 @@ function encodeOne(dto: BookingDTO, l: Lookup): AgendaWireBooking {
     }
     out[f.wire] = v;
   }
-  for (const k of Object.keys(src)) if (!KNOWN.has(k)) out[k] = src[k];
+  const ins = l.insurers;
+  if (ins && src.insurerKey !== undefined) {
+    const v = src.insurerKey as string | null;
+    if (deriveInsurerKey(dto, ins) !== v) out[INSURER_WIRE] = encodeInsurerKey(v, ins);
+  }
+  for (const k of Object.keys(src)) if (!KNOWN.has(k) && !(ins && k === "insurerKey")) out[k] = src[k];
   return out;
 }
 
@@ -142,6 +225,12 @@ function decodeOne(w: AgendaWireBooking, l: Lookup): BookingDTO {
       const d = f.derive(out as Partial<BookingDTO>, l);
       if (d !== undefined) out[f.key] = d;
     }
+  }
+  const ins = l.insurers;
+  if (ins) {
+    // Después de `FIELDS`: la derivación lee paciente, `obraSocial`, acceso y `canOperate` ya decodificados.
+    const k = INSURER_WIRE in w ? decodeInsurerKey(w[INSURER_WIRE], ins) : deriveInsurerKey(out as Partial<BookingDTO>, ins);
+    if (k !== undefined) out.insurerKey = k;
   }
   for (const k of Object.keys(w)) if (!SHORT.has(k)) out[k] = w[k];
   return out as BookingDTO;

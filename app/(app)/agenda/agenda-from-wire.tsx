@@ -19,10 +19,10 @@ export function AgendaFromWire({
   wireBookings,
   ...props
 }: Omit<AgendaClientProps, "bookings"> & { wireBookings: AgendaWireBooking[] }) {
-  const { services, locations } = props;
+  const { services, locations, insurers } = props;
   const bookings = useMemo(
-    () => decodeAgendaWire(wireBookings, { services, locations: locations ?? [] }),
-    [wireBookings, services, locations]
+    () => decodeAgendaWire(wireBookings, { services, locations: locations ?? [], insurers }),
+    [wireBookings, services, locations, insurers]
   );
   return <AgendaClient {...props} bookings={bookings} />;
 }

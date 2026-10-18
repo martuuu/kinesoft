@@ -148,3 +148,91 @@ describe("[PF2-c] cable de la agenda", () => {
     expect(decodeAgendaWire([w], catalog)[0]).toEqual(dto);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [AS-2o] T3e-2o (plan §23.9): `insurerKey` en el cable como `oi`, sin que el payload crezca: se DERIVA de lo que
+// ya viaja (el nombre de la obra social contra el catálogo de obras sociales que la página manda igual, el acceso y
+// `canOperate`) y solo viaja cuando la derivación no lo reproduce (índice en el catálogo, -1 = particular, null o el
+// id explícito de una OS fuera del catálogo).
+// ─────────────────────────────────────────────────────────────────────────────
+import { agendaRowToDTO } from "@/lib/agenda-wire";
+
+describe("[AS-2o] obra social en el cable (`oi`)", () => {
+  const withInsurers: AgendaWireCatalog = {
+    ...catalog,
+    insurers: [
+      { id: "ins_osde", name: "OSDE" },
+      { id: "ins_swiss", name: "Swiss Medical" },
+      { id: "ins_dup1", name: "Duplicada" },
+      { id: "ins_dup2", name: "Duplicada" },
+    ],
+  };
+  const OS: Record<string, AgendaBookingRow> = {
+    osde: row({ obraSocial: "OSDE", insurerKey: "ins_osde" }),
+    swiss: row({ obraSocial: "Swiss Medical", insurerKey: "ins_swiss" }),
+    particular: row({ obraSocial: "Particular", insurerKey: "particular" }),
+    guest: row({ patientId: null, patientName: "Invitado", patientAccess: "none", obraSocial: "Particular", insurerKey: "particular" }),
+    // Acceso basic de un profesional sin `operateAll`: no ve la cobertura.
+    sinAcceso: row({ patientAccess: "basic", canOperate: false, clinicalHidden: true, obraSocial: "Particular", insurerKey: null }),
+    // Secretaria (nivel admin → viaja como basic, opera): ve la cobertura.
+    secretariaParticular: row({ patientAccess: "basic", clinicalHidden: true, obraSocial: "Particular", insurerKey: "particular" }),
+    secretariaOsde: row({ patientAccess: "basic", clinicalHidden: true, obraSocial: "OSDE", insurerKey: "ins_osde" }),
+    // Texto libre sin vincular que coincide con un nombre del catálogo: es particular igual.
+    textoLibre: row({ obraSocial: "OSDE", insurerKey: "particular" }),
+    // Obra social inactiva (fuera del catálogo de la página): viaja su id.
+    inactiva: row({ obraSocial: "IOMA (baja)", insurerKey: "ins_ioma" }),
+    // Nombre repetido en el catálogo: no se puede derivar, viaja el índice.
+    duplicada: row({ obraSocial: "Duplicada", insurerKey: "ins_dup2" }),
+    // Basic sin operar pero con la clave sabida (caso raro): viaja explícito.
+    basicConClave: row({ patientAccess: "basic", canOperate: false, obraSocial: "Particular", insurerKey: "particular" }),
+  };
+
+  for (const [name, r] of Object.entries(OS)) {
+    it(`[AS-2o] ida y vuelta exacta con el catálogo de obras sociales (${name})`, () => {
+      const dto = agendaRowToDTO(r);
+      expect(dto.insurerKey).toBe(r.insurerKey);
+      const [w] = encodeAgendaWire([dto], withInsurers);
+      expect(Object.keys(w)).not.toContain("insurerKey");
+      const [back] = decodeAgendaWire([w], withInsurers);
+      expect(JSON.stringify(back)).toBe(JSON.stringify(dto));
+    });
+  }
+
+  it("[AS-2o] los casos comunes no suman bytes; los raros, lo mínimo", () => {
+    const enc = (r: AgendaBookingRow) => encodeAgendaWire([agendaRowToDTO(r)], withInsurers)[0];
+    const plain = (r: AgendaBookingRow) => {
+      const { insurerKey: _drop, ...rest } = r;
+      return encodeAgendaWire([toBookingDTO(rest as AgendaBookingRow)], catalog)[0];
+    };
+    for (const k of ["osde", "swiss", "particular", "guest", "sinAcceso", "secretariaParticular", "secretariaOsde"]) {
+      expect(JSON.stringify(enc(OS[k])), k).toBe(JSON.stringify(plain(OS[k])));
+    }
+    expect(enc(OS.textoLibre).oi).toBe(-1);
+    expect(enc(OS.inactiva).oi).toBe("ins_ioma");
+    expect(enc(OS.duplicada).oi).toBe(3);
+    expect(enc(OS.basicConClave).oi).toBe(-1);
+  });
+
+  it("[AS-2o] sin el catálogo de obras sociales al decodificar: la clave queda AUSENTE (nunca se esconde), sin basura", () => {
+    const wire = encodeAgendaWire(Object.values(OS).map(agendaRowToDTO), withInsurers);
+    for (const back of decodeAgendaWire(wire, catalog)) {
+      expect("insurerKey" in back).toBe(false);
+      expect("oi" in back).toBe(false);
+    }
+  });
+
+  it("[AS-2o] sin el catálogo al codificar: la clave viaja con su nombre completo (no se pierde)", () => {
+    const dto = agendaRowToDTO(OS.osde);
+    const [w] = encodeAgendaWire([dto], catalog);
+    expect(w.insurerKey).toBe("ins_osde");
+    expect(JSON.stringify(decodeAgendaWire([w], catalog)[0])).toBe(JSON.stringify(dto));
+  });
+
+  it("[AS-2o] agendaRowToDTO = toBookingDTO + insurerKey al final (ausente si la fila no la trae)", () => {
+    const dto = agendaRowToDTO(OS.sinAcceso);
+    expect(Object.keys(dto).at(-1)).toBe("insurerKey");
+    expect(dto.insurerKey).toBeNull();
+    const { insurerKey: _drop, ...rest } = OS.osde;
+    expect(agendaRowToDTO(rest as AgendaBookingRow)).toEqual(toBookingDTO(rest as AgendaBookingRow));
+  });
+});

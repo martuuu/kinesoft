@@ -53,8 +53,7 @@ import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 import { displayMemberName } from "@/lib/display-name";
 import { addDays, dayWindow } from "@/lib/availability/day";
 import type { DayKey } from "@/lib/availability/types";
-import { toBookingDTO } from "@/components/agenda/agenda-utils";
-import { encodeAgendaWire, type AgendaWireBooking } from "@/lib/agenda-wire";
+import { agendaRowToDTO, encodeAgendaWire, type AgendaWireBooking } from "@/lib/agenda-wire";
 import { logger } from "@/lib/logger";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -230,9 +229,13 @@ export async function loadAgendaPage(
   ]);
   return {
     ...boot,
-    // El catálogo del cable es EXACTAMENTE el que viaja en las props (`services`, `locations`): el cliente
-    // decodifica con esas mismas listas.
-    bookings: encodeAgendaWire(rows.map(toBookingDTO), { services: boot.services, locations: boot.locations }),
+    // El catálogo del cable es EXACTAMENTE el que viaja en las props (`services`, `locations` e `insurers`, este
+    // último para `oi`, el filtro por obra social de AS-2o): el cliente decodifica con esas mismas listas.
+    bookings: encodeAgendaWire(rows.map(agendaRowToDTO), {
+      services: boot.services,
+      locations: boot.locations,
+      insurers: boot.insurers,
+    }),
     agendaView,
     capabilities: [...caps],
     availability,

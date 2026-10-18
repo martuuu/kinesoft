@@ -196,9 +196,18 @@ export function parseSelectedPractitioners(
  * profesionales viaja en la URL para que un refresh o un link conserven la
  * vista de la secretaria; la sede vive en `agendaPrefs`.
  */
-export function agendaHref(p: { view: AgendaView; dayKey: DayKey; selectedIds?: ReadonlyArray<string> }): string {
+export function agendaHref(p: {
+  view: AgendaView;
+  dayKey: DayKey;
+  selectedIds?: ReadonlyArray<string>;
+  /** [AS-2o] filtro de obra social ya efectivo (`effectiveInsurerFilter`); null/ausente = sin `?os=`. */
+  insurerKey?: string | null;
+}): string {
   const sp = new URLSearchParams({ view: p.view, date: p.dayKey });
   if (p.selectedIds && p.selectedIds.length > 0) sp.set("pros", p.selectedIds.join(","));
+  // [AS-2o] Como `pros`: el filtro de obra social viaja en la URL para que navegar de día/semana, un refresh o un
+  // link lo conserven (antes `go()` armaba la URL de cero y lo perdía).
+  if (p.insurerKey) sp.set("os", p.insurerKey);
   return `/agenda?${sp.toString()}`;
 }
 
@@ -237,7 +246,16 @@ export function agendaHref(p: { view: AgendaView; dayKey: DayKey; selectedIds?: 
  * `roomId`: undefined = "no sé" (proyección sin sala) → ningún filtro de sala
  * lo esconde; null = sin sala.
  */
-export type AgendaFilterable = { practitionerId: string; locationId?: string | null; roomId?: string | null };
+export type AgendaFilterable = {
+  practitionerId: string;
+  locationId?: string | null;
+  roomId?: string | null;
+  /**
+   * [AS-2o] Cobertura (`BookingDTO.insurerKey`): id del catálogo o "particular"; `null` = el actor no la ve (nunca
+   * matchea un filtro activo); `undefined` = no se sabe (nunca se esconde).
+   */
+  insurerKey?: string | null;
+};
 type Filterable = AgendaFilterable;
 
 /** Filtros que sacan turnos de la agenda. Vacío/null en cada clave = sin filtrar. */
@@ -251,6 +269,12 @@ export type AgendaFilters = {
    * `ROOM_FILTER_NONE` (= "Sin sala") o null/ausente = todas.
    */
   roomId?: string | null;
+  /**
+   * [AS-2o] Obra social (`?os=`, ya pasada por `effectiveInsurerFilter`): un id del catálogo,
+   * `INSURER_FILTER_PARTICULAR` o null/ausente = todas. Opcional como `roomId`: un objeto armado antes de T3e sigue
+   * significando «todas».
+   */
+  insurerKey?: string | null;
 };
 
 export type AgendaFilterKey = keyof AgendaFilters;
@@ -258,7 +282,10 @@ export type AgendaFilterKey = keyof AgendaFilters;
 /** Valor del filtro de sala para "Sin sala" (mismo que `AgendaBookingsQuery.roomId`). */
 export const ROOM_FILTER_NONE = "none";
 
-export const EMPTY_AGENDA_FILTERS: AgendaFilters = { practitionerIds: [], locationId: null, roomId: null };
+/** [AS-2o] Valor del filtro de obra social para «Particular» (mismo literal que `BookingDTO.insurerKey`). */
+export const INSURER_FILTER_PARTICULAR = "particular";
+
+export const EMPTY_AGENDA_FILTERS: AgendaFilters = { practitionerIds: [], locationId: null, roomId: null, insurerKey: null };
 
 /** Datos del consultorio que necesitan las dimensiones (no son filtros). */
 export type AgendaFilterContext = { primaryLocationId: string | null };
@@ -297,6 +324,14 @@ export const AGENDA_FILTER_DIMENSIONS = {
   roomId: {
     isActive: (id) => id != null,
     matches: (b, id) => b.roomId === undefined || (id === ROOM_FILTER_NONE ? b.roomId === null : b.roomId === id),
+  },
+  // [AS-2o] Regla segura (plan §23.9): `undefined` (el server no la mandó) no se esconde, como la sala y la sede.
+  // `null` es «no tenés acceso a la cobertura de este paciente» (acceso `basic`): NUNCA matchea, ni siquiera
+  // «Particular» (en la fila basic `obraSocial` dice «Particular» por defecto, y mostrarlo como particular afirmaría
+  // algo que el actor no sabe). Con filtro activo esas filas se ocultan y se cuentan (`countInsurerAccessHidden`).
+  insurerKey: {
+    isActive: (k) => k != null,
+    matches: (b, k) => b.insurerKey === undefined || (b.insurerKey !== null && b.insurerKey === k),
   },
 } satisfies { [K in AgendaFilterKey]: AgendaFilterDimension<K> };
 
@@ -445,6 +480,64 @@ export function countByRoom(
     out[k] = (out[k] ?? 0) + 1;
   }
   return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Obra social (T3e-2o, plan §23.9)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * ¿Se ofrece el filtro de obra social? Con ≥1 obra social que no sea Particular (el catálogo de la página ya viene
+ * sin Particular: `loadAgendaBootstrapInTx`; `isParticular` se mira igual por si un caller manda el catálogo entero).
+ * Sin obras sociales, filtrar por «Particular» sacaría solo los turnos sin acceso: no aporta.
+ */
+export function showInsurerFilter(insurers: ReadonlyArray<{ id: string; isParticular?: boolean }>): boolean {
+  return insurers.some((i) => !i.isParticular);
+}
+
+/** `?os=` → id del catálogo o "particular"; cualquier otra cosa (id ajeno, archivado, vacío) → null. */
+export function parseInsurerFilterParam(
+  raw: string | null | undefined,
+  insurers: ReadonlyArray<{ id: string; isParticular?: boolean }>
+): string | null {
+  if (!raw) return null;
+  if (raw === INSURER_FILTER_PARTICULAR) return raw;
+  return insurers.some((i) => i.id === raw && !i.isParticular) ? raw : null;
+}
+
+/**
+ * Filtro de obra social que efectivamente se aplica: el de la URL si el select se muestra; si no, ninguno (mismo
+ * criterio que `effectiveRoomFilter`: nunca se esconde un turno por un filtro que no se ve en pantalla).
+ */
+export function effectiveInsurerFilter(
+  raw: string | null | undefined,
+  insurers: ReadonlyArray<{ id: string; isParticular?: boolean }>
+): string | null {
+  return showInsurerFilter(insurers) ? parseInsurerFilterParam(raw, insurers) : null;
+}
+
+/**
+ * Turnos que el filtro de obra social oculta porque el actor no ve su cobertura (`insurerKey === null`). Pasarle la
+ * base con los demás filtros y la visibilidad («Mostrar cancelados/ausentes») ya aplicados, en el alcance de la
+ * vista: así cuenta exactamente lo que se vería sin este filtro (un cancelado oculto por la visibilidad no suma).
+ * Sin filtro, 0: un `null` sin filtro se ve como siempre.
+ */
+export function countInsurerAccessHidden(
+  bookings: ReadonlyArray<{ insurerKey?: string | null }>,
+  insurerKey: string | null
+): number {
+  if (insurerKey == null) return 0;
+  let n = 0;
+  for (const b of bookings) if (b.insurerKey === null) n++;
+  return n;
+}
+
+/** Copy del aviso (plan §23.9); 0 → null (no se dibuja). */
+export function insurerAccessHiddenLabel(n: number): string | null {
+  if (n <= 0) return null;
+  return n === 1
+    ? "1 turno sin acceso a la cobertura no se muestra con este filtro"
+    : `${n} turnos sin acceso a la cobertura no se muestran con este filtro`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
