@@ -56,22 +56,22 @@ import { formatDateAR } from "@/lib/format";
 import type { BookingStatus } from "@prisma/client";
 
 export const EVOLUCIONES_VIEW_COPY = {
-  title: "Evoluciones",
-  newNote: "Nueva evolución",
+  title: "Historia clínica",
+  newNote: "Nueva ficha",
   print: "Imprimir historia clínica",
-  searchLabel: "Buscar en las evoluciones",
+  searchLabel: "Buscar en las fichas",
   searchPlaceholder: "Buscar por título o texto…",
-  loading: "Cargando evoluciones…",
+  loading: "Cargando fichas…",
   loadMore: "Cargar más",
   loadingMore: "Cargando…",
-  loadFailed: "No pudimos cargar las evoluciones. Probá de nuevo.",
+  loadFailed: "No pudimos cargar las fichas. Probá de nuevo.",
   retry: "Reintentar",
-  empty: "Todavía no hay evoluciones de este paciente.",
-  emptyWrite: "Cargá la primera con «Nueva evolución» o desde el turno en la agenda.",
-  emptySearch: (q: string) => `No encontramos evoluciones con «${q}».`,
+  empty: "Todavía no hay fichas de este paciente.",
+  emptyWrite: "Escribí la primera arriba o desde el turno en la agenda.",
+  emptySearch: (q: string) => `No encontramos fichas con «${q}».`,
   sessionTitle: "Sesión del plan",
   sessionInNote: "Sesión registrada",
-  bookingUnavailable: "No se puede cargar una evolución en ese turno.",
+  bookingUnavailable: "No se puede cargar una ficha en ese turno.",
 } as const;
 
 /** Turno del deep link (`?turno=`), proyectado por la página: solo si es de ESTE paciente y del consultorio. */

@@ -29,48 +29,48 @@ import { formatDateAR } from "@/lib/format";
 // ─── Copy de la UI (voseo). Lo de las actions vive en CLINICAL_NOTE_COPY (C-EV2-1). ─────────────────────────────
 
 export const CLINICAL_NOTES_UI_COPY = {
-  newTitle: "Nueva evolución",
-  editTitle: "Editar evolución",
-  amendTitle: "Agregar enmienda",
+  newTitle: "Nueva ficha",
+  editTitle: "Editar ficha",
+  amendTitle: "Enmendar",
   kindLabel: "Tipo",
   titleLabel: "Título (opcional)",
   titlePlaceholder: "Ej.: Control post quirúrgico",
-  bodyLabel: "Evolución",
+  bodyLabel: "Ficha",
   amendBodyLabel: "Enmienda",
   bodyPlaceholder: "Qué se hizo, cómo respondió el paciente, indicaciones…",
   occurredAtLabel: "Fecha y hora de la atención",
-  save: "Guardar evolución",
+  save: "Guardar ficha",
   saveEdit: "Guardar cambios",
   saveAmend: "Guardar enmienda",
   saving: "Guardando…",
   cancel: "Cancelar",
   edit: "Editar",
-  amend: "Agregar enmienda",
+  amend: "Enmendar",
   void: "Anular",
   history: "Ver versiones anteriores",
-  amendHint: "La enmienda se agrega debajo de la evolución original, que queda como estaba.",
-  dirtyMessage: "Tenés texto sin guardar en la evolución. Si cerrás, se pierde.",
-  savedCreate: "Evolución guardada",
+  amendHint: "La enmienda se agrega debajo de la ficha original, que queda como estaba.",
+  dirtyMessage: "Tenés una ficha sin guardar. Si cerrás, se pierde.",
+  savedCreate: "Ficha guardada",
   savedEdit: "Cambios guardados",
   savedAmend: "Enmienda guardada",
-  voidTitle: "Anular evolución",
+  voidTitle: "Anular ficha",
   voidDescription:
-    "La evolución no se borra: queda en la historia clínica marcada como anulada, con el motivo y quién la anuló.",
+    "La ficha no se borra: queda en la historia clínica marcada como anulada, con el motivo y quién la anuló.",
   voidReasonLabel: "Motivo",
   voidReasonPlaceholder: "Ej.: Cargada en el paciente equivocado",
-  voidConfirm: "Anular evolución",
+  voidConfirm: "Anular ficha",
   voiding: "Anulando…",
-  voided: "Evolución anulada",
+  voided: "Ficha anulada",
   voidedBadge: "Anulada",
   voidedShowText: "Ver el texto anulado",
   amendmentLabel: "Enmienda",
   historyTitle: "Versiones anteriores",
   historyLoading: "Cargando versiones…",
-  historyEmpty: "Esta evolución no tiene versiones anteriores.",
-  historyForbidden: "No tenés acceso a las versiones de esta evolución.",
+  historyEmpty: "Esta ficha no tiene versiones anteriores.",
+  historyForbidden: "No tenés acceso a las versiones de esta ficha.",
   historyCurrent: "Versión actual",
   edited: "Editada",
-  emptyBody: "Escribí la evolución.",
+  emptyBody: "Escribí la ficha.",
   emptyAmend: "Escribí la enmienda.",
   // EV2-Z M5: al pasar de «editar» a «enmienda» (se cerró la ventana de 24 h) el texto escrito no se pierde.
   amendCarriedHint: "Copiamos tu texto: dejá solo lo que agrega o corrige.",
@@ -161,9 +161,9 @@ export function isDraftDirty(initial: NoteDraft, current: NoteDraft): boolean {
   return isFormDirty(formStateKey([], initial), formStateKey([], current));
 }
 
-/** «La evolución puede tener hasta 20.000 caracteres.» / «La enmienda …» (EV2-Z: la enmienda decía «evolución»). */
+/** «La ficha puede tener hasta 20.000 caracteres.» / «La enmienda …» (EV2-Z: la enmienda decía «evolución»). */
 export function bodyMaxMessage(mode: NoteEditorMode): string {
-  const what = mode.type === "amend" ? "La enmienda" : "La evolución";
+  const what = mode.type === "amend" ? "La enmienda" : "La ficha";
   return `${what} puede tener hasta ${CLINICAL_NOTE_BODY_MAX.toLocaleString("es-AR")} caracteres.`;
 }
 

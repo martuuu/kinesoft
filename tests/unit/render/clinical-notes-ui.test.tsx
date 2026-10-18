@@ -94,7 +94,7 @@ describe("[EV2-2e] editor de evoluciones", () => {
       />
     );
     expect(html).toContain('role="dialog"');
-    expect(html).toContain("Nueva evolución");
+    expect(html).toContain("Nueva ficha");
     expect(html.match(/role="radio"/g)?.length).toBe(3);
     expect(html).toMatch(/role="radio" aria-checked="true"[^>]*><span[^>]*><span class="k-tag k-tag-sky">Evolución<\/span>/);
     expect(html).toContain('<span class="k-tag k-tag-lime">Primera consulta</span>');
@@ -106,7 +106,7 @@ describe("[EV2-2e] editor de evoluciones", () => {
     expect(html).toContain('value="2026-10-15"');
     expect(html).toMatch(/<option value="09" selected="">09<\/option>/);
     expect(html).toMatch(/<option value="30" selected="">30<\/option>/);
-    expect(buttons(html)).toEqual(expect.arrayContaining(["Cancelar", "Guardar evolución"]));
+    expect(buttons(html)).toEqual(expect.arrayContaining(["Cancelar", "Guardar ficha"]));
     expect(html).not.toContain("Podés editar hasta");
   });
 
@@ -124,7 +124,7 @@ describe("[EV2-2e] editor de evoluciones", () => {
     const html = render(<NoteEditorForm mode={{ type: "amend", note: note() }} onCancel={noop} onSaved={noop} now={NOW} />);
     expect(html).not.toContain('role="radio"');
     expect(html).not.toContain('type="date"');
-    expect(html).toContain("La enmienda se agrega debajo de la evolución original");
+    expect(html).toContain("La enmienda se agrega debajo de la ficha original");
     expect(html).toContain("de Lic. Pérez");
     expect(buttons(html)).toContain("Guardar enmienda");
     expect(html).toContain("0 / 20.000");
@@ -143,15 +143,15 @@ describe("[EV2-2e] tarjeta de evolución y permisos", () => {
     expect(html).toContain('<span class="k-tag k-tag-sky">Evolución</span>');
   });
 
-  it("[EV2-2e] otro profesional con escritura: solo «Agregar enmienda»", () => {
+  it("[EV2-2e] otro profesional con escritura: solo «Enmendar»", () => {
     const html = render(<NoteCard note={note({}, { actor: "user-other" })} now={NOW} />);
-    expect(buttons(html)).toEqual(["Agregar enmienda"]);
+    expect(buttons(html)).toEqual(["Enmendar"]);
     expect(html).not.toContain("Podés editar hasta");
   });
 
   it("[EV2-2e] Titular clínico/a (no autor): enmienda y anular", () => {
     const html = render(<NoteCard note={note({}, { actor: "user-owner", owner: true })} now={NOW} />);
-    expect(buttons(html)).toEqual(["Agregar enmienda", "Anular"]);
+    expect(buttons(html)).toEqual(["Enmendar", "Anular"]);
   });
 
   it("[EV2-2e] lector sin escritura: ningún botón", () => {
@@ -162,7 +162,7 @@ describe("[EV2-2e] tarjeta de evolución y permisos", () => {
   it("[EV2-2e] editada: «editada» y «Ver versiones anteriores»", () => {
     const html = render(<NoteCard note={note({ revision: 2 }, { actor: "user-other" })} now={NOW} />);
     expect(html).toContain("Lic. Pérez · editada");
-    expect(buttons(html)).toEqual(["Agregar enmienda", "Ver versiones anteriores"]);
+    expect(buttons(html)).toEqual(["Enmendar", "Ver versiones anteriores"]);
   });
 
   it("[EV2-2e] enmiendas debajo de la raíz, rotuladas", () => {
@@ -171,9 +171,9 @@ describe("[EV2-2e] tarjeta de evolución y permisos", () => {
     expect(html).toContain('data-note-id="am-1"');
     expect(html).toContain(">Enmienda</strong>");
     expect(html).toContain("Agrego dato de dolor.");
-    // La enmienda no ofrece «Agregar enmienda» (se enmienda solo la raíz).
+    // La enmienda no ofrece «Enmendar» (se enmienda solo la raíz).
     const amHtml = html.slice(html.indexOf('data-note-id="am-1"'));
-    expect(buttons(amHtml)).not.toContain("Agregar enmienda");
+    expect(buttons(amHtml)).not.toContain("Enmendar");
   });
 
   it("[EV2-2e] anulada: colapsada (details cerrado) con motivo, quién anuló y autor; sin acciones", () => {
@@ -199,11 +199,11 @@ describe("[EV2-2e] anular en Modal y versiones", () => {
   it("[EV2-2e] el diálogo de anular es un Modal con motivo y contador a 500", () => {
     const html = render(<VoidNoteDialog open onClose={noop} note={note()} onVoided={noop} />);
     expect(html).toContain('role="dialog"');
-    expect(html).toContain("Anular evolución");
-    expect(html).toContain("La evolución no se borra");
+    expect(html).toContain("Anular ficha");
+    expect(html).toContain("La ficha no se borra");
     expect(html).toContain("Motivo");
     expect(html).toContain("0 / 500");
-    expect(buttons(html)).toEqual(expect.arrayContaining(["Cancelar", "Anular evolución"]));
+    expect(buttons(html)).toEqual(expect.arrayContaining(["Cancelar", "Anular ficha"]));
   });
 
   it("[EV2-2e] cerrado no renderiza nada", () => {
@@ -214,10 +214,10 @@ describe("[EV2-2e] anular en Modal y versiones", () => {
     const n = note({ revision: 3, body: "Texto actual" });
     expect(render(<NoteHistoryContent note={n} state={{ status: "loading" }} />)).toContain("Cargando versiones…");
     expect(render(<NoteHistoryContent note={n} state={{ status: "forbidden" }} />)).toContain(
-      "No tenés acceso a las versiones de esta evolución."
+      "No tenés acceso a las versiones de esta ficha."
     );
     expect(render(<NoteHistoryContent note={n} state={{ status: "ready", revisions: [] }} />)).toContain(
-      "Esta evolución no tiene versiones anteriores."
+      "Esta ficha no tiene versiones anteriores."
     );
     const html = render(
       <NoteHistoryContent
@@ -329,7 +329,7 @@ describe("[EV2-Z] fixes de UI del editor y la tarjeta", () => {
     expect(buttons(render(<NoteCard note={voided} now={NOW} hideBooking />))).toEqual(["Ver versiones anteriores"]);
     // Viva editada de otro autor (el caso del drawer del turno): enmienda e historial.
     expect(buttons(render(<NoteCard note={note({ revision: 2 }, { actor: "user-other" })} now={NOW} hideBooking />))).toEqual([
-      "Agregar enmienda",
+      "Enmendar",
       "Ver versiones anteriores",
     ]);
   });

@@ -220,7 +220,7 @@ export function NoteEditorForm({
           )}
           {mode.type === "amend" && (
             <p style={hintStyle}>
-              Enmienda a la evolución del {noteDateLabel(mode.note.occurredAt)} de {mode.note.author.name}.{" "}
+              Enmienda a la ficha del {noteDateLabel(mode.note.occurredAt)} de {mode.note.author.name}.{" "}
               {COPY.amendHint}
             </p>
           )}

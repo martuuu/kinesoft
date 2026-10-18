@@ -125,22 +125,22 @@ export type VoidClinicalNoteInput = { noteId: string; expectedRevision: number; 
 
 /** Copy único (voseo). Los rechazos de acceso NO distinguen «no existe» de «no podés» (no revelan nada). */
 export const CLINICAL_NOTE_COPY = {
-  forbidden: "No tenés acceso para cargar o ver evoluciones de este paciente.",
-  notFound: "No encontramos la evolución.",
+  forbidden: "No tenés acceso para cargar o ver fichas de este paciente.",
+  notFound: "No encontramos la ficha.",
   bookingNotFound: "No encontramos el turno.",
   bookingOtherPatient: "Ese turno es de otro paciente.",
-  bookingCancelled: "El turno está cancelado: no se le puede cargar una evolución.",
-  bookingNoShow: "El turno quedó como ausente: no se le puede cargar una evolución.",
-  future: "Todavía no llegó la hora del turno: la evolución se puede cargar desde 12 h antes.",
+  bookingCancelled: "El turno está cancelado: no se le puede cargar una ficha.",
+  bookingNoShow: "El turno quedó como ausente: no se le puede cargar una ficha.",
+  future: "Todavía no llegó la hora del turno: la ficha se puede cargar desde 12 h antes.",
   /** EV2-Z: `future` habla del turno; sin turno el límite es la fecha que se eligió (EV2-D12). */
-  futureNoBooking: "La fecha de la evolución no puede ser más de 12 h en el futuro.",
-  bookingTaken: "Este turno ya tiene una evolución. Editala o agregale una enmienda.",
+  futureNoBooking: "La fecha de la ficha no puede ser más de 12 h en el futuro.",
+  bookingTaken: "Este turno ya tiene una ficha. Editala o enmendala.",
   notAuthor: "Solo quien la escribió puede editarla.",
   windowClosed: "Pasaron más de 24 h: agregá una enmienda o anulala con un motivo.",
-  voided: "La evolución está anulada.",
-  amendTarget: "Se enmienda la evolución original, no una enmienda.",
+  voided: "La ficha está anulada.",
+  amendTarget: "Se enmienda la ficha original, no una enmienda.",
   voidForbidden: "Solo quien la escribió o el/la Titular pueden anularla.",
-  stale: "La evolución cambió mientras la editabas. Recargá para ver la última versión.",
-  keyReused: "Ese envío ya se usó para otra evolución. Cerrá y volvé a abrir el editor.",
+  stale: "La ficha cambió mientras la editabas. Recargá para ver la última versión.",
+  keyReused: "Ese envío ya se usó para otra ficha. Cerrá y volvé a abrir el editor.",
   invalid: "Revisá los datos e intentá de nuevo.",
 } as const;

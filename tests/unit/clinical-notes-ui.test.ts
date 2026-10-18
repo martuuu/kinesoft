@@ -123,7 +123,7 @@ describe("[EV2-2e] borrador del editor", () => {
     expect(bodyCounter("a".repeat(18_000)).announce).toBe("Te quedan 2.000 caracteres");
     expect(bodyCounter("a".repeat(CLINICAL_NOTE_BODY_MAX - 1)).announce).toBe("Te quedan 1 carácter");
     expect(bodyCounter("a".repeat(CLINICAL_NOTE_BODY_MAX + 1)).announce).toBe(
-      "La evolución puede tener hasta 20.000 caracteres."
+      "La ficha puede tener hasta 20.000 caracteres."
     );
     const amend: NoteEditorMode = { type: "amend", note: {} as ClinicalNoteDTO };
     expect(bodyCounter("a".repeat(CLINICAL_NOTE_BODY_MAX + 1), amend).announce).toBe(
@@ -135,7 +135,7 @@ describe("[EV2-2e] borrador del editor", () => {
     const amend: NoteEditorMode = { type: "amend", note: {} as ClinicalNoteDTO };
     const d = { kind: "EVOLUTION" as const, title: "", body: "a".repeat(CLINICAL_NOTE_BODY_MAX + 1), occurredAtLocal: "" };
     expect(validateDraft(amend, d, now).body).toBe("La enmienda puede tener hasta 20.000 caracteres.");
-    expect(bodyMaxMessage({ type: "create", patientId: "p" })).toBe("La evolución puede tener hasta 20.000 caracteres.");
+    expect(bodyMaxMessage({ type: "create", patientId: "p" })).toBe("La ficha puede tener hasta 20.000 caracteres.");
   });
 
   it("[EV2-Z M6] picker: el minuto fuera de la grilla de 5' se agrega como opción (no se esconde)", () => {

@@ -35,7 +35,7 @@ export const RESUMEN_COPY = {
   evaEmpty: "Todavía no hay puntajes de EVA. Registrá el de hoy abajo.",
 } as const;
 
-/** Tope del extracto de «Última evolución»: la nota entera está en la pestaña. */
+/** Tope del extracto de «Última ficha»: la nota entera está en la pestaña. */
 export const LATEST_NOTE_EXCERPT_MAX = 280;
 
 /** Extracto de la última evolución (puro): corta en el último espacio antes del tope y agrega «…». */
@@ -321,7 +321,7 @@ export function ResumenView({
   );
 }
 
-/** EV2-3a · «Última evolución» (raíz viva más reciente por `occurredAt`; las anuladas no cuentan). */
+/** EV2-3a · «Última ficha» (raíz viva más reciente por `occurredAt`; las anuladas no cuentan). */
 function LatestNoteCard({
   latest,
   liveCount,
@@ -334,7 +334,7 @@ function LatestNoteCard({
   return (
     <Card style={{ padding: 18, display: "grid", gap: 8 }} data-testid="latest-note">
       <div className="k-display" style={{ fontSize: 14, fontWeight: 700 }}>
-        Última evolución
+        Última ficha
       </div>
       {latest ? (
         <>
@@ -349,12 +349,12 @@ function LatestNoteCard({
           <span style={{ fontSize: 12, color: "var(--navy-400)" }}>{authorLine(latest)}</span>
         </>
       ) : (
-        <p style={{ margin: 0, fontSize: 13, color: "var(--navy-500)" }}>Todavía no hay evoluciones.</p>
+        <p style={{ margin: 0, fontSize: 13, color: "var(--navy-500)" }}>Todavía no hay fichas.</p>
       )}
       {onOpen && (
         <div>
           <Button variant="ghost" onClick={onOpen} style={{ fontSize: 12, padding: "8px 12px" }}>
-            {liveCount > 1 ? `Ver las ${liveCount} evoluciones` : "Ir a Evoluciones"}
+            {liveCount > 1 ? `Ver las ${liveCount} fichas` : "Ir a la historia clínica"}
           </Button>
         </div>
       )}

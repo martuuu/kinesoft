@@ -181,9 +181,9 @@ describe("[EV2-3a] pestañas del perfil por acceso", () => {
   it("profesional con clinical.read: «Evoluciones» segunda, con el contador de vivas; la curva se llama «EVA»", () => {
     const html = profile(["clinical.read"], { clinicalSummary: { latest: note(), liveCount: 3 } });
     expect(tabLabels(html)).toEqual([
-      "Resumen", "Evoluciones", "Turnos", "Sesiones", "Planes", "Archivos", "Antecedentes", "EVA", "Facturación", "Actividad",
+      "Resumen", "Historia clínica", "Turnos", "Sesiones", "Planes", "Archivos", "Antecedentes", "EVA", "Facturación", "Actividad",
     ]);
-    expect(html).toMatch(/data-profile-tab="evoluciones"[^>]*>Evoluciones<span[^>]*>3</);
+    expect(html).toMatch(/data-profile-tab="evoluciones"[^>]*>Historia clínica<span[^>]*>3</);
   });
 
   it("Titular sin agenda (acceso full, sin clinical.read): no hay Evoluciones aunque llegue un resumen ni ?tab=evoluciones", () => {
@@ -191,23 +191,23 @@ describe("[EV2-3a] pestañas del perfil por acceso", () => {
       clinicalSummary: { latest: note(), liveCount: 3 },
       initialTab: "evoluciones",
     });
-    expect(tabLabels(html)).not.toContain("Evoluciones");
+    expect(tabLabels(html)).not.toContain("Historia clínica");
     expect(html).toMatch(/data-profile-tab="resumen" aria-current="true"/);
     // Tampoco la card de Resumen (sería HC).
-    expect(html).not.toContain("Última evolución");
+    expect(html).not.toContain("Última ficha");
     expect(html).not.toContain("Control de hombro");
   });
 
   it("consultorio General con clinical.read: Evoluciones es del núcleo (sí), EVA no", () => {
     const html = profile(["clinical.read"], {}, GENERAL);
-    expect(tabLabels(html)).toEqual(["Resumen", "Evoluciones", "Turnos", "Archivos", "Antecedentes", "Facturación", "Actividad"]);
+    expect(tabLabels(html)).toEqual(["Resumen", "Historia clínica", "Turnos", "Archivos", "Antecedentes", "Facturación", "Actividad"]);
   });
 
   it("Resumen del perfil: «Última evolución» + «Notas generales» (ya no «Notas clínicas»)", () => {
     const html = profile(["clinical.read"], { clinicalSummary: { latest: note(), liveCount: 3 } });
-    expect(html).toContain("Última evolución");
+    expect(html).toContain("Última ficha");
     expect(html).toContain("Control de hombro");
-    expect(html).toContain("Ver las 3 evoluciones");
+    expect(html).toContain("Ver las 3 fichas");
     expect(html).toContain("Notas generales");
     expect(html).toContain("Alérgica al ibuprofeno.");
     expect(html).not.toContain("Notas clínicas");
@@ -227,13 +227,13 @@ describe("[EV2-3a] ResumenView: Última evolución", () => {
     );
 
   it("sin resumen (sin módulo o sin acceso) no hay card", () => {
-    expect(resumen({ clinicalSummary: null })).not.toContain("Última evolución");
+    expect(resumen({ clinicalSummary: null })).not.toContain("Última ficha");
   });
 
   it("sin evoluciones: lo dice, y lleva a la pestaña", () => {
     const html = resumen({ clinicalSummary: { latest: null, liveCount: 0 }, onOpenEvoluciones: noop });
-    expect(html).toContain("Todavía no hay evoluciones.");
-    expect(buttons(html)).toContain("Ir a Evoluciones");
+    expect(html).toContain("Todavía no hay fichas.");
+    expect(buttons(html)).toContain("Ir a la historia clínica");
   });
 
   it("con evolución: tipo, fecha AR, título, extracto y autor", () => {
@@ -246,7 +246,7 @@ describe("[EV2-3a] ResumenView: Última evolución", () => {
     expect(html).toContain("Control de hombro");
     expect(html).toContain("Lic. Pérez");
     expect(html).toContain("…");
-    expect(buttons(html)).toContain("Ir a Evoluciones");
+    expect(buttons(html)).toContain("Ir a la historia clínica");
   });
 
   it("[EV2-Z] Notas generales vacías: dice cómo cargarlas", () => {
@@ -314,33 +314,33 @@ describe("[EV2-3a] EvolucionesView: línea de tiempo", () => {
     // Paginado y acciones de la pestaña.
     const b = buttons(html);
     expect(b).toContain("Cargar más");
-    expect(b).toContain("Nueva evolución");
+    expect(b).toContain("Nueva ficha");
     expect(html).toMatch(/href="\/pacientes\/pat_000000abcdef\/imprimir"[^>]*target="_blank"[^>]*>Imprimir historia clínica</);
-    expect(html).toContain('aria-label="Buscar en las evoluciones"');
+    expect(html).toContain('aria-label="Buscar en las fichas"');
   });
 
   it("sin escritura (no es profesional): sin «Nueva evolución» ni acciones en las tarjetas; imprimir sí", () => {
     const n = note({}, { canWrite: false });
     const html = view({ canWrite: false, initialPage: { items: [noteItem(n)], nextCursor: null } });
     const b = buttons(html);
-    expect(b).not.toContain("Nueva evolución");
-    expect(b).not.toContain("Agregar enmienda");
+    expect(b).not.toContain("Nueva ficha");
+    expect(b).not.toContain("Enmendar");
     expect(b).not.toContain("Anular");
     expect(b).not.toContain("Cargar más");
     expect(html).toContain("Imprimir historia clínica");
   });
 
   it("vacía: lo dice y sugiere cómo cargar la primera (solo a quien escribe)", () => {
-    expect(view({ initialPage: { items: [], nextCursor: null } })).toContain("Cargá la primera con «Nueva evolución»");
+    expect(view({ initialPage: { items: [], nextCursor: null } })).toContain("Escribí la primera arriba o desde el turno en la agenda.");
     const ro = view({ canWrite: false, initialPage: { items: [], nextCursor: null } });
-    expect(ro).toContain("Todavía no hay evoluciones de este paciente.");
+    expect(ro).toContain("Todavía no hay fichas de este paciente.");
     expect(ro).not.toContain("Cargá la primera");
   });
 
   it("antes de la primera respuesta muestra «Cargando» (sin lista vacía engañosa)", () => {
     const html = view();
-    expect(html).toContain("Cargando evoluciones…");
-    expect(html).not.toContain("Todavía no hay evoluciones");
+    expect(html).toContain("Cargando fichas…");
+    expect(html).not.toContain("Todavía no hay fichas");
   });
 });
 
@@ -364,7 +364,7 @@ describe("[EV2-Z] EvolucionesView: imprimir, mobile y deep link", () => {
     const html = view({ initialPage: { items: [noteItem(note())], nextCursor: null } });
     expect(html).toMatch(/<input type="search" class="k-evo-search"/);
     expect(html).toMatch(/<a class="k-btn k-btn-ghost k-evo-head-btn"[^>]*>Imprimir historia clínica</);
-    expect(html).toMatch(/<button class="k-btn[^"]*k-evo-head-btn"[^>]*>[\s\S]*?Nueva evolución/);
+    expect(html).toMatch(/<button class="k-btn[^"]*k-evo-head-btn"[^>]*>[\s\S]*?Nueva ficha/);
     expect(html).toMatch(/@media \(max-width: 640px\)[\s\S]*\.k-evo-search \{ font-size: 16px !important; min-height: 44px; \}/);
     expect(html).toMatch(/\.k-evo-head-btn \{ min-height: 44px;/);
     // Sin búsqueda en curso, la lista no está ocupada.

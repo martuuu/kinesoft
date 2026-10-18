@@ -41,9 +41,9 @@ const TitleSchema = z
 const BodySchema = z
   .string()
   .transform((v) => v.trim())
-  .refine((v) => v.length >= 1, { message: "Escribí la evolución." })
+  .refine((v) => v.length >= 1, { message: "Escribí la ficha." })
   .refine((v) => v.length <= CLINICAL_NOTE_BODY_MAX, {
-    message: `La evolución puede tener hasta ${CLINICAL_NOTE_BODY_MAX.toLocaleString("es-AR")} caracteres.`,
+    message: `La ficha puede tener hasta ${CLINICAL_NOTE_BODY_MAX.toLocaleString("es-AR")} caracteres.`,
   });
 
 /** ISO con zona (el cliente manda `toISOString()`): sin zona sería hora del host, el bug de siempre en Vercel. */

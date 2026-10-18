@@ -226,7 +226,7 @@ describe("[S22b] shell en un consultorio General", () => {
       </TenantModulesProvider>,
     );
     // EV2-3a: con `clinical.read`, Evoluciones (núcleo) está también en General.
-    expect(tabLabels(html)).toEqual(["Resumen", "Evoluciones", "Turnos", "Archivos", "Antecedentes", "Facturación", "Actividad"]);
+    expect(tabLabels(html)).toEqual(["Resumen", "Historia clínica", "Turnos", "Archivos", "Antecedentes", "Facturación", "Actividad"]);
     // Cayó a Resumen (la pestaña pedida no existe en General).
     expect(html).toMatch(/data-profile-tab="resumen" aria-current="true"[^>]*>Resumen/);
     expect(net.getPatientPlans).not.toHaveBeenCalled();

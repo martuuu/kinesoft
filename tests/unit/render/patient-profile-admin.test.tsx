@@ -182,7 +182,7 @@ function Providers({ children }: { children: ReactNode }) {
 }
 
 // «Facturación» ya no está: desde T3d-1u el perfil admin cobra desde la ficha (plan §23.4).
-const CLINICAL_TABS = ["Evoluciones", "EVA", "Evolución", "Plan", "Sesiones", "Seguimiento", "Archivos", "Antecedentes", "Actividad", "Resumen"];
+const CLINICAL_TABS = ["Historia clínica", "Evoluciones", "EVA", "Evolución", "Plan", "Sesiones", "Seguimiento", "Archivos", "Antecedentes", "Actividad", "Resumen"];
 
 /** Etiquetas de los botones de pestaña (la barra de tabs del perfil). */
 function tabLabels(html: string) {

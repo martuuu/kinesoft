@@ -79,7 +79,7 @@ export function TabsBar({
 }) {
   const all: { id: Tab; label: string; count?: number }[] = [
     { id: "resumen", label: "Resumen" },
-    { id: "evoluciones", label: "Evoluciones", count: counts.evoluciones || undefined },
+    { id: "evoluciones", label: "Historia clínica", count: counts.evoluciones || undefined },
     { id: "turnos", label: "Turnos", count: counts.turnos || undefined },
     { id: "sesiones", label: "Sesiones", count: counts.sesiones || undefined },
     { id: "planes", label: "Planes", count: counts.planes || undefined },
