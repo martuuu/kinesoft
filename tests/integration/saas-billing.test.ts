@@ -104,7 +104,7 @@ describe.skipIf(!RUN)("[PL-2b] Configuración → Facturación", () => {
   let chargeId: string;
   const users: string[] = [];
 
-  async function member(t: EphemeralTenant, role: "ASSISTANT" | "BILLING", grantBilling = false) {
+  async function member(t: EphemeralTenant, role: "ASSISTANT" | "BILLING" | "ADMIN", grantBilling = false) {
     const id = `test-user-${uniqueSuffix()}`;
     users.push(id);
     await db.userProfile.create({ data: { id, email: `${id}@test.local`, fullName: `Miembro ${role}` } });
@@ -117,7 +117,9 @@ describe.skipIf(!RUN)("[PL-2b] Configuración → Facturación", () => {
     A = await createEphemeralTenant(db, { saasPlan: "CONSULTORIO" });
     B = await createEphemeralTenant(db, { saasPlan: "CONSULTORIO" });
     assistantId = await member(A, "ASSISTANT");
-    billingUserId = await member(A, "BILLING", true);
+    // T3 (19-oct): Secretaria y Facturación ya no reciben «Planes y pagos» (corte de staff); el delegado es un Admin
+    // con solo esa delegación (sin «Configuración»).
+    billingUserId = await member(A, "ADMIN", true);
     // Un cargo abierto del período vigente (lo genera el cron en la vida real; acá a mano con el owner).
     const p = periodFor(toARDateKey(new Date()));
     const c = await db.saasCharge.create({
