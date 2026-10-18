@@ -17,6 +17,13 @@
  * PL-1b (C-PL5): «rol clínico» pasó a «miembro que atiende»
  * (`clinicalMembershipWhere`): un Titular/Admin con `clinical = false` que
  * conserva su `Practitioner` de antes deja de ser reservable. PL-Z M1: el Administrador/a nunca (§20.17).
+ *
+ * T3c-1s (AS-1s, §23.2): + `user.disabledAt` (usuario deshabilitado en PLATAFORMA, BO0/M7), SIEMPRE. Antes el
+ * fragmento solo miraba la membresía, así que alguien que Plataforma deshabilitó (no entra a ningún consultorio)
+ * seguía en el turnero, la agenda y la disponibilidad, y se le reservaban turnos. Va por default y no como opción:
+ * los 8 llamadores lo heredan sin tocarse, y ninguno quiere listar a un usuario que no puede entrar. Es la misma
+ * sentencia (EXISTS sobre `UserProfile` que ya se hacía por `user.memberships`): 0 statements nuevos.
+ *
  */
 import type { Prisma } from "@prisma/client";
 
@@ -47,9 +54,18 @@ export function bookablePractitionerWhere(
   }
   return {
     tenantId,
-    user: { memberships: { some: membership } },
+    user: { disabledAt: null, memberships: { some: membership } },
   };
 }
+
+/**
+ * Copy de `createService`/`updateService` (lib/services.ts) cuando el dueño pedido no es reservable: de otro
+ * consultorio, suspendido, deshabilitado o que no atiende (Secretaria/Facturación con su fila `Practitioner` vieja).
+ * Un solo texto para todos los casos a propósito: no le dice al cliente si un id ajeno existe. Reemplaza al viejo
+ * «Profesional fuera del tenant.» (jerga). Horarios, servicios por profesional y coberturas conservan su «Profesional no
+ * encontrado.» (contrato de sus tests de IDOR).
+ */
+export const PRACTITIONER_NOT_BOOKABLE = "Ese profesional no está activo en el consultorio (suspendido, deshabilitado o no atiende).";
 
 /*
  * ── Actor sin profesional (IAM-4a) ────────────────────────────────────────

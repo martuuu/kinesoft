@@ -84,6 +84,8 @@ import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 
 const WRITE_MSG = "Solo OWNER/ADMIN pueden configurar sedes y horarios.";
 const READ_MSG = "No tenés permiso para ver la agenda del consultorio.";
+// T3c-1s: también para un profesional suspendido o deshabilitado en las escrituras (`findBookablePractitioner`): mismo
+// copy que el de otro consultorio, así un id ajeno no se distingue de uno inactivo (y no cambia el contrato IDOR).
 const PRAC_NOT_FOUND = "Profesional no encontrado.";
 const TENANT_WIDE_ROOM_ERROR =
   "Un horario especial de todo el consultorio no lleva sala. Asignala en el horario especial de cada profesional.";
@@ -96,8 +98,22 @@ async function lockKey(tx: DbClient, key: string): Promise<void> {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
 }
 
+/** Lectura: cualquier profesional del tenant (ver la semana de alguien suspendido no escribe nada). */
 async function findPractitioner(tx: DbClient, tenantId: string, id: string) {
   return tx.practitioner.findFirst({ where: { id, tenantId }, select: { id: true } });
+}
+
+/**
+ * Escritura (franjas y excepciones): el profesional tiene que ser RESERVABLE (T3c-1s, AS-1s, §23.2). Antes alcanzaba
+ * con que fuera del tenant, así que se le cargaban horarios a un suspendido, a un deshabilitado en Plataforma o a la
+ * Secretaria con su fila `Practitioner` vieja: disponibilidad para alguien a quien el motor nunca le ofrece turnos.
+ * Mismo EXISTS en la misma sentencia (0 statements nuevos).
+ */
+async function findBookablePractitioner(tx: DbClient, tenantId: string, id: string) {
+  return tx.practitioner.findFirst({
+    where: { id, ...bookablePractitionerWhere(tenantId, { includeDisabledFilter: true }) },
+    select: { id: true },
+  });
 }
 
 /** Ids de sedes ACTIVAS del tenant dentro de `ids`. */
@@ -545,7 +561,7 @@ async function savePractitionerWeekImpl(
       // Orden fijo: sedes compartido → room-schedule → schedule:<prac> (ver "Salas en franjas").
       if (roomIds.length > 0) await lockKey(tx, roomScheduleLockKey(actor.tenantId));
       await lockKey(tx, `kinesoft:schedule:${input.practitionerId}`);
-      if (!(await findPractitioner(tx, actor.tenantId, input.practitionerId))) {
+      if (!(await findBookablePractitioner(tx, actor.tenantId, input.practitionerId))) {
         throw new Abort({ ok: false, error: PRAC_NOT_FOUND });
       }
       if (!roomsOn && sentRoomIds.length > 0) {
@@ -809,7 +825,7 @@ async function upsertExceptionImpl(raw: UpsertExceptionRaw): Promise<ActionResul
       // Orden fijo: sedes compartido → room-schedule → schedexc (ver "Salas en franjas").
       if (roomIds.length > 0) await lockKey(tx, roomScheduleLockKey(actor.tenantId));
       await lockKey(tx, `kinesoft:schedexc:${actor.tenantId}:${input.practitionerId ?? "*"}:${input.date}`);
-      if (input.practitionerId && !(await findPractitioner(tx, actor.tenantId, input.practitionerId))) {
+      if (input.practitionerId && !(await findBookablePractitioner(tx, actor.tenantId, input.practitionerId))) {
         throw new Abort({ ok: false, error: PRAC_NOT_FOUND });
       }
       if (!roomsOn && sentRoomIds.length > 0) {

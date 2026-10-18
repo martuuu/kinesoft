@@ -11,6 +11,11 @@
  * Es solo un atajo: el link lleva al perfil con `?turno=` (`clinicalNoteDeepLink`) y ahí la pestaña decide con
  * el server si se puede crear. La barrera es `createClinicalNote` (acceso `full` + profesional + turno válido).
  * Turno sin paciente (invitado) → sin toast: no hay historia clínica donde cargarla.
+ *
+ * T3c-1s (AS-1s, §23.2): además, acceso `full` a ESE paciente (`patientAccess` de la fila confirmada, el mismo que el
+ * server calcula para la agenda). El rol no alcanza: un profesional atiende en su turno a un paciente asignado a otro
+ * kine sin compartir (`basic`), y `createClinicalNote` lo rechaza; el toast era un atajo directo a ese error. Vive en
+ * `attendedNoteHref` y no en `offersAttendedNoteToast` porque es por turno, no por actor.
  */
 import { clinicalNoteDeepLink } from "@/lib/clinical-notes-logic";
 import type { ReceptionAction } from "@/lib/reception-state";
@@ -39,11 +44,12 @@ export function offersAttendedNoteToast(v: ClinicalNoteViewer | null | undefined
 export function attendedNoteHref(
   v: ClinicalNoteViewer | null | undefined,
   action: ReceptionAction,
-  saved: { id: string; status: string; patientId: string | null; practitionerId: string }
+  saved: { id: string; status: string; patientId: string | null; practitionerId: string; patientAccess: "full" | "basic" | "none" }
 ): string | null {
   if (action !== "atendido" || saved.status !== "COMPLETED") return null;
   if (!offersAttendedNoteToast(v) || !v) return null;
   if (!saved.patientId) return null;
+  if (saved.patientAccess !== "full") return null;
   if (saved.practitionerId !== v.practitionerId) return null;
   return clinicalNoteDeepLink(saved.patientId, saved.id);
 }

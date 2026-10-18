@@ -27,6 +27,7 @@ import { logger } from "@/lib/logger";
 import { tags } from "@/lib/cache-tags";
 import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import type { ActionResult } from "@/lib/validation";
+import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 import {
   EntityId,
   PractitionerServiceInput,
@@ -45,8 +46,10 @@ export async function listPractitionerServices(
   const tenantId = actor.tenantId;
 
   const rows = await runWithRls(tenantId, async (tx) => {
+    // T3c-1s (AS-1s): solo profesionales RESERVABLES (ver `bookablePractitionerWhere`); la lista de Configuración ya
+    // no muestra al suspendido ni al deshabilitado, y su escritura se rechaza igual: leer su config no sirve de nada.
     const prac = await tx.practitioner.findFirst({
-      where: { id: pid.data, tenantId },
+      where: { id: pid.data, ...bookablePractitionerWhere(tenantId, { includeDisabledFilter: true }) },
       select: { id: true },
     });
     if (!prac) return null;
@@ -128,7 +131,13 @@ async function upsertPractitionerServiceImpl(
       // Ambos ids contra el tenant, en la misma tx que escribe (las FK
       // saltean RLS: el servicio de OTRO consultorio pasaría la FK).
       const [prac, svc] = await Promise.all([
-        tx.practitioner.findFirst({ where: { id: pid.data, tenantId }, select: { id: true } }),
+        // T3c-1s (AS-1s, §23.2): + reservable (membresía aceptada que atiende, sin suspender, usuario no
+        // deshabilitado en Plataforma). Antes alcanzaba el tenant: se le habilitaban servicios a un suspendido o a la
+        // Secretaria con su fila `Practitioner` vieja. Mismo EXISTS en la misma sentencia.
+        tx.practitioner.findFirst({
+          where: { id: pid.data, ...bookablePractitionerWhere(tenantId, { includeDisabledFilter: true }) },
+          select: { id: true },
+        }),
         tx.service.findFirst({ where: { id: sid.data, tenantId }, select: { id: true } }),
       ]);
       if (!prac) return { kind: "error" as const, error: "Profesional no encontrado." };

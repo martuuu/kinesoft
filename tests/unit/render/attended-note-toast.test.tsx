@@ -108,6 +108,26 @@ describe("[EV2-3c] toast «Cargar evolución» por rol", () => {
   });
 });
 
+describe("[AS-1s] el toast exige acceso `full` al paciente", () => {
+  // §23.2: el toast miraba el rol (clinical.read + profesional del turno) pero no el acceso a ESE paciente. Un
+  // profesional atiende un turno propio de un paciente asignado a otro kine sin compartir (`patientAccess` "basic"):
+  // `createClinicalNote` lo rechaza, así que ofrecerle «Cargar evolución» es un atajo a un error.
+  it("[AS-1s] profesional en su turno con acceso basic/none: sin toast; con full: sí", () => {
+    run(PROFESIONAL, { saved: dto({ patientAccess: "basic" }) });
+    run(PROFESIONAL, { saved: dto({ patientAccess: "none" }) });
+    expect(success).not.toHaveBeenCalled();
+    run(PROFESIONAL, { saved: dto({ patientAccess: "full" }) });
+    expect(success).toHaveBeenCalledTimes(1);
+  });
+
+  it("[AS-1s] regla pura: attendedNoteHref null sin full", () => {
+    const on = { ...PROFESIONAL, evolucionesOn: true };
+    const saved = { id: "bk1", status: "COMPLETED", patientId: "pat1", practitionerId: "p1" };
+    expect(attendedNoteHref(on, "atendido", { ...saved, patientAccess: "basic" })).toBeNull();
+    expect(attendedNoteHref(on, "atendido", { ...saved, patientAccess: "full" })).toBe("/pacientes/pat1?tab=evoluciones&turno=bk1");
+  });
+});
+
 describe("[EV2-3c] regla pura", () => {
   const on = { ...PROFESIONAL, evolucionesOn: true };
   it("offersAttendedNoteToast", () => {
@@ -118,7 +138,7 @@ describe("[EV2-3c] regla pura", () => {
     expect(offersAttendedNoteToast(null)).toBe(false);
   });
   it("attendedNoteHref encodea el turno", () => {
-    expect(attendedNoteHref(on, "atendido", { id: "a b", status: "COMPLETED", patientId: "pat1", practitionerId: "p1" })).toBe(
+    expect(attendedNoteHref(on, "atendido", { id: "a b", status: "COMPLETED", patientId: "pat1", practitionerId: "p1", patientAccess: "full" })).toBe(
       "/pacientes/pat1?tab=evoluciones&turno=a%20b"
     );
   });

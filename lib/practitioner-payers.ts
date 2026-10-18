@@ -25,6 +25,7 @@ import { requireCapability } from "@/lib/authz";
 import { logger } from "@/lib/logger";
 import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import type { ActionResult } from "@/lib/validation";
+import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 import {
   EntityId,
   PractitionerPayersInput,
@@ -42,8 +43,10 @@ export async function listPractitionerPayers(
   const tenantId = actor.tenantId;
 
   const rows = await runWithRls(tenantId, async (tx) => {
+    // T3c-1s (AS-1s): solo profesionales RESERVABLES (ver `bookablePractitionerWhere`); la lista de Configuración ya
+    // no muestra al suspendido ni al deshabilitado, y su escritura se rechaza igual: leer su config no sirve de nada.
     const prac = await tx.practitioner.findFirst({
-      where: { id: pid.data, tenantId },
+      where: { id: pid.data, ...bookablePractitionerWhere(tenantId, { includeDisabledFilter: true }) },
       select: { id: true },
     });
     if (!prac) return null;
@@ -107,8 +110,11 @@ async function setPractitionerPayersImpl(
     | { kind: "error"; error: string };
   try {
     result = await runWithRls(tenantId, async (tx) => {
+      // T3c-1s (AS-1s, §23.2): + reservable (membresía aceptada que atiende, sin suspender, usuario no
+      // deshabilitado en Plataforma). Antes alcanzaba el tenant: se le fijaban coberturas a un suspendido o a la
+      // Secretaria con su fila `Practitioner` vieja. Mismo EXISTS en la misma sentencia.
       const prac = await tx.practitioner.findFirst({
-        where: { id: parsed.data.practitionerId, tenantId },
+        where: { id: parsed.data.practitionerId, ...bookablePractitionerWhere(tenantId, { includeDisabledFilter: true }) },
         select: { id: true },
       });
       if (!prac) return { kind: "error" as const, error: "Profesional no encontrado." };

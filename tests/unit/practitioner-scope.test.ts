@@ -37,10 +37,11 @@ describe("[PL-1b] clinicalMembershipWhere = espejo SQL de isClinicalMember", () 
 });
 
 describe("[IAM-0c] bookablePractitionerWhere", () => {
-  it("por defecto: tenant + membresía aceptada EN ESE tenant de alguien que atiende, sin filtro de disabledAt", () => {
+  it("por defecto: tenant + usuario no deshabilitado en Plataforma (AS-1s) + membresía aceptada EN ESE tenant de alguien que atiende, sin filtro de Membership.disabledAt", () => {
     expect(bookablePractitionerWhere("t1")).toEqual({
       tenantId: "t1",
       user: {
+        disabledAt: null,
         memberships: {
           some: {
             tenantId: "t1",
@@ -78,6 +79,18 @@ describe("[IAM-0c] bookablePractitionerWhere", () => {
     const b = bookablePractitionerWhere("t1");
     expect(a).not.toBe(b);
     expect(a).toEqual(b);
+  });
+});
+
+describe("[AS-1s] bookablePractitionerWhere deja afuera al usuario deshabilitado en Plataforma", () => {
+  // §23.2: el turnero listaba usuarios con `UserProfile.disabledAt` (BO0/M7: deshabilitado en TODA la plataforma),
+  // porque el fragmento solo miraba la membresía. Va por default: los 8 llamadores lo heredan sin tocarlos.
+  it("[AS-1s] por default: user.disabledAt null junto a la membresía", () => {
+    for (const w of [bookablePractitionerWhere("t1"), bookablePractitionerWhere("t1", { includeDisabledFilter: true })]) {
+      const u = (w as { user: Record<string, unknown> }).user;
+      expect(u.disabledAt).toBeNull();
+      expect(u).toHaveProperty("memberships.some.tenantId", "t1");
+    }
   });
 });
 

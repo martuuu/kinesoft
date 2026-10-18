@@ -28,6 +28,7 @@ import { logger } from "@/lib/logger";
 import { tags, ttl } from "@/lib/cache-tags";
 import { ServiceInput, type ActionResult } from "@/lib/validation";
 import type { ServiceRow } from "@/lib/services-types";
+import { PRACTITIONER_NOT_BOOKABLE, bookablePractitionerWhere } from "@/lib/practitioner-scope";
 
 const ADMIN_MSG = "Solo OWNER/ADMIN pueden modificar el catálogo de servicios.";
 
@@ -79,13 +80,15 @@ async function createServiceImpl(
   const actor = await requireTenantAdmin(ADMIN_MSG);
   const deniedCreate = disciplineDenied(actor, parsed.data.discipline);
   if (deniedCreate) return { ok: false, error: deniedCreate };
-  // Validate practitioner belongs to the tenant if supplied.
+  // T3c-1s (AS-1s, §23.2): el dueño tiene que ser RESERVABLE, no solo del tenant. Antes se le podía asignar un
+  // servicio a un profesional suspendido, deshabilitado en Plataforma o a la Secretaria (fila `Practitioner` vieja):
+  // el servicio quedaba colgado de alguien que no atiende y sin nadie a quien reservarle.
   if (parsed.data.practitionerId) {
     const owned = await runWithRls(actor.tenantId, (tx) => tx.practitioner.findFirst({
-      where: { id: parsed.data.practitionerId, tenantId: actor.tenantId },
+      where: { id: parsed.data.practitionerId, ...bookablePractitionerWhere(actor.tenantId, { includeDisabledFilter: true }) },
       select: { id: true },
     }));
-    if (!owned) return { ok: false, error: "Profesional fuera del tenant." };
+    if (!owned) return { ok: false, error: PRACTITIONER_NOT_BOOKABLE };
   }
   try {
     const row = await runWithRls(actor.tenantId, async (tx) => {
@@ -154,7 +157,7 @@ async function updateServiceImpl(
   const actor = await requireTenantAdmin(ADMIN_MSG);
   const owned = await runWithRls(actor.tenantId, (tx) => tx.service.findFirst({
     where: { id, tenantId: actor.tenantId },
-    select: { id: true },
+    select: { id: true, practitionerId: true },
   }));
   if (!owned) return { ok: false, error: "Servicio no encontrado." };
 
@@ -168,12 +171,16 @@ async function updateServiceImpl(
   }
   const deniedUpdate = disciplineDenied(actor, parsed.data.discipline);
   if (deniedUpdate) return { ok: false, error: deniedUpdate };
-  if (parsed.data.practitionerId) {
+  // T3c-1s (AS-1s): pasar el servicio a OTRO profesional exige que sea reservable (como en `createService`). Si el
+  // pedido trae el MISMO dueño que ya tiene, no se re-valida: el formulario manda todos los campos, y un servicio
+  // de un profesional que después se suspendió no podría ni corregir su precio hasta reasignarlo. Ese dueño ya es
+  // del tenant (salió de la fila de arriba, filtrada por `tenantId`).
+  if (parsed.data.practitionerId && parsed.data.practitionerId !== owned.practitionerId) {
     const ownedPrac = await runWithRls(actor.tenantId, (tx) => tx.practitioner.findFirst({
-      where: { id: parsed.data.practitionerId, tenantId: actor.tenantId },
+      where: { id: parsed.data.practitionerId, ...bookablePractitionerWhere(actor.tenantId, { includeDisabledFilter: true }) },
       select: { id: true },
     }));
-    if (!ownedPrac) return { ok: false, error: "Profesional fuera del tenant." };
+    if (!ownedPrac) return { ok: false, error: PRACTITIONER_NOT_BOOKABLE };
   }
   try {
     // Lectura del "antes", update y audit en la misma transacción: el audit
