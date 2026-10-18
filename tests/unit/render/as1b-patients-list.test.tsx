@@ -79,12 +79,31 @@ describe("[AS-1b] PatientsList · filas admin", () => {
     expect(html).toContain("Ana García · ana@example.test");
     expect(html).toContain("DNI 30111222");
     expect(html).toContain("OSDE");
-    expect(html).toContain("Sin acceso");
+    // T3-Z M8: una lista solo de filas admin (Secretaria, Admin, Facturación) no muestra la columna Plan: un
+    // «Sin acceso» en cada fila era ruido y sonaba a error.
+    expect(html).not.toContain("Sin acceso");
+    expect(html).not.toMatch(/class="[^"]*_cellPlan_/);
     expect(html).not.toContain("Plan lumbar");
     expect(html).not.toContain("3/10");
     expect(html).not.toContain("Seleccionar paciente");
     expect(html).not.toContain('aria-label="Acciones"');
     expect(html).not.toContain("Inactivo");
+  });
+
+  it("[T3-Z M8] mezcla full + admin: la columna Plan queda y la fila admin dice «—», no «Sin acceso»", () => {
+    const html = wrap(
+      <PatientsList
+        rows={[
+          row({ id: "p-admin", activePlans: [{ discipline: "KINESIOLOGY", done: 3, totalLive: 10 }] }),
+          row({ id: "p-full", access: "full", activePlans: [{ discipline: "KINESIOLOGY", done: 1, totalLive: 8 }] }),
+        ]}
+        archived={false}
+      />
+    );
+    expect(html.match(/class="[^"]*_cellPlan_/g)).toHaveLength(2);
+    expect(html).not.toContain("Sin acceso");
+    expect(html).not.toContain("3/10");
+    expect(html).toContain("1/8");
   });
 
   it("admin en un consultorio General: el estado del paciente (no HC) se ve", () => {

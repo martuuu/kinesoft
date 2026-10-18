@@ -267,7 +267,11 @@ describe("[AS-1g] Accesos de soporte", () => {
   it("[AS-1g] «Lo terminó el consultorio» y el copy de cómo termina un acceso", () => {
     expect(supportEndedLabel("tenant")).toBe("Lo terminó el consultorio");
     const html = text(renderToStaticMarkup(<SupportAccessPanel sessions={[]} />));
-    expect(html).toContain("y termina cuando soporte sale, cierra sesión o lo terminás desde acá.");
+    // T3-Z M4: sin `canEnd` no promete un botón que no tiene.
+    expect(html).toContain("y termina cuando soporte sale, cierra sesión o lo termina el titular o el administrador.");
+    expect(html).not.toContain("lo terminás desde acá");
+    const owner = text(renderToStaticMarkup(<SupportAccessPanel sessions={[]} canEnd />));
+    expect(owner).toContain("y termina cuando soporte sale, cierra sesión o lo terminás desde acá.");
   });
 
   it("[AS-1g] sin `canEnd` no hay botón (y el panel se arma sin providers, como antes)", () => {

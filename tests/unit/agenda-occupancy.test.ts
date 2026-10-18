@@ -145,6 +145,18 @@ describe("[AS-3h] tope por intervalo en la tabla por hora", () => {
     expect(upcomingCell([3, 0, 0, 0], null, 3)).toMatchObject({ text: "3", atCap: false, note: null });
   });
 
+  it("[T3-Z M6] con intervalo < 60 la celda NO se pinta como topeada (solo ▲) y la nota dice el tope", () => {
+    // La hora tiene 5 turnos pero solo UN intervalo de 15' llegó: pintarla entera de «en el tope» mentía.
+    const a = upcomingCell([2, 1, 1, 1], { count: 2, intervalMin: 15 }, 5);
+    expect(a).toMatchObject({ atCap: true, capFill: false });
+    expect(a.note).toBe("En 1 de 4 intervalos de 15 min se llegó al tope de 2 turnos.");
+    const b = upcomingCell([1, 1, 0, 1], { count: 2, intervalMin: 30 }, 5);
+    expect(b.note).toBe("En 1 de 2 intervalos de 30 min se llegó al tope de 2 turnos.");
+    // Con 60 la hora ES el intervalo: ahí sí se pinta.
+    expect(upcomingCell([1, 1, 0, 0], { count: 2, intervalMin: 60 }, 4)).toMatchObject({ atCap: true, capFill: true });
+    expect(upcomingCell([1, 0, 0, 0], { count: 2, intervalMin: 60 }, 4).capFill).toBe(false);
+  });
+
   it("«Lo que viene»: una tabla por semana, columnas por fecha AR y domingo solo con turnos", () => {
     const rows: OccupancySqlRow[] = [
       { day: "2027-11-11", dow: 4, hour: 10, q: 0, n: 2, hold: null },

@@ -63,7 +63,7 @@ describe("[AS-1k1] requireTenantSensitive", () => {
     }
     ref.actor = member("ASSISTANT", { grantSettings: true });
     await expect(requireTenantSensitive()).rejects.toThrow(
-      "Solo el titular, o un administrador/a o profesional con «Configuración», puede cambiar esto."
+      "Solo el titular o el administrador (o un profesional con «Configuración») puede cambiar esto."
     );
   });
 

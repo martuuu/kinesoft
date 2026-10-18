@@ -128,7 +128,7 @@ export function NewPatientModal({
             error={fieldErrors.assignTo?.[0]}
             hint={
               assignees.length === 0
-                ? "No hay profesionales que atiendan en el consultorio: sumá uno en Configuración para dar de alta pacientes."
+                ? "No hay profesionales que atiendan en el consultorio. Pedile al titular o al administrador que sume uno para poder dar de alta pacientes."
                 : "Es quien atiende al paciente y carga su historia clínica."
             }
             options={[

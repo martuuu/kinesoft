@@ -79,8 +79,9 @@ export function OccupancyView({ data }: { data: OccupancyViewData }) {
             ))}
           </select>
         </div>
+        {/* T3-Z B9: «Aplicar» y no «Ver»: el botón aplica los filtros, la tabla ya se está viendo. */}
         <Button type="submit" variant="ghost">
-          Ver
+          Aplicar
         </Button>
       </form>
 
@@ -130,19 +131,25 @@ function Legend({ hasCap, intervalMin }: { hasCap: boolean; intervalMin: number 
         <span className={`${styles.swatch} ${styles.l3}`} aria-hidden="true" />
         <span className={`${styles.swatch} ${styles.l5}`} aria-hidden="true" /> De menos a más turnos
       </li>
-      {hasCap && (
-        <li>
-          <span className={`${styles.swatch} ${styles.cap}`} aria-hidden="true" />
-          <span aria-hidden="true">▲</span>{" "}
-          {intervalMin === 60 ? "En el tope (turnos / tope)" : `Con intervalos de ${intervalMin} min en el tope`}
-        </li>
-      )}
+      {/* T3-Z M6: con intervalo < 60 la celda no se rellena (ver `OccupancyCell.capFill`), así que la leyenda
+          tampoco muestra el relleno: solo el ▲. */}
+      {hasCap &&
+        (intervalMin === 60 ? (
+          <li>
+            <span className={`${styles.swatch} ${styles.cap}`} aria-hidden="true" />
+            <span aria-hidden="true">▲</span> En el tope (turnos/tope)
+          </li>
+        ) : (
+          <li>
+            <span aria-hidden="true">▲</span> Algún intervalo de {intervalMin} min llegó al tope
+          </li>
+        ))}
     </ul>
   );
 }
 
 function cellClass(c: OccupancyCell): string {
-  return `${styles[`l${c.level}`]}${c.atCap ? ` ${styles.cap}` : ""}`;
+  return `${styles[`l${c.level}`]}${c.capFill ? ` ${styles.cap}` : ""}`;
 }
 
 function CellContent({ c }: { c: OccupancyCell }) {
@@ -162,8 +169,15 @@ function CellContent({ c }: { c: OccupancyCell }) {
 }
 
 function OccupancyTableCard({ table, average }: { table: OccupancyTable; average: boolean }) {
-  const unit = (v: number, text: string) =>
-    average ? `${text} por semana` : v === 1 ? "1 turno" : `${text.split("/")[0]} turnos`;
+  // T3-Z B9: con tope por hora la lista dice «2 de 3 (tope)»; antes salía «2 turnos de 3», que no decía de qué.
+  const unit = (v: number, text: string) => {
+    if (average) return `${text} por semana`;
+    if (text.includes("/")) {
+      const [used, cap] = text.split("/");
+      return `${used} de ${cap} (tope)`;
+    }
+    return v === 1 ? "1 turno" : `${text} turnos`;
+  };
   return (
     <section>
       <Card className={`${styles.card} ${styles.desktop}`}>
@@ -215,7 +229,6 @@ function OccupancyTableCard({ table, average }: { table: OccupancyTable; average
                         <span>{r.label}</span>
                         <span>
                           {unit(c.value, c.text)}
-                          {c.text.includes("/") ? ` de ${c.text.split("/")[1]}` : ""}
                           {c.atCap && (
                             <>
                               <span className={styles.mark} aria-hidden="true">

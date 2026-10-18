@@ -41,9 +41,9 @@ import type { ActionResult } from "@/lib/validation";
 
 // T3 (C-AS1): mismo texto que el default de `requireTenantSensitive` (lib/authz.ts); acá vuelve en el resultado (el
 // switch muestra `r.error`; un ForbiddenError llega redactado en prod).
-const ADMIN_ONLY = "Solo el titular, o un administrador/a o profesional con «Configuración», puede cambiar esto.";
+const ADMIN_ONLY = "Solo el titular o el administrador (o un profesional con «Configuración») puede cambiar esto.";
 const SPECIALTIES_FORBIDDEN =
-  "Solo el titular, un administrador/a o profesional con «Configuración», o el propio profesional, pueden cambiar las especialidades.";
+  "Solo el propio profesional, el titular o el administrador (o un profesional con «Configuración») pueden cambiar las especialidades.";
 const NOT_FOUND_TENANT = "No encontramos el consultorio. Recargá la página.";
 const NOT_FOUND_PRACTITIONER = "Profesional no encontrado.";
 const BAD_SPECIALTY = "Alguna de las especialidades elegidas no existe o ya no está disponible.";

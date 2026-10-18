@@ -66,7 +66,7 @@ const RUN = process.env.INTEGRATION === "1";
 const DAY = 86_400_000;
 
 /** Default de `requireTenantSensitive` (lib/authz.ts). */
-const SENSITIVE = "Solo el titular, o un administrador/a o profesional con «Configuración», puede cambiar esto.";
+const SENSITIVE = "Solo el titular o el administrador (o un profesional con «Configuración») puede cambiar esto.";
 
 const mail = {
   sent: [] as SendEmailInput[],

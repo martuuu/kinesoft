@@ -50,9 +50,10 @@ describe("[AS-1p] AccessWall de un módulo deshabilitado a mano", () => {
     const html = render(<AccessWall module="planes" disabled />);
     expect(MODULE_REVOKED_COPY).toBe("Este módulo no está habilitado para tu consultorio. Si lo necesitás, escribinos desde Soporte.");
     expect(html).toContain(MODULE_REVOKED_COPY);
+    expect(html).toContain("Módulo no habilitado"); // T3-Z B6
     expect(html).toContain(accessWallDisabledTitle("planes"));
-    expect(accessWallDisabledTitle("planes")).toBe("Planes de tratamiento no está disponible");
-    expect(accessWallDisabledTitle("reportes")).toBe("Este módulo no está disponible");
+    expect(accessWallDisabledTitle("planes")).toBe("Planes de tratamiento no está habilitado");
+    expect(accessWallDisabledTitle("reportes")).toBe("Este módulo no está habilitado");
     expect(html).toContain('href="/configuracion?tab=soporte"');
     expect(html).toContain('href="/dashboard"');
     expect(html).not.toContain("Ver planes");

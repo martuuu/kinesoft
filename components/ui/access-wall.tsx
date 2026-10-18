@@ -29,7 +29,9 @@ export function accessWallTitle(m: TenantModule, plan: SaasPlan): string {
  */
 export function accessWallDisabledTitle(m: TenantModule): string {
   const label = MODULE_UI_LABEL[m];
-  return label ? `${label} no está disponible` : "Este módulo no está disponible";
+  // T3-Z B6: «no está habilitado» y no «no está disponible»: el módulo existe, lo apagó Plataforma para este
+  // consultorio; «disponible» sonaba a caída o a que no existe para su plan.
+  return label ? `${label} no está habilitado` : "Este módulo no está habilitado";
 }
 
 /** Upsell (`plan` + `canBuy`) o módulo deshabilitado a mano (`disabled`): el layout pasa tal cual lo de `moduleWall`. */
@@ -57,7 +59,7 @@ export function AccessWall(props: AccessWallProps) {
     // `assertModule`, `moduleDeniedCopy`), con el mismo link que «Ayuda y soporte» del menú (cualquier miembro, PL-F1b).
     return (
       <section aria-labelledby="access-wall-title" style={wallStyle}>
-        <EyebrowLabel tone="accent">Módulo deshabilitado</EyebrowLabel>
+        <EyebrowLabel tone="accent">Módulo no habilitado</EyebrowLabel>
         <h1 id="access-wall-title" className="k-display" style={titleStyle}>
           {accessWallDisabledTitle(props.module)}
         </h1>

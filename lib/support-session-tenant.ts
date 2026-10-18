@@ -30,7 +30,7 @@ export async function endSupportAccessForTenant(input: { id: string }): Promise<
   if (actor.support) {
     throw new ForbiddenError("Entraste como soporte: para terminar el acceso usá «Salir de soporte».");
   }
-  await requireTenantSensitive("Solo el titular, o un administrador/a o profesional con «Configuración», puede terminar un acceso de soporte.");
+  await requireTenantSensitive("Solo el titular o el administrador (o un profesional con «Configuración») puede terminar un acceso de soporte.");
   const parsed = EndSupportAccessInput.safeParse(input);
   if (!parsed.success) return { ok: false, error: "Datos inválidos" };
 

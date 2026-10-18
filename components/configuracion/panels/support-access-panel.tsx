@@ -91,9 +91,11 @@ export function SupportAccessPanel({
             Todo es <strong>solo lectura</strong>, salvo Configuración: ahí puede crear y modificar (equipo, obras
             sociales, servicios, sedes, horarios y datos del consultorio) para ayudarte.
           </li>
+          {/* T3-Z M4: «lo terminás desde acá» solo para quien ve el botón (`canEnd`); la Secretaria y Facturación ven
+              la lista pero no lo terminan, así que el copy no les promete un botón que no tienen. */}
           <li>
-            Cada acceso queda registrado acá, con el motivo, y termina cuando soporte sale, cierra sesión o lo terminás
-            desde acá.
+            Cada acceso queda registrado acá, con el motivo, y termina cuando soporte sale, cierra sesión o{" "}
+            {canEnd ? "lo terminás desde acá." : "lo termina el titular o el administrador."}
           </li>
         </ul>
       </Card>
@@ -180,6 +182,8 @@ function EndSupportAccessButton({ id, email }: { id: string; email: string }) {
         const r = await endSupportAccessForTenant({ id });
         // Ya terminado (soporte salió, u otro miembro lo cortó): la action devuelve el error SIN revalidar.
         if (!r.ok) toast.error(r.error);
+        // T3-Z M4: el ok también avisa; sin esto la fila solo cambiaba de estado tras el refresh, sin confirmación.
+        else toast.success("Acceso terminado");
       } catch {
         // La action tira `ForbiddenError` (sin `tenant.sensitive`, o el propio soporte): nunca un rechazo mudo.
         toast.error("No pudimos terminar el acceso. Reintentá en un momento.");

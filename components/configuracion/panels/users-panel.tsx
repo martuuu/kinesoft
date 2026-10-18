@@ -73,7 +73,7 @@ const STAFF_ROLES: ReadonlySet<Role> = new Set<Role>(["ASSISTANT", "BILLING"]);
 
 /** Qué cubre «Configuración» delegada a la Secretaria o Facturación (T3d-1g). Exportada para el test. */
 export const STAFF_SETTINGS_HINT =
-  "Servicios, obras sociales, horarios, sedes y salas. El turnero, quién ve la historia clínica, los datos del consultorio y el equipo los maneja el titular o el administrador.";
+  "Servicios, obras sociales, horarios, sedes y salas. El turnero, los cobros online, quién ve la historia clínica, los datos del consultorio y el equipo los maneja el titular o el administrador.";
 
 // PL-Z M3: el copy anterior hablaba de «lugar de profesional / no clínico del plan», una distinción que el plan no
 // muestra en ningún lado (el cupo es uno: «Lugares»). Se dice solo lo que cambia para la persona.

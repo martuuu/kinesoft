@@ -143,6 +143,8 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
     return qs ? `?${qs}` : "";
   };
 
+  // T3-Z M8: misma regla que PatientsList (sin filas full, la columna Plan no se muestra y el encabezado no se corre).
+  const showPlanColumn = plansEnabled && patients.some((p) => p.access === "full");
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       {/* PF1.1 (C-PF5.3): `PageHeader` (eyebrow + h1 + acciones). El conteo queda en el h1 con el color de marca. */}
@@ -272,11 +274,11 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
         <Card style={{ padding: 0, overflow: "hidden" }}>
           <div
             className={directory.head}
-            style={{ gridTemplateColumns: patientsGridColumns(plansEnabled) }}
+            style={{ gridTemplateColumns: patientsGridColumns(showPlanColumn) }}
           >
             <span />
             <span>Paciente</span>
-            {plansEnabled && <span>Plan activo</span>}
+            {showPlanColumn && <span>Plan activo</span>}
             <span>Obra social</span>
             <span>Próx. turno</span>
             <span>Última visita</span>

@@ -33,7 +33,7 @@ import type { ActionResult } from "@/lib/validation";
 
 // T3 (C-AS1): la Secretaria con «Configuración» no pasa; «quien tenga permiso de Configuración» le prometía de más.
 const FORBIDDEN_MSG =
-  "Solo el titular, un administrador/a o profesional con «Configuración», o el propio profesional, pueden cambiar esto.";
+  "Solo el propio profesional, el titular o el administrador (o un profesional con «Configuración») pueden cambiar esto.";
 const NOT_FOUND = "Profesional no encontrado.";
 
 const Input = z.object({

@@ -114,7 +114,12 @@ export function PatientsList({
   // ser "tiene plan activo" (que ahí sería siempre «Inactivo") para ser el del
   // paciente: Activo o Archivado según la vista.
   const plansEnabled = useTenantModules().has("planes");
-  const cols: React.CSSProperties = { gridTemplateColumns: patientsGridColumns(plansEnabled) };
+  // T3-Z M8: la columna «Plan activo» solo sale si ALGUNA fila es `full`. Una lista solo de filas `admin`/`basic`
+  // (Secretaria, Admin, Facturación) la mostraba entera con «Sin acceso», que es ruido y sonaba a error. El
+  // encabezado de `app/(app)/pacientes/page.tsx` aplica la MISMA regla (si no, las celdas se corren de título).
+  // El tono del avatar y el «Estado» siguen leyendo `plansEnabled`: eso no depende de que haya columna.
+  const showPlanColumn = plansEnabled && rows.some((r) => r.access === "full");
+  const cols: React.CSSProperties = { gridTemplateColumns: patientsGridColumns(showPlanColumn) };
 
   return (
     <div key={signature}>
@@ -161,12 +166,15 @@ export function PatientsList({
                 <div className={styles.sub}>{patientRowSubline(p)}</div>
               </div>
             </Link>
-            {plansEnabled && (
+            {showPlanColumn && (
             <div className={styles.cellPlan} style={{ minWidth: 0 }}>
               {isFull ? (
                 <PlanCell plans={p.activePlans ?? []} title={p.activeProgramTitle} />
-              ) : (
+              ) : isBasic ? (
                 <Tag tone="soft">Sin acceso</Tag>
+              ) : (
+                // T3-Z M8: `admin` ve la ficha administrativa; el plan es HC y no le corresponde, no le «falta acceso».
+                <span style={{ color: "var(--navy-400)" }}>—</span>
               )}
             </div>
             )}

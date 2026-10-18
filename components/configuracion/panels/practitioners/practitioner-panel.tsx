@@ -433,8 +433,9 @@ export function BookingCapEditor({
         confirmás.
       </div>
       <div role="radiogroup" aria-label={`Tope de turnos de ${practitionerName}`} style={{ display: "grid", gap: 8 }}>
+        {/* T3-Z B4: toda la fila (label) es el área táctil del radio: 44 px como el resto de los controles táctiles. */}
         {(["INHERIT", "NONE", "CUSTOM"] as const).map((m) => (
-          <label key={m} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 13, minHeight: 32 }}>
+          <label key={m} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 13, minHeight: 44 }}>
             <input
               type="radio"
               name={group}

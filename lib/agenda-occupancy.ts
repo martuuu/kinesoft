@@ -163,8 +163,14 @@ export type OccupancyCell = {
   /** El número que se lee en la celda: «1,5», «3», «2/2». */
   text: string;
   level: OccupancyLevel;
-  /** Llegó al tope (intervalo 60) o algún intervalo de la hora llegó (15/30). */
+  /** Llegó al tope (intervalo 60) o algún intervalo de la hora llegó (15/30): lleva la marca ▲. */
   atCap: boolean;
+  /**
+   * T3-Z M6: la celda se PINTA como topeada (relleno fuerte). Solo con intervalo 60, donde la hora es el intervalo; con
+   * 15/30 basta que UN intervalo llegue para `atCap`, y pintar la hora entera de «en el tope» decía que no entraba nadie
+   * más en toda la hora cuando quedaban intervalos libres. Ahí va solo el ▲ y la nota.
+   */
+  capFill: boolean;
   /** Detalle del tope para el `title` y el lector de pantalla, o null. */
   note: string | null;
 };
@@ -230,7 +236,7 @@ export function buildPastTable(
       label: hourLabel(h),
       cells: isoDows.map((d) => {
         const v = avg(d, h);
-        return { value: v, text: formatOccupancyAverage(v), level: occupancyLevel(v, max), atCap: false, note: null };
+        return { value: v, text: formatOccupancyAverage(v), level: occupancyLevel(v, max), atCap: false, capFill: false, note: null };
       }),
     })),
   };
@@ -244,7 +250,7 @@ export function upcomingCell(
 ): OccupancyCell {
   const count = quarters[0] + quarters[1] + quarters[2] + quarters[3];
   const level = occupancyLevel(count, max);
-  if (!cap) return { value: count, text: String(count), level, atCap: false, note: null };
+  if (!cap) return { value: count, text: String(count), level, atCap: false, capFill: false, note: null };
   if (cap.intervalMin === 60) {
     const atCap = count >= cap.count;
     return {
@@ -252,6 +258,7 @@ export function upcomingCell(
       text: `${count}/${cap.count}`,
       level,
       atCap,
+      capFill: atCap,
       note: atCap ? (count > cap.count ? "Pasó el tope (hay sobreturnos)" : "En el tope") : null,
     };
   }
@@ -268,9 +275,12 @@ export function upcomingCell(
     text: String(count),
     level,
     atCap: capped > 0,
+    capFill: false,
     note:
       capped > 0
-        ? `Con intervalos topeados: ${capped} de ${intervals} intervalos de ${cap.intervalMin} min llegaron al tope (${cap.count})`
+        ? `En ${capped} de ${intervals} intervalos de ${cap.intervalMin} min se llegó al tope de ${
+            cap.count === 1 ? "1 turno" : `${cap.count} turnos`
+          }.`
         : null,
   };
 }

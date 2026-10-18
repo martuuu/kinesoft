@@ -149,7 +149,7 @@ export async function requireTenantAdmin(
  */
 export async function requireTenantSensitive(
   // Default que no promete de más: «quien tenga Configuración» engañaría a la Secretaria con el permiso, que acá no pasa.
-  message = "Solo el titular, o un administrador/a o profesional con «Configuración», puede cambiar esto."
+  message = "Solo el titular o el administrador (o un profesional con «Configuración») puede cambiar esto."
 ): Promise<Actor> {
   const { actor } = await requireCapability("tenant.sensitive", message);
   return actor;

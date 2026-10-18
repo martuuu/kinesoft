@@ -85,7 +85,7 @@ describe.skipIf(!RUN)("authz · rol desde Membership", () => {
   it("datos del consultorio con requireTenantSensitive (T3): PRACTITIONER sin «Configuración» no escribe, OWNER sí", async () => {
     asUser(pracUser);
     await expect(updateTenantBasics({ name: "Hackeado" })).rejects.toThrow(
-      "Solo el titular, o un administrador/a o profesional con «Configuración», puede cambiar esto."
+      "Solo el titular o el administrador (o un profesional con «Configuración») puede cambiar esto."
     );
     expect((await db.tenant.findUniqueOrThrow({ where: { id: A.tenantId } })).name).not.toBe("Hackeado");
 
