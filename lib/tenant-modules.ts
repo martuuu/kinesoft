@@ -54,8 +54,8 @@ export type TenantEntitlements = {
  * Núcleo: común a las dos verticales y a todos los planes (plan §20.5.2).
  *
  * PL-1a: `evoluciones` es clave reservada (la usa EV2, HC base para todas las verticales). `salaEspera` SALIÓ del
- * núcleo (PL-D6): la sala de espera (`/sala`, vista Recepción, «Llamar», realtime) es de Clínica/Libre; «Llegó» y
- * «En atención» son estados de agenda y no dependen de este módulo.
+ * núcleo (PL-D6): la sala de espera (`/sala`, vista Recepción, «Llamar», avisos de llegada) es de Clínica/Libre; la agenda en vivo, «Llegó» y
+ * «En atención» son de todos los planes (HF-1a/HF-2c, D-HF1) y no dependen de este módulo.
  */
 const CORE: readonly TenantModule[] = ["agenda", "pacientes", "facturacion", "obrasSociales", "evoluciones"];
 

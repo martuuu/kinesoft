@@ -95,6 +95,19 @@ describe("POST /api/client-errors", () => {
     expect(log).not.toContain("abc123def");
   });
 
+  it("[HF-1a] acepta kind «realtime» (beacon del hub de HF-1b) y tapa un JWT del motivo", async () => {
+    vi.stubEnv("SENTRY_DSN", "https://pk@o1.ingest.sentry.io/42");
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJydDp4In0.c2lnbmF0dXJhLWRlLXBydWViYQ";
+    const res = await POST(req({ message: `join: CHANNEL_ERROR · Invalid JWT ${jwt}`, kind: "realtime", path: "/agenda" }));
+    expect(res.status).toBe(204);
+    expect(sentry.calls).toHaveLength(1);
+    const [err, hint] = sentry.calls[0] as [Error, { extra: Record<string, unknown> }];
+    expect(hint.extra).toMatchObject({ source: "client", kind: "realtime", path: "/agenda" });
+    expect(err.message).toContain("Invalid JWT");
+    expect(err.message).not.toContain(jwt);
+    expect(out.join("")).not.toContain(jwt);
+  });
+
   it("recorta el stack a 4 KB y el mensaje a su tope", async () => {
     const res = await POST(req({ message: "m".repeat(2_000), stack: "s".repeat(6_000), kind: "route" }));
     expect(res.status).toBe(204);

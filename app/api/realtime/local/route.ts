@@ -18,9 +18,8 @@ export const dynamic = "force-dynamic";
  * del actor (`lib/realtime-local-bus.ts`), y nada de otro consultorio: el
  * `tenantId` sale de la sesión, nunca del request.
  *
- * Misma regla de acceso que el bootstrap (`realtimeAllowed`: módulo `salaEspera`
- * + `agenda.reception`): si el layout no le dio realtime a este actor, la ruta
- * tampoco (BILLING → 403, sigue con el polling de 60 s).
+ * Misma regla de acceso que el bootstrap (`realtimeAllowed`: `agenda.reception`, todos los planes desde
+ * HF-1a / D-HF1): si el layout no le dio realtime a este actor, la ruta tampoco (BILLING → 403).
  *
  * Formato: un evento `data: <JSON array de RealtimeAgendaMessage>` por `emit` (el
  * driver local los parsea con `parseIncomingBatch`) y un comentario `: ping` cada

@@ -68,7 +68,9 @@ import { verifyRealtimeToken } from "@/lib/realtime-token-internal";
 import { topicFor } from "@/lib/realtime-constants";
 import { __rateLimitInternals } from "@/lib/rate-limit";
 import { getActor } from "@/lib/session";
-import { MODULE_DENIED_COPY } from "@/lib/tenant-modules";
+import { modulesFor } from "@/lib/tenant-modules";
+import { logger } from "@/lib/logger";
+import { __resetMintDeniedLogForTests } from "@/lib/realtime-mint-log";
 import { asUser } from "@/tests/helpers/actor";
 import {
   addPractitioner,
@@ -185,17 +187,21 @@ describe.skipIf(!RUN)("SV04b · mintRealtimeToken", () => {
     });
   });
 
-  it("[FX1b] tenant sin el módulo salaEspera → {ok:false} con el copy del módulo (aunque el driver sea supabase)", async () => {
+  // HF-1a (D-HF1, decisión de Martin 18-oct; H-RT3): ANTES este test afirmaba «sin salaEspera → {ok:false} con el
+  // copy del módulo». La agenda en vivo pasó a ser de todos los planes (`salaEspera` es solo Clínica/Libre y un
+  // Consultorio con Secretaria nunca entraba en vivo), así que sin el módulo el token sale igual. `/sala`, «Llamar» y
+  // la TV siguen con su gate (lo cubren pl2f-rooms-plan y las suites SR/SV).
+  it("[HF-1a] tenant sin el módulo salaEspera → token igual (agenda en vivo en todos los planes)", async () => {
     setEnv(SUPA);
     asUser(A.userId);
     mods.drop.add("salaEspera");
     try {
-      expect(await mintRealtimeToken()).toEqual({ ok: false, error: MODULE_DENIED_COPY.salaEspera });
+      const r = await mintRealtimeToken();
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(verifyRealtimeToken(r.data.token, SECRET)?.tenant_id).toBe(A.tenantId);
     } finally {
       mods.drop.clear();
     }
-    // Control: el mismo actor con el módulo sí obtiene token (el rojo es por el módulo).
-    expect((await mintRealtimeToken()).ok).toBe(true);
   });
 
   it("[FX1b] un error no tipado adentro (rate limit caído) → {ok:false, error:'realtime-error'}, sin tirar", async () => {
@@ -216,7 +222,7 @@ describe.skipIf(!RUN)("SV04b · mintRealtimeToken", () => {
     setEnv(SUPA);
     asUser(billingId);
     // Por el error exacto: un `{ok:false}` por driver o rate limit daría verde igual.
-    expect(await mintRealtimeToken()).toEqual({ ok: false, error: "No tenés acceso a la sala de espera en vivo." });
+    expect(await mintRealtimeToken()).toEqual({ ok: false, error: "No tenés acceso a la agenda en vivo." });
   });
 
   // BO2-D (C-BO1 `publicSurfacesOpen`, modo EFECTIVO): consultorio en solo lectura bajo `enforce` → sin token
@@ -327,14 +333,16 @@ describe.skipIf(!RUN)("SV04b · realtimeBootstrap", () => {
     expect((await realtimeBootstrap(await getActor())).driver).toBe("off");
   });
 
-  it("[FX1b] tenant sin el módulo salaEspera → off con supabase y con local", async () => {
+  // HF-1a (D-HF1): ANTES «sin salaEspera → off». Ahora el bootstrap da el driver igual (mismo `realtimeAllowed` que
+  // el token y que `/api/realtime/local`).
+  it("[HF-1a] tenant sin el módulo salaEspera → supabase y local igual (agenda en vivo en todos los planes)", async () => {
     asUser(A.userId);
     mods.drop.add("salaEspera");
     try {
       setEnv(SUPA);
-      expect(await realtimeBootstrap(await getActor())).toEqual({ driver: "off", tenantId: A.tenantId });
+      expect(await realtimeBootstrap(await getActor())).toEqual({ driver: "supabase", tenantId: A.tenantId, url: URL_PUB, anonKey: ANON });
       setEnv({ REALTIME_DRIVER: "local" });
-      expect(await realtimeBootstrap(await getActor())).toEqual({ driver: "off", tenantId: A.tenantId });
+      expect(await realtimeBootstrap(await getActor())).toEqual({ driver: "local", tenantId: A.tenantId });
     } finally {
       mods.drop.clear();
     }
@@ -344,5 +352,72 @@ describe.skipIf(!RUN)("SV04b · realtimeBootstrap", () => {
     setEnv(SUPA);
     asUser(billingId);
     expect(await realtimeBootstrap(await getActor())).toEqual({ driver: "off", tenantId: A.tenantId });
+  });
+});
+
+// HF-1c (plan §22.4, D-HF1): el caso real del cliente principal. Sin mock de módulos: un consultorio en plan
+// CONSULTORIO de verdad (sin `salaEspera` en la matriz) con una Secretaria.
+describe.skipIf(!RUN)("[HF-1c] agenda en vivo en plan Consultorio", () => {
+  let db: PrismaClient;
+  let C: EphemeralTenant;
+  let secretariaId: string;
+  let billingId: string;
+
+  beforeAll(async () => {
+    db = ownerClient();
+    C = await createEphemeralTenant(db, { saasPlan: "CONSULTORIO" });
+    secretariaId = (await addPractitioner(db, C, "ASSISTANT")).userId;
+    billingId = (await addPractitioner(db, C, "BILLING")).userId;
+  });
+  afterAll(async () => {
+    over.values = {};
+    await C?.cleanup();
+    await db?.$disconnect();
+  });
+  beforeEach(() => {
+    __rateLimitInternals.reset();
+    __resetMintDeniedLogForTests();
+    mods.drop.clear();
+    setEnv(SUPA);
+  });
+
+  it("[HF-1c] Consultorio con Secretaria → mintRealtimeToken ok; BILLING sigue {ok:false}", async () => {
+    asUser(secretariaId);
+    const actor = await getActor();
+    // Control: el plan de verdad no trae el módulo (si lo trajera, el test no probaría D-HF1).
+    expect(modulesFor(actor.entitlements).has("salaEspera")).toBe(false);
+    const r = await mintRealtimeToken();
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(verifyRealtimeToken(r.data.token, SECRET)?.tenant_id).toBe(C.tenantId);
+    expect((await realtimeBootstrap(actor)).driver).toBe("supabase");
+
+    asUser(billingId);
+    expect(await mintRealtimeToken()).toEqual({ ok: false, error: "No tenés acceso a la agenda en vivo." });
+    expect((await realtimeBootstrap(await getActor())).driver).toBe("off");
+  });
+
+  it("[HF-1a] cada rechazo deja realtime.mint_denied con su motivo, una vez por usuario y ventana", async () => {
+    const warn = vi.spyOn(logger, "warn");
+    try {
+      asUser(billingId);
+      await mintRealtimeToken();
+      await mintRealtimeToken();
+      await mintRealtimeToken();
+      const denied = warn.mock.calls.filter((c) => c[0] === "realtime.mint_denied");
+      expect(denied).toHaveLength(1);
+      expect(denied[0][1]).toEqual({ reason: "no_capability", userId: billingId, tenantId: C.tenantId });
+      // Otro motivo del mismo usuario sí loguea (driver apagado no llega: BILLING corta antes). Otro usuario, sí.
+      setEnv({ REALTIME_DRIVER: "off" });
+      asUser(secretariaId);
+      await mintRealtimeToken();
+      await mintRealtimeToken();
+      const after = warn.mock.calls.filter((c) => c[0] === "realtime.mint_denied");
+      expect(after).toHaveLength(2);
+      expect(after[1][1]).toEqual({ reason: "driver_off", userId: secretariaId, tenantId: C.tenantId });
+      // Nunca el token ni el secreto en el log.
+      expect(JSON.stringify(after)).not.toContain(SECRET);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

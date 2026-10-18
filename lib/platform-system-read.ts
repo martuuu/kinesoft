@@ -10,6 +10,10 @@ import "server-only";
  * de BO3), salvo `TENANT_ACCESS_ENFORCEMENT`: por `tenantAccessEnforcement()`, que es lo que leen los cortes en cada
  * request (el `env` se congela al importar; mostrar el congelado podría no ser lo que se aplica).
  *
+ * HF-1a: el secreto de firma de realtime se describe con `describeRealtimeSecret` (largo, bordes, huella) leyendo el
+ * CRUDO de `process.env`: `env` ya viene recortado y no podría decir si Vercel lo tenía con un `\n` al borde (H-RT1).
+ * Al builder llega solo esa descripción, nunca el valor.
+ *
  * Migraciones: `_prisma_migrations` por `prismaService`. En prod el canal service es un rol BYPASSRLS que puede no
  * tener SELECT sobre esa tabla (la crea el owner): si falla, el panel dice «no se pudo leer», no se cae.
  */
@@ -18,6 +22,7 @@ import { env, tenantAccessEnforcement } from "@/lib/env";
 import { pingDb } from "@/lib/db-ping";
 import { logger } from "@/lib/logger";
 import { requirePlatformAdmin } from "@/lib/platform-actor";
+import { describeRealtimeSecret } from "@/lib/realtime-token-internal";
 import { buildSystemStatus, type MigrationsInfo, type PlatformSystemStatus } from "@/lib/platform-system-logic";
 
 export type { PlatformSystemStatus } from "@/lib/platform-system-logic";
@@ -55,6 +60,9 @@ export async function getPlatformSystemStatus(): Promise<PlatformSystemStatus> {
       CRON_SECRET: env.CRON_SECRET,
       NEXT_PUBLIC_APP_URL: env.NEXT_PUBLIC_APP_URL,
       VERCEL_ENV: env.VERCEL_ENV,
+      SUPABASE_JWT_KID: env.SUPABASE_JWT_KID,
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      realtimeSecret: describeRealtimeSecret(process.env.SUPABASE_JWT_SECRET),
     },
     migrations,
     { up: ping.up, ms: ping.ms }

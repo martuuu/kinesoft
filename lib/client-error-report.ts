@@ -25,7 +25,13 @@ export const CLIENT_ERROR_ENDPOINT = "/api/client-errors";
 /** Topes en caracteres. El stack a 4 KB alcanza para las primeras ~30 frames minificadas. */
 export const CLIENT_ERROR_LIMITS = { message: 1024, stack: 4096, digest: 128, path: 512 } as const;
 
-/** Qué boundary reportó. Lista cerrada: el server rechaza cualquier otro valor. */
+/**
+ * Qué boundary reportó. Lista cerrada: el server rechaza cualquier otro valor.
+ *
+ * HF-1a: `realtime` no es un boundary sino el beacon del hub de tiempo real (HF-1b): cuando el canal queda rechazado
+ * de forma permanente (auth del `phx_join`, action vieja), el motivo no salía del navegador y en prod nadie lo veía.
+ * El mensaje es el `diag` del hub (paso + código + motivo recortado), nunca el token.
+ */
 export const CLIENT_ERROR_KINDS = [
   "global",
   "route",
@@ -35,8 +41,12 @@ export const CLIENT_ERROR_KINDS = [
   "auth",
   "onboarding",
   "invite",
+  "realtime",
 ] as const;
 export type ClientErrorKind = (typeof CLIENT_ERROR_KINDS)[number];
+/** HF-1a: el kind del beacon de realtime (lo usa HF-1b), exportado para no repetir el literal. */
+export type RealtimeClientErrorKind = Extract<ClientErrorKind, "realtime">;
+export const REALTIME_CLIENT_ERROR_KIND: RealtimeClientErrorKind = "realtime";
 
 export type ClientErrorPayload = {
   message: string;

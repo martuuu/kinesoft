@@ -8,11 +8,21 @@
  * (alguien pegó un secreto en la variable equivocada) se muestra como «inválido», no tal cual.
  * `NEXT_PUBLIC_APP_URL` es pública, pero tampoco sale: solo si apunta a localhost (el bug de env-sin-fail-fast).
  *
+ * HF-1a (H-RT1, plan §22.4) · ÚNICA excepción, el secreto de firma de realtime (`SUPABASE_JWT_SECRET`): se muestran su
+ * LARGO, si tenía espacios o saltos al borde (sí/no) y una HUELLA (sha256 con prefijo propio → 8 hex,
+ * `realtimeSecretFingerprint`). La agenda nunca entraba en vivo porque Vercel tenía el secreto con un `\n` final, y sin
+ * estos tres datos no había forma de verlo desde la app. Por qué no rompe la regla de arriba: la huella no es un
+ * pedazo del valor ni sirve para adivinarlo (32 bits de un hash, el espacio a recorrer es el del secreto), y el largo
+ * de un secreto HS256 no distingue test de prod (todos los de Supabase miden lo mismo); el `\n` sí se nota (+1). El
+ * builder recibe esos datos ya calculados (`RealtimeSecretInfo`), nunca el secreto. El `kid` sale tal cual solo con
+ * forma de UUID (no es secreto: viaja en el header de cada token), y de la anon key solo el TIPO.
+ *
  * El builder recibe un objeto de entrada explícito (no lee `process.env`) para que el unit test pueda pasarle valores
  * marcados y probar que ninguno aparece en el DTO.
  */
 import { REALTIME_DRIVERS } from "@/lib/realtime-constants";
 import { ACCESS_ENFORCEMENTS } from "@/lib/tenant-access";
+import type { RealtimeSecretInfo } from "@/lib/realtime-token-internal";
 
 export type SystemCheckState = "ok" | "missing" | "warn" | "value";
 
@@ -48,6 +58,12 @@ export type SystemConfigInput = {
   CRON_SECRET?: string;
   NEXT_PUBLIC_APP_URL?: string;
   VERCEL_ENV?: string;
+  /** HF-1a: ya recortado por `lib/env.ts`. Solo se muestra con forma de UUID. */
+  SUPABASE_JWT_KID?: string;
+  /** HF-1a: pública, pero igual solo sale el tipo (JWT legacy / publishable / secreta pegada por error). */
+  NEXT_PUBLIC_SUPABASE_ANON_KEY?: string;
+  /** HF-1a: lo que se puede decir del secreto de firma sin el valor (`describeRealtimeSecret`). null = no está. */
+  realtimeSecret?: RealtimeSecretInfo | null;
 };
 
 export type MigrationsInfo = { available: true; applied: number; last: string | null } | { available: false };
@@ -62,6 +78,91 @@ function presence(key: string, label: string, v: string | undefined, missingDeta
   return present(v)
     ? { key, label, state: "ok", value: null, detail: okDetail }
     : { key, label, state: "missing", value: null, detail: missingDetail };
+}
+
+/** Los `kid` de las JWT signing keys de Supabase son UUID. Otra cosa no se muestra (podría ser un secreto mal pegado). */
+const KID_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Un JWT con forma (`eyJ…` y tres partes): la anon key legacy. */
+const JWT_SHAPE = /^eyJ[\w-]*\.[\w-]+\.[\w-]+$/;
+
+function realtimeChecks(input: SystemConfigInput, driver: string): SystemCheck[] {
+  const supabase = driver === "supabase";
+  const info = input.realtimeSecret ?? null;
+  const secret: SystemCheck = !info
+    ? {
+        key: "SUPABASE_JWT_SECRET",
+        label: "Secreto de firma del canal",
+        state: supabase ? "missing" : "warn",
+        value: null,
+        detail: supabase
+          ? "Sin secreto no se firma el token del canal: la agenda no entra en vivo."
+          : "Sin secreto. Hace falta antes de pasar el tiempo real a supabase.",
+      }
+    : {
+        key: "SUPABASE_JWT_SECRET",
+        label: "Secreto de firma del canal",
+        state: info.edgeWhitespace ? "warn" : "ok",
+        value: `huella ${info.fingerprint}`,
+        detail: info.edgeWhitespace
+          ? `${info.length} caracteres · espacios o saltos de línea al borde: sí. La app los recorta al firmar, pero volvé a pegarlo limpio en Vercel (sin Enter al final). Compará la huella con la de scripts/realtime-verify.ts.`
+          : `${info.length} caracteres · espacios o saltos de línea al borde: no. Compará la huella con la de scripts/realtime-verify.ts: si difieren, firman con secretos distintos.`,
+      };
+
+  const kidRaw = (input.SUPABASE_JWT_KID ?? "").trim();
+  const kid: SystemCheck = !kidRaw
+    ? {
+        key: "SUPABASE_JWT_KID",
+        label: "kid de la clave",
+        state: "value",
+        value: "sin kid",
+        detail: "Correcto con el secreto legacy. Con una clave HS256 del sistema nuevo de JWT signing keys hace falta su kid.",
+      }
+    : KID_UUID.test(kidRaw)
+      ? {
+          key: "SUPABASE_JWT_KID",
+          label: "kid de la clave",
+          state: "value",
+          value: kidRaw.toLowerCase(),
+          detail: "Tiene que ser el kid de la clave HS256 con la que se firma (Supabase → JWT Keys). Con el secreto legacy, dejalo vacío.",
+        }
+      : {
+          key: "SUPABASE_JWT_KID",
+          label: "kid de la clave",
+          state: "warn",
+          value: "no es UUID",
+          detail: "Los kid de Supabase tienen forma de UUID. No se muestra por si es otro dato pegado acá.",
+        };
+
+  const anon = (input.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "").trim();
+  const anonCheck: SystemCheck = !anon
+    ? {
+        key: "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+        label: "Clave pública (anon)",
+        state: "missing",
+        value: null,
+        detail: "Sin clave pública el navegador no puede abrir el socket de tiempo real (ni el login).",
+      }
+    : anon.startsWith("sb_publishable_")
+      ? { key: "NEXT_PUBLIC_SUPABASE_ANON_KEY", label: "Clave pública (anon)", state: "value", value: "publishable", detail: "Clave publishable del sistema nuevo de API keys." }
+      : anon.startsWith("sb_secret_")
+        ? {
+            key: "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+            label: "Clave pública (anon)",
+            state: "missing",
+            value: "es secreta",
+            detail: "Es una clave sb_secret_: viaja en el bundle del navegador. Cambiala por la publishable y rotala en Supabase.",
+          }
+        : JWT_SHAPE.test(anon)
+          ? { key: "NEXT_PUBLIC_SUPABASE_ANON_KEY", label: "Clave pública (anon)", state: "value", value: "JWT legacy", detail: "Anon key legacy (JWT)." }
+          : {
+              key: "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+              label: "Clave pública (anon)",
+              state: "warn",
+              value: "no reconocida",
+              detail: "No es un JWT ni una clave sb_publishable_: revisá que sea la anon key del proyecto.",
+            };
+
+  return [secret, kid, anonCheck];
 }
 
 function enumValue(v: string | undefined, allowed: readonly string[], fallback: string): string {
@@ -155,16 +256,16 @@ export function buildSystemStatus(
       checks: [
         {
           key: "REALTIME_DRIVER",
-          label: "Sala de espera en tiempo real",
+          label: "Agenda y sala en tiempo real",
           state: realtime === "inválido" ? "warn" : "value",
           value: realtime,
           detail:
             realtime === "supabase"
-              ? "Avisos al instante por Supabase Realtime."
+              ? "Avisos al instante por Supabase Realtime. Probalo con «Probar desde el servidor»."
               : realtime === "local"
                 ? "Bus en memoria: solo sirve en desarrollo."
                 : realtime === "off"
-                  ? "Apagado: la sala se actualiza cada 60 s."
+                  ? "Apagado: sin avisos al instante; la agenda se refresca cada 60 s con la pestaña a la vista."
                   : "Valor no reconocido.",
         },
         {
@@ -182,6 +283,11 @@ export function buildSystemStatus(
                   : "Valor no reconocido.",
         },
       ],
+    },
+    {
+      id: "realtime",
+      title: "Tiempo real (Supabase)",
+      checks: realtimeChecks(input, realtime),
     },
     {
       id: "cron",

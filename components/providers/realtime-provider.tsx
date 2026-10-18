@@ -157,7 +157,7 @@ export function createDiagBeacon(send: (err: Error) => void) {
 }
 
 // HANDOFF HF-1a: `"realtime"` en `CLIENT_ERROR_KINDS`. Hasta que esté, el server responde 400 y no pasa nada más.
-const REALTIME_KIND = "realtime" as ClientErrorKind;
+const REALTIME_KIND: ClientErrorKind = "realtime";
 const beaconDiag = createDiagBeacon((err) => reportClientError(err, { kind: REALTIME_KIND }));
 
 /** Diagnóstico del hub que no cargó (lo arma el provider: sin hub no hay `makeDiag`). */

@@ -3,11 +3,15 @@
  * «Revisar» o el VALOR cuando es un enum no secreto (driver de tiempo real, modo de corte, entorno). La vista solo
  * puede mostrar lo que trae `PlatformSystemStatus`, que nunca contiene un secreto (ver `platform-system-logic.ts`).
  * Sin "use client": es una foto del server al cargar.
+ *
+ * HF-1a: la Card «Tiempo real» suma «Probar desde el servidor» (`RealtimeProbe`, isla cliente): la foto dice qué hay
+ * cargado; el botón dice si con eso Supabase deja suscribirse.
  */
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { formatDateAR } from "@/lib/format";
 import type { PlatformSystemStatus, SystemCheck } from "@/lib/platform-system-logic";
+import { RealtimeProbe } from "@/components/plataforma/system/realtime-probe";
 
 function StateBadge({ c }: { c: SystemCheck }) {
   if (c.state === "ok") return <Tag tone="lime">{c.value ? `OK · ${c.value}` : "OK"}</Tag>;
@@ -53,6 +57,7 @@ export function SystemView({ status }: { status: PlatformSystemStatus }) {
                 </li>
               ))}
             </ul>
+            {g.id === "realtime" ? <RealtimeProbe /> : null}
           </Card>
         ))}
       </div>

@@ -15,6 +15,12 @@ vi.mock("@/lib/preferences", () => ({ updateUserPreferences: vi.fn(async () => (
 vi.mock("@/lib/exercises-admin", () => ({}));
 vi.mock("@/components/plataforma/exercise-drawer", () => ({ ExerciseDrawer: () => null }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }) }));
+// HF-1a: la Card de tiempo real monta «Probar desde el servidor». Su action (red a Supabase) y la capa de
+// re-verificación de Plataforma (arrastra la sesión del server) no corren en un render estático: se reemplazan.
+vi.mock("@/lib/platform-realtime-probe", () => ({ probeRealtimeFromServer: vi.fn() }));
+vi.mock("@/components/plataforma/reauth-modal", () => ({
+  usePlatformAction: () => <T,>(fn: () => Promise<T>) => fn(),
+}));
 
 import { AuditView } from "@/components/plataforma/audit/audit-view";
 import { SystemView } from "@/components/plataforma/system/system-view";
@@ -124,6 +130,26 @@ describe("[BO3-E] SystemView", () => {
     expect(html).toContain(">banner<");
     expect(html).toContain(">87<");
     expect(html).toContain("OK · pública");
+  });
+
+  it("[HF-1a] Tiempo real: huella y bordes del secreto, kid, tipo de anon y el botón de probar; nunca el valor", () => {
+    const status = buildSystemStatus(
+      {
+        REALTIME_DRIVER: "supabase",
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: "sb_publishable_SECRETO",
+        realtimeSecret: { length: 41, edgeWhitespace: true, fingerprint: "0badf00d" },
+      },
+      { available: false },
+      { up: true, ms: 5 }
+    );
+    const html = renderToStaticMarkup(<SystemView status={status} />);
+    expect(html).not.toMatch(/SECRETO/);
+    expect(html).toContain("Tiempo real (Supabase)");
+    expect(html).toContain("Revisar · huella 0badf00d");
+    expect(html).toContain("41 caracteres · espacios o saltos de línea al borde: sí");
+    expect(html).toContain(">sin kid<");
+    expect(html).toContain(">publishable<");
+    expect(html).toContain("Probar desde el servidor");
   });
 });
 

@@ -8,7 +8,8 @@
  *   - sala ELEGIDA en un alta, un lote, una edición, una franja, una excepción o un bloqueo → 403 sin escribir;
  *   - las salas «duermen»: la sala de la franja no se estampa, no hay «sala ocupada», y lo que ya tenía sala la
  *     conserva (editar notas, mover el horario, guardar la semana) — datos intactos para cuando vuelva a Clínica;
- *   - «Llamar» → 403 (Sala de Espera); «Llegó» sigue andando (núcleo); token realtime → 403.
+ *   - «Llamar» → 403 (Sala de Espera); «Llegó» sigue andando (núcleo); token realtime: desde HF-1a (D-HF1) ya NO
+ *     es 403 — la agenda en vivo es de todos los planes.
  * Clínica sin cambios: lo cubren las suites SR/SV (sus tenants nacen `saasPlan: "CLINICA"`).
  *
  * Símbolos reales; se mockean la sesión (helper `asUser`) y `next/cache` (setup de integración). Fixtures por
@@ -23,6 +24,7 @@ import { savePractitionerWeek, upsertException } from "@/lib/practitioner-schedu
 import { createTimeBlock, listTimeBlocks } from "@/lib/time-blocks";
 import { mintRealtimeToken } from "@/lib/realtime-token";
 import { MODULE_DENIED_COPY } from "@/lib/tenant-modules";
+import { env } from "@/lib/env";
 import { toARDateKey } from "@/lib/datetime-ar";
 import {
   ownerClient,
@@ -217,7 +219,7 @@ describe.skipIf(!RUN)("PL-2f · salas y Sala de Espera sin el plan Clínica", ()
     expect(await db.booking.findUniqueOrThrow({ where: { id: b.id } })).toMatchObject({ roomId: null, locationId: L2 });
   });
 
-  it("Recepción: «Llamar» → 403 sin escribir; «Llegó» (núcleo) anda; token realtime → 403", async () => {
+  it("Recepción: «Llamar» → 403 sin escribir; «Llegó» (núcleo) anda; token realtime ya no depende del plan (HF-1a)", async () => {
     const now = new Date();
     // Un turno de hoy AR, empezando ahora (redondeado al minuto).
     const b = await mk({ when: new Date(Math.floor(now.getTime() / 60_000) * 60_000) });
@@ -238,7 +240,15 @@ describe.skipIf(!RUN)("PL-2f · salas y Sala de Espera sin el plan Clínica", ()
     // «En atención» también es núcleo.
     expect(await markReceptionAction(b.id, "en-atencion", llego.data.updatedAt)).toMatchObject({ ok: true });
 
-    expect(await mintRealtimeToken()).toEqual({ ok: false, error: MODULE_DENIED_COPY.salaEspera });
+    // HF-1a (D-HF1, decisión de Martin 18-oct; H-RT3): ANTES «token realtime → 403 con el copy de salaEspera». La
+    // agenda en vivo pasó a todos los planes, así que el plan Consultorio ya no corta el token: lo que decide es la
+    // config del deploy (este archivo corre con el env real de `.env.local`, sin Proxy). Se afirma el resultado
+    // exacto según esa config, para que un `{ok:false}` por otro motivo no dé verde.
+    const rt = await mintRealtimeToken();
+    expect(rt).not.toEqual({ ok: false, error: MODULE_DENIED_COPY.salaEspera });
+    if (env.REALTIME_DRIVER !== "supabase") expect(rt).toEqual({ ok: false, error: "realtime-off" });
+    else if (!env.SUPABASE_JWT_SECRET) expect(rt).toEqual({ ok: false, error: "realtime-unconfigured" });
+    else expect(rt.ok).toBe(true);
   });
 
   it("horarios: sala nueva en una franja → 403 sin escribir; la dormida se conserva; cambiar la sede la suelta", async () => {

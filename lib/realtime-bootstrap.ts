@@ -2,7 +2,6 @@ import "server-only";
 import { env } from "@/lib/env";
 import { memberCapabilitiesForActor } from "@/lib/authz";
 import type { Capability } from "@/lib/capabilities";
-import { modulesFor } from "@/lib/tenant-modules";
 import type { Actor } from "@/lib/session";
 import type { RealtimeBootstrap } from "@/lib/realtime-events";
 
@@ -13,21 +12,28 @@ import type { RealtimeBootstrap } from "@/lib/realtime-events";
  * en el bundle). Nunca lleva `SUPABASE_JWT_SECRET` ni la service key: el token del
  * canal lo pide el cliente aparte con `mintRealtimeToken()`.
  *
- * Quién usa realtime: el módulo `salaEspera` + la capability `agenda.reception`.
+ * Quién usa realtime: la capability `agenda.reception`, en TODOS los planes (HF-1a, D-HF1, decisión de Martin
+ * 18-oct; H-RT3). Antes también exigía el módulo `salaEspera`, que es solo de Clínica/Libre: un consultorio en plan
+ * Consultorio con Secretaria nunca tenía agenda en vivo. `/sala`, «Llamar», la TV y los avisos con sonido siguen con
+ * sus propios gates de módulo; el canal solo lleva avisos de «cambió algo» sin PHI.
+ *
  * DESVÍO de §18.2 (que dice `agenda.viewAll || agenda.reception`): BILLING tiene
  * `agenda.viewAll` (`lib/capabilities.ts`, matriz BILLING), así que el OR la dejaría
  * pasar, y §18.8 fila SV04b exige BILLING → `{ok:false}`. Todo rol con `viewAll`
  * salvo BILLING tiene también `reception`, así que exigir `reception` es el OR del
- * plan menos BILLING, que es lo conservador. BILLING sigue viendo la agenda por el
- * polling de 60 s.
+ * plan menos BILLING, que es lo conservador. BILLING ve la agenda sin vivo: con el
+ * driver `off` del bootstrap el cliente NO hacía polling (H-RT2: la agenda quedaba
+ * congelada hasta navegar; el comentario anterior decía «polling de 60 s» y era
+ * falso). HF-1b suma el resync de 60 s con la pestaña visible para ese caso.
  *
  * BO2-E: el soporte (`actor.support`) nunca: `SUPPORT_CAPS` trae `agenda.reception` (es la Secretaria), pero un
  * canal en vivo de la sala de espera (nombres de pacientes llegando) no hace falta para mirar el consultorio y
  * deja un JWT de canal en manos de alguien sin membresía. Como `mintRealtimeToken` usa esta misma función, el
- * rechazo vale para el token y para el bootstrap del layout. Soporte ve la agenda por polling.
+ * rechazo vale para el token y para el bootstrap del layout (y para `/api/realtime/local`). Soporte ve la agenda sin
+ * vivo, igual que BILLING.
  */
 export function realtimeAllowed(actor: Actor, caps: ReadonlySet<Capability>): boolean {
-  return !actor.support && modulesFor(actor.entitlements).has("salaEspera") && caps.has("agenda.reception");
+  return !actor.support && caps.has("agenda.reception");
 }
 
 export async function realtimeBootstrap(

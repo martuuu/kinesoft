@@ -24,6 +24,11 @@ const MARKED: Required<SystemConfigInput> = {
   CRON_SECRET: "SECRETO-CRON",
   NEXT_PUBLIC_APP_URL: "https://SECRETO-app.kinesoft.com.ar",
   VERCEL_ENV: "production",
+  // HF-1a: un kid sin forma de UUID y una anon key no reconocida no salen tal cual.
+  SUPABASE_JWT_KID: "SECRETO-KID",
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: "SECRETO-ANON",
+  // Ya descripto (el builder nunca recibe el secreto); `load()` no lo pasa a process.env.
+  realtimeSecret: { length: 40, edgeWhitespace: false, fingerprint: "abcd1234" },
 };
 
 const allChecks = (s: ReturnType<typeof buildSystemStatus>) => s.groups.flatMap((g) => g.checks);
@@ -44,6 +49,32 @@ describe("[BO3-E] buildSystemStatus · presencia sin valores", () => {
     expect(byKey.NEXT_PUBLIC_APP_URL).toMatchObject({ state: "ok", value: "pública" });
     expect(byKey.migrations).toMatchObject({ value: "120", detail: "Última: 20261014120000_platform_backoffice" });
     expect(byKey.health).toMatchObject({ state: "ok" });
+    // HF-1a: del secreto de realtime, huella y largo (nunca el valor); kid y anon con forma rara → no salen.
+    expect(byKey.SUPABASE_JWT_SECRET).toMatchObject({ state: "ok", value: "huella abcd1234" });
+    expect(byKey.SUPABASE_JWT_SECRET.detail).toMatch(/40 caracteres · espacios o saltos de línea al borde: no/);
+    expect(byKey.SUPABASE_JWT_KID).toMatchObject({ state: "warn", value: "no es UUID" });
+    expect(byKey.NEXT_PUBLIC_SUPABASE_ANON_KEY).toMatchObject({ state: "warn", value: "no reconocida" });
+  });
+
+  it("[HF-1a] kid UUID sale tal cual; anon JWT legacy / publishable / secreta; sin secreto con supabase → falta", () => {
+    const kid = "3f0c2d1e-9a8b-4c7d-8e6f-5a4b3c2d1e0f";
+    const s1 = buildSystemStatus(
+      { REALTIME_DRIVER: "supabase", SUPABASE_JWT_KID: kid, NEXT_PUBLIC_SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiJ9.c2ln" },
+      { available: false },
+      { up: true, ms: 1 }
+    );
+    const k1 = Object.fromEntries(allChecks(s1).map((c) => [c.key, c]));
+    expect(k1.SUPABASE_JWT_KID).toMatchObject({ state: "value", value: kid });
+    expect(k1.NEXT_PUBLIC_SUPABASE_ANON_KEY).toMatchObject({ value: "JWT legacy" });
+    expect(k1.SUPABASE_JWT_SECRET).toMatchObject({ state: "missing", value: null });
+    expect(JSON.stringify(s1)).not.toContain("eyJyb2xl");
+
+    const s2 = buildSystemStatus({ NEXT_PUBLIC_SUPABASE_ANON_KEY: "sb_secret_SECRETO" }, { available: false }, { up: true, ms: 1 });
+    const k2 = Object.fromEntries(allChecks(s2).map((c) => [c.key, c]));
+    expect(k2.NEXT_PUBLIC_SUPABASE_ANON_KEY).toMatchObject({ state: "missing", value: "es secreta" });
+    expect(k2.SUPABASE_JWT_KID).toMatchObject({ value: "sin kid" });
+    expect(k2.SUPABASE_JWT_SECRET.state).toBe("warn"); // driver off: avisa, no «falta»
+    expect(JSON.stringify(s2)).not.toMatch(/SECRETO/);
   });
 
   it("un secreto pegado en una variable de enum sale «inválido», no tal cual", () => {
@@ -86,7 +117,7 @@ describe("[BO3-E] getPlatformSystemStatus · el export real con env marcado", ()
   async function load(requireImpl: () => Promise<unknown>) {
     vi.resetModules();
     // VERCEL_ENV no se setea: el fail-fast de Production de `lib/env.ts` no aplica (no es lo que se prueba acá).
-    for (const [k, v] of Object.entries(MARKED)) if (k !== "VERCEL_ENV") vi.stubEnv(k, v);
+    for (const [k, v] of Object.entries(MARKED)) if (k !== "VERCEL_ENV" && typeof v === "string") vi.stubEnv(k, v);
     const requirePlatformAdmin = vi.fn(requireImpl);
     vi.doMock("@/lib/platform-actor", () => ({ requirePlatformAdmin }));
     vi.doMock("@/lib/db", () => ({

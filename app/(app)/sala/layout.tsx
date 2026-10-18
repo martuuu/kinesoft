@@ -10,7 +10,7 @@ import { moduleWall } from "@/lib/module-wall";
  * manda a /login.
  *
  * El layout es UX, la barrera es la action: `markReceptionAction` exige
- * `agenda.reception` y `mintRealtimeToken` el módulo. La capability la chequea
+ * `agenda.reception`; el token realtime ya no depende del módulo (HF-1a, D-HF1). La capability la chequea
  * la página (BILLING → /agenda).
  *
  * VX2-b2 (D-VX20): si un plan MAYOR trae el módulo en la vertical del consultorio, muro con upsell (`AccessWall`) en

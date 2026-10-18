@@ -8,6 +8,14 @@ import { PLATFORM_MFA_ENFORCEMENTS, type PlatformMfaEnforcement } from "@/lib/pl
 // copiar el example rompería el arranque en local.
 const emptyAsUndefined = (v: unknown) => (typeof v === "string" && v.trim() === "" ? undefined : v);
 
+// HF-1a (H-RT1, plan §22.2): Vercel guardó `SUPABASE_JWT_SECRET` con un `\n` al final (se pegó con Enter). Firmábamos
+// el HS256 con ese byte de más, Supabase verificaba con el secreto limpio y TODO `phx_join` volvía con firma inválida:
+// la agenda nunca entraba en vivo. El script local daba 11/11 porque dotenv recorta y Vercel no. Martin lo corrigió a
+// mano; esto evita que vuelva: ningún secreto, `kid` ni clave pública tiene espacios legítimos en los bordes. Vacío
+// (o solo espacios) → no seteada, igual que el resto. `lib/realtime-token-internal.ts` firma con `env`, así que el
+// recorte llega a la firma sin más cambios.
+const trimmedOrUndefined = (v: unknown) => (typeof v === "string" ? emptyAsUndefined(v.trim()) : v);
+
 const schema = z.object({
   DATABASE_URL: z.string().url().optional(),
   DIRECT_URL: z.string().url().optional(),
@@ -16,7 +24,8 @@ const schema = z.object({
   DATABASE_URL_SERVICE: z.string().url().optional(),
 
   NEXT_PUBLIC_SUPABASE_URL: z.string().url().optional(),
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().optional(),
+  // HF-1a: recortada (ver `trimmedOrUndefined`): viaja como `apikey` del socket y un `\n` lo rechaza igual.
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: z.preprocess(trimmedOrUndefined, z.string().optional()),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
 
   // Sala de Espera en tiempo real (SV, §18.2). `off` (default) = la app es
@@ -27,10 +36,11 @@ const schema = z.object({
   // Secreto HS256 con el que firmamos el token del canal (SV-D6/D15). SERVER-ONLY:
   // nunca `NEXT_PUBLIC_` (el guard (d) de SV lo verifica). Con él se puede firmar
   // un token `authenticated` del proyecto: es tan sensible como la service key.
-  SUPABASE_JWT_SECRET: z.string().optional(),
+  // HF-1a: recortado (H-RT1): un `\n` final de Vercel cambiaba la firma y ningún canal se suscribía.
+  SUPABASE_JWT_SECRET: z.preprocess(trimmedOrUndefined, z.string().optional()),
   // `kid` opcional del header (SV-D15): con una clave HS256 del sistema nuevo de
   // JWT signing keys de Supabase hay que nombrarla; con el secreto legacy, no.
-  SUPABASE_JWT_KID: z.string().optional(),
+  SUPABASE_JWT_KID: z.preprocess(trimmedOrUndefined, z.string().optional()),
 
   MP_ACCESS_TOKEN: z.string().optional(),
   MP_PUBLIC_KEY: z.string().optional(),
@@ -145,6 +155,19 @@ const schema = z.object({
   DIRECTORY_MODE: z.preprocess(
     (v) => (typeof v === "string" ? emptyAsUndefined(v.trim().toLowerCase()) : v),
     z.enum(["off", "preview", "public"]).default("off")
+  ),
+
+  // TP-0 (H-TP0/H-TP1, plan §22.5): ¿el turnero público cobra online al reservar?
+  //   off      = DEFAULT: el turno nace reservado sin pago y se paga en el consultorio. Hoy la ÚNICA cuenta de Mercado
+  //              Pago es la de la plataforma (`MP_ACCESS_TOKEN`, AUDIT `turnero-mp-cuenta-plataforma`): cobrar online
+  //              mandaría la plata del paciente a KineSoft y no al profesional. Además el checkout siempre exigía
+  //              pagar y fallaba con precio $0, así que el turnero no dejaba terminar ninguna reserva.
+  //   platform = se cobra con la cuenta de la plataforma (solo para probar o con acuerdo explícito), si además el monto
+  //              llega al mínimo y MP está configurado (`decidePublicCheckout`).
+  // Lo lee `turneroCheckout()` (process.env en cada llamada), no este objeto congelado. Un typo frena el deploy.
+  TURNERO_CHECKOUT: z.preprocess(
+    (v) => (typeof v === "string" ? emptyAsUndefined(v.trim().toLowerCase()) : v),
+    z.enum(["off", "platform"]).default("off")
   ),
 
   // Set by Vercel: "production" | "preview" | "development". Unset locally/CI.
@@ -300,6 +323,7 @@ export const env = parseEnv({
   SAAS_BILLING_MODE: process.env.SAAS_BILLING_MODE,
   PLATFORM_INBOX_EMAIL: process.env.PLATFORM_INBOX_EMAIL,
   DIRECTORY_MODE: process.env.DIRECTORY_MODE,
+  TURNERO_CHECKOUT: process.env.TURNERO_CHECKOUT,
 });
 
 /**
@@ -347,6 +371,15 @@ export function saasBillingMode(): SaasBillingMode {
 export function saasBillingTransferInfo(): string | null {
   const v = process.env.SAAS_BILLING_TRANSFER_INFO?.trim();
   return v ? v.slice(0, 500) : null;
+}
+
+/**
+ * `TURNERO_CHECKOUT` vigente (TP-0), leído en cada llamada: los tests de `public-booking*` lo prenden en el hoisted y
+ * `env` se congela al importar. Cualquier valor que no sea `platform` → `off` (el boot ya rechazó uno inválido; ante
+ * la duda no se cobra con la cuenta de la plataforma).
+ */
+export function turneroCheckout(): "off" | "platform" {
+  return process.env.TURNERO_CHECKOUT?.trim().toLowerCase() === "platform" ? "platform" : "off";
 }
 
 /** `PLATFORM_INBOX_EMAIL` vigente (C-PL11), leído en cada llamada. Vacío → null (no sale el aviso por mail). */

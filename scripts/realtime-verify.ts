@@ -45,13 +45,19 @@
  * Variables: NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY,
  * SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET, SUPABASE_JWT_KID (opcional).
  * Sale con código 1 si algún chequeo da FAIL.
+ *
+ * HF-1a (H-RT1): imprime la HUELLA del secreto (`realtimeSecretFingerprint`, la misma que muestra
+ * `/plataforma/sistema`), su largo y si tenía espacios o saltos al borde, ANTES de validar el destino: así se compara
+ * contra Vercel aunque el chequeo no corra. Nunca el valor. Y firma con el secreto RECORTADO, igual que la app
+ * (`lib/env.ts`): antes firmaba con el crudo y, como dotenv recorta y Vercel no, el script daba 11/11 mientras la app
+ * firmaba con un `\n` de más.
  */
 import type {
   RealtimeChannel,
   RealtimeClient as RealtimeClientT,
   WebSocketLikeConstructor,
 } from "@supabase/realtime-js";
-import { signRealtimeToken } from "../lib/realtime-token-internal";
+import { describeRealtimeSecret, signRealtimeToken } from "../lib/realtime-token-internal";
 import { REALTIME_EVENT, topicFor } from "../lib/realtime-constants";
 import { availabilityMessage } from "../lib/realtime-events";
 import { toARDateKey } from "../lib/datetime-ar";
@@ -192,15 +198,22 @@ async function main(): Promise<void> {
   if (!tenantId || !/^[A-Za-z0-9]{16,40}$/.test(tenantId)) {
     throw new Error(`[${NAME}] uso: --tenant <tenantId> --confirm=<project ref>`);
   }
+  // Huella primero (antes del destino y de la red): es lo que se compara con /plataforma/sistema.
+  const secretInfo = describeRealtimeSecret(need("SUPABASE_JWT_SECRET"));
+  if (!secretInfo) throw new Error(`[${NAME}] SUPABASE_JWT_SECRET está vacío (solo espacios).`);
+  console.log(
+    `[${NAME}] secreto: huella ${secretInfo.fingerprint} · ${secretInfo.length} caracteres · espacios o saltos al borde: ${secretInfo.edgeWhitespace ? "sí (se recortan al firmar, como la app)" : "no"}`
+  );
   const url = need("NEXT_PUBLIC_SUPABASE_URL").replace(/\/+$/, "");
   checkTarget(url, arg("confirm"));
   const kidRaw = process.env.SUPABASE_JWT_KID?.trim();
   const { RealtimeClient } = await import("@supabase/realtime-js");
   const ctx: Ctx = {
     url,
-    anonKey: need("NEXT_PUBLIC_SUPABASE_ANON_KEY"),
+    anonKey: need("NEXT_PUBLIC_SUPABASE_ANON_KEY").trim(),
     serviceKey: need("SUPABASE_SERVICE_ROLE_KEY"),
-    secret: need("SUPABASE_JWT_SECRET"),
+    // Recortado, como `lib/env.ts` (H-RT1).
+    secret: need("SUPABASE_JWT_SECRET").trim(),
     kid: kidRaw ? kidRaw : undefined,
     tenantId,
     topic: topicFor(tenantId),

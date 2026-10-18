@@ -1,5 +1,5 @@
 import "server-only";
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { REALTIME_TOKEN_TTL_SEC } from "@/lib/realtime-constants";
 
 /**
@@ -111,4 +111,40 @@ export function verifyRealtimeToken(
   } catch {
     return null;
   }
+}
+
+/**
+ * HF-1a (H-RT1, plan §22.4): huella del secreto de firma, para comparar sin mostrarlo. La ven `/plataforma/sistema`
+ * (el secreto que tiene ESTE deploy) y `scripts/realtime-verify.ts` (el que tiene el `.env` desde donde corre). Si
+ * difieren, Vercel y el script firman con secretos distintos: fue el caso del `\n` final, que dotenv recortaba y
+ * Vercel no (el script daba 11/11 y la app nunca se suscribía).
+ *
+ * sha256 de un prefijo versionado + el secreto RECORTADO (lo mismo con lo que firma la app, `lib/env.ts`), primeros
+ * 8 hex. Por qué así:
+ *  - el prefijo propio hace que la huella no sea el sha256 «pelado» del secreto (no se puede cruzar con tablas ni con
+ *    otra herramienta que hashee el mismo valor) y `v1` deja cambiarla sin ambigüedad;
+ *  - 8 hex = 32 bits: alcanza para ver «igual / distinto» a ojo y no ayuda a adivinar un secreto de ≥32 caracteres
+ *    aleatorios (el espacio a recorrer es el del secreto, no el de la huella);
+ *  - el valor nunca sale, ni un prefijo.
+ */
+const FINGERPRINT_PREFIX = "kinesoft-rt-fp:v1:";
+
+export function realtimeSecretFingerprint(secret: string): string {
+  return createHash("sha256").update(`${FINGERPRINT_PREFIX}${secret.trim()}`).digest("hex").slice(0, 8);
+}
+
+/** Lo que se puede decir del secreto sin mostrarlo (Sistema y el script). `null` = no está cargado. */
+export type RealtimeSecretInfo = {
+  /** Largo del secreto recortado (con el que se firma). */
+  length: number;
+  /** El crudo de `process.env` tenía espacios o saltos de línea al borde (la app los recorta; conviene repegarlo). */
+  edgeWhitespace: boolean;
+  fingerprint: string;
+};
+
+export function describeRealtimeSecret(raw: string | undefined): RealtimeSecretInfo | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  return { length: trimmed.length, edgeWhitespace: trimmed !== raw, fingerprint: realtimeSecretFingerprint(trimmed) };
 }

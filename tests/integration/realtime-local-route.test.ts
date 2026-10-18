@@ -125,13 +125,19 @@ describe.skipIf(!RUN)("SV07b · GET /api/realtime/local", () => {
     expect(listenerCount(A.tenantId)).toBe(before);
   });
 
-  it("[FX1b] tenant sin el módulo salaEspera → 403, sin suscribirse al bus", async () => {
+  // HF-1a (D-HF1, decisión de Martin 18-oct): ANTES «sin salaEspera → 403». La ruta usa `realtimeAllowed`, que dejó
+  // de exigir el módulo (agenda en vivo en todos los planes), así que hereda el cambio: sin el módulo se suscribe igual.
+  it("[HF-1a] tenant sin el módulo salaEspera → 200 y se suscribe al bus (agenda en vivo en todos los planes)", async () => {
     asUser(A.userId);
     const before = listenerCount(A.tenantId);
     mods.drop.add("salaEspera");
+    const ctrl = new AbortController();
     try {
-      expect((await GET(req())).status).toBe(403);
+      const res = await GET(req(ctrl));
+      expect(res.status).toBe(200);
+      expect(listenerCount(A.tenantId)).toBe(before + 1);
     } finally {
+      ctrl.abort();
       mods.drop.clear();
     }
     expect(listenerCount(A.tenantId)).toBe(before);
