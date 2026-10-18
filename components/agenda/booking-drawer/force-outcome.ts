@@ -1,7 +1,7 @@
 import {
   FORCE_PROMPT_ORDER,
   forcePromptConfirm,
-  intervalCapNoticeText,
+  intervalCapNoticeFromServer,
   nextForcePrompt,
   withForce,
   type ForceAction,
@@ -27,7 +27,7 @@ export function successInfoText(r: {
 }): string | null {
   const parts: string[] = [];
   if (r.notice) parts.push(r.notice);
-  if (r.intervalCapNotice) parts.push(intervalCapNoticeText(r.intervalCapNotice));
+  if (r.intervalCapNotice) parts.push(intervalCapNoticeFromServer(r.intervalCapNotice));
   return parts.length > 0 ? parts.join(" ") : null;
 }
 

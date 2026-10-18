@@ -77,6 +77,7 @@ describe("chips", () => {
     expect(v.tone).toBe("full");
     expect(v.selectable).toBe(true);
     expect(v.hint).toContain("Cupo completo 2/2");
+    expect(v.hint).toMatch(/: se carga como sobreturno si confirmás$/);
   });
 
   it("pasado / anticipación: no elegible con motivo", () => {
@@ -290,6 +291,14 @@ describe("[AS-2u1] chip y aviso del tope por intervalo", () => {
     expect(pickerState.intervalCapLiveNotice(c, "2026-10-05T13:20:00.000Z", "Ana Pérez")).toBe(
       "Ya hay 1 turno de Ana Pérez a las 10:15."
     );
+    // [Z-u2 M5] con intervalo de 60 el intervalo no es el horario: rango.
+    expect(
+      pickerState.intervalCapLiveNotice(
+        check({ intervalCapUse: { used: 1, cap: { count: 2, intervalMin: 60 } }, intervalCapped: false }),
+        "2026-10-05T13:20:00.000Z",
+        "Ana Pérez"
+      )
+    ).toBe("Ya hay 1 turno de Ana Pérez entre las 10:00 y las 11:00.");
     // Vacío, sin tope o ya topeado: nada (el topeado lo cuenta el título «Tope completo»).
     expect(pickerState.intervalCapLiveNotice(check({ intervalCapUse: { used: 0, cap: { count: 2, intervalMin: 15 } } }), "2026-10-05T13:20:00.000Z", "Ana")).toBeNull();
     expect(pickerState.intervalCapLiveNotice(check(), "2026-10-05T13:20:00.000Z", "Ana")).toBeNull();
@@ -306,6 +315,6 @@ describe("[AS-2u1] chip y aviso del tope por intervalo", () => {
     const cap = { used: 2, cap: { count: 2, intervalMin: 30 as const } };
     expect(instantStatusView(check({ class: "tope-intervalo", intervalCapped: true, intervalCapUse: cap })).title).toBe("Tope completo (2/2)");
     const v = instantStatusView(check({ class: "sobreturno", used: 3, cap: 3, intervalCapped: true, intervalCapUse: cap }));
-    expect(v.details).toContain("También llega al tope de turnos del profesional: queda como sobreturno");
+    expect(v.details).toContain("También llega al tope de turnos del profesional: se carga como sobreturno si confirmás");
   });
 });

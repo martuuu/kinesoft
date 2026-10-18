@@ -903,8 +903,8 @@ describe("[AS-2o] dimensión insurerKey (obra social)", () => {
     expect(countInsurerAccessHidden(two, "particular")).toBe(2);
     expect(countInsurerAccessHidden(two, null)).toBe(0);
     expect(insurerAccessHiddenLabel(0)).toBeNull();
-    expect(insurerAccessHiddenLabel(1)).toBe("1 turno sin acceso a la cobertura no se muestra con este filtro");
-    expect(insurerAccessHiddenLabel(3)).toBe("3 turnos sin acceso a la cobertura no se muestran con este filtro");
+    expect(insurerAccessHiddenLabel(1)).toBe("1 turno no se muestra con este filtro: no tenés acceso a su cobertura.");
+    expect(insurerAccessHiddenLabel(3)).toBe("3 turnos no se muestran con este filtro: no tenés acceso a su cobertura.");
   });
 });
 

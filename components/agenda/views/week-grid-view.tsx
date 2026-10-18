@@ -18,8 +18,12 @@ import { BLOCKED_STRIPES } from "../grid/unavailable-overlay";
 import { normalizeSlotMinutes, type AgendaSlotMinutes } from "@/lib/tenant-settings-constants";
 import styles from "./views.module.css";
 
-/** [AS-2g] Alto de fila de la Semana por minutos de fila (plan §23.8). 60/30 son los de antes de T3. */
-const WEEK_ROW_PX: Readonly<Record<AgendaSlotMinutes, number>> = { 60: 50, 30: 34, 15: 24 };
+/**
+ * [AS-2g] Alto de fila de la Semana por minutos de fila (plan §23.8). 60/30 son los de antes de T3. T3-Z (A1): 15 era
+ * 24 y el alto útil (24 − 2·`WEEK_CELL_PAD` = 20) no llegaba a una línea compacta (`WEEK_LINE_H` 22): el turno solo
+ * se dibujaba cortado. Con 26 entra justo una línea; el agregado de esa fila va en una sola línea (ver abajo).
+ */
+export const WEEK_ROW_PX: Readonly<Record<AgendaSlotMinutes, number>> = { 60: 50, 30: 34, 15: 26 };
 
 /** Profesional visible con sus iniciales (orden de columnas/chips). */
 type WeekPractitioner = { id: string; initials: string; name: string };
@@ -104,9 +108,11 @@ function WeekSlotModal({
 }
 
 /** G2: alto de una línea compacta de la Semana (hora + paciente + barra de servicio) y separación entre líneas. */
-const WEEK_LINE_H = 22;
+export const WEEK_LINE_H = 22;
 const WEEK_LINE_GAP = 2;
-const WEEK_CELL_PAD = 2;
+export const WEEK_CELL_PAD = 2;
+/** T3-Z (A1): bajo este alto de fila el agregado «N turnos» va en una línea (número + palabra) y sin reparto. */
+const WEEK_AGG_ONE_LINE_BELOW = 30;
 
 /**
  * Cuántas líneas compactas entran en una celda de `cellPx` de alto (G2). Pura y exportada para el test: si TODOS los
@@ -490,13 +496,23 @@ export function WeekGridView({
 
             // Barras de los servicios de la celda (hasta 4): el agregado no pierde el canal de servicio.
             const serviceColors = Array.from(new Set(cellBookings.map((b) => b.serviceColor ?? SERVICE_COLOR_FALLBACK))).slice(0, 4);
+            // T3-Z (A1): con filas de 15' (26 px) el agregado en columna (número de 15 px + reparto) no entraba y se
+            // cortaba. En una fila chica va en una línea, número de 12 px y sin el reparto; lo que no se dibuja queda
+            // SIEMPRE en el `title` («3 turnos · AB 2 · CD 1 · 2 de plan · 1 suelto») y en el modal.
+            const oneLine = cellPx < WEEK_AGG_ONE_LINE_BELOW;
+            const countText = `${count} ${count === 1 ? "turno" : "turnos"}`;
+            const cellTitle = [
+              countText,
+              ...(split && split.length > 0 ? [split.map((x) => `${x.initials} ${x.count}`).join(" · ")] : []),
+              ...(planSplitText ? [planSplitText] : []),
+            ].join(" · ");
 
             return (
               <button
                 key={cellKey}
                 type="button"
                 data-week-cell="aggregate"
-                title={planSplitText ? `${count} ${count === 1 ? "turno" : "turnos"} · ${planSplitText}` : undefined}
+                title={cellTitle}
                 aria-label={`${fmtHour(date0)}: ${count} ${count === 1 ? "turno" : "turnos"}${planSplitText ? ` (${planSplitText})` : ""}. Ver la lista`}
                 onClick={() =>
                   setOverflow({
@@ -513,11 +529,11 @@ export function WeekGridView({
                   borderRadius: 8,
                   cursor: "pointer",
                   display: "flex",
-                  flexDirection: "column",
+                  flexDirection: oneLine ? "row" : "column",
                   alignItems: "center",
                   justifyContent: "center",
                   gap: 2,
-                  padding: "4px 6px 4px 10px",
+                  padding: oneLine ? "0 6px 0 10px" : "4px 6px 4px 10px",
                   overflow: "hidden",
                   position: "relative",
                   zIndex: hasMatch ? 5 : undefined,
@@ -533,10 +549,10 @@ export function WeekGridView({
                   ))}
                 </span>
                 <span aria-hidden="true" style={{ display: "flex", alignItems: "baseline", gap: 4, lineHeight: 1 }}>
-                  <span className="k-mono" style={{ fontSize: 15, fontWeight: 700, color: "var(--sky-700)" }}>{count}</span>
+                  <span className="k-mono" style={{ fontSize: oneLine ? 12 : 15, fontWeight: 700, color: "var(--sky-700)" }}>{count}</span>
                   <span style={{ fontSize: 10, fontWeight: 600, color: "var(--navy-500)" }}>{count === 1 ? "turno" : "turnos"}</span>
                 </span>
-                {split && multiSplit ? (
+                {oneLine ? null : split && multiSplit ? (
                   <span
                     aria-label={split.map((x) => `${practitionerById?.get(x.id)?.name ?? x.initials}: ${x.count}`).join(", ")}
                     style={{ fontSize: 9, color: "var(--navy-500)", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}
@@ -546,7 +562,7 @@ export function WeekGridView({
                 ) : planSplitText ? null : split && split.length === 1 ? (
                   <span style={{ fontSize: 9, color: "var(--navy-500)", fontWeight: 600 }}>{split[0].initials}</span>
                 ) : null}
-                {planSplitText && (
+                {!oneLine && planSplitText && (
                   <span
                     data-plan-split
                     style={{ fontSize: 9, color: "var(--navy-700)", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}

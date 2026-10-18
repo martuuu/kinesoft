@@ -532,12 +532,16 @@ export function countInsurerAccessHidden(
   return n;
 }
 
-/** Copy del aviso (plan §23.9); 0 → null (no se dibuja). */
+/**
+ * Copy del aviso (plan §23.9); 0 → null (no se dibuja). T3-Z (B8): «turno sin acceso a la cobertura» se leía
+ * como un turno sin cobertura; quien no tiene acceso es el usuario, así que se dice primero qué pasa y después
+ * por qué.
+ */
 export function insurerAccessHiddenLabel(n: number): string | null {
   if (n <= 0) return null;
   return n === 1
-    ? "1 turno sin acceso a la cobertura no se muestra con este filtro"
-    : `${n} turnos sin acceso a la cobertura no se muestran con este filtro`;
+    ? "1 turno no se muestra con este filtro: no tenés acceso a su cobertura."
+    : `${n} turnos no se muestran con este filtro: no tenés acceso a su cobertura.`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

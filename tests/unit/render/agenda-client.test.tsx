@@ -803,7 +803,7 @@ describe("[AS-2g] filas de 15' y zoom por usuario", () => {
 
   it("consultorio en 15' y zoom default: la Semana dibuja 44 filas (8→19) de 24 px", () => {
     const html = r({ ...base, view: "week", businessHours: h15 }, "week-15");
-    expect(html).toContain("repeat(44, 24px)");
+    expect(html).toContain("repeat(44, 26px)");
   });
 
   it("zoom elegido (zoomSet): manda sobre el consultorio en Día y Semana", () => {
@@ -812,7 +812,7 @@ describe("[AS-2g] filas de 15' y zoom por usuario", () => {
     expect(dayLabels(day)).not.toContain("09:15");
     expect(dayLabels(day)).not.toContain("09:30");
     const week = r({ ...base, view: "week", agendaPrefs: prefsOf({ zoom: 15, zoomSet: true }) }, "week-z15");
-    expect(week).toContain("repeat(44, 24px)");
+    expect(week).toContain("repeat(44, 26px)");
   });
 
   it("zoom sin elegir (default 30, o 15 sin zoomSet): el consultorio en 60 sigue en 60", () => {
@@ -878,7 +878,7 @@ describe("[AS-2o] filtro por obra social", () => {
     expect(html).toContain('value="ins_swiss">Swiss Medical<');
     // Sin filtro se ve todo, incluidos los que no tienen acceso, y no hay aviso.
     for (const n of ["Con Osde", "Es Particular", "Sin Acceso Uno", "No Se Sabe"]) expect(html).toContain(n);
-    expect(html).not.toContain("sin acceso a la cobertura");
+    expect(html).not.toContain("no tenés acceso a su cobertura");
   });
 
   it("[AS-2o] ?os=<id>: esa OS + los que no se saben; los sin acceso se ocultan y se cuentan", () => {
@@ -887,7 +887,7 @@ describe("[AS-2o] filtro por obra social", () => {
     expect(html).toContain("No Se Sabe");
     expect(html).not.toContain("Es Particular");
     expect(html).not.toContain("Sin Acceso Uno");
-    expect(html).toContain("2 turnos sin acceso a la cobertura no se muestran con este filtro");
+    expect(html).toContain("2 turnos no se muestran con este filtro: no tenés acceso a su cobertura.");
     expect(html).toMatch(/<option value="ins_osde" selected="">OSDE</);
   });
 
@@ -896,7 +896,7 @@ describe("[AS-2o] filtro por obra social", () => {
     expect(html).toContain("Es Particular");
     expect(html).not.toContain("Con Osde");
     expect(html).not.toContain("Sin Acceso Dos");
-    expect(html).toContain("2 turnos sin acceso a la cobertura no se muestran con este filtro");
+    expect(html).toContain("2 turnos no se muestran con este filtro: no tenés acceso a su cobertura.");
   });
 
   it("[AS-2o] id desconocido o sin select: se ignora (todo visible, sin aviso)", () => {
@@ -906,7 +906,7 @@ describe("[AS-2o] filtro por obra social", () => {
     ]) {
       const html = r(p, "os-ignored");
       for (const n of ["Con Osde", "Es Particular", "Sin Acceso Uno", "No Se Sabe"]) expect(html).toContain(n);
-      expect(html).not.toContain("sin acceso a la cobertura");
+      expect(html).not.toContain("no tenés acceso a su cobertura");
     }
   });
 });

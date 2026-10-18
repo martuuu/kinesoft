@@ -1,0 +1,19 @@
+/* T3-Z (M9): estilos del filtro «Obra social» de /pacientes. Salieron del `style` inline porque ahí no entra un
+   media query: bajo 768 el select necesita 44 px de alto (área táctil, criterio §5) y 16 px de letra (con menos,
+   Safari de iOS hace zoom al tocarlo y descuadra la lista). Escritorio queda como estaba (pastilla de 32 px). */
+.select {
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  border: 1px solid rgba(15, 30, 51, 0.08);
+  background: rgba(255, 255, 255, 0.7);
+  max-width: 200px;
+  min-height: 32px;
+}
+
+@media (max-width: 767px) {
+  .select {
+    min-height: 44px;
+    font-size: 16px;
+  }
+}

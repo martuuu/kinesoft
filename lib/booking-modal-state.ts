@@ -32,7 +32,7 @@ import type { TenantModule } from "@/lib/tenant-modules";
 import {
   forcePromptActionLabel,
   forcePromptHeadline,
-  intervalCapNoticeText,
+  intervalCapNoticeFromServer,
   nextForcePrompt,
   type IntervalCapPromptData,
 } from "@/lib/booking-force-flags";
@@ -710,14 +710,17 @@ export function intervalCapPromptCopy(p: IntervalCapPromptData): {
 /** Aviso informativo del 2.º turno del intervalo en un alta OK (`intervalCapNotice`), o null. No bloquea. */
 export function intervalCapNoticeOf(r: {
   ok: boolean;
-  intervalCapNotice?: { practitionerName: string; used: number; time: string } | null;
+  intervalCapNotice?: { practitionerName: string; used: number; time: string; to?: string | null; intervalMin?: number | null } | null;
 }): string | null {
-  return r.intervalCapNotice ? intervalCapNoticeText(r.intervalCapNotice) : null;
+  return r.intervalCapNotice ? intervalCapNoticeFromServer(r.intervalCapNotice) : null;
 }
 
-/** «{n} fechas superan el tope» (preflight del lote y preview de Sesiones). */
+/**
+ * «{n} fechas llegan al tope» (preflight del lote y preview de Sesiones). T3-Z (B5): «superan» decía que ya
+ * estaban pasadas; la fecha LLEGA al tope (la que se agenda sería la que lo pasa), mismo verbo que el resto.
+ */
 export function batchIntervalCapLine(n: number): string {
-  return n === 1 ? "1 fecha supera el tope" : `${n} fechas superan el tope`;
+  return n === 1 ? "1 fecha llega al tope" : `${n} fechas llegan al tope`;
 }
 
 /** Casilla del preflight: «Agendar igual esas fechas» (singular con una). */

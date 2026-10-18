@@ -517,8 +517,8 @@ describe("[AS-2u1] lote con fechas que superan el tope", () => {
     expect(modalState.batchIntervalCappedCounts(plan)).toEqual({ total: 2, free: 1, conflicted: 1 });
     expect(batchCreatableCounts(plan, false)).toEqual({ all: 2, freeOnly: 2 });
     expect(modalState.batchCreatableCounts(plan, false, true)).toEqual({ all: 4, freeOnly: 3 });
-    expect(modalState.batchIntervalCapLine(2)).toBe("2 fechas superan el tope");
-    expect(modalState.batchIntervalCapLine(1)).toBe("1 fecha supera el tope");
+    expect(modalState.batchIntervalCapLine(2)).toBe("2 fechas llegan al tope");
+    expect(modalState.batchIntervalCapLine(1)).toBe("1 fecha llega al tope");
   });
 
   it("[AS-2u1] una fecha con sala ocupada Y tope se omite si falta cualquiera de los dos flags", () => {

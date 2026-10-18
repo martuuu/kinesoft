@@ -254,11 +254,44 @@ function turnos(n: number): string {
 
 /**
  * Aviso INFORMATIVO del 2.º turno del intervalo (C-AS3, `intervalCapState ===
- * "notice"`): no se confirma ni manda flag. `time` = "HH:MM" AR del inicio del
- * intervalo. «Ya hay 1 turno de Ana a las 10:00.»
+ * "notice"`): no se confirma ni manda flag. `from`/`to` = "HH:MM" AR del
+ * intervalo. T3-Z (M5): con intervalo de 15 min el intervalo ES el horario
+ * («Ya hay 1 turno de Ana a las 10:00.»); con 30/60 «a las 10:00» mentía (el
+ * turno de las 10:40 también cuenta en 10:00-11:00), así que se dice el rango:
+ * «Ya hay 1 turno de Ana entre las 10:00 y las 11:00.». Sin `to` o sin
+ * `intervalMin` (resultado de server viejo, que solo manda `time`) se cae a «a
+ * las {from}», que es lo que se decía antes.
  */
-export function intervalCapNoticeText(o: { practitionerName: string; used: number; time: string }): string {
-  return `Ya hay ${turnos(o.used)} de ${o.practitionerName} a las ${o.time}.`;
+export function intervalCapNoticeText(o: {
+  practitionerName: string;
+  used: number;
+  from: string;
+  to?: string | null;
+  intervalMin?: number | null;
+}): string {
+  const when =
+    o.to && o.intervalMin != null && o.intervalMin !== 15 ? `entre las ${o.from} y las ${o.to}` : `a las ${o.from}`;
+  return `Ya hay ${turnos(o.used)} de ${o.practitionerName} ${when}.`;
+}
+
+/**
+ * Adapta el `intervalCapNotice` del server (`{ practitionerName, used, time }`,
+ * más `to`/`intervalMin` cuando el server los mande) a `intervalCapNoticeText`.
+ */
+export function intervalCapNoticeFromServer(n: {
+  practitionerName: string;
+  used: number;
+  time: string;
+  to?: string | null;
+  intervalMin?: number | null;
+}): string {
+  return intervalCapNoticeText({
+    practitionerName: n.practitionerName,
+    used: n.used,
+    from: n.time,
+    to: n.to ?? null,
+    intervalMin: n.intervalMin ?? null,
+  });
 }
 
 /**

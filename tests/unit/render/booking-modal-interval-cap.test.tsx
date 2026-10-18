@@ -92,7 +92,7 @@ describe("[AS-2u1] lote con fechas topeadas", () => {
     expect(html).not.toContain("Agendar igual esas fechas");
   });
 
-  it("[AS-2u1] fechas topeadas: «{n} fechas superan el tope», casilla y, sin marcar, no cuentan", () => {
+  it("[AS-2u1] fechas topeadas: «{n} fechas llegan al tope», casilla y, sin marcar, no cuentan", () => {
     const html = renderToStaticMarkup(
       <BatchConflictPrompt
         promptRef={ref}
@@ -107,7 +107,7 @@ describe("[AS-2u1] lote con fechas topeadas", () => {
         onBack={() => {}}
       />
     );
-    expect(html).toContain("2 fechas superan el tope");
+    expect(html).toContain("2 fechas llegan al tope");
     expect(html).toContain("Agendar igual esas fechas");
     expect(html).toContain("Tope completo");
     expect(html).toContain("Crear la sesión");

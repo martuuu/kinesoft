@@ -52,7 +52,7 @@ const SEGMENT_LABEL: Record<ViewSegment, string> = {
  * - `dayLock`: el candado del día (Día/Lista) junto al título.
  * - `zoom`/`onZoomChange`: franja 15/30/60 en el menú Vista (todos los modos; en Día/Semana la del consultorio hasta que el usuario elige, AS-2g).
  * - `insurerFilter` (AS-2o): el `<InsurerFilter>` diferido (select de obra social), junto a la sede.
- *   `insurerHiddenLabel`: «N turnos sin acceso a la cobertura no se muestran con este filtro» o null; va abajo del
+ *   `insurerHiddenLabel`: «N turnos no se muestran con este filtro: no tenés acceso a su cobertura.» o null; va abajo del
  *   título como el aviso de ocultos, sin «Mostrar todos» (no es la visibilidad: se resuelve sacando el filtro).
  *
  * PF1.1-agenda-a:

@@ -147,7 +147,8 @@ export function chipView(slot: StaffSlot): ChipView {
       tone: "full",
       selectable: true,
       occupancy: occ,
-      hint: `${REASON_LABEL["cupo-completo"]}${occupancy ? ` ${occupancy}` : ""}: se carga como sobreturno`,
+      // T3-Z (B5): mismo cierre que el tope («si confirmás»): elegir el chip no carga nada todavía.
+      hint: `${REASON_LABEL["cupo-completo"]}${occupancy ? ` ${occupancy}` : ""}: se carga como sobreturno si confirmás`,
     };
   }
   return { tone: "free", selectable: true, occupancy: occ, hint: occupancy && slot.used > 0 ? `Ocupación ${occupancy}` : null };
@@ -405,7 +406,7 @@ export function instantStatusView(c: InstantCheck): InstantStatusView {
   // T3: el motor informa `intervalCapped` aunque gane otra clase (forzar el
   // cupo no fuerza el tope: el alta va a pedir las dos confirmaciones).
   if (c.class !== "tope-intervalo" && c.intervalCapped) {
-    details.push("También llega al tope de turnos del profesional: queda como sobreturno");
+    details.push("También llega al tope de turnos del profesional: se carga como sobreturno si confirmás");
   }
   if (!c.serviceEnabled) details.push("El profesional no tiene habilitada esta práctica");
   return { tone, title, details };
@@ -425,9 +426,6 @@ export function intervalCapLiveNotice(c: InstantCheck, iso: string, practitioner
   if (!use || use.used < 1 || c.intervalCapped || c.class === "tope-intervalo") return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
-  return intervalCapNoticeText({
-    practitionerName,
-    used: use.used,
-    time: arIntervalLabels(d, use.cap.intervalMin).from,
-  });
+  const { from, to } = arIntervalLabels(d, use.cap.intervalMin);
+  return intervalCapNoticeText({ practitionerName, used: use.used, from, to, intervalMin: use.cap.intervalMin });
 }

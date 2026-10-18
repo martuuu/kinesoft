@@ -245,6 +245,10 @@
   .icsLink {
     height: 44px;
   }
+  /* iOS hace zoom al enfocar un select de menos de 16 px (T3-Z, M9). */
+  .select {
+    font-size: 16px;
+  }
 }
 
 @media (max-width: 479px) {

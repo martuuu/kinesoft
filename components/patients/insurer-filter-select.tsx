@@ -1,6 +1,7 @@
 "use client";
 
 import directory from "@/components/patients/patients-directory.module.css";
+import styles from "./insurer-filter-select.module.css";
 import { PARTICULAR_INSURER_KEY } from "@/lib/patients-os-filter";
 
 /**
@@ -28,26 +29,19 @@ export function InsurerFilterSelect({
         name="os"
         defaultValue={value}
         aria-label="Filtrar por obra social"
-        className={directory.field}
+        className={`${directory.field} ${styles.select}`}
         onChange={(e) => e.currentTarget.form?.requestSubmit()}
-        style={{
-          padding: "5px 10px",
-          borderRadius: 999,
-          fontSize: 11.5,
-          border: "1px solid rgba(15,30,51,0.08)",
-          background: "rgba(255,255,255,0.7)",
-          maxWidth: 200,
-          minHeight: 32,
-        }}
       >
+        {/* T3-Z (M9): mismo orden que el filtro de la agenda (Todas, Particular, catálogo) y la inactiva al final:
+            Particular arriba porque es la opción más usada y con decenas de OS quedaba perdida al fondo. */}
         <option value="">Todas las obras sociales</option>
+        <option value={PARTICULAR_INSURER_KEY}>Particular</option>
         {insurers.map((i) => (
           <option key={i.id} value={i.id}>
             {i.name}
           </option>
         ))}
         {!known && <option value={value}>Obra social inactiva</option>}
-        <option value={PARTICULAR_INSURER_KEY}>Particular</option>
       </select>
       <noscript>
         <button type="submit">Filtrar</button>

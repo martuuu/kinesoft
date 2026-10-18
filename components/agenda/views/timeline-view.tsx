@@ -283,11 +283,15 @@ function SlotRow({
   const more = overflowButtonText(overflow, highlight != null, `a las ${label}`);
   // Sub-hour rows: the :30 label is muted so the hour still reads as the anchor. [AS-2g] A 15' la hora va en negrita
   // y las :15/:45 más tenues que la :30 (cuatro etiquetas iguales por hora saturaban la columna).
+  // T3-Z (M7): la jerarquía se hace con token + peso + tamaño, no con alfas: rgba(…,0.2)/0.28 sobre blanco quedaban
+  // ~1,6:1 y no se leían. Con filas de 30/15 la hora en punto es navy-500 600; la :30 navy-300 400; las :15/:45
+  // navy-300 al 75 % y 10 px (siguen legibles, pero no compiten con la hora). Con filas de 60 no hay jerarquía que
+  // marcar y la etiqueta queda como estaba (navy-300).
   const isHalfLabel = slotMinutes !== 60 && slot % 60 !== 0;
-  const quarter = slotMinutes === 15;
-  const labelColor = !isHalfLabel
-    ? quarter ? "var(--navy-500)" : "var(--navy-300)"
-    : quarter && slot % 30 !== 0 ? "rgba(15,30,51,0.2)" : "rgba(15,30,51,0.28)";
+  const subHour = slotMinutes !== 60;
+  const quarterLabel = isHalfLabel && slot % 30 !== 0;
+  const labelColor = !isHalfLabel && subHour ? "var(--navy-500)" : "var(--navy-300)";
+  const labelWeight = !isHalfLabel ? (subHour ? 600 : undefined) : 400;
 
   return (
     <div
@@ -317,9 +321,10 @@ function SlotRow({
           background: "transparent",
           textAlign: "left",
           cursor: "pointer",
-          fontSize: 11,
-          fontWeight: quarter && !isHalfLabel ? 600 : undefined,
+          fontSize: quarterLabel ? 10 : 11,
+          fontWeight: labelWeight,
           color: labelColor,
+          opacity: quarterLabel ? 0.75 : undefined,
         }}
       >
         {label}

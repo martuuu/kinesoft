@@ -8,6 +8,7 @@ import {
   nextForcePrompt,
   withForce,
   intervalCapNoticeText,
+  intervalCapNoticeFromServer,
   type ForceableResult,
   type ForceFlags,
 } from "@/lib/booking-force-flags";
@@ -246,11 +247,25 @@ describe("[AS-2k] intervalCap (tope por intervalo)", () => {
   });
 
   it("aviso informativo del 2.º turno (sin flag)", () => {
-    expect(intervalCapNoticeText({ practitionerName: "Ana", used: 1, time: "10:00" })).toBe(
+    expect(intervalCapNoticeText({ practitionerName: "Ana", used: 1, from: "10:00", to: "10:15", intervalMin: 15 })).toBe(
       "Ya hay 1 turno de Ana a las 10:00."
     );
-    expect(intervalCapNoticeText({ practitionerName: "Ana", used: 3, time: "10:15" })).toBe(
+    expect(intervalCapNoticeText({ practitionerName: "Ana", used: 3, from: "10:15", to: "10:30", intervalMin: 15 })).toBe(
       "Ya hay 3 turnos de Ana a las 10:15."
+    );
+  });
+
+  it("[Z-u2 M5] con intervalo de 30/60 dice el rango, no «a las»", () => {
+    expect(intervalCapNoticeText({ practitionerName: "Ana", used: 1, from: "10:00", to: "11:00", intervalMin: 60 })).toBe(
+      "Ya hay 1 turno de Ana entre las 10:00 y las 11:00."
+    );
+    expect(intervalCapNoticeText({ practitionerName: "Ana", used: 2, from: "10:30", to: "11:00", intervalMin: 30 })).toBe(
+      "Ya hay 2 turnos de Ana entre las 10:30 y las 11:00."
+    );
+    // Resultado del server sin `to`/`intervalMin` (hoy solo manda `time`): cae a «a las».
+    expect(intervalCapNoticeFromServer({ practitionerName: "Ana", used: 1, time: "10:00" })).toBe("Ya hay 1 turno de Ana a las 10:00.");
+    expect(intervalCapNoticeFromServer({ practitionerName: "Ana", used: 1, time: "10:00", to: "11:00", intervalMin: 60 })).toBe(
+      "Ya hay 1 turno de Ana entre las 10:00 y las 11:00."
     );
   });
 });
