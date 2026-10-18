@@ -436,6 +436,8 @@ async function classifyInTx(
       rangesFor: availability.rangesFor,
       blocks: availability.input.blocks,
       bookings: availability.bookings,
+      // T3 (C-AS3): el tope por intervalo es solo aviso en Planes (`overIntervalCap`), sin lock ni bloqueo.
+      intervalCap: availability.input.intervalCaps?.[ctx.practitionerId] ?? null,
       now,
       excludeBookingIds,
     },
