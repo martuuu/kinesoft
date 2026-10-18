@@ -8,6 +8,9 @@ import type { Role } from "@prisma/client";
 import {
   CAPABILITIES,
   capabilitiesFor,
+  capabilitiesForMember,
+  canCollectCopago,
+  canConfirmInsurer,
   canManageBlocksFor,
   canOperateBooking,
   canWriteClinical,
@@ -20,7 +23,9 @@ import {
 // plans.schedule / plans.authorize. "Con full" NO va en la matriz.
 // PL-1b (C-PL5): el default por ROL nunca trae `account.*` (titularidad y «Planes y pagos» salen de
 // `capabilitiesForMember`, no del rol).
-const ROLE_DEFAULT_ALL = CAPABILITIES.filter((c) => !c.startsWith("account."));
+// T3b-1k1 (C-AS1): `billing.collectOwn` es solo del PRACTITIONER (patrón `manageOwnBlocks`): OWNER/ADMIN cobran
+// cualquier turno con `billing.collect`, así que «lo propio» no les suma nada y la matriz queda exacta.
+const ROLE_DEFAULT_ALL = CAPABILITIES.filter((c) => !c.startsWith("account.") && c !== "billing.collectOwn");
 const EXPECTED: Record<Role, Capability[]> = {
   OWNER: [...ROLE_DEFAULT_ALL],
   ADMIN: [...ROLE_DEFAULT_ALL],
@@ -32,6 +37,7 @@ const EXPECTED: Record<Role, Capability[]> = {
     "plans.manage",
     "plans.schedule",
     "plans.authorize",
+    "billing.collectOwn",
   ],
   ASSISTANT: [
     "agenda.viewAll",
@@ -41,8 +47,10 @@ const EXPECTED: Record<Role, Capability[]> = {
     "agenda.operateAll",
     "plans.schedule",
     "plans.authorize",
+    "billing.collect",
+    "patients.editAdmin",
   ],
-  BILLING: ["agenda.viewAll", "billing.manage"],
+  BILLING: ["agenda.viewAll", "billing.manage", "billing.collect"],
 };
 const ROLES = Object.keys(EXPECTED) as Role[];
 
@@ -199,5 +207,101 @@ describe("canWriteClinical = clinical.read && full", () => {
   it("PRACTITIONER: full sí; básico no", () => {
     expect(canWriteClinical(capabilitiesFor("PRACTITIONER"), "full")).toBe(true);
     expect(canWriteClinical(capabilitiesFor("PRACTITIONER"), "basic")).toBe(false);
+  });
+});
+
+/*
+ * T3b-1k1 (C-AS1, plan §23.3; decisiones 1-4 del 19-oct). Las 4 capabilities nuevas, por MIEMBRO (la barrera real es
+ * `capabilitiesForMember`, no el rol en abstracto): la matriz exacta con los defaults de cada rol (sin delegaciones;
+ * el Titular atiende) y con «Configuración» delegada, que es lo único que mueve `tenant.sensitive`.
+ */
+describe("[AS-1k1] capabilities nuevas — matriz exacta por rol", () => {
+  const NEW_CAPS = ["billing.collect", "billing.collectOwn", "patients.editAdmin", "tenant.sensitive"] as const;
+  const mem = (role: Role, grantSettings = false) => ({ role, clinical: true, grantSettings, grantBilling: false });
+  const has = (role: Role, grantSettings = false) =>
+    NEW_CAPS.filter((c) => capabilitiesForMember(mem(role, grantSettings)).has(c));
+
+  it("[AS-1k1] existen en CAPABILITIES", () => {
+    for (const c of NEW_CAPS) expect(CAPABILITIES).toContain(c);
+  });
+
+  it("[AS-1k1] sin delegaciones: collect a OWNER/ADMIN/ASSISTANT/BILLING, collectOwn al PRACTITIONER, editAdmin a OWNER/ADMIN/ASSISTANT, sensitive solo al OWNER", () => {
+    expect({
+      OWNER: has("OWNER"),
+      ADMIN: has("ADMIN"),
+      PRACTITIONER: has("PRACTITIONER"),
+      ASSISTANT: has("ASSISTANT"),
+      BILLING: has("BILLING"),
+    }).toEqual({
+      OWNER: ["billing.collect", "patients.editAdmin", "tenant.sensitive"],
+      ADMIN: ["billing.collect", "patients.editAdmin"],
+      PRACTITIONER: ["billing.collectOwn"],
+      ASSISTANT: ["billing.collect", "patients.editAdmin"],
+      BILLING: ["billing.collect"],
+    });
+  });
+
+  it("[AS-1k1] con «Configuración»: ADMIN y PRACTITIONER suman tenant.sensitive (decisión 4); ASSISTANT y BILLING nunca (decisión 3)", () => {
+    expect(has("OWNER", true)).toContain("tenant.sensitive");
+    expect(has("ADMIN", true)).toContain("tenant.sensitive");
+    expect(has("PRACTITIONER", true)).toContain("tenant.sensitive");
+    expect(has("ASSISTANT", true)).not.toContain("tenant.sensitive");
+    expect(has("BILLING", true)).not.toContain("tenant.sensitive");
+    // «Configuración» no cambia quién cobra ni quién edita datos administrativos.
+    expect(has("ASSISTANT", true)).toEqual(["billing.collect", "patients.editAdmin"]);
+    expect(has("PRACTITIONER", true)).toEqual(["billing.collectOwn", "tenant.sensitive"]);
+  });
+});
+
+describe("[AS-1k1] canCollectCopago = collect || (collectOwn && turno propio)", () => {
+  const me = "prac-me";
+  const other = "prac-other";
+  const COLLECT = new Set<Capability>(["billing.collect"]);
+  const OWN = new Set<Capability>(["billing.collectOwn"]);
+  const NONE = new Set<Capability>();
+
+  it("[AS-1k1] billing.collect: cualquier turno, con o sin profesional del actor, y el guest", () => {
+    expect(canCollectCopago(COLLECT, null, other)).toBe(true);
+    expect(canCollectCopago(COLLECT, me, other)).toBe(true);
+    expect(canCollectCopago(COLLECT, null, null)).toBe(true);
+  });
+
+  it("[AS-1k1] billing.collectOwn: solo el turno propio", () => {
+    expect(canCollectCopago(OWN, me, me)).toBe(true);
+    expect(canCollectCopago(OWN, me, other)).toBe(false);
+    expect(canCollectCopago(OWN, me, null)).toBe(false);
+  });
+
+  it("[AS-1k1] un actor sin practitionerId nunca pasa por collectOwn (nunca `null === null`)", () => {
+    expect(canCollectCopago(OWN, null, null)).toBe(false);
+    expect(canCollectCopago(OWN, null, other)).toBe(false);
+  });
+
+  it("[AS-1k1] sin ninguna de las dos: nunca (billing.manage solo no cobra copagos)", () => {
+    expect(canCollectCopago(NONE, me, me)).toBe(false);
+    expect(canCollectCopago(new Set<Capability>(["billing.manage"]), me, me)).toBe(false);
+  });
+
+  it("[AS-1k1] por miembro: Secretaria y Facturación cobran cualquiera; el profesional solo lo suyo; un Titular que no atiende cobra igual", () => {
+    const m = (role: Role, clinical = true) => capabilitiesForMember({ role, clinical, grantSettings: false, grantBilling: false });
+    expect(canCollectCopago(m("ASSISTANT"), null, other)).toBe(true);
+    expect(canCollectCopago(m("BILLING"), null, other)).toBe(true);
+    expect(canCollectCopago(m("ADMIN"), null, other)).toBe(true);
+    expect(canCollectCopago(m("OWNER", false), null, other)).toBe(true);
+    expect(canCollectCopago(m("PRACTITIONER"), me, me)).toBe(true);
+    expect(canCollectCopago(m("PRACTITIONER"), me, other)).toBe(false);
+  });
+});
+
+describe("[AS-1k1] canConfirmInsurer = billing.manage", () => {
+  it.each(ROLES)("%s → billing.manage del rol", (role) => {
+    const caps = capabilitiesFor(role);
+    expect(canConfirmInsurer(caps)).toBe(caps.has("billing.manage"));
+  });
+
+  it("Secretaria y profesional no confirman obra social; Facturación sí", () => {
+    expect(canConfirmInsurer(capabilitiesFor("ASSISTANT"))).toBe(false);
+    expect(canConfirmInsurer(capabilitiesFor("PRACTITIONER"))).toBe(false);
+    expect(canConfirmInsurer(capabilitiesFor("BILLING"))).toBe(true);
   });
 });

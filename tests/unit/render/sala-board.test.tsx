@@ -312,7 +312,7 @@ describe("[RX-1a] /sala elige la cara y comparte los datos vivos", () => {
   });
 
   it.each(["list", "flow"] as const)("%s: monta el escritorio con SalaLive (todas las filas) y no el Tablero", (layout) => {
-    const html = render({ initialLayout: layout, viewer: deskViewer(null, ["agenda.viewAll", "agenda.reception", "agenda.operateAll", "billing.manage"]) });
+    const html = render({ initialLayout: layout, viewer: deskViewer(null, ["agenda.viewAll", "agenda.reception", "agenda.operateAll", "billing.manage", "billing.collect"]) });
     expect(html).toContain(`data-layout="${layout}"`);
     expect(html).not.toContain("sala-board");
     expect(html).not.toContain('class="sala-call"');

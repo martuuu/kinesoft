@@ -33,9 +33,16 @@ export const CAPABILITIES = [
   "schedule.configure",
   /** Contenido clínico: title/description/notas del turno, HC. */
   "clinical.read",
-  /** Cobros, copagos, liquidación de obra social. */
+  /**
+   * Facturación del consultorio: confirmar pagos de obra social y la liquidación (`canConfirmInsurer`). Desde T3
+   * (C-AS1) NO es lo que habilita cobrar el copago de un turno: eso es `billing.collect` / `billing.collectOwn`.
+   */
   "billing.manage",
-  /** Configuración del consultorio (catálogo, prestadoras, settings, equipo). */
+  /**
+   * Configuración «común» del consultorio: servicios, obras sociales, horario y granularidad, horarios/excepciones/
+   * servicios/prestadoras por profesional, sedes y salas, topes de turnos. La Secretaria la recibe con «Configuración»
+   * (`grantSettings`). Lo delicado (turnero, equipo, quién ve la HC…) es `tenant.sensitive`.
+   */
   "tenant.admin",
   /**
    * Operar TODOS los turnos del tenant (crear, reprogramar, cancelar, estado,
@@ -76,6 +83,33 @@ export const CAPABILITIES = [
    * (decisión 7: «nadie le revoca la titularidad»). Soporte nunca.
    */
   "account.owner",
+  /**
+   * T3 (C-AS1, decisión 1 del 19-oct): registrar el cobro del copago de CUALQUIER turno (guest incluido) con su medio
+   * de pago. OWNER, ADMIN, ASSISTANT y BILLING. Hasta T3 cobrar exigía acceso full al paciente (`toggleBilling` con
+   * `hasFullAccess`, §23.2) y nadie no clínico podía: el «Cobrar» de /sala se le mostraba al Admin y el server lo
+   * rechazaba. Se decide con `canCollectCopago`, nunca leyéndola suelta.
+   */
+  "billing.collect",
+  /**
+   * T3 (C-AS1): cobrar SOLO los turnos propios (`actor.practitionerId === booking.practitionerId`). PRACTITIONER.
+   * Patrón `agenda.manageBlocks` / `agenda.manageOwnBlocks`: un actor sin profesional nunca tiene turnos «propios».
+   */
+  "billing.collectOwn",
+  /**
+   * T3 (C-AS1, §23.5): datos ADMINISTRATIVOS del paciente (contacto, DNI, nacimiento, cobertura, copago propio,
+   * pedidos del portal) sin acceso full. OWNER, ADMIN, ASSISTANT. Nunca notas ni diagnóstico: la action rechaza las
+   * claves clínicas (`updatePatient` las escribía tal cual, §23.2).
+   */
+  "patients.editAdmin",
+  /**
+   * T3 (C-AS1, decisiones 3 y 4 del 19-oct): lo DELICADO de Configuración. Turnero del consultorio y de profesionales
+   * ajenos, directorio, «quién ve la HC», datos del consultorio, equipo, diagnósticos propios, deshabilitar miembros
+   * al cambiar de plan, terminar un acceso de soporte; en T5, cobros online y la cuenta MP. El Titular siempre;
+   * cualquier rol con «Configuración» SALVO la Secretaria y Facturación (corte de staff en `capabilitiesForMember`).
+   * Hasta T3 todo esto colgaba de `tenant.admin` y una Secretaria con «Configuración» invitaba gente y prendía el
+   * turnero de cualquiera (§23.2).
+   */
+  "tenant.sensitive",
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
@@ -89,10 +123,30 @@ const ACCOUNT_CAPS: readonly Capability[] = ["account.billing", "account.owner"]
  */
 const CLINICAL_ONLY_CAPS: readonly Capability[] = ["clinical.read", "plans.manage"];
 
-/** «Configuración» (`grantSettings`, PL-D5): lo que exigen las actions de Configuración. */
-const SETTINGS_CAPS: readonly Capability[] = ["tenant.admin", "schedule.configure"];
+/**
+ * «Configuración» (`grantSettings`, PL-D5): lo que exigen las actions de Configuración. El ADMIN los saca de su base
+ * y los recupera con la delegación; cualquier rol con `grantSettings` los suma; el OWNER siempre los tiene.
+ * T3 (C-AS1) suma `tenant.sensitive`: se delega con el mismo switch y el corte de staff decide quién no la recibe.
+ */
+const CONFIG_DELEGATED: readonly Capability[] = ["tenant.admin", "schedule.configure", "tenant.sensitive"];
 
-const ALL: readonly Capability[] = CAPABILITIES.filter((c) => !ACCOUNT_CAPS.includes(c));
+/**
+ * Corte de staff (T3, C-AS1; decisiones 2 y 3 del 19-oct): la Secretaria y Facturación nunca manejan lo delicado
+ * («nunca cobros online, MP, turnero online, equipo ni plan») ni «Planes y pagos» de la cuenta, aunque la fila tenga
+ * `grantSettings`/`grantBilling` prendidos (un dato viejo o mal cargado no se las abre). Se aplica AL FINAL de
+ * `capabilitiesForMember`, como el corte clínico, para que ninguna delegación las devuelva. El OWNER no se corta.
+ */
+const STAFF_ROLES: ReadonlySet<Role> = new Set<Role>(["ASSISTANT", "BILLING"]);
+const STAFF_CUT_CAPS: readonly Capability[] = ["tenant.sensitive", "account.billing"];
+
+/**
+ * Lo que es «solo lo propio» de quien atiende y no va en el «todo» de OWNER/ADMIN: `billing.collectOwn` (ellos ya
+ * cobran todo con `billing.collect`; tenerla también no cambia nada y ensuciaría la matriz exacta de C-AS1).
+ * `agenda.manageOwnBlocks` queda en el «todo» porque así está desde B-pre y lo leen las UIs de bloqueos.
+ */
+const OWN_ONLY_CAPS: readonly Capability[] = ["billing.collectOwn"];
+
+const ALL: readonly Capability[] = CAPABILITIES.filter((c) => !ACCOUNT_CAPS.includes(c) && !OWN_ONLY_CAPS.includes(c));
 
 /**
  * La matriz. OWNER/ADMIN: todo. PRACTITIONER: ve todo, recepciona y bloquea
@@ -102,9 +156,9 @@ const ALL: readonly Capability[] = CAPABILITIES.filter((c) => !ACCOUNT_CAPS.incl
  * Decisiones (revisables en C0):
  * - `schedule.configure` solo admin: los horarios por profesional afectan la
  *   disponibilidad del turnero público y del batch de Planes.
- * - `billing.manage` no está en PRACTITIONER: hoy ninguna action de cobro lo
- *   exige; antes de adoptarlo en cobros hay que decidir si el profesional
- *   cobra en el consultorio (cambiaría su comportamiento actual).
+ * - `billing.manage` no está en PRACTITIONER. T3 (C-AS1) lo resolvió: el
+ *   profesional cobra el copago de SUS turnos con `billing.collectOwn`;
+ *   `billing.manage` queda para confirmar pagos de obra social.
  */
 /*
  * Planes E1 (firmado 03-oct, matriz literal de PLANES.md §8 P0-Ck):
@@ -129,6 +183,7 @@ const MATRIX: Record<Role, readonly Capability[]> = {
     "plans.manage",
     "plans.schedule",
     "plans.authorize",
+    "billing.collectOwn",
   ],
   ASSISTANT: [
     "agenda.viewAll",
@@ -138,15 +193,23 @@ const MATRIX: Record<Role, readonly Capability[]> = {
     "agenda.operateAll",
     "plans.schedule",
     "plans.authorize",
+    // T3 (decisión 1 del 19-oct): la Secretaria cobra («si paga en efectivo lo marca Pagado y listo») y edita contacto
+    // y cobertura (§23.5). RX-D4 («la Secretaria no cobra hasta que C0 lo decida») queda resuelto.
+    "billing.collect",
+    "patients.editAdmin",
   ],
-  BILLING: ["agenda.viewAll", "billing.manage"],
+  BILLING: ["agenda.viewAll", "billing.manage", "billing.collect"],
 };
 
 /**
  * BO2-E (plan §19.5, decisión 3 de Martin): capacidades del actor de SOPORTE (un superadmin «como soporte» en un
- * consultorio ajeno). «Ve lo que ve la Secretaria», sin acceso clínico: las de ASSISTANT + `tenant.admin` y
- * `schedule.configure`, que son las que exigen las actions de Configuración que soporte puede usar (usuarios,
- * obras sociales, servicios, sedes/salas, horarios, datos del consultorio, turnero).
+ * consultorio ajeno). «Ve lo que ve la Secretaria», sin acceso clínico: las de ASSISTANT + `tenant.admin`,
+ * `schedule.configure` y (T3, C-AS1) `tenant.sensitive`, que son las que exigen las actions de Configuración que
+ * soporte puede usar (usuarios, obras sociales, servicios, sedes/salas, horarios, datos del consultorio, turnero).
+ *
+ * T3 (C-AS1): SIN `billing.*` ni `patients.editAdmin`, que la Secretaria sí recibe desde T3. Soporte no registra
+ * plata de un consultorio ajeno ni edita datos de sus pacientes; conserva lo que hoy edita en Configuración (BO
+ * decisión 3), por eso suma `tenant.sensitive` (datos del consultorio, turnero), que pasó a exigirlo.
  *
  * Las capacidades NO son la barrera de escritura del soporte: con `agenda.operateAll` (de la Secretaria) pasaría el
  * chequeo de crear un turno, pero la transacción va en solo lectura (`runWithRls` + `request-context.readOnly`) salvo
@@ -154,11 +217,14 @@ const MATRIX: Record<Role, readonly Capability[]> = {
  * `plans.manage` y `account.*` no están nunca (un test lo fija).
  */
 export const SUPPORT_CAPS: ReadonlySet<Capability> = new Set<Capability>(
-  [...MATRIX.ASSISTANT, "tenant.admin", "schedule.configure"].filter(
+  [...MATRIX.ASSISTANT, ...CONFIG_DELEGATED].filter(
     (c): c is Capability =>
       c !== "clinical.read" &&
       c !== "plans.manage" &&
-      c !== "billing.manage" &&
+      // T3 (C-AS1): ningún `billing.*` (ni `billing.manage` ni el cobro de copagos que la Secretaria trae desde T3)
+      // ni la edición administrativa de pacientes. Por prefijo, para que una capability de cobro nueva no entre sola.
+      !c.startsWith("billing.") &&
+      c !== "patients.editAdmin" &&
       // PL-1b: soporte nunca toca la cuenta (plan, débito, titularidad). Hoy ASSISTANT no tiene `account.*`; el
       // filtro explícito es para que un cambio de la matriz no se la regale (lo fija pl-ownership-guard.test.ts).
       !c.startsWith("account.")
@@ -181,13 +247,17 @@ export function capabilitiesFor(role: Role | null | undefined): ReadonlySet<Capa
 /**
  * Capabilities de un MIEMBRO concreto (PL-1b, C-PL5; decisiones 7 y 8 de Martin):
  * - OWNER (Titular): todo + `account.*`. Si no atiende, sin lo clínico (ve como la Secretaria).
- * - ADMIN: lo de su rol SIN `tenant.admin`/`schedule.configure` (vienen solo por `grantSettings`; los ADMIN que
- *   existían quedaron en `true` por el backfill de M8) y nunca `account.*` por el rol. Sin lo clínico si no atiende.
- * - Cualquier rol: `grantSettings` suma `tenant.admin` + `schedule.configure`; `grantBilling` suma
- *   `account.billing`. Nunca suman lo clínico: delegar Configuración a la Secretaria no le abre la HC.
+ * - ADMIN: lo de su rol SIN `CONFIG_DELEGATED` (`tenant.admin`/`schedule.configure`/`tenant.sensitive`: vienen
+ *   solo por `grantSettings`; los ADMIN que existían quedaron en `true` por el backfill de M8) y nunca `account.*`
+ *   por el rol. Sin lo clínico (nunca atiende, §20.17).
+ * - Cualquier rol: `grantSettings` suma `CONFIG_DELEGATED`; `grantBilling` suma `account.billing`. Nunca suman lo
+ *   clínico: delegar Configuración a la Secretaria no le abre la HC.
  * - `clinical` se lee con `isClinicalMember`: en PRACTITIONER/ASSISTANT/BILLING el flag no cambia nada.
+ * - T3 (C-AS1): corte de staff — ASSISTANT y BILLING pierden `tenant.sensitive` y `account.billing` siempre
+ *   (decisión 3 del 19-oct: la Secretaria nunca turnero, equipo ni plan; un PRACTITIONER con «Configuración» sí
+ *   accede a lo delicado, decisión 4).
  *
- * El orden importa: lo clínico se saca AL FINAL, así ninguna delegación lo puede devolver.
+ * El orden importa: lo clínico y el corte de staff se sacan AL FINAL, así ninguna delegación los puede devolver.
  */
 export function capabilitiesForMember(m: MemberAccess): ReadonlySet<Capability> {
   const caps = new Set<Capability>(capabilitiesFor(m.role));
@@ -195,14 +265,17 @@ export function capabilitiesForMember(m: MemberAccess): ReadonlySet<Capability> 
     for (const c of ACCOUNT_CAPS) caps.add(c);
   }
   if (m.role === "ADMIN") {
-    for (const c of SETTINGS_CAPS) caps.delete(c);
+    for (const c of CONFIG_DELEGATED) caps.delete(c);
   }
   if (m.grantSettings) {
-    for (const c of SETTINGS_CAPS) caps.add(c);
+    for (const c of CONFIG_DELEGATED) caps.add(c);
   }
   if (m.grantBilling) caps.add("account.billing");
   if (!isClinicalMember(m)) {
     for (const c of CLINICAL_ONLY_CAPS) caps.delete(c);
+  }
+  if (STAFF_ROLES.has(m.role)) {
+    for (const c of STAFF_CUT_CAPS) caps.delete(c);
   }
   return caps;
 }
@@ -294,4 +367,32 @@ export function canOperateBooking(caps: ReadonlySet<Capability>, access: Patient
  */
 export function canWriteClinical(caps: ReadonlySet<Capability>, access: PatientAccessLevel): boolean {
   return caps.has("clinical.read") && access === "full";
+}
+
+/**
+ * ¿Puede registrar (o deshacer) el cobro del copago de ESTE turno? T3 (C-AS2, §23.4): `billing.collect` cobra
+ * cualquiera (guest incluido); `billing.collectOwn`, solo los turnos del profesional del actor. Lo usan el server
+ * (`toggleBilling` con gate «copago», en lugar del `hasFullAccess` de antes) y la UI de /sala y del drawer
+ * (`canCollectRow` de `lib/reception-desk-state.ts`), así el botón y la action no pueden divergir.
+ *
+ * Un actor sin profesional (Secretaria, Facturación, Titular sin agenda) nunca pasa por «lo propio»: sin el chequeo
+ * explícito de `null`, un turno sin profesional daría `null === null` (mismo cuidado que `canManageBlocksFor`).
+ */
+export function canCollectCopago(
+  caps: ReadonlySet<Capability>,
+  actorPractitionerId: string | null,
+  bookingPractitionerId: string | null
+): boolean {
+  return (
+    caps.has("billing.collect") ||
+    (caps.has("billing.collectOwn") && actorPractitionerId != null && actorPractitionerId === bookingPractitionerId)
+  );
+}
+
+/**
+ * ¿Puede confirmar pagos de obra social (gate «insurer» de `toggleBilling`)? `billing.manage`: Facturación, el
+ * Titular y el Administrador/a. La Secretaria cobra copagos pero no confirma obra social.
+ */
+export function canConfirmInsurer(caps: ReadonlySet<Capability>): boolean {
+  return caps.has("billing.manage");
 }

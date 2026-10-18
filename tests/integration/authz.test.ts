@@ -57,6 +57,7 @@ describe.skipIf(!RUN)("authz · rol desde Membership", () => {
       "agenda.manageOwnBlocks",
       "agenda.reception",
       "agenda.viewAll",
+      "billing.collectOwn",
       "clinical.read",
       "plans.authorize",
       "plans.manage",

@@ -167,15 +167,14 @@ describe.skipIf(!RUN)("[BO3-F] getTenantPlanUsage", () => {
     }
   });
 
-  it("[PL-3] la Secretaria con «Planes y pagos» (grantBilling → account.billing) sí ve el plan y los cupos", async () => {
+  it("[T3] la Secretaria con «Planes y pagos» (grantBilling) NO ve el plan: el corte de staff le saca account.billing", async () => {
     await db.membership.update({
       where: { userId_tenantId: { userId: assistantUserId, tenantId: T.tenantId } },
       data: { grantBilling: true },
     });
     try {
       asUser(assistantUserId);
-      const view = await getTenantPlanUsage();
-      expect(view.seats).toBeTruthy();
+      await expect(getTenantPlanUsage()).rejects.toThrow("Solo OWNER/ADMIN ven el plan del consultorio.");
     } finally {
       await db.membership.update({
         where: { userId_tenantId: { userId: assistantUserId, tenantId: T.tenantId } },

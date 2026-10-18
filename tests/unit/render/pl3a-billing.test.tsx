@@ -37,7 +37,7 @@ import type { MemberAccess } from "@/lib/saas-plans-types";
 import type { PlanChangeCandidate, PlanChangePreview } from "@/lib/saas-plan-change-types";
 import type { BillingChargeRow, BillingOverview, BillingPaymentRow } from "@/lib/saas-billing-types";
 
-const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false }));
+const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }));
 const tabs = (html: string) => Array.from(html.matchAll(/role="tab"[^>]*>([^<]+)</g), (m) => m[1]);
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;|&#39;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, " ");
 
@@ -57,7 +57,7 @@ const wrap = (node: React.ReactNode) =>
 
 describe("[PL-3a] pestañas por capacidad", () => {
   it("delegado con «Planes y pagos» (grantBilling) ve Plan y uso + Facturación + Soporte; ADMIN sin la delegación no ve Facturación", () => {
-    const delegate = accessOf({ role: "ASSISTANT", clinical: false, grantSettings: false, grantBilling: true });
+    const delegate = accessOf({ role: "PRACTITIONER", clinical: true, grantSettings: false, grantBilling: true });
     const t1 = tabs(renderToStaticMarkup(<TabsBar tab="plan" setTab={() => {}} access={delegate} modules={KINE} />));
     expect(t1).toEqual(["Plan y uso", "Facturación", "Soporte"]);
 
@@ -76,7 +76,7 @@ describe("[PL-3a] pestañas por capacidad", () => {
   });
 
   it("pestaña inicial: `?tab=facturacion` (link de los mails) si la puede ver; si no, la primera que ve", () => {
-    const delegate = accessOf({ role: "BILLING", clinical: false, grantSettings: false, grantBilling: true });
+    const delegate = accessOf({ role: "PRACTITIONER", clinical: true, grantSettings: false, grantBilling: true });
     const v = visibleConfigTabs(delegate, KINE);
     expect(initialConfigTab("facturacion", v)).toBe("facturacion");
     // Sin General: cae en Plan y uso, no en una pestaña que no ve.

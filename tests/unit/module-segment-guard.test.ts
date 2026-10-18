@@ -74,11 +74,11 @@ function actorWith(e: TenantEntitlements, membership: MemberAccess = OWNER, supp
   return { tenantId: "t-1", userId: "u-1", entitlements: e, membership, support };
 }
 
-const GENERAL: TenantEntitlements = { vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: true };
-const KINE_FREE: TenantEntitlements = { vertical: "KINESIOLOGY", plan: "INDIVIDUAL", publicBookingEnabled: false };
-const KINE_CONSULTORIO: TenantEntitlements = { vertical: "KINESIOLOGY", plan: "CONSULTORIO", publicBookingEnabled: false };
-const KINE_CLINICA: TenantEntitlements = { vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false };
-const GENERAL_INDIVIDUAL: TenantEntitlements = { vertical: "GENERAL", plan: "INDIVIDUAL", publicBookingEnabled: false };
+const GENERAL: TenantEntitlements = { vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: true, moduleGrants: [], moduleRevokes: [] };
+const KINE_FREE: TenantEntitlements = { vertical: "KINESIOLOGY", plan: "INDIVIDUAL", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] };
+const KINE_CONSULTORIO: TenantEntitlements = { vertical: "KINESIOLOGY", plan: "CONSULTORIO", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] };
+const KINE_CLINICA: TenantEntitlements = { vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] };
+const GENERAL_INDIVIDUAL: TenantEntitlements = { vertical: "GENERAL", plan: "INDIVIDUAL", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] };
 
 const CHILD = "contenido-del-segmento";
 
@@ -140,8 +140,8 @@ describe("guards de segmento por módulo", () => {
         [OWNER, null, true],
         // ADMIN sin «Planes y pagos»: no ve la pestaña Plan → sin «Ver planes».
         [{ role: "ADMIN", clinical: true, grantSettings: true, grantBilling: false }, null, false],
-        // Secretaria con «Planes y pagos» delegado: sí.
-        [{ role: "ASSISTANT", clinical: false, grantSettings: false, grantBilling: true }, null, true],
+        // Profesional con «Planes y pagos» delegado: sí (T3: la Secretaria ya no lo recibe, corte de staff).
+        [{ role: "PRACTITIONER", clinical: true, grantSettings: false, grantBilling: true }, null, true],
         [{ role: "PRACTITIONER", clinical: true, grantSettings: false, grantBilling: false }, null, false],
         // Soporte de Plataforma: `SUPPORT_CAPS` nunca trae `account.*`.
         [OWNER, { sessionId: "s-1" }, false],
@@ -175,7 +175,7 @@ describe("[VX2-b2] moduleWallFor: matriz completa", () => {
     for (const vertical of ["GENERAL", "KINESIOLOGY"] as const) {
       for (const plan of PLANS) {
         for (const publicBookingEnabled of [false, true]) {
-          const e: TenantEntitlements = { vertical, plan, publicBookingEnabled };
+          const e: TenantEntitlements = { vertical, plan, publicBookingEnabled, moduleGrants: [], moduleRevokes: [] };
           for (const m of TENANT_MODULES) {
             const r = moduleWallFor(e, m, BUY);
             const min = minimumPlanFor(m, vertical);
@@ -195,8 +195,8 @@ describe("[VX2-b2] moduleWallFor: matriz completa", () => {
   });
 
   it("casos de producto: no se le vende Kine a un General; sala → Clínica; plantillas → Consultorio", () => {
-    const gen: TenantEntitlements = { vertical: "GENERAL", plan: "INDIVIDUAL", publicBookingEnabled: false };
-    const kine: TenantEntitlements = { vertical: "KINESIOLOGY", plan: "INDIVIDUAL", publicBookingEnabled: false };
+    const gen: TenantEntitlements = { vertical: "GENERAL", plan: "INDIVIDUAL", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] };
+    const kine: TenantEntitlements = { vertical: "KINESIOLOGY", plan: "INDIVIDUAL", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] };
     for (const m of ["diagnostico", "sesiones", "ejercicios", "planes", "reportes"] as const) {
       expect(moduleWallFor({ ...gen, plan: "LIBRE" }, m, BUY)).toBe("redirect");
     }

@@ -111,9 +111,19 @@ describe("[BO2-E] SUPPORT_CAPS: Secretaria sin clínico + Configuración", () =>
     expect(SUPPORT_CAPS.has("billing.manage")).toBe(false);
     expect(SUPPORT_CAPS.has("tenant.admin")).toBe(true);
     expect(SUPPORT_CAPS.has("schedule.configure")).toBe(true);
-    // Lo demás es exactamente lo de la Secretaria.
-    for (const c of capabilitiesFor("ASSISTANT")) expect(SUPPORT_CAPS.has(c), c).toBe(true);
-    expect([...SUPPORT_CAPS].sort()).toEqual([...capabilitiesFor("ASSISTANT"), "tenant.admin", "schedule.configure"].sort());
+  });
+
+  // T3b-1k1 (C-AS1): la Secretaria cobra y edita datos administrativos desde T3, soporte no (no registra plata de un
+  // consultorio ajeno ni toca datos de pacientes). Soporte conserva lo que hoy edita en Configuración (BO decisión 3),
+  // así que suma `tenant.sensitive` (datos del consultorio, turnero): la barrera de escritura real sigue siendo
+  // `SUPPORT_WRITABLE_ACTIONS` (cobros online/MP nunca entran).
+  it("[AS-1k1] sin billing.* ni patients.editAdmin; con tenant.sensitive; el resto es la Secretaria", () => {
+    expect([...SUPPORT_CAPS].filter((c) => c.startsWith("billing."))).toEqual([]);
+    expect(SUPPORT_CAPS.has("patients.editAdmin")).toBe(false);
+    expect(SUPPORT_CAPS.has("tenant.sensitive")).toBe(true);
+    const base = [...capabilitiesFor("ASSISTANT")].filter((c) => !c.startsWith("billing.") && c !== "patients.editAdmin");
+    expect(base.length).toBeGreaterThan(5);
+    expect([...SUPPORT_CAPS].sort()).toEqual([...base, "tenant.admin", "schedule.configure", "tenant.sensitive"].sort());
   });
 });
 

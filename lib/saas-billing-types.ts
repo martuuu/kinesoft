@@ -27,21 +27,17 @@ export type { SaasBillingMode };
  */
 export const SAAS_PAYMENT_METHODS = ["TRANSFER", "CASH", "CARD", "WALLET", "MERCADO_PAGO", "OTHER"] as const satisfies readonly SaasPaymentMethod[];
 
-export const SAAS_PAYMENT_METHOD_LABEL: Record<SaasPaymentMethod, string> = {
-  TRANSFER: "Transferencia",
-  CASH: "Efectivo",
-  CARD: "Tarjeta",
-  WALLET: "Billetera virtual",
-  MERCADO_PAGO: "Mercado Pago",
-  OTHER: "Otro",
-};
-
-/** Pagos de antes de M8c (columna NULL): no se sabe con qué se pagó. */
-export const SAAS_PAYMENT_METHOD_UNKNOWN = "Sin informar";
-
-export function paymentMethodLabel(m: SaasPaymentMethod | null | undefined): string {
-  return m ? SAAS_PAYMENT_METHOD_LABEL[m] : SAAS_PAYMENT_METHOD_UNKNOWN;
-}
+/*
+ * T3 (C-AS2): las etiquetas y «Sin informar» viven en `lib/payment-method.ts`, compartidas con el cobro del turno
+ * (`BookingPaymentMethod` de M12 tiene los mismos valores). Se re-exportan con los nombres de siempre para no tocar a
+ * los importadores de la suscripción; el orden de los selects de acá (`SAAS_PAYMENT_METHODS`) no cambia.
+ * `SAAS_PAYMENT_METHOD_UNKNOWN`: pagos de antes de M8c (columna NULL).
+ */
+export {
+  PAYMENT_METHOD_LABEL as SAAS_PAYMENT_METHOD_LABEL,
+  PAYMENT_METHOD_UNKNOWN as SAAS_PAYMENT_METHOD_UNKNOWN,
+  paymentMethodLabel,
+} from "@/lib/payment-method";
 
 export function isSaasPaymentMethod(v: unknown): v is SaasPaymentMethod {
   return typeof v === "string" && (SAAS_PAYMENT_METHODS as readonly string[]).includes(v);

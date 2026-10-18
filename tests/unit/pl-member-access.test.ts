@@ -20,8 +20,13 @@ import type { MemberAccess } from "@/lib/saas-plans-types";
 const ROLES: Role[] = ["OWNER", "ADMIN", "PRACTITIONER", "ASSISTANT", "BILLING"];
 const ALL = [...CAPABILITIES] as Capability[];
 const CLINICAL: Capability[] = ["clinical.read", "plans.manage"];
-const SETTINGS: Capability[] = ["tenant.admin", "schedule.configure"];
+// T3b-1k1 (C-AS1): «Configuración» delega también `tenant.sensitive` (CONFIG_DELEGATED); el corte de staff se la saca
+// a la Secretaria y a Facturación al final.
+const SETTINGS: Capability[] = ["tenant.admin", "schedule.configure", "tenant.sensitive"];
 const ACCOUNT: Capability[] = ["account.billing", "account.owner"];
+/** Solo del PRACTITIONER (C-AS1): OWNER/ADMIN cobran todo con `billing.collect`. */
+const OWN_ONLY: Capability[] = ["billing.collectOwn"];
+const STAFF: Role[] = ["ASSISTANT", "BILLING"];
 
 const m = (role: Role, o: Partial<Omit<MemberAccess, "role">> = {}): MemberAccess => ({
   role,
@@ -34,29 +39,29 @@ const sorted = (s: ReadonlySet<Capability>) => [...s].sort();
 
 describe("[PL-1b] capabilitiesForMember — matriz", () => {
   it("Titular que atiende: todo, incluido account.* (con o sin delegaciones)", () => {
-    expect(sorted(capabilitiesForMember(m("OWNER")))).toEqual([...ALL].sort());
+    expect(sorted(capabilitiesForMember(m("OWNER")))).toEqual(without(ALL, OWN_ONLY).sort());
     expect(sorted(capabilitiesForMember(m("OWNER", { grantSettings: true, grantBilling: true })))).toEqual(
-      [...ALL].sort()
+      without(ALL, OWN_ONLY).sort()
     );
   });
 
   it("Titular que NO atiende: todo menos lo clínico; conserva account.* y Configuración", () => {
-    expect(sorted(capabilitiesForMember(m("OWNER", { clinical: false })))).toEqual(without(ALL, CLINICAL).sort());
+    expect(sorted(capabilitiesForMember(m("OWNER", { clinical: false })))).toEqual(without(ALL, CLINICAL, OWN_ONLY).sort());
   });
 
   it("[PL-Z] M1: Admin legado con clinical = true y «Configuración»: sin lo clínico ni account.*", () => {
     expect(sorted(capabilitiesForMember(m("ADMIN", { grantSettings: true })))).toEqual(
-      without(ALL, ACCOUNT, CLINICAL).sort()
+      without(ALL, ACCOUNT, CLINICAL, OWN_ONLY).sort()
     );
   });
 
   it("Admin sin «Configuración»: sin tenant.admin ni schedule.configure (ni lo clínico)", () => {
-    expect(sorted(capabilitiesForMember(m("ADMIN")))).toEqual(without(ALL, ACCOUNT, SETTINGS, CLINICAL).sort());
+    expect(sorted(capabilitiesForMember(m("ADMIN")))).toEqual(without(ALL, ACCOUNT, SETTINGS, CLINICAL, OWN_ONLY).sort());
   });
 
   it("Admin que no atiende con «Configuración»: sin lo clínico", () => {
     expect(sorted(capabilitiesForMember(m("ADMIN", { clinical: false, grantSettings: true })))).toEqual(
-      without(ALL, ACCOUNT, CLINICAL).sort()
+      without(ALL, ACCOUNT, CLINICAL, OWN_ONLY).sort()
     );
   });
 
@@ -70,12 +75,17 @@ describe("[PL-1b] capabilitiesForMember — matriz", () => {
     const caps = capabilitiesForMember(m("ASSISTANT", { clinical: true, grantSettings: true, grantBilling: true }));
     expect(caps.has("tenant.admin")).toBe(true);
     expect(caps.has("schedule.configure")).toBe(true);
-    expect(caps.has("account.billing")).toBe(true);
     expect(caps.has("account.owner")).toBe(false);
     expect(caps.has("clinical.read")).toBe(false);
     expect(caps.has("plans.manage")).toBe(false);
-    // Lo demás es exactamente lo de la Secretaria.
-    expect(sorted(caps)).toEqual([...capabilitiesFor("ASSISTANT"), ...SETTINGS, "account.billing"].sort());
+  });
+
+  it("[AS-1k1] Secretaria con «Configuración» y «Planes y pagos»: sin tenant.sensitive ni account.billing (decisión 3: nunca turnero, equipo ni plan)", () => {
+    const caps = capabilitiesForMember(m("ASSISTANT", { clinical: true, grantSettings: true, grantBilling: true }));
+    expect(caps.has("tenant.sensitive")).toBe(false);
+    expect(caps.has("account.billing")).toBe(false);
+    // Lo demás es exactamente lo de la Secretaria + la Configuración «común».
+    expect(sorted(caps)).toEqual([...capabilitiesFor("ASSISTANT"), "tenant.admin", "schedule.configure"].sort());
   });
 
   it("Profesional: el flag `clinical` no le saca la HC; con «Configuración» suma tenant.admin", () => {
@@ -85,9 +95,16 @@ describe("[PL-1b] capabilitiesForMember — matriz", () => {
     expect(caps.has("agenda.operateAll")).toBe(false);
   });
 
-  it("Facturación con «Planes y pagos»: account.billing; sin clínico ni Configuración", () => {
-    const caps = capabilitiesForMember(m("BILLING", { grantBilling: true }));
-    expect(sorted(caps)).toEqual([...capabilitiesFor("BILLING"), "account.billing"].sort());
+  it("[AS-1k1] Profesional con «Configuración» accede a lo delicado (decisión 4: el corte es solo de staff)", () => {
+    expect(capabilitiesForMember(m("PRACTITIONER", { grantSettings: true })).has("tenant.sensitive")).toBe(true);
+    expect(capabilitiesForMember(m("PRACTITIONER")).has("tenant.sensitive")).toBe(false);
+  });
+
+  it("[AS-1k1] Facturación con «Planes y pagos» y «Configuración»: nada de la cuenta ni de lo delicado", () => {
+    const caps = capabilitiesForMember(m("BILLING", { grantBilling: true, grantSettings: true }));
+    expect(caps.has("account.billing")).toBe(false);
+    expect(caps.has("tenant.sensitive")).toBe(false);
+    expect(sorted(capabilitiesForMember(m("BILLING", { grantBilling: true })))).toEqual([...capabilitiesFor("BILLING")].sort());
   });
 
   describe("invariantes sobre todas las combinaciones", () => {
@@ -101,8 +118,15 @@ describe("[PL-1b] capabilitiesForMember — matriz", () => {
               expect(caps.has("clinical.read")).toBe(isClinicalMember(acc));
               expect(caps.has("plans.manage")).toBe(isClinicalMember(acc));
               expect(caps.has("account.owner")).toBe(role === "OWNER");
-              expect(caps.has("account.billing")).toBe(role === "OWNER" || grantBilling);
+              // T3b-1k1 (C-AS1, decisiones 2 y 3 del 19-oct): «Planes y pagos» y lo delicado se delegan, pero el
+              // corte de staff va AL FINAL (como el clínico): la Secretaria y Facturación no los reciben ni con la
+              // delegación prendida en la fila, porque decisión 3 dice «nunca turnero, equipo ni plan». Antes la
+              // regla era `OWNER || grantBilling` sin excepción de rol.
+              const staff = STAFF.includes(role);
+              expect(caps.has("account.billing")).toBe(role === "OWNER" || (grantBilling && !staff));
+              expect(caps.has("tenant.sensitive")).toBe(role === "OWNER" || (grantSettings && !staff));
               expect(caps.has("tenant.admin")).toBe(role === "OWNER" || grantSettings);
+              expect(caps.has("billing.collectOwn")).toBe(role === "PRACTITIONER");
               for (const c of caps) expect(CAPABILITIES).toContain(c);
             });
           }

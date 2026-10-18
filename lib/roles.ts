@@ -31,26 +31,31 @@ export { roleLabel } from "@/lib/role-label";
  *   (`TabsBar` de Configuración).
  * - PRACTITIONER: clínica + planes (en Kine), opera lo suyo y ve la agenda
  *   de todos (`agenda.viewAll`).
- * - ASSISTANT: `agenda.operateAll` + recepción, sin `clinical.read`.
- * - BILLING: `billing.manage` + ver agenda, sin `clinical.read`.
+ * - ASSISTANT: `agenda.operateAll` + recepción + `billing.collect` + `patients.editAdmin`, sin `clinical.read`.
+ * - BILLING: `billing.collect` + `billing.manage` (obra social) + ver agenda, sin `clinical.read`.
+ * T3 (C-AS1, copy literal de §23.3): ADMIN, Secretaria y Facturación dicen que cobran porque desde T3 cobran
+ * (`billing.collect`); el test cruza «cobros» ↔ `billing.collect`.
  */
 export function roleDescription(role: Role, vertical?: TenantVertical | null): string {
   switch (role) {
     case "OWNER":
       return "Maneja todo el consultorio, incluido el equipo y quién puede hacer qué.";
     case "ADMIN":
-      // §20.17: el Administrador/a nunca atiende (decisión 8: sin HC). Organiza las agendas y la Sala de espera.
-      return "Organiza las agendas de todos y la Sala de espera, y configura el consultorio. No atiende ni ve historias clínicas.";
+      // §20.17: el Administrador/a nunca atiende (decisión 8: sin HC). T3 (decisión 2 del 19-oct): imputa pagos y
+      // trae «Planes y pagos» por defecto (el Titular se lo puede sacar).
+      return "Organiza las agendas, la Sala de espera y los cobros; configura el consultorio y maneja el plan. No atiende ni ve historias clínicas.";
     case "PRACTITIONER":
       // General no tiene el módulo de planes (lib/tenant-modules.ts): no se promete.
       return vertical === "GENERAL"
         ? "Atiende a sus pacientes y carga sus historias clínicas. Ve la agenda de todos."
         : "Atiende a sus pacientes: historias clínicas, planes y evoluciones. Ve la agenda de todos.";
     case "ASSISTANT":
-      return "Maneja la agenda y la recepción de todos. No ve historias clínicas.";
+      // T3 (decisión 1 del 19-oct): la Secretaria cobra y edita contacto y cobertura (§23.5).
+      return "Maneja la agenda y la recepción de todos, registra cobros y edita el contacto y la cobertura de los pacientes. No ve historias clínicas.";
     case "BILLING":
-      // PL-Z M2: la pestaña se llama «Facturación» (PL-D21) pero el rol no factura: ve los cobros de los pacientes.
-      return "Ve los cobros y copagos de los pacientes. No ve historias clínicas.";
+      // PL-Z M2: la pestaña se llama «Facturación» (PL-D21) pero el rol no factura. T3: registra cobros
+      // (`billing.collect`) y confirma los pagos de obra social (`billing.manage`).
+      return "Registra los cobros de los pacientes y confirma los pagos de obra social. No ve historias clínicas.";
   }
 }
 

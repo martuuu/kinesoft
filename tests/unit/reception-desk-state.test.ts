@@ -14,6 +14,7 @@ import {
   DESK_SOON_MIN,
   DESK_WAIT_FULL_MIN,
   attendingEntries,
+  canCollectRow,
   cashEntries,
   chronological,
   deskEntries,
@@ -73,9 +74,15 @@ function dto(id: string, h: string, over: Partial<BookingDTO> = {}): BookingDTO 
   };
 }
 
-const OWNER = deskViewer("p1", ["agenda.reception", "agenda.operateAll", "billing.manage"]);
+// T3b-1k1 (C-AS1): cobrar el copago es `billing.collect` (cualquier turno) o `billing.collectOwn` (los propios), no
+// `billing.manage` (que queda para confirmar pagos de obra social).
+const OWNER = deskViewer("p1", ["agenda.reception", "agenda.operateAll", "billing.manage", "billing.collect"]);
 const SECRETARIA = deskViewer(null, ["agenda.reception", "agenda.operateAll"]);
 const KINE = deskViewer("p1", ["agenda.reception", "clinical.read"]);
+/** La Secretaria de T3: cobra cualquier turno (decisión 1 del 19-oct). */
+const SECRETARIA_COBRA = deskViewer(null, ["agenda.reception", "agenda.operateAll", "billing.collect"]);
+/** El profesional de T3: cobra solo sus turnos. */
+const KINE_COBRA = deskViewer("p1", ["agenda.reception", "clinical.read", "billing.collectOwn"]);
 
 /** Un turno de cada estado (a las 10:42 AR). */
 const ROWS = {
@@ -93,16 +100,66 @@ const byId = (es: ReadonlyArray<{ row: BookingDTO }>) => es.map((e) => e.row.id)
 const entryOf = (es: DeskEntry[], id: string) => es.find((e) => e.row.id === id)!;
 
 describe("[RX-0] deskViewer", () => {
-  it("canCollect = billing.manage; el resto es el viewer del Tablero", () => {
-    expect(OWNER).toEqual({ practitionerId: "p1", canReception: true, canOperateAll: true, canCollect: true });
+  it("[AS-1k1] canCollect = billing.collect || billing.collectOwn; el resto es el viewer del Tablero", () => {
+    expect(OWNER).toEqual({ practitionerId: "p1", canReception: true, canOperateAll: true, canCollect: true, canCollectAll: true });
     expect(SECRETARIA.canCollect).toBe(false);
-    expect(KINE).toEqual({ practitionerId: "p1", canReception: true, canOperateAll: false, canCollect: false });
+    expect(KINE).toEqual({ practitionerId: "p1", canReception: true, canOperateAll: false, canCollect: false, canCollectAll: false });
+    expect(SECRETARIA_COBRA).toMatchObject({ canCollect: true, canCollectAll: true });
+    expect(KINE_COBRA).toMatchObject({ canCollect: true, canCollectAll: false });
+  });
+
+  it("[AS-1k1] billing.manage solo ya no cobra copagos (es confirmar obra social)", () => {
+    expect(deskViewer("p1", ["agenda.reception", "billing.manage"]).canCollect).toBe(false);
   });
 
   it("acepta un iterable de un solo uso (Set.values())", () => {
-    const v = deskViewer(null, new Set(["agenda.reception", "billing.manage"]).values());
+    const v = deskViewer(null, new Set(["agenda.reception", "billing.collect"]).values());
     expect(v.canReception).toBe(true);
     expect(v.canCollect).toBe(true);
+  });
+});
+
+describe("[AS-1k1] canCollectRow (el mismo `canCollectCopago` que el server)", () => {
+  const mine = dto("mine", "10:50", { practitionerId: "p1", copagoCents: 600_000 });
+  const theirs = dto("theirs", "10:50", { practitionerId: "p2", copagoCents: 600_000 });
+
+  it("[AS-1k1] con billing.collect: cualquier fila", () => {
+    expect(canCollectRow(SECRETARIA_COBRA, theirs)).toBe(true);
+    expect(canCollectRow(OWNER, theirs)).toBe(true);
+  });
+
+  it("[AS-1k1] con billing.collectOwn: solo las filas propias", () => {
+    expect(canCollectRow(KINE_COBRA, mine)).toBe(true);
+    expect(canCollectRow(KINE_COBRA, theirs)).toBe(false);
+  });
+
+  it("[AS-1k1] sin practitionerId nunca pasa por collectOwn; sin cobro, ninguna", () => {
+    const sinAgenda = deskViewer(null, ["agenda.reception", "billing.collectOwn"]);
+    expect(canCollectRow(sinAgenda, mine)).toBe(false);
+    expect(canCollectRow(SECRETARIA, mine)).toBe(false);
+    expect(canCollectRow(KINE, mine)).toBe(false);
+  });
+
+  it("[AS-1k1] primaria «Cobrar» y «Cobrar ahora» solo en las filas que el profesional cobra", () => {
+    const done = (id: string, pro: string) =>
+      dto(id, "09:00", { practitionerId: pro, status: "COMPLETED", copagoCents: 600_000, paymentStatus: "UNPAID" });
+    const es = deskEntries([done("m", "p1"), done("t", "p2")], NOW, KINE_COBRA);
+    expect(deskPrimary(entryOf(es, "m"), KINE_COBRA)).toEqual({ kind: "collect", label: "Cobrar" });
+    expect(deskPrimary(entryOf(es, "t"), KINE_COBRA)).toBeNull();
+    const early = deskEntries([mine, theirs], NOW, KINE_COBRA);
+    expect(deskMenuItems(entryOf(early, "mine"), KINE_COBRA, DAY).some((i) => i.kind === "collect")).toBe(true);
+    expect(deskMenuItems(entryOf(early, "theirs"), KINE_COBRA, DAY).some((i) => i.kind === "collect")).toBe(false);
+  });
+
+  it("[AS-1k1] «Por cobrar» con viewer: solo lo que ese viewer cobra (y el total de eso)", () => {
+    const done = (id: string, pro: string) =>
+      dto(id, "09:00", { practitionerId: pro, status: "COMPLETED", copagoCents: 600_000, paymentStatus: "UNPAID" });
+    const es = deskEntries([done("m", "p1"), done("t", "p2")], NOW, KINE_COBRA);
+    expect(byId(cashEntries(es, KINE_COBRA).entries)).toEqual(["m"]);
+    expect(cashEntries(es, KINE_COBRA).totalCents).toBe(600_000);
+    expect(byId(cashEntries(es, SECRETARIA_COBRA).entries).sort()).toEqual(["m", "t"]);
+    // Sin viewer, como antes: todo lo que se debe.
+    expect(byId(cashEntries(es).entries).sort()).toEqual(["m", "t"]);
   });
 });
 

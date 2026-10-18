@@ -51,9 +51,23 @@ describe("[IAM-0c] roleLabel", () => {
 });
 
 describe("[IAM-0c] roleDescription", () => {
-  it("Secretario/a y Facturación con el texto acordado", () => {
-    expect(roleDescription("ASSISTANT")).toBe("Maneja la agenda y la recepción de todos. No ve historias clínicas.");
-    expect(roleDescription("BILLING")).toBe("Ve los cobros y copagos de los pacientes. No ve historias clínicas.");
+  it("[AS-1k1] Administrador/a, Secretario/a y Facturación con el texto de §23.3 (cobran desde T3)", () => {
+    expect(roleDescription("ADMIN")).toBe(
+      "Organiza las agendas, la Sala de espera y los cobros; configura el consultorio y maneja el plan. No atiende ni ve historias clínicas."
+    );
+    expect(roleDescription("ASSISTANT")).toBe(
+      "Maneja la agenda y la recepción de todos, registra cobros y edita el contacto y la cobertura de los pacientes. No ve historias clínicas."
+    );
+    expect(roleDescription("BILLING")).toBe(
+      "Registra los cobros de los pacientes y confirma los pagos de obra social. No ve historias clínicas."
+    );
+  });
+
+  it("[AS-1k1] coherente con la matriz: los roles que dicen «cobros» tienen billing.collect", () => {
+    for (const r of ["ADMIN", "ASSISTANT", "BILLING"] as const) {
+      expect(roleDescription(r)).toMatch(/cobros/);
+      expect(capabilitiesFor(r).has("billing.collect")).toBe(true);
+    }
   });
 
   it("una línea no vacía para cada rol y vertical", () => {

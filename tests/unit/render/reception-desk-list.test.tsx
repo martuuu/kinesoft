@@ -86,7 +86,8 @@ const PRACTITIONERS = [
 const ROOMS = [{ id: "r1", name: "Consultorio 1", capacity: 1 }];
 
 const SECRETARIA = deskViewer(null, ["agenda.viewAll", "agenda.reception", "agenda.operateAll"]);
-const TITULAR = deskViewer("p1", ["agenda.viewAll", "agenda.reception", "agenda.operateAll", "billing.manage", "clinical.read"]);
+// T3b-1k1 (C-AS1): cobrar el copago es `billing.collect` (el Titular la trae por rol), no `billing.manage`.
+const TITULAR = deskViewer("p1", ["agenda.viewAll", "agenda.reception", "agenda.operateAll", "billing.manage", "billing.collect", "clinical.read"]);
 
 function makeLive(viewer: DeskViewer, over: Partial<SalaLive> = {}, rows: BookingDTO[] = ROWS): SalaLive {
   return {

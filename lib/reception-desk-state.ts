@@ -19,14 +19,18 @@
  *   - las entries incluyen atendidos y ausentes (`deskEntries`): el Tablero no les da card, pero el escritorio los
  *     necesita para «Por cobrar», «Atendidos» y el progreso de la franja.
  *
- * Cobrar (brief §1.4, RX-D4): `setBookingCopagoPaid` no exige capability (pide acceso full al paciente), pero la UI
- * de cobro del escritorio solo aparece con `billing.manage` (OWNER/ADMIN; BILLING no llega a /sala porque no tiene
- * `agenda.reception`). La Secretaria no cobra hasta que C0 lo decida. El server sigue siendo la autoridad.
+ * Cobrar (T3, C-AS1/C-AS2; decisión 1 del 19-oct, reemplaza RX-D4): la UI de cobro aparece con `billing.collect`
+ * (Titular, Admin, Secretaria; Facturación no llega a /sala porque no tiene `agenda.reception`) o con
+ * `billing.collectOwn` (el profesional, SOLO en sus filas). Fila por fila decide `canCollectRow`, que es el mismo
+ * `canCollectCopago` que usa el server en `toggleBilling`: el botón y la action no pueden divergir. Antes la UI miraba
+ * `billing.manage` y el server pedía acceso full, así que el Admin veía «Cobrar» y el server lo rechazaba (§23.2).
+ * El server sigue siendo la autoridad.
  *
  * PD-13: nada clínico. Todo sale de `BookingDTO` ya limpio (`fromSalaWire`): nombre, hora, servicio, profesional,
  * sala, obra social, copago y cobro. Plata en centavos con `formatARS`.
  */
 import type { BookingDTO } from "@/components/agenda/agenda-utils";
+import { canCollectCopago, type Capability } from "@/lib/capabilities";
 import { formatARS } from "@/lib/format";
 import {
   RECEPTION_ACTION_LABEL,
@@ -61,13 +65,35 @@ export const DESK_DELAY_BAD_MIN = 15;
 
 // ── Viewer ───────────────────────────────────────────────────────────────────
 
-/** El viewer del Tablero + si cobra (`billing.manage`). */
-export type DeskViewer = SalaViewer & { canCollect: boolean };
+/**
+ * El viewer del Tablero + si cobra. Son booleanos (no el set de capabilities) porque viaja de la page server a
+ * `SalaClient` como prop y un `Set` no se serializa.
+ * - `canCollect`: cobra ALGO (`billing.collect || billing.collectOwn`): habilita «Por cobrar», la card de cobros y el
+ *   modal. Qué filas, lo decide `canCollectRow`.
+ * - `canCollectAll`: `billing.collect` (cualquier fila). Sin esto y con `canCollect`, solo las del profesional.
+ */
+export type DeskViewer = SalaViewer & { canCollect: boolean; canCollectAll: boolean };
 
 export function deskViewer(practitionerId: string | null, caps: Iterable<string>): DeskViewer {
   // Se materializa una vez: `caps` puede ser un iterador de un solo uso.
   const list = Array.from(caps);
-  return { ...salaViewer(practitionerId, list), canCollect: list.includes("billing.manage") };
+  const all = list.includes("billing.collect");
+  return {
+    ...salaViewer(practitionerId, list),
+    canCollect: all || list.includes("billing.collectOwn"),
+    canCollectAll: all,
+  };
+}
+
+/**
+ * ¿El viewer cobra ESTA fila? Reconstruye las dos capabilities de cobro desde los booleanos del viewer y llama al
+ * MISMO `canCollectCopago` del server (paridad de /sala, §23.3): un profesional solo ve «Cobrar» en sus turnos, y un
+ * viewer sin profesional nunca pasa por «lo propio».
+ */
+export function canCollectRow(viewer: DeskViewer, row: Pick<BookingDTO, "practitionerId">): boolean {
+  if (!viewer.canCollect) return false;
+  const caps = new Set<Capability>([viewer.canCollectAll ? "billing.collect" : "billing.collectOwn"]);
+  return canCollectCopago(caps, viewer.practitionerId, row.practitionerId);
 }
 
 // ── Entries ──────────────────────────────────────────────────────────────────
@@ -130,7 +156,7 @@ const FILTERS: ReadonlyArray<{ id: DeskFilter; label: string }> = [
   { id: "atendidos", label: "Atendidos" },
 ];
 
-/** Chips de la tabla A. Sin `canCollect`, «Por cobrar» no existe (la Secretaria no cobra, RX-D4). */
+/** Chips de la tabla A. Sin `canCollect`, «Por cobrar» no existe (quien no registra cobros). */
 export function deskFilters(canCollect: boolean): ReadonlyArray<{ id: DeskFilter; label: string }> {
   return canCollect ? FILTERS : FILTERS.filter((f) => f.id !== "por-cobrar");
 }
@@ -225,11 +251,16 @@ export function attendingEntries<E extends ReceptionEntry<BookingDTO>>(es: Reado
     .sort((a, b) => ms(a.row.attendingAt) - ms(b.row.attendingAt) || a.row.id.localeCompare(b.row.id));
 }
 
-/** Por cobrar: atendidos que deben copago (cronológico) y el total pendiente, en centavos. */
+/**
+ * Por cobrar: atendidos que deben copago (cronológico) y el total pendiente, en centavos. Con `viewer` (T3), solo las
+ * filas que ese viewer cobra (`canCollectRow`): al profesional con `billing.collectOwn` no se le listan ni se le
+ * suman los copagos de turnos ajenos que no puede registrar. Sin `viewer`, todo lo que se debe (como antes).
+ */
 export function cashEntries<E extends ReceptionEntry<BookingDTO>>(
-  es: ReadonlyArray<E>
+  es: ReadonlyArray<E>,
+  viewer?: DeskViewer
 ): { entries: E[]; totalCents: number } {
-  const entries = chronological(es.filter(owesCopago));
+  const entries = chronological(es.filter((e) => owesCopago(e) && (!viewer || canCollectRow(viewer, e.row))));
   return { entries, totalCents: entries.reduce((s, e) => s + e.row.copagoCents, 0) };
 }
 
@@ -359,17 +390,17 @@ export type DeskPrimary =
 /**
  * Botón primario de la fila (prototipo `primary()`): Llegó / Llamar / En atención / Atendido según el estado (la
  * misma `primarySalaAction` del Tablero), solo si el viewer puede hacerla (`salaActions`: rol, «solo hoy»,
- * `canOperate`). Un atendido que debe copago muestra «Cobrar», solo a quien cobra.
+ * `canOperate`). Un atendido que debe copago muestra «Cobrar», solo a quien cobra ESA fila (`canCollectRow`).
  */
 export function deskPrimary(e: Pick<DeskEntry, "row" | "state" | "salaActions">, viewer: DeskViewer): DeskPrimary {
-  if (e.state === "atendido") return viewer.canCollect && owesCopago(e) ? { kind: "collect", label: "Cobrar" } : null;
+  if (e.state === "atendido") return canCollectRow(viewer, e.row) && owesCopago(e) ? { kind: "collect", label: "Cobrar" } : null;
   const a = primarySalaAction(e.state);
   return a && e.salaActions.includes(a) ? { kind: "action", action: a, label: RECEPTION_ACTION_LABEL[a] } : null;
 }
 
 export type DeskMenuItem =
   | { kind: "action"; action: ReceptionAction; label: string }
-  | { kind: "collect"; label: string } // «Cobrar ahora ($ 6.000)», solo canCollect y no atendido
+  | { kind: "collect"; label: string } // «Cobrar ahora ($ 6.000)», solo si cobra la fila y no atendido
   | { kind: "agenda"; href: string; label: "Ver turno en la agenda" };
 
 /**
@@ -387,7 +418,7 @@ export function deskMenuItems(
   const items: DeskMenuItem[] = e.salaActions
     .filter((a) => a !== primary)
     .map((action) => ({ kind: "action", action, label: RECEPTION_ACTION_LABEL[action] }));
-  if (viewer.canCollect && canCollectEarly(e)) {
+  if (canCollectRow(viewer, e.row) && canCollectEarly(e)) {
     items.push({ kind: "collect", label: `Cobrar ahora (${formatARS(e.row.copagoCents)})` });
   }
   const q = new URLSearchParams({ date: dayKey, view: "timeline", pros: e.row.practitionerId });

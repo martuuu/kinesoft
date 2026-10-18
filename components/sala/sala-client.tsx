@@ -67,18 +67,18 @@ export function SalaClient({
   practitioners: SalaPractitioner[];
   rooms: SalaRoom[];
   /** `deskViewer(...)` de la page; un `SalaViewer` pelado (tests del Tablero) se toma como «no cobra». */
-  viewer: SalaViewer & { canCollect?: boolean };
+  viewer: SalaViewer & { canCollect?: boolean; canCollectAll?: boolean };
   initialGroupBy: SalaGroupBy;
   /** `agendaPrefs.receptionLayout` del server (la page). */
   initialLayout?: ReceptionLayout;
   /** EV2-3c: `caps.has("clinical.read")`. Sin la prop, sin toast «Cargar evolución». */
   canReadClinical?: boolean;
 }) {
-  const { practitionerId, canReception, canOperateAll, canCollect = false } = viewerProp;
+  const { practitionerId, canReception, canOperateAll, canCollect = false, canCollectAll = false } = viewerProp;
   // Identidad estable por valor: `viewer` es dep de `buildBoard`/`deskEntries` en cada render.
   const viewer = useMemo<DeskViewer>(
-    () => ({ practitionerId, canReception, canOperateAll, canCollect }),
-    [practitionerId, canReception, canOperateAll, canCollect]
+    () => ({ practitionerId, canReception, canOperateAll, canCollect, canCollectAll }),
+    [practitionerId, canReception, canOperateAll, canCollect, canCollectAll]
   );
   const onCommitted = useAttendedNoteToast({ practitionerId, canReadClinical });
   const live = useSalaLive({ dayKey, initialNow, initialRows, practitioners, rooms, viewer, onCommitted });

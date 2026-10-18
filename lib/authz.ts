@@ -84,11 +84,19 @@ export async function capabilitiesForActor(actor: Actor): Promise<ReadonlySet<Ca
 /**
  * Reemplazo 1:1 de `capabilitiesFor(await getMembershipRole(actor))` (el patrón que usan las lecturas clínicas:
  * bookings, planes, pacientes, realtime). Igual que ese patrón, el SOPORTE vale como la Secretaria
- * (`capabilitiesFor("ASSISTANT")`, sin `tenant.admin`), no `SUPPORT_CAPS`; para un miembro es
+ * (`capabilitiesFor("ASSISTANT")`, sin `tenant.admin` y, desde T3, sin `billing.*` ni `patients.editAdmin`), no
+ * `SUPPORT_CAPS`; para un miembro es
  * `capabilitiesForMember`, así que un Titular/Admin que no atiende pierde `clinical.read` (H-PL1).
  */
 export async function memberCapabilitiesForActor(actor: Actor): Promise<ReadonlySet<Capability>> {
-  if (actor.support) return capabilitiesFor("ASSISTANT");
+  if (actor.support) {
+    // T3 (C-AS1): desde T3 la Secretaria trae `billing.collect` y `patients.editAdmin`; soporte «vale como la
+    // Secretaria» para LEER, pero no cobra ni edita pacientes de un consultorio ajeno (igual que `SUPPORT_CAPS`).
+    // Sin este filtro lo heredaba por la puerta de las lecturas (bookings, pacientes, realtime).
+    return new Set<Capability>(
+      [...capabilitiesFor("ASSISTANT")].filter((c) => !c.startsWith("billing.") && c !== "patients.editAdmin")
+    );
+  }
   const m = await getMemberAccess(actor);
   return m ? capabilitiesForMember(m) : new Set<Capability>();
 }
@@ -130,8 +138,26 @@ export async function requireTenantAdmin(
 }
 
 /**
- * «Planes y pagos» de la cuenta (PL-1b, C-PL5): el Titular o quien tenga `grantBilling`. Soporte nunca
- * (`SUPPORT_CAPS` no tiene `account.*`).
+ * `tenant.sensitive` o tira (T3, C-AS1): lo DELICADO de Configuración (turnero del consultorio y de profesionales
+ * ajenos, directorio, quién ve la HC, datos del consultorio, equipo, diagnósticos propios, deshabilitar miembros al
+ * cambiar de plan, terminar un acceso de soporte; en T5 cobros online y MP). El Titular, o quien tenga
+ * «Configuración» salvo la Secretaria y Facturación (corte de staff de `capabilitiesForMember`, decisiones 3 y 4 del
+ * 19-oct). Soporte la tiene (`SUPPORT_CAPS`): su barrera de escritura es `SUPPORT_WRITABLE_ACTIONS`.
+ *
+ * Misma forma que `requireTenantAdmin` (devuelve el Actor; `ForbiddenError` con el `message` dado) para que las
+ * actions que hoy usan `requireTenantAdmin` en lo delicado cambien una sola palabra.
+ */
+export async function requireTenantSensitive(
+  // Default que no promete de más: «quien tenga Configuración» engañaría a la Secretaria con el permiso, que acá no pasa.
+  message = "Solo el titular, o un administrador/a o profesional con «Configuración», puede cambiar esto."
+): Promise<Actor> {
+  const { actor } = await requireCapability("tenant.sensitive", message);
+  return actor;
+}
+
+/**
+ * «Planes y pagos» de la cuenta (PL-1b, C-PL5): el Titular o quien tenga `grantBilling`, salvo la Secretaria y
+ * Facturación (T3, corte de staff). Soporte nunca (`SUPPORT_CAPS` no tiene `account.*`).
  */
 export async function requireAccountBilling(
   message = "Solo el titular o quien tenga permiso de «Planes y pagos» puede hacer esto."
