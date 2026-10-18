@@ -39,6 +39,9 @@ import { SwRegister } from "@/components/pwa/sw-register";
  * SV11b: `ArrivalAlerts` va DENTRO del `RealtimeProvider` (usa `useRealtime`) y
  * envuelve todo el workspace para que la Card de Configuración y el menú de la
  * agenda lean `useAlertPrefs()`. Sin canal (`driver:"off"`) no arranca nada.
+ * HF-1b/HF-1c (§22.4): la agenda en vivo pasa a todos los planes (HF-1a saca el gate `salaEspera` del mint), pero los
+ * avisos de llegada y de llamado (con sonido) siguen siendo de la Sala de espera, que solo tienen Clínica y Libre:
+ * `arrivalAlertsLive` exige canal Y módulo. Sin esto, un consultorio en plan Consultorio empezaría a sonar.
  *
  * IAM-3b (decisión 6: un usuario puede trabajar en varios consultorios): `TenantChoiceProvider` publica los
  * consultorios usables de la sesión y el activo, que el layout ya leyó para el gate. Lo leen el selector del
@@ -67,6 +70,11 @@ import { SwRegister } from "@/components/pwa/sw-register";
  * y el alto mínimo es `100dvh` (respaldo `100vh`): en Safari iOS y en la PWA standalone `100vh` no es el alto real.
  * `SwRegister` (MB-0a, C-MB5) registra el service worker de instalación solo con sesión (MB-D5).
  */
+/** HF-1c: ¿arranca el motor de avisos de llegada? Canal realtime y módulo `salaEspera`, los dos. */
+export function arrivalAlertsLive(realtime: Pick<RealtimeBootstrap, "driver">, modules: readonly TenantModule[]): boolean {
+  return realtime.driver !== "off" && modules.includes("salaEspera");
+}
+
 const TweaksPanel = dynamic(() => loadTweaksPanel().then((m) => m.TweaksPanel), {
   ssr: false,
   // Misma caja y lugar que el panel abierto (fija abajo a la derecha): ni salto ni hueco mientras llega.
@@ -142,7 +150,7 @@ export function AppShell({
     <TenantChoiceProvider options={tenantOptions} activeTenantId={activeTenantId} switchTenant={switchTenantAction}>
       <TenantModulesProvider modules={modules} vertical={vertical}>
         <RealtimeProvider bootstrap={realtime}>
-          <ArrivalAlerts viewer={alertViewer} initialPrefs={initialAlertPrefs} live={realtime.driver !== "off"}>
+          <ArrivalAlerts viewer={alertViewer} initialPrefs={initialAlertPrefs} live={arrivalAlertsLive(realtime, modules)}>
             <div
               className={`k-app ${styles.shell}`}
               style={{

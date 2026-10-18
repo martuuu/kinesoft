@@ -27,8 +27,13 @@ export type DriverStatus = "idle" | "connecting" | "live" | "reconnecting" | "of
  */
 export type ConnectionState = "live" | "reconnecting" | "polling" | "off";
 
-/** Por qué se le avisa al driver que pruebe ya (eventos del browser o el usuario). */
-export type NudgeReason = "visible" | "online" | "manual";
+/**
+ * Por qué se le avisa al driver que pruebe ya (eventos del browser o el usuario).
+ * HF-1b: `reconnect` es el botón «Reconectar» del detalle del indicador. Es el único que reintenta YA con el canal
+ * estacionado por un rechazo permanente (ver `RealtimeDiag.permanent`); `manual` es el «Actualizar» de la agenda, que
+ * re-pide datos y no tiene por qué gastar un mint por clic.
+ */
+export type NudgeReason = "visible" | "online" | "manual" | "reconnect";
 
 /** Qué dispara (o no) un re-pedido completo de la página. Ver `shouldResync`. */
 export type ResyncReason = "connect" | "reconnect" | "visible" | "online" | "manual";
@@ -45,7 +50,59 @@ export type ResyncReason = "connect" | "reconnect" | "visible" | "online" | "man
  * `reconnecting` se emite UNA VEZ POR FALLO (no se deduplica) para que el consumer
  * vea crecer `failures`; los demás estados se emiten solo cuando cambian.
  */
-export type StatusInfo = { failures: number; reconnected: boolean };
+export type StatusInfo = {
+  failures: number;
+  reconnected: boolean;
+  /** HF-1b: por qué falló el último intento (solo en `reconnecting`). Aditivo: los drivers viejos no lo mandan. */
+  diag?: RealtimeDiag;
+};
+
+/**
+ * HF-1b (H-RT1): en qué paso se cortó la conexión. En orden: el bootstrap del layout trae driver y URL, se baja el
+ * chunk del driver (`import`), se pide el token (`mint`), se abre el socket y se une el canal privado (`join`). El
+ * detalle del indicador los pinta ✓/✗ en este orden.
+ */
+export type RealtimeDiagStep = "bootstrap" | "import" | "mint" | "socket" | "join";
+
+/**
+ * Código estable del fallo (va al beacon y al copy del indicador; el `reason` es el texto técnico).
+ * - `auth`: el server de Realtime rechazó el JWT o el canal (CHANNEL_ERROR con «Unauthorized»/«JWT»…).
+ * - `no_access` · `session` · `rate_limited` · `off` · `unconfigured` · `server_error`: respuestas `{ok:false}` del
+ *   mint (sin el módulo o el permiso, sesión vencida, rate limit, driver apagado en el server, sin secreto, error).
+ * - `stale_build`: deploy nuevo con la pestaña (o la PWA) vieja: el chunk ya no existe o la action del token cambió de
+ *   id. No se arregla reintentando: «Hay una versión nueva · Recargá».
+ * - `network` · `timeout` · `closed` · `channel_error`: transitorios del transporte.
+ * - `no_transport`: el bootstrap pidió un driver pero falta la URL o la clave (config del deploy).
+ */
+export type RealtimeDiagCode =
+  | "auth"
+  | "no_access"
+  | "session"
+  | "rate_limited"
+  | "off"
+  | "unconfigured"
+  | "server_error"
+  | "stale_build"
+  | "network"
+  | "timeout"
+  | "closed"
+  | "channel_error"
+  | "no_transport";
+
+export type RealtimeDiag = {
+  step: RealtimeDiagStep;
+  code: RealtimeDiagCode;
+  /** Texto técnico recortado a 160 caracteres y sin nada con forma de JWT (`clipDiagReason`). */
+  reason: string;
+  /**
+   * Reintentar en seguida no lo arregla (rechazo de auth, mint `{ok:false}`, versión vieja). Después de
+   * `PERMANENT_FAILURES_TO_PARK` seguidos el driver se estaciona: reintenta cada 5 min, o ante `visible`/`online` si ya
+   * pasaron 5 min, o ya con «Reconectar».
+   */
+  permanent: boolean;
+  /** ms epoch del fallo. */
+  at: number;
+};
 
 /**
  * Transporte de mensajes del canal de la agenda. Solo ESCUCHA: no hay `send` ni
@@ -76,8 +133,13 @@ export type Timers = {
   clearTimeout(handle: unknown): void;
 };
 
-/** Token del canal tal como lo devuelve `mintRealtimeToken()` (`data`); `null` = no hay. */
-export type RealtimeTokenGetter = () => Promise<{ token: string; expiresAt: string } | null>;
+/**
+ * Token del canal tal como lo devuelve `mintRealtimeToken()` (`data`); `null` = no hay (red: transitorio).
+ * HF-1b: un `{ code, reason }` es el motivo del `{ok:false}` (o de la action que ya no existe) ya clasificado; antes
+ * se perdía y el driver re-minteaba en bucle hasta agotar el rate limit.
+ */
+export type RealtimeTokenFailure = { code: RealtimeDiagCode; reason: string };
+export type RealtimeTokenGetter = () => Promise<{ token: string; expiresAt: string } | RealtimeTokenFailure | null>;
 
 /** Dependencias comunes de los drivers (todas opcionales; default = las del browser). */
 export type DriverDeps = {

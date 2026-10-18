@@ -254,7 +254,7 @@ describe("createSupabaseDriver", () => {
 
     first.emitStatus("CHANNEL_ERROR");
     await settle();
-    expect(status.at(-1)).toEqual({ s: "reconnecting", info: { failures: 1, reconnected: false } });
+    expect(status.at(-1)).toMatchObject({ s: "reconnecting", info: { failures: 1, reconnected: false } });
     expect(first.removed).toBe(true);
     // El CLOSED que dispara removeChannel no cuenta como otra caída.
     expect(status.filter((x) => x.s === "reconnecting")).toHaveLength(1);
@@ -323,7 +323,7 @@ describe("createSupabaseDriver", () => {
     await driver.connect();
     await settle();
     expect(rt.reg.channels).toHaveLength(0);
-    expect(status.at(-1)).toEqual({ s: "reconnecting", info: { failures: 1, reconnected: false } });
+    expect(status.at(-1)).toMatchObject({ s: "reconnecting", info: { failures: 1, reconnected: false } });
     tok.fail = false;
     vi.advanceTimersByTime(1_000);
     await settle();
@@ -569,7 +569,7 @@ describe("createLocalDriver", () => {
     first.open();
     first.error();
     expect(first.closed).toBe(true);
-    expect(status.at(-1)).toEqual({ s: "reconnecting", info: { failures: 1, reconnected: false } });
+    expect(status.at(-1)).toMatchObject({ s: "reconnecting", info: { failures: 1, reconnected: false } });
 
     vi.advanceTimersByTime(999);
     expect(es.reg.instances).toHaveLength(1);

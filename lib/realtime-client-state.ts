@@ -10,6 +10,9 @@ import { parseRealtimeAgendaMessage, type RealtimeAgendaMessage } from "@/lib/re
 import type {
   ConnectionState,
   DriverStatus,
+  RealtimeDiag,
+  RealtimeDiagCode,
+  RealtimeDiagStep,
   ResyncReason,
   StatusInfo,
   Timers,
@@ -30,6 +33,18 @@ export const TOKEN_REFRESH_RATIO = 0.8;
  * limit del mint es 30 cada 10 min por usuario y el piso deja 20 (1 cada 30 s).
  */
 export const TOKEN_REFRESH_MIN_MS = 30_000;
+/**
+ * HF-1b (H-RT1): fallos permanentes seguidos (rechazo de auth, mint `{ok:false}`) antes de estacionar el driver.
+ * Tres y no uno: un CHANNEL_ERROR suelto puede ser un token recién vencido por un reloj corrido, y el re-mint lo arregla.
+ */
+export const PERMANENT_FAILURES_TO_PARK = 3;
+/**
+ * Estacionado, un intento cada 5 min (o ante `visible`/`online` si ya pasaron 5 min). Con 3 intentos de entrada
+ * quedan ≤4 mints cada 10 min por pestaña; el bucle de antes (backoff 1…30 s) pedía ~24 y agotaba el rate limit de 30.
+ */
+export const PARKED_RETRY_MS = 5 * 60_000;
+/** Tope del `reason` del diagnóstico: entra en el `title` del indicador y en el beacon sin arrastrar un stack. */
+export const DIAG_REASON_MAX = 160;
 
 /** Timers del host leídos EN CADA LLAMADA (no al cargar el módulo): así `vi.useFakeTimers` los reemplaza. */
 export const defaultTimers: Timers = {
@@ -190,6 +205,87 @@ export function deriveConnectionState(
   if (driverStatus === "live") return "live";
   if (consecutiveFailures >= 2) return "polling";
   return "reconnecting";
+}
+
+// ─── HF-1b · diagnóstico ─────────────────────────────────────────────────────
+
+const JWT_LIKE = /eyJ[\w-]{4,}\.[\w-]{4,}\.[\w-]*/g;
+
+/** Texto técnico → ≤160 caracteres, una línea, sin nada con forma de JWT (el token nunca viaja al beacon). */
+export function clipDiagReason(raw: unknown): string {
+  let s = "";
+  try {
+    s = raw instanceof Error ? raw.message : typeof raw === "string" ? raw : raw == null ? "" : String(raw);
+  } catch {
+    s = "";
+  }
+  return s.replace(JWT_LIKE, "[jwt]").replace(/\s+/g, " ").trim().slice(0, DIAG_REASON_MAX);
+}
+
+/** Códigos que reintentar en seguida no arregla. */
+const PERMANENT_CODES: ReadonlySet<RealtimeDiagCode> = new Set<RealtimeDiagCode>([
+  "auth",
+  "no_access",
+  "session",
+  "rate_limited",
+  "off",
+  "unconfigured",
+  "server_error",
+  "stale_build",
+]);
+
+export function isPermanentDiagCode(code: RealtimeDiagCode): boolean {
+  return PERMANENT_CODES.has(code);
+}
+
+export function makeDiag(step: RealtimeDiagStep, code: RealtimeDiagCode, reason: unknown, at: number): RealtimeDiag {
+  return { step, code, reason: clipDiagReason(reason), permanent: isPermanentDiagCode(code), at };
+}
+
+/**
+ * `{ok:false, error}` del mint → código. Los strings salen de `lib/realtime-token.ts` (literales `realtime-*`, el
+ * «Tu sesión venció.» y el `rateLimitedMessage`); cualquier otro es un `ForbiddenError` (sin módulo, sin permiso).
+ * Todos son permanentes (§22.4 HF-1b): la respuesta es del server, no de la red.
+ */
+export function classifyMintError(error: unknown): { code: RealtimeDiagCode; reason: string } {
+  const reason = clipDiagReason(error);
+  if (reason === "realtime-off") return { code: "off", reason };
+  if (reason === "realtime-unconfigured") return { code: "unconfigured", reason };
+  if (reason === "realtime-error") return { code: "server_error", reason };
+  if (/sesi[oó]n venci/i.test(reason)) return { code: "session", reason };
+  if (/demasiados intentos/i.test(reason)) return { code: "rate_limited", reason };
+  return { code: "no_access", reason };
+}
+
+/**
+ * La action del token TIRÓ (por contrato no tira nunca, ver `mintRealtimeToken`): o la red, o la action ya no existe
+ * en el server. Next 14 responde «Failed to find Server Action… older or newer deployment» (en prod el mensaje puede
+ * llegar genérico), y un resultado que no es `{ok}` es una respuesta que no vino de la action. Red → `null`
+ * (transitorio); todo lo demás → versión nueva.
+ */
+export function classifyMintThrow(err: unknown): { code: RealtimeDiagCode; reason: string } | null {
+  const reason = clipDiagReason(err);
+  const name = err instanceof Error ? err.name : "";
+  if (name === "TypeError" && /fetch|network|load failed/i.test(reason)) return null;
+  if (name === "AbortError") return null;
+  return { code: "stale_build", reason: reason || "La action del token no respondió" };
+}
+
+const AUTH_REASON = /jwt|unauthori[sz]ed|permission|forbidden|token|signature|claim|expired|not allowed|invalid.*key/i;
+
+/**
+ * Estado de `channel.subscribe` → diagnóstico. CHANNEL_ERROR con un motivo de auth (lo que deja ver H-RT1: firma con
+ * un secreto mal recortado) es permanente; sin motivo, o con otro, es un error del canal y sigue el backoff corto.
+ */
+export function classifyJoinError(
+  status: "TIMED_OUT" | "CLOSED" | "CHANNEL_ERROR",
+  err?: unknown,
+  at: number = Date.now(),
+): RealtimeDiag {
+  if (status === "TIMED_OUT") return makeDiag("join", "timeout", err ?? "El join no respondió a tiempo", at);
+  if (status === "CLOSED") return makeDiag("socket", "closed", err ?? "El socket se cerró", at);
+  const reason = clipDiagReason(err);
+  return makeDiag("join", AUTH_REASON.test(reason) ? "auth" : "channel_error", reason || "CHANNEL_ERROR", at);
 }
 
 /**

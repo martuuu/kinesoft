@@ -27,11 +27,26 @@
  * - Toda la lógica vive en `createRealtimeHub` (sin React, sin DOM): los render
  *   tests corren sin jsdom (no hay effects), así que el hub se testea directo con
  *   un driver fake y timers fake; el provider es solo cableado de eventos del DOM.
+ *
+ * HF-1b (§22.2 H-RT1/H-RT2):
+ * - `diag` publica el último fallo del hub (paso, código, motivo) para el indicador y su «Ver detalle», y
+ *   `reconnect()` es el botón «Reconectar» (reintenta aunque el driver esté estacionado por un rechazo de auth).
+ * - Cada código de fallo sale UNA vez por carga de página al beacon de errores del cliente (`createDiagBeacon`): sin
+ *   eso, en prod el motivo solo llegaba a un `devWarn` que no hace nada.
+ * - El `import()` del hub va con un reintento (`importWithRetry`); si tampoco entra, es un deploy nuevo y el
+ *   indicador pide recargar.
+ * - Con `driver:"off"` ANTES no había ni polling (el comentario de acá decía lo contrario) y la agenda quedaba
+ *   congelada hasta navegar. Ahora `createVisiblePoller` avisa `"poll"` cada 60 s solo con la pestaña visible (y
+ *   `"visible"` al volver a verla), el mismo resync que dispara el hub. Vive acá y no en el hub porque con `off` el
+ *   hub no se descarga: son ~30 líneas sin dependencias en el first-load.
  */
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 // Solo tipos: `import type` se borra al compilar y no arrastra el módulo al bundle.
-import type { ConnectionState } from "@/lib/realtime-client-types";
+import type { ConnectionState, RealtimeDiag } from "@/lib/realtime-client-types";
 import type { RealtimeAgendaMessage, RealtimeBootstrap } from "@/lib/realtime-events";
+// Sin dependencias las dos (las cuida su cabecera): son lo único de valor que este archivo suma al first-load.
+import { importWithRetry, isStaleBuildError } from "@/lib/chunk-retry";
+import { reportClientError, type ClientErrorKind } from "@/lib/client-error-report";
 
 /**
  * Por qué hay que re-pedir. `"connect"` no está: la primera conexión llega con la
@@ -47,6 +62,10 @@ export type RealtimeContextValue = {
   subscribe(fn: RealtimeBatchListener): () => void;
   onResync(fn: RealtimeResyncListener): () => void;
   resync(): void;
+  /** HF-1b: último fallo del canal (`null` = en vivo, apagado o sin fallos). */
+  diag: RealtimeDiag | null;
+  /** HF-1b: «Reconectar»: reintenta ya (aunque el canal esté estacionado) y re-pide los datos. */
+  reconnect(): void;
 };
 
 /**
@@ -58,6 +77,99 @@ export type RealtimeContextValue = {
  */
 export function initialRealtimeState(bootstrap: RealtimeBootstrap): ConnectionState {
   return bootstrap.driver === "off" ? "off" : "reconnecting";
+}
+
+/** Mismo valor que `POLL_INTERVAL_MS` de `lib/realtime-client-state` (importarlo traería ese módulo al first-load). */
+export const OFF_POLL_INTERVAL_MS = 60_000;
+
+type PollTimers = { setTimeout(fn: () => void, ms: number): unknown; clearTimeout(h: unknown): void };
+const hostTimers: PollTimers = {
+  setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms),
+  clearTimeout: (h) => globalThis.clearTimeout(h as ReturnType<typeof setTimeout>),
+};
+
+/**
+ * HF-1b (H-RT2): polling de respaldo SIN hub (driver `off`, o el chunk del hub que no cargó). Avisa `"poll"` cada
+ * `intervalMs` mientras la pestaña está visible; oculta, no pide nada (una pestaña olvidada no martilla el server) y al
+ * volver a verse avisa `"visible"` en seguida y re-arranca la cuenta. Puro (timers e `isVisible` inyectables): los
+ * render tests no corren effects y esto se testea directo.
+ */
+export function createVisiblePoller(o: {
+  onPoll: (reason: RealtimeResyncReason) => void;
+  isVisible: () => boolean;
+  intervalMs?: number;
+  timers?: PollTimers;
+}) {
+  const timers = o.timers ?? hostTimers;
+  const ms = o.intervalMs ?? OFF_POLL_INTERVAL_MS;
+  let handle: unknown = null;
+  let running = false;
+  const clear = () => {
+    if (handle !== null) timers.clearTimeout(handle);
+    handle = null;
+  };
+  const arm = () => {
+    clear();
+    if (!running || !o.isVisible()) return;
+    handle = timers.setTimeout(() => {
+      handle = null;
+      if (!running) return;
+      if (o.isVisible()) o.onPoll("poll");
+      arm();
+    }, ms);
+  };
+  return {
+    start() {
+      running = true;
+      arm();
+    },
+    stop() {
+      running = false;
+      clear();
+    },
+    handleVisibility(visible: boolean) {
+      if (!running) return;
+      if (!visible) return clear();
+      o.onPoll("visible");
+      arm();
+    },
+  };
+}
+
+/**
+ * HF-1b: un beacon por CÓDIGO y por carga de página (el `Set` vive en el módulo). Un canal estacionado repite el mismo
+ * diagnóstico cada 5 min y el endpoint tiene rate limit por IP (20/min): con esto un consultorio con 6 pestañas manda
+ * a lo sumo un evento por tipo de fallo y pestaña. El mensaje lleva paso, código y motivo (ya recortado y sin JWT).
+ */
+export function createDiagBeacon(send: (err: Error) => void) {
+  const seen = new Set<string>();
+  return (d: RealtimeDiag | null) => {
+    if (!d || seen.has(d.code)) return;
+    seen.add(d.code);
+    const err = new Error(`realtime ${d.step}/${d.code}: ${d.reason}`);
+    err.name = "RealtimeDiag";
+    try {
+      send(err);
+    } catch {
+      // El beacon nunca rompe la pantalla.
+    }
+  };
+}
+
+// HANDOFF HF-1a: `"realtime"` en `CLIENT_ERROR_KINDS`. Hasta que esté, el server responde 400 y no pasa nada más.
+const REALTIME_KIND = "realtime" as ClientErrorKind;
+const beaconDiag = createDiagBeacon((err) => reportClientError(err, { kind: REALTIME_KIND }));
+
+/** Diagnóstico del hub que no cargó (lo arma el provider: sin hub no hay `makeDiag`). */
+function hubImportDiag(err: unknown): RealtimeDiag {
+  const raw = err instanceof Error ? err.message : "";
+  return {
+    step: "import",
+    code: isStaleBuildError(err) ? "stale_build" : "network",
+    reason: raw.replace(/\s+/g, " ").slice(0, 160),
+    permanent: isStaleBuildError(err),
+    at: Date.now(),
+  };
 }
 
 /** Entrega a cada listener en su try: un consumer roto no corta a los demás. */
@@ -84,6 +196,8 @@ const OFF_VALUE: RealtimeContextValue = {
   subscribe: () => noopUnsub,
   onResync: () => noopUnsub,
   resync: () => {},
+  diag: null,
+  reconnect: () => {},
 };
 
 const RealtimeContext = createContext<RealtimeContextValue>(OFF_VALUE);
@@ -91,6 +205,7 @@ const RealtimeContext = createContext<RealtimeContextValue>(OFF_VALUE);
 /** Lo que el provider necesita del hub cargado (subconjunto de `RealtimeHub`). */
 type LoadedHub = {
   resync(): void;
+  reconnect(): void;
 };
 
 export function RealtimeProvider({
@@ -130,29 +245,54 @@ export function RealtimeProvider({
         if (b.hub) b.hub.resync();
         else fanOut(resync, "manual" as RealtimeResyncReason);
       },
+      requestReconnect() {
+        if (b.hub) b.hub.reconnect();
+        else fanOut(resync, "manual" as RealtimeResyncReason);
+      },
     };
     return b;
   });
   const [state, setState] = useState<ConnectionState>(() => initialRealtimeState(bootstrap));
+  const [diag, setDiag] = useState<RealtimeDiag | null>(null);
 
   const { driver, url, anonKey, tenantId } = bootstrap;
   // Dependencias primitivas: un `router.refresh()` re-renderiza el layout y trae
   // otro objeto bootstrap igual; reconectar por identidad sería un socket nuevo por refresh.
   useEffect(() => {
+    const isVisible = () => document.visibilityState === "visible";
+    /** Polling sin hub (H-RT2): devuelve su cleanup. */
+    const startPoller = () => {
+      const poller = createVisiblePoller({ onPoll: (r) => fanOut(bridge.resync, r), isVisible });
+      const onVis = () => poller.handleVisibility(isVisible());
+      document.addEventListener("visibilitychange", onVis);
+      poller.start();
+      return () => {
+        document.removeEventListener("visibilitychange", onVis);
+        poller.stop();
+      };
+    };
+
     if (driver === "off") {
+      // «off» = sin indicador (no hay nada «en vivo» que prometer), pero la agenda se refresca sola cada 60 s.
       setState("off");
-      return;
+      setDiag(null);
+      return startPoller();
     }
     // Primer paint de un driver vivo: «reconnecting» hasta que el hub hable.
     setState(initialRealtimeState({ driver, url, anonKey, tenantId }));
+    setDiag(null);
     let cancelled = false;
     let cleanup: (() => void) | null = null;
 
-    import("@/components/realtime/realtime-hub").then(
+    importWithRetry(() => import("@/components/realtime/realtime-hub")).then(
       ({ createRealtimeHub }) => {
         if (cancelled) return;
         const hub = createRealtimeHub();
         const offState = hub.onState(setState);
+        const offDiag = hub.onDiag((d) => {
+          setDiag(d);
+          beaconDiag(d);
+        });
         const offBatch = hub.subscribe((msgs) => fanOut(bridge.batch, msgs));
         const offResync = hub.onResync((reason) => fanOut(bridge.resync, reason));
         const stop = hub.start({ driver, url, anonKey, tenantId });
@@ -171,19 +311,21 @@ export function RealtimeProvider({
           window.removeEventListener("offline", onOffline);
           stop();
           offState();
+          offDiag();
           offBatch();
           offResync();
           if (bridge.hub === hub) bridge.hub = null;
         };
       },
-      () => {
-        // Chunk que no cargó (deploy nuevo, red): mismo criterio que un driver que
-        // no carga en el hub — sin canal, polling de 60 s (la sala no se congela).
-        // 60 s literal = `POLL_INTERVAL_MS`: importarlo traería el módulo que no cargó.
+      (err: unknown) => {
+        // Chunk que no cargó ni al reintento (deploy nuevo): mismo criterio que un driver que no carga en el hub —
+        // sin canal, polling de 60 s con la pestaña visible (la sala no se congela) y el indicador pide recargar.
         if (cancelled) return;
         setState("polling");
-        const id = setInterval(() => fanOut(bridge.resync, "poll" as RealtimeResyncReason), 60_000);
-        cleanup = () => clearInterval(id);
+        const d = hubImportDiag(err);
+        setDiag(d);
+        beaconDiag(d);
+        cleanup = startPoller();
       },
     );
 
@@ -200,8 +342,10 @@ export function RealtimeProvider({
       subscribe: bridge.subscribe,
       onResync: bridge.onResync,
       resync: bridge.requestResync,
+      diag,
+      reconnect: bridge.requestReconnect,
     }),
-    [bridge, state],
+    [bridge, state, diag],
   );
 
   return <RealtimeContext.Provider value={value}>{children}</RealtimeContext.Provider>;

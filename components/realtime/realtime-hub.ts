@@ -13,16 +13,32 @@
  * entran por otro `import()` dentro de `defaultLoadDriver`.
  *
  * Nunca se loguea nada del token: el `getToken` solo lo pasa al driver.
+ *
+ * HF-1b (§22.2 H-RT1): el hub guarda el último diagnóstico (`getDiag`/`onDiag`: paso, código y motivo ≤160) y lo
+ * limpia al quedar en vivo. Antes el motivo del mint fallido y el `err` del canal solo iban a `devWarn` (no-op en
+ * prod) y desde afuera era imposible saber por qué una cuenta nunca pasaba a «En vivo». El provider lo publica al
+ * indicador y lo manda una vez por código al beacon de errores del cliente.
  */
 import {
+  classifyMintError,
+  classifyMintThrow,
   createCoalescer,
   defaultTimers,
   deriveConnectionState,
+  makeDiag,
   nextPollDelay,
   shouldResync,
   COALESCE_WINDOW_MS,
 } from "@/lib/realtime-client-state";
-import type { ConnectionState, DriverStatus, RealtimeDriver, Timers } from "@/lib/realtime-client-types";
+import type {
+  ConnectionState,
+  DriverStatus,
+  RealtimeDiag,
+  RealtimeDriver,
+  RealtimeTokenGetter,
+  Timers,
+} from "@/lib/realtime-client-types";
+import { importWithRetry, isStaleBuildError } from "@/lib/chunk-retry";
 import type { RealtimeBootstrap } from "@/lib/realtime-events";
 import { mintRealtimeToken } from "@/lib/realtime-token";
 import type {
@@ -45,6 +61,11 @@ export type RealtimeHub = {
   onState(fn: (s: ConnectionState) => void): () => void;
   subscribe(fn: RealtimeBatchListener): () => void;
   onResync(fn: RealtimeResyncListener): () => void;
+  /** HF-1b: último fallo de la sesión; `null` en vivo, sin sesión o antes del primer fallo. */
+  getDiag(): RealtimeDiag | null;
+  onDiag(fn: (d: RealtimeDiag | null) => void): () => void;
+  /** HF-1b: botón «Reconectar» del detalle: reintenta ya aunque el driver esté estacionado, y re-pide los datos. */
+  reconnect(): void;
   /** Resync manual: descarga lo pendiente del coalescer y pide re-pedir todo. */
   resync(): void;
   /**
@@ -65,25 +86,37 @@ function defaultIsOnline(): boolean | undefined {
     : undefined;
 }
 
-/** Token del canal: la action devuelve `{ok:false}` con driver ≠ supabase o sin permiso. */
-async function getRealtimeToken() {
+/**
+ * Token del canal. HF-1b: el `{ok:false}` ya no se aplana a `null` — vuelve clasificado (`classifyMintError`) para que
+ * el driver lo cuente como permanente y el indicador diga por qué. Que la action TIRE (por contrato no tira) es red
+ * (`null`, transitorio) o una action que ya no existe en el server (`stale_build`: deploy nuevo con la PWA vieja).
+ */
+export const getRealtimeToken: RealtimeTokenGetter = async () => {
+  let r: unknown;
   try {
-    const r = await mintRealtimeToken();
-    return r.ok ? r.data : null;
-  } catch {
-    // Red caída o action rota: el driver lo trata como «no hay token» y reintenta con backoff.
-    return null;
+    r = await mintRealtimeToken();
+  } catch (err) {
+    return classifyMintThrow(err);
   }
-}
+  // Una respuesta sin `ok` no salió de la action (Next devolvió otra cosa: id de action de otro build).
+  if (!r || typeof r !== "object" || !("ok" in r)) {
+    return { code: "stale_build", reason: "La action del token no respondió" };
+  }
+  const res = r as Awaited<ReturnType<typeof mintRealtimeToken>>;
+  return res.ok ? res.data : classifyMintError(res.error);
+};
 
-/** Import dinámico: ni los drivers ni realtime-js entran al first-load (§18.10 punto 7). */
+/**
+ * Import dinámico: ni los drivers ni realtime-js entran al first-load (§18.10 punto 7). HF-1b: con un reintento
+ * (`importWithRetry`); si el chunk tampoco está a los 5 s, tira `StaleBuildError` y el hub lo marca versión nueva.
+ */
 export const defaultLoadDriver: DriverLoader = async (b) => {
   if (b.driver === "local") {
-    const { createLocalDriver } = await import("@/lib/realtime-client-local");
+    const { createLocalDriver } = await importWithRetry(() => import("@/lib/realtime-client-local"));
     return createLocalDriver();
   }
   if (b.driver === "supabase" && b.url && b.anonKey) {
-    const { createSupabaseDriver } = await import("@/lib/realtime-client-supabase");
+    const { createSupabaseDriver } = await importWithRetry(() => import("@/lib/realtime-client-supabase"));
     return createSupabaseDriver({
       url: b.url,
       anonKey: b.anonKey,
@@ -101,6 +134,8 @@ export function createRealtimeHub(opts: RealtimeHubOptions = {}): RealtimeHub {
   const batchListeners = new Set<RealtimeBatchListener>();
   const resyncListeners = new Set<RealtimeResyncListener>();
   const stateListeners = new Set<(s: ConnectionState) => void>();
+  const diagListeners = new Set<(d: RealtimeDiag | null) => void>();
+  let diag: RealtimeDiag | null = null;
 
   let state: ConnectionState = "off";
   // Sesión vigente (una por `start`). Los callbacks de una sesión vieja se ignoran
@@ -137,6 +172,18 @@ export function createRealtimeHub(opts: RealtimeHubOptions = {}): RealtimeHub {
       }
     }
     schedulePoll();
+  }
+
+  function setDiag(next: RealtimeDiag | null) {
+    if (next === diag) return;
+    diag = next;
+    for (const fn of Array.from(diagListeners)) {
+      try {
+        fn(next);
+      } catch {
+        // idem
+      }
+    }
   }
 
   function recompute() {
@@ -186,6 +233,7 @@ export function createRealtimeHub(opts: RealtimeHubOptions = {}): RealtimeHub {
     failures = 0;
     coalescer.cancel();
     clearPoll();
+    setDiag(null);
     if (d) {
       try {
         d.close();
@@ -221,6 +269,18 @@ export function createRealtimeHub(opts: RealtimeHubOptions = {}): RealtimeHub {
       if (shouldResync("manual")) emitResync("manual");
       driver?.nudge("manual");
     },
+    getDiag: () => diag,
+    onDiag(fn) {
+      diagListeners.add(fn);
+      return () => {
+        diagListeners.delete(fn);
+      };
+    },
+    reconnect() {
+      coalescer.flush();
+      if (shouldResync("manual")) emitResync("manual");
+      driver?.nudge("reconnect");
+    },
 
     start(bootstrap, loadDriver = defaultLoadDriver) {
       if (session) stopSession();
@@ -233,16 +293,23 @@ export function createRealtimeHub(opts: RealtimeHubOptions = {}): RealtimeHub {
 
       void (async () => {
         let d: RealtimeDriver | null = null;
+        let loadErr: unknown = null;
         try {
           d = await loadDriver(bootstrap);
-        } catch {
+        } catch (err) {
           d = null; // chunk que no cargó (deploy nuevo, red): queda en polling/off
+          loadErr = err ?? new Error("import");
         }
         if (session !== mine) {
           d?.close();
           return;
         }
         if (!d) {
+          setDiag(
+            loadErr
+              ? makeDiag("import", isStaleBuildError(loadErr) ? "stale_build" : "network", loadErr, Date.now())
+              : makeDiag("bootstrap", "no_transport", `driver ${bootstrap.driver} sin URL o clave`, Date.now()),
+          );
           // Sin transporte: «off» apagaría el polling, y la sala quedaría congelada.
           // Se trata como un canal caído (2 fallos) → polling de 60 s.
           driverStatus = "reconnecting";
@@ -258,6 +325,8 @@ export function createRealtimeHub(opts: RealtimeHubOptions = {}): RealtimeHub {
           if (session !== mine) return;
           driverStatus = status;
           failures = info?.failures ?? (status === "live" ? 0 : failures);
+          if (status === "live") setDiag(null);
+          else if (info?.diag) setDiag(info.diag);
           recompute();
           // Mientras el canal no estuvo se pudieron perder mensajes: re-pedir todo.
           if (status === "live" && info?.reconnected && shouldResync("reconnect")) {

@@ -25,11 +25,20 @@
  *   dos reconexiones en cadena.
  * - Nunca tira: todo error termina en `reconnecting` + backoff, y los logs son
  *   `console.warn` solo en dev, con un código fijo y nunca el token.
+ * - HF-1b (H-RT1): cada fallo viaja como `StatusInfo.diag` (paso, código, motivo ≤160): en prod el `devWarn` es no-op
+ *   y el motivo se perdía. Un rechazo permanente (auth del canal, mint `{ok:false}`, action vieja) cuenta aparte: a
+ *   los `PERMANENT_FAILURES_TO_PARK` seguidos el driver se ESTACIONA — un intento cada `PARKED_RETRY_MS`, un
+ *   `visible`/`online` solo si ya pasó ese plazo, y «Reconectar» (`nudge("reconnect")`) ya. Antes el backoff re-minteaba
+ *   cada ≤30 s para siempre y agotaba el rate limit del mint (30 cada 10 min, compartido con las otras pestañas).
  */
 import { REALTIME_EVENT, topicFor } from "@/lib/realtime-constants";
 import {
+  PARKED_RETRY_MS,
+  PERMANENT_FAILURES_TO_PARK,
   TOKEN_REFRESH_MIN_MS,
   backoffDelay,
+  classifyJoinError,
+  makeDiag,
   createDriverEvents,
   defaultTimers,
   devWarn,
@@ -38,9 +47,12 @@ import {
 } from "@/lib/realtime-client-state";
 import type {
   DriverDeps,
+  RealtimeDiag,
   RealtimeDriver,
+  RealtimeTokenFailure,
   RealtimeTokenGetter,
 } from "@/lib/realtime-client-types";
+import { importWithRetry, isStaleBuildError } from "@/lib/chunk-retry";
 
 // ─── Formas mínimas del SDK (lo único que el driver usa) ─────────────────────
 
@@ -117,25 +129,40 @@ export function createSupabaseDriver(opts: SupabaseDriverOptions): RealtimeDrive
   let refreshTimer: unknown = null;
   let refreshAt: number | null = null;
   let refreshing = false;
+  /** HF-1b: fallos permanentes SEGUIDOS (se cortan con un transitorio o con `live`). */
+  let permanentFailures = 0;
+  /** ms epoch del último `attempt()`: estacionado, un `visible`/`online` solo reintenta si ya pasó `PARKED_RETRY_MS`. */
+  let lastAttemptAt = 0;
+
+  const isParked = () => permanentFailures >= PERMANENT_FAILURES_TO_PARK;
 
   const isStale = (myGen: number) => closed || myGen !== gen;
 
   async function loadCtor(): Promise<RealtimeClientCtor> {
     if (deps?.RealtimeClient) return deps.RealtimeClient;
-    const mod = await import("@supabase/realtime-js");
+    // HF-1b: un reintento a los 5 s; si el chunk tampoco está, es un deploy nuevo (`StaleBuildError`). El
+    // `async () => await import(` es a propósito: el guard (e) de §18.9 busca ese literal para saber que el driver carga
+    // el SDK de forma dinámica.
+    const mod = await importWithRetry(async () => await import("@supabase/realtime-js"));
     return mod.RealtimeClient as unknown as RealtimeClientCtor;
   }
 
-  async function mint(): Promise<Token | null> {
+  /** Token, o el motivo por el que no hay (HF-1b: `null` del getter = red, transitorio). */
+  async function mint(): Promise<Token | RealtimeTokenFailure> {
     try {
       const t = await getToken();
-      if (!t || typeof t.token !== "string" || t.token.length === 0) return null;
+      if (t && "code" in t) return t;
+      if (!t || typeof t.token !== "string" || t.token.length === 0) {
+        return { code: "network", reason: "No se pudo pedir el token" };
+      }
       return { token: t.token, expiresAt: t.expiresAt };
     } catch (err) {
       devWarn("realtime.token_failed", err);
-      return null;
+      return { code: "network", reason: err instanceof Error ? err.message : "No se pudo pedir el token" };
     }
   }
+
+  const isToken = (t: Token | RealtimeTokenFailure): t is Token => "token" in t;
 
   function clearRetry() {
     if (retryTimer !== null) timers.clearTimeout(retryTimer);
@@ -165,10 +192,12 @@ export function createSupabaseDriver(opts: SupabaseDriverOptions): RealtimeDrive
     try {
       const t = await mint();
       if (closed) return;
-      if (!t) {
+      if (!isToken(t)) {
         // Se conserva el token actual; si vence, el server cierra el canal y entra
-        // por el camino de reconexión.
-        scheduleRefresh(now() + TOKEN_REFRESH_MIN_MS);
+        // por el camino de reconexión. HF-1b: un rechazo permanente (sesión vencida, rate limit) no se re-pide cada
+        // 30 s (eran 20 mints cada 10 min por pestaña): espera lo mismo que un canal estacionado.
+        const d = makeDiag("mint", t.code, t.reason, now());
+        scheduleRefresh(now() + (d.permanent ? PARKED_RETRY_MS : TOKEN_REFRESH_MIN_MS));
         return;
       }
       current = t;
@@ -193,30 +222,44 @@ export function createSupabaseDriver(opts: SupabaseDriverOptions): RealtimeDrive
     }
   }
 
-  function fail(myGen: number) {
+  function fail(myGen: number, diag: RealtimeDiag) {
     if (isStale(myGen)) return;
     // Invalida primero: el CLOSED que dispara removeChannel ya no es de esta generación.
     gen++;
     failures++;
     dropped = true;
+    // Una versión vieja no se arregla con 3 intentos: se estaciona de una.
+    if (diag.code === "stale_build") permanentFailures = Math.max(permanentFailures + 1, PERMANENT_FAILURES_TO_PARK);
+    else permanentFailures = diag.permanent ? permanentFailures + 1 : 0;
     const ch = channel;
     channel = null;
     removeChannelQuietly(ch);
-    events.setStatus("reconnecting", { failures, reconnected: false });
+    events.setStatus("reconnecting", { failures, reconnected: false, diag });
     clearRetry();
-    retryTimer = timers.setTimeout(() => {
-      retryTimer = null;
-      void attempt();
-    }, backoffDelay(failures - 1, random));
+    retryTimer = timers.setTimeout(
+      () => {
+        retryTimer = null;
+        void attempt();
+      },
+      isParked() ? PARKED_RETRY_MS : backoffDelay(failures - 1, random),
+    );
   }
 
   async function attempt(): Promise<void> {
     if (closed) return;
     clearRetry();
     const myGen = ++gen;
+    lastAttemptAt = now();
     try {
       if (!client) {
-        const Ctor = await loadCtor();
+        let Ctor: RealtimeClientCtor;
+        try {
+          Ctor = await loadCtor();
+        } catch (err) {
+          if (isStale(myGen)) return;
+          fail(myGen, makeDiag("import", isStaleBuildError(err) ? "stale_build" : "network", err, now()));
+          return;
+        }
         if (isStale(myGen)) return;
         client = new Ctor(endpoint, {
           params: { apikey: anonKey },
@@ -225,20 +268,27 @@ export function createSupabaseDriver(opts: SupabaseDriverOptions): RealtimeDrive
           accessToken: async () => {
             if (current && Date.parse(current.expiresAt) - now() > TOKEN_REUSE_MARGIN_MS) return current.token;
             const t = await mint();
-            if (t && !closed) current = t;
-            return t?.token ?? null;
+            if (!isToken(t)) return null;
+            if (!closed) current = t;
+            return t.token;
           },
         });
       }
 
       const t = await mint();
       if (isStale(myGen)) return;
-      if (!t) {
-        fail(myGen);
+      if (!isToken(t)) {
+        fail(myGen, makeDiag("mint", t.code, t.reason, now()));
         return;
       }
       current = t;
-      await client.setAuth(t.token);
+      try {
+        await client.setAuth(t.token);
+      } catch (err) {
+        if (isStale(myGen)) return;
+        fail(myGen, makeDiag("socket", "network", err, now()));
+        return;
+      }
       if (isStale(myGen)) return;
       scheduleRefresh(nextTokenRefreshAt(t.expiresAt, now()));
 
@@ -258,17 +308,18 @@ export function createSupabaseDriver(opts: SupabaseDriverOptions): RealtimeDrive
           const reconnected = dropped;
           dropped = false;
           failures = 0;
+          permanentFailures = 0;
           events.setStatus("live", { failures: 0, reconnected });
           return;
         }
         if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
           devWarn(`realtime.channel_${status.toLowerCase()}`, err);
-          fail(myGen);
+          fail(myGen, classifyJoinError(status, err, now()));
         }
       });
     } catch (err) {
       devWarn("realtime.connect_failed", err);
-      fail(myGen);
+      fail(myGen, makeDiag("socket", "network", err, now()));
     }
   }
 
@@ -304,7 +355,7 @@ export function createSupabaseDriver(opts: SupabaseDriverOptions): RealtimeDrive
     onMessage: events.onMessage,
     onStatus: events.onStatus,
 
-    nudge() {
+    nudge(reason) {
       if (closed || !started) return;
       if (events.status === "live") {
         // Pestaña que vuelve de segundo plano: el navegador congela los timers y el
@@ -317,10 +368,12 @@ export function createSupabaseDriver(opts: SupabaseDriverOptions): RealtimeDrive
       }
       // Esperando el backoff → se reintenta ya. Si hay un intento en curso, no se
       // pisa (ya está probando).
-      if (retryTimer !== null) {
-        clearRetry();
-        void attempt();
-      }
+      if (retryTimer === null) return;
+      // HF-1b: estacionado, solo «Reconectar» reintenta ya; `visible`/`online`/«Actualizar», si ya pasó el plazo (el
+      // timer de 5 min pudo quedar congelado con la pestaña oculta). Si no, cada vuelta a la pestaña gastaba un mint.
+      if (isParked() && reason !== "reconnect" && now() - lastAttemptAt < PARKED_RETRY_MS) return;
+      clearRetry();
+      void attempt();
     },
   };
 }

@@ -1,0 +1,73 @@
+/* HF-1b · detalle de la conexión en vivo. CSS module propio: baja con el chunk dinámico del panel, no con el
+   first-load (y `app/globals.css` es de HF-2a en esta tanda). Solo tokens existentes: navy, success, danger, line. */
+.steps {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--navy-700);
+}
+.step[data-status="pending"] {
+  color: var(--navy-400);
+}
+.mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  background: var(--line);
+  color: var(--navy-400);
+}
+.step[data-status="ok"] .mark {
+  background: var(--success-bg);
+  color: var(--success-fg);
+}
+.step[data-status="fail"] .mark {
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+}
+.detail {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+.reason {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--navy-900);
+}
+.meta {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  font-size: 12px;
+  color: var(--navy-500);
+}
+.meta dt {
+  font-weight: 600;
+}
+.meta dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--navy-500);
+}
