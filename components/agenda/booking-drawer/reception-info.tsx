@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { Tag } from "@/components/ui/tag";
+import { dayKeyOf } from "@/lib/availability/day";
 import { Row } from "./billing-rows";
 import type { DrawerBooking } from "./types";
 
@@ -27,6 +28,26 @@ function safeUrl(url: string | null | undefined): string | null {
 }
 
 /**
+ * Texto de la fila «Recepción». Atendido: ya no está "en atención"; queda la hora de llegada como dato.
+ *
+ * HF-2c: «En sala de espera desde las 10:42» (y «Llamado a las …» con el llamado) solo si el turno es de HOY (día
+ * AR) y sigue esperando: con el «Llegó» ahora en el drawer, decir solo «Llegó a las» no contestaba la pregunta de
+ * la Secretaria («¿sigue en la sala?»). Una llegada de otro día no sigue esperando (H-LL2: «En sala» se arrastraba
+ * a días anteriores), así que ahí queda el dato histórico «Llegó a las …».
+ */
+function receptionText(b: DrawerBooking, now: Date): string | null {
+  const waiting =
+    !!b.arrivedAt &&
+    !b.attendingAt &&
+    (b.status === "PENDING" || b.status === "CONFIRMED") &&
+    dayKeyOf(new Date(b.scheduledFor)) === dayKeyOf(now);
+  if (waiting && b.calledAt) return `Llamado a las ${arTime(b.calledAt)} · en sala desde las ${arTime(b.arrivedAt!)}`;
+  if (waiting) return `En sala de espera desde las ${arTime(b.arrivedAt!)}`;
+  if (b.attendingAt && b.status !== "COMPLETED") return `En atención desde las ${arTime(b.attendingAt)}`;
+  return b.arrivedAt ? `Llegó a las ${arTime(b.arrivedAt)}` : null;
+}
+
+/**
  * Filas extra del turno que trae B2/B3 (B5.7): sede, telemedicina, sobreturno y
  * estado de recepción. Todo opcional: si el DTO no trae el campo, la fila no
  * aparece (la agenda los suma en B4.3; hasta entonces el drawer se ve igual).
@@ -39,13 +60,7 @@ function safeUrl(url: string | null | undefined): string | null {
  */
 export function ReceptionInfo({ booking, room }: { booking: DrawerBooking; room?: ReactNode }) {
   const url = safeUrl(booking.telemedicineUrl);
-  // Atendido: ya no está "en atención"; queda la hora de llegada como dato.
-  const reception =
-    booking.attendingAt && booking.status !== "COMPLETED"
-      ? `En atención desde las ${arTime(booking.attendingAt)}`
-      : booking.arrivedAt
-        ? `Llegó a las ${arTime(booking.arrivedAt)}`
-        : null;
+  const reception = receptionText(booking, new Date());
   return (
     <>
       {booking.locationName && <Row label="Sede">{booking.locationName}</Row>}

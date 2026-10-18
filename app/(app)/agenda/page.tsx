@@ -73,7 +73,10 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
     mode: agendaPrefs.mode,
     practitionerCount: practitioners.length,
     // PL-2f (PL-D6): la vista Recepción es de la Sala de Espera (Clínica / Libre). Sin el módulo, `?view=reception`
-    // cae al Día; «Llegó» y «En atención» siguen en el drawer y las tarjetas.
+    // cae al Día. «Llegó», «En atención» y «Deshacer» (todos los planes, D-HF1) se marcan desde el drawer del turno
+    // (HF-2c, `booking-drawer/reception-actions.tsx`); las tarjetas solo muestran el estado. Antes este comentario
+    // decía que ya estaban en el drawer y las tarjetas, y no era cierto: Individual y Consultorio no tenían dónde
+    // marcar la llegada (H-LL1).
     canReception: capabilities.includes("agenda.reception") && waitingRoomEnabled(actor.entitlements),
     roomCount: scopeRooms.length,
   });

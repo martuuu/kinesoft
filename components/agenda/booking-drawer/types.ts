@@ -40,6 +40,12 @@ export type DrawerBooking = {
   /** Recepción: llegó / pasó a atención (ISO). */
   arrivedAt?: string | null;
   attendingAt?: string | null;
+  /**
+   * SV (M5): la recepción lo llamó (ISO). HF-2c: el drawer lo necesita para derivar «llamado» (Deshacer vuelve a
+   * en sala, no borra la llegada) y para la fila «Llamado a las …». Sin el campo = no llamado (el DTO solo lo trae
+   * cuando hay llamado, `compactCalledField`).
+   */
+  calledAt?: string | null;
   locationId?: string | null;
   /** Nombre de la sede; sin él, la sede no se muestra (el id solo no dice nada). */
   locationName?: string | null;

@@ -55,9 +55,13 @@ import { buttonClassName } from "@/components/ui/button";
 import styles from "./booking-drawer.module.css";
 import {
   deleteBooking,
+  markReceptionAction,
   setBookingStatus,
   updateBooking,
 } from "@/lib/bookings";
+import type { ReceptionActionResult } from "@/lib/bookings-types";
+import type { ReceptionAction } from "@/lib/reception-state";
+import { isStaleError } from "@/lib/reception-view-state";
 import { getPatientBookingsSummary, setPatientDiagnosis } from "@/lib/patients";
 import type { PatientBookingSummary } from "@/lib/patients-types";
 import { localToARIso, isoToARLocalInput } from "@/lib/datetime-ar";
@@ -105,6 +109,7 @@ import {
 } from "./plan-row";
 import { planStatusToastDescription } from "./status-actions";
 import { ReceptionInfo } from "./reception-info";
+import { ReceptionActions, drawerReceptionActions, receptionToastTitle } from "./reception-actions";
 import { NO_ROOM_VALUE, RoomRow, drawerRoomModel, roomChangeOutcome, roomUpdatePayload } from "./room-row";
 import type { RoomOption } from "@/lib/rooms-types";
 import {
@@ -162,7 +167,7 @@ const CLOSED: BookingDrawerAccess = {
 };
 
 export function BookingDrawer({
-  booking,
+  booking: bookingProp,
   onClose,
   onSaved,
   capabilities,
@@ -188,6 +193,25 @@ export function BookingDrawer({
 }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // HF-2c: lo que devolvió `markReceptionAction` para el turno abierto. Las acciones de recepción NO cierran el
+  // drawer (la Secretaria marca «Llegó» y sigue con el turno), así que hasta que la agenda traiga la fila nueva
+  // (la action revalida /agenda) el drawer se ve con la respuesta del server. Sin esto, el próximo click (otra
+  // acción de recepción, Cambiar estado, Reprogramar) salía con el `updatedAt` viejo y rebotaba por stale. Se
+  // descarta solo cuando la fila del padre es igual o más nueva (mismo criterio que `mergeReceptionOverrides`).
+  const [receptionResult, setReceptionResult] = useState<{ id: string; result: ReceptionActionResult } | null>(null);
+  const booking: DrawerBooking | null = useMemo(() => {
+    if (!bookingProp || !receptionResult || receptionResult.id !== bookingProp.id) return bookingProp;
+    const r = receptionResult.result;
+    if (new Date(bookingProp.updatedAt).getTime() >= new Date(r.updatedAt).getTime()) return bookingProp;
+    return {
+      ...bookingProp,
+      status: r.status,
+      arrivedAt: r.arrivedAt,
+      calledAt: r.calledAt,
+      attendingAt: r.attendingAt,
+      updatedAt: r.updatedAt,
+    };
+  }, [bookingProp, receptionResult]);
   const toast = useToast();
   const confirm = useConfirm();
   const router = useRouter();
@@ -635,6 +659,55 @@ export function BookingDrawer({
   const { canOperate, clinicalWritable, notesWritable, canDelete } = access;
   const roomModel = booking ? drawerRoomModel(booking, rooms, primaryLocationId) : null;
 
+  // HF-2c: «Llegó» · «En atención» · «Deshacer» (y «Llamar» con Sala de Espera). Reglas en `./reception-actions`.
+  // El reloj se toma en el render: el drawer se abre con un click (nunca en el SSR) y la única decisión que
+  // depende de él es «¿es de hoy?» / demorado, que el server vuelve a validar.
+  const receptionNow = new Date();
+  const receptionActions = booking
+    ? drawerReceptionActions(booking, {
+        caps,
+        canOperate,
+        waitingRoom: tenantModules.has("salaEspera"),
+        now: receptionNow,
+      })
+    : [];
+
+  /**
+   * `markReceptionAction` con el lock optimista (`expectedUpdatedAt`). `from` = la versión sobre la que se actúa:
+   * la del drawer, o la que devolvió la acción anterior (el «Deshacer» del toast, que puede llegar con el drawer ya
+   * cerrado o con otro turno abierto: actúa sobre ESA versión y, si alguien la cambió en el medio, es stale).
+   */
+  const runReception = (
+    action: ReceptionAction,
+    from: { id: string; updatedAt: string; patientName: string } | null = booking
+  ) => {
+    if (!from) return;
+    setError(null);
+    start(async () => {
+      const r = await markReceptionAction(from.id, action, from.updatedAt);
+      if (!r.ok) {
+        if (isStaleError(r.error)) {
+          toast.error("El turno cambió en otra sesión", {
+            description: "Traemos la versión nueva de la agenda: revisalo y probá de nuevo.",
+          });
+          // refresh-ok: con «cambió en otra sesión» la action NO revalida; hay que traer la fila vigente.
+          router.refresh();
+        } else {
+          toast.error("No pudimos actualizar la recepción", { description: r.error });
+        }
+        return;
+      }
+      setReceptionResult({ id: from.id, result: r.data });
+      const next = { id: from.id, updatedAt: r.data.updatedAt, patientName: from.patientName };
+      toast.success(receptionToastTitle(action, from.patientName), {
+        ...(r.data.notice ? { description: r.data.notice } : {}),
+        ...(action === "deshacer"
+          ? {}
+          : { action: { label: "Deshacer", onClick: () => runReception("deshacer", next) } }),
+      });
+    });
+  };
+
   // Dirty-guard (A2b-S-ui): con "Editar" o "Reprogramar" abiertos y algo
   // cambiado, Esc / fondo / X preguntan antes de tirar la edición. El paciente
   // cuenta como cambio con la misma regla que el guardado (null = desvincular,
@@ -734,6 +807,13 @@ export function BookingDrawer({
                   />
                 ) : undefined
               }
+            />
+            <ReceptionActions
+              booking={booking}
+              actions={receptionActions}
+              pending={pending}
+              now={receptionNow}
+              onAction={(a) => runReception(a)}
             />
             {!canOperate && (
               <div style={{ fontSize: 11.5, color: "var(--navy-500)", marginTop: 4 }}>

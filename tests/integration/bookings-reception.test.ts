@@ -467,6 +467,67 @@ describe.skipIf(!RUN)("B4.1 · recepción, proyección liviana y cancelación en
   });
 
   // ── FX1b: estampas de Recepción al mover un turno ──────────────────────
+  // HF-2c (H-LL1, D-HF1/PL-D6): «Llegó» / «En atención» / «Deshacer» son estados de agenda, de TODOS los planes; el
+  // drawer del turno ahora los ofrece en Individual y Consultorio. Solo «Llamar» es de la Sala de Espera
+  // (Clínica / Libre). Acá se fija que el server lo permite en los planes chicos y que el gate de «Llamar» sigue.
+  describe("[HF-2c] recepción en planes sin Sala de Espera", () => {
+    let C: EphemeralTenant;
+    let I: EphemeralTenant;
+    let secretaria: { userId: string; practitionerId: string };
+
+    beforeAll(async () => {
+      C = await createEphemeralTenant(db, { saasPlan: "CONSULTORIO" });
+      I = await createEphemeralTenant(db, { saasPlan: "INDIVIDUAL" });
+      secretaria = await addPractitioner(db, C, "ASSISTANT");
+    });
+
+    afterAll(async () => {
+      await C?.cleanup();
+      await I?.cleanup();
+    });
+
+    it("[HF-2c] llegó en plan CONSULTORIO → ok (Secretaria): en atención y deshacer también; llamar no", async () => {
+      asUser(secretaria.userId);
+      const b = await seed(C);
+      const r1 = await markReceptionAction(b.id, "llego", b.updatedAt.toISOString());
+      expect(r1.ok).toBe(true);
+      if (!r1.ok) return;
+      expect(r1.data.state).toBe("en-sala");
+      let row = await db.booking.findUniqueOrThrow({ where: { id: b.id } });
+      expect(row.arrivedAt?.toISOString()).toBe(r1.data.arrivedAt);
+      expect(row.updatedAt.toISOString()).toBe(r1.data.updatedAt);
+
+      // «Llamar» sigue siendo de Clínica / Libre: rechazo sin escribir.
+      const call = await markReceptionAction(b.id, "llamar", r1.data.updatedAt);
+      expect(call.ok).toBe(false);
+      row = await db.booking.findUniqueOrThrow({ where: { id: b.id } });
+      expect(row.calledAt).toBeNull();
+      expect(row.updatedAt.toISOString()).toBe(r1.data.updatedAt);
+
+      const r2 = await markReceptionAction(b.id, "en-atencion", r1.data.updatedAt);
+      expect(r2.ok).toBe(true);
+      if (!r2.ok) return;
+      expect(r2.data.state).toBe("en-atencion");
+
+      // Deshacer en atención → en sala (sin llamado), conserva la llegada.
+      const r3 = await markReceptionAction(b.id, "deshacer", r2.data.updatedAt);
+      expect(r3.ok).toBe(true);
+      if (!r3.ok) return;
+      expect(r3.data.state).toBe("en-sala");
+      row = await db.booking.findUniqueOrThrow({ where: { id: b.id } });
+      expect(row.attendingAt).toBeNull();
+      expect(row.arrivedAt).not.toBeNull();
+    });
+
+    it("[HF-2c] llegó en plan INDIVIDUAL → ok (dueño)", async () => {
+      asUser(I.userId);
+      const b = await seed(I);
+      const r = await markReceptionAction(b.id, "llego", b.updatedAt.toISOString());
+      expect(r.ok).toBe(true);
+      expect((await db.booking.findUniqueOrThrow({ where: { id: b.id } })).arrivedAt).not.toBeNull();
+    });
+  });
+
   // Un turno «llamado» movido a mañana seguía con `arrivedAt`/`calledAt` de
   // hoy: mañana aparecía en la Sala de Espera como ya llegado. Cambiar de día
   // AR las limpia (las tres, en el mismo UPDATE: CHECK de M5); mover dentro
