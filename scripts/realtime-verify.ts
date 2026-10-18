@@ -295,13 +295,28 @@ async function main(): Promise<void> {
     {
       const r = await fetch(`${url}/rest/v1/Tenant?select=id&limit=1`, { headers: authH });
       const body = await r.text().catch(() => "");
-      const ok = [401, 403, 404].includes(r.status) || body.includes("42501");
-      record("V4", "PostgREST rechaza el token", ok, `HTTP ${r.status}${body.includes("42501") ? " · 42501" : ""}`);
+      // 503 = la Data API está apagada (R3, la dejamos así a propósito): el token tampoco llega a ninguna tabla.
+      const apiOff = r.status === 503;
+      const ok = [401, 403, 404].includes(r.status) || apiOff || body.includes("42501");
+      record(
+        "V4",
+        "PostgREST rechaza el token",
+        ok,
+        `HTTP ${r.status}${body.includes("42501") ? " · 42501" : ""}${apiOff ? " · Data API apagada (R3): no sirve ni con token" : ""}`
+      );
     }
     {
       const r = await fetch(`${url}/auth/v1/user`, { headers: authH });
-      await r.text().catch(() => "");
-      record("V4", "GoTrue /auth/v1/user rechaza el token", r.status === 401 || r.status === 403, `HTTP ${r.status}`);
+      const gbody = await r.text().catch(() => "");
+      // 400 con `bad_jwt`: GoTrue rechaza el token porque su `sub` sintético ("rt:<uuid>") no es un UUID (es justo la
+      // garantía de diseño: SV-D6). Solo se acepta el 400 si el cuerpo dice que el problema es el JWT.
+      const badJwt = r.status === 400 && /bad_jwt|sub claim|invalid claim|jwt/i.test(gbody);
+      record(
+        "V4",
+        "GoTrue /auth/v1/user rechaza el token",
+        r.status === 401 || r.status === 403 || badJwt,
+        `HTTP ${r.status}${badJwt ? " · bad_jwt (sub no es UUID)" : ""}`
+      );
     }
     {
       // El listado de Storage es un POST con prefijo (la API no tiene GET para listar).
