@@ -189,6 +189,17 @@ const securityHeaders = [
     : []),
 ];
 
+// --- Renderers de la historia clínica (FC-1c) ------------------------------
+// Exportados para `tests/unit/hc-heavy-deps.test.ts` (fija que sigan acá).
+export const HC_SERVER_EXTERNAL_PACKAGES = ["@react-pdf/renderer", "docx"];
+export const HC_PDF_FONTS_GLOB = "./lib/hc-pdf/fonts/**/*";
+// FC-1c (hallazgo del spike): pdfkit 0.20 carga las métricas de Helvetica con `require("#standard-fonts/Helvetica")`
+// (un `imports` de su package.json) y el trazado de Next 14 no sigue esos specifiers: el `.nft.json` de la ruta salía
+// sin `pdfkit/js/standard-fonts/` y cualquier PDF tiraba MODULE_NOT_FOUND en la función. react-pdf SIEMPRE suma
+// Helvetica al final de la pila de fuentes (`@react-pdf/layout`), así que se carga aunque no se use. ~184 kB.
+export const HC_PDFKIT_STANDARD_FONTS_GLOB = "./node_modules/pdfkit/js/standard-fonts/**/*";
+export const HC_PDF_ROUTES = ["/api/hc-spike", "/api/pacientes/**", "/pacientes/**"];
+
 const nextConfig = {
   reactStrictMode: true,
   experimental: {
@@ -199,6 +210,22 @@ const nextConfig = {
     // Next 14 solo corre instrumentation.ts con este flag. Sin SENTRY_DSN,
     // register() retorna sin importar nada.
     instrumentationHook: true,
+    // FC-1c (§24.6, C-FC5): los renderers de la HC corren SOLO en el server y se cargan de node_modules tal cual, sin
+    // pasar por webpack. react-pdf 4 es ESM puro (yoga en wasm embebido en base64, pdfkit, fontkit) y docx trae su
+    // propio jszip: bundlearlos en la capa RSC los resolvería con la condición `react-server` de React y sumaría
+    // varios MB a cada ruta que los importe. Externos, Node los resuelve con su `react` normal y el trazado
+    // (`.nft.json`) copia los paquetes a la función. Verificado en el spike local (`app/api/hc-spike`, 18-oct):
+    // `next build` + `next start` renderiza el PDF y el .docx, y el .nft.json de la ruta lleva react-pdf, yoga,
+    // pdfkit, fontkit y docx.
+    serverComponentsExternalPackages: HC_SERVER_EXTERNAL_PACKAGES,
+    // FC-1c: el renderer abre las fuentes con `path.join(process.cwd(), "lib/hc-pdf/fonts/…")`, que el trazado
+    // estático de Next no sigue: sin esto la función de Vercel sale sin los .ttf y el render tira ENOENT. Lo mismo
+    // con las métricas de Helvetica de pdfkit (ver `HC_PDFKIT_STANDARD_FONTS_GLOB`). Las claves son rutas (picomatch
+    // con `contains`) de todo lo que puede renderizar un PDF: el spike, las rutas de descarga de C-FC7 y el perfil
+    // del paciente (la action de compartir de C-FC6 arma el PDF ahí).
+    outputFileTracingIncludes: Object.fromEntries(
+      HC_PDF_ROUTES.map((r) => [r, [HC_PDF_FONTS_GLOB, HC_PDFKIT_STANDARD_FONTS_GLOB]]),
+    ),
   },
   images: {
     remotePatterns: [
