@@ -14,6 +14,8 @@ const { proxy } = vi.hoisted(() => ({
       }
     ),
 }));
+// WA-0: la action del contacto arrastra `lib/session` (React `cache`); el render no la necesita.
+vi.mock("@/lib/booking-share-actions", () => ({ getPatientShareContact: async () => ({ status: "hidden" }) }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn(), replace: vi.fn() }) }));
 vi.mock("@/components/ui/toast", () => ({
   useToast: () => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), show: vi.fn(), dismiss: vi.fn() }),

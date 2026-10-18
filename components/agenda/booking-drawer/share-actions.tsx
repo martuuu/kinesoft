@@ -1,5 +1,6 @@
 "use client";
 
+import { getPatientShareContact } from "@/lib/booking-share-actions";
 import { useEffect, useState } from "react";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { recordatorioHtml } from "@/components/agenda/recordatorio-turno";
@@ -29,10 +30,7 @@ export function ShareActions({ booking }: { booking: DrawerBooking }) {
   useEffect(() => {
     if (!lookup || !patientId) return;
     let alive = true;
-    // Import diferido: la action arrastra `lib/session` (React `cache`) y el drawer solo la necesita al abrir un turno
-    // con paciente; así tampoco suma al chunk del drawer.
-    import("@/lib/booking-share-actions")
-      .then((m) => m.getPatientShareContact(patientId))
+    getPatientShareContact(patientId)
       .then((value) => alive && setContact({ patientId, value }))
       // Sesión vencida o red caída: el link queda sin destinatario, como antes de WA-0. Sin toast: no es un error de
       // lo que la persona hizo, y el botón sigue andando.

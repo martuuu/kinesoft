@@ -6,6 +6,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 // `renderToStaticMarkup` no espera Suspense: el mock resuelve cada `import()`
 // en `beforeAll` y después renderiza el componente real, sincrónico.
 const { dynamicLoads } = vi.hoisted(() => ({ dynamicLoads: [] as Promise<unknown>[] }));
+// WA-0: la action del contacto arrastra `lib/session` (React `cache`); el render no la necesita.
+vi.mock("@/lib/booking-share-actions", () => ({ getPatientShareContact: async () => ({ status: "hidden" }) }));
 vi.mock("next/dynamic", () => ({
   default: (loader: () => Promise<React.ComponentType<Record<string, unknown>>>) => {
     let Loaded: React.ComponentType<Record<string, unknown>> | null = null;
