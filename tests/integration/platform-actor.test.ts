@@ -37,6 +37,9 @@ import { PLATFORM_REAUTH_COOKIE, makePlatformReauthValue } from "@/lib/platform-
 import { PLATFORM_ERROR_DIGEST, PLATFORM_REAUTH_TTL_S } from "@/lib/platform-mfa-logic";
 import { classifyStepUpError } from "@/lib/two-factor-logic";
 import { PlatformMfaFake } from "@/tests/helpers/platform-mfa-fake";
+import { startSupport } from "@/lib/platform-support";
+import { SUPPORT_COOKIE } from "@/lib/support-session-internal";
+import { toARDateKey } from "@/lib/datetime-ar";
 import { asAnonymous, asUser } from "@/tests/helpers/actor";
 import { ownerClient, createEphemeralTenant, uniqueSuffix, type EphemeralTenant } from "@/tests/helpers/tenant-factory";
 
@@ -309,6 +312,37 @@ describe.skipIf(!RUN)("[BO4] requirePlatformAdmin · segundo paso", () => {
       expect(fake.calls.map((c) => c.method)).toEqual(["getAssurance"]);
       __setPlatformMfaForTests(PlatformMfaFake.withVerifiedFactor("aal2"));
       await expect(requirePlatformAdmin("support.start")).resolves.toMatchObject({ mfa: true });
+    });
+
+    it("[HF-3] off + 2FA en pausa: support.start pasa sin step-up y el registro dice twoFactorBypass:true", async () => {
+      const A = await createEphemeralTenant(db);
+      try {
+        const u = await superadmin();
+        const reason = "Ayuda con la agenda del consultorio";
+        const payloads = async () =>
+          (
+            await db.platformAuditEvent.findMany({
+              where: { actorId: u, action: "platform.support.start" },
+              orderBy: { createdAt: "asc" },
+              select: { payload: true },
+            })
+          ).map((r) => r.payload as Record<string, unknown>);
+
+        // Sin pausa (step-up dado por hecho): el registro no trae la marca.
+        stepUp.pass = true;
+        expect(await startSupport(A.tenantId, reason)).toMatchObject({ ok: true });
+        expect((await payloads())[0]).not.toHaveProperty("twoFactorBypass");
+
+        // Con pausa y el step-up REAL (sin 2FA → antes «Activá la verificación…»): pasa y queda asentado.
+        stepUp.pass = false;
+        process.env.SUPERADMIN_2FA_BYPASS = `${u}@${toARDateKey(new Date(Date.now() + 7 * 86_400_000))}`;
+        expect(await startSupport(A.tenantId, reason)).toMatchObject({ ok: true });
+        expect((await payloads())[1]).toMatchObject({ twoFactorBypass: true, mfa: false });
+      } finally {
+        delete process.env.SUPERADMIN_2FA_BYPASS;
+        cookies().delete(SUPPORT_COOKIE);
+        await A.cleanup();
+      }
     });
 
     it("off con el puerto real sin GoTrue (mock de integración sin getSession) → permitido con mfa:false, no tira", async () => {

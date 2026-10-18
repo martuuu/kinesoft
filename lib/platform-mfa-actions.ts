@@ -72,7 +72,9 @@ function outcomeError(r: Exclude<VerifyOutcome, "ok">): string {
  */
 async function requireStepUpIfUserTwoFactor(userId: string): Promise<void> {
   const s = await getAccessSnapshot();
-  if (s && hasAnyTwoFactorMethod(s.twoFactor.methods)) await requireStepUp({ userId });
+  // La pausa de 2FA del superadmin (HF-3) no aplica acá: sumar un factor nuevo con solo la contraseña dejaría
+  // un TOTP del atacante vivo después de que la pausa venza.
+  if (s && hasAnyTwoFactorMethod(s.twoFactor.methods)) await requireStepUp({ userId }, { allowBypass: false });
 }
 
 /**

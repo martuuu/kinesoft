@@ -33,6 +33,7 @@ import { getVerifiedSessionUser } from "@/lib/session-user";
 import { sendEmail } from "@/lib/email";
 import "@/lib/email/log";
 import { supportAccessEmail } from "@/lib/email/templates";
+import { isTwoFactorBypassed } from "@/lib/two-factor-bypass";
 import type { PlatformActor } from "@/lib/platform-actor";
 import type { PlatformActorRef } from "@/lib/platform-audit-types";
 
@@ -274,6 +275,7 @@ export async function startSupportSession(p: {
   const actorRef = { userId: p.actor.userId, email: p.actor.email, homeTenantId: p.actor.homeTenantId };
   const meta = requestMeta();
   const now = new Date();
+  const bypassed = isTwoFactorBypassed({ id: p.actor.userId, isPlatformAdmin: true, disabledAt: null }, now);
 
   let result: { sessionId: string; tenantName: string };
   try {
@@ -312,7 +314,15 @@ export async function startSupportSession(p: {
         entityId: session.id,
         // BO4: `mfa` deja asentado si la sesión que entró al consultorio pasó por TOTP (con
         // PLATFORM_MFA_ENFORCEMENT=off se permite igual y queda `false`: es la huella para revisar después).
-        payload: { scope: "ADMIN_CONFIG", reasonLength: reason.length, mfa: p.actor.mfa },
+        // HF-3 (D-HF7): con la 2FA del superadmin en pausa, la entrada al consultorio queda marcada: es la huella para
+        // revisar qué se hizo sin segundo factor. `isPlatformAdmin: true` / `disabledAt: null` porque el `PlatformActor`
+        // solo existe si `requirePlatformAdmin` ya los verificó en este request; ante la duda la marca sobra, no falta.
+        payload: {
+          scope: "ADMIN_CONFIG",
+          reasonLength: reason.length,
+          mfa: p.actor.mfa,
+          ...(bypassed ? { twoFactorBypass: true } : {}),
+        },
       });
       return { sessionId: session.id, tenantName: tenant.name };
     });

@@ -74,6 +74,8 @@ import { resetPlatformUserTwoFactor } from "@/lib/platform-users";
 import { confirmPlatformMfaEnrollment, startPlatformMfaEnrollment } from "@/lib/platform-mfa-actions";
 import { saveOnboardingClinic } from "@/lib/onboarding";
 import { acceptInvite } from "@/app/invite/[token]/accept-action";
+import { logger } from "@/lib/logger";
+import { toARDateKey } from "@/lib/datetime-ar";
 
 const RUN = process.env.INTEGRATION === "1";
 
@@ -469,6 +471,88 @@ describe.skipIf(!RUN)("[PL-2a] 2FA por usuario", () => {
       expect(await verifyEmailCode("step_up", lastCode())).toMatchObject({ ok: true });
       const st = await startPlatformMfaEnrollment();
       expect(st).toMatchObject({ ok: true });
+    });
+  });
+
+  /**
+   * HF-3 (plan §22.4, D-HF7): 2FA del superadmin en pausa con `SUPERADMIN_2FA_BYPASS` (leída en cada llamada). Símbolos
+   * REALES: la foto de acceso (`lib/session.ts`), `requirePlatformAdmin`, `requireStepUp` y las actions de 2FA.
+   */
+  describe("[HF-3] 2FA del superadmin en pausa", () => {
+    const inDays = (n: number) => toARDateKey(new Date(Date.now() + n * 86_400_000));
+    const pause = (id: string, days = 10) => (process.env.SUPERADMIN_2FA_BYPASS = `${id}@${inDays(days)}`);
+    afterEach(() => {
+      delete process.env.SUPERADMIN_2FA_BYPASS;
+      delete process.env.PLATFORM_MFA_ENFORCEMENT;
+      vi.restoreAllMocks();
+    });
+
+    it("[HF-3] superadmin con TOTP + bypass → satisfied; sin bypass → required", async () => {
+      const S = await profile({ admin: true });
+      await db.userProfile.update({ where: { id: S }, data: { twoFactorTotp: true } });
+      session(S, `sess-${uniqueSuffix()}`, "aal1");
+      expect((await getAccessSnapshot())?.twoFactor.state).toBe("required");
+      await expect(requirePlatformAdmin("platform.read")).rejects.toMatchObject({ reason: "two_factor" });
+      pause(S);
+      expect((await getAccessSnapshot())?.twoFactor.state).toBe("satisfied");
+      await expect(requirePlatformAdmin("platform.read")).resolves.toMatchObject({ userId: S });
+      // Vencida: vuelve a pedir el código sola, sin tocar nada.
+      pause(S, -1);
+      expect((await getAccessSnapshot())?.twoFactor.state).toBe("required");
+    });
+
+    it("[HF-3] acción high con bypass pasa sin step-up y loguea", async () => {
+      const S = await profile({ admin: true });
+      session(S);
+      // H-2FA: sin ningún método, la acción high pedía «Activá la verificación en dos pasos».
+      expect(classifyStepUpError(await requirePlatformAdmin("user.disable").catch((e) => e))).toEqual({ kind: "setup" });
+      const warn = vi.spyOn(logger, "warn");
+      pause(S);
+      await expect(requirePlatformAdmin("user.disable")).resolves.toMatchObject({ userId: S, mfa: false });
+      expect(warn).toHaveBeenCalledWith("2fa.stepup_bypassed", { userId: S });
+    });
+
+    it("[HF-3] con enforce el bypass no aplica", async () => {
+      const S = await profile({ admin: true });
+      await db.userProfile.update({ where: { id: S }, data: { twoFactorTotp: true } });
+      session(S, `sess-${uniqueSuffix()}`, "aal1");
+      pause(S);
+      process.env.PLATFORM_MFA_ENFORCEMENT = "enforce";
+      expect((await getAccessSnapshot())?.twoFactor.state).toBe("required");
+      await expect(requirePlatformAdmin("platform.read")).rejects.toMatchObject({ reason: "two_factor" });
+    });
+
+    it("[HF-3] apagar la 2FA sigue pidiendo step-up", async () => {
+      const S = await profile({ admin: true });
+      session(S);
+      const st = await startTotpEnrollment();
+      if (!st.ok) throw new Error(st.error);
+      await confirmTotpEnrollment(st.data.factorId, mfa.goodCode);
+      cookies().delete(STEP_UP_COOKIE);
+      pause(S);
+      // Sesión que sí pasó la app (AAL2) pero sin step-up fresco: apagar pide el código igual.
+      session(S, `sess-${uniqueSuffix()}`, "aal2");
+      expect(classifyStepUpError(await disableMethod("totp").catch((e) => e))).toEqual({ kind: "step_up" });
+      // Sesión que entró solo con la contraseña gracias a la pausa (AAL1): ni llega al step-up.
+      session(S, `sess-${uniqueSuffix()}`, "aal1");
+      expect((await getAccessSnapshot())?.twoFactor.state).toBe("satisfied");
+      expect(await disableMethod("totp")).toEqual({ ok: false, error: expect.stringMatching(/terminá de verificar/) });
+      expect((await db.userProfile.findUniqueOrThrow({ where: { id: S } })).twoFactorTotp).toBe(true);
+      expect(mfa.factors).toHaveLength(1);
+    });
+
+    it("[HF-3] no-superadmin con su id en la lista → sin efecto", async () => {
+      const U = await profile();
+      await db.userProfile.update({ where: { id: U }, data: { twoFactorTotp: true } });
+      session(U, `sess-${uniqueSuffix()}`, "aal1");
+      pause(U);
+      expect((await getAccessSnapshot())?.twoFactor.state).toBe("required");
+      // Superadmin deshabilitado tampoco.
+      const D = await profile({ admin: true });
+      await db.userProfile.update({ where: { id: D }, data: { twoFactorTotp: true, disabledAt: new Date() } });
+      session(D, `sess-${uniqueSuffix()}`, "aal1");
+      pause(D);
+      expect((await getAccessSnapshot())?.twoFactor.state).toBe("required");
     });
   });
 

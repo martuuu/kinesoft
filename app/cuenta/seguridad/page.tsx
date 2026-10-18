@@ -7,6 +7,8 @@ import { loadTwoFactorOverview } from "@/lib/two-factor-internal";
 import { maskEmail } from "@/lib/email/transport";
 import { verifyAccessHref } from "@/app/verificar-acceso/verify-access-logic";
 import { safeNext } from "@/lib/safe-next";
+import { twoFactorBypassFor } from "@/lib/two-factor-bypass";
+import { TwoFactorBypassBand } from "@/components/account/two-factor-bypass-band";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Seguridad de la cuenta · KineSoft" };
@@ -38,10 +40,14 @@ export default async function SeguridadPage({ searchParams }: { searchParams?: {
 
   const fallback = snapshot.usable.length > 0 ? "/dashboard" : snapshot.profile.isPlatformAdmin ? "/plataforma" : "/dashboard";
   const backHref = safeNext(nextParam, fallback);
+  // HF-3 (D-HF7): acá se viene a «volver a activarla»; la banda dice hasta cuándo dura la pausa.
+  const p = snapshot.profile;
+  const bypass = twoFactorBypassFor({ id: snapshot.userId, isPlatformAdmin: p.isPlatformAdmin, disabledAt: p.disabledAt });
   return (
     <AuthShell variant="centered" introAs="p">
       {/* VX2-b1: la h1 vive en la card (en `centered` la intro no se pinta); SecuritySettings sigue con sus h2. */}
       <StatusHeading eyebrow="Tu cuenta" title="Seguridad de la cuenta" />
+      {bypass.active && <TwoFactorBypassBand until={bypass.until} />}
       <StatusText muted last>
         La verificación en dos pasos pide, además de tu contraseña, un código de tu teléfono o de tu email. Es opcional,
         salvo para cambiar el plan, los permisos del equipo o la titularidad del consultorio.

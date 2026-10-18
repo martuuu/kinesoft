@@ -12,6 +12,8 @@ import { PlatformShell } from "@/components/plataforma/platform-shell";
 import { UIProviders } from "@/components/providers/ui-providers";
 import { PlatformReauthProvider } from "@/components/plataforma/reauth-modal";
 import { verifyAccessHref } from "@/app/verificar-acceso/verify-access-logic";
+import { twoFactorBypassFor } from "@/lib/two-factor-bypass";
+import { TwoFactorBypassBand } from "@/components/account/two-factor-bypass-band";
 
 /**
  * Guard + shell del grupo `(platform)` (BO3-A, plan §19.5 «Superadmin sin consultorio casa»).
@@ -63,6 +65,10 @@ export default async function PlatformLayout({ children }: { children: React.Rea
   // VX0-b (decisión 19): la barra muestra el NOMBRE del superadmin (la misma foto que ya leyó `requirePlatformAdmin`,
   // cacheada por request: sin query); antes mostraba su email como si fuera el nombre.
   const [target, snapshot] = await Promise.all([resolveSupportTarget(actor.userId), getAccessSnapshot()]);
+  // HF-3 (D-HF7): la 2FA del superadmin en pausa se ve en cada pantalla de Plataforma, con la fecha en que vence. Se
+  // evalúa en cada request (la variable se lee en cada llamada): al vencer, la banda se va sola.
+  const p = snapshot?.profile;
+  const bypass = p ? twoFactorBypassFor({ id: actor.userId, isPlatformAdmin: p.isPlatformAdmin, disabledAt: p.disabledAt }) : null;
 
   // El provider del modal de re-verificación envuelve todo el shell: cualquier componente de Plataforma puede usar
   // `usePlatformAction()` para que una acción `high` pida el código y se reintente sola (BO4).
@@ -77,6 +83,7 @@ export default async function PlatformLayout({ children }: { children: React.Rea
           support={target ? { tenantName: target.tenant.name } : null}
           endSupportAction={endSupport}
         >
+          {bypass?.active && <TwoFactorBypassBand until={bypass.until} />}
           {children}
         </PlatformShell>
       </PlatformReauthProvider>

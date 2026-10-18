@@ -17,6 +17,8 @@ import "server-only";
 import { getAccessSnapshot, ForbiddenError, UnauthenticatedError } from "@/lib/session";
 import { getSessionUser, getStrictSessionUser } from "@/lib/session-user";
 import { hasFreshStepUp, hasSessionProof } from "@/lib/two-factor-cookie";
+import { isTwoFactorBypassed } from "@/lib/two-factor-bypass";
+import { logger } from "@/lib/logger";
 import {
   TWO_FACTOR_ERROR_DIGEST,
   hasAnyTwoFactorMethod,
@@ -56,10 +58,24 @@ export function stepUpDecision(methods: TwoFactorMethods, stepUpFresh: boolean):
 /**
  * C-PL6. `actor` = el de `getActor()` (o cualquier `{ userId }` de la sesión: también un superadmin en soporte, que
  * confirma con SU 2FA). Tira; no devuelve nada si pasa.
+ *
+ * HF-3 (D-HF7): con la 2FA del superadmin en pausa (`SUPERADMIN_2FA_BYPASS`, lib/two-factor-bypass.ts) sale antes,
+ * SIN pedir código y aunque no tenga ningún método (H-2FA: apagar el TOTP propio dejaba las acciones `high` de
+ * Plataforma en «Activá la verificación…»). Queda un `warn` por cada salto: es el rastro de qué se hizo sin segundo
+ * factor. Va DESPUÉS del chequeo de identidad: la pausa nunca reemplaza a la sesión.
+ * `{ allowBypass: false }`: para sumar un factor (el TOTP de /plataforma-mfa/configurar). Con la contraseña sola
+ * alguien podría dejar un TOTP propio que sigue valiendo cuando la pausa vence: ahí la pausa no aplica.
  */
-export async function requireStepUp(actor: { userId: string }): Promise<void> {
+export async function requireStepUp(actor: { userId: string }, opts?: { allowBypass?: boolean }): Promise<void> {
   const [s, user] = await Promise.all([getAccessSnapshot(), getSessionUser()]);
   if (!s || !user || s.userId !== actor.userId || user.id !== actor.userId) throw new UnauthenticatedError("no_session");
+  if (opts?.allowBypass !== false && s.profile) {
+    const p = s.profile;
+    if (isTwoFactorBypassed({ id: s.userId, isPlatformAdmin: p.isPlatformAdmin, disabledAt: p.disabledAt })) {
+      logger.warn("2fa.stepup_bypassed", { userId: actor.userId });
+      return;
+    }
+  }
   const d = stepUpDecision(s.twoFactor.methods, hasFreshStepUp(actor.userId, user.sessionId));
   if (d === "setup") throw new TwoFactorSetupRequiredError();
   if (d === "step_up") throw new StepUpRequiredError();

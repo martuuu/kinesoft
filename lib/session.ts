@@ -57,6 +57,7 @@ import type { SaasPlan } from "@prisma/client";
 import type { MemberAccess } from "@/lib/saas-plans-types";
 import { twoFactorStateOf, type TwoFactorMethods, type TwoFactorState } from "@/lib/two-factor-logic";
 import { STEP_UP_COOKIE, TWO_FACTOR_COOKIE, hasSessionProof } from "@/lib/two-factor-cookie";
+import { isTwoFactorBypassed } from "@/lib/two-factor-bypass";
 import { logger } from "@/lib/logger";
 import { ensureRequestContext, primeRequestContext } from "@/lib/request-context";
 import { timeAsync } from "@/lib/server-timing";
@@ -421,12 +422,21 @@ async function loadAccessSnapshot(): Promise<AccessSnapshot | null> {
   const cookieValid = !!cookieTenantId && usable.some((m) => m.tenantId === cookieTenantId);
   const state = resolveAccessState(logicView, { cookieTenantId, preferredTenantId });
   const methods: TwoFactorMethods = profile?.twoFactor ?? { totp: false, email: false };
+  // HF-3 (D-HF7): 2FA del superadmin en pausa (`SUPERADMIN_2FA_BYPASS`, lib/two-factor-bypass.ts; falla cerrado:
+  // superadmin activo, su id, fecha AR vigente a ≤30 días, nunca con `enforce`). La sesión cuenta como verificada y no
+  // pasa por /verificar-acceso. Solo acá: `resolveTwoFactorSession` (las actions de 2FA) sigue con el estado real, así
+  // que cambiar o apagar la 2FA sigue pidiendo el código. Sin la variable no cuesta nada (camino rápido).
+  const bypassed =
+    !!profile &&
+    isTwoFactorBypassed({ id: user.id, isPlatformAdmin: profile.isPlatformAdmin, disabledAt: profile.disabledAt }, now);
   // La cookie se lee (HMAC) solo si hay algún método prendido: el resto de los usuarios no paga nada.
-  const twoFactorState = twoFactorStateOf(methods, {
-    aal: user.aal,
-    sessionId: user.sessionId,
-    sessionProofValid: (methods.totp || methods.email) && hasSessionProof(user.id, user.sessionId),
-  });
+  const twoFactorState: TwoFactorState = bypassed
+    ? "satisfied"
+    : twoFactorStateOf(methods, {
+        aal: user.aal,
+        sessionId: user.sessionId,
+        sessionProofValid: (methods.totp || methods.email) && hasSessionProof(user.id, user.sessionId),
+      });
   return {
     userId: user.id,
     profile,
