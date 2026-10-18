@@ -82,7 +82,10 @@ B-pre **no suma servicios externos, env vars ni configuración de consola**. Lo 
 
 Mails: desde IAM no hace falta SMTP propio en Supabase; lo que hace falta es Resend con dominio propio (§0.4).
 
-### 0.3 SV — tareas del dueño (Sala de Espera en vivo, 14-oct-2026) 🔴
+### 0.3 SV — tareas del dueño (Sala de Espera en vivo, 14-oct-2026) 🟢
+
+> **16-oct:** prendido en prod (`REALTIME_DRIVER=supabase`, V1-V7 11/11). **18-oct:** la agenda no entraba en vivo por
+> un `\n` al final del secreto en Vercel (H-RT1); Martin lo re-pegó y HF-1a lo recorta. Pendiente: el QA de §0.8.
 
 SV suma **tres variables** y configuración de consola de Supabase. No bloquea el deploy (prod arranca con
 `REALTIME_DRIVER=off`, idéntica a SR); bloquea **prender** la sala en vivo. Todo en **§3.1** (abajo):
@@ -217,6 +220,37 @@ corre. Un superadmin no puede resetear la 2FA de otro superadmin (recuperación:
 | `NEXT_PUBLIC_PWA` | Vercel → Production | **Sin setear = prendido**: el workspace y Plataforma registran `/sw.js` (instalable; offline muestra «Sin conexión», nada de datos en caché, ADR-022). `off` es el **interruptor de emergencia** (MB-D6): en la próxima carga desregistra todos los service workers. Es `NEXT_PUBLIC_*`: se inlinea en el build, así que cambiarlo **requiere redeploy** |
 | Instalar la app | Teléfono / PC real | QA manual de [QA.md «MB»](QA.md): Android (Chrome «Instalar app»), iOS (Safari → Compartir → «Agregar a inicio»), macOS (Safari «Agregar al Dock» / Chrome) y Windows (Edge/Chrome). No se promociona hasta el cambio de dominio (MB-D9): una PWA instalada en el dominio viejo no migra |
 
+### 0.8 Tanda A — turnero sin cobro, realtime y 2FA (18-oct-2026) 🔴
+
+Sin migración. Todo es Vercel → Production y **redeploy** al cambiar una variable. Detalle en [AUDIT «Hallazgos de la
+Tanda A»](AUDIT.md), [SECURITY §17 y §20.1](SECURITY.md); QA en [QA «Tanda A»](QA.md).
+
+| Qué | Dónde | Cuándo / cómo |
+|---|---|---|
+| `TURNERO_CHECKOUT` | Vercel → Production | **Dejarla sin setear** (= `off`, TP-D1): el turnero reserva sin cobro y se paga en el consultorio. `platform` cobraría con la cuenta MP **de la plataforma** (H-TP1): solo para probar o con acuerdo explícito. Otro valor frena el boot. El cobro a la cuenta de cada profesional llega con TP-2 (T5) |
+| Holds trabados del turnero | SQL Editor de prod, **solo lectura** | Reservas que quedaron PENDING por el bug de H-TP0 (cada reintento fallaba). Correr la query de abajo y avisar a esos pacientes (el horario ya se liberó a los 30 min). No escribir nada: el agente no toca prod |
+| `SUPERADMIN_2FA_BYPASS` | Vercel → Production | Formato `<tu userId>@AAAA-MM-DD` (fecha de vencimiento, inclusive, hora AR; **≤ 30 días**, recomendado 14). El userId es el de Supabase → Authentication → Users. Una entrada mal escrita o a más de 30 días se ignora (log `2fa.bypass_ignored`) y la 2FA sigue pidiéndose. No aplica con `PLATFORM_MFA_ENFORCEMENT=enforce`. Mientras dure, **con tu contraseña sola se opera Plataforma entera**: contraseña única. Cambiar o apagar la 2FA y sumar un factor siguen pidiendo el código. Al terminar, borrarla y redeploy (o dejar que venza: la banda desaparece sola) |
+| `SUPABASE_JWT_SECRET` | Vercel → Production | Ya re-pegado por Martin el 18-oct sin Enter al final (H-RT1). Verificar: `/plataforma/sistema` → huella del secreto = la que imprime `scripts/realtime-verify.ts` en local, y «espacios o saltos de línea al borde: no» |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Vercel → Production | Revisar que no tenga salto de línea al final: el server la recorta, pero la copia que el build inlinea en el navegador **no** (se usa como `apikey` del socket). Si se re-pega, redeploy |
+| Node 22 en Vercel | Vercel → Settings → General → Node.js Version | Opcional: «Probar desde el servidor» de `/plataforma/sistema` necesita el `WebSocket` global de Node 22. En Node 20 dice «no disponible en este runtime» (no rompe nada). Probarlo primero en un Preview, que hoy comparte la DB de prod: solo deploy, sin QA de escritura |
+| Skew Protection | Vercel → Settings → Advanced | Opcional, si el plan lo permite: evita el «Hay una versión nueva · Recargá» en pestañas y PWA abiertas durante un deploy |
+
+**Query de holds trabados (solo lectura):**
+
+```sql
+-- Reservas del turnero (key `pub:`) que quedaron PENDING más de 30 min y todavía son a futuro.
+SELECT t.slug, b.id, b."scheduledFor", b."createdAt", b."guestName", b."guestPhone", b."guestEmail",
+       b.status, b."paymentStatus", p.status AS "mpStatus"
+FROM "Booking" b
+JOIN "Tenant" t ON t.id = b."tenantId"
+LEFT JOIN "Payment" p ON p."bookingId" = b.id
+WHERE b."idempotencyKey" LIKE 'pub:%'
+  AND b.status = 'PENDING'
+  AND b."createdAt" < now() - interval '30 minutes'
+  AND b."scheduledFor" > now()
+ORDER BY b."scheduledFor";
+```
+
 ### 1. Hosting / plataforma de despliegue — Vercel
 - **Qué configura:** proyecto en Vercel (región `gru1` ya fijada en `vercel.json`); env vars de prod;
   branch protection en `main` exigiendo el check de CI como required; `KINESOFT_ALLOW_DEMO_ACTOR`
@@ -282,7 +316,9 @@ que antes de SV y `/sala` se actualiza cada 60 s).
   access» OFF; tres variables de entorno; verificación V1-V7 en staging.
 - **Bloquea:** prender `REALTIME_DRIVER=supabase` (no bloquea el deploy: con `off` todo funciona).
 - **Responsable:** dueño.
-- **Estado:** 🔴 (R1-R4 sin correr; anotá acá los resultados, sin valores secretos).
+- **Estado:** 🟢 prendido en prod desde el 16-oct (V1-V7 11/11). Desde HF-1a (18-oct) es la **agenda en vivo de todos
+  los planes** (no solo Sala de Espera) y `/plataforma/sistema` muestra la huella del secreto y «Probar desde el
+  servidor» (§0.8).
 - **Gate de activación:** `REALTIME_DRIVER=supabase` + redeploy.
 
 **Qué es R4, en criollo.** Supabase firma los tokens de sesión con una clave del proyecto. Históricamente era un
@@ -384,6 +420,9 @@ prod `supabase` + redeploy. Volver atrás = `REALTIME_DRIVER=off` + redeploy.
 - **Qué configura:**
   1. **Checkout de turnos (existente):** credenciales de prod + `MP_WEBHOOK_SECRET` verificado en
      Vercel (la ruta ya da 503 sin él); credenciales **sandbox** para el QA de `payment-amount-anclado`.
+     **Desde TP-0 (18-oct) está apagado por default** (`TURNERO_CHECKOUT` sin setear, §0.8): la única cuenta es la de
+     la plataforma. El cobro a la cuenta de cada profesional (OAuth con PKCE, app MP, usuarios de prueba, sandbox S3)
+     es TP-2 en la tanda T5 (plan §22.5 «Consola de Martin»).
   2. **Preapproval / suscripción:** **no por ahora** (decisión de Martin 16-oct). La suscripción se cobra por
      transferencia con comprobante (PL-2b, §0.6); el webhook de MP queda solo para los turnos.
 - **Bloquea:** checkout de turnos (corte E1 #2). Ya no bloquea el cobro del plan: es manual (PL-2b, §0.6; la Ola 2.4 quedó superada por PL).

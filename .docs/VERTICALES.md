@@ -251,8 +251,9 @@ el detalle está en [ARCHITECTURE.md §Sala de Espera realtime + ADR-006](ARCHIT
 - **Transporte:** Broadcast privado `tenant:<id>:agenda`; publica solo el server, después del commit, desde
   `afterBookingsCommitted` (1 POST, tope 1,5 s, breaker); el browser se suscribe con un token HS256 de 10 min
   (`kid` opcional). Drivers `off` (default, app idéntica a SR) · `local` (SSE, solo dev) · `supabase`.
-- **Quién lo usa:** módulo `salaEspera` (General y Kinesiología) + capability `agenda.reception`. BILLING queda afuera
-  aunque tenga `agenda.viewAll`, y sigue con su agenda sin canal.
+- **Quién lo usa:** desde HF-1a (18-oct, D-HF1) la agenda en vivo es de todos los planes: basta la capability
+  `agenda.reception`. BILLING y soporte quedan afuera (polling de 60 s). `/sala`, «Llamar» y los avisos de llegada siguen
+  con el módulo `salaEspera`.
 - **M5 `20261013120000_reception_call_realtime`** (sola): `Booking.calledAt` + CHECK, `kinesoft_realtime_can_read`,
   policy guardada `FOR SELECT TO authenticated`. Aplicada solo en el Docker local; `migrate status` = 32.
 - **Estado «Llamado»** y acción «Llamar» (profesional en sus turnos; Secretaria/OWNER/ADMIN en todos). Mover un turno

@@ -304,11 +304,22 @@ action → runWithRls (commit) → afterBookingsCommitted(tenantId, refs)
   (guard (e)): no está en ningún first-load. Backoff `min(30 s, 1 s·2^n)` con jitter, refresh del token al 80 % del
   TTL, resync al volver la pestaña / `online` / reconectar, `polling` de 60 s con 2 fallos seguidos u offline.
   `LiveIndicator`: «En vivo» · «Reconectando…» · «Sin conexión en vivo · se actualiza cada 60 s» · oculto con `off`.
+  **HF-1b (18-oct):** el hub guarda `diag {step, code, reason}` (indicador con motivo y «Ver detalle»); 3 rechazos de
+  auth seguidos estacionan el driver (un intento cada 5 min, o «Reconectar»), sin re-mint en bucle; el `import()` del
+  hub se reintenta una vez (`lib/chunk-retry.ts`) y si vuelve a fallar es un deploy nuevo («Hay una versión nueva ·
+  Recargá»); con driver `off` o sin hub, polling de 60 s **solo con la pestaña visible** (`createVisiblePoller`).
 - **Agenda en vivo** (`agenda-client.tsx` + `lib/agenda-client-state.ts`): `messagesTouchRange` decide si el lote toca
   la semana visible → re-pide `listAgendaBookings` (coalescido, uno en vuelo) → `changedBookingIds` → `k-flash` en las
   `BookingCard` cambiadas por otro (no las propias: `OWN_ACTION_QUIET_MS`); `availability` → `router.refresh()`. El
   drawer guarda `{id, updatedAt}` y deriva el turno de la lista viva (`agenda-client.tsx:313-317`): ve la hora nueva y
-  guardar con la versión vieja da stale. Con `off` el markup es el de SR (snapshot) y **no hay polling**.
+  guardar con la versión vieja da stale. Con `off` el markup es el de SR (snapshot) y, desde HF-1b, se re-pide cada
+  60 s con la pestaña visible (antes no había polling y la agenda quedaba congelada, H-RT2).
+- **Agenda en vivo sin módulo (HF-1a, D-HF1, 18-oct).** El canal es de la agenda, no de la Sala de Espera:
+  `realtimeAllowed = !actor.support && caps.has("agenda.reception")` (`lib/realtime-bootstrap.ts`), sin el módulo
+  `salaEspera`, así que entra en vivo en **todos los planes** (Individual y Consultorio incluidos); BILLING y soporte no.
+  Lo que sigue atado a `salaEspera` tiene su propio gate: `/sala`, «Llamar», la TV y los avisos de llegada
+  (`app-shell` monta `ArrivalAlerts` solo con el módulo). «Llegó» / «En atención» y el latido son de todos los planes
+  (drawer de HF-2c, `waitingPulse` de HF-2a).
 - **`/sala`** (`app/(app)/sala/*`, `components/sala/*`; módulo `salaEspera` + `agenda.reception`, BILLING →
   `/agenda`; solo hoy AR, SV-D8): columnas por profesional o por sala (SV-D13, «Por sala» solo con ≥ 1 sala activa,
   recordado en `agendaPrefs.salaGroupBy`); cada columna es **una `<ul>`** con bandas En atención → Llamado → En sala →
@@ -869,11 +880,22 @@ Booking.locationId? ──► Location (RESTRICT; null = primary)
   `nextFreeSlot` ↔ old suggest, `buildPublicSlots` old ↔ new; with the
   backfill applied, the output is identical for today's client.
 - **Consumers**: `lib/bookings.ts` (suggest, soft warnings, batch),
-  `lib/public-booking.ts` (`listPublicSlots`, `findFirstPublicSlot`, submit),
+  `lib/public-booking.ts` (`listPublicSlotWindow`, `listPublicSlots` legado, `findFirstPublicSlot`, submit),
   `lib/availability-actions.ts` (`getAgendaAvailability`, `listAvailableSlots`,
   `classifyBookingInstant`, `previewRecurrence` — read-only,
   `agenda.viewAll`, **no PHI**, **no cache** on purpose: a stale "free" slot is
   a surprise overbooking).
+
+- **Ventana del turnero (TP-1s, 18-oct).** `listPublicSlotWindow({tenantSlug, practitionerId, serviceId, from})` →
+  `{days: {date, status: "open"|"full", slots}[], nextFrom, reachedEnd, skippedFrom}`: 5 días **hábiles** (días en que
+  el profesional atiende y que todavía tienen horarios por delante desde ahora + la anticipación mínima; TP-D2), solo
+  horarios libres, «full» = «Completo». Si los 5 están llenos avanza sola y `skippedFrom` alimenta el aviso del salto.
+  Costo: **un** hit de rate limit (`pub:slots:<ip>`) y **una** carga del loader sobre 6 semanas
+  (`PUBLIC_WINDOW_SCAN_DAYS = 42`, recortado a hoy + 90 y a `maxLeadDays`): ≤ 14 sentencias, lo mismo que un día de la
+  lista legada (`turnero.slotWindow` en `tests/perf/loaders.perf.test.ts`). La pura es `publicSlotWindow`
+  (`lib/public-booking-slots.ts`), construida sobre `publicDaySlots`/`slotsForOffer`: todo slot ofrecido pasa
+  `checkPublicSlot` en el submit (test de paridad), y «Próximo turno disponible» coincide con `firstPublicSlotAcross`
+  (oráculo). La UI es `components/booking/wizard/slot-window-step.tsx`.
 
 ### Write paths on the engine (`lib/bookings.ts`)
 

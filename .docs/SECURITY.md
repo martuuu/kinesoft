@@ -783,7 +783,7 @@ Diseño en [ARCHITECTURE.md §Salas (SR)](ARCHITECTURE.md); orden de locks en AD
 - **Facturación (SR-D4F):** los cancelados/ausentes con cobro se ven siempre y suman en "percibido"
   (`isBillingVisible`, `components/planes/plan-booking-groups.ts:242`). No cambia quién ve la pestaña.
 
-## 17. Realtime (SV, 13/14-oct-2026; en código, sin deploy hasta cerrar B)
+## 17. Realtime (SV, 13/14-oct-2026; prendido en prod el 16-oct; HF-1a, 18-oct)
 
 Diseño en [ARCHITECTURE.md ADR-006](ARCHITECTURE.md); consola y verificación en [EXTERNAL-CONFIG.md §3.1](EXTERNAL-CONFIG.md).
 Con `REALTIME_DRIVER=off` (default) nada de esto corre: ni publish, ni token, ni socket.
@@ -796,8 +796,9 @@ Con `REALTIME_DRIVER=off` (default) nada de esto corre: ni publish, ni token, ni
   - JWT HS256 con `node:crypto`, header `kid` opcional (`SUPABASE_JWT_KID`, SV-D15). Claims literales (SV-D6)
     `{iss:"kinesoft-realtime", aud:"authenticated", role:"authenticated", sub:"rt:<uuid>", tenant_id, purpose:
     "kinesoft-realtime", iat, exp: iat+600}`. El `tenant_id` sale del actor de la sesión, nunca del cliente.
-  - Gate: `getActor()` → módulo `salaEspera` → `realtimeAllowed` = **`agenda.reception`** (no `agenda.viewAll`:
-    BILLING lo tiene y quedaría adentro; `lib/realtime-bootstrap.ts:24`) → driver `supabase` → secreto presente →
+  - Gate: `getActor()` → acceso del consultorio (BO2-D) → `realtimeAllowed` = **`!actor.support &&
+    agenda.reception`** (no `agenda.viewAll`: BILLING lo tiene y quedaría adentro; `lib/realtime-bootstrap.ts`) →
+    driver `supabase` → secreto presente →
     `rateLimit("rt:token:<userId>", 30 cada 10 min)`. Nunca tira (`{ok:false}` → el cliente cae a polling). El token
     y el secreto no se loguean.
   - **Por qué no sirve para otra cosa si se filtra** (10 min): `sub` no es UUID (GoTrue lo rechaza y `auth.uid()` no
@@ -839,8 +840,21 @@ Con `REALTIME_DRIVER=off` (default) nada de esto corre: ni publish, ni token, ni
   `components/**`/`app/**/*.tsx`/drivers del cliente, `server-only` en publisher y firmador, sin `console.log` ni
   `logger(…token|secret…)` en `lib/realtime-*`; (e) `@supabase/realtime-js` solo por `import()` dinámico en
   `lib/realtime-client-supabase.ts`. Limitación: (c) mira por archivo, no por función (AUDIT `guard-realtime-por-archivo`).
-- **Pendiente de Martin** (EXTERNAL-CONFIG §3.1): R1-R4 (incluye «Allow public access» OFF) y V1-V7 en staging antes de
-  `REALTIME_DRIVER=supabase`.
+- **Agenda en vivo para todos los planes (HF-1a, D-HF1, 18-oct).** Antes el mint exigía el módulo `salaEspera` (solo
+  Clínica/Libre) y un consultorio en plan Consultorio con Secretaria no tenía agenda en vivo (AUDIT H-RT3). Ahora el
+  gate es la capability sola; BILLING y soporte siguen afuera. Lo que abre es poco: el canal lleva avisos «cambió
+  algo» sin PHI y cada vista re-pide con su propia action y su propio gate. `/sala`, «Llamar», la TV y los avisos de
+  llegada siguen exigiendo `salaEspera`.
+- **Endurecimiento de HF-1a (H-RT1).** `lib/env.ts` recorta `SUPABASE_JWT_SECRET`, `SUPABASE_JWT_KID` y la anon key
+  (un `\n` de Vercel cambiaba la firma); la copia de la anon key que inlinea el build en el navegador **no** pasa por
+  ese recorte (AUDIT `anon-key-navegador-sin-recorte`). `/plataforma/sistema` muestra largo, si había espacios al borde
+  y una **huella** (sha256 con prefijo propio → 8 hex) del secreto, nunca el valor; la misma huella imprime
+  `scripts/realtime-verify.ts`. «Probar desde el servidor» (`lib/platform-realtime-probe{,-internal}.ts`,
+  `requirePlatformAdmin`) firma con el mismo código y se une a un tenant **sintético** (`PROBE_TENANT_ID`); el motivo
+  se recorta y se le tapan JWT y anon key. Cada rechazo del mint deja `realtime.mint_denied` con un código (una vez por
+  usuario, motivo y 10 min), sin token ni secreto.
+- **Pendiente de Martin** (EXTERNAL-CONFIG §0.8 y §3.1): el QA de «En vivo» en prod después del re-pegado del secreto;
+  Node 22 en Vercel si quiere usar «Probar desde el servidor».
 
 ## 18. Identidad y acceso (IAM, 14-oct-2026)
 
@@ -989,6 +1003,28 @@ Hallazgos en [AUDIT.md «Hallazgos de PL-Z»](AUDIT.md); consola en [EXTERNAL-CO
   aunque la fila diga `clinical = true`; ningún camino de lectura le abre la HC por ese flag.
 - **Leads** (a4#1): el tope global diario se consume solo si pasan el de IP y el de email: una IP sola ya no agota el cupo
   del día.
+
+### 20.1 Pausa de la 2FA del superadmin (HF-3, 18-oct-2026; D-HF7)
+
+Por qué (AUDIT H-2FA): apagar el TOTP propio no sirve, porque sin ningún método cada step-up pide «Activá la
+verificación en dos pasos» y eso bloquea las acciones `high` de Plataforma.
+
+- **Variable** `SUPERADMIN_2FA_BYPASS="<userId>@AAAA-MM-DD[,…]"`, leída de `process.env` en cada llamada
+  (`lib/two-factor-bypass.ts`; lógica pura en `lib/two-factor-bypass-logic.ts`). La carga Martin; el agente no lee el env.
+- **Falla cerrado.** Aplica solo si: superadmin (`isPlatformAdmin`) no deshabilitado; su id exacto en la lista; la fecha
+  no venció (vale hasta el fin de ese día AR); vence a **≤ 30 días** (más lejos se ignora con `2fa.bypass_ignored`);
+  `PLATFORM_MFA_ENFORCEMENT` distinto de `enforce`. **Una entrada mal formada invalida toda la variable.**
+- **Dónde actúa:** la foto de acceso (`lib/session.ts`) deja la 2FA `satisfied` (no pasa por `/verificar-acceso`);
+  `requireStepUp` sale antes y deja `logger.warn("2fa.stepup_bypassed")` por cada salto; `support.start` registra
+  `twoFactorBypass: true`.
+- **Dónde NO actúa:** `resolveTwoFactorSession` / `assertStepUp` (cambiar o apagar la 2FA sigue pidiendo el código) y
+  **enrolar un factor nuevo** en `/plataforma-mfa/configurar` (`requireStepUp(…, { allowBypass: false })`): con la
+  contraseña sola alguien podría dejar un TOTP propio que sigue valiendo cuando la pausa vence.
+- **Rastro visible:** banda en Plataforma y en `/cuenta/seguridad` («La verificación en dos pasos está en pausa para tu
+  usuario hasta el dd/mm…»). Se apaga sola al vencer.
+- **Riesgo aceptado por Martin:** mientras dure, **con la contraseña sola se opera Plataforma entera** (las 14 acciones de
+  riesgo incluidas). Mitigación: contraseña única, 14 días (tope 30), solo su id. Arreglo de fondo en backlog:
+  «Recordar este dispositivo 30 días» + step-up de 60 min para superadmin.
 
 ## 21. Evoluciones de HC (EV2, 15/16-oct-2026)
 

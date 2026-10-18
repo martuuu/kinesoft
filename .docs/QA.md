@@ -1952,3 +1952,59 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 ### Escritorio chico (monitores de recepción)
 - [ ] **1366×768** y **1024×768** de pantalla (625 px útiles en el navegador, 695 instalada), con sidebar contraído, expandido y con «Barra superior»: Recepción de la agenda y `/sala` sin scroll del documento; la tira de KPIs de `/sala` siempre a la vista.
 - [ ] Grilla de la agenda a 1366×625: se ven ≥ 6 h sin scroll del documento.
+
+## Tanda A · Turnero sin cobro, realtime, «Llegó» y 2FA (18-oct-2026)
+
+> HF-2c (`59ca0a7`) · TP-0b (`0469f10`) · HF-3 (`eead8fc`) · HF-2a (`5921d62`) · TP-0a (`acb8792`) · HF-1b (`fb65ad8`)
+> · HF-1a (`d1f08df`) · TP-1s (`6facb80`) · TP-1u (`841c67d`, `4e504ee`). **Sin migración.** Plan §22; hallazgos en
+> [AUDIT «Hallazgos de la Tanda A»](AUDIT.md); variables en [EXTERNAL-CONFIG §0.8](EXTERNAL-CONFIG.md). Fechas con
+> `TZ=UTC`. Lo de realtime y 2FA se prueba en **prod después del deploy** (es lo que falló allá); el resto también en local.
+
+### 🔴 Realtime (HF-1a/1b)
+- [ ] 🔴 Consultorio en plan **Consultorio** con una Secretaria: en **Chrome** y en la **PWA instalada**, la agenda muestra «En vivo». Un cambio de turno hecho desde otra cuenta aparece en < 2 s sin recargar.
+- [ ] Lo mismo con un profesional del consultorio. Con una cuenta **Facturación** (BILLING) y entrando como soporte: sin «En vivo», y la agenda igual se actualiza sola cada ~60 s con la pestaña visible.
+- [ ] Consultorio en plan Consultorio: no hay avisos de llegada con sonido ni `/sala` (siguen siendo de Clínica/Libre).
+- [ ] El indicador, si no entra en vivo, dice el motivo al pasar el mouse y tiene «Ver detalle» con los pasos ✓/✗ y «Reconectar». No queda en «Reconectando…» para siempre (después de 3 rechazos espera 5 min).
+- [ ] PWA abierta desde antes de un deploy: aparece «Hay una versión nueva · Recargá» y al recargar vuelve «En vivo».
+- [ ] `/plataforma/sistema`: la tarjeta de realtime muestra la **huella** del secreto (8 caracteres, nunca el valor) y «espacios o saltos de línea al borde: no». La huella es la misma que imprime `scripts/realtime-verify.ts` en local.
+- [ ] «Probar desde el servidor»: `SUBSCRIBED`, o con Node 20 «WebSocket no disponible en este runtime» (esperado hasta pasar a Node 22).
+
+### 🔴 «Llegó» desde el drawer (HF-2c)
+- [ ] 🔴 Plan **Individual** y **Consultorio**: en un turno de **hoy**, el drawer muestra «Llegó». Al tocarlo: toast «Marcaste la llegada de …» con «Deshacer», y el drawer dice «En sala de espera desde las HH:MM».
+- [ ] «En atención» y «Deshacer» desde el drawer; en un turno de ayer o de mañana no aparecen.
+- [ ] Plan Consultorio: no hay «Llamar». En Clínica/Libre sí.
+- [ ] Facturación no ve las acciones.
+
+### Latido de espera (HF-2a)
+- [ ] Paciente marcado «Llegó»: punto lima que late arriba a la derecha de la tarjeta en **Día**, en **Semana** (punto chico en la línea) y en la **lista mobile** de Semana a 390. En Lista, el texto.
+- [ ] A los **15 min** de espera late más rápido y dice «En sala 15′» en negrita (sin ámbar). Los minutos avanzan solos también en «Por profesional» y «Por sala».
+- [ ] Se apaga al «Llamar» o al pasar a «En atención».
+- [ ] Una llegada de **ayer** no muestra «En sala» ni punto.
+- [ ] Celda con muchos turnos: el «+N más» dice «· 1 en sala» y el que espera queda a la vista.
+- [ ] Apariencia → «Aviso de espera»: **Punto** (default) y **Borde que late** (late el borde de la tarjeta, sin sombra). La preferencia queda al recargar.
+- [ ] Con «reducir movimiento» del sistema: punto (o borde) **fijo**, sin animación, y se ve completo. Lector de pantalla: «En sala de espera · 12 min».
+- [ ] El fondo, la barra lateral y la opacidad de la tarjeta no cambian.
+
+### 2FA del superadmin en pausa (HF-3)
+- [ ] Con `SUPERADMIN_2FA_BYPASS="<tu id>@<hoy + 14>"` y redeploy: el login no pide código, y Plataforma y `/cuenta/seguridad` muestran la banda «La verificación en dos pasos está en pausa para tu usuario hasta el dd/mm…».
+- [ ] Una acción de riesgo de Plataforma (por ejemplo, entrar como soporte) corre sin pedir código; el registro de soporte dice `twoFactorBypass`.
+- [ ] Cambiar o apagar la 2FA, y sumar un TOTP en `/plataforma-mfa/configurar`, **siguen pidiendo el código**.
+- [ ] Fecha a más de 30 días, mal escrita o de otro usuario → no hay banda y se pide el código como siempre.
+- [ ] Al pasar la fecha (o borrando la variable): la banda desaparece sola y vuelve a pedirse el código.
+
+### 🔴 Turnero sin cobro (TP-0)
+- [ ] 🔴 Con `TURNERO_CHECKOUT` sin setear: servicio de **$ 0** y servicio con precio → el botón dice «Confirmar turno», el resumen «Lo pagás en el consultorio» y el resultado «¡Turno reservado!» · «Te esperamos. El pago lo hacés en el consultorio.». Nunca manda a Mercado Pago.
+- [ ] El turno aparece en la agenda **Confirmado** e impago, y sigue reservado pasados 30 min.
+- [ ] Llega el aviso de turno nuevo al titular, al profesional y a la Secretaria. Una sola vez (recargar el resultado no repite el aviso ni el turno).
+- [ ] La pantalla de estado del turno muestra el precio del servicio, no «$ 0».
+
+### Turnero: ventana de 5 días (TP-1)
+- [ ] A **390 px**: los días apilados, cada uno con su título, 8 horarios y «Ver N más». A **900 px** o más (y a 1366×768): 5 columnas.
+- [ ] Un sábado a la noche (con `TZ=UTC`): muestra lunes a viernes de la semana siguiente.
+- [ ] Un día sin horarios libres dice «Completo». Solo se ven horarios libres (no hay tachados).
+- [ ] Si los 5 días están llenos, salta solo y avisa «No había turnos libres hasta el …; te mostramos desde el …».
+- [ ] «Siguientes ›» y «‹ Anteriores»: avanzan y vuelven por la misma ventana; el rango se anuncia al lector de pantalla.
+- [ ] «Próximo turno disponible» (también con un profesional elegido): salta al primer libre y le pone el foco.
+- [ ] «Ir a una fecha»: un día que no atiende arranca en el próximo hábil y lo avisa. No pasa de 90 días.
+- [ ] Botones de horario de 44 px; el lector lee «Lunes 19 de octubre a las 09:00».
+- [ ] Reservar desde la ventana termina en «¡Turno reservado!» (lo ofrecido siempre se puede reservar).

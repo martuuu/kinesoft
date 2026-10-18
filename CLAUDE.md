@@ -69,6 +69,18 @@
     - «M8» = `pl_accounts_billing`, «M9» = `clinical_notes`, «M10» = `perf_fk_indexes`, «M11» = `public_directory`.
     - «H-SLOW» (lentitud general), «H-TURN» (turnero por profesional), «H-EV2», «H-LAND», «H-LOGIN», «H-BUNDLE», «H-DOC»:
       hallazgos de §20.2 ([AUDIT §Ronda 24](.docs/AUDIT.md)).
+  - **§22 del plan (18-oct; orden de §22.13):**
+    - «HF» = hotfixes de la Tanda A (HF-1a/1b realtime, HF-2a/2c «Llegó» y latido, HF-3 2FA del superadmin): **no**
+      son los hallazgos H1-H6. «D-HF1..7» sus decisiones con default y «D-LL1» el estilo del latido (punto lima, borde
+      en Apariencia).
+    - «TP» = turnero público y cobro de turnos: TP-0 (sin cobro), TP-1 (ventana de 5 días; sesiones TP-1s/TP-1u), TP-M
+      (= **M18** `turnero_cobros_mp`), TP-2 (server), TP-3 (UI). «TP-D*» sus decisiones. No confundir con la
+      «Tanda»: TP es un bloque.
+    - «MPS-D7» = cobro de la suscripción el día 4 (enmienda de MPS, §22.6).
+    - «H-TP0..3», «H-RT1..3», «H-LL1..2», «H-2FA», «H-YT» son hallazgos de §22.2 (AUDIT «Ronda 30»), no olas.
+    - «Tanda A» / «Tanda B» = las dos primeras tandas sin migración de §22.13; «T3..T7» las siguientes (T3 = AS M12,
+      T4 = FC M14, T5 = TP M18, T6 = WA M15 + MPS M16, T7 = TV M17). Se ejecutan T3 → T4 → T5 → T7 → T6 + infra:
+      el número no es el orden. «T*» no son los «S01…S32» de Planes.
   - «Plan» choca en tres sentidos: plan de tratamiento, plan SaaS del tenant y plan de la obra social.
   - «Vertical» (`Tenant.vertical`: General / Kinesiología) es el tipo de consultorio: no es la «disciplina» de un
     servicio o plan (Kine / Osteo) ni el plan SaaS (`Tenant.plan`). «Kine PRO» = vertical Kinesiología + plan PRO.
