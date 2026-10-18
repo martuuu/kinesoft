@@ -22,7 +22,7 @@ import type { ReceptionAction } from "@/lib/reception-state";
 
 export const ATTENDED_NOTE_TOAST = {
   title: "Turno atendido",
-  action: "Cargar evolución",
+  action: "Cargar ficha",
 } as const;
 
 /** Lo que la superficie sabe del actor. `canReadClinical` = `caps.has("clinical.read")` (lo calcula el server). */

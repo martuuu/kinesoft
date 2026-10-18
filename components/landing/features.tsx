@@ -144,7 +144,7 @@ export function Features() {
           </Tile>
           <Tile className={s.hc} icon={ICON.file} title="Pacientes e historia clínica">
             <p>
-              La ficha de cada paciente con sus turnos, sus archivos y las evoluciones de cada consulta. Una evolución se
+              La ficha de cada paciente con sus turnos, sus archivos y las fichas de cada consulta. Una ficha se
               edita durante 24 horas; después se enmienda o se anula con motivo, nunca se borra.
             </p>
           </Tile>

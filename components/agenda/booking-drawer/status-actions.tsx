@@ -53,7 +53,7 @@ export function offersNoteAfterStatus(status: BookingStatus, view: BookingClinic
 }
 
 /** EV2-3b: acción del toast de «Realizado» cuando el actor puede cargar la evolución del turno. */
-export const NOTE_TOAST_ACTION_LABEL = "Cargar evolución";
+export const NOTE_TOAST_ACTION_LABEL = "Cargar ficha";
 
 /**
  * EV2-Z bajo: con acción el toast dura 10 s. Con el default de éxito se iba antes de que el profesional terminara de
@@ -62,7 +62,7 @@ export const NOTE_TOAST_ACTION_LABEL = "Cargar evolución";
 export const NOTE_TOAST_DURATION_MS = 10_000;
 
 /** EV2-Z bajo: «Eliminar turno» deshabilitado si el turno tiene evolución (viva o anulada: el server lo rechaza). */
-export const DELETE_BLOCKED_BY_NOTE_HINT = "Tiene una evolución: cancelalo en vez de eliminarlo.";
+export const DELETE_BLOCKED_BY_NOTE_HINT = "Tiene una ficha: cancelalo en vez de eliminarlo.";
 
 /** ¿La vista del turno trae alguna evolución (viva o anulada)? `null` (sin acceso / no leída) = no se sabe → false. */
 export function bookingHasClinicalNote(view: BookingClinicalNoteView | null): boolean {

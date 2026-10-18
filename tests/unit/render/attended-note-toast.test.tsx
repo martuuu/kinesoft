@@ -66,7 +66,7 @@ describe("[EV2-3c] toast «Cargar evolución» por rol", () => {
     expect(title).toBe(ATTENDED_NOTE_TOAST.title);
     expect(opts.description).toBe("Ana Pérez");
     expect(opts.id).toBe("attended-note:bk1");
-    expect(opts.action.label).toBe("Cargar evolución");
+    expect(opts.action.label).toBe("Cargar ficha");
     opts.action.onClick();
     expect(push).toHaveBeenCalledWith("/pacientes/pat1?tab=evoluciones&turno=bk1");
   });

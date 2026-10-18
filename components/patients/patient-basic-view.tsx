@@ -78,8 +78,8 @@ export function PatientBasicView({
 
       <p style={{ fontSize: 13, color: "var(--navy-700)", lineHeight: 1.5, margin: 0 }}>
         Este paciente está asignado a otro profesional del consultorio. Para
-        ver su historia clínica{hasPlans ? ", plan de tratamiento o evolución" : ""}, pedile al
-        responsable que use el botón <strong>Compartir</strong> desde el
+        ver su historia clínica{hasPlans ? " o su plan de tratamiento" : ""}, pedile al
+        responsable que use el botón <strong>Compartir con un profesional</strong> desde el
         perfil del paciente.
       </p>
     </Card>

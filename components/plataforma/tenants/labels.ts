@@ -62,7 +62,7 @@ export const MODULE_LABEL: Record<TenantModule, string | null> = {
  * (tabla «Módulos» de Suscripción, «Actividad», copy de dependencias): ahí esconderlos dejaría una fila o un cambio
  * sin nombre.
  */
-export const MODULE_NAME_FALLBACK: Partial<Record<string, string>> = { evoluciones: "Evoluciones", reportes: "Reportes" };
+export const MODULE_NAME_FALLBACK: Partial<Record<string, string>> = { evoluciones: "Historia clínica", reportes: "Reportes" };
 
 /** Nombre de un módulo para Plataforma, con chip o sin chip. */
 export function moduleName(m: TenantModule): string {

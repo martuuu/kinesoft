@@ -242,12 +242,22 @@ function humanizeAction(action: string): string {
     "patientFile.upload": "Archivo subido",
     "patientFile.delete": "Archivo eliminado",
     "patientFile.download": "Archivo descargado",
-    // EV2 (EV2-D16, EV2-D11): evoluciones de HC e impresión auditada. El payload trae ids, revisión y tipo; nunca texto.
-    "clinicalNote.create": "Evolución cargada",
-    "clinicalNote.edit": "Evolución editada",
-    "clinicalNote.amend": "Enmienda agregada a una evolución",
-    "clinicalNote.void": "Evolución anulada",
+    // EV2 (EV2-D16, EV2-D11): fichas de HC e impresión auditada. El payload trae ids, revisión y tipo; nunca texto.
+    // FC-3h2 (Anexo B): «evolución» → «ficha»; «Evolución» queda solo como tipo de ficha (CLINICAL_NOTE_KIND_LABEL).
+    "clinicalNote.create": "Ficha cargada",
+    "clinicalNote.edit": "Ficha editada",
+    "clinicalNote.amend": "Enmienda agregada a una ficha",
+    "clinicalNote.void": "Ficha anulada",
     "clinicalRecord.print": "Historia clínica impresa",
+    // FC (C-FC7): compartir/dejar de compartir con el paciente (auditInTx) y descargas (auditSecurityEvent). La
+    // importación de Word se audita hoy como `clinicalNote.create` (con `importSource`); la clave `clinicalNote.import`
+    // queda mapeada por si FC-2a la separa, así el historial no muestra la clave cruda.
+    "clinicalNote.import": "Ficha importada",
+    "patientDocument.share": "Ficha compartida con el paciente",
+    "patientDocument.revoke": "Ficha que dejó de compartirse",
+    "patientDocument.download": "Ficha compartida descargada por el paciente",
+    "clinicalNote.download": "Ficha descargada",
+    "clinicalRecord.download": "Historia clínica descargada",
   };
   return map[action] ?? action;
 }

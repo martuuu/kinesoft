@@ -123,15 +123,15 @@ export const PLAN_PATIENT_CHANGE_ERROR =
  * RESTRICT de M9 (`ClinicalNote_bookingId_fkey`) lo frena igual, pero con un P2003 = 500: la evolución es historia
  * clínica del turno, así que se cancela.
  */
-export const BOOKING_HAS_CLINICAL_NOTE_ERROR = "Este turno tiene una evolución: cancelalo en vez de eliminarlo.";
+export const BOOKING_HAS_CLINICAL_NOTE_ERROR = "Este turno tiene una ficha: cancelalo en vez de eliminarlo.";
 /**
  * EV2 (brief §0 R1, C-EV2-7): la evolución es del paciente del turno. La FK compuesta
  * `ClinicalNote_booking_tenant_patient_fkey` (ON UPDATE NO ACTION) frena el re-vínculo con 23503 = 500; acá, mensaje.
  */
-export const BOOKING_CLINICAL_NOTE_PATIENT_ERROR = "Este turno tiene una evolución: no se puede cambiar el paciente.";
+export const BOOKING_CLINICAL_NOTE_PATIENT_ERROR = "Este turno tiene una ficha: no se puede cambiar el paciente.";
 /** Salir de COMPLETED con la sesión "tocada" (C4): la sesión queda realizada. */
 export const SESSION_KEPT_DONE_NOTICE =
-  "La sesión ya tenía un registro o una evolución: quedó realizada. Revisala en Seguimiento si hace falta.";
+  "La sesión ya tenía un registro o una ficha: quedó realizada. Revisala en Seguimiento si hace falta.";
 
 export const RECEPTION_FORBIDDEN_ERROR ="No tenés permiso para operar la recepción.";
 export const RECEPTION_OTHER_PRACTITIONER_ERROR =

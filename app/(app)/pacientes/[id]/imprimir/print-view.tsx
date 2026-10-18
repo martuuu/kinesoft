@@ -29,7 +29,7 @@ function fmtBirth(ymd: string): string {
 
 export const PRINT_COPY = {
   truncated: (n: number) =>
-    `Se imprimen las ${n} evoluciones más recientes. Para la historia completa, pedile la exportación al/la Titular.`,
+    `Se imprimen las ${n} fichas más recientes. Para la historia completa, pedile la exportación al/la Titular.`,
   // Anula el autor o el Titular (`permissionsFor`): si no fue el autor, fue el Titular. No se lee el nombre del
   // Titular: el DTO no lo trae y para la HC alcanza con el rol.
   voidedBy: "el/la Titular",
@@ -183,7 +183,7 @@ export function ClinicalRecordPrintView({ record, backHref }: { record: Clinical
 
       <section style={{ marginTop: 18 }}>
         {entries.length === 0 ? (
-          <p style={{ color: "var(--navy-500)" }}>Todavía no hay evoluciones cargadas para este paciente.</p>
+          <p style={{ color: "var(--navy-500)" }}>Todavía no hay fichas cargadas para este paciente.</p>
         ) : (
           entries.map(({ note, amendments }) => (
             <article key={note.id} className="k-print-note">

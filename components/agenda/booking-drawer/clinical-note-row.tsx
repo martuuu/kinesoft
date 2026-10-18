@@ -25,9 +25,9 @@ import type { BookingClinicalNoteView, ClinicalNoteDTO } from "@/lib/clinical-no
 import { menuLabel, sectionCard } from "./styles";
 
 export const CLINICAL_NOTE_ROW_COPY = {
-  label: "Evolución",
-  create: "Cargar evolución",
-  empty: "Este turno todavía no tiene evolución.",
+  label: "Ficha",
+  create: "Cargar ficha",
+  empty: "Este turno todavía no tiene ficha.",
   openHc: "Abrir en la historia clínica",
   editInHc: "Editar, enmendar o anular en la historia clínica",
 } as const;

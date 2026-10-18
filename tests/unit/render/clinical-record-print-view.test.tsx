@@ -74,7 +74,7 @@ describe("[EV2-Z] impresión de la historia clínica", () => {
 
   it("aviso de corte: pedile la exportación al/la Titular", () => {
     const html = render(record({ truncated: true }));
-    expect(html).toMatch(/Se imprimen las \d+ evoluciones más recientes\. Para la historia completa, pedile la exportación al\/la Titular\./);
+    expect(html).toMatch(/Se imprimen las \d+ fichas más recientes\. Para la historia completa, pedile la exportación al\/la Titular\./);
     expect(render(record())).not.toContain("Se imprimen las");
   });
 

@@ -34,14 +34,14 @@ import { clinicalNoteDeepLink } from "@/lib/clinical-notes-logic";
 export const SEGUIMIENTO_COPY = {
   sinTurnoTitle: "Sin turno",
   sinTurnoHint: "Sesiones de planes activos que no tienen turno en la agenda.",
-  sinEvolucionTitle: "Sin evolución",
-  sinEvolucionHint: "Realizadas en los últimos 14 días sin evolución ni registro de la sesión (anotaciones, EVA o ejercicios).",
-  sinEvolucionTag: "Sin evolución",
+  sinEvolucionTitle: "Sin ficha",
+  sinEvolucionHint: "Realizadas en los últimos 14 días sin ficha ni registro de la sesión (anotaciones, EVA o ejercicios).",
+  sinEvolucionTag: "Sin ficha",
   /** EV2-D19: guarda la meta de la sesión (antes decía «Cargar evolución»). */
   registrarSesion: "Registrar sesión",
   /** EV2-D19: abre el editor de la evolución de HC del turno de la sesión. */
-  cargarEvolucionHc: "Cargar evolución",
-  verEvolucionHc: "Ver evolución",
+  cargarEvolucionHc: "Cargar ficha",
+  verEvolucionHc: "Ver ficha",
   agendar: "Agendar",
   dischargeTitle: "Para dar el alta",
   dischargeAction: "Ver el plan",

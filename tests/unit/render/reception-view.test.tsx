@@ -54,7 +54,7 @@ describe("ReceptionView render", () => {
     );
     expect(pro).toBe(base);
     expect(secretaria).toBe(base);
-    expect(base).not.toContain("Cargar evolución");
+    expect(base).not.toContain("Cargar ficha");
   });
   it("solo lectura", () => {
     const html = renderToStaticMarkup(<ReceptionView dayKey={DAY} bookings={rows} practitioners={pr} now={NOW} canOperate={false} onOpenBooking={noop} onChanged={noop} />);

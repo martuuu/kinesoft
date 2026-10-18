@@ -101,7 +101,7 @@ describe("[EV1-C2] copy por vertical", () => {
       expect(html).not.toMatch(/kinesi[oó]log/i);
     }
     expect(g).not.toContain("plan de tratamiento");
-    expect(k).toContain("plan de tratamiento o evolución");
+    expect(k).toContain("historia clínica o su plan de tratamiento");
   });
 
   it("obras sociales: General «al profesional por turno»; Kine «al kine por sesión»", () => {

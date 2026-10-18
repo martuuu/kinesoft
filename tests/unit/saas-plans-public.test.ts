@@ -98,7 +98,7 @@ describe("[PL-1a] getPublicPlanCatalog (C-PL2)", () => {
 });
 
 describe("[VX2-c2] bullet de evoluciones (EV2 ya está)", () => {
-  const EVOL = "Evoluciones de cada consulta en la historia clínica";
+  const EVOL = "Fichas de cada consulta en la historia clínica, en PDF para el paciente";
 
   it("Individual lo muestra en las dos verticales y los planes de arriba lo heredan («Todo lo del plan…»)", async () => {
     db.findMany.mockResolvedValue(M8_ROWS);

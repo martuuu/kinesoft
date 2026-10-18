@@ -116,7 +116,7 @@ export function TenantModulesForm({
         })}
       </ul>
       <p style={{ margin: 0, fontSize: 12, color: "var(--navy-300)", lineHeight: 1.45 }}>
-        Lo básico (agenda, pacientes, facturación, obras sociales y evoluciones) y lo que no existe para{" "}
+        Lo básico (agenda, pacientes, facturación, obras sociales e historia clínica) y lo que no existe para{" "}
         {VERTICAL_LABEL[base.vertical]} no se toca. Turnos online: {TURNERO_ROW_HINT.charAt(0).toLowerCase() + TURNERO_ROW_HINT.slice(1)}
       </p>
 

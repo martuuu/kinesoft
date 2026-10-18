@@ -125,15 +125,15 @@ describe("[P3-S20] modelo de Seguimiento", () => {
     expect(sessionHeading({ ordinal: 4, totalLive: 10, title: null })).toBe("Sesión 4 de 10");
   });
 
-  it("[EV2-Z M1] hint de «Sin evolución» literal (cuenta la evolución de HC y el registro de la sesión)", () => {
+  it("[EV2-Z M1] hint de «Sin ficha» literal (cuenta la ficha de HC y el registro de la sesión)", () => {
     expect(SEGUIMIENTO_COPY.sinEvolucionHint).toBe(
-      "Realizadas en los últimos 14 días sin evolución ni registro de la sesión (anotaciones, EVA o ejercicios)."
+      "Realizadas en los últimos 14 días sin ficha ni registro de la sesión (anotaciones, EVA o ejercicios)."
     );
     const s = row({ id: "ev1", completedAt: new Date("2026-10-05T13:00:00.000Z") });
     const out = html(
       <SeguimientoLanding buckets={buckets({ recent: { rows: [s], total: 1 }, realizadasSinEvolucion: { rows: [s], total: 1 } })} plansEnabled />
     );
-    expect(out).toContain("sin evolución ni registro de la sesión (anotaciones, EVA o ejercicios).");
+    expect(out).toContain("sin ficha ni registro de la sesión (anotaciones, EVA o ejercicios).");
   });
 
   it("copy de alta literal C13", () => {
@@ -228,9 +228,9 @@ describe("[P3-S20] landing de Seguimiento", () => {
         plansEnabled
       />
     );
-    expect(out).toContain(">Sin evolución<");
+    expect(out).toContain(">Sin ficha<");
     expect(out).toContain(">Registrar sesión<");
-    expect(out).not.toContain("Cargar evolución");
+    expect(out).not.toContain("Cargar ficha");
     // La realizada sin evolución no dice "Hecho".
     expect(out).not.toContain("Hecho");
   });
@@ -264,7 +264,7 @@ describe("[P3-S20] landing de Seguimiento", () => {
   it("buckets nuevos vacíos o ausentes no agregan secciones", () => {
     const out = html(<SeguimientoLanding buckets={buckets()} plansEnabled />);
     expect(out).not.toContain(">Sin turno<");
-    expect(out).not.toContain(">Sin evolución<");
+    expect(out).not.toContain(">Sin ficha<");
     expect(out).not.toContain("¿Le das el alta?");
   });
 });
@@ -340,10 +340,10 @@ describe("[P3-S20] detalle de sesión", () => {
     const out = html(
       <SessionDetail session={detail({ completedAt: new Date("2026-10-06T13:00:00.000Z") })} scheduledLabel="x" canSchedule />
     );
-    expect(out).toContain(">Sin evolución<");
+    expect(out).toContain(">Sin ficha<");
     expect(out).toContain("Registrar sesión");
     // Sin `clinicalNote` (la página no la pasó: sin turno / sin acceso) no hay evolución de HC.
-    expect(out).not.toContain("Cargar evolución");
+    expect(out).not.toContain("Cargar ficha");
     expect(out).not.toContain("Guardar anotaciones");
     // Realizada: no se agenda ni se cierra.
     expect(out).not.toContain(">Agendar<");
@@ -358,7 +358,7 @@ describe("[P3-S20] detalle de sesión", () => {
       />
     );
     expect(out).not.toContain("Registrar sesión");
-    expect(out).not.toContain(">Sin evolución<");
+    expect(out).not.toContain(">Sin ficha<");
   });
 });
 
@@ -374,21 +374,21 @@ describe("[EV2-3c] Seguimiento: evolución de HC del turno de la sesión (EV2-D1
 
   it("profesional con escritura (canCreate): 'Cargar evolución' además de 'Registrar sesión'", () => {
     const out = html(<SessionDetail session={detail(done)} scheduledLabel="x" clinicalNote={note()} />);
-    expect(out).toContain(">Cargar evolución<");
+    expect(out).toContain(">Cargar ficha<");
     expect(out).toContain("Registrar sesión");
-    expect(out).toContain(">Sin evolución<");
+    expect(out).toContain(">Sin ficha<");
   });
 
   it("también en una sesión todavía no realizada (el turno puede estar en curso)", () => {
     const out = html(<SessionDetail session={detail()} scheduledLabel="x" clinicalNote={note()} />);
-    expect(out).toContain(">Cargar evolución<");
+    expect(out).toContain(">Cargar ficha<");
     expect(out).toContain("Cerrar sesión");
   });
 
   it("sin escritura (canCreate false, sin nota): ni botón ni link", () => {
     const out = html(<SessionDetail session={detail(done)} scheduledLabel="x" clinicalNote={note({ canCreate: false })} />);
-    expect(out).not.toContain("Cargar evolución");
-    expect(out).not.toContain("Ver evolución");
+    expect(out).not.toContain("Cargar ficha");
+    expect(out).not.toContain("Ver ficha");
   });
 
   it("con evolución viva: 'Ver evolución' al perfil con ?turno= y la sesión deja de estar 'Sin evolución' (EV2-D18)", () => {
@@ -396,9 +396,9 @@ describe("[EV2-3c] Seguimiento: evolución de HC del turno de la sesión (EV2-D1
       <SessionDetail session={detail(done)} scheduledLabel="x" clinicalNote={note({ canCreate: false, hasLiveNote: true })} />
     );
     expect(out).toContain('href="/pacientes/pat1?tab=evoluciones&amp;turno=bk1"');
-    expect(out).toContain(">Ver evolución<");
-    expect(out).not.toContain(">Cargar evolución<");
-    expect(out).not.toContain(">Sin evolución<");
+    expect(out).toContain(">Ver ficha<");
+    expect(out).not.toContain(">Cargar ficha<");
+    expect(out).not.toContain(">Sin ficha<");
     // EV2-Z A2: la evolución de HC NO bloquea registrar la sesión del plan (EVA, ejercicios): sigue «Registrar sesión».
     expect(out).toContain("Registrar sesión");
     expect(out).not.toContain("Guardar anotaciones");
@@ -415,7 +415,7 @@ describe("[EV2-3c] Seguimiento: evolución de HC del turno de la sesión (EV2-D1
     );
     expect(out).not.toContain("Registrar sesión");
     expect(out).toContain("Guardar anotaciones");
-    expect(out).not.toContain(">Sin evolución<");
+    expect(out).not.toContain(">Sin ficha<");
   });
 
   it("[EV2-Z A1] el editor de la evolución recibe el nombre del paciente («Apellido, Nombre») y el turno", () => {
@@ -424,7 +424,7 @@ describe("[EV2-3c] Seguimiento: evolución de HC del turno de la sesión (EV2-D1
     const mode = sessionNoteEditorMode(detail(done), note());
     expect(mode).toMatchObject({ type: "create", patientName: "Pérez, Ana", booking: { id: "bk1" } });
     const out = html(<SessionDetail session={detail(done)} scheduledLabel="x" clinicalNote={note()} />);
-    expect(out).toContain(">Cargar evolución<");
+    expect(out).toContain(">Cargar ficha<");
     expect(out).not.toContain("data-editor-mode");
   });
 
@@ -433,11 +433,11 @@ describe("[EV2-3c] Seguimiento: evolución de HC del turno de la sesión (EV2-D1
     expect(open).toMatch(/<div class="k-glass[^"]*"[^>]*flex-wrap:wrap/);
     const row = open.indexOf("data-session-note-action");
     expect(row).toBeGreaterThan(open.indexOf("Cerrar sesión"));
-    expect(open.slice(row, row + 400)).toMatch(/flex-basis:100%[\s\S]*>Cargar evolución</);
+    expect(open.slice(row, row + 400)).toMatch(/flex-basis:100%[\s\S]*>Cargar ficha</);
     const viewed = html(<SessionDetail session={detail(done)} scheduledLabel="x" clinicalNote={note({ hasLiveNote: true })} />);
     const r2 = viewed.indexOf("data-session-note-action");
     expect(r2).toBeGreaterThan(viewed.indexOf("Realizada"));
-    expect(viewed.slice(r2, r2 + 500)).toContain(">Ver evolución<");
+    expect(viewed.slice(r2, r2 + 500)).toContain(">Ver ficha<");
     // Sin evolución de HC que ofrecer no queda una fila vacía.
     expect(html(<SessionDetail session={detail(done)} scheduledLabel="x" />)).not.toContain("data-session-note-action");
   });

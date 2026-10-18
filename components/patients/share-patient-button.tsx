@@ -112,12 +112,13 @@ export function SharePatientButton({
         className={heroStyles.action}
         style={{ fontSize: 12.5 }}
       >
-        Compartir
+        {/* FC-UI-D8 (§24.2 #14): «Compartir» a secas choca con «Compartir con el paciente» de la ficha. */}
+        Compartir con un profesional
       </Button>
       {open && (
         <div
           role="dialog"
-          aria-label="Compartir paciente"
+          aria-label="Compartir con un profesional"
           style={{
             position: "absolute",
             top: "calc(100% + 6px)",

@@ -58,7 +58,7 @@ const VERTICALS: readonly TenantVertical[] = ["GENERAL", "KINESIOLOGY"];
 const MODULE_BULLETS: readonly { modules: readonly TenantModule[]; text: string }[] = [
   { modules: ["agenda"], text: "Agenda de turnos por profesional" },
   { modules: ["pacientes"], text: "Fichas de pacientes con antecedentes y archivos" },
-  { modules: ["evoluciones"], text: "Evoluciones de cada consulta en la historia clínica" },
+  { modules: ["evoluciones"], text: "Fichas de cada consulta en la historia clínica, en PDF para el paciente" },
   { modules: ["facturacion", "obrasSociales"], text: "Cobros de copago y obra social en cada turno" },
   { modules: ["turneroPublico"], text: "Turnero online para que tus pacientes reserven solos" },
   { modules: ["planes", "sesiones"], text: "Planes de tratamiento con seguimiento de sesiones" },

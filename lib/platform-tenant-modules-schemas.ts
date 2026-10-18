@@ -14,7 +14,7 @@ export const MODULE_OVERRIDES_MAX = 32;
 
 /** Copy de los rechazos que se pueden decidir sin la fila (núcleo, turnero, repetidos, las dos listas a la vez). */
 export const MODULE_OVERRIDE_COPY = {
-  core: "Los módulos básicos (agenda, pacientes, facturación, obras sociales y evoluciones) los tiene todo consultorio: no se habilitan ni se deshabilitan a mano.",
+  core: "Los módulos básicos (agenda, pacientes, facturación, obras sociales e historia clínica) los tiene todo consultorio: no se habilitan ni se deshabilitan a mano.",
   turnero: "Los turnos online se prenden y apagan con su switch, en «Editar suscripción».",
   duplicate: "Un módulo aparece repetido. Recargá y probá de nuevo.",
   both: "Un módulo no puede estar habilitado y deshabilitado a mano a la vez.",

@@ -194,7 +194,7 @@ type Variant = "overdue" | "sinTurno" | "sinEvolucion" | "today" | "upcoming" | 
 const EMPTY_COPY: Record<Variant, string> = {
   overdue: "No hay sesiones vencidas.",
   sinTurno: "Todas las sesiones tienen turno.",
-  sinEvolucion: "No hay sesiones sin evolución.",
+  sinEvolucion: "No hay sesiones sin ficha.",
   today: "Hoy no hay sesiones de planes.",
   upcoming: "No hay sesiones próximas.",
   completed: "No hubo sesiones realizadas en los últimos 14 días.",

@@ -76,7 +76,7 @@ describe("[VX2-c2] LandingPricing", () => {
     expect(text(card(h, "individual")!)).not.toMatch(/Sala/);
     expect(text(card(h, "consultorio")!)).not.toMatch(/Sala/);
     expect(text(card(h, "clinica")!)).toMatch(/Sala de espera/);
-    expect(text(card(h, "individual")!)).toContain("Evoluciones de cada consulta en la historia clínica");
+    expect(text(card(h, "individual")!)).toContain("Fichas de cada consulta en la historia clínica, en PDF para el paciente");
     expect(text(card(h, "consultorio")!)).toContain("Todo lo del plan Individual");
   });
 

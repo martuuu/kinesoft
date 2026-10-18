@@ -235,8 +235,8 @@ describe("[EV2-Z] fixes de UI del drawer del turno", () => {
     const blocked = renderToStaticMarkup(<DeleteBookingButton onDelete={() => {}} pending={false} blockedByNote />);
     expect(blocked).toMatch(/<button[^>]*disabled=""[^>]*aria-describedby="booking-delete-hint"/);
     expect(blocked).toContain(`id="booking-delete-hint"`);
-    expect(blocked).toContain("Tiene una evolución: cancelalo en vez de eliminarlo.");
-    expect(DELETE_BLOCKED_BY_NOTE_HINT).toBe("Tiene una evolución: cancelalo en vez de eliminarlo.");
+    expect(blocked).toContain("Tiene una ficha: cancelalo en vez de eliminarlo.");
+    expect(DELETE_BLOCKED_BY_NOTE_HINT).toBe("Tiene una ficha: cancelalo en vez de eliminarlo.");
 
     const free = renderToStaticMarkup(<DeleteBookingButton onDelete={() => {}} pending={false} blockedByNote={false} />);
     expect(free).not.toContain("disabled");
@@ -265,6 +265,6 @@ describe("[EV2-Z] fixes de UI del drawer del turno", () => {
       />
     );
     expect(html).toContain("Sesión registrada");
-    expect(html).not.toContain("Evolución cargada");
+    expect(html).not.toContain("Ficha cargada");
   });
 });

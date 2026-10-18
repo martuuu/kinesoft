@@ -24,11 +24,18 @@ const ev = (action: string, i: number): ActivityEvent => ({
 
 describe("[EV2-3d] actividad: evoluciones e impresión", () => {
   it.each([
-    ["clinicalNote.create", "Evolución cargada"],
-    ["clinicalNote.edit", "Evolución editada"],
-    ["clinicalNote.amend", "Enmienda agregada a una evolución"],
-    ["clinicalNote.void", "Evolución anulada"],
+    ["clinicalNote.create", "Ficha cargada"],
+    ["clinicalNote.edit", "Ficha editada"],
+    ["clinicalNote.amend", "Enmienda agregada a una ficha"],
+    ["clinicalNote.void", "Ficha anulada"],
     ["clinicalRecord.print", "Historia clínica impresa"],
+    // [FC-3h2] compartir con el paciente y descargas (C-FC7).
+    ["patientDocument.share", "Ficha compartida con el paciente"],
+    ["patientDocument.revoke", "Ficha que dejó de compartirse"],
+    ["patientDocument.download", "Ficha compartida descargada por el paciente"],
+    ["clinicalNote.download", "Ficha descargada"],
+    ["clinicalRecord.download", "Historia clínica descargada"],
+    ["clinicalNote.import", "Ficha importada"],
   ])("%s → «%s»", (action, label) => {
     const html = renderToStaticMarkup(<ActivityTimeline events={[ev(action, 1)]} />);
     expect(html).toContain(label);
@@ -39,7 +46,7 @@ describe("[EV2-3d] actividad: evoluciones e impresión", () => {
   it("la sesión registrada ya no se confunde con la evolución de HC (EV2-D19)", () => {
     const html = renderToStaticMarkup(<ActivityTimeline events={[ev("session.evolution", 1), ev("clinicalNote.create", 2)]} />);
     expect(html).toContain("Sesión registrada");
-    expect(html.match(/Evolución cargada/g)).toHaveLength(1);
+    expect(html.match(/Ficha cargada/g)).toHaveLength(1);
   });
 
   it("fecha y hora en AR (corre igual en TZ=UTC y TZ=AR)", () => {

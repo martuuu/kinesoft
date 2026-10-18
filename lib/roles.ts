@@ -48,7 +48,7 @@ export function roleDescription(role: Role, vertical?: TenantVertical | null): s
       // General no tiene el módulo de planes (lib/tenant-modules.ts): no se promete.
       return vertical === "GENERAL"
         ? "Atiende a sus pacientes y carga sus historias clínicas. Ve la agenda de todos."
-        : "Atiende a sus pacientes: historias clínicas, planes y evoluciones. Ve la agenda de todos.";
+        : "Atiende a sus pacientes: historias clínicas, fichas y planes. Ve la agenda de todos.";
     case "ASSISTANT":
       // T3 (decisión 1 del 19-oct): la Secretaria cobra y edita contacto y cobertura (§23.5).
       return "Maneja la agenda y la recepción de todos, registra cobros y edita el contacto y la cobertura de los pacientes. No ve historias clínicas.";
