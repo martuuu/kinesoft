@@ -108,7 +108,9 @@ async function createImpl(input: CreateClinicalNoteInput): Promise<ActionResult<
     assertModule(actor, "evoluciones");
     const parsed = CreateClinicalNoteSchema.safeParse(input);
     if (!parsed.success) return invalid(parsed.error);
-    const p = parsed.data;
+    const pending = pendingFcFields(parsed.data);
+    if (pending) return pending;
+    const p = { ...parsed.data, body: parsed.data.body as string };
     const now = new Date();
 
     let result: ActionResult<{ note: ClinicalNoteDTO; replayed: boolean }>;
@@ -140,7 +142,7 @@ async function createImpl(input: CreateClinicalNoteInput): Promise<ActionResult<
 async function createInTx(
   tx: DbClient,
   actor: Actor,
-  p: CreateClinicalNoteParsed,
+  p: CreateClinicalNoteParsed & { body: string },
   now: Date
 ): Promise<Fail | Ok<{ note: ClinicalNoteDTO; replayed: boolean }>> {
   const tenantId = actor.tenantId;
@@ -209,6 +211,8 @@ async function editImpl(input: EditClinicalNoteInput): Promise<ActionResult<{ no
     assertModule(actor, "evoluciones");
     const parsed = EditClinicalNoteSchema.safeParse(input);
     if (!parsed.success) return invalid(parsed.error);
+    const pendingEdit = pendingFcFields(parsed.data);
+    if (pendingEdit) return pendingEdit;
     const p = parsed.data;
     const tenantId = actor.tenantId;
     const now = new Date();
@@ -271,7 +275,9 @@ async function amendImpl(input: AmendClinicalNoteInput): Promise<ActionResult<{ 
     assertModule(actor, "evoluciones");
     const parsed = AmendClinicalNoteSchema.safeParse(input);
     if (!parsed.success) return invalid(parsed.error);
-    const p = parsed.data;
+    const pendingAmend = pendingFcFields(parsed.data);
+    if (pendingAmend) return pendingAmend;
+    const p = { ...parsed.data, body: parsed.data.body as string };
     const tenantId = actor.tenantId;
     const now = new Date();
 
@@ -423,6 +429,27 @@ const EDIT_REJECTION = {
   "not-author": COPY.notAuthor,
   "window-closed": COPY.windowClosed,
 } as const;
+
+/**
+ * FC-1b1: las firmas ya aceptan los campos de C-FC3 (`bodyDoc`, `diagnoses`, `setActiveDiagnosis`, `importSource`)
+ * y el zod los valida, pero la ESCRITURA la implementa FC-2a (bodyDoc → body, diagnósticos re-leídos con
+ * `resolveDiagnosesInTx`, diagnóstico activo, `authorLicense`, `importSource`). Hasta entonces se rechazan con el copy
+ * genérico en vez de guardar a medias (p. ej. una ficha con formato sin su `bodyDoc`, o diagnósticos perdidos en
+ * silencio). Lo de EV2 (solo `body`) sigue igual. Con esto, el zod garantiza que `body` vino.
+ */
+function pendingFcFields(p: {
+  bodyDoc?: unknown;
+  diagnoses?: unknown[] | null;
+  setActiveDiagnosis?: boolean;
+  importSource?: unknown;
+}): Fail | null {
+  const pending =
+    p.bodyDoc !== undefined ||
+    p.diagnoses !== undefined ||
+    p.setActiveDiagnosis === true ||
+    (p.importSource !== undefined && p.importSource !== null);
+  return pending ? fail(COPY.invalid) : null;
+}
 
 function fail(error: string): Fail {
   return { ok: false, error };

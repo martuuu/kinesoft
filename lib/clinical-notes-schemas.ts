@@ -8,11 +8,17 @@ import "server-only";
 import { z } from "zod";
 import {
   CLINICAL_NOTE_BODY_MAX,
+  CLINICAL_NOTE_COPY,
+  CLINICAL_NOTE_IMPORT_FILE_NAME_MAX,
+  CLINICAL_NOTE_IMPORT_MAX_BYTES,
+  CLINICAL_NOTE_IMPORT_PARTS_MAX,
   CLINICAL_NOTE_KINDS,
   CLINICAL_NOTE_TITLE_MAX,
   CLINICAL_NOTE_VOID_REASON_MAX,
   CLINICAL_NOTE_VOID_REASON_MIN,
 } from "@/lib/clinical-notes-types";
+import { DIAGNOSES_MAX, DIAGNOSIS_COPY, DIAGNOSIS_TEXT_MAX, DIAGNOSIS_TEXT_MIN } from "@/lib/diagnoses-types";
+import { HC_DOC_ERROR_COPY, validateHcDoc } from "@/lib/hc-doc";
 
 // ─── Schemas (zod `.strict()`) ───────────────────────────────────────────────
 
@@ -52,17 +58,80 @@ const IsoDateSchema = z
   .datetime({ offset: true, message: "Elegí una fecha válida." })
   .transform((s) => new Date(s));
 
+// ─── FC (C-FC3): formato, diagnósticos e importación ─────────────────────────
+
+/**
+ * Doc del editor → `{ doc, plainText }`. `validateHcDoc` RE-ARMA un doc nuevo con la allow-list (nunca se guarda lo que
+ * mandó el cliente tal cual) y da el texto plano del que el server deriva `body`. El tope de caracteres es el mismo de
+ * `body` (ClinicalNote_body_check), así una ficha con formato nunca llega a la base con un `body` que la base rechaza.
+ */
+export const BodyDocSchema = z.unknown().transform((v, ctx) => {
+  const r = validateHcDoc(v, { maxChars: CLINICAL_NOTE_BODY_MAX });
+  if (!r.ok) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: HC_DOC_ERROR_COPY[r.reason] });
+    return z.NEVER;
+  }
+  return { doc: r.doc, plainText: r.plainText };
+});
+
+const DiagnosisTextSchema = z
+  .string()
+  .transform((v) => v.trim())
+  .refine((v) => v.length >= DIAGNOSIS_TEXT_MIN && v.length <= DIAGNOSIS_TEXT_MAX, { message: DIAGNOSIS_COPY.textLength });
+
+/**
+ * La UI manda REFERENCIAS (FC-D27), nunca el título ni el código: el server re-lee cada una en la base y congela el
+ * snapshot (`resolveDiagnosesInTx`). Así nadie puede guardar un «CIE-11» con un título inventado (licencia OMS: los
+ * títulos no se modifican).
+ */
+export const DiagnosisRefSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("icd11"), id: IdSchema }).strict(),
+  z.object({ kind: z.literal("tenant"), id: IdSchema }).strict(),
+  z.object({ kind: z.literal("kine"), id: IdSchema }).strict(),
+  z.object({ kind: z.literal("text"), text: DiagnosisTextSchema }).strict(),
+]);
+
+export const DiagnosesSchema = z.array(DiagnosisRefSchema).max(DIAGNOSES_MAX, { message: DIAGNOSIS_COPY.tooMany });
+
+export const ImportSourceSchema = z
+  .object({
+    kind: z.literal("docx"),
+    fileName: z.string().trim().min(1).max(CLINICAL_NOTE_IMPORT_FILE_NAME_MAX),
+    fileSize: z.number().int().min(0).max(CLINICAL_NOTE_IMPORT_MAX_BYTES),
+    fileLastModified: z.string().datetime({ offset: true }).nullable(),
+    batchId: z.string().uuid(),
+    part: z.number().int().min(1),
+    parts: z.number().int().min(1).max(CLINICAL_NOTE_IMPORT_PARTS_MAX),
+  })
+  .strict()
+  .refine((v) => v.part <= v.parts, { message: CLINICAL_NOTE_COPY.invalid, path: ["part"] });
+
+/** Refine 1 de C-FC3: exactamente uno de `body` / `bodyDoc` (en edición: a lo sumo uno, ver abajo). */
+const exactlyOneBody = (v: { body?: unknown; bodyDoc?: unknown }) => (v.body !== undefined) !== (v.bodyDoc !== undefined);
+/** Refine 3: «Usar como diagnóstico activo» exige al menos un diagnóstico (el principal) en ESTE envío. */
+const activeNeedsDiagnosis = (v: { setActiveDiagnosis?: boolean; diagnoses?: unknown[] | null }) =>
+  !v.setActiveDiagnosis || (v.diagnoses?.length ?? 0) > 0;
+
+// Las refines van en el orden literal del contrato: `invalid()` muestra el primer issue.
 export const CreateClinicalNoteSchema = z
   .object({
     patientId: IdSchema,
     bookingId: OptionalIdSchema,
     kind: KindSchema.optional(),
     title: TitleSchema.optional(),
-    body: BodySchema,
+    body: BodySchema.optional(),
+    bodyDoc: BodyDocSchema.optional(),
+    diagnoses: DiagnosesSchema.optional(),
+    setActiveDiagnosis: z.boolean().optional(),
+    importSource: ImportSourceSchema.nullable().optional(),
     occurredAt: IsoDateSchema.nullable().optional(),
     idempotencyKey: z.string().uuid(),
   })
-  .strict();
+  .strict()
+  .refine(exactlyOneBody, { message: CLINICAL_NOTE_COPY.bodyAndDoc })
+  // Una importada es «carga tardía» de una consulta vieja: asociarla a un turno mezclaría dos fuentes (§24.3).
+  .refine((v) => !v.importSource || !v.bookingId, { message: CLINICAL_NOTE_COPY.importWithBooking, path: ["bookingId"] })
+  .refine(activeNeedsDiagnosis, { message: DIAGNOSIS_COPY.activeNeedsPrincipal, path: ["setActiveDiagnosis"] });
 
 export const EditClinicalNoteSchema = z
   .object({
@@ -71,21 +140,40 @@ export const EditClinicalNoteSchema = z
     kind: KindSchema.optional(),
     title: TitleSchema.optional(),
     body: BodySchema.optional(),
+    bodyDoc: BodyDocSchema.optional(),
+    // `null` o `[]` borran los diagnósticos; `undefined` no los toca.
+    diagnoses: DiagnosesSchema.nullable().optional(),
+    setActiveDiagnosis: z.boolean().optional(),
     occurredAt: IsoDateSchema.optional(),
   })
   .strict()
-  .refine((v) => v.kind !== undefined || v.title !== undefined || v.body !== undefined || v.occurredAt !== undefined, {
-    message: "No hay cambios para guardar.",
-  });
+  // En una edición los dos son opcionales (cambiar solo el título): lo prohibido es mandar los dos juntos.
+  .refine((v) => v.body === undefined || v.bodyDoc === undefined, { message: CLINICAL_NOTE_COPY.bodyAndDoc })
+  .refine(activeNeedsDiagnosis, { message: DIAGNOSIS_COPY.activeNeedsPrincipal, path: ["setActiveDiagnosis"] })
+  .refine(
+    (v) =>
+      v.kind !== undefined ||
+      v.title !== undefined ||
+      v.body !== undefined ||
+      v.bodyDoc !== undefined ||
+      v.diagnoses !== undefined ||
+      v.occurredAt !== undefined,
+    { message: "No hay cambios para guardar." }
+  );
 
 export const AmendClinicalNoteSchema = z
   .object({
     noteId: IdSchema,
     title: TitleSchema.optional(),
-    body: BodySchema,
+    body: BodySchema.optional(),
+    bodyDoc: BodyDocSchema.optional(),
+    diagnoses: DiagnosesSchema.optional(),
+    setActiveDiagnosis: z.boolean().optional(),
     idempotencyKey: z.string().uuid(),
   })
-  .strict();
+  .strict()
+  .refine(exactlyOneBody, { message: CLINICAL_NOTE_COPY.bodyAndDoc })
+  .refine(activeNeedsDiagnosis, { message: DIAGNOSIS_COPY.activeNeedsPrincipal, path: ["setActiveDiagnosis"] });
 
 export const VoidClinicalNoteSchema = z
   .object({

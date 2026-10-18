@@ -2,7 +2,10 @@ import "server-only";
 import type { Prisma } from "@prisma/client";
 import { capabilitiesForActor } from "@/lib/authz";
 import { canReadClinicalNotes, canWriteClinicalNotes, permissionsFor } from "@/lib/clinical-notes-logic";
-import type { ClinicalNoteDTO } from "@/lib/clinical-notes-types";
+import type { ClinicalNoteDTO, ImportSourceDTO } from "@/lib/clinical-notes-types";
+import { isLateEntry } from "@/lib/diagnoses-logic";
+import type { DiagnosisSnapshot } from "@/lib/diagnoses-types";
+import type { HcDoc } from "@/lib/hc-doc";
 import type { DbClient } from "@/lib/rls";
 import type { Actor } from "@/lib/session";
 import { modulesFor } from "@/lib/tenant-modules";
@@ -67,6 +70,11 @@ export const CLINICAL_NOTE_SELECT = {
   voidReason: true,
   createdAt: true,
   updatedAt: true,
+  // FC (M14, C-FC3): contenido (bodyDoc, diagnoses) e identidad (authorLicense, importSource) de la ficha.
+  bodyDoc: true,
+  diagnoses: true,
+  authorLicense: true,
+  importSource: true,
   booking: {
     select: { id: true, scheduledFor: true, status: true, service: { select: { name: true } } },
   },
@@ -74,6 +82,24 @@ export const CLINICAL_NOTE_SELECT = {
 
 export type ClinicalNoteSelected = Prisma.ClinicalNoteGetPayload<{ select: typeof CLINICAL_NOTE_SELECT }>;
 
+/**
+ * FC · `importSource` guardado (`{v:1, ...ImportSourceInput, importedAt}`, regla 4 de C-FC3) → DTO. Solo lo que la UI
+ * muestra («Importada de informe.docx · parte 2 de 3»): `fileSize`, `fileLastModified` y `batchId` quedan en la base
+ * (auditoría del import), no viajan al cliente. Forma inesperada → null (mejor sin marca que un 500 en la HC).
+ */
+function toImportSourceDTO(raw: Prisma.JsonValue | null): ImportSourceDTO | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const o = raw as Record<string, Prisma.JsonValue>;
+  if (o.kind !== "docx" || typeof o.fileName !== "string" || typeof o.importedAt !== "string") return null;
+  const part = typeof o.part === "number" ? o.part : 1;
+  const parts = typeof o.parts === "number" ? o.parts : 1;
+  return { kind: "docx", fileName: o.fileName, importedAt: o.importedAt, part, parts };
+}
+
+/**
+ * `bodyDoc` y `diagnoses` se guardan YA re-armados por el server (`validateHcDoc`, `resolveDiagnosesInTx`) y la base
+ * los acota con CHECK (M14): acá solo se tipan, no se re-validan en cada lectura (la timeline lee hasta 50 por página).
+ */
 export function toClinicalNoteDTO(
   row: ClinicalNoteSelected,
   ctx: { actorUserId: string; isClinicalOwner: boolean; canWrite: boolean; now: Date }
@@ -109,5 +135,12 @@ export function toClinicalNoteDTO(
       { authorUserId: row.authorUserId, createdAt: row.createdAt, voidedAt: row.voidedAt, amendsNoteId: row.amendsNoteId },
       ctx
     ),
+    bodyDoc: (row.bodyDoc as HcDoc | null) ?? null,
+    diagnoses: Array.isArray(row.diagnoses) ? (row.diagnoses as unknown as DiagnosisSnapshot[]) : [],
+    authorLicense: row.authorLicense,
+    importSource: toImportSourceDTO(row.importSource),
+    lateEntry: isLateEntry({ importSource: row.importSource, createdAt: row.createdAt, occurredAt: row.occurredAt }),
+    // [FC-2b] lo llena la lectura con el LEFT JOIN LATERAL del documento vivo (C-FC3 «Lecturas»); hasta entonces, null.
+    sharedDocument: null,
   };
 }

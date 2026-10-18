@@ -52,6 +52,8 @@ function note(over: Partial<ClinicalNoteDTO> = {}, ctx: { actor?: string; owner?
     voided: null,
     booking: { id: "bk-1", scheduledFor: "2026-10-15T12:30:00.000Z", status: "COMPLETED", serviceName: "Sesión kinésica" },
     permissions: { canEdit: false, canAmend: false, canVoid: false, editableUntil: null },
+    // FC-1b1 (C-FC3): campos nuevos del DTO, en su valor de una nota de EV2.
+    bodyDoc: null, diagnoses: [], authorLicense: null, importSource: null, lateEntry: false, sharedDocument: null,
     ...over,
   };
   const now = new Date(ctx.now ?? "2026-10-15T14:00:00.000Z");

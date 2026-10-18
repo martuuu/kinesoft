@@ -301,6 +301,8 @@ function note(id: string, occurredH: number, p: Partial<ClinicalNoteDTO> = {}): 
     voided: null,
     booking: null,
     permissions: { canEdit: false, canAmend: true, canVoid: false, editableUntil: null },
+    // FC-1b1 (C-FC3): campos nuevos del DTO, en su valor de una nota de EV2.
+    bodyDoc: null, diagnoses: [], authorLicense: null, importSource: null, lateEntry: false, sharedDocument: null,
     ...p,
   };
 }

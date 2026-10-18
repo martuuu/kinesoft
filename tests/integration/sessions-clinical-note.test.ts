@@ -154,7 +154,7 @@ describe.skipIf(!RUN)("EV2-2d · «Sin evolución» cuenta la evolución de HC d
     const v = await ver(b);
     const undo = await measure(() => markReceptionAction(b, "deshacer", v));
     expect(undo.result.ok).toBe(true);
-    if (undo.result.ok) expect(undo.result.data.notice).toMatch(/evolución/i);
+    if (undo.result.ok) expect(undo.result.data.notice).toMatch(/ficha/i);
     expect((await db.booking.findUniqueOrThrow({ where: { id: b } })).status).toBe("CONFIRMED");
     expect((await session(p.sessionIds[0])).completedAt).not.toBeNull();
     // Mismo `EXISTS` en la misma sentencia: ni una sentencia más que el testigo.

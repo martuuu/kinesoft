@@ -35,6 +35,7 @@ import {
   type BookingClinicalNoteView,
   type ClinicalNoteDTO,
   type ClinicalNoteRevisionDTO,
+  type PatientClinicalHome,
   type PatientClinicalSummary,
   type TimelinePage,
   type TimelineSessionDTO,
@@ -67,6 +68,10 @@ type RawNoteRow = {
   voidReason: string | null;
   createdAt: Date;
   updatedAt: Date;
+  bodyDoc: Prisma.JsonValue | null;
+  diagnoses: Prisma.JsonValue | null;
+  authorLicense: string | null;
+  importSource: Prisma.JsonValue | null;
   b_id: string | null;
   b_scheduledFor: Date | null;
   b_status: BookingStatus | null;
@@ -80,7 +85,7 @@ type RawNoteRow = {
 const NOTE_COLUMNS = Prisma.sql`
   n.id, n."patientId", n."bookingId", n."amendsNoteId", n.kind::text AS kind, n.title, n.body, n."occurredAt",
   n."authorUserId", n."authorPractitionerId", n."authorName", n.revision, n."voidedAt", n."voidedByUserId",
-  n."voidReason", n."createdAt", n."updatedAt",
+  n."voidReason", n."createdAt", n."updatedAt", n."bodyDoc", n.diagnoses, n."authorLicense", n."importSource",
   b.id AS "b_id", b."scheduledFor" AS "b_scheduledFor", b.status::text AS "b_status", sv.name AS "b_serviceName"`;
 const NOTE_JOINS = Prisma.sql`
   LEFT JOIN "Booking" b ON b.id = n."bookingId" AND b."tenantId" = n."tenantId"
@@ -105,6 +110,10 @@ function rawToSelected(r: RawNoteRow): ClinicalNoteSelected {
     voidReason: r.voidReason,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
+    bodyDoc: r.bodyDoc,
+    diagnoses: r.diagnoses,
+    authorLicense: r.authorLicense,
+    importSource: r.importSource,
     booking:
       r.b_id && r.b_scheduledFor && r.b_status
         ? { id: r.b_id, scheduledFor: r.b_scheduledFor, status: r.b_status, service: { name: r.b_serviceName ?? "" } }
@@ -340,4 +349,22 @@ export async function getPatientClinicalSummary(patientId: string): Promise<Pati
     const ctx = { actorUserId: actor.userId, isClinicalOwner: gate.isClinicalOwner, canWrite: gate.canWrite, now };
     return { latest: latest ? toClinicalNoteDTO(latest, ctx) : null, liveCount };
   });
+}
+
+/**
+ * FC (C-FC3) · La tx 3 del perfil (§24.2 hallazgo 3): resumen + primera página de la timeline + turnos candidatos del
+ * compositor + deep link del turno, en UNA lectura (el perfil sigue en exactamente 3 tx, pf2-profile-budget).
+ * `opts.timeline: false` no arma `firstPage`; `opts.noteBookingId` resuelve el deep link `?nota=<turno>`.
+ * null = sin módulo, sin acceso o paciente ajeno (mismo gate que el resto del archivo).
+ *
+ * FC-1b1 deja la firma congelada; la implementa FC-2b (`lib/clinical-notes-timeline-internal.ts`, LATERAL del
+ * documento vivo, techo de sentencias). Tira para que nadie la consuma antes de tiempo sin enterarse.
+ */
+export async function getPatientClinicalHome(
+  patientId: string,
+  opts?: { noteBookingId?: string | null; timeline?: boolean }
+): Promise<PatientClinicalHome | null> {
+  void patientId;
+  void opts;
+  throw new Error("[FC-2b] getPatientClinicalHome todavía no está implementada");
 }
