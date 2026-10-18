@@ -246,3 +246,67 @@ export function coverageInsurerPrefill(
 export function nextDayKey(dayKey: string): string {
   return addDays(dayKey, 1);
 }
+
+// ─── Cobro online o reserva sin cobro (TP-0) ───────────────────────────
+
+/**
+ * Piso del cobro online, el mismo de `decidePublicCheckout` (TP-0a, `MIN_ONLINE_CHARGE_CENTS = 100`): bajo $1 el server
+ * no arma preferencia aunque el consultorio cobre online. Va repetido acá y no importado porque este módulo entra al
+ * bundle del turnero (presupuesto ≤135 kB gz) y no tiene que arrastrar nada del lado server (hoy es puro, mañana puede
+ * leer env); la paridad la fija el test `[TP-0] checkoutCopyFor · mismo piso que el server`.
+ */
+const MIN_ONLINE_CHARGE_CENTS = 100;
+
+export type CheckoutCopy = {
+  /** Si el submit va a terminar en Mercado Pago. */
+  online: boolean;
+  cta: string;
+  ctaPending: string;
+  totalLabel: string;
+  /** Sin cobro y con precio 0 no hay fila de total: antes se leía «$ 0» como si el turno fuera gratis (H-TP2). */
+  showTotal: boolean;
+  note: string;
+};
+
+/**
+ * Copy del cierre del wizard. Hasta TP-0 era siempre «Pagar y reservar» + «El pago se hace en Mercado Pago», pero hoy
+ * el turnero no cobra (H-TP1: la única cuenta MP es la de la plataforma, `TURNERO_CHECKOUT` en `off`): el paciente
+ * reserva y paga en el consultorio. `onlineCheckout` ausente (payload viejo) = sin cobro, que es lo que hace el server.
+ */
+export function checkoutCopyFor(args: { onlineCheckout?: boolean; priceCents: number }): CheckoutCopy {
+  const online = args.onlineCheckout === true && args.priceCents >= MIN_ONLINE_CHARGE_CENTS;
+  if (online) {
+    return {
+      online: true,
+      cta: "Pagar y reservar",
+      ctaPending: "Redirigiendo…",
+      totalLabel: "Total a pagar",
+      showTotal: true,
+      note: "El pago se hace en Mercado Pago.",
+    };
+  }
+  return {
+    online: false,
+    cta: "Confirmar turno",
+    ctaPending: "Reservando…",
+    totalLabel: "Valor del turno",
+    showTotal: args.priceCents > 0,
+    note: "Lo pagás en el consultorio.",
+  };
+}
+
+/**
+ * Adónde va el navegador después de `submitPublicBooking`. Manda `next` (la decisión es del server, que puede degradar
+ * a reservado si la preferencia de MP falla): `reserved` → la pantalla de resultado, aunque viniera un `initPoint`;
+ * `checkout` → Mercado Pago. Un `checkout` sin `initPoint` no debería pasar: cae a `/pending`, cuyo poller muestra el
+ * estado real en vez de dejar al paciente con el botón trabado.
+ */
+export function destinationAfterSubmit(r: {
+  bookingId: string;
+  next: "checkout" | "reserved";
+  initPoint: string | null;
+}): string {
+  const id = encodeURIComponent(r.bookingId);
+  if (r.next === "reserved") return `/booking/${id}/ok`;
+  return r.initPoint ?? `/booking/${id}/pending`;
+}

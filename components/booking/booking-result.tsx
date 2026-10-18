@@ -11,7 +11,8 @@ import type { PublicBookingStatus } from "@/lib/public-booking-types";
 import { BookAgainLink, BookingFrame } from "./booking-unavailable";
 import s from "./booking-result.module.css";
 
-export type BookingResultVariant = "ok" | "pending" | "failed";
+/** `reserved` (TP-0) no viene de la URL: sale del estado (turno sin cobro online). */
+export type BookingResultVariant = "ok" | "pending" | "failed" | "reserved";
 
 /** 60 consultas cada 3 s ≈ 3 min: después se deja de consultar y se dice qué hacer, sin prometer nada. */
 export const MAX_POLL_ATTEMPTS = 60;
@@ -23,6 +24,10 @@ const POLL_MS = 3000;
  */
 export function effectiveVariantFor(status: PublicBookingStatus, variant: BookingResultVariant): BookingResultVariant {
   if (status.paymentStatus === "PAID") return "ok";
+  // TP-0: sin cobro online el turno nace CONFIRMED/UNPAID y no hay pago que esperar. Sin esta rama, el wizard llevaba a
+  // `/ok` y se leía «¡Turno confirmado!» con «Monto $ 0», y un `/failed` abierto a mano decía «El pago no se completó».
+  // Solo con `onlinePayment === false` explícito: los fixtures/payloads viejos (sin el campo) siguen como antes.
+  if (status.onlinePayment === false && status.status === "CONFIRMED") return "reserved";
   if (status.paymentStatus === "FAILED") return "failed";
   if (status.paymentStatus === "AUTHORIZED" || status.status === "PENDING") return "pending";
   return variant;
@@ -49,6 +54,11 @@ export const RESULT_COPY: Record<BookingResultVariant, { title: string; lead: st
     lead: "El turno no quedó confirmado. Podés volver a reservar y elegir otra forma de pago.",
     state: "Pago no completado",
   },
+  reserved: {
+    title: "¡Turno reservado!",
+    lead: "Te esperamos. El pago lo hacés en el consultorio.",
+    state: "Reservado",
+  },
 };
 
 /** Cuando el poller se queda sin consultas y Mercado Pago todavía no confirmó. */
@@ -56,7 +66,7 @@ export const PENDING_TIMEOUT_NOTE =
   "Mercado Pago todavía no nos confirmó el pago. Actualizá esta página en unos minutos para ver el estado del turno.";
 
 /**
- * Página de resultado después de Mercado Pago. Consulta `/api/booking/:id/status` cada 3 s hasta
+ * Página de resultado después de Mercado Pago (o de reservar sin cobro, TP-0: variante `reserved`, sin poller). Consulta `/api/booking/:id/status` cada 3 s hasta
  * `MAX_POLL_ATTEMPTS` veces o hasta un estado final. En desarrollo hay un «Simular webhook PAID»: los webhooks de MP
  * no llegan a localhost.
  */
@@ -72,7 +82,8 @@ export function BookingResult({
   const effective = effectiveVariantFor(status, variant);
 
   useEffect(() => {
-    if (effective === "ok" || effective === "failed") return;
+    // `reserved` también es final: no hay webhook que esperar.
+    if (effective !== "pending") return;
     if (attempts >= MAX_POLL_ATTEMPTS) return;
     const t = setTimeout(async () => {
       try {
@@ -114,18 +125,29 @@ export function BookingResult({
             timeZone: "America/Argentina/Buenos_Aires",
           })}
         />
-        {status.amountCents != null && <DetailRow label="Monto" value={formatARS(status.amountCents)} />}
+        {effective === "reserved" ? (
+          // Sin monto (o 0, H-TP2) no hay fila: «A pagar en el consultorio $ 0» confunde más de lo que informa.
+          status.amountCents != null &&
+          status.amountCents > 0 && (
+            <DetailRow label="A pagar en el consultorio" value={formatARS(status.amountCents)} />
+          )
+        ) : (
+          status.amountCents != null && <DetailRow label="Monto" value={formatARS(status.amountCents)} />
+        )}
         <div className={s.row}>
           <dt className={s.term}>Estado</dt>
           <dd className={s.value}>
-            <Tag tone={effective === "ok" ? "lime" : effective === "pending" ? "sky" : "soft"} variant="outline">
+            <Tag
+              tone={effective === "ok" || effective === "reserved" ? "lime" : effective === "pending" ? "sky" : "soft"}
+              variant="outline"
+            >
               {copy.state}
             </Tag>
           </dd>
         </div>
       </dl>
 
-      {effective === "ok" && (
+      {(effective === "ok" || effective === "reserved") && (
         <div className={s.actions}>
           <ButtonLink href="/portal" size="lg" block>
             Ver mis turnos <IconArrow size={14} />
@@ -141,16 +163,18 @@ export function BookingResult({
       )}
       {timedOut && <p className={s.note}>{PENDING_TIMEOUT_NOTE}</p>}
 
-      {dev && effective !== "ok" && <DevPaidStub bookingId={status.bookingId} onPaid={setStatus} />}
+      {/* Reservado no tiene pago que simular. */}
+      {dev && (effective === "pending" || effective === "failed") && <DevPaidStub bookingId={status.bookingId} onPaid={setStatus} />}
     </BookingFrame>
   );
 }
 
 function StatusIcon({ variant }: { variant: BookingResultVariant }) {
-  const tone = variant === "ok" ? s.iconOk : variant === "pending" ? s.iconPending : s.iconFailed;
+  const done = variant === "ok" || variant === "reserved";
+  const tone = done ? s.iconOk : variant === "pending" ? s.iconPending : s.iconFailed;
   return (
     <div className={cn(s.icon, tone)} aria-hidden="true">
-      {variant === "ok" ? (
+      {done ? (
         <IconCheck size={28} stroke={3} />
       ) : variant === "pending" ? (
         <IconClock size={28} />

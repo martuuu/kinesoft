@@ -31,7 +31,7 @@ const base: PublicBookingStatus = {
   amountCents: 1_500_000,
 };
 
-const render = (over: Partial<PublicBookingStatus>, variant: "ok" | "pending" | "failed") =>
+const render = (over: Partial<PublicBookingStatus>, variant: "ok" | "pending" | "failed" | "reserved") =>
   renderToStaticMarkup(<BookingResult initial={{ ...base, ...over }} variant={variant} />);
 
 const h1Count = (html: string) => (html.match(/<h1[\s>]/g) ?? []).length;
@@ -111,5 +111,53 @@ describe("[VX2-d2] BookingResult (render)", () => {
       .concat(PENDING_TIMEOUT_NOTE)
       .join(" ");
     expect(all).not.toMatch(/te mandamos|email|correo|cancel|recordatori|whatsapp/i);
+  });
+});
+
+// TP-0 · turnero sin cobro: el turno nace CONFIRMED/UNPAID sin Payment y el status lo dice con `onlinePayment: false`.
+// Antes caía en «ok» por la URL (o en «failed» si alguien abría /failed) y la fila decía «Monto $ 0» (H-TP2).
+describe("[TP-0] effectiveVariantFor → reserved", () => {
+  const reserved = { status: "CONFIRMED", paymentStatus: "UNPAID", onlinePayment: false } as const;
+
+  it("CONFIRMED, sin pagar y sin cobro online → reserved, venga de la URL que venga", () => {
+    for (const v of ["ok", "pending", "failed"] as const) {
+      expect(effectiveVariantFor({ ...base, ...reserved }, v), v).toBe("reserved");
+    }
+  });
+
+  it("si igual quedó PAID manda «ok»; con cobro online o sin el campo (fixtures viejos) nada cambia", () => {
+    expect(effectiveVariantFor({ ...base, ...reserved, paymentStatus: "PAID" }, "ok")).toBe("ok");
+    expect(effectiveVariantFor({ ...base, ...reserved, onlinePayment: true }, "failed")).toBe("failed");
+    expect(effectiveVariantFor({ ...base, status: "CONFIRMED", paymentStatus: "UNPAID" }, "failed")).toBe("failed");
+    expect(effectiveVariantFor({ ...base, status: "CONFIRMED", paymentStatus: "UNPAID" }, "ok")).toBe("ok");
+    // Un PENDING sin cobro online (no debería existir) no se presenta como reservado.
+    expect(effectiveVariantFor({ ...base, ...reserved, status: "PENDING" }, "ok")).toBe("pending");
+  });
+
+  it("render: «¡Turno reservado!», «Te esperamos…», estado «Reservado» y «A pagar en el consultorio»; nada de pago", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const html = render(reserved, "ok");
+    vi.unstubAllEnvs();
+    expect(RESULT_COPY.reserved).toEqual({
+      title: "¡Turno reservado!",
+      lead: "Te esperamos. El pago lo hacés en el consultorio.",
+      state: "Reservado",
+    });
+    expect(html).toContain("¡Turno reservado!");
+    expect(html).toContain("Te esperamos. El pago lo hacés en el consultorio.");
+    expect(html).toContain("Reservado");
+    expect(html).toMatch(/A pagar en el consultorio<\/dt><dd[^>]*>\$\s?15\.000/);
+    expect(html).not.toContain(RESULT_COPY.pending.title);
+    expect(html).not.toMatch(/Mercado Pago|Esperando el pago|Confirmado|>Monto</);
+    expect(html).toContain('href="/portal"');
+  });
+
+  it("monto 0 o null: sin fila de monto (antes «$ 0»); en desarrollo, sin el stub del webhook", () => {
+    for (const amountCents of [0, null]) {
+      const html = render({ ...reserved, amountCents }, "ok");
+      expect(html).not.toContain("A pagar en el consultorio");
+      expect(html).not.toMatch(/\$\s?0\b/);
+      expect(html).not.toContain("Simular webhook PAID");
+    }
   });
 });

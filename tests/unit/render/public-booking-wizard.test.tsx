@@ -8,7 +8,8 @@ vi.mock("@/lib/public-booking", () => ({
 }));
 
 import { readFileSync } from "node:fs";
-import { DataStep, PublicBookingWizard, type PatientHC } from "@/components/booking/public-booking-wizard";
+import { DataStep, PublicBookingWizard, SummaryAside, type PatientHC } from "@/components/booking/public-booking-wizard";
+import { checkoutCopyFor } from "@/lib/public-wizard-state";
 import { PractitionerStep } from "@/components/booking/wizard/practitioner-step";
 import { STEP_HEADING_SELECTOR, focusStepHeading } from "@/components/booking/wizard/shared";
 import type { PublicClinic } from "@/lib/public-booking-types";
@@ -111,7 +112,8 @@ describe("VX2-d1 · turnero", () => {
   it("resumen sin claims sin evidencia (handoff 12)", () => {
     const html = renderToStaticMarkup(<PublicBookingWizard clinic={clinic(1, false)} session={null} prefill={null} />);
     expect(html).not.toMatch(/100%|cifrad/i);
-    expect(html).toContain("Total a pagar");
+    // TP-0: sin `onlineCheckout` el turnero no cobra → «Valor del turno» (antes «Total a pagar»).
+    expect(html).toContain("Valor del turno");
   });
 
   it("datos con Field: label asociada y autocomplete del paciente; emergencia sin autocompletar", () => {
@@ -235,5 +237,61 @@ describe("DIR-2d · deep link ?pro=", () => {
     expect(bad).not.toContain("¿Qué servicio necesitás?");
     expect(bad).toContain("Primer turno disponible");
     expect(bad).toContain("Lic. Ana");
+  });
+});
+
+describe("[TP-0] wizard sin cobro: «Confirmar turno», sin «Mercado Pago»", () => {
+  const c = clinic(1, false);
+  const sv = c.services[0];
+  const aside = (clinicOver: Partial<PublicClinic>, priceCents: number) => {
+    const cl = { ...c, ...clinicOver };
+    return renderToStaticMarkup(
+      <SummaryAside
+        clinic={cl}
+        practitioner={cl.practitioners[0]}
+        anyPractitioner={false}
+        service={{ ...sv, priceCents }}
+        slotISO="2026-10-19T12:00:00.000Z"
+        location={null}
+        checkout={checkoutCopyFor({ onlineCheckout: cl.onlineCheckout, priceCents })}
+      />
+    );
+  };
+
+  it("wizard completo sin `onlineCheckout` (falso o ausente): ni «Mercado Pago» ni «Pagar»", () => {
+    for (const over of [{}, { onlineCheckout: false }]) {
+      const html = renderToStaticMarkup(<PublicBookingWizard clinic={{ ...c, ...over }} session={null} prefill={null} />);
+      expect(html).not.toMatch(/Mercado Pago|Pagar y reservar|Total a pagar/);
+      expect(html).toContain("Lo pagás en el consultorio.");
+    }
+  });
+
+  it("resumen con servicio: «Valor del turno» + monto + «Lo pagás en el consultorio.»; precio 0 → sin fila de total", () => {
+    const html = aside({}, 1_500_000);
+    expect(html).toMatch(/Valor del turno<\/span><span[^>]*>\$\s?15\.000/);
+    expect(html).toContain("Lo pagás en el consultorio.");
+    expect(html).not.toMatch(/Mercado Pago|Total a pagar/);
+    const free = aside({}, 0);
+    expect(free).not.toContain("Valor del turno");
+    expect(free).not.toMatch(/\$\s?0\b/);
+    expect(free).toContain("Lo pagás en el consultorio.");
+  });
+
+  it("con cobro online el resumen sigue como antes (Total a pagar + Mercado Pago)", () => {
+    const html = aside({ onlineCheckout: true }, 1_500_000);
+    expect(html).toContain("Total a pagar");
+    expect(html).toContain("El pago se hace en Mercado Pago.");
+  });
+
+  it("el botón del último paso y la navegación salen de los helpers (sin el «Pagar y reservar» fijo)", () => {
+    // El paso 3 no se alcanza con render estático: se fija que el wizard use el copy y el destino de los helpers
+    // (testeados en tests/unit/public-wizard-state.test.ts), no un literal.
+    const src = readFileSync("components/booking/public-booking-wizard.tsx", "utf8");
+    expect(src).not.toContain('"Pagar y reservar"');
+    expect(src).not.toContain('"Redirigiendo…"');
+    expect(src).toMatch(/pending\s*\?\s*checkout\.ctaPending\s*:\s*checkout\.cta/);
+    expect(src).toContain("window.location.href = destinationAfterSubmit(r.data);");
+    expect(src).not.toMatch(/window\.location\.href = r\.data\.initPoint/);
+    expect(checkoutCopyFor({ priceCents: 1_500_000 })).toMatchObject({ cta: "Confirmar turno", ctaPending: "Reservando…" });
   });
 });

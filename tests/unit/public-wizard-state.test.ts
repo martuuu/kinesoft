@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   attemptSignature,
+  checkoutCopyFor,
+  destinationAfterSubmit,
   coverageInsurerPrefill,
   coverageOptions,
   durationFor,
@@ -17,6 +19,7 @@ import {
   servicesForPractitioner,
 } from "@/lib/public-wizard-state";
 import type { PublicClinic, PublicLocation } from "@/lib/public-booking-types";
+import { MIN_ONLINE_CHARGE_CENTS } from "@/lib/public-booking-payment";
 
 // B5.6 — lógica pura del turnero público (sin DOM). El componente
 // `components/booking/public-booking-wizard.tsx` usa exactamente estas
@@ -247,5 +250,73 @@ describe("precarga de obra social en Tus datos", () => {
     expect(coverageInsurerPrefill("IOMA", c, "OSDE")).toBe("IOMA");
     expect(coverageInsurerPrefill("", c, "PART")).toBe("");
     expect(coverageInsurerPrefill("", c, null)).toBe("");
+  });
+});
+
+// TP-0 · turnero sin cobro. El server decide (`decidePublicCheckout`); el wizard solo elige el copy que corresponde y
+// adónde ir con la respuesta. Sin checkout no se menciona Mercado Pago (H-TP1: hoy la única cuenta es la de la
+// plataforma y el turnero no cobra).
+describe("[TP-0] checkoutCopyFor", () => {
+  it("sin cobro online (falso o ausente): «Confirmar turno», «Valor del turno» y «Lo pagás en el consultorio.»", () => {
+    for (const onlineCheckout of [false, undefined]) {
+      const c = checkoutCopyFor({ onlineCheckout, priceCents: 1_500_000 });
+      expect(c).toEqual({
+        online: false,
+        cta: "Confirmar turno",
+        ctaPending: "Reservando…",
+        totalLabel: "Valor del turno",
+        showTotal: true,
+        note: "Lo pagás en el consultorio.",
+      });
+      expect(JSON.stringify(c)).not.toMatch(/Mercado Pago|Pagar/);
+    }
+  });
+
+  it("sin cobro y precio 0: sin fila de total (antes decía «$ 0»), la nota queda", () => {
+    const c = checkoutCopyFor({ onlineCheckout: false, priceCents: 0 });
+    expect(c.showTotal).toBe(false);
+    expect(c.note).toBe("Lo pagás en el consultorio.");
+  });
+
+  it("con cobro online y monto ≥ $1: el copy de Mercado Pago de siempre", () => {
+    expect(checkoutCopyFor({ onlineCheckout: true, priceCents: 1_500_000 })).toEqual({
+      online: true,
+      cta: "Pagar y reservar",
+      ctaPending: "Redirigiendo…",
+      totalLabel: "Total a pagar",
+      showTotal: true,
+      note: "El pago se hace en Mercado Pago.",
+    });
+  });
+
+  it("con cobro online pero monto < $1 (MIN_ONLINE_CHARGE_CENTS): el server no hace checkout → copy sin cobro", () => {
+    expect(checkoutCopyFor({ onlineCheckout: true, priceCents: 99 }).online).toBe(false);
+    expect(checkoutCopyFor({ onlineCheckout: true, priceCents: 0 }).cta).toBe("Confirmar turno");
+    expect(checkoutCopyFor({ onlineCheckout: true, priceCents: 100 }).online).toBe(true);
+  });
+
+  it("mismo piso que el server (`MIN_ONLINE_CHARGE_CENTS` de decidePublicCheckout)", () => {
+    const m = MIN_ONLINE_CHARGE_CENTS;
+    expect(checkoutCopyFor({ onlineCheckout: true, priceCents: m - 1 }).online).toBe(false);
+    expect(checkoutCopyFor({ onlineCheckout: true, priceCents: m }).online).toBe(true);
+  });
+});
+
+describe("[TP-0] destinationAfterSubmit", () => {
+  it("next reserved navega a /booking/<id>/ok", () => {
+    expect(destinationAfterSubmit({ bookingId: "bk_1", next: "reserved", initPoint: null })).toBe("/booking/bk_1/ok");
+    // Aunque viniera un initPoint (no debería), reservado no manda a Mercado Pago.
+    expect(destinationAfterSubmit({ bookingId: "bk_1", next: "reserved", initPoint: "https://mp/x" })).toBe(
+      "/booking/bk_1/ok"
+    );
+  });
+
+  it("next checkout → initPoint, como hoy; sin initPoint cae al resultado (el poller dice el estado real)", () => {
+    expect(destinationAfterSubmit({ bookingId: "bk_1", next: "checkout", initPoint: "https://mp/x" })).toBe("https://mp/x");
+    expect(destinationAfterSubmit({ bookingId: "bk_1", next: "checkout", initPoint: null })).toBe("/booking/bk_1/pending");
+  });
+
+  it("el id va escapado en la URL", () => {
+    expect(destinationAfterSubmit({ bookingId: "a/b", next: "reserved", initPoint: null })).toBe("/booking/a%2Fb/ok");
   });
 });

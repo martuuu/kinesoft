@@ -10,14 +10,15 @@
  *   3. Fecha + hora: grilla de `listPublicSlots`, o en modo "cualquiera" el
  *      primer horario libre de `findFirstPublicSlot`
  *   4. Tus datos — Google sign-in or HC form
- *   5. Confirmación + redirección a Mercado Pago
+ *   5. Confirmación: reserva sin cobro («Confirmar turno» → `/booking/<id>/ok`) o, si el consultorio cobra online,
+ *      redirección a Mercado Pago (TP-0: decide el server con `next`)
  *
  * The component is responsive: on desktop the steps run as a 2-column
  * layout (form left + summary right); on mobile they're a stack (VX2-d1:
  * todo en `public-booking.module.css`, sin `<style>` embebido ni reglas
  * `.booking-*` globales). State
  * is fully client-side; submission goes through the `submitPublicBooking`
- * server action which creates Patient + Booking + MP preference.
+ * server action which creates Patient + Booking (+ MP preference only when it charges online).
  * La lógica pura (filtros, rotación de la key, selección "cualquiera") está
  * en `lib/public-wizard-state.ts` con sus unit tests.
  */
@@ -37,7 +38,9 @@ import type { PublicClinic, PublicLocation, PublicSlot, PrefillPatient } from "@
 import type { TenantVertical } from "@prisma/client";
 import {
   attemptSignature,
+  checkoutCopyFor,
   coverageInsurerPrefill,
+  destinationAfterSubmit,
   durationFor,
   filterPractitioners,
   findLocation,
@@ -49,6 +52,7 @@ import {
   servicesForAny,
   servicesForPractitioner,
   type Attempt,
+  type CheckoutCopy,
   type WizardFilters,
   type WizardSelection,
 } from "@/lib/public-wizard-state";
@@ -169,6 +173,8 @@ export function PublicBookingWizard({
 
   const practitioner = clinic.practitioners.find((p) => p.id === practitionerId) ?? null;
   const service = clinic.services.find((s) => s.id === serviceId) ?? null;
+  // TP-0: botón y resumen según si este turno se cobra online. Es solo copy: adónde ir lo decide el `next` del server.
+  const checkout = checkoutCopyFor({ onlineCheckout: clinic.onlineCheckout, priceCents: service?.priceCents ?? 0 });
 
   // Servicios del profesional elegido (`practitionerIds`, B3.2). En modo
   // "cualquiera": los que ofrece al menos un profesional que pasa los filtros.
@@ -275,8 +281,9 @@ export function PublicBookingWizard({
         setError(r.error);
         return;
       }
-      // Redirect to Mercado Pago.
-      window.location.href = r.data.initPoint;
+      // `reserved` → resultado (/ok); `checkout` → Mercado Pago. Navegación dura a propósito: el resultado consulta el
+      // estado real y no hay nada del wizard que conservar.
+      window.location.href = destinationAfterSubmit(r.data);
     });
   };
 
@@ -377,8 +384,8 @@ export function PublicBookingWizard({
             <Button variant="primary" size="md" onClick={next} disabled={!canAdvance || pending}>
               {step === 3
                 ? pending
-                  ? "Redirigiendo…"
-                  : "Pagar y reservar"
+                  ? checkout.ctaPending
+                  : checkout.cta
                 : "Continuar"}{" "}
               <IconArrow size={14} />
             </Button>
@@ -392,6 +399,7 @@ export function PublicBookingWizard({
           service={service}
           slotISO={slotISO}
           location={findLocation(clinic, slotLocationId)}
+          checkout={checkout}
         />
       </main>
 
@@ -862,13 +870,15 @@ export function DataStep({
   );
 }
 
-function SummaryAside({
+/** Exportado para el render test (TP-0): con un servicio elegido no se llega por render estático del wizard. */
+export function SummaryAside({
   clinic,
   practitioner,
   anyPractitioner,
   service,
   slotISO,
   location,
+  checkout,
 }: {
   clinic: PublicClinic;
   practitioner: PublicClinic["practitioners"][number] | null;
@@ -878,6 +888,7 @@ function SummaryAside({
   slotISO: string | null;
   /** Sede del horario elegido (cada slot trae la suya). */
   location: PublicLocation | null;
+  checkout: CheckoutCopy;
 }) {
   const when = slotISO ? formatWhenAR(slotISO) : null;
   const address = location ? formatLocationAddress(location) : "";
@@ -899,11 +910,14 @@ function SummaryAside({
           {location && <Row label="Dónde" value={location.name} sub={address || undefined} />}
         </dl>
         <div className={s.total}>
-          <div className={s.totalRow}>
-            <span className={s.totalLabel}>Total a pagar</span>
-            <span className={`k-display ${s.totalValue}`}>{service ? formatARS(service.priceCents) : "—"}</span>
-          </div>
-          <p className={s.totalNote}>El pago se hace en Mercado Pago.</p>
+          {/* Sin servicio elegido: «—». Elegido, sin cobro y con precio 0: sin fila (antes «$ 0», H-TP2). */}
+          {(!service || checkout.showTotal) && (
+            <div className={s.totalRow}>
+              <span className={s.totalLabel}>{checkout.totalLabel}</span>
+              <span className={`k-display ${s.totalValue}`}>{service ? formatARS(service.priceCents) : "—"}</span>
+            </div>
+          )}
+          <p className={s.totalNote}>{checkout.note}</p>
         </div>
       </Card>
     </aside>
