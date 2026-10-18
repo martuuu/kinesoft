@@ -24,8 +24,9 @@ export type AuditParams = {
   action: string;
   entity: string;
   entityId?: string;
-  ip?: string;
-  userAgent?: string;
+  // `null` = «no se sabe» (el portal lo pasa así desde `clientIp`/el header); se guarda como NULL.
+  ip?: string | null;
+  userAgent?: string | null;
   payload?: Record<string, unknown>;
 };
 
@@ -98,6 +99,13 @@ export const SECURITY_EVENT_ACTIONS = [
   "tenant.export",
   // «Imprimir historia clínica» (EV2-D11): se registra ANTES de devolver los datos; sin audit no hay impresión.
   "clinicalRecord.print",
+  // T4 (C-FC7): descargas de la ficha (PDF/Word) y de la HC completa por el equipo, y del documento compartido desde
+  // el portal. No hay write al que atarse y los bytes son PHI: se audita ANTES del primer byte y, si el audit falla,
+  // la ruta responde 503 sin cuerpo. El portal no tiene contexto de request (`lib/request-context.ts`): pasa `ip` y
+  // `userAgent` explícitos en los params.
+  "clinicalNote.download",
+  "clinicalRecord.download",
+  "patientDocument.download",
 ] as const;
 export type SecurityEventAction = (typeof SECURITY_EVENT_ACTIONS)[number];
 

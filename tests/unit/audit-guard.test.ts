@@ -57,9 +57,20 @@ describe("[PL-A] guard de auditoría y errores", () => {
     expect([...calls, ...imports]).toEqual([]);
   });
 
-  it("la allowlist de eventos de seguridad es exactamente esta", () => {
+  it("[FC-1b] la allowlist de eventos de seguridad es exactamente esta", () => {
     expect([...SECURITY_EVENT_ACTIONS].sort()).toEqual(
-      ["clinicalRecord.print", "patient.export", "patientFile.download", "tenant.export", "tenant.export.started"].sort()
+      [
+        "clinicalRecord.print",
+        "patient.export",
+        "patientFile.download",
+        "tenant.export",
+        "tenant.export.started",
+        // [FC-1b] T4 (C-FC7): descargas de ficha, de la HC completa y del documento compartido en el portal. No tienen
+        // write propio y se auditan ANTES del primer byte (audit caído → 503).
+        "clinicalNote.download",
+        "clinicalRecord.download",
+        "patientDocument.download",
+      ].sort()
     );
   });
 
