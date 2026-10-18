@@ -1,4 +1,5 @@
 import type { BookingStatus, PaymentStatus } from "@prisma/client";
+import type { PaymentMethod } from "@/lib/payment-method";
 import { formatARS } from "@/lib/format";
 import type { AgendaBookingRow, AgendaPlanFields, BookingRow } from "@/lib/bookings-types";
 import type { Discipline } from "@/lib/plans-constants";
@@ -92,6 +93,17 @@ export type BookingDTO = {
    *   pone en "Sin sala"; por eso la agenda SIEMPRE expande.
    */
   roomId?: string | null;
+  /**
+   * T3 (C-AS2): medio del cobro del copago. En el cable viaja como `pm` (default null: solo crecen las filas
+   * pagadas; `agenda-wire.ts`, T3c-1c). null = sin cobrar o «Sin informar».
+   */
+  copagoPaymentMethod?: PaymentMethod | null;
+  /**
+   * T3 (plan §23.9): clave de la cobertura para el filtro por obra social. `string` = id del catálogo o
+   * `"particular"`; `null` = el actor no ve la cobertura (con filtro activo se oculta y se cuenta, nunca matchea);
+   * `undefined` = no se sabe (nunca se esconde). En el cable, `oi` = índice en el catálogo (T3e-2o).
+   */
+  insurerKey?: string | null;
 } & Partial<AgendaPlanFields>;
 /*
  * C9 (Planes, PLANES.md §4) en el DTO: `programId`, `sessionId`,

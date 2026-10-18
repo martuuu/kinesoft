@@ -1,6 +1,7 @@
 import "server-only";
 import type { DbClient } from "@/lib/rls";
 import { dayKeyOf, dayKeyRange } from "@/lib/availability/day";
+import { arHourKeyOf } from "@/lib/availability/interval-cap";
 
 /**
  * Lock de CUPO de un profesional + servicio por día AR (B3.1, pedido del
@@ -40,10 +41,12 @@ import { dayKeyOf, dayKeyRange } from "@/lib/availability/day";
  * `lockCapacityMany`.
  *
  * Orden respecto de los otros locks (C2): `lockPlanPatient` (lib/plan-lock.ts)
- * SIEMPRE antes que el cupo; el cupo antes que la SALA (SR, enmienda C2 (1b),
- * ver el bloque de salas abajo); la sala antes que `lockTenantLocationsShared`;
- * y recién después las filas (Booking FOR UPDATE id asc → Session →
- * TreatmentProgram).
+ * SIEMPRE antes que el cupo; el cupo antes que la HORA del profesional (T3,
+ * enmienda C2 (1c), ver el bloque `phour` abajo); la hora antes que la SALA
+ * (SR, enmienda C2 (1b)); la sala antes que `lockTenantLocationsShared`; y
+ * recién después las filas (Booking FOR UPDATE id asc → Session →
+ * TreatmentProgram). Cupo, hora y sala van en UNA sentencia
+ * (`lockAgendaKeysMany`).
  *
  * Alcance de transacción: se suelta solo en COMMIT/ROLLBACK. Llamarlo fuera
  * de un `runWithRls(...)` / `$transaction` no protege nada.
@@ -133,13 +136,14 @@ export async function lockCapacity(tx: DbClient, o: CapacityLockKey): Promise<vo
  * Lista vacía: no-op sin ida a la base.
  */
 export async function lockCapacityMany(tx: DbClient, keys: readonly CapacityLockKey[]): Promise<void> {
-  await lockOrderedKeys(tx, orderedCapacityLockKeys(keys));
+  await lockAgendaKeysMany(tx, { cap: keys });
 }
 
 /**
  * La sentencia literal de C2 (1) sobre un array YA ordenado. Privada: el único
- * lugar donde vive el SQL, para que `lockCapacityMany` y
- * `lockCapacityAndRoomsMany` (SR, enmienda C2 (1b)) no puedan divergir.
+ * lugar donde vive el SQL, para que `lockCapacityMany`,
+ * `lockCapacityAndRoomsMany` (SR, enmienda C2 (1b)) y `lockAgendaKeysMany`
+ * (T3, enmienda C2 (1c)) no puedan divergir.
  * Lista vacía: no-op sin ida a la base.
  */
 async function lockOrderedKeys(tx: DbClient, ordered: string[]): Promise<void> {
@@ -238,7 +242,7 @@ export function orderedCapacityAndRoomLockKeys(
   cap: readonly CapacityLockKey[],
   rooms: readonly RoomLockKey[]
 ): string[] {
-  return [...orderedCapacityLockKeys(cap), ...orderedRoomLockKeys(rooms)];
+  return orderedAgendaLockKeys({ cap, rooms });
 }
 
 /**
@@ -254,5 +258,92 @@ export async function lockCapacityAndRoomsMany(
   cap: readonly CapacityLockKey[],
   rooms: readonly RoomLockKey[]
 ): Promise<void> {
-  await lockOrderedKeys(tx, orderedCapacityAndRoomLockKeys(cap, rooms));
+  await lockAgendaKeysMany(tx, { cap, rooms });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Hora del profesional (T3, C-AS3, enmienda C2 (1c)): paciente → cupo → HORA → sala → sedes → filas
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// El bug que evita: el tope «N turnos cada X min» (decisión 6) cuenta los turnos del profesional de CUALQUIER
+// servicio que empiezan en el mismo intervalo AR. El conteo es un SELECT seguido del INSERT, como el cupo, y el
+// lock de cupo no lo serializa porque su clave lleva el servicio: dos altas simultáneas de servicios distintos
+// con tope 1 leían las dos «0 en el intervalo» y entraban las dos.
+//
+// Por eso hay una clave por (tenant, profesional, HORA AR del inicio del turno). La hora y no el intervalo: los
+// intervalos de 15/30/60 están alineados a la hora AR (`lib/availability/interval-cap.ts`), así que cualquier
+// intervalo cae entero dentro de UNA hora, y dos altas que compiten por el mismo intervalo comparten la clave de
+// hora sea cual sea la configuración. Si el profesional cambia su tope de 15 a 60 en el medio, la clave no cambia
+// (no hay ventana donde dos tx con configs distintas tomen claves distintas). El costo: serializar altas del mismo
+// profesional que empiezan en la misma hora, que no compiten en volumen.
+//
+// Una clave por turno (la hora de SU inicio): el tope cuenta inicios, no solapes. Una edición que no cambia de
+// intervalo ni reactiva no la necesita (su conteo no crece), pero tomarla igual es inocuo.
+//
+// Orden (C2 (1c)): TODO el cupo → TODAS las horas → TODAS las salas, en UNA sentencia (`lockAgendaKeysMany`, la
+// misma SQL `WITH ORDINALITY … ORDER BY o`): 0 statements nuevos en altas, lote, edición y turnero (techos de perf
+// 35 / 186 intactos). Con el orden total compartido, dos tx nunca se esperan en ciclo. Prefijos
+// "kinesoft:cap:" / "kinesoft:phour:" / "kinesoft:room:" no se pisan.
+//
+// Quién NO la toma: bloqueos/candado (no crean turnos) y la promoción del hold del turnero. Planes avisa
+// (`overIntervalCap`) sin lock.
+
+/** Una clave de hora: (profesional, hora AR "YYYY-MM-DDTHH") dentro de un tenant. */
+export type HourLockKey = { tenantId: string; practitionerId: string; hourKey: string };
+
+/** La clave textual del advisory lock de hora (exportada para los tests de carrera). */
+export const hourLockKey = (o: HourLockKey) => `kinesoft:phour:${o.tenantId}:${o.practitionerId}:${o.hourKey}`;
+
+/** La clave de hora de un turno que EMPIEZA en `start` (la hora AR del inicio; 23:30 AR → "…T23" de ese día). */
+export function hourKeyForStart(o: { tenantId: string; practitionerId: string; start: Date }): HourLockKey {
+  return { tenantId: o.tenantId, practitionerId: o.practitionerId, hourKey: arHourKeyOf(o.start) };
+}
+
+/**
+ * Claves de hora deduplicadas y ordenadas por (tenantId, practitionerId, hourKey), POR COMPONENTE (mismo motivo
+ * que `orderedCapacityLockKeys`: con ids de largo distinto, "a:" vs "a1:" concatenados invertirían el orden).
+ * "YYYY-MM-DDTHH" ordena igual que el tiempo.
+ */
+export function orderedHourLockKeys(keys: readonly HourLockKey[]): string[] {
+  const sorted = [...keys].sort(
+    (a, b) => cmp(a.tenantId, b.tenantId) || cmp(a.practitionerId, b.practitionerId) || cmp(a.hourKey, b.hourKey)
+  );
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const k of sorted) {
+    const s = hourLockKey(k);
+    if (seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
+/** Las tres familias de claves de agenda; cualquiera puede faltar o venir vacía. */
+export type AgendaLockKeys = {
+  cap?: readonly CapacityLockKey[];
+  hour?: readonly HourLockKey[];
+  rooms?: readonly RoomLockKey[];
+};
+
+/**
+ * El array exacto que bloquea `lockAgendaKeysMany`: cupo ordenado ++ horas ordenadas ++ salas ordenadas (nunca
+ * intercaladas, aunque un tenant de la sala ordenara antes que el del cupo). Exportado para el unit test de orden
+ * y para los tests de carrera (`pg_locks`).
+ */
+export function orderedAgendaLockKeys(k: AgendaLockKeys): string[] {
+  return [
+    ...orderedCapacityLockKeys(k.cap ?? []),
+    ...orderedHourLockKeys(k.hour ?? []),
+    ...orderedRoomLockKeys(k.rooms ?? []),
+  ];
+}
+
+/**
+ * Cupo → hora → sala en UNA sentencia (C-AS3, enmienda C2 (1c)). Lo usan altas, lote, edición que cambia de
+ * intervalo o reactiva, y el submit del turnero; `lockCapacityMany`/`lockCapacityWindow`/`lockCapacityAndRoomsMany`
+ * quedan como envoltorios con su firma (C8). Todas las listas vacías: no-op sin ida a la base.
+ */
+export async function lockAgendaKeysMany(tx: DbClient, keys: AgendaLockKeys): Promise<void> {
+  await lockOrderedKeys(tx, orderedAgendaLockKeys(keys));
 }

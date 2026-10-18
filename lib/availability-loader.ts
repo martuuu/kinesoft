@@ -2,8 +2,9 @@ import "server-only";
 import { z } from "zod";
 import type { DbClient } from "@/lib/rls";
 import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
-import { roomsEnabled } from "@/lib/tenant-modules";
+import { parseModuleOverrides, roomsEnabled } from "@/lib/tenant-modules";
 import { addDays, dayKeyToDbDate, dayWindow, dbDateToDayKey, isDayKey } from "@/lib/availability/day";
+import { effectiveIntervalCap, type IntervalCap } from "@/lib/availability/interval-cap";
 import {
   BOOKING_LOOKBACK_MIN,
   FALLBACK_TENANT_HOURS,
@@ -61,6 +62,8 @@ export type LoadedAvailabilityInput = Omit<AvailabilityInput, "bookings" | "room
   bookings: ReadonlyArray<AvailabilityBooking & { roomId: string | null }>;
   /** SR (§17.5): siempre cargado (`[]` = ninguno). */
   roomBlocks: ReadonlyArray<RoomBlock>;
+  /** T3 (C-AS3): siempre cargado, una entrada por profesional de `templates` (null = sin tope). */
+  intervalCaps: Readonly<Record<string, IntervalCap | null>>;
 };
 
 export type LoadAvailabilityParams = {
@@ -270,10 +273,24 @@ async function loadForRuns(
         vertical: true,
         saasPlan: true,
         publicBookingEnabled: true,
+        // T3 (1k2): overrides de módulos de Plataforma, parte de `TenantEntitlements` (un «salas» revocado o
+        // concedido a mano cambia `roomsOn`). Columnas escalares de la misma fila: 0 sentencias nuevas.
+        moduleGrants: true,
+        moduleRevokes: true,
+        // T3 (C-AS3): tope por intervalo del consultorio (default de cada profesional en INHERIT). Misma fila.
+        bookingCapCount: true,
+        bookingCapIntervalMin: true,
       },
     }),
     requestedIds && requestedIds.length === 0
-      ? Promise.resolve([] as { id: string }[])
+      ? Promise.resolve(
+          [] as {
+            id: string;
+            bookingCapMode: string;
+            bookingCapCount: number | null;
+            bookingCapIntervalMin: number | null;
+          }[]
+        )
       : db.practitioner.findMany({
           // Mismo criterio que `listPractitioners`: `removeMember` borra la
           // membresía pero deja la fila Practitioner (historial); IAM-2e:
@@ -287,7 +304,8 @@ async function loadForRuns(
             ...(requestedIds ? { id: { in: requestedIds } } : {}),
             ...(params.publicBookingOnly ? { publicBookingEnabled: true } : {}),
           },
-          select: { id: true },
+          // T3 (C-AS3): el tope propio viaja en la MISMA sentencia (columnas escalares; 0 sentencias nuevas).
+          select: { id: true, bookingCapMode: true, bookingCapCount: true, bookingCapIntervalMin: true },
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         }),
     db.location.findFirst({
@@ -316,7 +334,19 @@ async function loadForRuns(
     vertical: tenant.vertical,
     plan: tenant.saasPlan,
     publicBookingEnabled: tenant.publicBookingEnabled,
+    ...parseModuleOverrides(tenant),
   });
+  // T3 (C-AS3): tope efectivo por profesional reservable (INHERIT → el del consultorio; NONE → null; CUSTOM →
+  // el propio). Lo decide SOLO `effectiveIntervalCap` (puro), para que el motor, el turnero y los write-paths no
+  // puedan divergir en la herencia.
+  const tenantCap = { count: tenant.bookingCapCount, intervalMin: tenant.bookingCapIntervalMin };
+  const intervalCaps: Record<string, IntervalCap | null> = {};
+  for (const p of practitioners) {
+    intervalCaps[p.id] = effectiveIntervalCap(
+      { mode: p.bookingCapMode, count: p.bookingCapCount, intervalMin: p.bookingCapIntervalMin },
+      tenantCap
+    );
+  }
   const primaryLocationId = primary?.id ?? null;
   const resolveLocation = (id: string | null | undefined): string =>
     id ?? primaryLocationId ?? NO_LOCATION_ID;
@@ -612,5 +642,6 @@ async function loadForRuns(
     practitionerServices,
     services: serviceInfos,
     practitionerPayers,
+    intervalCaps,
   };
 }

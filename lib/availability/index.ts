@@ -12,6 +12,8 @@
  *   plan        motor puro de Planes: expandPlanDates, classifyPlanRows,
  *               suggestRowSlot, stateToken y tipos C6/C7 (S07p, ES1)
  *   rooms       salas (SR1a): defaultRoomFor, roomOccupancyAt, roomAssignmentsFor
+ *   interval-cap  tope de turnos por intervalo (T3, C-AS3): effectiveIntervalCap,
+ *               arIntervalWindow/arIntervalKeyOf/arHourKeyOf, intervalStartsUsed, intervalCapState
  */
 export * from "@/lib/availability/types";
 export * from "@/lib/availability/day";
@@ -22,3 +24,4 @@ export * from "@/lib/availability/next-free";
 export * from "@/lib/availability/recurrence";
 export * from "@/lib/availability/plan";
 export * from "@/lib/availability/rooms";
+export * from "@/lib/availability/interval-cap";

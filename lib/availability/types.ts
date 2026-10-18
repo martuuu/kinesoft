@@ -25,11 +25,15 @@
  *   • Sede: `locationId` siempre resuelto (string). `Booking.locationId` null =
  *     sede principal: el loader lo normaliza a `primaryLocationId`. Sin sede
  *     principal (`primaryLocationId` null) se usa `NO_LOCATION_ID` (ver abajo).
+ *   • Tope por intervalo (T3, C-AS3): profesional, CUALQUIER servicio, turnos
+ *     que empiezan en el mismo intervalo AR alineado a la hora; lógica SOLO en
+ *     `lib/availability/interval-cap.ts`. Es independiente del cupo de abajo.
  *   • Cupo: profesional + servicio (decisión 5), decidido SOLO con
  *     `isHoldingCapacity` + `overlapBlocks` de `lib/booking-capacity.ts`
  *     (preservar AUDIT §5.18). `cap` null = ilimitado.
  */
 import type { BatchExistingBooking } from "@/lib/booking-schedule";
+import type { IntervalCap } from "@/lib/availability/interval-cap";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Primitivos
@@ -282,6 +286,13 @@ export type AvailabilityInput = {
    *  obra social"). Opcional: ausente = sin filas = todas activas. El loader
    *  siempre lo carga. Agregado por el integrador de B2 (handoff de B2.1b). */
   practitionerPayers?: ReadonlyArray<PractitionerPayerRule>;
+  /**
+   * T3 (C-AS3): tope de turnos por intervalo EFECTIVO de cada profesional cargado (`effectiveIntervalCap`: el
+   * del consultorio, «sin tope» o el propio). `null` = sin tope; un profesional ausente del mapa, también.
+   * Opcional para los callers puros (fixtures de antes de T3); el loader siempre lo carga, con las columnas del
+   * tope sumadas a los selects de tenant y profesional que ya corrían (0 sentencias nuevas).
+   */
+  intervalCaps?: Readonly<Record<string, IntervalCap | null>>;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -293,7 +304,11 @@ export type SlotUnavailableReason =
   | "pasado" // arranca antes de `now`
   | "anticipacion-minima" // antes de now + minLead
   | "fuera-de-horizonte" // después de now + maxLeadDays
-  | "cupo-completo"; // overlapBlocks(used, cap)
+  | "cupo-completo" // overlapBlocks(used, cap)
+  // T3 (C-AS3): el intervalo AR del slot ya tiene `cap.count` turnos del profesional (cualquier servicio). Va
+  // ÚLTIMO: con el cupo del servicio también lleno, gana "cupo-completo" (mismo orden que `InstantClass`:
+  // sobreturno > tope-intervalo). El turnero no lo ofrece (duro); el selector del staff lo deja elegir y forzar.
+  | "tope-intervalo";
 
 /** Un slot de `buildSlots`. La grilla se ancla al inicio de CADA franja y el
  *  slot entra entero en la franja ([inicio, inicio + duración) ⊆ franja). */
@@ -309,7 +324,12 @@ export type SlotResult = {
   used: number;
   /** Cupo; null = ilimitado. */
   cap: number | null;
+  /** T3 (C-AS3): uso del tope por intervalo («Tope completo (2/2)»). Solo con tope; ausente = sin tope. */
+  intervalCapUse?: IntervalCapUse;
 };
+
+/** Cuántos turnos del profesional ya empiezan en el intervalo AR (`used`) contra su tope (`cap`). */
+export type IntervalCapUse = { used: number; cap: IntervalCap };
 
 /** Parámetros de `buildSlots` (B2.1a). */
 export type BuildSlotsInput = {
@@ -322,11 +342,30 @@ export type BuildSlotsInput = {
   /** Ya filtrados a profesional + servicio. */
   bookings: ReadonlyArray<AvailabilityBooking>;
   cap: number | null;
+  /**
+   * T3 (C-AS3): tope por intervalo del profesional. `bookings` acá son TODOS los turnos no cancelados del
+   * profesional (cualquier servicio), no los ya filtrados de arriba: el tope cruza servicios. Ausente o
+   * `null` = sin tope (la grilla de siempre, byte a byte).
+   */
+  intervalCap?: IntervalCapContext | null;
+};
+
+/**
+ * Tope por intervalo + los turnos contra los que se cuenta (`intervalStartsUsed`): todos los del profesional,
+ * de cualquier servicio. Forma única para `BuildSlotsInput.intervalCap`; `classifyInstant` recibe solo el
+ * `IntervalCap` porque su `bookings` ya trae todos los del profesional (C-AS3: «prefiltros que conservan los
+ * turnos del profesional cuando hay tope», a cargo de quien arma el input).
+ */
+export type IntervalCapContext = {
+  practitionerId: string;
+  cap: IntervalCap;
+  bookings: ReadonlyArray<AvailabilityBooking>;
 };
 
 /**
  * Clase de un instante (`classifyInstant`, B2.1b), en este orden de precedencia:
- *   duplicado > bloqueado > fuera-de-horario > sobreturno / paciente-superpuesto > libre.
+ *   duplicado > bloqueado > fuera-de-horario > paciente-superpuesto > sobreturno > tope-intervalo > libre
+ * (el orden real entre paciente-superpuesto y sobreturno es el de `classify.ts`, heredado del batch).
  *   • duplicado: el paciente ya tiene un turno que arranca en ese instante (el
  *     índice único parcial lo rechaza: nunca creable).
  *   • bloqueado: cae (aunque sea en parte) sobre un TimeBlock. Staff: creable
@@ -336,6 +375,12 @@ export type BuildSlotsInput = {
  *   • sobreturno: cupo del profesional + servicio lleno.
  *   • paciente-superpuesto: el paciente tiene otro turno solapado (cualquier
  *     profesional/servicio). Hoy el batch lo informa como "sobreturno".
+ *   • tope-intervalo (T3, C-AS3): el intervalo AR de `when` ya tiene `count`
+ *     turnos del profesional que retienen cupo (cualquier servicio,
+ *     `intervalStartsUsed`). Staff: creable con `allowIntervalCap`, queda
+ *     `isOverbooked` (decisión 6); turnero: duro; Planes: aviso
+ *     (`overIntervalCap`) sin bloqueo. Va justo antes de "libre": cualquier
+ *     otra clase lo tapa (un sobreturno de cupo ya es sobreturno).
  */
 export type InstantClass =
   | "duplicado"
@@ -343,6 +388,7 @@ export type InstantClass =
   | "fuera-de-horario"
   | "sobreturno"
   | "paciente-superpuesto"
+  | "tope-intervalo"
   | "libre";
 
 /** Resultado de `classifyInstant`. `outOfHours`/`blocked` se informan aunque
@@ -356,6 +402,14 @@ export type InstantClassification = {
   blockIds: ReadonlyArray<string>;
   used: number;
   cap: number | null;
+  /**
+   * T3 (C-AS3): el intervalo ya está en el tope (`intervalCapState === "full"`). Se informa aunque gane una
+   * clase de mayor precedencia (como `outOfHours`/`blocked`): forzar el cupo no fuerza el tope, cada uno tiene
+   * su flag. Ausente = sin tope (o un clasificador de antes de T3).
+   */
+  intervalCapped?: boolean;
+  /** Uso del tope (aviso del 2.º turno y «x/tope»). Solo con tope. */
+  intervalCapUse?: IntervalCapUse;
 };
 
 /** Estado de candado de un día para un profesional (`dayLockState`, B2.1a). */

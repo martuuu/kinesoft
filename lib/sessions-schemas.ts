@@ -35,6 +35,9 @@ const RescheduleForce = z
     allowOutOfHours: z.boolean().optional(),
     allowBlocked: z.boolean().optional(),
     allowRoomConflict: z.boolean().optional(),
+    // T3 (C-AS3): pasar el tope por intervalo del profesional (queda sobreturno). Sin esto, `.strict()` rechazaba
+    // el reintento del drawer de Seguimiento con el flag nuevo como «input inválido».
+    allowIntervalCap: z.boolean().optional(),
   })
   .strict();
 

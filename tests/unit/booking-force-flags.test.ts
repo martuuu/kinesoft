@@ -7,6 +7,7 @@ import {
   forcePromptHeadline,
   nextForcePrompt,
   withForce,
+  intervalCapNoticeText,
   type ForceableResult,
   type ForceFlags,
 } from "@/lib/booking-force-flags";
@@ -78,7 +79,8 @@ const roomBlocked = { roomName: "Consultorio 2", nextFreeISO: null, blocked: { r
 
 describe("roomBusy (SR)", () => {
   it("ORDER: roomBusy va último y con el flag allowRoomConflict", () => {
-    expect(FORCE_PROMPT_ORDER).toEqual(["blocked", "outOfHours", "conflict", "patientOverlap", "roomBusy"]);
+    // T3 (C-AS3): `intervalCap` entra después del cupo; la sala sigue última.
+    expect(FORCE_PROMPT_ORDER).toEqual(["blocked", "outOfHours", "conflict", "intervalCap", "patientOverlap", "roomBusy"]);
     expect(FORCE_FLAG_BY_KIND.roomBusy).toBe("allowRoomConflict");
     const all: ForceableResult = { blocked, outOfHours, conflict, patientOverlap, roomBusy };
     expect(nextForcePrompt(all)?.kind).toBe("blocked");
@@ -190,6 +192,65 @@ describe("copy", () => {
     });
     expect(forcePromptConfirm(nextForcePrompt({ outOfHours })!, "reactivate").message).toBe(
       "¿Reactivar igual?"
+    );
+  });
+});
+
+// [AS-2k] T3 (C-AS3, decisión 6): tope «N turnos cada X min». Aviso forzable propio, después del cupo, y ES
+// sobreturno (a diferencia de la sala).
+const intervalCap = { practitionerName: "Ana", used: 2, cap: 2, fromTime: "10:00", toTime: "10:15", nextFreeISO: NEXT };
+
+describe("[AS-2k] intervalCap (tope por intervalo)", () => {
+  it("flag allowIntervalCap, entre el cupo y el paciente", () => {
+    expect(FORCE_FLAG_BY_KIND.intervalCap).toBe("allowIntervalCap");
+    const all: ForceableResult = { blocked, outOfHours, conflict, intervalCap, patientOverlap, roomBusy };
+    expect(
+      nextForcePrompt(all, { allowBlocked: true, allowOutOfHours: true, allowOverbooking: true })?.kind
+    ).toBe("intervalCap");
+    expect(
+      nextForcePrompt(all, { allowBlocked: true, allowOutOfHours: true, allowOverbooking: true, allowIntervalCap: true })
+        ?.kind
+    ).toBe("patientOverlap");
+    // Forzar el cupo no fuerza el tope, ni al revés.
+    expect(nextForcePrompt({ conflict, intervalCap }, { allowOverbooking: true })?.kind).toBe("intervalCap");
+    expect(nextForcePrompt({ conflict, intervalCap }, { allowIntervalCap: true })?.kind).toBe("conflict");
+    expect(nextForcePrompt({ intervalCap }, { allowIntervalCap: true })).toBeNull();
+    expect(nextForcePrompt({ intervalCap: null })).toBeNull();
+  });
+
+  it("prompt con uso, tope e intervalo", () => {
+    expect(nextForcePrompt({ intervalCap })).toEqual({
+      kind: "intervalCap",
+      flag: "allowIntervalCap",
+      practitionerName: "Ana",
+      reason: null,
+      nextFreeISO: NEXT,
+      intervalCap: { used: 2, cap: 2, fromTime: "10:00", toTime: "10:15" },
+    });
+  });
+
+  it("copy de C-AS3: titular, «Cargar como sobreturno» y consecuencia de sobreturno", () => {
+    const p = nextForcePrompt({ intervalCap })!;
+    expect(forcePromptHeadline(p)).toBe("Ana ya tiene 2 turnos entre las 10:00 y las 10:15 (tope: 2).");
+    expect(forcePromptHeadline(nextForcePrompt({ intervalCap: { ...intervalCap, used: 1, cap: 1 } })!)).toBe(
+      "Ana ya tiene 1 turno entre las 10:00 y las 10:15 (tope: 1)."
+    );
+    expect(forcePromptActionLabel(p, "edit")).toBe("Cargar como sobreturno");
+    expect(forcePromptActionLabel(p, "reschedule")).toBe("Cargar como sobreturno");
+    expect(forcePromptActionLabel(p, "reactivate")).toBe("Reactivar como sobreturno");
+    expect(forcePromptConfirm(p, "reschedule")).toEqual({
+      title: "Ana ya tiene 2 turnos entre las 10:00 y las 10:15 (tope: 2).",
+      message: "Si lo reprogramás, queda como sobreturno.",
+      confirmLabel: "Cargar como sobreturno",
+    });
+  });
+
+  it("aviso informativo del 2.º turno (sin flag)", () => {
+    expect(intervalCapNoticeText({ practitionerName: "Ana", used: 1, time: "10:00" })).toBe(
+      "Ya hay 1 turno de Ana a las 10:00."
+    );
+    expect(intervalCapNoticeText({ practitionerName: "Ana", used: 3, time: "10:15" })).toBe(
+      "Ya hay 3 turnos de Ana a las 10:15."
     );
   });
 });

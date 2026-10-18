@@ -1,5 +1,7 @@
 import type { BookingStatus, PaymentStatus } from "@prisma/client";
+import type { PaymentMethod } from "@/lib/payment-method";
 import type { BatchSlotStatus } from "@/lib/booking-schedule";
+import type { IntervalCapPromptData } from "@/lib/booking-force-flags";
 import type { ReceptionAction, ReceptionState } from "@/lib/reception-state";
 import type { Discipline } from "@/lib/plans-constants";
 import type { LinkedPlanDiscipline } from "@/lib/plan-display";
@@ -97,6 +99,24 @@ export type BookingBlockedPrompt = {
   nextFreeISO: string | null;
 };
 
+/**
+ * T3 (C-AS3): el intervalo AR del turno ya tiene `used` turnos del profesional y el tope es `cap` (aviso forzable
+ * `intervalCap`, mismo patrón que `conflict`: `ok: false` + `error` legible; con `allowIntervalCap` el turno queda
+ * `isOverbooked`). Forma única con `ForceableResult.intervalCap` (`lib/booking-force-flags.ts`).
+ */
+export type BookingIntervalCapPrompt = IntervalCapPromptData;
+
+/**
+ * T3 (C-AS3): aviso INFORMATIVO del 2.º turno del intervalo (`intervalCapState === "notice"`), en un resultado
+ * `ok: true`: no bloquea ni pide confirmación. `time` = "HH:MM" AR del inicio del intervalo. Copy con
+ * `intervalCapNoticeText` («Ya hay 1 turno de Ana a las 10:00.»).
+ */
+export type BookingIntervalCapNotice = {
+  practitionerName: string;
+  used: number;
+  time: string;
+};
+
 /** Una fecha del preview/resultado de `createBookingsBatch`. `outOfHours` y
  *  `blocked` son flags extra (no cambian el `status` ni los conteos; un
  *  bloqueo ya sube el status a "sobreturno"). */
@@ -112,6 +132,12 @@ export type BatchDateOutcome = {
    * hasta que SR3a lo llene (ausente = false).
    */
   roomBusy?: boolean;
+  /**
+   * T3 (C-AS3): la fecha pasa el tope por intervalo del profesional. Flag extra como `roomBusy` (no cambia
+   * `status` ni los conteos): sin `allowIntervalCap` la fecha se OMITE («{n} fechas superan el tope» +
+   * «Agendar igual esas fechas»); con el flag entra como sobreturno. Ausente = false (lote de antes de T3d).
+   */
+  intervalCapped?: boolean;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -184,6 +210,17 @@ export type AgendaBookingRow = BookingRow & {
    * paciente siguen a esto; en un guest siguen a `canOperate` (son del staff).
    */
   clinicalWritable: boolean;
+  /**
+   * T3 (C-AS2): cómo pagó el copago (`Booking.copagoPaymentMethod`, M12); null = no cobrado o cobrado antes de
+   * T3 («Sin informar»). Opcional hasta que T3c-1c lo proyecte en `listAgendaBookings` (cable `pm`, default null).
+   */
+  copagoPaymentMethod?: PaymentMethod | null;
+  /**
+   * T3 (plan §23.9): clave de la cobertura para el filtro por obra social: el id del `Insurer` del catálogo,
+   * `"particular"`, o `null` si el actor no ve facturación (nunca matchea un filtro activo: se oculta y se
+   * cuenta). Ausente = el server no la mandó (nunca se esconde). Opcional hasta T3e-2o.
+   */
+  insurerKey?: string | null;
 } & AgendaPlanFields;
 
 /**
