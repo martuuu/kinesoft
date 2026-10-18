@@ -194,8 +194,11 @@ export const SALA_CSS = `
   .sala-col-body { overflow: visible; }
   .sala-btn { min-height: 44px; padding: 8px 14px; }
   .sala-seg-btn { min-height: 44px; }
-  .sala-search { min-height: 44px; }
-  .sala-search input { min-height: 42px; }
+  /* AS-0d: el input es el target (el label solo lo envuelve) y medía 42 a 390 (44 del label menos el borde). */
+  .sala-search { min-height: 46px; }
+  .sala-search input { min-height: 44px; }
+  .sala-empty-btn { min-height: 44px; }
+  .sala-skel-search { max-width: none; flex-basis: 100%; height: 46px; }
   .sala-search-clear { width: 40px; height: 40px; }
   .sala-later { min-height: 44px; }
   .sala-col[data-waiting=true] { order: -1; }

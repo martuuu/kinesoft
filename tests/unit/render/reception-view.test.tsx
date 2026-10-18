@@ -81,8 +81,11 @@ describe("ReceptionView render", () => {
 
     const con = render({ room_c2: { name: "Consultorio 2" } });
     expect(con).toContain('<th scope="col">Sala</th>');
-    // Una celda por fila (data-label para las cards de mobile), con o sin sala.
-    expect(con.split('data-label="Sala"').length - 1).toBe(withRooms.length);
+    // Una celda por fila (data-label para las cards de mobile), con o sin sala. AS-0d: la tabla de escritorio y las
+    // secciones del celular se dibujan las dos (el CSS elige una): una celda por fila en cada copia.
+    const mIdx = con.indexOf('class="rcp-m"');
+    expect(con.slice(0, mIdx).split('data-label="Sala"').length - 1).toBe(withRooms.length);
+    expect(con.slice(mIdx).split('data-label="Sala"').length - 1).toBe(withRooms.length);
     expect(con).toContain("Consultorio 2");
     // La columna va después de Profesional y antes de Estado.
     expect(con.indexOf(">Profesional<")).toBeLessThan(con.indexOf(">Sala<"));

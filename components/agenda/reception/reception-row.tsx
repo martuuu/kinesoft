@@ -92,6 +92,7 @@ export function ReceptionRow({
   practitioner,
   now,
   canOperate,
+  operable: operableProp,
   pending,
   onAction,
   onOpen,
@@ -104,6 +105,8 @@ export function ReceptionRow({
   now: Date;
   /** false → sin columna de acciones (la vista muestra el aviso de solo lectura). */
   canOperate: boolean;
+  /** AS-0d: ¿el actor opera ESTA fila? (`receptionRowOperable`, misma regla que el server). Sin la prop, la del DTO. */
+  operable?: boolean;
   /** Hay una action en vuelo para esta fila: botones deshabilitados. */
   pending: boolean;
   onAction: (b: BookingDTO, action: ReceptionAction) => void;
@@ -122,7 +125,8 @@ export function ReceptionRow({
   // `agenda.operateAll`: el profesional en las suyas, la Secretaria/OWNER/ADMIN
   // en todas (SV-D2: la Secretaria llama en nombre del profesional). Sin el
   // campo (proyecciones viejas) se asume operable; el server decide igual.
-  const operable = b.canOperate !== false;
+  // AS-0d: la vista pasa `operable` con el turno propio sumado (el server lo acepta aunque el paciente sea basic).
+  const operable = operableProp ?? b.canOperate !== false;
 
   return (
     <tr

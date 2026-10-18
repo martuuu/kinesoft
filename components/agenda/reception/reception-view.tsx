@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
+import { IconChevD } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import { markReceptionAction } from "@/lib/bookings";
 import { dayKeyOf } from "@/lib/availability/day";
@@ -28,6 +29,8 @@ import { ReceptionRow } from "./reception-row";
 import { noteLocalReception } from "@/lib/arrival-local-notes";
 import { useAttendedNoteToast } from "./use-attended-note-toast";
 import { RECEPTION_FIT_MQ, measureReceptionBottomGap, receptionScrollMaxHeight } from "./reception-fit";
+import { receptionSections, type ReceptionSectionId } from "./reception-sections";
+import { receptionRowOperable } from "./reception-operable";
 
 /**
  * Modo Recepción de la agenda (B4.5, plan §11.3 punto 4): la lista del día de
@@ -70,6 +73,9 @@ import { RECEPTION_FIT_MQ, measureReceptionBottomGap, receptionScrollMaxHeight }
  *   `caps.has("clinical.read")` }): al marcar «Atendido» en un turno propio el
  *   profesional ve el toast «Cargar evolución» (`useAttendedNoteToast`). Sin
  *   la prop (o la Secretaria, sin `clinical.read`) no hay toast.
+ * - AS-0d: `clinicalNoteViewer.practitionerId` es también el profesional del actor para `receptionRowOperable`
+ *   (turno propio con paciente basic = operable, como en el server). Bajo 640 px la lista va en secciones
+ *   plegables por estado (`reception-sections.ts`); la tabla de escritorio no cambia.
  */
 export function ReceptionView({
   dayKey,
@@ -96,6 +102,10 @@ export function ReceptionView({
   const offerNote = useAttendedNoteToast(clinicalNoteViewer);
   const [filter, setFilter] = useState<ReceptionFilter>("todos");
   const [announce, setAnnounce] = useState("");
+  // AS-0d: secciones que el usuario plegó/desplegó en el celular (el resto, con el default de `receptionSections`).
+  const [toggled, setToggled] = useState<Partial<Record<ReceptionSectionId, boolean>>>({});
+  const viewerPractitionerId = clinicalNoteViewer?.practitionerId ?? null;
+  const uid = useId();
 
   // Reloj: el `now` del padre, más un tic propio cada 60 s (ver cabecera).
   const nowMs = now.getTime();
@@ -127,6 +137,7 @@ export function ReceptionView({
   const entries = useMemo(() => receptionEntriesForDay(merged.rows, clock, dayKey), [merged.rows, clock, dayKey]);
   const counters = useMemo(() => receptionCounters(entries), [entries]);
   const shown = useMemo(() => filterEntries(entries, filter), [entries, filter]);
+  const sections = useMemo(() => receptionSections(shown, filter, toggled), [shown, filter, toggled]);
   const byPractitioner = useMemo(() => new Map(practitioners.map((p) => [p.id, p])), [practitioners]);
   const isToday = dayKey === dayKeyOf(clock);
   const showRoom = roomById != null && Object.keys(roomById).length > 0;
@@ -172,7 +183,7 @@ export function ReceptionView({
   async function handleAction(b: BookingDTO, action: ReceptionAction) {
     // SV10b: misma regla que la fila (no muestra botones si `canOperate` del
     // DTO es false); el server lo vuelve a chequear.
-    if (!canOperate || b.canOperate === false) return;
+    if (!canOperate || !receptionRowOperable(b, viewerPractitionerId)) return;
     const begun = beginReceptionAction(overridesRef.current, b, action, new Date());
     if (!begun.ok) {
       toast.error(begun.error);
@@ -211,6 +222,24 @@ export function ReceptionView({
     } else {
       toast.error(res.error);
     }
+  }
+
+  function renderRow(e: (typeof shown)[number]) {
+    return (
+      <ReceptionRow
+        key={e.row.id}
+        entry={e}
+        actions={visibleActions(e.actions, isToday)}
+        practitioner={byPractitioner.get(e.row.practitionerId) ?? null}
+        now={clock}
+        canOperate={canOperate}
+        operable={receptionRowOperable(e.row, viewerPractitionerId)}
+        pending={!!overrides[e.row.id]?.pending}
+        onAction={handleAction}
+        onOpen={onOpenBooking}
+        room={showRoom ? roomOf(roomById, e.row) : undefined}
+      />
+    );
   }
 
   const dayLabel = new Date(`${dayKey}T12:00:00-03:00`).toLocaleDateString("es-AR", {
@@ -283,49 +312,85 @@ export function ReceptionView({
           {entries.length === 0 ? "No hay turnos para este día." : "No hay turnos con este filtro."}
         </Card>
       ) : (
-        <Card style={{ padding: 0, overflow: "hidden" }}>
+        <>
+        <Card className="rcp-d" style={{ padding: 0, overflow: "hidden" }}>
           <div className="rcp-scroll" ref={scrollRef}>
           <table className="rcp-table">
             <caption className="rcp-sr">
               Turnos del {dayLabel}, {RECEPTION_FILTERS.find((f) => f.id === filter)?.label.toLowerCase()}
             </caption>
-            <thead>
-              <tr>
-                <th scope="col">Hora</th>
-                <th scope="col">Paciente</th>
-                <th scope="col">Servicio</th>
-                <th scope="col">Profesional</th>
-                {showRoom && <th scope="col">Sala</th>}
-                <th scope="col">Estado</th>
-                <th scope="col">Espera</th>
-                {canOperate && (
-                  <th scope="col" style={{ textAlign: "right" }}>
-                    Acciones
-                  </th>
-                )}
-              </tr>
-            </thead>
+            <ReceptionHead showRoom={showRoom} canOperate={canOperate} />
             <tbody>
-              {shown.map((e) => (
-                <ReceptionRow
-                  key={e.row.id}
-                  entry={e}
-                  actions={visibleActions(e.actions, isToday)}
-                  practitioner={byPractitioner.get(e.row.practitionerId) ?? null}
-                  now={clock}
-                  canOperate={canOperate}
-                  pending={!!overrides[e.row.id]?.pending}
-                  onAction={handleAction}
-                  onOpen={onOpenBooking}
-                  room={showRoom ? roomOf(roomById, e.row) : undefined}
-                />
-              ))}
+              {shown.map(renderRow)}
             </tbody>
           </table>
           </div>
         </Card>
+
+        {/* AS-0d (mbz-recepcion-plegable-390): bajo 640 px, secciones por estado plegables (patrón acordeón: botón
+            dentro del heading, `aria-expanded` + `aria-controls`, cuerpo con `hidden`). Se dibujan siempre y el CSS
+            elige tabla o secciones: decidirlo con `matchMedia` reordenaba la lista al hidratar (CLS a 390). Las dos
+            copias no se ven a la vez: la oculta tiene `display: none` y queda fuera del árbol de accesibilidad. */}
+        <div className="rcp-m">
+          {sections.map((s) => {
+            const head = `${uid}-h-${s.id}`;
+            const body = `${uid}-b-${s.id}`;
+            return (
+              <section key={s.id} className="rcp-sec" data-section={s.id} aria-labelledby={head}>
+                <h3 className="rcp-sec-h" id={head}>
+                  <button
+                    type="button"
+                    className="rcp-sec-btn"
+                    aria-expanded={s.open}
+                    aria-controls={body}
+                    onClick={() => setToggled((t) => ({ ...t, [s.id]: !s.open }))}
+                  >
+                    <span className="rcp-sec-label">{s.label}</span>
+                    {/* El número visible es decorativo; el lector oye «Por llegar, 10 turnos» (sin «Por llegar10»). */}
+                    <span className="rcp-sr">, {s.entries.length} {s.entries.length === 1 ? "turno" : "turnos"}</span>
+                    <span className="rcp-sec-n k-mono" aria-hidden="true">
+                      {s.entries.length}
+                    </span>
+                    <IconChevD size={18} />
+                  </button>
+                </h3>
+                <div id={body} className="rcp-sec-body" hidden={!s.open}>
+                  <table className="rcp-table">
+                    <caption className="rcp-sr">
+                      {s.label}, {dayLabel}
+                    </caption>
+                    <ReceptionHead showRoom={showRoom} canOperate={canOperate} />
+                    <tbody>{s.entries.map(renderRow)}</tbody>
+                  </table>
+                </div>
+              </section>
+            );
+          })}
+        </div>
+        </>
       )}
     </section>
+  );
+}
+
+function ReceptionHead({ showRoom, canOperate }: { showRoom: boolean; canOperate: boolean }) {
+  return (
+    <thead>
+      <tr>
+        <th scope="col">Hora</th>
+        <th scope="col">Paciente</th>
+        <th scope="col">Servicio</th>
+        <th scope="col">Profesional</th>
+        {showRoom && <th scope="col">Sala</th>}
+        <th scope="col">Estado</th>
+        <th scope="col">Espera</th>
+        {canOperate && (
+          <th scope="col" style={{ textAlign: "right" }}>
+            Acciones
+          </th>
+        )}
+      </tr>
+    </thead>
   );
 }
 
@@ -383,7 +448,19 @@ const RECEPTION_CSS = `
 .rcp-btn-primary { background: var(--sky-700); border-color: var(--sky-700); color: #fff; }
 .rcp-btn-ghost { background: transparent; color: var(--navy-700); }
 .rcp-btn:disabled { opacity: 0.5; cursor: progress; }
-.rcp-btn:focus-visible, .rcp-chip:focus-visible, .rcp-link:focus-visible { outline: 2px solid var(--sky-700); outline-offset: 2px; }
+.rcp-btn:focus-visible, .rcp-chip:focus-visible, .rcp-link:focus-visible, .rcp-sec-btn:focus-visible { outline: 2px solid var(--sky-700); outline-offset: 2px; }
+/* AS-0d: secciones plegables, solo bajo 640 (ver la regla de abajo). */
+.rcp-m { display: none; }
+.rcp-sec { background: var(--card-bg); border-radius: var(--r-lg); box-shadow: var(--shadow-card); overflow: hidden; }
+.rcp-sec-h { margin: 0; font: inherit; }
+.rcp-sec-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 0 12px 0 14px; border: none; background: transparent; font: inherit; font-size: 13px; font-weight: 700; color: var(--navy-900); text-align: left; cursor: pointer; }
+.rcp-sec-label { flex: 1 1 auto; min-width: 0; }
+.rcp-sec-n { font-size: 11px; font-weight: 700; min-width: 22px; text-align: center; padding: 1px 7px; border-radius: 999px; background: rgba(15,30,51,0.06); color: var(--navy-700); }
+.rcp-sec-btn svg { flex-shrink: 0; color: var(--navy-500); }
+.rcp-sec-btn[aria-expanded="false"] svg { transform: rotate(-90deg); }
+.rcp-sec-body { border-top: 1px solid rgba(15,30,51,0.06); }
+.rcp-sec-body[hidden] { display: none !important; }
+.rcp-sec .rcp-row:last-child { border-bottom: none; }
 
 /* [MB-1b · C-MB4] Escritorio chico (1366/1024 × 625 en el navegador, 695 en la PWA). KPIs en una línea (franja de
    ~38 px; antes ~75), el link al escritorio de Recepción a la derecha de los filtros (antes un renglón propio) y
@@ -417,6 +494,8 @@ const RECEPTION_CSS = `
      pliegue. Ahora los KPIs son una franja de una línea («rótulo valor») y los filtros una fila; las dos scrollean de
      costado si no entran (los chips son botones: el foco los trae a la vista). */
   .rcp { gap: 8px; }
+  .rcp-d { display: none; }
+  .rcp-m { display: grid; gap: 8px; }
   .rcp-counters { display: flex; gap: 6px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
   .rcp-counter { flex: 0 0 auto; display: flex; align-items: baseline; gap: 6px; padding: 6px 10px; }
   .rcp-counter-label, .rcp-counter-hint { white-space: nowrap; }
