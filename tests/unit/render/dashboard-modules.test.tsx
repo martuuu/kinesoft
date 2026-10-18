@@ -57,15 +57,14 @@ import { TenantModulesProvider } from "@/components/layout/tenant-modules-contex
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { ToastProvider } from "@/components/ui/toast";
 import { modulesFor, type TenantModule } from "@/lib/tenant-modules";
+import { DEFAULT_PREFERENCES, type KpiKey } from "@/lib/preferences-constants";
 import {
-  DEFAULT_PREFERENCES,
   GENERAL_DEFAULT_PINNED_KPIS,
   KPI_OPTIONS,
   effectivePinnedKpis,
   kpiOptionsFor,
   pinnableKpis,
-  type KpiKey,
-} from "@/lib/preferences-constants";
+} from "@/lib/dashboard-kpi-options";
 import type { DashboardData } from "@/lib/dashboard";
 
 const GENERAL = modulesFor({ vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: false });

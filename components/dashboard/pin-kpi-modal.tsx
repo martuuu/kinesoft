@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { IconCheck } from "@/components/ui/icons";
 import { updateUserPreferences } from "@/lib/preferences";
-import { kpiOptionsFor, pinnableKpis, type KpiKey, type KpiRevenueScope } from "@/lib/preferences-constants";
+import type { KpiKey } from "@/lib/preferences-constants";
+import { kpiOptionsFor, pinnableKpis, type KpiRevenueScope } from "@/lib/dashboard-kpi-options";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 
 /**

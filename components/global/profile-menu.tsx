@@ -4,7 +4,8 @@ import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 import { Avatar } from "@/components/ui/avatar";
 import { IconBell, IconHome, IconLogout, IconSettings, IconShield } from "@/components/ui/icons";
-import type { KpiRevenueScope, Preferences } from "@/lib/preferences-constants";
+import type { Preferences } from "@/lib/preferences-constants";
+import type { KpiRevenueScope } from "@/lib/dashboard-kpi-options";
 import { CHOOSE_TENANT_HREF, useTenantChoice } from "@/components/layout/tenant-switcher";
 import {
   OWN_TURNERO_OFF_HINT,

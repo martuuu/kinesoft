@@ -5,14 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { IconCheck } from "@/components/ui/icons";
 import { updateUserPreferences } from "@/lib/preferences";
-import {
-  effectivePinnedKpis,
-  kpiOptionsFor,
-  type KpiKey,
-  type KpiRevenueScope,
-  type Palette,
-  type Preferences,
-} from "@/lib/preferences-constants";
+import type { KpiKey, Palette, Preferences } from "@/lib/preferences-constants";
+import { effectivePinnedKpis, kpiOptionsFor, type KpiRevenueScope } from "@/lib/dashboard-kpi-options";
 import { useTweaks } from "@/components/layout/tweaks-context";
 // PL-F: las mismas cuatro paletas y rótulos que «Apariencia». PF1.0-a: desde `appearance-options` (sin dependencias),
 // no desde `tweaks-panel`, que arrastraba el panel entero de Apariencia a `/dashboard`.

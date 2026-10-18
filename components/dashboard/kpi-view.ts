@@ -8,7 +8,7 @@
  * (`weeklyBars`, la misma fuente que usa el server) y sin turnos se muestra «—» y «Sin turnos esta semana».
  */
 import type { KpiKey } from "@/lib/preferences-constants";
-import { GENERAL_KPI_COPY } from "@/lib/preferences-constants";
+import { GENERAL_KPI_COPY } from "@/lib/dashboard-kpi-options";
 import { formatARS } from "@/lib/format";
 import type { DashboardData } from "@/lib/dashboard";
 

@@ -24,13 +24,8 @@ import { PinKpiModal } from "@/components/dashboard/pin-kpi-modal";
 import { SettingsModal } from "@/components/global/settings-modal";
 import { TenantModulesProvider } from "@/components/layout/tenant-modules-context";
 import { modulesFor } from "@/lib/tenant-modules";
-import {
-  DEFAULT_PREFERENCES,
-  KPI_OPTIONS,
-  kpiOptionsFor,
-  pinnableKpis,
-  type KpiKey,
-} from "@/lib/preferences-constants";
+import { DEFAULT_PREFERENCES, type KpiKey } from "@/lib/preferences-constants";
+import { KPI_OPTIONS, kpiOptionsFor, pinnableKpis } from "@/lib/dashboard-kpi-options";
 
 const pinned: KpiKey[] = ["activePatients", "monthRevenue", "todayCount"];
 const noop = () => {};

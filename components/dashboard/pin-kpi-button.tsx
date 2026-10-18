@@ -3,7 +3,8 @@
 import dynamic from "next/dynamic";
 import { useState } from "react";
 import { IconPlus } from "@/components/ui/icons";
-import type { KpiKey, KpiRevenueScope } from "@/lib/preferences-constants";
+import type { KpiKey } from "@/lib/preferences-constants";
+import type { KpiRevenueScope } from "@/lib/dashboard-kpi-options";
 import dash from "./dashboard.module.css";
 
 /**

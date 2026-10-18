@@ -3,7 +3,7 @@
 /**
  * Per-user preferences — server actions only.
  *
- * Pure types + `KPI_OPTIONS` live in `lib/preferences-constants.ts` so
+ * Pure types live in `lib/preferences-constants.ts` (and `KPI_OPTIONS` in `lib/dashboard-kpi-options.ts`) so
  * client components can consume them without violating the
  * "use server" → every-export-must-be-async rule.
  */
@@ -19,7 +19,6 @@ import {
 } from "@/lib/preferences-schemas";
 import {
   DEFAULT_PREFERENCES,
-  KPI_OPTIONS,
   sanitizeCatalogPrefs,
   sanitizeDashboardPrefs,
   type AgendaViewPrefs,
@@ -28,6 +27,7 @@ import {
   type Palette,
   type Preferences,
 } from "@/lib/preferences-constants";
+import { KPI_OPTIONS } from "@/lib/dashboard-kpi-options";
 
 export async function getUserPreferences(): Promise<Preferences> {
   const actor = await getActor();
