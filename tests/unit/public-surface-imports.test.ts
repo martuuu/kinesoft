@@ -8,14 +8,24 @@
  *
  * Grafo de imports REAL (no grep plano): se sigue cada `import`/`export … from`/`import()` con specifier `@/…` o
  * relativo, resolviendo extensiones e `index`, desde cada entrada de C-F7. Se ignoran los `import type`/`export type`
- * (TypeScript los borra: no llegan al bundle). Si falla, el mensaje muestra la cadena de imports completa.
+ * (TypeScript los borra: no llegan al bundle). Si falla, el mensaje muestra la cadena de imports completa. El recorrido
+ * vive en `tests/helpers/import-graph.ts` desde FC-1e.
  */
 import { describe, expect, it } from "vitest";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, resolve, dirname, sep } from "node:path";
-
-const ROOT = process.cwd();
-const rel = (abs: string) => relative(ROOT, abs).split(sep).join("/");
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+// [FC-1e] El BFS vive en el helper (lo comparte el guard del portal «Documentos»); este test afirma lo mismo que antes.
+import {
+  ROOT,
+  rel,
+  walk,
+  valueSpecifiers,
+  resolveLocal,
+  forbiddenReach as reachWith,
+  fmtViolations as fmt,
+  type SpecCache,
+  type Violation,
+} from "@/tests/helpers/import-graph";
 
 // ── Contrato C-F3.5 (literal): lo que una superficie pública no puede importar, directo ni transitivo. ──
 const FORBIDDEN_PACKAGES = ["framer-motion"];
@@ -47,18 +57,6 @@ const MOTION_COMPONENT_IMPORTERS_MAX = 0;
 const FRAMER_IMPORTERS_MAX = 21;
 
 const SOURCE_DIRS = ["app", "components", "lib", "hooks"];
-const EXTS = [".ts", ".tsx"];
-
-function walk(dir: string, out: string[] = []): string[] {
-  if (!existsSync(dir)) return out;
-  for (const name of readdirSync(dir)) {
-    if (name === "node_modules" || name.startsWith(".")) continue;
-    const p = join(dir, name);
-    if (statSync(p).isDirectory()) walk(p, out);
-    else if (EXTS.some((e) => name.endsWith(e)) && !name.endsWith(".d.ts")) out.push(p);
-  }
-  return out;
-}
 
 /** C-F7 (literal): entradas de las superficies públicas. */
 function publicEntries(): string[] {
@@ -86,72 +84,9 @@ function publicEntries(): string[] {
   );
 }
 
-/** Specifiers de VALOR del archivo (sin `import type` / `export type`). */
-function valueSpecifiers(src: string): string[] {
-  // Comentarios fuera: un `import` dentro de un JSDoc no es un import.
-  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
-  const specs: string[] = [];
-  const staticRe = /^\s*(import|export)\s+(type\s+)?([\s\S]*?)\s*from\s*["']([^"']+)["']/gm;
-  for (const m of code.matchAll(staticRe)) if (!m[2]) specs.push(m[4]);
-  for (const m of code.matchAll(/^\s*import\s*["']([^"']+)["']/gm)) specs.push(m[1]);
-  for (const m of code.matchAll(/\bimport\(\s*["']([^"']+)["']\s*\)/g)) specs.push(m[1]);
-  return specs;
-}
-
-function resolveLocal(spec: string, fromFile: string): string | null {
-  let base: string;
-  if (spec.startsWith("@/")) base = join(ROOT, spec.slice(2));
-  else if (spec.startsWith(".")) base = resolve(dirname(fromFile), spec);
-  else return null;
-  const candidates = [base, ...EXTS.map((e) => base + e), ...EXTS.map((e) => join(base, "index" + e))];
-  for (const c of candidates) if (existsSync(c) && statSync(c).isFile() && EXTS.some((e) => c.endsWith(e))) return c;
-  return null; // .css, .json, assets: no cargan JS de UI
-}
-
-function packageName(spec: string): string {
-  const parts = spec.split("/");
-  return spec.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
-}
-
-type Violation = { entry: string; target: string; chain: string[] };
-
-/** BFS desde `entry`; devuelve la primera cadena hacia cada objetivo prohibido. */
-function forbiddenReach(entry: string, cache: Map<string, string[]>): Violation[] {
-  const start = join(ROOT, entry);
-  const parent = new Map<string, string | null>([[start, null]]);
-  const queue = [start];
-  const found: Violation[] = [];
-  const chainTo = (abs: string) => {
-    const chain: string[] = [];
-    for (let cur: string | null = abs; cur; cur = parent.get(cur) ?? null) chain.unshift(rel(cur));
-    return chain;
-  };
-  while (queue.length) {
-    const file = queue.shift()!;
-    let specs = cache.get(file);
-    if (!specs) {
-      specs = valueSpecifiers(readFileSync(file, "utf8"));
-      cache.set(file, specs);
-    }
-    for (const spec of specs) {
-      const local = resolveLocal(spec, file);
-      if (!local) {
-        if (!spec.startsWith(".") && !spec.startsWith("@/") && FORBIDDEN_PACKAGES.includes(packageName(spec))) {
-          found.push({ entry, target: spec, chain: chainTo(file) });
-        }
-        continue;
-      }
-      if (parent.has(local)) continue;
-      parent.set(local, file);
-      if (FORBIDDEN_FILES.includes(rel(local))) {
-        found.push({ entry, target: rel(local), chain: chainTo(local) });
-        continue; // ya es violación; no hace falta seguir adentro
-      }
-      queue.push(local);
-    }
-  }
-  return found;
-}
+/** BFS desde `entry`; devuelve la primera cadena hacia cada objetivo prohibido de C-F3.5. */
+const forbiddenReach = (entry: string, cache: SpecCache): Violation[] =>
+  reachWith(entry, { isForbiddenFile: (f) => FORBIDDEN_FILES.includes(f), forbiddenPackages: FORBIDDEN_PACKAGES }, cache);
 
 /**
  * Fugas conocidas, pendientes de un handoff (no son archivos de F-d). Cada una tiene su `it.fails` abajo: cuando el
@@ -165,10 +100,8 @@ const KNOWN_LEAKS: { entry: string; target: string }[] = [
 ];
 const isKnownLeak = (v: Violation) => KNOWN_LEAKS.some((k) => k.entry === v.entry && k.target === v.target);
 
-const fmt = (v: Violation[]) => v.map((x) => `${x.entry} → ${x.target}\n    ${x.chain.join("\n    → ")}`).join("\n");
-
 describe("[VX F-d] superficies públicas sin framer-motion ni providers de UI (C-F3 / C-F7)", () => {
-  const cache = new Map<string, string[]>();
+  const cache: SpecCache = new Map();
 
   it("las entradas de C-F7 existen (el guard no pasa en vacío)", () => {
     const entries = publicEntries();

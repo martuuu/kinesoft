@@ -23,11 +23,15 @@
  *
  * Lo que la tabla dice y el código no hace queda como `it.fails("[ES4-S26p] …")` (hallazgo; no se toca producción).
  *
- * Fronteras mockeadas: la sesión de Supabase (con `email_confirmed_at` controlable, para P-sinverif) y la consulta de
- * proveedores OAuth de la home (red a GoTrue).
+ * Fronteras mockeadas: la sesión de Supabase (con `email_confirmed_at` controlable, para P-sinverif), la consulta de
+ * proveedores OAuth de la home (red a GoTrue) y, solo con el interruptor prendido, la caída de la base de audit
+ * ([FC-1e], para el 503 de la descarga).
+ *
+ * [FC-1e] «Documentos» (T4, C-FC8): filas `it.fails` de lo compartido con el paciente (solo el propio y vivo, ningún
+ * id de nota, staff → 404, audit antes de los bytes). Las dan vuelta FC-2h (lectura + ruta) y FC-4a (páginas).
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 
 /** Sesión de Supabase del test: `confirmed = false` es P-sinverif. */
@@ -54,6 +58,22 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 vi.mock("@/lib/oauth-providers-public", () => ({ visibleOAuthProviders: async () => ["google"] }));
 
+/**
+ * [FC-1e] Frontera «la base de auditoría no responde»: la descarga del portal tiene que fallar cerrada (503 sin bytes,
+ * C-FC8). Es la única forma de provocarlo sin tirar Postgres; con `on = false` corre el `auditSecurityEvent` REAL.
+ */
+const auditFault = vi.hoisted(() => ({ on: false }));
+vi.mock("@/lib/audit", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/audit")>();
+  return {
+    ...real,
+    auditSecurityEvent: async (...args: Parameters<typeof real.auditSecurityEvent>) => {
+      if (auditFault.on) throw new Error("[FC-1e] audit caído (falla inyectada)");
+      return real.auditSecurityEvent(...args);
+    },
+  };
+});
+
 // La config de integración compila JSX con el runtime clásico: las pages se ejecutan como funciones (server components).
 import * as ReactNs from "react";
 (globalThis as { React?: unknown }).React = ReactNs;
@@ -63,6 +83,7 @@ import { getPortalAccount, getPortalAccountPage } from "@/lib/portal-account";
 import { getPortalExercisesView } from "@/lib/portal-exercises";
 import { requestPortalProfileChange } from "@/lib/portal-profile";
 import { loadPortalProfile } from "@/lib/portal-profile-internal";
+import { requirePortalPatient } from "@/lib/portal-identity-internal";
 import { linkPortalByInvite } from "@/lib/portal-vincular";
 import { makePortalInviteToken } from "@/lib/portal-invite-token";
 import { __rateLimitInternals } from "@/lib/rate-limit";
@@ -239,7 +260,7 @@ describe.skipIf(!RUN)("[ES4-S26p] matriz de autorización del portal", () => {
    */
   const writeState = async () => {
     const tenantIds = [K, K2, G, G2, O, S].map((t) => t.tenantId);
-    const [patients, eva, requests, notifications, notes] = await Promise.all([
+    const [patients, eva, requests, notifications, notes, documents] = await Promise.all([
       db.patient.findMany({
         where: { tenantId: { in: tenantIds } },
         select: { id: true, userId: true, updatedAt: true, phone: true, email: true, notes: true },
@@ -261,8 +282,14 @@ describe.skipIf(!RUN)("[ES4-S26p] matriz de autorización del portal", () => {
         select: { id: true, updatedAt: true },
         orderBy: { id: "asc" },
       }),
+      // [FC-1e] el portal solo LEE lo compartido: nunca crea ni revoca documentos.
+      db.patientDocument.findMany({
+        where: { tenantId: { in: tenantIds } },
+        select: { id: true, revokedAt: true },
+        orderBy: { id: "asc" },
+      }),
     ]);
-    return serialize({ patients, eva, requests, notifications, notes });
+    return serialize({ patients, eva, requests, notifications, notes, documents });
   };
   /** ⛔: corre la llamada y afirma que no cambió nada. Devuelve el resultado para afirmar el rechazo. */
   async function refusedWithoutWrite<T>(run: () => Promise<T>): Promise<T> {
@@ -686,6 +713,257 @@ describe.skipIf(!RUN)("[ES4-S26p] matriz de autorización del portal", () => {
       for (const s of BANNED_LITERALS) expect(json).not.toContain(s);
       for (const id of evolutionIds) expect(json).not.toContain(id);
       expect(json).not.toMatch(BANNED_PATTERN);
+    });
+  });
+
+  // ── [FC-1e] «Documentos» (T4, C-FC8): solo lo compartido y vivo de la ficha propia ────────────────────────────────
+  //
+  // T4 deshace EV2-D5 de forma ACOTADA: el portal lee `PatientDocument` (la foto HcPrintable v1 que el profesional
+  // compartió), nunca la nota. Las filas nacen `it.fails` porque la lectura, la ruta del PDF (FC-2h) y las páginas
+  // (FC-4a) todavía no existen; se cargan con `import()` dinámico para que este archivo compile y corra sin ellas. Las
+  // da vuelta el integrador de cada tanda (FC-2i / FC-4i) cuando el símbolo real exista.
+  //
+  // Fixture: la NOTA de origen lleva un centinela propio (NOTE_SRC_BODY) que el snapshot no tiene. Si el portal lo
+  // muestra, leyó la nota y no la foto. Los ids de las notas tampoco pueden viajar.
+
+  describe("[FC-1e] «Documentos»: solo lo compartido y vivo del paciente propio (C-FC8)", () => {
+    const SHARED_BODY = `SHARED-BODY-${SFX}`;
+    const SHARED_BODY_NEWER = `SHARED-BODY-NUEVO-${SFX}`;
+    const SHARED_TITLE = `Ficha compartida ${SFX}`;
+    const SHARED_TITLE_NEWER = `Ficha compartida nueva ${SFX}`;
+    const NOTE_SRC_BODY = `NOTA-ORIGEN-${SFX}`;
+    const REVOKED_BODY = `REVOCADO-${SFX}`;
+    const FOREIGN_BODY = `AJENO-${SFX}`;
+    const UA = "FC1e-matriz/1.0";
+    const IP = "203.0.113.7";
+    const docNoteIds: string[] = [];
+    let dLive = "", dNewer = "", dRevoked = "", dOther = "", dStaff = "", dUnver = "", dFree = "", dK2 = "";
+
+    const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+    /** HcPrintable v1 mínima (lib/hc-print-types.ts) con el centinela en el cuerpo; `label` es texto, nunca el enum. */
+    const snapshot = (title: string, body: string) => ({
+      v: 1,
+      content: {
+        letterhead: { tenantName: "Consultorio FC-1e", addressLine: null, phone: null, hasLogo: false },
+        patient: { fullName: "Paciente FC-1e", documentId: null, dateOfBirth: null },
+        fichas: [
+          {
+            main: {
+              label: "Evolución",
+              title,
+              occurredAt: new Date(Date.now() - 3 * DAY).toISOString(),
+              dateLabel: "hace 3 días",
+              body: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: body }] }] },
+              diagnoses: [],
+              signature: { line: "Lic. Ana Pérez · MN 1234", imageRef: null },
+              marks: { lateEntry: null, imported: null, voided: null },
+              revisionLabel: "",
+            },
+            amendments: [],
+          },
+        ],
+        icdAttribution: null,
+      },
+      meta: { generatedAt: new Date().toISOString(), purpose: "shared", generatedByName: "Ana Pérez", verificationCode: "A1B2-C3D4-E5F6", truncated: false },
+    });
+    /** Nota raíz viva + documento vivo (insert directo, sin la action de compartir: acá se mide la lectura). */
+    const shareDoc = async (t: EphemeralTenant, patientId: string, title: string, body: string, sharedAgoDays: number) => {
+      const note = await db.clinicalNote.create({
+        data: {
+          tenantId: t.tenantId,
+          patientId,
+          kind: "EVOLUTION",
+          title,
+          body: NOTE_SRC_BODY,
+          occurredAt: new Date(Date.now() - 3 * DAY),
+          authorUserId: t.userId,
+          authorPractitionerId: t.practitionerId,
+          authorName: "Ana Pérez",
+          idempotencyKey: randomUUID(),
+        },
+        select: { id: true },
+      });
+      docNoteIds.push(note.id);
+      const snap = snapshot(title, body);
+      const doc = await db.patientDocument.create({
+        data: {
+          tenantId: t.tenantId,
+          patientId,
+          noteId: note.id,
+          noteRevision: 1,
+          sourceDigest: sha(`src-${note.id}`),
+          title,
+          occurredAt: new Date(Date.now() - 3 * DAY),
+          snapshot: snap,
+          snapshotSha256: sha(JSON.stringify(snap)),
+          pdfStorageKey: `stub:${note.id}`,
+          pdfSha256: sha(`pdf-${note.id}`),
+          pdfSizeBytes: 1000,
+          sharedByUserId: t.userId,
+          sharedByPractitionerId: t.practitionerId,
+          sharedAt: new Date(Date.now() - sharedAgoDays * DAY),
+          idempotencyKey: randomUUID(),
+        },
+        select: { id: true },
+      });
+      return doc.id;
+    };
+
+    // Contratos C-FC8 (los tipos reales los publica FC-2h; acá alcanza la forma que se afirma).
+    type Ref = NonNullable<Awaited<ReturnType<typeof requirePortalPatient>>>;
+    type DocsLib = {
+      listPortalDocuments(ref: Ref): Promise<{ id: string; title: string; occurredAt: string; sharedAt: string }[]>;
+      getPortalDocument(ref: Ref, id: string): Promise<{ id: string; title: string; content: unknown } | null>;
+    };
+    type Page = (props: { params: Record<string, string> }) => unknown;
+    type Route = (req: Request, ctx: { params: { slug: string; id: string } }) => Promise<Response>;
+    // `import()` con specifier variable: si el módulo no existe, falla la fila (it.fails), no el archivo entero.
+    const load = (spec: string) => import(/* @vite-ignore */ spec);
+    const docsLib = async () => (await load("@/lib/portal-documents-internal")) as DocsLib;
+    const listPage = async () => ((await load("@/app/(portal)/portal/c/[slug]/documentos/page")) as { default: Page }).default;
+    const viewPage = async () => ((await load("@/app/(portal)/portal/c/[slug]/documentos/[id]/page")) as { default: Page }).default;
+    const pdfRoute = async () => ((await load("@/app/(portal)/portal/c/[slug]/documentos/[id]/pdf/route")) as { GET: Route }).GET;
+    const pdfRequest = (slug: string, id: string) =>
+      new Request(`http://localhost/portal/c/${slug}/documentos/${id}/pdf`, {
+        headers: { "x-forwarded-for": IP, "user-agent": UA },
+      });
+    const downloadAudits = (id: string) =>
+      db.auditEvent.findMany({ where: { action: "patientDocument.download", entityId: id }, select: { tenantId: true, actorId: true, ip: true, userAgent: true } });
+    const allSentinels = () => [SHARED_BODY, SHARED_BODY_NEWER, SHARED_TITLE, SHARED_TITLE_NEWER, NOTE_SRC_BODY, REVOKED_BODY, FOREIGN_BODY];
+    /** Ni el modelo de notas, ni sus columnas propias, ni los ids de las notas de origen, ni las claves internas del doc. */
+    const expectNoNoteTrace = (json: string) => {
+      expect(json).not.toMatch(BANNED_PATTERN_DOCS);
+      for (const id of [...docNoteIds, ...evolutionIds]) expect(json).not.toContain(id);
+      expect(json).not.toContain(NOTE_SRC_BODY);
+      for (const k of ["noteId", "sourceDigest", "pdfStorageKey", "idempotencyKey", "sharedByUserId", "sharedByPractitionerId", "snapshotSha256"]) {
+        expect(json, k).not.toContain(`"${k}"`);
+      }
+    };
+    const BANNED_PATTERN_DOCS = /clinicalNote|ClinicalNote|clinical-notes|EVOLUTION|amendsNoteId|voidReason|authorPractitionerId/;
+
+    beforeAll(async () => {
+      dLive = await shareDoc(K, pK, SHARED_TITLE, SHARED_BODY, 2);
+      dNewer = await shareDoc(K, pK, SHARED_TITLE_NEWER, SHARED_BODY_NEWER, 1);
+      dRevoked = await shareDoc(K, pK, `Revocada ${SFX}`, REVOKED_BODY, 3);
+      await db.patientDocument.update({
+        where: { id: dRevoked },
+        data: { revokedAt: new Date(), revokedByUserId: K.userId, revokeReason: "MANUAL" },
+      });
+      dOther = await shareDoc(K, pOtherK, `Ajena ${SFX}`, FOREIGN_BODY, 1);
+      dStaff = await shareDoc(K, pStaffK, `Del staff ${SFX}`, FOREIGN_BODY, 1);
+      dUnver = await shareDoc(K, pUnverK, `De sinverif ${SFX}`, FOREIGN_BODY, 1);
+      dFree = await shareDoc(K, pFreeK, `De la ficha libre ${SFX}`, FOREIGN_BODY, 1);
+      dK2 = await shareDoc(K2, pOtroK2, `De K2 ${SFX}`, FOREIGN_BODY, 1);
+    });
+
+    it("la fixture existe (el barrido no es un falso verde): 2 vivos de P, 1 revocado, ajenos vivos", async () => {
+      const rows = await db.patientDocument.findMany({
+        where: { id: { in: [dLive, dNewer, dRevoked, dOther, dStaff, dUnver, dFree, dK2] } },
+        select: { id: true, revokedAt: true },
+      });
+      expect(rows).toHaveLength(8);
+      expect(rows.filter((r) => r.revokedAt).map((r) => r.id)).toEqual([dRevoked]);
+    });
+
+    it.fails("[FC-2h] matriz del portal: P ve el suyo (centinela SHARED_BODY); revocado y ajeno → null", async () => {
+      as(P);
+      const ref = await requirePortalPatient(K.slug);
+      if (!ref) throw new Error("P debería tener ficha en K");
+      const lib = await docsLib();
+      const list = await lib.listPortalDocuments(ref);
+      // Solo los vivos propios, el más nuevo primero.
+      expect(list.map((d) => d.id)).toEqual([dNewer, dLive]);
+      const view = await lib.getPortalDocument(ref, dLive);
+      const json = serialize({ list, view });
+      expect(json).toContain(SHARED_BODY); // vista desde el snapshot
+      expect(json).toContain(SHARED_TITLE_NEWER);
+      expect(json).not.toContain(REVOKED_BODY);
+      expect(json).not.toContain(FOREIGN_BODY);
+      expectNoNoteTrace(json);
+      expect(await lib.getPortalDocument(ref, dRevoked)).toBeNull();
+      expect(await lib.getPortalDocument(ref, dOther)).toBeNull();
+      expect(await lib.getPortalDocument(ref, dK2)).toBeNull();
+    });
+
+    it.fails("[FC-4a] matriz del portal: P ve el suyo en las páginas (centinela SHARED_BODY)", async () => {
+      as(P);
+      const [List, View] = [await listPage(), await viewPage()];
+      const list = await pageOf(List({ params: { slug: K.slug } }));
+      const view = await pageOf(View({ params: { slug: K.slug, id: dLive } }));
+      expect(list.kind).toBe("ok");
+      expect(view.kind).toBe("ok");
+      const json = serialize({ list, view });
+      expect(json).toContain(SHARED_TITLE);
+      expect(json).toContain(SHARED_TITLE_NEWER);
+      expect(json).toContain(SHARED_BODY);
+      expect(json).not.toContain(REVOKED_BODY);
+      expect(json).not.toContain(FOREIGN_BODY);
+      expectNoNoteTrace(json);
+      for (const id of [dRevoked, dOther, dK2]) {
+        expect((await pageOf(View({ params: { slug: K.slug, id } }))).kind, id).toBe("notFound");
+      }
+    });
+
+    // P-otro, otro consultorio, sin vínculo, sin verificar, STAFF y sin sesión: ni la lista ni la vista de K (ni K2
+    // para P) devuelven contenido. 404 o login (P-sinverif / sin sesión, como cuenta y ejercicios), nunca «ok».
+    const DENIED: [string, () => void, () => string, () => string][] = [
+      ["P-otro", () => as(POtro), () => K.slug, () => dLive],
+      ["P en otro consultorio (K2)", () => as(P), () => K2.slug, () => dK2],
+      ["P-sinvínculo", () => as(PFree), () => K.slug, () => dFree],
+      ["P-sinverif", () => as(PUnver, false), () => K.slug, () => dUnver],
+      ["STAFF", () => as(STAFF), () => K.slug, () => dStaff],
+      ["sin sesión", () => as(null), () => K.slug, () => dLive],
+    ];
+    for (const [who, login, slug, id] of DENIED) {
+      it.fails(`[FC-4a] matriz del portal: ${who} no ve documentos (lista, vista ni PDF)`, async () => {
+        const [List, View, GET] = [await listPage(), await viewPage(), await pdfRoute()];
+        login();
+        const auditsBefore = (await downloadAudits(id())).length;
+        const list = await pageOf(List({ params: { slug: slug() } }));
+        const view = await pageOf(View({ params: { slug: slug(), id: id() } }));
+        expect(list.kind, who).not.toBe("ok");
+        expect(view.kind, who).not.toBe("ok");
+        __rateLimitInternals.reset();
+        const res = await GET(pdfRequest(slug(), id()), { params: { slug: slug(), id: id() } });
+        expect(res.status, who).toBe(404);
+        const json = serialize({ list, view }) + (await res.text());
+        for (const s of allSentinels()) expect(json, who).not.toContain(s);
+        expectNoNoteTrace(json);
+        expect((await downloadAudits(id())).length).toBe(auditsBefore); // un 404 no deja rastro de descarga
+      });
+    }
+
+    it.fails("[FC-2h] descarga: audit (ip/ua) antes de los bytes; revocado y ajeno → 404", async () => {
+      const GET = await pdfRoute();
+      as(P);
+      const res = await GET(pdfRequest(K.slug, dLive), { params: { slug: K.slug, id: dLive } });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toMatch(/application\/pdf/);
+      // ANTES de leer el cuerpo: la fila de audit ya existe (la ruta audita antes de entregar los bytes).
+      expect(await downloadAudits(dLive)).toEqual([{ tenantId: K.tenantId, actorId: P.id, ip: IP, userAgent: UA }]);
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      expect(Buffer.from(bytes.slice(0, 5)).toString("latin1")).toBe("%PDF-");
+      expect(res.headers.get("content-disposition") ?? "").not.toMatch(new RegExp(docNoteIds.join("|")));
+      for (const id of [dRevoked, dOther, dK2]) {
+        __rateLimitInternals.reset();
+        const r = await GET(pdfRequest(K.slug, id), { params: { slug: K.slug, id } });
+        expect(r.status, id).toBe(404);
+        expect(await downloadAudits(id)).toEqual([]);
+      }
+    });
+
+    it.fails("[FC-2h] descarga: audit caído → 503 sin bytes", async () => {
+      const GET = await pdfRoute();
+      as(P);
+      auditFault.on = true;
+      try {
+        const res = await GET(pdfRequest(K.slug, dNewer), { params: { slug: K.slug, id: dNewer } });
+        expect(res.status).toBe(503);
+        const body = new Uint8Array(await res.arrayBuffer());
+        expect(Buffer.from(body.slice(0, 5)).toString("latin1")).not.toBe("%PDF-");
+      } finally {
+        auditFault.on = false;
+      }
     });
   });
 

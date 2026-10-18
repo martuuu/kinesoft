@@ -7,9 +7,12 @@
  * saltean RLS (un id ajeno se persiste aun con el rol app). Cada fila llama a
  * la action REAL como actor del tenant A con ids del tenant B y afirma que
  * rechaza SIN escribir. Lo que hoy falla va con `it.fails("[sesión] …")`.
+ *
+ * [FC-1e] Fila «FC · portal «Documentos»» (T4, C-FC8): ninguna columna de staff baja el PDF compartido por el portal
+ * (→ 404). Nace `it.fails("[FC-2h] …")`.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import {
   createBooking,
@@ -47,7 +50,7 @@ import {
   addStaff,
   type EphemeralTenant,
 } from "@/tests/helpers/tenant-factory";
-import { asUser } from "@/tests/helpers/actor";
+import { asUser, currentTestUser } from "@/tests/helpers/actor";
 import { cookies } from "next/headers";
 import { ForbiddenError } from "@/lib/session";
 import { ReadOnlyModeError } from "@/lib/tenant-access";
@@ -710,6 +713,78 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     fx.noteRevision = r.data.note.revision;
   }
 
+  /**
+   * [FC-1e] Documento compartido vivo (insert directo de nota raíz + PatientDocument: acá se mide la puerta del portal,
+   * no la action de compartir). El snapshot lleva un centinela que no puede salir por la ruta.
+   */
+  async function fxSharedDocument(fx: Fx) {
+    const sha = (v: string) => createHash("sha256").update(v).digest("hex");
+    const note = await db.clinicalNote.create({
+      data: {
+        tenantId: fx.host.tenantId,
+        patientId: fx.patientId,
+        kind: "EVOLUTION",
+        body: "S26b nota de origen",
+        occurredAt: new Date(Date.now() - 86_400_000),
+        authorUserId: fx.host.userId,
+        authorPractitionerId: fx.host.practitionerId,
+        authorName: "Titular",
+        idempotencyKey: randomUUID(),
+      },
+      select: { id: true },
+    });
+    const snapshot = { v: 1, content: { fichas: [], centinela: "S26b documento compartido" }, meta: { purpose: "shared" } };
+    const doc = await db.patientDocument.create({
+      data: {
+        tenantId: fx.host.tenantId,
+        patientId: fx.patientId,
+        noteId: note.id,
+        noteRevision: 1,
+        sourceDigest: sha(`src-${note.id}`),
+        title: "Ficha compartida S26b",
+        occurredAt: new Date(Date.now() - 86_400_000),
+        snapshot,
+        snapshotSha256: sha(JSON.stringify(snapshot)),
+        pdfStorageKey: `stub:${note.id}`,
+        pdfSha256: sha(`pdf-${note.id}`),
+        pdfSizeBytes: 1000,
+        sharedByUserId: fx.host.userId,
+        sharedByPractitionerId: fx.host.practitionerId,
+        sharedAt: new Date(),
+        idempotencyKey: randomUUID(),
+      },
+      select: { id: true },
+    });
+    fx.documentId = doc.id;
+  }
+
+  /**
+   * [FC-1e] Llama a la ruta REAL del PDF del portal como el usuario de la celda, con la ficha de la fixture vinculada
+   * a su cuenta (Patient es único por (tenantId, userId): se desvincula la anterior). ✅ = 200; ⛔ tiene que ser 404
+   * sin audit de descarga. `import()` dinámico: sin la ruta (antes de FC-2h) la celda falla, no el archivo.
+   */
+  async function portalPdfSeenByCurrentUser(fx: Fx): Promise<boolean> {
+    const me = currentTestUser();
+    if (!me) throw new Error("la celda no tiene usuario");
+    await db.patient.updateMany({ where: { tenantId: fx.host.tenantId, userId: me.id }, data: { userId: null } });
+    await db.patient.update({ where: { id: fx.patientId }, data: { userId: me.id } });
+    const spec = "@/app/(portal)/portal/c/[slug]/documentos/[id]/pdf/route";
+    const { GET } = (await import(/* @vite-ignore */ spec)) as {
+      GET: (req: Request, ctx: { params: { slug: string; id: string } }) => Promise<Response>;
+    };
+    const id = fx.documentId as string;
+    __rateLimitInternals.reset();
+    const res = await GET(
+      new Request(`http://localhost/portal/c/${fx.host.slug}/documentos/${id}/pdf`, { headers: { "user-agent": "S26b" } }),
+      { params: { slug: fx.host.slug, id } }
+    );
+    if (res.status === 200) return true;
+    expect(res.status).toBe(404);
+    expect(await res.text()).not.toContain("S26b documento compartido");
+    expect(await db.auditEvent.count({ where: { action: "patientDocument.download", entityId: id } })).toBe(0);
+    return false;
+  }
+
   const tenantRow = (id: string) => db.tenant.findUniqueOrThrow({ where: { id } });
 
   const ROWS_S26B: MatrixRow[] = [
@@ -1041,6 +1116,17 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
       cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "deny", GENERAL: "ok", SUPPORT: "deny" },
       setup: (fx) => fxNote(fx, "S26b resumen"),
       seen: async (fx) => (await getPatientClinicalSummary(fx.patientId)) !== null,
+    },
+    // ─────────────────────────────────────────── FC · portal «Documentos» ───────────────────────────────────────────
+    // [FC-1e] T4 (C-FC8): el staff nunca entra al portal (`requirePortalPatient` corta a quien tiene Membership, AUDIT
+    // §5.22), ni con una ficha vinculada a SU cuenta que tiene un documento vivo compartido (peor caso: dato viejo).
+    // La descarga del PDF → 404 y sin fila de audit. Nace `it.fails` porque la ruta no existe; la da vuelta FC-2h.
+    {
+      kind: "read",
+      name: "FC · portal «Documentos»: PDF del documento compartido, ficha vinculada a la cuenta del staff",
+      cells: Object.fromEntries(COLS.map((c) => [c, { exp: "deny", fails: "FC-2h", note: "staff → 404" }])) as Cells,
+      setup: (fx) => fxSharedDocument(fx),
+      seen: (fx) => portalPdfSeenByCurrentUser(fx),
     },
     // ─────────────────────────────────────────── PL · cuenta del consultorio ───────────────────────────────────────────
     {

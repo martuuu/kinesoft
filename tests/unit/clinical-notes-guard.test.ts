@@ -10,10 +10,16 @@
  *  - `lib/clinical-notes-internal.ts` importa `server-only` (el gate y el select no pueden llegar al bundle).
  *  - Nadie escribe `revision:` en el `data:` de un write de `clinicalNote`: la sube el trigger `ClinicalNote_guard`
  *    (M9) al copiar la versión anterior a ClinicalNoteRevision. Si la app la escribiera, se desincroniza del historial.
+ *  - [FC-1e] T4 deshace EV2-D5 de forma ACOTADA (portal «Documentos», C-FC8): el portal muestra lo compartido con
+ *    módulos HC NEUTRALES (`PORTAL_HC_ALLOWLIST`, en `tests/helpers/import-graph.ts` porque también la usa
+ *    `portal-documents-guard`). El guard literal de arriba NO se afloja; se suma que esos módulos tampoco mencionan
+ *    el modelo (comentarios incluidos): si uno lo nombrara, el portal podría alcanzarlo por import sin que la regex
+ *    sobre los archivos del portal lo vea. El grafo de imports lo cuida `portal-documents-guard.test.ts`.
  */
 import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { PORTAL_HC_ALLOWLIST, portalHcAllowlistFiles } from "@/tests/helpers/import-graph";
 
 const ROOT = join(__dirname, "..", "..");
 
@@ -119,6 +125,22 @@ describe("[EV2-1a] guard estático de evoluciones", () => {
 
   it("portal, ⌘K, superficies públicas y Plataforma no mencionan evoluciones (EV2-D5, EV2-D6)", () => {
     const offenders = forbiddenSurfaces().flatMap((rel) =>
+      read(rel)
+        .split("\n")
+        .flatMap((l, i) => (MENTION.test(l) ? [`${rel}:${i + 1}: ${l.trim()}`] : []))
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it("[FC-1e] la allow-list HC del portal existe (no pasa vacía) y no incluye nada de notas", () => {
+    const files = portalHcAllowlistFiles();
+    expect(files).toContain("lib/hc-doc.ts");
+    expect(files).toContain("components/hc/hc-doc-view.tsx");
+    expect(PORTAL_HC_ALLOWLIST.filter((p) => MENTION.test(p) || /clinical/.test(p))).toEqual([]);
+  });
+
+  it("[FC-1e] los módulos de la allow-list no mencionan la regex", () => {
+    const offenders = portalHcAllowlistFiles().flatMap((rel) =>
       read(rel)
         .split("\n")
         .flatMap((l, i) => (MENTION.test(l) ? [`${rel}:${i + 1}: ${l.trim()}`] : []))
