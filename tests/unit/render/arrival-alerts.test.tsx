@@ -38,7 +38,7 @@ import {
   SOUND_BLOCKED_NOTE,
   alertRadioKeyTarget,
 } from "@/components/realtime/alert-prefs-controls";
-import { AvisosMenuSection } from "@/components/agenda/view-options-menu";
+import { AvisosMenuSection } from "@/components/agenda/view-options-panel";
 import { AlertPrefsCard } from "@/components/configuracion/panels/general-panel";
 import { ToastProvider, type ToastOptions } from "@/components/ui/toast";
 import { effectivePrefs, type AlertPrefs, type AlertRow, type AlertViewer } from "@/lib/arrival-alert-state";

@@ -98,9 +98,7 @@ import type { Discipline } from "@/lib/plans-constants";
 import { expandPlanFields, serviceDisciplineMap, toBookingDTO, withArchivedRooms, type BookingDTO } from "./agenda-utils";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { AgendaToolbar } from "./agenda-toolbar";
-import { PlanLegend } from "./plan-legend";
 import { AGENDA_MODE_OPTIONS, ModeToggle } from "./mode-toggle";
-import { PractitionerChips } from "./practitioner-chips";
 import { LocationFilter } from "./location-filter";
 import { DayLockButton } from "./day-lock/day-lock-button";
 import { WeekStrip } from "./views/week-strip";
@@ -197,6 +195,39 @@ const WeekGridViewC = preferLoaded(WeekGridView, () => viewModules["week-grid"]?
 const ListViewC = preferLoaded(ListView, () => viewModules.list?.ListView);
 const WeekDayListC = preferLoaded(WeekDayList, () => viewModules["week-list"]?.WeekDayList);
 const RoomFilterC = preferLoaded(RoomFilter, () => roomFilterModule?.RoomFilter);
+// [AS-0z] T3a-0z3: la leyenda «Turnos: De plan · Sueltos» (solo módulo `planes`, abajo de la página) y los chips de
+// profesional (solo multi-profesional) salen del first load de /agenda con el mismo patrón que `RoomFilter`: SSR
+// (llegan en el HTML del server, su chunk se precarga desde ahí), `SsrHold` deja quieto ese HTML hasta que el chunk
+// está (sin CLS) y, cargado, se dibujan directo (`preferLoaded`). Medido standalone min+gz: chips ~1,5 kB, leyenda
+// ~0,9 kB. `ModeToggle` (~0,8 kB) queda estático: su `AGENDA_MODE_OPTIONS` arma las opciones en el render de acá y
+// diferirlo obligaba a tocar `mode-toggle.tsx` por poco.
+// Trade-off aceptado (como `RoomFilter`): hasta que llega el chunk el HTML del server se ve pero no responde (decenas
+// de ms; el `import()` arranca en el primer effect).
+const PlanLegend = dynamic(() => import("./plan-legend").then((m) => m.PlanLegend));
+let planLegendModule: typeof import("./plan-legend") | undefined;
+const loadPlanLegend = () => import("./plan-legend").then((m) => void (planLegendModule = m));
+const PlanLegendC = preferLoaded(PlanLegend, () => planLegendModule?.PlanLegend);
+const PractitionerChips = dynamic(() => import("./practitioner-chips").then((m) => m.PractitionerChips));
+let practitionerChipsModule: typeof import("./practitioner-chips") | undefined;
+const loadPractitionerChips = () => import("./practitioner-chips").then((m) => void (practitionerChipsModule = m));
+const PractitionerChipsC = preferLoaded(PractitionerChips, () => practitionerChipsModule?.PractitionerChips);
+/** `true` cuando el chunk está (o falló la red: se suelta igual, como las vistas). `load` tiene que ser estable. */
+function useChunkReady(enabled: boolean, isLoaded: () => boolean, load: () => Promise<unknown>): boolean {
+  const [ready, setReady] = useState(isLoaded);
+  useEffect(() => {
+    if (!enabled || ready) return;
+    let on = true;
+    load()
+      .catch(() => {})
+      .finally(() => on && setReady(true));
+    return () => {
+      on = false;
+    };
+  }, [enabled, ready, load]);
+  return ready;
+}
+const planLegendLoaded = () => !!planLegendModule;
+const practitionerChipsLoaded = () => !!practitionerChipsModule;
 /** Precarga en idle de los chunks que se abren con un click. Idempotente: el
  *  bundler cachea el `import()`. */
 function prefetchAgendaChunks() {
@@ -623,6 +654,10 @@ export function AgendaClient(props: Props) {
       on = false;
     };
   }, [roomCount, roomFilterReady]);
+  // [AS-0z] Mismas condiciones con las que se dibujan abajo (sin el `view !== "room"` de los chips: pedir el chunk de
+  // más en «Por sala» no cuesta nada y deja los chips listos al volver).
+  const planLegendReady = useChunkReady(plansEnabled, planLegendLoaded, loadPlanLegend);
+  const practitionerChipsReady = useChunkReady(practitionerCount > 1, practitionerChipsLoaded, loadPractitionerChips);
   // SRZ B4: parado en "Por sala" en una sede sin salas (se cambió de sede con
   // la página abierta), el toggle igual ofrece "Por sala" marcado y la salida
   // a "Por día"; si no, quedaban opciones sin marcar (o ningún toggle con un
@@ -1126,15 +1161,17 @@ export function AgendaClient(props: Props) {
         }
         practitionerChips={
           multi && view !== "room" ? (
-            <PractitionerChips
-              practitioners={ordered.map((p) => ({ ...p, count: chipCounts[p.id] ?? 0 }))}
-              selectedIds={selectedIds}
-              onChange={setSelectedIds}
-              favoriteIds={prefs.favoritePractitionerIds}
-              onToggleFavorite={(id) =>
-                persistPrefs({ favoritePractitionerIds: toggleFavoritePractitioner(prefs.favoritePractitionerIds, id) })
-              }
-            />
+            <SsrHold ready={practitionerChipsReady}>
+              <PractitionerChipsC
+                practitioners={ordered.map((p) => ({ ...p, count: chipCounts[p.id] ?? 0 }))}
+                selectedIds={selectedIds}
+                onChange={setSelectedIds}
+                favoriteIds={prefs.favoritePractitionerIds}
+                onToggleFavorite={(id) =>
+                  persistPrefs({ favoritePractitionerIds: toggleFavoritePractitioner(prefs.favoritePractitionerIds, id) })
+                }
+              />
+            </SsrHold>
           ) : null
         }
         locationFilter={
@@ -1416,7 +1453,9 @@ export function AgendaClient(props: Props) {
                   style={{ width: 1, height: 16, background: "rgba(15,30,51,0.12)", margin: "0 4px" }}
                 />
               )}
-              <PlanLegend highlight={highlight} onToggle={toggleLegend} counts={planCounts} />
+              <SsrHold ready={planLegendReady}>
+                <PlanLegendC highlight={highlight} onToggle={toggleLegend} counts={planCounts} />
+              </SsrHold>
             </>
           )}
         </div>

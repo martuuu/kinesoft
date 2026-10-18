@@ -48,7 +48,8 @@ import {
   createVisiblePoller,
   type RealtimeResyncReason,
 } from "@/components/providers/realtime-provider";
-import { LiveIndicator, liveIndicatorLabel, liveIndicatorTitle } from "@/components/realtime/live-indicator";
+import { LiveIndicator, liveIndicatorLabel, loadLiveIndicatorDiag } from "@/components/realtime/live-indicator";
+import { liveIndicatorTitle } from "@/components/realtime/live-indicator-diag";
 import { diagSteps } from "@/components/realtime/live-diagnostics";
 import { POLL_INTERVAL_MS } from "@/lib/realtime-client-state";
 import type { RealtimeDiag } from "@/lib/realtime-client-types";
@@ -126,6 +127,17 @@ describe("[HF-1b] beacon", () => {
 });
 
 describe("[HF-1b] LiveIndicator · motivo y detalle", () => {
+  it("[AS-0z] sin el chunk del diagnóstico: el estado sin motivo ni botón (nunca un title roto)", async () => {
+    // Corre primero, antes de cargar el chunk (el módulo queda cargado para el resto del archivo).
+    const html = renderToStaticMarkup(<LiveIndicator state="polling" diag={AUTH} />);
+    expect(html).toContain('title="Sin conexión en vivo · se actualiza cada 60 s"');
+    expect(html).toContain('data-diag="auth"');
+    expect(html).not.toContain("data-live-detail");
+    expect(html).not.toContain("El servidor rechazó la conexión");
+    // T3a-0z3: el chunk baja con el primer diag; ya cargado, el indicador lo usa sincrónico.
+    await loadLiveIndicatorDiag();
+  });
+
   it("fuera de vivo: motivo en title, botón «Ver detalle» con el motivo en su aria-label", () => {
     expect(liveIndicatorTitle("polling", AUTH)).toBe(
       "Sin conexión en vivo · se actualiza cada 60 s. El servidor rechazó la conexión",

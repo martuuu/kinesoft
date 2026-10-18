@@ -14,14 +14,23 @@
  * provider se pinta como `offline` (gris: «no en vivo»).
  *
  * HF-1b (§22.2 H-RT1): fuera de «En vivo» el motivo del último fallo va en `title`/`aria-label` con copy para la
- * Secretaria («El servidor rechazó la conexión»…), y «Ver detalle» abre `LiveDiagnostics` (pasos ✓/✗ y
- * «Reconectar»), que baja con `next/dynamic` recién al abrirlo. Con una versión vieja (deploy nuevo con la pestaña o
+ * Secretaria, y «Ver detalle» abre `LiveDiagnostics` (pasos ✓/✗ y «Reconectar»), que baja con `next/dynamic` recién
+ * al abrirlo. Con una versión vieja (deploy nuevo con la pestaña o
  * la PWA abiertas) el badge dice «Hay una versión nueva · Recargá»: reconectar no trae el build nuevo.
+ *
+ * [AS-0z] T3a-0z3: el copy de los motivos, el `title` con motivo y el botón «Ver detalle» viven en
+ * `./live-indicator-diag` y bajan con `import()` recién cuando hay un diag (nunca en vivo, nunca en el HTML del server:
+ * el estado inicial del provider no trae diag). Acá queda lo de «En vivo» / «Reconectando…», que es lo que se ve al
+ * cargar. Mientras el chunk llega (o si falla la red), el badge muestra el estado sin el motivo y sin el botón.
  */
-import { useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import dynamic from "next/dynamic";
 import { useRealtime } from "@/components/providers/realtime-provider";
-import type { ConnectionState, RealtimeDiag, RealtimeDiagCode } from "@/lib/realtime-client-types";
+import type { ConnectionState, RealtimeDiag } from "@/lib/realtime-client-types";
+
+let diagModule: typeof import("./live-indicator-diag") | undefined;
+/** Baja el chunk del diagnóstico (idempotente: el bundler cachea el `import()`). Exportado para los render tests. */
+export const loadLiveIndicatorDiag = () => import("./live-indicator-diag").then((m) => (diagModule = m));
 
 const LiveDiagnostics = dynamic(() => import("./live-diagnostics").then((m) => m.LiveDiagnostics), { ssr: false });
 
@@ -31,35 +40,14 @@ export const LIVE_INDICATOR_COPY: Record<Exclude<ConnectionState, "off">, string
   polling: "Sin conexión en vivo · se actualiza cada 60 s",
 };
 
-/** HF-1b: el motivo, para quien atiende (el texto técnico queda en el detalle). */
-export const REALTIME_DIAG_COPY: Record<RealtimeDiagCode, string> = {
-  auth: "El servidor rechazó la conexión",
-  no_access: "Tu usuario no tiene la agenda en vivo",
-  session: "Tu sesión venció: volvé a entrar",
-  rate_limited: "Demasiados intentos: se reintenta en unos minutos",
-  off: "La conexión en vivo está apagada en el servidor",
-  unconfigured: "Falta configurar la conexión en vivo en el servidor",
-  server_error: "El servidor no pudo dar el permiso",
-  stale_build: "Hay una versión nueva · Recargá",
-  network: "No se pudo llegar al servidor",
-  timeout: "El servidor en vivo no respondió a tiempo",
-  closed: "Se cortó la conexión",
-  channel_error: "El canal en vivo dio un error",
-  no_transport: "Falta la configuración de la conexión en vivo",
-};
+/** Lo único del copy de diagnóstico que va en el texto del badge (la versión vieja manda sobre el estado). */
+export const STALE_BUILD_LABEL = "Hay una versión nueva · Recargá";
 
 /** Texto del badge: la versión vieja manda sobre el estado (es lo único que el usuario tiene que hacer). */
 export function liveIndicatorLabel(state: ConnectionState, diag: RealtimeDiag | null): string {
   if (state === "off") return "";
-  if (diag?.code === "stale_build") return REALTIME_DIAG_COPY.stale_build;
+  if (diag?.code === "stale_build") return STALE_BUILD_LABEL;
   return LIVE_INDICATOR_COPY[state];
-}
-
-/** `title`/`aria-label`: el estado más el motivo, solo fuera de «En vivo» (un diag viejo no se muestra en vivo). */
-export function liveIndicatorTitle(state: ConnectionState, diag: RealtimeDiag | null): string {
-  const label = liveIndicatorLabel(state, diag);
-  if (state === "live" || !diag || diag.code === "stale_build") return label;
-  return `${label}. ${REALTIME_DIAG_COPY[diag.code]}`;
 }
 
 const DATA_STATE: Record<Exclude<ConnectionState, "off">, "live" | "reconnecting" | "offline"> = {
@@ -79,20 +67,6 @@ export function liveAnnouncement(prev: string, state: ConnectionState): string {
   if (state === "live" || state === "polling") return LIVE_INDICATOR_COPY[state];
   return prev;
 }
-
-const DETAIL_BUTTON: CSSProperties = {
-  border: 0,
-  background: "none",
-  padding: "2px 4px",
-  font: "inherit",
-  fontSize: 11,
-  fontWeight: 600,
-  color: "inherit",
-  textDecoration: "underline",
-  textUnderlineOffset: 2,
-  cursor: "pointer",
-  whiteSpace: "nowrap",
-};
 
 // Visualmente oculto pero leído (sin clase utilitaria en globals.css, y el CSS
 // del badge no se toca): absoluto, así no suma `gap` en el flex del header.
@@ -128,11 +102,25 @@ export function LiveIndicator({
   // al montar: los lectores leen los CAMBIOS de una región viva).
   const announced = useRef("");
   announced.current = liveAnnouncement(announced.current, state);
-  if (state === "off") return null;
   // En vivo no hay detalle que ver: un diag que quedó de antes no se muestra.
-  const diag = state === "live" ? null : diagProp !== undefined ? diagProp : ctxDiag;
+  const diag = state === "live" || state === "off" ? null : diagProp !== undefined ? diagProp : ctxDiag;
+  // [AS-0z] El chunk del diagnóstico recién con el primer diag; el contador solo re-renderiza cuando llega.
+  const [, setDiagLoaded] = useState(0);
+  const needsDiag = diag != null && !diagModule;
+  useEffect(() => {
+    if (!needsDiag) return;
+    let on = true;
+    loadLiveIndicatorDiag()
+      .then(() => on && setDiagLoaded((n) => n + 1))
+      .catch(() => {});
+    return () => {
+      on = false;
+    };
+  }, [needsDiag]);
+  if (state === "off") return null;
   const label = liveIndicatorLabel(state, diag);
-  const title = liveIndicatorTitle(state, diag);
+  const diagMod = diag ? diagModule : undefined;
+  const title = diagMod ? diagMod.liveIndicatorTitle(state, diag) : label;
   return (
     <>
       <span
@@ -150,18 +138,8 @@ export function LiveIndicator({
         <span className="k-live-dot" aria-hidden="true" />
         {compact ? null : label}
       </span>
-      {diag ? (
-        <button
-          type="button"
-          // Compacto (header denso, también mobile): «?» con caja mínima de 32 px para el dedo, sin agrandar el header.
-          style={compact ? { ...DETAIL_BUTTON, minWidth: 32, minHeight: 32 } : DETAIL_BUTTON}
-          onClick={() => setDetailOpen(true)}
-          aria-haspopup="dialog"
-          aria-label={`Ver detalle de la conexión: ${title}`}
-          data-live-detail
-        >
-          {compact ? "?" : "Ver detalle"}
-        </button>
+      {diag && diagMod ? (
+        <diagMod.LiveDiagButton compact={compact} title={title} onOpen={() => setDetailOpen(true)} />
       ) : null}
       {detailOpen ? (
         <LiveDiagnostics

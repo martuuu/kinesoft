@@ -14,7 +14,8 @@
 import { Modal, ModalActions } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import type { ConnectionState, RealtimeDiag, RealtimeDiagStep } from "@/lib/realtime-client-types";
-import { REALTIME_DIAG_COPY, liveIndicatorLabel } from "@/components/realtime/live-indicator";
+import { liveIndicatorLabel } from "@/components/realtime/live-indicator";
+import { REALTIME_DIAG_COPY } from "@/components/realtime/live-indicator-diag";
 import styles from "./live-diagnostics.module.css";
 
 export const DIAG_STEPS: ReadonlyArray<{ step: RealtimeDiagStep; label: string }> = [
