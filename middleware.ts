@@ -2,6 +2,12 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { SUPABASE_COOKIE_OPTIONS } from "@/lib/supabase/cookie-options";
 import {
+  SESSION_MODE_COOKIE,
+  applySessionCookiePolicy,
+  sessionModeCookie,
+  sessionModeFromCookie,
+} from "@/lib/supabase/session-mode";
+import {
   MAINTENANCE_PATH,
   MAINTENANCE_RETRY_AFTER_SECONDS,
   maintenanceDecision,
@@ -86,8 +92,11 @@ async function refreshSupabaseSession(req: NextRequest): Promise<CookieToSet[]> 
   if (!url || !key) return [];
   // Sin cookie de sesión no hay nada que refrescar: el tráfico anónimo
   // (landing, turnero público) no paga ni la construcción del cliente.
-  if (!req.cookies.getAll().some((c) => c.name.startsWith("sb-"))) return [];
+  if (!hasSupabaseSession(req)) return [];
 
+  // «Mantenerme conectado» (tanda B): el refresh reescribe las cookies de sesión con los 400 días de `@supabase/ssr`;
+  // con `kine_session_mode=ephemeral` salen sin vencimiento, o la primera hora deshacía la casilla destildada.
+  const mode = sessionModeFromCookie(req.cookies.get(SESSION_MODE_COOKIE)?.value);
   const out: CookieToSet[] = [];
   const supabase = createServerClient(url, key, {
     cookieOptions: SUPABASE_COOKIE_OPTIONS,
@@ -98,7 +107,7 @@ async function refreshSupabaseSession(req: NextRequest): Promise<CookieToSet[]> 
       setAll(cookiesToSet: { name: string; value: string; options: CookieOptions }[]) {
         for (const { name, value, options } of cookiesToSet) {
           req.cookies.set(name, value);
-          out.push({ name, value, options: { ...options, ...SUPABASE_COOKIE_OPTIONS } });
+          out.push({ name, value, options: applySessionCookiePolicy({ ...options, ...SUPABASE_COOKIE_OPTIONS }, mode) });
         }
       },
     },
@@ -110,6 +119,25 @@ async function refreshSupabaseSession(req: NextRequest): Promise<CookieToSet[]> 
     // component va a ver la sesión vieja (o ninguna) y actuar en consecuencia.
   }
   return out;
+}
+
+function hasSupabaseSession(req: NextRequest): boolean {
+  return req.cookies.getAll().some((c) => c.name.startsWith("sb-"));
+}
+
+/**
+ * «Mantenerme conectado»: la preferencia `ephemeral` que sobrevive a su sesión (se cerró sesión o venció sin cerrar
+ * el navegador) se borra en la próxima navegación, así el siguiente login con Google/Facebook (que no pasa por la
+ * casilla y es siempre persistente) no hereda «no mantener» de otra persona. No en `/api/auth/*` ni `/auth/*`: ahí la
+ * misma respuesta del route handler escribe la preferencia (o la sesión) y dos Set-Cookie del mismo nombre en la
+ * misma respuesta no tienen orden garantizado.
+ */
+function staleSessionModeCookie(req: NextRequest): CookieToSet | null {
+  if (!req.cookies.has(SESSION_MODE_COOKIE) || hasSupabaseSession(req)) return null;
+  const p = req.nextUrl.pathname;
+  if (p.startsWith("/api/auth/") || p.startsWith("/auth/")) return null;
+  const c = sessionModeCookie("persistent");
+  return { name: c.name, value: c.value, options: c.options };
 }
 
 export async function middleware(req: NextRequest) {
@@ -130,6 +158,8 @@ export async function middleware(req: NextRequest) {
   // `scripts/perf/ttfb.mjs`). Apagado no se toma ningún tiempo. Solo mide: el orden de abajo (AUDIT §5.3) no cambia.
   const mwT0 = PERF_TIMING ? performance.now() : 0;
   const sessionCookies = maintenance === "pass" ? await refreshSupabaseSession(req) : [];
+  const staleMode = staleSessionModeCookie(req);
+  if (staleMode) sessionCookies.push(staleMode);
   const mwSessionMs = PERF_TIMING ? performance.now() - mwT0 : 0;
 
   const requestHeaders = new Headers(req.headers);

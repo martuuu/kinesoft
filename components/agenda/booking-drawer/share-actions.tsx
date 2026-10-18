@@ -1,18 +1,51 @@
 "use client";
 
-import { formatDateAR } from "@/lib/format";
+import { useEffect, useState } from "react";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { recordatorioHtml } from "@/components/agenda/recordatorio-turno";
+import { useToast } from "@/components/ui/toast";
+import { bookingReminderText, bookingShareUrl, shareNotice, type ShareContact } from "@/lib/booking-share";
+import { getPatientShareContact } from "@/lib/booking-share-actions";
 import { miniGhostBtn, sectionCard } from "./styles";
 import type { DrawerBooking } from "./types";
 
 /**
  * Sección "Compartir": recordatorio por WhatsApp e imprimible / PDF. Solo lee
  * el turno; se muestra también con acceso básico.
+ *
+ * WA-0 (§21.6): el link de WhatsApp va al celular del paciente cuando el actor ve su contacto (lo decide el server en
+ * `getPatientShareContact`: `full` y `admin`; la fila del drawer manda `admin` como "basic", por eso no alcanza con
+ * `booking.patientAccess`). Si lo ve y no es un celular válido, aviso + el link sin destinatario de antes. «Copiar
+ * mensaje» sirve para pegarlo en otro canal (o en WhatsApp Web, cuando el link no abre la app).
  */
 export function ShareActions({ booking }: { booking: DrawerBooking }) {
   // EV1-C1: en Clínica general la sección del recordatorio dice «Motivo».
   const diagnostico = useTenantModules().has("diagnostico");
+  const toast = useToast();
+  const patientId = booking.patientId;
+  // Sin paciente (turno guest) o con `none` no hay número que buscar: no se llama al server.
+  const lookup = Boolean(patientId) && booking.patientAccess !== "none";
+  const [contact, setContact] = useState<{ patientId: string; value: ShareContact } | null>(null);
+
+  useEffect(() => {
+    if (!lookup || !patientId) return;
+    let alive = true;
+    getPatientShareContact(patientId)
+      .then((value) => alive && setContact({ patientId, value }))
+      // Sesión vencida o red caída: el link queda sin destinatario, como antes de WA-0. Sin toast: no es un error de
+      // lo que la persona hizo, y el botón sigue andando.
+      .catch(() => alive && setContact({ patientId, value: { status: "hidden" } }));
+    return () => {
+      alive = false;
+    };
+  }, [lookup, patientId]);
+
+  // El contacto de OTRO turno (el drawer reusa el componente al cambiar de turno) no vale para este.
+  const current = lookup && contact?.patientId === patientId ? contact.value : null;
+  const loading = lookup && current === null;
+  const notice = shareNotice(current);
+  const href = bookingShareUrl(booking, current);
+
   // Recordatorio imprimible / PDF — abre una ventana nueva con el HTML
   // autocontenido y dispara el diálogo de impresión del navegador (que
   // ofrece "Guardar como PDF"). Evitamos `window.print()` sobre la página
@@ -26,6 +59,18 @@ export function ShareActions({ booking }: { booking: DrawerBooking }) {
       w.print();
     }
   };
+
+  const copyMessage = async () => {
+    try {
+      await navigator.clipboard.writeText(bookingReminderText(booking));
+      toast.success("Mensaje copiado");
+    } catch {
+      // Sin permiso de portapapeles (http, iframe, Safari viejo).
+      toast.error("No pudimos copiar el mensaje", { description: "Usá «Compartir por WhatsApp» o copialo a mano." });
+    }
+  };
+
+  const btn = { ...miniGhostBtn, display: "inline-flex", alignItems: "center", gap: 6 } as const;
 
   return (
     <div style={{ ...sectionCard, display: "grid", gap: 10 }}>
@@ -45,30 +90,43 @@ export function ShareActions({ booking }: { booking: DrawerBooking }) {
           Enviale al paciente un recordatorio de este turno.
         </div>
       </div>
+      {notice && (
+        <div
+          role="status"
+          style={{
+            display: "grid",
+            gap: 2,
+            padding: "8px 10px",
+            borderRadius: 10,
+            background: "var(--warn-bg)",
+            border: "1px solid var(--warn-border)",
+            color: "var(--warn-fg)",
+            fontSize: 11.5,
+          }}
+        >
+          <strong style={{ fontWeight: 650 }}>{notice.title}</strong>
+          <span>{notice.detail}</span>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         <a
-          href={`https://wa.me/?text=${encodeURIComponent(
-            `Hola ${booking.patientName}, te recordamos tu turno para ${booking.serviceName} el ${formatDateAR(
-              booking.scheduledFor,
-              "longDateTime"
-            )} (duración ${booking.durationMin} min). ¡Te esperamos!`
-          )}`}
+          href={href}
           target="_blank"
           rel="noopener"
-          style={{
-            ...miniGhostBtn,
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            textDecoration: "none",
-          }}
+          aria-disabled={loading || undefined}
+          // Mientras se busca el número (una lectura chica), un click saldría sin destinatario: se espera.
+          onClick={(e) => loading && e.preventDefault()}
+          style={{ ...btn, textDecoration: "none", opacity: loading ? 0.6 : 1, cursor: loading ? "progress" : "pointer" }}
         >
           Compartir por WhatsApp
         </a>
+        <button type="button" onClick={copyMessage} style={btn}>
+          Copiar mensaje
+        </button>
         <button
           type="button"
           onClick={printRecordatorio}
-          style={{ ...miniGhostBtn, display: "inline-flex", alignItems: "center", gap: 6 }}
+          style={btn}
           title="Abre el recordatorio en una ventana para imprimir o guardar como PDF"
         >
           Imprimir / Guardar PDF

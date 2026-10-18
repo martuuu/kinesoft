@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { hashKeyPart, rateLimitAll } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
 import { env } from "@/lib/env";
 import { isAllowedOrigin, safeNext } from "@/lib/safe-next";
 import { clearActiveTenantCookie } from "@/lib/tenant-choice";
+import { sessionModeCookie, sessionModeFromForm } from "@/lib/supabase/session-mode";
 
 export const runtime = "nodejs";
 
@@ -19,6 +21,12 @@ export const runtime = "nodejs";
  *     y se propaga en cada vuelta al login para no perder el destino;
  *   - chequeo de Origin: un sitio ajeno no puede loguear a la víctima en una
  *     cuenta del atacante (login CSRF).
+ *
+ * «Mantenerme conectado» (tanda B, §22.13): el form manda `remember` (hidden `0` + checkbox `1`). Destildado → el
+ * cliente de Supabase escribe las cookies de sesión sin vencimiento (mueren al cerrar el navegador) y se deja
+ * `kine_session_mode=ephemeral` para que los refresh posteriores (middleware) sigan igual. Tildado o sin el campo →
+ * como siempre, y se borra una preferencia vieja de otra persona en este navegador. La preferencia se escribe solo con
+ * un login exitoso: uno fallido no toca nada (igual que la cookie del consultorio).
  */
 function backToLogin(req: Request, error: string, next: string, email?: string) {
   const u = new URL("/login", req.url);
@@ -54,7 +62,8 @@ export async function POST(req: Request) {
 
   if (!email || !password) return backToLogin(req, "missing_credentials", next);
 
-  const supabase = getSupabaseServerClient();
+  const sessionMode = sessionModeFromForm(formData.getAll("remember"));
+  const supabase = getSupabaseServerClient({ sessionMode });
   const { error } = await supabase.auth.signInWithPassword({ email, password });
 
   if (error) {
@@ -69,5 +78,7 @@ export async function POST(req: Request) {
   // el layout de la app ve la cookie vacía y pregunta a cuál entrar (`/elegir-consultorio`); con uno solo entra
   // directo. Además, la cookie de OTRA cuenta que se logueó antes en este navegador no se arrastra.
   clearActiveTenantCookie();
+  const pref = sessionModeCookie(sessionMode);
+  cookies().set(pref.name, pref.value, pref.options);
   return NextResponse.redirect(new URL(next, req.url), { status: 303 });
 }

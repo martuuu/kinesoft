@@ -161,15 +161,13 @@ describe("[VX2-a] Login: botones sociales", () => {
     expect(html).not.toContain("o con tu email");
   });
 
-  it("product + una h1; sin «Matrícula» ni «recordarme»; autocomplete y foco del design system", async () => {
+  it("product + una h1; sin «Matrícula»; autocomplete y foco del design system", async () => {
     const html = renderToStaticMarkup(await LoginPage({ searchParams: {} }));
     expect(html).toContain('data-variant="product"');
     expect(h1Count(html)).toBe(1);
     expect(html).toMatch(/<h1[^>]*>Ingresá a tu consultorio<\/h1>/);
     expect(html).toContain("Con Google, Facebook o tu email.");
     expect(html).not.toMatch(/Matr[íi]cula/);
-    expect(html).not.toContain('name="remember"');
-    expect(html).not.toMatch(/Mantenerme/);
     const email = inputTag(html, "email");
     expect(email).toContain('autoComplete="email"');
     expect(email).toContain('inputMode="email"');
@@ -193,6 +191,22 @@ describe("[VX2-a] Login: botones sociales", () => {
     expect(html).not.toMatch(/movare|camila/i);
   });
 
+
+  it("[B5] «Mantenerme conectado»: tildado por default, hidden 0 ANTES del checkbox 1, ayuda asociada", async () => {
+    const html = renderToStaticMarkup(await LoginPage({ searchParams: {} }));
+    const start = html.indexOf('action="/api/auth/sign-in"');
+    const form = html.slice(start, html.indexOf("</form>", start));
+    const hidden = form.indexOf('<input type="hidden" name="remember" value="0"/>');
+    const box = form.indexOf('<input id="login-remember"');
+    expect(hidden).toBeGreaterThan(-1);
+    expect(box).toBeGreaterThan(hidden);
+    const boxTag = form.slice(box, form.indexOf(">", box));
+    for (const attr of ['type="checkbox"', 'name="remember"', 'value="1"', 'checked=""']) expect(boxTag).toContain(attr);
+    expect(form).toContain('aria-describedby="login-remember-help"');
+    expect(form).toMatch(/<label for="login-remember"[^>]*>.*Mantenerme conectado<\/label>/);
+    expect(form).toContain('id="login-remember-help"');
+    expect(form).toContain("Destildalo en una computadora compartida.");
+  });
   it("error OAuth traducido en el aviso (nunca el texto del proveedor)", () => {
     for (const [code, text] of [
       ["provider_disabled", "Ese método de ingreso no está disponible por ahora."],

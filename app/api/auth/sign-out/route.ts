@@ -6,6 +6,8 @@ import { clearActiveTenantCookie } from "@/lib/tenant-choice";
 import { clearTwoFactorCookies } from "@/lib/two-factor-cookie";
 import { endSupportSession } from "@/lib/support-session-internal";
 import { logger } from "@/lib/logger";
+import { cookies } from "next/headers";
+import { sessionModeCookie } from "@/lib/supabase/session-mode";
 
 export const runtime = "nodejs";
 
@@ -37,6 +39,9 @@ export async function POST(req: Request) {
   // PL-2a: las pruebas de 2FA (`kine_2fa`, `kine_stepup`) ya no validarían (van ligadas al `session_id` que se
   // acaba de cerrar), pero no tienen por qué quedar en el browser de una PC compartida.
   clearTwoFactorCookies();
+  // B5: al cerrar sesión se olvida «no mantener»; el próximo login decide de nuevo.
+  const sessionPref = sessionModeCookie("persistent");
+  cookies().set(sessionPref.name, sessionPref.value, sessionPref.options);
   const next = safeNext(new URL(req.url).searchParams.get("next"), "/login");
   return NextResponse.redirect(new URL(next, env.NEXT_PUBLIC_APP_URL), { status: 303 });
 }

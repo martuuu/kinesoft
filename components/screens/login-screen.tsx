@@ -23,8 +23,8 @@ const FIELD_ERROR_CODES = new Set(["invalid_credentials", "missing_credentials"]
  *
  * - El mapa de códigos → mensaje + salidas vive en `auth-feedback.ts` (lógica pura, con su unit test). Acá solo se
  *   pinta: nunca el valor crudo de la query.
- * - Sin «Matrícula» (no existe ese ingreso) ni «Mantenerme conectada» (el checkbox no hacía nada: la sesión de
- *   Supabase ya persiste; queda en el backlog C).
+ * - Sin «Matrícula» (no existe ese ingreso). «Mantenerme conectado» volvió en la tanda B (§22.13) con efecto real:
+ *   destildado, la sesión muere al cerrar el navegador (`lib/supabase/session-mode.ts`).
  * - `providers` lo decide la page con `visibleOAuthProviders()` (D-VX16); la bajada se arma con los mismos.
  */
 export function LoginScreen({
@@ -109,6 +109,31 @@ export function LoginScreen({
             <Link href="/forgot" className={`k-link ${st.small}`} style={{ position: "absolute", top: 0, right: 0 }}>
               ¿Olvidaste tu contraseña?
             </Link>
+          </div>
+
+          {/* «Mantenerme conectado» (tanda B, §22.13; vuelve después del «fuera por ahora» de VX2-a, ahora con efecto
+              real: ver lib/supabase/session-mode.ts). El hidden `0` va ANTES del checkbox: destildado = llega solo el
+              `0`; tildado = `0` y `1` (gana el `1`); un POST sin el campo (login cacheado de antes) = persistente. */}
+          <input type="hidden" name="remember" value="0" />
+          <div style={{ display: "grid", gap: 2 }}>
+            <label
+              htmlFor="login-remember"
+              style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 15, color: "var(--navy-700)", cursor: "pointer" }}
+            >
+              <input
+                id="login-remember"
+                type="checkbox"
+                name="remember"
+                value="1"
+                defaultChecked
+                aria-describedby="login-remember-help"
+                style={{ width: 18, height: 18, margin: 0, accentColor: "var(--sky-700)" }}
+              />
+              Mantenerme conectado
+            </label>
+            <span id="login-remember-help" className={st.small} style={{ color: "var(--navy-500)", paddingLeft: 26 }}>
+              Destildalo en una computadora compartida.
+            </span>
           </div>
 
           <AuthSubmit label="Ingresar" busyLabel="Ingresando…" />

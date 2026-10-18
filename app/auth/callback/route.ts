@@ -9,6 +9,7 @@ import { authErrorPath, safeNext } from "@/lib/safe-next";
 import { linkPortalPatientsOnSignIn } from "@/lib/portal-link-internal";
 import { ACTIVE_TENANT_COOKIE, ACTIVE_TENANT_COOKIE_OPTIONS } from "@/lib/active-tenant-cookie";
 import { oauthCallbackErrorCode, oauthProfileFromUser } from "@/lib/identity/oauth-profile";
+import { sessionModeCookie } from "@/lib/supabase/session-mode";
 
 export const runtime = "nodejs";
 
@@ -69,7 +70,9 @@ export async function GET(req: Request) {
     return NextResponse.redirect(`${url.origin}${authErrorPath(next, "missing_code")}`);
   }
 
-  const supabase = getSupabaseServerClient();
+  // OAuth siempre es persistente («Mantenerme conectado» es solo del login con contraseña, B5): una preferencia
+  // «efímera» que haya quedado de una sesión anterior no se hereda.
+  const supabase = getSupabaseServerClient({ sessionMode: "persistent" });
   const { data: session, error } = await supabase.auth.exchangeCodeForSession(code);
   if (error || !session.user) {
     logger.warn("auth.callback.exchange_failed", { message: error?.message ?? "no_user" });
@@ -114,5 +117,7 @@ export async function GET(req: Request) {
 
   const res = NextResponse.redirect(new URL(next, url.origin));
   res.cookies.set(ACTIVE_TENANT_COOKIE, "", { ...ACTIVE_TENANT_COOKIE_OPTIONS, maxAge: 0 });
+  const sessionPref = sessionModeCookie("persistent");
+  res.cookies.set(sessionPref.name, sessionPref.value, sessionPref.options);
   return res;
 }
