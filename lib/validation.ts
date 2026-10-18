@@ -111,6 +111,31 @@ export const PatientUpdate = z.object({
 });
 export type PatientUpdateInput = z.input<typeof PatientUpdate>;
 
+/**
+ * T3c-1b (plan §23.5): claves clínicas de `PatientUpdate`. La rama `admin` de `updatePatient` (Secretaria, Admin y
+ * Titular sin agenda, con `patients.editAdmin`) las rechaza enteras si llegan con cualquier valor, incluido `""`:
+ * el drawer de edición de la rama full siempre las manda (`edit-patient-drawer.tsx:173-175`) y, con los campos
+ * ocultos, un `""` borraría las notas del profesional (§23.2).
+ */
+export const PATIENT_CLINICAL_KEYS = ["notes", "diagnosisTitle", "diagnosisNote"] as const;
+
+/**
+ * T3c-1b (plan §23.5): lo que edita el nivel `admin` de la ficha. Lista CERRADA (`.strict()`): una clave de más
+ * (clínica o cualquier otra, p. ej. `assignedPractitionerId`) es un rechazo, no algo que se ignora en silencio. Mismas
+ * reglas de campo que `PatientUpdate` (vaciables, DNI que no se vacía, `dateOfBirth` como fecha de calendario).
+ */
+export const PatientAdminUpdate = PatientUpdate.pick({
+  id: true,
+  firstName: true,
+  lastName: true,
+  email: true,
+  phone: true,
+  documentId: true,
+  dateOfBirth: true,
+  expectedUpdatedAt: true,
+}).strict();
+export type PatientAdminUpdateInput = z.input<typeof PatientAdminUpdate>;
+
 // Input for `setPatientCoverage` (replace the patient's single active
 // coverage). Either `insurerId` resolves to a tenant Insurer row, or
 // `insurerName` is the free-form ("Otra") fallback; both optional so the

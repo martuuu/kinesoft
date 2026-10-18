@@ -25,6 +25,7 @@ import { runWithRls } from "@/lib/rls";
 import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import { escapeLike } from "@/lib/email-match";
 import { getActor } from "@/lib/session";
+import { memberCapabilitiesForActor } from "@/lib/authz";
 import { logger } from "@/lib/logger";
 import { tags, ttl } from "@/lib/cache-tags";
 import { matchKey } from "@/lib/catalog/normalize";
@@ -264,8 +265,11 @@ function planSlug(name: string): string {
  * el `tenantId` del actor y `source=TENANT`. Lo ve solo este consultorio hasta
  * que Plataforma lo promueve (B1.3 `promotePayerPlan`).
  *
- * Cualquier miembro puede proponer (el picker vive en la ficha del paciente,
- * que edita el profesional). Idempotente: si ya hay un plan global o propio
+ * Quién propone (T3c-1b, plan §23.2/§23.5): quien carga coberturas, o sea
+ * `patients.editAdmin` (Titular, Admin, Secretaria) o `clinical.read` (el
+ * profesional desde la ficha). Hasta T3 no tenía gate: cualquier miembro
+ * (Facturación incluida, o un rol sin ficha que editar) escribía en el
+ * catálogo del consultorio. Idempotente: si ya hay un plan global o propio
  * con el mismo slug para esa prestadora, devuelve ese id en vez de duplicar.
  */
 // EV1-E1 (readonly-residual-actions): el cuerpo va en `proposePayerPlanImpl`; el wrapper convierte el ReadOnlyModeError
@@ -284,6 +288,10 @@ async function proposePayerPlanImpl(
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
   }
   const actor = await getActor();
+  const caps = await memberCapabilitiesForActor(actor);
+  if (!caps.has("patients.editAdmin") && !caps.has("clinical.read")) {
+    return { ok: false, error: "Tu rol no carga planes de obra social." };
+  }
   const slug = planSlug(parsed.data.name);
   if (!slug) return { ok: false, error: "El nombre del plan no es válido." };
 

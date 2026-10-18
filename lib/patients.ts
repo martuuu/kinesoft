@@ -15,11 +15,11 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
-import { bookablePractitionerWhere, clinicalMembershipWhere, isActorPractitioner } from "@/lib/practitioner-scope";
+import { bookablePractitionerWhere, isActorPractitioner } from "@/lib/practitioner-scope";
 import { getActor, writableError } from "@/lib/session";
 import { memberCapabilitiesForActor } from "@/lib/authz";
 import { MODULE_DENIED_COPY, modulesFor } from "@/lib/tenant-modules";
-import { canWriteClinical } from "@/lib/capabilities";
+import { canWriteClinical, type Capability, type PatientAccessLevel } from "@/lib/capabilities";
 import { findUsablePayerPlan } from "@/lib/catalog-validate";
 import { auditInTx } from "@/lib/audit";
 import { logger } from "@/lib/logger";
@@ -65,6 +65,8 @@ import {
   PatientCreate,
   PatientCreateOptions,
   PatientUpdate,
+  PatientAdminUpdate,
+  PATIENT_CLINICAL_KEYS,
   CoverageSet,
   type ActionResult,
   type PatientCreateInput,
@@ -353,11 +355,35 @@ export async function listPatients(opts: {
       // Basic rows expose ONLY name + DNI + next booking. Every other
       // field is nulled out so a basic-access kine can't even infer
       // medical history by glancing at the directory.
-      // PD-13: `admin` (rol sin clinical.read) tampoco ve HC → en el
-      // directorio usa la misma proyección que basic (S07sp, P0.2, no sumó
-      // `admin` a PatientRow: haría falta pasar `patients-list.tsx` y
-      // `recent-patients.tsx` a `=== "full"`). Contacto y cobertura los ve en
-      // el perfil (`getPatientCore` admin). HC solo con `=== "full"`.
+      // PD-13: `admin` (rol sin clinical.read) no ve HC. Hasta T3 usaba la
+      // proyección basic; T3c-1b (§23.5) le da la suya: lo que la recepción
+      // necesita para llamar y cobrar (contacto, nacimiento, DNI, obra social,
+      // próximo turno, lo mismo que `PatientAdminCore` en el perfil) y NADA
+      // clínico: notas, planes (títulos y conteos de sesiones) y última visita
+      // (sale de sesiones del plan) quedan vacíos. La UI decide HC con
+      // `=== "full"` (`patients-list.tsx`, `recent-patients.tsx`).
+      if (access === "admin") {
+        const coverage = p.coverages[0];
+        return {
+          id: p.id,
+          firstName: p.firstName,
+          lastName: p.lastName,
+          email: p.email,
+          phone: p.phone,
+          documentId: p.documentId,
+          dateOfBirth: p.dateOfBirth,
+          notes: null,
+          createdAt: p.createdAt,
+          activeProgramTitle: null,
+          sessionsTotal: 0,
+          sessionsDone: 0,
+          activePlans: [],
+          lastVisit: null,
+          upcomingAt,
+          obraSocial: coverage?.insurerRef?.name ?? coverage?.insurer ?? "Particular",
+          access: "admin",
+        };
+      }
       if (access !== "full") {
         return {
           id: p.id,
@@ -731,12 +757,10 @@ export async function createPatient(
     const p = await runWithRls(actor.tenantId, async (tx) => {
       let assignee = actor.practitionerId;
       if (assignTo) {
+        // T3c-1b (§23.2/§23.5): reservable Y no deshabilitado. Con solo `clinicalMembershipWhere` se le podía cargar
+        // la ficha a un profesional suspendido (`Membership.disabledAt`): nadie que atienda la veía en full.
         const target = await tx.practitioner.findFirst({
-          where: {
-            id: assignTo,
-            tenantId: actor.tenantId,
-            user: { memberships: { some: clinicalMembershipWhere(actor.tenantId) } },
-          },
+          where: { id: assignTo, ...bookablePractitionerWhere(actor.tenantId, { includeDisabledFilter: true }) },
           select: { id: true },
         });
         if (!target || (!clinical && isActorPractitioner(actor, target.id))) return null;
@@ -840,7 +864,15 @@ const PATIENT_EDITABLE_FIELDS = [
  *    lleva el `updatedAt` leído en el WHERE, así dos pestañas editando la misma
  *    ficha no se pisan en silencio (la segunda recibe "cambió en otra sesión").
  *  - exige acceso `full` (decisión del dueño 30-sep: acceso básico = solo ver).
- *  - el audit registra QUÉ campos cambiaron (solo nombres, sin valores: PHI).
+ *  - sin audit desde PL-A (recorte PL-D13/PL-D14: editar contacto no es seguridad, plata, acceso ni HC); antes
+ *    registraba los nombres de los campos cambiados.
+ *
+ * T3c-1b (plan §23.5, decisión 1 del 19-oct): rama `admin` para la recepción. Nivel `admin` (rol sin
+ * `clinical.read`) + `patients.editAdmin` (Titular sin agenda, Admin, Secretaria; Facturación no) edita la lista
+ * cerrada de `PatientAdminUpdate` (nombre, apellido, email, teléfono, DNI, nacimiento). Si llega CUALQUIER clave
+ * clínica (`PATIENT_CLINICAL_KEYS`, también `""`) se rechaza el pedido entero sin escribir nada: hasta T3 la rama
+ * full escribía `notes`/`diagnosis*` tal cual, y abrirla a `admin` sin este corte habría dejado que el drawer (que
+ * siempre las manda) borrara notas que la Secretaria no ve (§23.2). Mismo lock optimista y sin audit, como la full.
  */
 // BO3-F: el cuerpo va en `updatePatientImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
 // en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
@@ -860,7 +892,17 @@ async function updatePatientImpl(
       fieldErrors: parsed.error.flatten().fieldErrors,
     };
   }
-  const { id, expectedUpdatedAt, ...data } = parsed.data;
+  const { id, expectedUpdatedAt } = parsed.data;
+  // T3c-1b: la rama `admin` se decide en la tx (nivel de acceso), pero su parseo es puro y va antes. «Llega» = clave
+  // con valor distinto de `undefined` (un `undefined` no escribe nada ni viaja por RPC como valor). Lo que no sea
+  // clínico pero quede fuera de la lista cerrada lo rechaza el `.strict()`.
+  const rawRecord = raw as Record<string, unknown>;
+  const sentKeys = Object.keys(rawRecord).filter((k) => rawRecord[k] !== undefined);
+  const sendsClinical = sentKeys.some((k) => (PATIENT_CLINICAL_KEYS as readonly string[]).includes(k));
+  const adminParsed = sendsClinical
+    ? null
+    : PatientAdminUpdate.safeParse(Object.fromEntries(sentKeys.map((k) => [k, rawRecord[k]])));
+  const caps = await memberCapabilitiesForActor(actor);
   // RLS Etapa 2: the ownership check + update share the same tx so a
   // race that flipped tenantId between them couldn't slip through. The
   // try/catch surfaces the email/phone uniqueness violations with a
@@ -868,6 +910,9 @@ async function updatePatientImpl(
   type Outcome =
     | { kind: "notfound" }
     | { kind: "forbidden" }
+    | { kind: "noEditAdmin" }
+    | { kind: "clinical" }
+    | { kind: "invalid" }
     | { kind: "stale" }
     | { kind: "ok"; changed: string[]; updatedAt: Date };
   let outcome: Outcome;
@@ -890,16 +935,28 @@ async function updatePatientImpl(
         },
       });
       if (!before) return { kind: "notfound" };
-      if ((await patientAccessFor(actor, id, tx)) !== "full") return { kind: "forbidden" };
+      const access = await patientAccessFor(actor, id, tx);
+      let source: Partial<typeof parsed.data>;
+      if (access === "full") {
+        source = parsed.data;
+      } else if (access === "admin") {
+        if (!caps.has("patients.editAdmin")) return { kind: "noEditAdmin" };
+        if (sendsClinical) return { kind: "clinical" };
+        if (!adminParsed?.success) return { kind: "invalid" };
+        source = adminParsed.data;
+      } else {
+        return { kind: "forbidden" };
+      }
+      const data = Object.fromEntries(
+        PATIENT_EDITABLE_FIELDS.filter((f) => f in source).map((f) => [f, source[f]])
+      ) as Partial<Pick<typeof parsed.data, (typeof PATIENT_EDITABLE_FIELDS)[number]>>;
       if (expectedUpdatedAt && +before.updatedAt !== +new Date(expectedUpdatedAt)) {
         return { kind: "stale" };
       }
       const prev: Record<string, unknown> = before;
       const same = (a: unknown, b: unknown) =>
         a instanceof Date || b instanceof Date ? +(a as Date) === +(b as Date) : (a ?? null) === (b ?? null);
-      const changed = PATIENT_EDITABLE_FIELDS.filter(
-        (f) => (data as Record<string, unknown>)[f] !== undefined && !same(prev[f], (data as Record<string, unknown>)[f])
-      );
+      const changed = PATIENT_EDITABLE_FIELDS.filter((f) => data[f] !== undefined && !same(prev[f], data[f]));
       // `updatedAt` leído en el WHERE: si otra tx lo movió entre el SELECT y
       // acá (READ COMMITTED), count = 0 → stale en vez de pisar.
       const res = await tx.patient.updateMany({
@@ -919,6 +976,19 @@ async function updatePatientImpl(
   if (outcome.kind === "notfound") return { ok: false, error: "Paciente no encontrado." };
   if (outcome.kind === "forbidden") {
     return { ok: false, error: "No tenés acceso completo a este paciente: solo podés verlo." };
+  }
+  if (outcome.kind === "noEditAdmin") return { ok: false, error: "Tu rol no edita los datos de los pacientes." };
+  if (outcome.kind === "clinical") {
+    return { ok: false, error: "Las notas y el diagnóstico los edita el profesional a cargo." };
+  }
+  if (outcome.kind === "invalid") {
+    // Mismo shape que el parseo de arriba: los `fieldErrors` del `.strict()` (si la clave de más era la única
+    // falla, no hay campo que marcar y queda el mensaje general).
+    return {
+      ok: false,
+      error: "Datos inválidos",
+      ...(adminParsed && !adminParsed.success ? { fieldErrors: adminParsed.error.flatten().fieldErrors } : {}),
+    };
   }
   if (outcome.kind === "stale") {
     return {
@@ -1059,6 +1129,17 @@ async function recordEvaScoreImpl(input: {
  * La cobertura sigue siendo single-active (`coverages[0]` = id desc): las
  * filas legacy extra se borran.
  */
+/**
+ * T3c-1b (plan §23.5): gate de las escrituras administrativas de la ficha (cobertura, copago propio). Pasa `full`
+ * (como siempre) o `admin` con `patients.editAdmin` (Titular sin agenda, Admin, Secretaria). Facturación es `admin`
+ * sin `editAdmin`: ve la cobertura y cobra, pero no la cambia. Devuelve el mensaje de rechazo o null.
+ */
+function adminEditDenied(access: PatientAccessLevel, caps: ReadonlySet<Capability>): string | null {
+  if (access === "full") return null;
+  if (access === "admin") return caps.has("patients.editAdmin") ? null : "Tu rol no edita los datos de los pacientes.";
+  return "No tenés acceso completo a este paciente: solo podés verlo.";
+}
+
 // BO3-F: el cuerpo va en `setPatientCoverageImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
 // en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
 export async function setPatientCoverage(...args: Parameters<typeof setPatientCoverageImpl>): Promise<ActionResult> {
@@ -1086,6 +1167,7 @@ async function setPatientCoverageImpl(input: {
     };
   }
   const { patientId, insurerId, insurerName, planName, payerPlanId, memberId, resetCopago } = parsed.data;
+  const caps = await memberCapabilitiesForActor(actor);
 
   // RLS-guarded: the ownership check, the insurer lookup and the write of the
   // Coverage row all run inside the same tenant GUC transaction. Previously
@@ -1098,9 +1180,9 @@ async function setPatientCoverageImpl(input: {
       select: { id: true },
     });
     if (!owned) return { ok: false as const, error: "Paciente no encontrado." };
-    if ((await patientAccessFor(actor, patientId, tx)) !== "full") {
-      return { ok: false as const, error: "No tenés acceso completo a este paciente: solo podés verlo." };
-    }
+    // T3c-1b (§23.5): la cobertura es dato administrativo; la carga también la recepción (`admin` + `editAdmin`).
+    const denied = adminEditDenied(await patientAccessFor(actor, patientId, tx), caps);
+    if (denied) return { ok: false as const, error: denied };
 
     let resolvedName = "";
     let resolvedInsurerId: string | null = null;
@@ -1265,7 +1347,7 @@ async function setPatientCoverageImpl(input: {
  * `serviceId` opcional: sin él se usa el primer servicio del tenant en el
  * orden del modal (`listServices`, nombre asc). El modal lo re-consulta al
  * cambiar de servicio. `source` dice de qué escalón salió el monto.
- * Returns null when the actor lacks full access to the patient.
+ * Returns null when the actor has `basic`/`none` access to the patient.
  */
 export async function getPatientBillingPreview(
   patientId: string,
@@ -1279,7 +1361,9 @@ export async function getPatientBillingPreview(
 } | null> {
   const actor = await getActor();
   const access = await patientAccessFor(actor, patientId);
-  if (access !== "full") return null;
+  // T3c-1b (§23.5): el monto y la OS son datos de cobro, no HC: los lee todo nivel `admin` (Secretaria, Admin,
+  // Facturación, Titular sin agenda), que es quien carga turnos y cobra. `basic` (kine ajeno) sigue sin verlo.
+  if (access !== "full" && access !== "admin") return null;
   const [b, service] = await Promise.all([
     resolvePatientBilling(patientId, actor.tenantId),
     runWithRls(actor.tenantId, (tx) =>
@@ -1335,15 +1419,16 @@ async function setPatientDefaultCopagoImpl(input: {
     return { ok: false, error: "Copago inválido." };
   }
   const copago = Math.round(input.copagoCents);
+  const caps = await memberCapabilitiesForActor(actor);
   const result = await runWithRls(actor.tenantId, async (tx) => {
     const owned = await tx.patient.findFirst({
       where: { id: input.patientId, tenantId: actor.tenantId },
       select: { id: true },
     });
     if (!owned) return { ok: false as const, error: "Paciente no encontrado." };
-    if ((await patientAccessFor(actor, input.patientId, tx)) !== "full") {
-      return { ok: false as const, error: "No tenés acceso completo a este paciente: solo podés verlo." };
-    }
+    // T3c-1b (§23.5): el copago propio lo actualiza también la recepción desde el modal del turno.
+    const denied = adminEditDenied(await patientAccessFor(actor, input.patientId, tx), caps);
+    if (denied) return { ok: false as const, error: denied };
     // `orderBy id desc`: la fila ACTIVA (la que lee el resolver). Sin orden,
     // con filas legacy duplicadas se podía escribir el override en otra.
     const coverage = await tx.coverage.findFirst({
@@ -1441,12 +1526,9 @@ async function assignPatientToPractitionerImpl(raw: {
       // P0.Z (H-b2): mismo filtro que `createPatient` (`clinicalMembershipWhere`, membresía
       // aceptada). Re-asignar a la Secretaria o a Facturación no les da HC
       // (PD-13) y dejaba al paciente sin profesional con full salvo OWNER/ADMIN.
+      // T3c-1b (§23.2/§23.5): además, no deshabilitado (mismo filtro que el alta).
       const prac = await tx.practitioner.findFirst({
-        where: {
-          id: input.practitionerId,
-          tenantId: actor.tenantId,
-          user: { memberships: { some: clinicalMembershipWhere(actor.tenantId) } },
-        },
+        where: { id: input.practitionerId, ...bookablePractitionerWhere(actor.tenantId, { includeDisabledFilter: true }) },
         select: { id: true },
       });
       if (!prac) return { ok: false as const, error: "Elegí un profesional activo del consultorio con acceso clínico." };

@@ -23,6 +23,8 @@ import { Prisma } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
 import { getActor, writableError } from "@/lib/session";
 import { patientAccessFor } from "@/lib/visibility";
+import { memberCapabilitiesForActor } from "@/lib/authz";
+import type { Capability } from "@/lib/capabilities";
 import { auditInTx } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { readOnlyFailure } from "@/lib/read-only-result";
@@ -61,7 +63,17 @@ const DecideInput = z
   })
   .strict();
 
-const canDecide = (level: string) => level === "admin" || level === "full";
+/** Ver la lista y el impacto (solo lectura): `full` o `admin`, como el perfil admin (soporte incluido, P4-S24r). */
+const canView = (level: string) => level === "admin" || level === "full";
+
+/**
+ * T3c-1b (plan §23.5, #26): deciden `full` o `admin` con `patients.editAdmin` (Titular sin agenda, Admin,
+ * Secretaria). Facturación es `admin` pero sin `editAdmin`: aprobar escribe contacto y cobertura de la ficha, que desde
+ * T3 ella no edita (`updatePatient`, `setPatientCoverage`). Antes alcanzaba con el nivel `admin`. Ver sigue con
+ * `canView`: soporte «vale como la Secretaria» para leer (sin `editAdmin`) y su test pide que liste.
+ */
+const canDecide = (level: string, caps: ReadonlySet<Capability>) =>
+  level === "full" || (level === "admin" && caps.has("patients.editAdmin"));
 
 /** Pedidos PENDING de la ficha (a lo sumo uno: único parcial `PatientChangeRequest_patient_pending_key`). */
 export async function listPatientPortalRequests(input: { patientId: string }): Promise<ActionResult<PortalRequestRow[]>> {
@@ -84,7 +96,7 @@ export async function listPatientPortalRequests(input: { patientId: string }): P
       },
     });
     if (!patient) return { kind: "notfound" };
-    if (!canDecide(await patientAccessFor(actor, patientId, tx))) return { kind: "forbidden" };
+    if (!canView(await patientAccessFor(actor, patientId, tx))) return { kind: "forbidden" };
 
     const requests = await tx.patientChangeRequest.findMany({
       where: { tenantId: actor.tenantId, patientId, status: "PENDING" },
@@ -143,7 +155,7 @@ export async function previewPortalRequestImpact(input: {
       select: { patientId: true, changes: true },
     });
     if (!req) return { kind: "notfound" };
-    if (!canDecide(await patientAccessFor(actor, req.patientId, tx))) return { kind: "forbidden" };
+    if (!canView(await patientAccessFor(actor, req.patientId, tx))) return { kind: "forbidden" };
     const changes = parseStoredChanges(req.changes);
     const { osChanges, ownCopagoCents } = await coverageImpactInTx(
       tx,
@@ -175,6 +187,7 @@ export async function decidePatientPortalRequest(input: {
   if (readOnly) return { ok: false, error: readOnly };
   const parsed = DecideInput.safeParse(input);
   if (!parsed.success) return { ok: false, error: COPY.invalid };
+  const caps = await memberCapabilitiesForActor(actor);
   const { id, expectedUpdatedAt, decision } = parsed.data;
   const expected = new Date(expectedUpdatedAt);
 
@@ -193,7 +206,7 @@ export async function decidePatientPortalRequest(input: {
         select: { patientId: true, status: true, updatedAt: true, changes: true, requestedByUserId: true },
       });
       if (!req) return { kind: "notfound" };
-      if (!canDecide(await patientAccessFor(actor, req.patientId, tx))) return { kind: "forbidden" };
+      if (!canDecide(await patientAccessFor(actor, req.patientId, tx), caps)) return { kind: "forbidden" };
       if (req.status !== "PENDING" || +req.updatedAt !== +expected) return { kind: "stale" };
 
       const changes = parseStoredChanges(req.changes);

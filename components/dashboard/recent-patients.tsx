@@ -123,7 +123,9 @@ function RecentRow({ p }: { p: DashboardData["recent"][number] }) {
             {p.name}
           </div>
           <div className={styles.ellipsis} style={{ fontSize: 11.5, color: "var(--navy-500)" }}>
-            {p.access === "basic" ? "Acceso básico" : p.cond || "Sin diagnóstico cargado"}
+            {/* T3c-1b (§23.5): el diagnóstico es HC → solo `=== "full"` (una fila que no sea full nunca lo muestra,
+                aunque el DTO crezca a `admin`). */}
+            {p.access === "full" ? p.cond || "Sin diagnóstico cargado" : "Acceso básico"}
           </div>
         </div>
         {p.access === "full" && (

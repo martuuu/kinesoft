@@ -46,8 +46,12 @@ export type PatientRow = {
    * Access tier for the current actor. `"basic"` rows have all PHI
    * fields nulled out (email, phone, dateOfBirth, notes, plan info) —
    * only firstName + lastName + documentId + upcomingAt are real.
+   * T3c-1b (§23.5): `"admin"` (rol sin `clinical.read`: Secretaria, Admin,
+   * Facturación, Titular sin agenda) trae contacto, nacimiento, DNI, obra
+   * social y próximo turno; `notes`, planes y `lastVisit` vacíos. Lo clínico
+   * se decide SIEMPRE con `=== "full"`, nunca con `!== "basic"`.
    */
-  access: "full" | "basic";
+  access: "full" | "admin" | "basic";
 };
 
 export type PatientSort =

@@ -78,7 +78,7 @@ function PlanCell({ plans, title }: { plans: PatientListPlanChip[]; title: strin
 /**
  * Línea secundaria de la fila (D11 de VX0-b): DNI o teléfono, que sirven para distinguir homónimos al escanear. El
  * email ya no va en la fila (era la línea de todas las filas y no aporta para buscar a ojo); queda en el `title` del
- * nombre y en la ficha. Una fila `basic` muestra solo el DNI.
+ * nombre y en la ficha. Una fila `basic` muestra solo el DNI; `admin` (T3c-1b) trae contacto como `full`.
  */
 export function patientRowSubline(p: Pick<PatientRow, "access" | "documentId" | "phone">): string {
   if (p.access === "basic") return p.documentId ? `DNI ${p.documentId}` : "Sin acceso";
@@ -121,13 +121,17 @@ export function PatientsList({
       {rows.map((p, i) => {
         const fullName = `${p.firstName} ${p.lastName}`;
         const isBasic = p.access === "basic";
+        // T3c-1b (§23.5): lo clínico (plan, última visita, estado del plan) y las acciones que mutan la ficha
+        // (selección masiva, archivar: exigen `full` en el server) van con `=== "full"`. Una fila `admin`
+        // (Secretaria, Admin, Facturación) muestra contacto y obra social como `full`, pero no HC.
+        const isFull = p.access === "full";
         // S32: "tiene plan" = al menos un chip (plan ACTIVE y vivo); avatar,
         // celda y «Estado» leen lo mismo.
         const hasPlan = (p.activePlans?.length ?? 0) > 0;
         // Basic rows: muted styling, no plan info, no insurer line,
         // no archive action (the row's owner controls that), no
         // bulk-select (those mutate PHI).
-        const tone: "sky" | "lime" | "navy" = isBasic || !plansEnabled
+        const tone: "sky" | "lime" | "navy" = !isFull || !plansEnabled
           ? "sky"
           : hasPlan
             ? "lime"
@@ -142,7 +146,7 @@ export function PatientsList({
           >
             {/* MB-1d: el `display` va por clase (inline le ganaba al `display: none` de la card < 768). */}
             <span className={styles.cellCheck}>
-              {isBasic ? <span /> : <BulkSelectCheckbox patientId={p.id} />}
+              {isFull ? <BulkSelectCheckbox patientId={p.id} /> : <span />}
             </span>
             <Link
               href={`/pacientes/${p.id}`}
@@ -159,10 +163,10 @@ export function PatientsList({
             </Link>
             {plansEnabled && (
             <div className={styles.cellPlan} style={{ minWidth: 0 }}>
-              {isBasic ? (
-                <Tag tone="soft">Sin acceso</Tag>
-              ) : (
+              {isFull ? (
                 <PlanCell plans={p.activePlans ?? []} title={p.activeProgramTitle} />
+              ) : (
+                <Tag tone="soft">Sin acceso</Tag>
               )}
             </div>
             )}
@@ -188,7 +192,7 @@ export function PatientsList({
                 : "—"}
             </div>
             <div className={`${styles.cellLast} ${styles.nowrap} k-mono`} style={{ fontSize: 12, color: "var(--navy-500)" }}>
-              {isBasic
+              {!isFull
                 ? "—"
                 : p.lastVisit
                   ? p.lastVisit.toLocaleDateString("es-AR", {
@@ -202,14 +206,17 @@ export function PatientsList({
               {isBasic ? (
                 <Tag tone="soft">—</Tag>
               ) : !plansEnabled ? (
+                // Sin `planes` el estado es el del paciente (no HC): `admin` también lo ve.
                 archived ? <Tag tone="soft">Archivado</Tag> : <Tag tone="lime">Activo</Tag>
+              ) : !isFull ? (
+                <Tag tone="soft">—</Tag>
               ) : hasPlan ? (
                 <Tag tone="lime">Activo</Tag>
               ) : (
                 <Tag tone="soft">Inactivo</Tag>
               )}
             </div>
-            {isBasic ? (
+            {!isFull ? (
               <span className={styles.cellActions} />
             ) : (
               // S32a (handoff): el diálogo de archivar nombra al paciente. `livePlanCount`
