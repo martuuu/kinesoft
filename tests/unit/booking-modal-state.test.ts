@@ -451,3 +451,94 @@ describe("[SR-U5c] varias sesiones con la sala ocupada (SR-D7)", () => {
     });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T3e-2u1 · tope de turnos por intervalo (C-AS3, decisión 6)
+// ─────────────────────────────────────────────────────────────────────────────
+import * as modalState from "@/lib/booking-modal-state";
+
+describe("[AS-2u1] tope por intervalo: prompt y reenvío", () => {
+  const CAP = { practitionerName: "Ana Pérez", used: 2, cap: 2, fromTime: "10:00", toTime: "10:15", nextFreeISO: null };
+
+  it("[AS-2u1] withConfirmation('intervalCap') suma allowIntervalCap, acumula y pasa el zod", () => {
+    const p = modalState.withConfirmation(
+      { ...buildCreatePayload(BASE), allowOutOfHours: true },
+      "intervalCap" as modalState.PromptConfirmation
+    );
+    expect((p as Record<string, unknown>).allowIntervalCap).toBe(true);
+    expect(p.allowOutOfHours).toBe(true);
+    // Flag propio: no fuerza el cupo del servicio.
+    expect(p.allowOverbooking).toBeUndefined();
+    expect(p.idempotencyKey).toBe(BASE.idempotencyKey);
+    expect(BookingCreate.safeParse(p).success).toBe(true);
+  });
+
+  it("[AS-2u1] 'Usar próximo libre' y el batch sacan allowIntervalCap", () => {
+    const p = { ...buildCreatePayload(BASE), allowIntervalCap: true };
+    const moved = modalState.withNextFree(p, "2027-03-09T11:00:00-03:00");
+    expect("allowIntervalCap" in moved).toBe(false);
+    const batch = buildBatchPayload(p, toBatchFields({ count: 3, daysOfWeek: [], frequency: "weekly" }));
+    expect("allowIntervalCap" in batch).toBe(false);
+  });
+
+  it("[AS-2u1] copy del prompt: headline de C-AS3 y «Cargar como sobreturno»", () => {
+    const copy = modalState.intervalCapPromptCopy(CAP);
+    expect(copy.title).toBe("Ana Pérez ya tiene 2 turnos entre las 10:00 y las 10:15 (tope: 2).");
+    expect(copy.confirmLabel).toBe("Cargar como sobreturno");
+    expect(copy.detail).toContain("sobreturno");
+  });
+
+  it("[AS-2u1] el aviso del 2.º turno (resultado ok) arma el copy informativo", () => {
+    // Forma real del resultado de `createBooking` (ok + data + aviso opcional).
+    const withNotice = { ok: true as const, data: { id: "b1" }, intervalCapNotice: { practitionerName: "Ana Pérez", used: 1, time: "10:00" } };
+    const plain = { ok: true as const, data: { id: "b1" } };
+    expect(modalState.intervalCapNoticeOf(withNotice)).toBe("Ya hay 1 turno de Ana Pérez a las 10:00.");
+    expect(modalState.intervalCapNoticeOf(plain)).toBeNull();
+  });
+});
+
+describe("[AS-2u1] lote con fechas que superan el tope", () => {
+  const d = (status: string, o: { roomBusy?: boolean; intervalCapped?: boolean } = {}) => ({
+    iso: "2026-10-06T13:00:00.000Z",
+    status,
+    outOfHours: false,
+    blocked: false,
+    ...o,
+  });
+
+  it("[AS-2u1] fechas topeadas: preguntan, se cuentan y, sin forzar, se omiten", () => {
+    const plan = {
+      free: 3,
+      conflicted: 1,
+      duplicates: 1,
+      dates: [d("libre"), d("libre", { intervalCapped: true }), d("libre"), d("sobreturno", { intervalCapped: true }), d("duplicado", { intervalCapped: true })],
+    };
+    expect(batchNeedsPrompt({ ...plan, conflicted: 0, duplicates: 0 })).toBe(true);
+    expect(modalState.batchIntervalCappedCounts(plan)).toEqual({ total: 2, free: 1, conflicted: 1 });
+    expect(batchCreatableCounts(plan, false)).toEqual({ all: 2, freeOnly: 2 });
+    expect(modalState.batchCreatableCounts(plan, false, true)).toEqual({ all: 4, freeOnly: 3 });
+    expect(modalState.batchIntervalCapLine(2)).toBe("2 fechas superan el tope");
+    expect(modalState.batchIntervalCapLine(1)).toBe("1 fecha supera el tope");
+  });
+
+  it("[AS-2u1] una fecha con sala ocupada Y tope se omite si falta cualquiera de los dos flags", () => {
+    const plan = { free: 2, conflicted: 0, duplicates: 0, dates: [d("libre"), d("libre", { roomBusy: true, intervalCapped: true })] };
+    expect(modalState.batchCreatableCounts(plan, true, false)).toEqual({ all: 1, freeOnly: 1 });
+    expect(modalState.batchCreatableCounts(plan, false, true)).toEqual({ all: 1, freeOnly: 1 });
+    expect(modalState.batchCreatableCounts(plan, true, true)).toEqual({ all: 2, freeOnly: 2 });
+  });
+
+  it("[AS-2u1] batchRunInput: allowIntervalCap solo viaja en true", () => {
+    const base = { serviceId: "s", practitionerId: "p", scheduledFor: "x", count: 2 };
+    expect(batchRunInput(base, { allowOverbooking: false, allowIntervalCap: false } as never)).toEqual({ ...base, allowOverbooking: false });
+    expect(batchRunInput(base, { allowOverbooking: false, allowIntervalCap: true } as never)).toEqual({
+      ...base,
+      allowOverbooking: false,
+      allowIntervalCap: true,
+    });
+  });
+
+  it("[AS-2u1] preview de Sesiones: cuántas fechas pasan el tope", () => {
+    expect(modalState.previewIntervalCappedCount([{ intervalCapped: true }, {}, { intervalCapped: false }, { intervalCapped: true }])).toBe(2);
+  });
+});

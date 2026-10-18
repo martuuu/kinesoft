@@ -19,6 +19,8 @@ import { addDays, dayKeyDiff, dowOfDayKey, formatWallTime } from "@/lib/availabi
 import type { DayKey, InstantClass, SlotUnavailableReason } from "@/lib/availability/types";
 import type { AnySlots, InstantCheck, StaffSlot } from "@/lib/availability-actions-types";
 import { toARDateKey, toARMinutes } from "@/lib/datetime-ar";
+import { arIntervalLabels } from "@/lib/availability/interval-cap";
+import { intervalCapNoticeText } from "@/lib/booking-force-flags";
 
 /**
  * Copy es-AR de cada clase, para el aviso en vivo del modal (B5.x).
@@ -78,8 +80,9 @@ export function dayLabelLong(dayKey: DayKey, today: DayKey): string {
 /**
  * Tono de un chip:
  *   • free     — disponible y sin conflicto del paciente (resaltado).
- *   • full     — cupo completo: elegible igual (el staff puede dar sobreturno;
- *                el aviso en vivo y `createBooking` lo confirman).
+ *   • full     — cupo completo o tope por intervalo completo (T3): elegible
+ *                igual (el staff puede dar sobreturno; el aviso en vivo y
+ *                `createBooking` lo confirman con «Cargar como sobreturno»).
  *   • conflict — el paciente ya tiene otro turno solapado: elegible con aviso.
  *   • blocked  — no elegible: ya pasó, fuera de anticipación/horizonte, o el
  *                paciente ya tiene un turno a ESA hora (duplicado: el índice
@@ -120,11 +123,24 @@ export function chipView(slot: StaffSlot): ChipView {
   if (slot.patientConflict === "duplicado") {
     return { tone: "blocked", selectable: false, occupancy: occ, hint: INSTANT_CLASS_LABEL.duplicado };
   }
-  if (!slot.available && slot.reason !== "cupo-completo") {
+  // T3 (C-AS3): el tope por intervalo es forzable por el staff (sobreturno,
+  // decisión 6) igual que el cupo: no cae en "blocked". El turnero no lo
+  // ofrece (duro), pero ese camino no usa este chip.
+  const forceable = slot.reason === "cupo-completo" || slot.reason === "tope-intervalo";
+  if (!slot.available && !forceable) {
     return { tone: "blocked", selectable: false, occupancy: occ, hint: REASON_LABEL[slot.reason ?? "pasado"] };
   }
   if (slot.patientConflict === "paciente-superpuesto") {
     return { tone: "conflict", selectable: true, occupancy: occ, hint: "El paciente ya tiene un turno en ese horario" };
+  }
+  if (!slot.available && slot.reason === "tope-intervalo") {
+    const use = slot.intervalCapUse;
+    return {
+      tone: "full",
+      selectable: true,
+      occupancy: occ,
+      hint: `${REASON_LABEL["tope-intervalo"]}${use ? ` (${use.used}/${use.cap.count})` : ""}: se carga como sobreturno si confirmás`,
+    };
   }
   if (!slot.available) {
     return {
@@ -373,7 +389,7 @@ export function instantStatusView(c: InstantCheck): InstantStatusView {
       break;
     case "tope-intervalo":
       tone = "warn";
-      title = "Tope completo";
+      title = c.intervalCapUse ? `Tope completo (${c.intervalCapUse.used}/${c.intervalCapUse.cap.count})` : "Tope completo";
       details.push(`${INSTANT_CLASS_LABEL["tope-intervalo"]}: si lo cargás, queda como sobreturno`);
       break;
     case "duplicado":
@@ -386,6 +402,32 @@ export function instantStatusView(c: InstantCheck): InstantStatusView {
     details.push(reasons.length ? `También pisa un bloqueo: ${reasons.join(", ")}` : "También pisa un horario bloqueado");
   }
   if (c.class !== "fuera-de-horario" && c.outOfHours) details.push("También queda fuera del horario del profesional");
+  // T3: el motor informa `intervalCapped` aunque gane otra clase (forzar el
+  // cupo no fuerza el tope: el alta va a pedir las dos confirmaciones).
+  if (c.class !== "tope-intervalo" && c.intervalCapped) {
+    details.push("También llega al tope de turnos del profesional: queda como sobreturno");
+  }
   if (!c.serviceEnabled) details.push("El profesional no tiene habilitada esta práctica");
   return { tone, title, details };
+}
+
+/**
+ * T3 (C-AS3, decisión 6): aviso INFORMATIVO al elegir un horario cuyo
+ * intervalo ya tiene ≥1 turno del profesional sin llegar al tope («el 2.º
+ * avisa»): «Ya hay 1 turno de Ana a las 10:15.». La hora es el INICIO del
+ * intervalo AR (alineado a la hora, `arIntervalLabels`, mismo cálculo que el
+ * server para `intervalCapNotice`), no la del turno. Topeado (`intervalCapped`
+ * o clase `tope-intervalo`) no avisa acá: lo dice el título «Tope completo» y
+ * el alta pide confirmar. Sin tope (`intervalCapUse` ausente) → null.
+ */
+export function intervalCapLiveNotice(c: InstantCheck, iso: string, practitionerName: string): string | null {
+  const use = c.intervalCapUse;
+  if (!use || use.used < 1 || c.intervalCapped || c.class === "tope-intervalo") return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return intervalCapNoticeText({
+    practitionerName,
+    used: use.used,
+    time: arIntervalLabels(d, use.cap.intervalMin).from,
+  });
 }

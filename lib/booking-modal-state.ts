@@ -29,6 +29,13 @@
  */
 import type { BookingCreateInput } from "@/lib/validation";
 import type { TenantModule } from "@/lib/tenant-modules";
+import {
+  forcePromptActionLabel,
+  forcePromptHeadline,
+  intervalCapNoticeText,
+  nextForcePrompt,
+  type IntervalCapPromptData,
+} from "@/lib/booking-force-flags";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Modos
@@ -395,6 +402,8 @@ export type ForceFlags = {
   allowBlocked?: boolean;
   /** SR (SR-D2): asignar igual una sala llena o bloqueada. No es sobreturno. */
   allowRoomConflict?: boolean;
+  /** T3 (C-AS3, decisión 6): cargar igual con el tope por intervalo lleno. ES sobreturno. */
+  allowIntervalCap?: boolean;
 };
 
 export type CreateBookingPayload = BookingCreateInput & ForceFlags & { idempotencyKey: string };
@@ -458,7 +467,8 @@ export type PromptConfirmation =
   | "patientOverlap"
   | "outOfHours"
   | "blocked"
-  | "roomConflict";
+  | "roomConflict"
+  | "intervalCap";
 
 export function withConfirmation<P extends ForceFlags>(payload: P, kind: PromptConfirmation): P {
   switch (kind) {
@@ -478,6 +488,11 @@ export function withConfirmation<P extends ForceFlags>(payload: P, kind: PromptC
       // SR-D2: flag propio; no toca `allowOverbooking` (forzar la sala nunca
       // fuerza el cupo del profesional, ni al revés).
       return { ...payload, allowRoomConflict: true };
+    case "intervalCap":
+      // T3 (C-AS3): flag propio, tampoco toca `allowOverbooking` (forzar el
+      // cupo del servicio no fuerza el tope, ni al revés). El server marca el
+      // turno `isOverbooked` (decisión 6: es sobreturno).
+      return { ...payload, allowIntervalCap: true };
   }
 }
 
@@ -497,6 +512,8 @@ export function withNextFree<P extends ForceFlags & { scheduledFor?: unknown }>(
     allowBlocked: _e,
     // SR: la sala se re-chequea en el instante nuevo (otra hora, otra ocupación).
     allowRoomConflict: _f,
+    // T3: el tope también (otro intervalo, otro conteo). Handoff H5 de T3d-2k.
+    allowIntervalCap: _g,
     ...rest
   } = payload;
   return { ...(rest as P), scheduledFor: iso };
@@ -531,6 +548,8 @@ export function buildBatchPayload<P extends ForceFlags>(base: P, series: BatchSe
     allowBlocked: _b,
     // SR-D7: el batch decide la sala con su propio `allowRoomConflict` (prompt).
     allowRoomConflict: _r,
+    // T3: el batch decide el tope con su propio `allowIntervalCap` («Agendar igual esas fechas»).
+    allowIntervalCap: _i,
     ...rest
   } = base;
   return {
@@ -556,7 +575,14 @@ export function submitLabel(mode: BookingModalMode, count: number, pending: bool
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Lo que miran los helpers del preflight (subconjunto de `BatchDateOutcome`). */
-export type BatchDateRoomLike = { status: string; outOfHours: boolean; blocked: boolean; roomBusy?: boolean };
+export type BatchDateRoomLike = {
+  status: string;
+  outOfHours: boolean;
+  blocked: boolean;
+  roomBusy?: boolean;
+  /** T3 (C-AS3): la fecha pasa el tope por intervalo (sin `allowIntervalCap` el server la omite). */
+  intervalCapped?: boolean;
+};
 export type BatchPlanLike = {
   free: number;
   conflicted: number;
@@ -585,41 +611,123 @@ export function batchNeedsPrompt(plan: BatchPlanLike): boolean {
   return (
     plan.conflicted > 0 ||
     plan.duplicates > 0 ||
-    plan.dates.some((d) => d.outOfHours || d.blocked || d.roomBusy === true)
+    plan.dates.some((d) => d.outOfHours || d.blocked || d.roomBusy === true || d.intervalCapped === true)
   );
+}
+
+/**
+ * Fechas que pasan el tope por intervalo (T3, C-AS3). Mismo patrón que
+ * `batchRoomBusyCounts`: `intervalCapped` es un flag extra (no cambia
+ * `status` ni los conteos del server), así que una fecha "libre" topeada
+ * cuenta en `free` pero, sin «Agendar igual esas fechas», el server la OMITE.
+ */
+export function batchIntervalCappedCounts(plan: BatchPlanLike): { total: number; free: number; conflicted: number } {
+  let free = 0;
+  let conflicted = 0;
+  for (const d of plan.dates) {
+    if (!d.intervalCapped || d.status === "duplicado") continue;
+    if (d.status === "libre") free++;
+    else conflicted++;
+  }
+  return { total: free + conflicted, free, conflicted };
 }
 
 /**
  * Cuántas se crean con cada botón del preflight. `forceRoom` = el usuario
  * marcó agendar igual en la sala ocupada (`allowRoomConflict`); sin marcar,
- * esas fechas se omiten (SR-D7).
+ * esas fechas se omiten (SR-D7). `forceCap` (T3) = marcó «Agendar igual esas
+ * fechas» del tope (`allowIntervalCap`). Una fecha se omite si le falta
+ * CUALQUIERA de los dos flags que necesita (el server chequea uno y después
+ * el otro, `createBookingsBatch`): por eso se cuenta por fecha y no restando
+ * los dos totales (una fecha con sala ocupada y tope se restaría dos veces).
  */
 export function batchCreatableCounts(
   plan: BatchPlanLike,
-  forceRoom: boolean
+  forceRoom: boolean,
+  forceCap = false
 ): { all: number; freeOnly: number } {
-  const rb = batchRoomBusyCounts(plan);
+  let omittedFree = 0;
+  let omittedConflicted = 0;
+  for (const d of plan.dates) {
+    if (d.status === "duplicado") continue;
+    const omitted = (d.roomBusy === true && !forceRoom) || (d.intervalCapped === true && !forceCap);
+    if (!omitted) continue;
+    if (d.status === "libre") omittedFree++;
+    else omittedConflicted++;
+  }
   return {
-    all: plan.free + plan.conflicted - (forceRoom ? 0 : rb.total),
-    freeOnly: plan.free - (forceRoom ? 0 : rb.free),
+    all: plan.free + plan.conflicted - omittedFree - omittedConflicted,
+    freeOnly: plan.free - omittedFree,
   };
 }
 
 /**
- * Input del batch real con las decisiones del prompt. `allowRoomConflict`
- * solo viaja en true (sin salas, el payload queda idéntico al de antes). Se
- * arma acá (y no como literal en el call site) para que compile también
- * mientras el tipo de `createBookingsBatch` no tenga el flag (SR3a).
+ * Input del batch real con las decisiones del prompt. `allowRoomConflict` y
+ * `allowIntervalCap` solo viajan en true (sin salas ni tope, el payload queda
+ * idéntico al de antes). Se arma acá (y no como literal en el call site) para
+ * que compile también mientras el tipo de `createBookingsBatch` no tenga el
+ * flag (SR3a).
  */
 export function batchRunInput<P extends object>(
   payload: P,
-  f: { allowOverbooking: boolean; allowRoomConflict?: boolean }
-): P & { allowOverbooking: boolean; allowRoomConflict?: boolean } {
-  return f.allowRoomConflict
-    ? { ...payload, allowOverbooking: f.allowOverbooking, allowRoomConflict: true }
-    : { ...payload, allowOverbooking: f.allowOverbooking };
+  f: { allowOverbooking: boolean; allowRoomConflict?: boolean; allowIntervalCap?: boolean }
+): P & { allowOverbooking: boolean; allowRoomConflict?: boolean; allowIntervalCap?: boolean } {
+  return {
+    ...payload,
+    allowOverbooking: f.allowOverbooking,
+    ...(f.allowRoomConflict ? { allowRoomConflict: true } : {}),
+    ...(f.allowIntervalCap ? { allowIntervalCap: true } : {}),
+  };
 }
 
 /** Texto de la fila de una fecha con la sala ocupada en el preflight. */
 export const BATCH_ROOM_BUSY_LABEL = "Sala ocupada";
 export const BATCH_ROOM_BUSY_DETAIL = "Se omite salvo que la agendes igual";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tope de turnos por intervalo (T3e-2u1, C-AS3, decisión 6)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Copy del prompt del tope en el alta simple. El titular y el botón salen de
+ * `lib/booking-force-flags.ts` (los mismos que el drawer y Turnos), así el
+ * literal de C-AS3 vive en un solo lugar: «Ana ya tiene 2 turnos entre las
+ * 10:00 y las 10:15 (tope: 2).» · «Cargar como sobreturno».
+ */
+export function intervalCapPromptCopy(p: IntervalCapPromptData): {
+  title: string;
+  detail: string;
+  confirmLabel: string;
+} {
+  const prompt = nextForcePrompt({ intervalCap: p })!;
+  return {
+    title: forcePromptHeadline(prompt),
+    detail: "Si lo cargás igual, queda marcado como sobreturno.",
+    confirmLabel: forcePromptActionLabel(prompt, "edit"),
+  };
+}
+
+/** Aviso informativo del 2.º turno del intervalo en un alta OK (`intervalCapNotice`), o null. No bloquea. */
+export function intervalCapNoticeOf(r: {
+  ok: boolean;
+  intervalCapNotice?: { practitionerName: string; used: number; time: string } | null;
+}): string | null {
+  return r.intervalCapNotice ? intervalCapNoticeText(r.intervalCapNotice) : null;
+}
+
+/** «{n} fechas superan el tope» (preflight del lote y preview de Sesiones). */
+export function batchIntervalCapLine(n: number): string {
+  return n === 1 ? "1 fecha supera el tope" : `${n} fechas superan el tope`;
+}
+
+/** Casilla del preflight: «Agendar igual esas fechas» (singular con una). */
+export function batchIntervalCapForceLabel(n: number): string {
+  return n === 1 ? "Agendar igual esa fecha" : "Agendar igual esas fechas";
+}
+
+/** Fechas del preview de Sesiones (`previewRecurrence`) que pasan el tope. */
+export function previewIntervalCappedCount(items: ReadonlyArray<{ intervalCapped?: boolean }>): number {
+  let n = 0;
+  for (const it of items) if (it.intervalCapped === true) n++;
+  return n;
+}

@@ -46,6 +46,7 @@ import {
   type SessionStateTone,
   type SessionsValue,
 } from "@/lib/sessions-mode-state";
+import { batchIntervalCapLine, previewIntervalCappedCount } from "@/lib/booking-modal-state";
 import { DayOfWeekPicker } from "../controls";
 
 const TONE_STYLE: Record<
@@ -178,6 +179,10 @@ export function SessionsMode({
   const summary = data?.summary ?? localSummary(anchorIso, value, unit);
   const rows = data ? data.items.map(sessionRow) : [];
   const counts = data ? countsLine(countSessionStates(data.items)) : "";
+  // T3 (C-AS3): fechas que pasan el tope por intervalo. Flag aparte del
+  // estado (no cambia `status`): al crear, el preflight pregunta «Agendar
+  // igual esas fechas»; sin marcarla se omiten. Acá solo se anticipa.
+  const capped = data ? previewIntervalCappedCount(data.items) : 0;
   const shortfall = data
     ? shortfallNote(data.requested, data.items.length, unit)
     : null;
@@ -323,7 +328,7 @@ export function SessionsMode({
             {preview.error}
           </div>
         )}
-        {data && (
+        {data && (counts || capped === 0) && (
           <div
             style={{
               fontSize: 12,
@@ -332,6 +337,11 @@ export function SessionsMode({
             }}
           >
             {counts || "Todas las fechas están libres"}
+          </div>
+        )}
+        {capped > 0 && (
+          <div style={{ fontSize: 11, color: "var(--warn-fg)" }}>
+            {batchIntervalCapLine(capped)}: al crear te preguntamos si las agendás igual como sobreturno.
           </div>
         )}
         {shortfall && (
@@ -351,7 +361,8 @@ export function SessionsMode({
               opacity: preview.kind === "loading" ? 0.6 : 1,
             }}
           >
-            {rows.map((r) => {
+            {rows.map((r, i) => {
+              const capOnRow = data?.items[i]?.intervalCapped === true;
               const tone = TONE_STYLE[SESSION_STATE_TONE[r.state]];
               return (
                 <li
@@ -392,6 +403,7 @@ export function SessionsMode({
                   >
                     {r.label}
                     {r.extra ? " · fuera de horario" : ""}
+                    {capOnRow ? " · tope completo" : ""}
                   </span>
                 </li>
               );

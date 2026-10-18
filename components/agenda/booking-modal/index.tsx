@@ -52,7 +52,15 @@
  * Orden en el DOM (no cambiarlo sin QA): modo, profesional, servicio,
  * paciente, copago, título, fecha/duración (+ slots), varias sesiones,
  * sede/telemedicina, descripción, notas, error, prompts (batch → bloqueado →
- * fuera de horario → superposición → mismo día → sobreturno → sala), footer.
+ * fuera de horario → superposición → mismo día → sobreturno → tope por
+ * intervalo → sala), footer.
+ *
+ * T3e-2u1 (C-AS3, decisión 6): `intervalCap` del alta → `IntervalCapPrompt`
+ * («Cargar como sobreturno» = `allowIntervalCap`); `intervalCapNotice` de un
+ * alta OK (2.º turno del intervalo bajo el tope) va como descripción del toast
+ * «Turno creado» (informativo, no bloquea ni frena el cierre). Al elegir un
+ * horario, `ScheduleSection` muestra el mismo aviso en vivo
+ * (`classify.practitionerName`). Lote: casilla «Agendar igual esas fechas».
  *
  * SR-U5c (salas): props `rooms` (catálogo del bootstrap) y `defaultRoomId`
  * (click en una celda de "Por sala": id = esa sala, null = columna "Sin
@@ -99,6 +107,7 @@ import {
   displayDuration,
   effectiveLocationId,
   initialRoomChoice,
+  intervalCapNoticeOf,
   isBatchSubmit,
   isServiceEnabledFor,
   reconcileRoomOnLocationChange,
@@ -130,9 +139,11 @@ import {
   OutOfHoursPrompt,
   PatientOverlapPrompt,
   RoomBusyPrompt,
+  IntervalCapPrompt,
   focusRoomSelect,
   promptFocusTarget,
   SamePatientPrompt,
+  type IntervalCapState,
   type RoomBusyState,
 } from "./conflict-prompts";
 import { usePatientBilling } from "./use-patient-billing";
@@ -258,6 +269,8 @@ export function BookingModal({
   const [outOfHoursPrompt, setOutOfHoursPrompt] = useState<OutOfHoursState | null>(null);
   // SR-U5c: la sala está llena o bloqueada (re-llamar con `allowRoomConflict`).
   const [roomBusyPrompt, setRoomBusyPrompt] = useState<RoomBusyState | null>(null);
+  // T3e-2u1: tope por intervalo lleno (re-llamar con `allowIntervalCap`; queda sobreturno).
+  const [intervalCapPrompt, setIntervalCapPrompt] = useState<IntervalCapState | null>(null);
   const clearPrompts = () => {
     setConflict(null);
     setSamePatient(null);
@@ -266,6 +279,7 @@ export function BookingModal({
     setBlockedPrompt(null);
     setOutOfHoursPrompt(null);
     setRoomBusyPrompt(null);
+    setIntervalCapPrompt(null);
   };
   // Every prompt renders below the form fields inside a scrolling drawer, so
   // bring whichever one appears into view instead of leaving it off-screen.
@@ -277,7 +291,14 @@ export function BookingModal({
   // (el aviso se pinta con la transición todavía viva y los botones disabled).
   const promptRef = useRef<HTMLDivElement | null>(null);
   const activePrompt =
-    conflict ?? samePatient ?? patientOverlap ?? batchConflict ?? blockedPrompt ?? outOfHoursPrompt ?? roomBusyPrompt;
+    conflict ??
+    samePatient ??
+    patientOverlap ??
+    batchConflict ??
+    blockedPrompt ??
+    outOfHoursPrompt ??
+    intervalCapPrompt ??
+    roomBusyPrompt;
   const focusedPrompt = useRef<object | null>(null);
   useEffect(() => {
     if (activePrompt) {
@@ -590,6 +611,14 @@ export function BookingModal({
         setError(null);
         return;
       }
+      // T3 (C-AS3): el tope va justo después del cupo (`FORCE_PROMPT_ORDER`).
+      // El server devuelve como mucho un aviso por respuesta: forzar este
+      // puede destapar el de paciente o el de sala en el reintento.
+      if (result.intervalCap) {
+        setIntervalCapPrompt({ ...result.intervalCap, payload });
+        setError(null);
+        return;
+      }
       // SR: la sala va ÚLTIMA (`FORCE_PROMPT_ORDER`): el server la chequea
       // después del cupo y del paciente.
       const roomBusy = roomBusyOf(result);
@@ -606,14 +635,26 @@ export function BookingModal({
     // "Ambas opciones": the turno already carries its own copago override;
     // if the kine confirmed the prompt, also make it the patient's default.
     await applyDefaultCopago();
-    toast.success("Turno creado");
+    // T3: 2.º turno del intervalo bajo el tope → «Ya hay 1 turno de Ana a las
+    // 10:00.» como descripción del mismo toast (informativo; el modal cierra
+    // igual: no hay nada que decidir).
+    const notice = intervalCapNoticeOf(result);
+    toast.success("Turno creado", notice ? { description: notice } : undefined);
     onSaved();
   };
 
   /** Execute the batch after the user picked what to do with the conflicts. */
-  const runBatch = async (payload: BatchPayload, allowOverbooking: boolean, allowRoomConflict = false) => {
+  const runBatch = async (
+    payload: BatchPayload,
+    allowOverbooking: boolean,
+    allowRoomConflict = false,
+    allowIntervalCap = false
+  ) => {
     // SR-D7: sin `allowRoomConflict`, las fechas con la sala ocupada se omiten.
-    const r = await createBookingsBatch(batchRunInput(payload, { allowOverbooking, allowRoomConflict }));
+    // T3: sin `allowIntervalCap`, las que pasan el tope también.
+    const r = await createBookingsBatch(
+      batchRunInput(payload, { allowOverbooking, allowRoomConflict, allowIntervalCap })
+    );
     if (!r.ok) {
       setError(r.error);
       toast.error("No pudimos crear los turnos", { description: r.error });
@@ -911,6 +952,8 @@ export function BookingModal({
               patientId: patientRefId,
               locationId: effLocationId || null,
               roomId: roomIdValue,
+              // T3: nombre para el aviso del 2.º turno del intervalo («Ya hay 1 turno de Ana a las 10:00.»).
+              practitionerName: practitionerLabels[practitionerId] ?? null,
             }}
             onInstantStatus={onInstantStatus}
             // En «Bloquear horario» el form queda oculto: no pedir slots.
@@ -1025,8 +1068,16 @@ export function BookingModal({
               promptRef={promptRef}
               batchConflict={batchConflict}
               pending={pending}
-              onCreateAll={(forceRoom) => start(async () => { await runBatch(batchConflict.payload, true, forceRoom); })}
-              onCreateFreeOnly={(forceRoom) => start(async () => { await runBatch(batchConflict.payload, false, forceRoom); })}
+              onCreateAll={(forceRoom, forceCap) =>
+                start(async () => {
+                  await runBatch(batchConflict.payload, true, forceRoom, forceCap);
+                })
+              }
+              onCreateFreeOnly={(forceRoom, forceCap) =>
+                start(async () => {
+                  await runBatch(batchConflict.payload, false, forceRoom, forceCap);
+                })
+              }
               onBack={() => setBatchConflict(null)}
             />
           )}
@@ -1078,6 +1129,16 @@ export function BookingModal({
               onUseSuggestedSlot={() => applyNextFree(conflict.payload, conflict.nextFreeISO)}
               onForceOverbooking={() => confirmWith(conflict.payload, "overbooking")}
               onBack={() => setConflict(null)}
+            />
+          )}
+          {intervalCapPrompt && (
+            <IntervalCapPrompt
+              promptRef={promptRef}
+              intervalCap={intervalCapPrompt}
+              pending={pending}
+              onForce={() => confirmWith(intervalCapPrompt.payload, "intervalCap")}
+              onUseSuggestedSlot={() => applyNextFree(intervalCapPrompt.payload, intervalCapPrompt.nextFreeISO)}
+              onBack={() => setIntervalCapPrompt(null)}
             />
           )}
           {roomBusyPrompt && (

@@ -52,6 +52,7 @@ import {
   SLOT_QUERY_DEBOUNCE_MS,
   createSequencer,
   instantStatusView,
+  intervalCapLiveNotice,
   sanitizeDuration,
   type InstantTone,
 } from "@/lib/slot-picker-state";
@@ -68,6 +69,13 @@ export type ScheduleClassifyContext = {
    * la de la franja); null = "Sin sala" (no chequea ocupación); un id = esa.
    */
   roomId?: string | null;
+  /**
+   * T3e-2u1 (C-AS3): nombre del profesional para el aviso informativo del 2.º
+   * turno del intervalo («Ya hay 1 turno de Ana a las 10:00.»). Solo copy: no
+   * entra en la clave de la consulta. Sin nombre no se muestra el aviso (el
+   * server igual lo manda en el toast al crear).
+   */
+  practitionerName?: string | null;
 };
 
 const LOCAL_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
@@ -217,7 +225,7 @@ export function ScheduleSection({
           onChange={(v) => onDurationMinChange(Math.max(15, Math.min(240, Number(v) || 45)))}
         />
       </div>
-      {classify && <InstantStatusLine live={live} />}
+      {classify && <InstantStatusLine live={live} iso={iso} practitionerName={classify.practitionerName ?? null} />}
     </div>
   );
 }
@@ -229,7 +237,15 @@ const TONE_STYLE: Record<InstantTone, React.CSSProperties> = {
   danger: { background: "var(--danger-bg)", color: "var(--danger-fg)" },
 };
 
-function InstantStatusLine({ live }: { live: LiveState }) {
+function InstantStatusLine({
+  live,
+  iso,
+  practitionerName,
+}: {
+  live: LiveState;
+  iso: string | null;
+  practitionerName: string | null;
+}) {
   return (
     <div role="status" aria-live="polite" style={{ minHeight: 0 }}>
       {live.status === "loading" && (
@@ -240,13 +256,24 @@ function InstantStatusLine({ live }: { live: LiveState }) {
           No pudimos comprobar el horario. Igual podés guardar: se valida al crear.
         </span>
       )}
-      {live.status === "ok" && <InstantStatusBox check={live.check} />}
+      {live.status === "ok" && <InstantStatusBox check={live.check} iso={iso} practitionerName={practitionerName} />}
     </div>
   );
 }
 
-function InstantStatusBox({ check }: { check: InstantCheck }) {
+export function InstantStatusBox({
+  check,
+  iso,
+  practitionerName,
+}: {
+  check: InstantCheck;
+  iso?: string | null;
+  practitionerName?: string | null;
+}) {
   const view = instantStatusView(check);
+  // T3 (decisión 6, «el 2.º avisa»): informativo, NO cambia el tono (un
+  // «Libre» sigue verde: no hay nada que confirmar).
+  const capNotice = iso && practitionerName ? intervalCapLiveNotice(check, iso, practitionerName) : null;
   // SR-U5c: sala llena o bloqueada. Solo aviso (se puede agendar igual), así
   // que un "Libre" del profesional pasa a tono de aviso; nunca a "danger".
   const roomLine = roomBusyLiveLine(check.roomBusy);
@@ -258,6 +285,7 @@ function InstantStatusBox({ check }: { check: InstantCheck }) {
         <div key={d}>{d}</div>
       ))}
       {roomLine && <div>{roomLine}</div>}
+      {capNotice && <div>{capNotice}</div>}
     </div>
   );
 }

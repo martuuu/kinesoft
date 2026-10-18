@@ -19,6 +19,9 @@
  * - `RoomBusyPrompt` (SR-U5c): la sala está llena (profesionales a la vez) o
  *   bloqueada → "Agendar igual" (`allowRoomConflict`, NO es sobreturno,
  *   SR-D2) / "Elegir otra sala". Sin "próximo libre": el motor no busca sala.
+ * - `IntervalCapPrompt` (T3e-2u1, C-AS3): el profesional llegó a su tope «N
+ *   turnos cada X min» → "Usar próximo libre" / "Cargar como sobreturno"
+ *   (`allowIntervalCap`, ES sobreturno, decisión 6) / "Volver".
  *
  * Orden en que el server los devuelve (lib/bookings.ts#createBooking):
  * bloqueado > fuera de horario > superposición del paciente > mismo día >
@@ -33,10 +36,15 @@ import {
   BATCH_ROOM_BUSY_DETAIL,
   BATCH_ROOM_BUSY_LABEL,
   batchCreatableCounts,
+  batchIntervalCapForceLabel,
+  batchIntervalCapLine,
+  batchIntervalCappedCounts,
   batchRoomBusyCounts,
+  intervalCapPromptCopy,
   roomBusyCopy,
   type RoomBusyResult,
 } from "@/lib/booking-modal-state";
+import type { IntervalCapPromptData } from "@/lib/booking-force-flags";
 import {
   countSessionStates,
   countsLine,
@@ -55,6 +63,8 @@ import type {
 
 /** SR-U5c: sala llena o bloqueada (re-llamar con `allowRoomConflict`). */
 export type RoomBusyState = RoomBusyResult & { payload: CreatePayload };
+/** T3e-2u1: tope por intervalo lleno (re-llamar con `allowIntervalCap`). */
+export type IntervalCapState = IntervalCapPromptData & { payload: CreatePayload };
 
 type PromptRef = MutableRefObject<HTMLDivElement | null>;
 
@@ -94,6 +104,10 @@ const WARN_BOX: CSSProperties = {
 };
 const WARN_GHOST: CSSProperties = { color: "var(--warn-fg)", borderColor: "var(--warn-border)" };
 
+/** T3: fila del preflight con la fecha que pasa el tope por intervalo. */
+const BATCH_INTERVAL_CAP_LABEL = "Tope completo";
+const BATCH_INTERVAL_CAP_DETAIL = "Se omite salvo que la agendes igual (queda como sobreturno)";
+
 export function BatchConflictPrompt({
   promptRef,
   batchConflict,
@@ -106,10 +120,11 @@ export function BatchConflictPrompt({
   batchConflict: BatchConflictState;
   pending: boolean;
   /** Crear todas: libres + sobreturnos + bloqueadas como sobreturno (`allowOverbooking: true`).
-   *  `forceRoom` = agendar igual las fechas con la sala ocupada (`allowRoomConflict`, SR-D7). */
-  onCreateAll: (forceRoom: boolean) => void;
+   *  `forceRoom` = agendar igual las fechas con la sala ocupada (`allowRoomConflict`, SR-D7).
+   *  `forceCap` = «Agendar igual esas fechas» del tope por intervalo (`allowIntervalCap`, T3). */
+  onCreateAll: (forceRoom: boolean, forceCap: boolean) => void;
   /** Crear solo las libres (`allowOverbooking: false`). */
-  onCreateFreeOnly: (forceRoom: boolean) => void;
+  onCreateFreeOnly: (forceRoom: boolean, forceCap: boolean) => void;
   onBack: () => void;
 }) {
   const plan = batchConflict.plan;
@@ -121,8 +136,14 @@ export function BatchConflictPrompt({
   // eso va como casilla y no se mezcla con "Crear todas". Sin salas
   // (`roomBusy` ausente en todas) no se dibuja nada nuevo.
   const [forceRoom, setForceRoom] = useState(false);
+  // T3 (C-AS3): las fechas que pasan el tope por intervalo también se OMITEN
+  // salvo «Agendar igual esas fechas» (entran como sobreturno, decisión 6).
+  // Casilla propia: forzar la sala no fuerza el tope, ni al revés. Sin tope
+  // (`intervalCapped` ausente en todas) no se dibuja nada nuevo.
+  const [forceCap, setForceCap] = useState(false);
   const roomBusy = batchRoomBusyCounts(plan);
-  const creatable = batchCreatableCounts(plan, forceRoom);
+  const capped = batchIntervalCappedCounts(plan);
+  const creatable = batchCreatableCounts(plan, forceRoom, forceCap);
   // Mismo vocabulario que el preview del modo Sesiones (B5.3,
   // `lib/sessions-mode-state`): estado principal por fecha (duplicado >
   // bloqueado > fuera de horario > sobreturno) y la línea de conteos.
@@ -131,7 +152,9 @@ export function BatchConflictPrompt({
   // cuentan como libres y se crean igual con cualquiera de los dos botones.
   const counts = countSessionStates(plan.dates);
   const line = countsLine(counts);
-  const problems = plan.dates.filter((d) => sessionDateState(d) !== "libre" || d.roomBusy === true);
+  const problems = plan.dates.filter(
+    (d) => sessionDateState(d) !== "libre" || d.roomBusy === true || d.intervalCapped === true
+  );
   return (
     <div ref={promptRef} role="alert" style={WARN_BOX}>
       <div style={{ fontSize: 13, color: "var(--warn-fg)", fontWeight: 700 }}>
@@ -143,6 +166,8 @@ export function BatchConflictPrompt({
         {plan.duplicates > 0 && ` · ${plan.duplicates} ya existen y no se pueden duplicar`}
         {roomBusy.total > 0 &&
           ` · ${roomBusy.total} con la sala ocupada${forceRoom ? "" : " (se omiten)"}`}
+        {capped.total > 0 &&
+          ` · ${batchIntervalCapLine(capped.total)}${forceCap ? " (van como sobreturno)" : " (se omiten)"}`}
         .
       </div>
       <div
@@ -160,13 +185,23 @@ export function BatchConflictPrompt({
           // Sala ocupada sola (fecha libre): es el estado de la fila. Con otro
           // aviso, va como aviso secundario.
           const roomOnly = d.roomBusy === true && desc.state === "libre";
+          // T3: tope solo (fecha libre, sin sala ocupada) = estado de la fila;
+          // con otro aviso, va como secundario.
+          const capOnly = d.intervalCapped === true && desc.state === "libre" && !roomOnly;
           return (
             <div key={d.iso}>
               <span className="k-mono">{fmtSlot(d.iso)}</span> ·{" "}
-              <strong>{roomOnly ? BATCH_ROOM_BUSY_LABEL : desc.label}</strong>
-              {roomOnly ? ` — ${BATCH_ROOM_BUSY_DETAIL}` : desc.detail ? ` — ${desc.detail}` : ""}
+              <strong>{capOnly ? BATCH_INTERVAL_CAP_LABEL : roomOnly ? BATCH_ROOM_BUSY_LABEL : desc.label}</strong>
+              {capOnly
+                ? ` — ${BATCH_INTERVAL_CAP_DETAIL}`
+                : roomOnly
+                  ? ` — ${BATCH_ROOM_BUSY_DETAIL}`
+                  : desc.detail
+                    ? ` — ${desc.detail}`
+                    : ""}
               {desc.extra ? ` (${desc.extra.toLowerCase()})` : ""}
               {d.roomBusy === true && !roomOnly ? ` (${BATCH_ROOM_BUSY_LABEL.toLowerCase()})` : ""}
+              {d.intervalCapped === true && !capOnly ? ` (${BATCH_INTERVAL_CAP_LABEL.toLowerCase()})` : ""}
             </div>
           );
         })}
@@ -182,17 +217,28 @@ export function BatchConflictPrompt({
           Agendar igual {roomBusy.total === 1 ? "la fecha" : `las ${roomBusy.total} fechas`} con la sala ocupada
         </label>
       )}
+      {capped.total > 0 && (
+        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, color: "var(--navy-700)" }}>
+          <input
+            type="checkbox"
+            checked={forceCap}
+            disabled={pending}
+            onChange={(e) => setForceCap(e.target.checked)}
+          />
+          {batchIntervalCapForceLabel(capped.total)} (quedan como sobreturno)
+        </label>
+      )}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
         {plan.conflicted > 0 ? (
           <>
-            <Button type="button" variant="primary" data-prompt-primary="true" disabled={pending} onClick={() => onCreateAll(forceRoom)}>
+            <Button type="button" variant="primary" data-prompt-primary="true" disabled={pending} onClick={() => onCreateAll(forceRoom, forceCap)}>
               Crear todas ({creatable.all}, bloqueadas y sobreturnos como sobreturno)
             </Button>
             <Button
               type="button"
               variant="ghost"
               disabled={pending || creatable.freeOnly === 0}
-              onClick={() => onCreateFreeOnly(forceRoom)}
+              onClick={() => onCreateFreeOnly(forceRoom, forceCap)}
               style={WARN_GHOST}
             >
               Crear solo las libres ({creatable.freeOnly})
@@ -205,7 +251,7 @@ export function BatchConflictPrompt({
             type="button"
             variant="primary" data-prompt-primary="true"
             disabled={pending || creatable.freeOnly === 0}
-            onClick={() => onCreateFreeOnly(forceRoom)}
+            onClick={() => onCreateFreeOnly(forceRoom, forceCap)}
           >
             Crear{" "}
             {creatable.freeOnly === 1
@@ -534,6 +580,52 @@ export function RoomBusyPrompt({
         {/* PF1-Z-F1: sin primaria visual; el foco va a la salida segura (un Enter de más no agenda la sala llena). */}
         <Button type="button" variant="ghost" data-prompt-primary="true" onClick={onBack} disabled={pending}>
           {copy.backLabel}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * T3e-2u1 (C-AS3, decisión 6): el profesional ya tiene `cap` turnos que
+ * empiezan en ese intervalo. Titular literal de C-AS3 (sale de
+ * `lib/booking-force-flags.ts`, el mismo del drawer). Forzar ES sobreturno:
+ * "Cargar como sobreturno" re-llama con `allowIntervalCap`. Mismo patrón de
+ * botones que `BlockedPrompt` (próximo libre primario si hay).
+ */
+export function IntervalCapPrompt({
+  promptRef,
+  intervalCap,
+  pending,
+  onForce,
+  onUseSuggestedSlot,
+  onBack,
+}: {
+  promptRef: PromptRef;
+  intervalCap: IntervalCapPromptData;
+  pending: boolean;
+  /** Re-llamar con `allowIntervalCap: true`. */
+  onForce: () => void;
+  /** Solo se ofrece si hay `nextFreeISO`. */
+  onUseSuggestedSlot: () => void;
+  onBack: () => void;
+}) {
+  const copy = intervalCapPromptCopy(intervalCap);
+  return (
+    <div ref={promptRef} role="alert" style={WARN_BOX}>
+      <div style={{ fontSize: 13, color: "var(--warn-fg)", fontWeight: 700 }}>{copy.title}</div>
+      <div style={{ fontSize: 12, color: "var(--navy-700)", lineHeight: 1.45 }}>{copy.detail}</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        {intervalCap.nextFreeISO && (
+          <Button type="button" variant="primary" data-prompt-primary="true" onClick={onUseSuggestedSlot} disabled={pending}>
+            Usar próximo libre · {fmtSlot(intervalCap.nextFreeISO)}
+          </Button>
+        )}
+        <Button type="button" variant="ghost" onClick={onForce} disabled={pending} style={WARN_GHOST}>
+          {copy.confirmLabel}
+        </Button>
+        <Button type="button" variant="ghost" onClick={onBack} disabled={pending}>
+          Volver
         </Button>
       </div>
     </div>
