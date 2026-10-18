@@ -15,12 +15,20 @@ import {
   updateTenantBasics,
   setBusinessHours,
   setPublicBookingEnabled,
+  setTenantBookingCap,
 } from "@/lib/tenant-settings";
 import { SAAS_PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
 import {
+  AGENDA_SLOT_OPTIONS,
   BUSINESS_HOUR_MIN,
   BUSINESS_HOUR_MAX,
 } from "@/lib/tenant-settings-constants";
+import {
+  INTERVAL_CAP_COUNT_MAX,
+  INTERVAL_CAP_COUNT_MIN,
+  INTERVAL_CAP_MINUTES,
+  parseBookingCapPair,
+} from "@/lib/booking-cap-config";
 import { Switch, ErrorBox } from "../controls";
 import { TENANT_BASICS_STALE_ERROR } from "../config-copy";
 import styles from "../configuracion.module.css";
@@ -284,8 +292,12 @@ export function GeneralPanel({
               onChange={(e) => setSlotMinutes(Number(e.target.value))}
               disabled={!canAdmin}
             >
-              <option value={60}>Cada 1 hora</option>
-              <option value={30}>Cada 30 minutos</option>
+              {/* T3 (§23.8): 15 también (el server ya lo aceptaba; la grilla de 15' la dibuja Día/Semana). */}
+              {AGENDA_SLOT_OPTIONS.map((m) => (
+                <option key={m} value={m}>
+                  {m === 60 ? "Cada 1 hora" : `Cada ${m} minutos`}
+                </option>
+              ))}
             </select>
           </label>
           <Button
@@ -323,6 +335,8 @@ export function GeneralPanel({
           </div>
         )}
       </Card>
+
+      <BookingCapCard tenant={tenant} admin={canAdmin} />
 
       {/* BO3-F: las preferencias son de la cuenta que mira; las del superadmin como soporte no se guardan (su sesión
           es de solo lectura fuera de las actions de Configuración) y no le sirven al consultorio. */}
@@ -411,6 +425,118 @@ export function AlertPrefsCard() {
             onChange={a.setCallAlert}
           />
         </PrefRow>
+      )}
+    </Card>
+  );
+}
+
+/**
+ * «Turnos por profesional» (T3e-2c; decisión 6 del 19-oct, plan §23.7): el tope del consultorio, que hereda cada
+ * profesional salvo que en su ficha diga «Sin tope» o tenga uno propio. Vacío = sin tope. `tenant.admin` como el
+ * horario: es operativo (la Secretaria con «Configuración» lo maneja). La validación es la misma que la del server
+ * (`parseBookingCapPair`), así el botón no se prende con un par a medias.
+ */
+function BookingCapCard({ tenant, admin }: { tenant: TenantSettings; admin: boolean }) {
+  const [pending, start] = useTransition();
+  const savedCount = tenant.bookingCapCount == null ? "" : String(tenant.bookingCapCount);
+  const savedInterval = String(tenant.bookingCapIntervalMin ?? 15);
+  const [count, setCount] = useState(savedCount);
+  const [interval, setIntervalMin] = useState(savedInterval);
+  const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  useEffect(() => { setCount(savedCount); }, [savedCount]);
+  useEffect(() => { setIntervalMin(savedInterval); }, [savedInterval]);
+
+  // Sin N el intervalo no se guarda (vacío = sin tope). El select no se deshabilita: un control apagado sin motivo a la
+  // vista parecía roto (mismo criterio que T3d-1g) y elegir primero el intervalo y después N es igual de válido.
+  const empty = count.trim() === "";
+  const parsed = parseBookingCapPair(empty ? null : count.trim(), empty ? null : Number(interval));
+  const dirty = empty ? tenant.bookingCapCount != null : count.trim() !== savedCount || interval !== savedInterval;
+
+  const save = () => {
+    setMsg(null);
+    if (!parsed.ok) {
+      setMsg({ tone: "err", text: parsed.error });
+      return;
+    }
+    start(async () => {
+      const r = await setTenantBookingCap({ count: parsed.cap?.count ?? null, intervalMin: parsed.cap?.intervalMin ?? null });
+      if (!r.ok) setMsg({ tone: "err", text: r.error });
+      // [PF1.1-config · C-PF4] Sin `router.refresh()`: la action revalida `/configuracion`.
+      else setMsg({ tone: "ok", text: parsed.cap ? "Tope guardado." : "Sin tope: guardado." });
+    });
+  };
+
+  return (
+    <Card style={{ padding: 20 }} data-booking-cap-card>
+      <EyebrowLabel>Turnos por profesional</EyebrowLabel>
+      <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 4, marginBottom: 14, lineHeight: 1.45 }}>
+        Cuántos turnos puede tener cada profesional que empiecen en el mismo intervalo (10:00, 10:15…), de cualquier
+        servicio. Desde el segundo turno, la agenda te avisa; pasado el tope, se carga como <strong>sobreturno</strong> si
+        lo confirmás, y el turnero online no lo ofrece. Dejalo vacío para no poner tope. Cada profesional puede tener el
+        suyo en su ficha.
+      </div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11 }}>
+          <span style={{ fontWeight: 600, color: "var(--navy-500)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Máximo de turnos por profesional
+          </span>
+          <input
+            className={styles.select}
+            type="number"
+            inputMode="numeric"
+            min={INTERVAL_CAP_COUNT_MIN}
+            max={INTERVAL_CAP_COUNT_MAX}
+            step={1}
+            placeholder="Sin tope"
+            value={count}
+            onChange={(e) => setCount(e.target.value)}
+            disabled={!admin}
+            aria-label="Máximo de turnos por profesional (vacío: sin tope)"
+            style={{ width: 120, cursor: "text" }}
+          />
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11 }}>
+          <span style={{ fontWeight: 600, color: "var(--navy-500)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Cada
+          </span>
+          <select
+            className={styles.select}
+            value={interval}
+            onChange={(e) => setIntervalMin(e.target.value)}
+            disabled={!admin}
+            aria-label="Intervalo del tope"
+          >
+            {INTERVAL_CAP_MINUTES.map((m) => (
+              <option key={m} value={m}>
+                {m} min
+              </option>
+            ))}
+          </select>
+        </label>
+        <Button
+          type="button"
+          variant="primary"
+          onClick={save}
+          disabled={pending || !admin || !dirty}
+          style={{ marginLeft: "auto" }}
+        >
+          {pending ? "Guardando…" : "Guardar tope"}
+        </Button>
+      </div>
+      {msg && (
+        <div
+          role={msg.tone === "err" ? "alert" : "status"}
+          style={{
+            marginTop: 12,
+            padding: 10,
+            borderRadius: 10,
+            background: msg.tone === "ok" ? "var(--success-bg)" : "var(--danger-bg)",
+            color: msg.tone === "ok" ? "var(--success-fg)" : "var(--danger-fg)",
+            fontSize: 12,
+          }}
+        >
+          {msg.text}
+        </div>
       )}
     </Card>
   );

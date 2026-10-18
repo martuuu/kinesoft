@@ -81,6 +81,8 @@ import {
 import { FALLBACK_WORKING_DOWS, type DayKey, type ScheduleRange } from "@/lib/availability/types";
 import type { ActionResult } from "@/lib/validation";
 import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
+import { auditInTx } from "@/lib/audit";
+import { parsePractitionerBookingCap, type BookingCapMode } from "@/lib/booking-cap-config";
 
 const WRITE_MSG = "Solo OWNER/ADMIN pueden configurar sedes y horarios.";
 const READ_MSG = "No tenés permiso para ver la agenda del consultorio.";
@@ -982,5 +984,72 @@ async function deleteExceptionImpl(id: string): Promise<ActionResult> {
   });
   if (!deleted) return { ok: false, error: "Excepción no encontrada." };
   revalidateAll();
+  return { ok: true, data: undefined };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tope de turnos por intervalo (T3e-2c, C-AS3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Sin «OWNER/ADMIN» (jerga, y desde T3 también la Secretaria con «Configuración» configura horarios).
+const CAP_WRITE_MSG = "Solo quien tiene permiso de «Configuración» puede cambiar el tope de turnos.";
+
+/**
+ * Tope de turnos del profesional (T3, decisión 6 del 19-oct; plan §23.7): «Usar el del consultorio» (INHERIT),
+ * «Sin tope» (NONE) o «Propio: N cada X min» (CUSTOM). INHERIT/NONE guardan el par en NULL (CHECK
+ * `Practitioner_bookingCap_check` de M12); lo que rige lo decide `effectiveIntervalCap`.
+ *
+ * `schedule.configure` como las franjas: es la agenda del profesional, no una preferencia suya (el propio profesional
+ * sin «Configuración» no se lo saca: le cambiaría al consultorio qué entra como sobreturno). Profesional RESERVABLE
+ * (`findBookablePractitioner`, T3c-1s): un tope para un suspendido o para la fila vieja de la Secretaria no rige nunca
+ * y el mismo «Profesional no encontrado.» no distingue un id ajeno de uno inactivo. Audit en la misma tx con el antes
+ * y el después; el mismo valor = ni write ni audit. Sin CAS (valores absolutos, el último gana, como el horario del
+ * consultorio); `FOR UPDATE` para que el `from` del audit sea el que se pisó.
+ */
+export async function setPractitionerBookingCap(...args: Parameters<typeof setPractitionerBookingCapImpl>): ReturnType<typeof setPractitionerBookingCapImpl> {
+  return withReadOnlyResult(() => withSupportWritable("lib/practitioner-schedule.ts#setPractitionerBookingCap", () => setPractitionerBookingCapImpl(...args)));
+}
+
+async function setPractitionerBookingCapImpl(
+  practitionerId: string,
+  input: { mode: BookingCapMode; count?: number | null; intervalMin?: number | null }
+): Promise<ActionResult> {
+  const { actor } = await requireCapability("schedule.configure", CAP_WRITE_MSG);
+  const idOk = EntityId.safeParse(practitionerId);
+  if (!idOk.success) return { ok: false, error: PRAC_NOT_FOUND };
+  const parsed = parsePractitionerBookingCap(input ?? { mode: null });
+  if (!parsed.ok) return { ok: false, error: parsed.error };
+  const to = parsed.data;
+  const res = await runWithRls(actor.tenantId, async (tx) => {
+    const found = await findBookablePractitioner(tx, actor.tenantId, idOk.data);
+    if (!found) return "notFound" as const;
+    const [prev] = await tx.$queryRaw<
+      { bookingCapMode: BookingCapMode; bookingCapCount: number | null; bookingCapIntervalMin: number | null }[]
+    >`SELECT "bookingCapMode"::text AS "bookingCapMode", "bookingCapCount", "bookingCapIntervalMin"
+        FROM "Practitioner" WHERE "id" = ${found.id} AND "tenantId" = ${actor.tenantId} FOR UPDATE`;
+    if (!prev) return "notFound" as const;
+    if (
+      prev.bookingCapMode === to.bookingCapMode &&
+      prev.bookingCapCount === to.bookingCapCount &&
+      prev.bookingCapIntervalMin === to.bookingCapIntervalMin
+    ) {
+      return "same" as const;
+    }
+    await tx.practitioner.updateMany({ where: { id: found.id, tenantId: actor.tenantId }, data: to });
+    await auditInTx(tx, {
+      tenantId: actor.tenantId,
+      actorId: actor.userId,
+      action: "practitioner.booking_cap",
+      entity: "Practitioner",
+      entityId: found.id,
+      payload: {
+        from: { mode: prev.bookingCapMode, count: prev.bookingCapCount, intervalMin: prev.bookingCapIntervalMin },
+        to: { mode: to.bookingCapMode, count: to.bookingCapCount, intervalMin: to.bookingCapIntervalMin },
+      },
+    });
+    return "changed" as const;
+  });
+  if (res === "notFound") return { ok: false, error: PRAC_NOT_FOUND };
+  if (res === "changed") revalidateAll();
   return { ok: true, data: undefined };
 }

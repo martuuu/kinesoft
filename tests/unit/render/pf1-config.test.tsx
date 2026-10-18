@@ -185,7 +185,8 @@ describe("[PF1.1-config · C3/C4] General", () => {
     const h = html();
     expect(h).toMatch(/class="[^"]*twoCol[^"]*"/);
     expect(h).not.toMatch(/outline:\s*none/);
-    expect(h.match(/<select[^>]*class="[^"]*select[^"]*"/g)?.length).toBe(3);
+    // Apertura, Cierre, Vista de agenda y (T3e-2c) el intervalo del tope de «Turnos por profesional».
+    expect(h.match(/<select[^>]*class="[^"]*select[^"]*"/g)?.length).toBe(4);
   });
 });
 

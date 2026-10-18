@@ -32,8 +32,6 @@ import {
   upsertPractitionerService,
 } from "@/lib/practitioner-services";
 import {
-  PS_DURATION_MAX,
-  PS_DURATION_MIN,
   PS_MAX_CONCURRENT_MAX,
   PS_MAX_LEAD_DAYS_MAX,
   type PractitionerServiceRow,
@@ -46,6 +44,7 @@ import {
   type ServiceDraftErrors,
 } from "@/lib/practitioner-editors-state";
 import { ErrorBox } from "../../controls";
+import { durationOptionsWith } from "@/lib/service-durations";
 
 type RowStatus =
   | { kind: "idle" }
@@ -333,24 +332,27 @@ function ServiceRowEditor({
       <div className="pse-cell">
         <label className="pse-label" htmlFor={`${idp}-dur`}>Duración</label>
         <div className="pse-inline">
-          <input
+          {/* T3 (§23.8): la grilla de 15 (lib/service-durations.ts); vacío = la del servicio (hereda). Un valor propio
+              guardado fuera de grilla (40, 50) se muestra tal cual («50 min (actual)»): guardar la fila sin tocarlo no
+              lo cambia. El server sigue aceptando múltiplos de 5 (`PS_DURATION_MIN/MAX`). */}
+          <select
             id={`${idp}-dur`}
             className="pse-input"
-            type="number"
-            inputMode="numeric"
-            min={PS_DURATION_MIN}
-            max={PS_DURATION_MAX}
-            step={5}
-            placeholder={String(row.serviceDurationMin)}
             value={d.durationMin}
             disabled={off || saving}
             aria-label={`Duración de ${n} en minutos (vacío: ${row.serviceDurationMin} del servicio)`}
             aria-invalid={!!errors.durationMin || undefined}
             aria-describedby={errors.durationMin ? `${idp}-dur-err` : undefined}
             onChange={(e) => set({ durationMin: e.target.value })}
-            style={{ width: 72 }}
-          />
-          <span className="pse-unit">min</span>
+            style={{ minWidth: 132 }}
+          >
+            <option value="">{`Del servicio (${row.serviceDurationMin} min)`}</option>
+            {durationOptionsWith(d.durationMin === "" ? null : Number(d.durationMin)).map((o) => (
+              <option key={o.value} value={String(o.value)}>
+                {o.label}
+              </option>
+            ))}
+          </select>
         </div>
         <FieldError id={`${idp}-dur-err`} msg={errors.durationMin} />
       </div>

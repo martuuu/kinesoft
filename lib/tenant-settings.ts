@@ -27,6 +27,7 @@ import { withReadOnlyResult } from "@/lib/read-only-result";
 import { auditInTx } from "@/lib/audit";
 import { syncDefaultSchedulesToTenantHours } from "@/lib/agenda-defaults";
 import { isAgendaSlotMinutes } from "@/lib/tenant-settings-constants";
+import { parseBookingCapPair } from "@/lib/booking-cap-config";
 import { applyTenantEntitlementsInTx } from "@/lib/tenant-entitlements-internal";
 import { tenantEntitlementTags } from "@/lib/cache-tags";
 import { updateTenantProfileInTx } from "@/lib/tenant-profile-internal";
@@ -54,6 +55,12 @@ export type TenantSettings = {
   businessHoursEnd: number;
   /** Agenda row granularity: 60 (per hour) or 30 (half-hour rows). */
   agendaSlotMinutes: number;
+  /**
+   * T3 (C-AS3, M12): tope de turnos por profesional del consultorio, «N cada X min». Los dos o ninguno (null/null =
+   * sin tope); lo hereda cada profesional en INHERIT. Se edita con `setTenantBookingCap`.
+   */
+  bookingCapCount: number | null;
+  bookingCapIntervalMin: number | null;
   /** BO2-D: ISO de `Tenant.updatedAt`, para el CAS opcional de `updateTenantBasics`. */
   updatedAt: string;
 };
@@ -77,6 +84,8 @@ export async function getTenantSettings(): Promise<TenantSettings> {
       businessHoursStart: true,
       businessHoursEnd: true,
       agendaSlotMinutes: true,
+      bookingCapCount: true,
+      bookingCapIntervalMin: true,
       updatedAt: true,
     },
   }));
@@ -147,6 +156,60 @@ async function setBusinessHoursImpl(input: {
   revalidatePath("/configuracion");
   revalidatePath("/agenda");
   revalidatePath("/dashboard");
+  return { ok: true, data: undefined };
+}
+
+/**
+ * Tope de turnos por profesional del consultorio (T3, decisión 6 del 19-oct; C-AS3; plan §23.7): «Máximo de turnos
+ * por profesional: N cada 15/30/60 min». `{ count: null, intervalMin: null }` = sin tope. Lo hereda cada profesional
+ * en `INHERIT` (`lib/availability/interval-cap.ts#effectiveIntervalCap`).
+ *
+ * `tenant.admin` como el horario (lo operativo de la agenda: la Secretaria con «Configuración» lo maneja, decisión 3)
+ * y `withSupportWritable` como el resto de Configuración operativa. A diferencia del horario, se audita: cambia qué
+ * turno entra como sobreturno y qué ofrece el turnero, y «¿quién puso el tope?» es la primera pregunta cuando un
+ * paciente no encuentra horario. Audit en la MISMA tx (el evento existe si y solo si el cambio existe); el mismo
+ * valor = ni write ni audit. Sin CAS: son dos valores absolutos que se guardan juntos (el último que guarda gana,
+ * como el horario); `FOR UPDATE` solo para que el `from` del audit sea el que realmente se pisó.
+ */
+export async function setTenantBookingCap(...args: Parameters<typeof setTenantBookingCapImpl>): ReturnType<typeof setTenantBookingCapImpl> {
+  return withReadOnlyResult(() => withSupportWritable("lib/tenant-settings.ts#setTenantBookingCap", () => setTenantBookingCapImpl(...args)));
+}
+
+async function setTenantBookingCapImpl(input: { count: number | null; intervalMin: number | null }): Promise<ActionResult> {
+  const actor = await requireTenantAdmin();
+  // El CHECK `Tenant_bookingCap_check` (M12) rebotaría un par a medias como un 500 sin copy: se valida antes.
+  const parsed = parseBookingCapPair(input?.count, input?.intervalMin);
+  if (!parsed.ok) return { ok: false, error: parsed.error };
+  const to = parsed.cap;
+  const changed = await runWithRls(actor.tenantId, async (tx) => {
+    const [prev] = await tx.$queryRaw<{ bookingCapCount: number | null; bookingCapIntervalMin: number | null }[]>`
+      SELECT "bookingCapCount", "bookingCapIntervalMin" FROM "Tenant" WHERE "id" = ${actor.tenantId} FOR UPDATE`;
+    const from =
+      prev && prev.bookingCapCount != null && prev.bookingCapIntervalMin != null
+        ? { count: prev.bookingCapCount, intervalMin: prev.bookingCapIntervalMin }
+        : null;
+    if (from?.count === to?.count && from?.intervalMin === to?.intervalMin) return false;
+    await tx.tenant.update({
+      where: { id: actor.tenantId },
+      data: { bookingCapCount: to?.count ?? null, bookingCapIntervalMin: to?.intervalMin ?? null },
+    });
+    await auditInTx(tx, {
+      tenantId: actor.tenantId,
+      actorId: actor.userId,
+      action: "tenant.booking_cap",
+      entity: "Tenant",
+      entityId: actor.tenantId,
+      payload: { from, to },
+    });
+    return true;
+  });
+  if (changed) {
+    // El modal de turnos, el lote y el turnero leen el tope en cada request (sin cache por tenant): alcanza con las
+    // rutas que lo muestran ya pintado.
+    revalidatePath("/configuracion");
+    revalidatePath("/agenda");
+    revalidatePath("/dashboard");
+  }
   return { ok: true, data: undefined };
 }
 

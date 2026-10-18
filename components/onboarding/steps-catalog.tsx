@@ -38,8 +38,10 @@ import type { OnboardingInsurer, OnboardingService } from "@/lib/onboarding-inte
 import type { TenantVertical } from "@prisma/client";
 import { StepHeader } from "./onboarding-shell";
 import { InlineError, ItemRow, StepFooter, useStepNav } from "./step-nav";
+import { durationOptionsWith } from "@/lib/service-durations";
 
-const DURATIONS = [30, 40, 45, 50, 60, 90];
+// T3 (§23.8): la grilla de 15 de `lib/service-durations.ts` (antes 30/40/45/50/60/90, que dejaba huecos con las filas
+// y el tope de 15'). La duración de una práctica del catálogo fuera de grilla se muestra como «sugerida».
 
 
 // ── Servicios ────────────────────────────────────────────────────────────
@@ -66,10 +68,8 @@ export function StepServices({
   const [priceInvalid, setPriceInvalid] = useState(false);
   const [cupo, setCupo] = useState("");
   const [practice, setPractice] = useState<PickedPractice | null>(null);
-  // La duración sugerida por la práctica puede no estar en la lista corta.
-  const durations = DURATIONS.includes(Number(duration))
-    ? DURATIONS
-    : [...DURATIONS, Number(duration)].sort((a, b) => a - b);
+  // La duración sugerida por la práctica puede no estar en la grilla: entra en orden, rotulada.
+  const durations = durationOptionsWith(Number(duration), { suffix: "sugerida" });
 
   const pickPractice = (p: PickedPractice | null) => {
     // Se sugiere, no se pisa: el nombre solo si estaba vacío o era el de la
@@ -154,7 +154,7 @@ export function StepServices({
             label="Duración"
             value={duration}
             onChange={setDuration}
-            options={durations.map((d) => ({ value: String(d), label: `${d} min` }))}
+            options={durations.map((d) => ({ value: String(d.value), label: d.label }))}
           />
           <MoneyInput
             label="Precio particular"

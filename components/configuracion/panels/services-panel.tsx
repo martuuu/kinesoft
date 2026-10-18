@@ -23,6 +23,7 @@ import {
 import { ErrorBox } from "../controls";
 import styles from "../configuracion.module.css";
 import { PracticePicker, type PickedPractice } from "../catalog/practice-picker";
+import { durationOptionsWith } from "@/lib/service-durations";
 
 // [PF1.1-config · C-PF4] Sin `router.refresh()` después de las actions de este archivo: todas revalidan `/configuracion`
 // y la respuesta de la action ya trae el árbol nuevo (un refresh era un segundo render entero, PF-0d).
@@ -243,17 +244,21 @@ function ServiceModal({
           defaultValue={service?.description ?? ""}
         />
         <div className={styles.twoCol}>
+          {/* T3 (§23.8): la grilla de 15 (lib/service-durations.ts). El valor guardado fuera de grilla (40, 50) se
+              muestra tal cual («50 min (actual)») para que guardar sin tocar no le cambie la duración; el de una
+              práctica del catálogo, como «sugerida». El server sigue aceptando múltiplos de 5 (5..480). */}
           <FormField
-            label="Duración (min)"
+            as="select"
+            label="Duración"
             name="durationMin"
-            type="number"
-            min={5}
-            max={480}
             value={durationMin}
             onChange={(v) => {
               setDurationMin(v);
               setDurationTouched(true);
             }}
+            options={durationOptionsWith(Number(durationMin), {
+              suffix: service && Number(durationMin) === service.durationMin ? "actual" : "sugerida",
+            }).map((o) => ({ value: String(o.value), label: o.label }))}
             required
           />
           <MoneyInput

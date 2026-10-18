@@ -16,10 +16,25 @@
  * DIR-3c (C-DIR9): sub-pestaña Especialidades (catálogo global, ≤ 5) cuando el directorio está prendido (`directory`
  * llega del loader; con `DIRECTORY_MODE=off` no existe). Se edita en línea, con el mismo dirty-guard.
  *
+ * T3e-2c (C-AS3, plan §23.7): arriba de Horarios, el tope de turnos del profesional («Usar el del consultorio / Sin
+ * tope / Propio: N cada X min»). Se edita en línea con el mismo dirty-guard. Llega en la fila del resumen
+ * (`bookingCap`, loader de Configuración); sin él (otro caller, fixture viejo) no se muestra.
+ *
  * Layout: tarjetas que se acomodan solas (grid auto-fill) arriba y el detalle
  * abajo; en un celular quedan apiladas sin necesitar un breakpoint.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useTransition } from "react";
+import { Button } from "@/components/ui/button";
+import { setPractitionerBookingCap } from "@/lib/practitioner-schedule";
+import {
+  INTERVAL_CAP_COUNT_MAX,
+  INTERVAL_CAP_COUNT_MIN,
+  INTERVAL_CAP_MINUTES,
+  bookingCapLabel,
+  parsePractitionerBookingCap,
+  type BookingCapMode,
+  type PractitionerBookingCapView,
+} from "@/lib/booking-cap-config";
 import { Card } from "@/components/ui/card";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { Tag } from "@/components/ui/tag";
@@ -50,6 +65,9 @@ export type PractitionerSpecialtiesData = {
   byPractitioner: Readonly<Record<string, readonly string[]>>;
 };
 
+/** Fila del resumen con el tope (T3e-2c). `bookingCap` opcional: el tipo base de `configuracion-client` no lo declara. */
+export type PractitionerPanelRow = PractitionerScheduleSummaryRow & { bookingCap?: PractitionerBookingCapView };
+
 export function PractitionerPanel({
   summary,
   locations,
@@ -60,7 +78,7 @@ export function PractitionerPanel({
   support = false,
   sensitive = false,
 }: {
-  summary: PractitionerScheduleSummaryRow[];
+  summary: PractitionerPanelRow[];
   locations: LocationRow[];
   /**
    * SR-U2: catálogo de salas (`listRooms({ includeArchived: true })`). Las
@@ -91,7 +109,8 @@ export function PractitionerPanel({
   const [svcDirty, setSvcDirty] = useState(false);
   const [payDirty, setPayDirty] = useState(false);
   const [speDirty, setSpeDirty] = useState(false);
-  const dirty = svcDirty || payDirty || speDirty;
+  const [capDirty, setCapDirty] = useState(false);
+  const dirty = svcDirty || payDirty || speDirty || capDirty;
   const subTabs = specialties ? SUB_TABS : SUB_TABS.filter((t) => t.key !== "especialidades");
 
   useEffect(() => {
@@ -122,6 +141,7 @@ export function PractitionerPanel({
       setSvcDirty(false);
       setPayDirty(false);
       setSpeDirty(false);
+      setCapDirty(false);
       go();
     },
     [dirty, confirm]
@@ -270,6 +290,15 @@ export function PractitionerPanel({
           </header>
           <div role="tabpanel" style={{ padding: 18 }}>
             {/* `key`: al cambiar de profesional cada editor arranca de cero (sin estado del anterior). */}
+            {sub === "horarios" && selected.bookingCap && (
+              <BookingCapEditor
+                key={`cap-${selected.practitionerId}`}
+                practitionerId={selected.practitionerId}
+                practitionerName={selected.name}
+                cap={selected.bookingCap}
+                onDirtyChange={setCapDirty}
+              />
+            )}
             {sub === "horarios" && (
               <ScheduleEditor
                 key={selected.practitionerId}
@@ -319,5 +348,168 @@ export function PractitionerPanel({
         </Card>
       )}
     </div>
+  );
+}
+
+const CAP_MODE_LABEL: Record<BookingCapMode, string> = {
+  INHERIT: "Usar el del consultorio",
+  NONE: "Sin tope",
+  CUSTOM: "Propio",
+};
+
+/**
+ * Tope de turnos del profesional (T3e-2c). Tres opciones en radio (no un select: «Propio» abre dos campos y se tiene
+ * que ver qué hay en cada una sin abrir nada). La validación es la del server (`parsePractitionerBookingCap`).
+ */
+export function BookingCapEditor({
+  practitionerId,
+  practitionerName,
+  cap,
+  onDirtyChange,
+}: {
+  practitionerId: string;
+  practitionerName: string;
+  cap: PractitionerBookingCapView;
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
+  const [pending, start] = useTransition();
+  const [mode, setMode] = useState<BookingCapMode>(cap.mode);
+  const [count, setCount] = useState(cap.count == null ? "" : String(cap.count));
+  const [interval, setIntervalMin] = useState(String(cap.intervalMin ?? cap.tenant?.intervalMin ?? 15));
+  const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  // Lo guardado (se mueve al guardar; la action revalida y el loader trae lo mismo).
+  const [saved, setSaved] = useState(cap);
+
+  const dirty =
+    mode !== saved.mode ||
+    (mode === "CUSTOM" && (count.trim() !== String(saved.count ?? "") || interval !== String(saved.intervalMin ?? "")));
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+
+  const inherited = `${CAP_MODE_LABEL.INHERIT} (${cap.tenant ? bookingCapLabel(cap.tenant) : "hoy, sin tope"})`;
+  const group = `cap-${practitionerId}`;
+
+  const save = () => {
+    setMsg(null);
+    const input = { mode, count: count.trim() === "" ? null : Number(count), intervalMin: Number(interval) };
+    const parsed = parsePractitionerBookingCap(input);
+    if (!parsed.ok) {
+      setMsg({ tone: "err", text: parsed.error });
+      return;
+    }
+    start(async () => {
+      const r = await setPractitionerBookingCap(practitionerId, input);
+      if (!r.ok) {
+        setMsg({ tone: "err", text: r.error });
+        return;
+      }
+      setSaved({
+        ...saved,
+        mode: parsed.data.bookingCapMode,
+        count: parsed.data.bookingCapCount,
+        intervalMin: parsed.data.bookingCapIntervalMin,
+      });
+      setMsg({ tone: "ok", text: "Tope guardado." });
+    });
+  };
+
+  return (
+    <fieldset
+      data-booking-cap-editor
+      style={{
+        border: "1px solid rgba(15,30,51,0.08)",
+        borderRadius: "var(--r-sm)",
+        padding: 14,
+        margin: "0 0 16px",
+        display: "grid",
+        gap: 10,
+      }}
+    >
+      <legend style={{ fontSize: 13, fontWeight: 700, padding: "0 4px" }}>Tope de turnos de {practitionerName}</legend>
+      <div style={{ fontSize: 12.5, color: "var(--navy-500)", lineHeight: 1.45 }}>
+        Cuántos turnos pueden empezar en el mismo intervalo. Pasado el tope, el turno se carga como sobreturno si lo
+        confirmás.
+      </div>
+      <div role="radiogroup" aria-label={`Tope de turnos de ${practitionerName}`} style={{ display: "grid", gap: 8 }}>
+        {(["INHERIT", "NONE", "CUSTOM"] as const).map((m) => (
+          <label key={m} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 13, minHeight: 32 }}>
+            <input
+              type="radio"
+              name={group}
+              value={m}
+              checked={mode === m}
+              onChange={() => setMode(m)}
+              disabled={pending}
+            />
+            <span>{m === "INHERIT" ? inherited : m === "CUSTOM" ? `${CAP_MODE_LABEL.CUSTOM}:` : CAP_MODE_LABEL[m]}</span>
+            {m === "CUSTOM" && (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={INTERVAL_CAP_COUNT_MIN}
+                  max={INTERVAL_CAP_COUNT_MAX}
+                  step={1}
+                  value={count}
+                  onChange={(e) => {
+                    setCount(e.target.value);
+                    setMode("CUSTOM");
+                  }}
+                  disabled={pending}
+                  aria-label={`Máximo de turnos de ${practitionerName}`}
+                  style={{
+                    width: 64,
+                    minHeight: 36,
+                    padding: "6px 8px",
+                    borderRadius: 8,
+                    border: "1px solid rgba(15,30,51,0.12)",
+                    font: "inherit",
+                  }}
+                />
+                <span>cada</span>
+                <select
+                  value={interval}
+                  onChange={(e) => {
+                    setIntervalMin(e.target.value);
+                    setMode("CUSTOM");
+                  }}
+                  disabled={pending}
+                  aria-label={`Intervalo del tope de ${practitionerName}`}
+                  style={{
+                    minHeight: 36,
+                    padding: "6px 8px",
+                    borderRadius: 8,
+                    border: "1px solid rgba(15,30,51,0.12)",
+                    font: "inherit",
+                    background: "var(--card-bg)",
+                  }}
+                >
+                  {INTERVAL_CAP_MINUTES.map((x) => (
+                    <option key={x} value={x}>
+                      {x} min
+                    </option>
+                  ))}
+                </select>
+              </span>
+            )}
+          </label>
+        ))}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 12, flexWrap: "wrap" }}>
+        {msg && (
+          <span
+            role={msg.tone === "err" ? "alert" : "status"}
+            style={{ fontSize: 12.5, fontWeight: 600, color: msg.tone === "ok" ? "var(--navy-900)" : "var(--danger-fg)" }}
+          >
+            {msg.text}
+          </span>
+        )}
+        <Button type="button" variant="primary" onClick={save} disabled={pending || !dirty}>
+          {pending ? "Guardando…" : "Guardar tope"}
+        </Button>
+      </div>
+    </fieldset>
   );
 }

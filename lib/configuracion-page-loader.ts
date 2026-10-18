@@ -64,6 +64,7 @@ import type { CustomConditionRow } from "@/lib/conditions";
 import type { LocationRow } from "@/lib/locations-schemas";
 import type { RoomRow } from "@/lib/rooms-schemas";
 import type { PractitionerScheduleSummaryRow } from "@/lib/practitioner-schedule-schemas";
+import type { PractitionerBookingCapView } from "@/lib/booking-cap-config";
 
 /** Mismo texto que `READ_MSG` de lib/locations.ts y lib/practitioner-schedule.ts (lo que tiraban sus lectores). */
 const AGENDA_READ_MSG = "No tenés permiso para ver la agenda del consultorio.";
@@ -116,6 +117,9 @@ export function directoryProfileStatus(p: Omit<ProfileStatusRow, "userId"> | nul
   return p.listed && !p.consentWithdrawnAt ? "published" : "none";
 }
 
+/** Fila del resumen de horarios + el tope por intervalo (T3e-2c). Mismas columnas del mismo select: 0 sentencias. */
+export type ConfiguracionScheduleRow = PractitionerScheduleSummaryRow & { bookingCap: PractitionerBookingCapView };
+
 export type ConfiguracionTxData = {
   tenant: TenantSettings | null;
   insurers: InsurerRow[];
@@ -126,7 +130,8 @@ export type ConfiguracionTxData = {
   practitioners: { id: string; name: string }[];
   customConditions: CustomConditionRow[];
   locations: LocationRow[];
-  scheduleSummary: PractitionerScheduleSummaryRow[];
+  /** T3e-2c (C-AS3): cada fila trae el tope del profesional y el del consultorio (para «Usar el del consultorio»). */
+  scheduleSummary: ConfiguracionScheduleRow[];
   rooms: RoomRow[];
   supportSessions: SupportSessionRow[] | null;
   directory: DirectoryTxPart | null;
@@ -224,6 +229,9 @@ export async function loadConfiguracionInTx(
               businessHoursStart: true,
               businessHoursEnd: true,
               agendaSlotMinutes: true,
+              // T3e-2c (C-AS3): = getTenantSettings.
+              bookingCapCount: true,
+              bookingCapIntervalMin: true,
               updatedAt: true,
               // DIR-3c: pestaña «Directorio» (M11). Se separan abajo: `tenant` sigue igual a `getTenantSettings`.
               directoryListed: true,
@@ -248,6 +256,10 @@ export async function loadConfiguracionInTx(
               // DIR-3c: `userId` para cruzar con el perfil público (no sale del loader) y el switch del turnero.
               userId: true,
               publicBookingEnabled: true,
+              // T3e-2c (C-AS3): el tope de la ficha del profesional, en el mismo select.
+              bookingCapMode: true,
+              bookingCapCount: true,
+              bookingCapIntervalMin: true,
               user: { select: { fullName: true, email: true } },
               schedules: {
                 where: { tenantId, OR: [{ validUntil: null }, { validUntil: { gte: today } }] },
@@ -309,7 +321,7 @@ export async function loadConfiguracionInTx(
     ]);
 
   let tenant: TenantSettings | null = null;
-  let scheduleSummary: PractitionerScheduleSummaryRow[] = [];
+  let scheduleSummary: ConfiguracionScheduleRow[] = [];
   let directory: DirectoryTxPart | null = null;
   if (tenantRow) {
     const { updatedAt, directoryListed, directoryHiddenAt, directoryHiddenReason, publicDescription, ...t } = tenantRow;
@@ -339,6 +351,10 @@ export async function loadConfiguracionInTx(
     }
     // `tenantHours`: el consultorio existe (findUniqueOrThrow), así que los `?? 8` / `?? 19` no aplican.
     const hours = { startMin: tenantRow.businessHoursStart * 60, endMin: tenantRow.businessHoursEnd * 60 };
+    const tenantCap =
+      tenantRow.bookingCapCount != null && tenantRow.bookingCapIntervalMin != null
+        ? { count: tenantRow.bookingCapCount, intervalMin: tenantRow.bookingCapIntervalMin }
+        : null;
     scheduleSummary = pracs.map((p) => {
       const isFallback = p.schedules.length === 0;
       return {
@@ -350,6 +366,12 @@ export async function loadConfiguracionInTx(
         isFallback,
         rangeCount: p.schedules.length,
         locationIds: [...new Set(p.schedules.map((s) => s.locationId))],
+        bookingCap: {
+          mode: p.bookingCapMode,
+          count: p.bookingCapCount,
+          intervalMin: p.bookingCapIntervalMin,
+          tenant: tenantCap,
+        },
       };
     });
   }

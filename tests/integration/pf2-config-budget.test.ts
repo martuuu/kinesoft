@@ -177,7 +177,25 @@ describe.skipIf(!RUN)("[PF2-d] /configuracion: presupuesto de tx e igualdad con 
     expect(plain(r.pending)).toEqual(plain(pending));
     expect(plain(r.customConditions)).toEqual(plain(conditions));
     expect(plain(r.locations)).toEqual(plain(locations));
-    expect(plain(r.scheduleSummary)).toEqual(plain(summary));
+    // T3e-2c (C-AS3): el loader suma a cada fila el tope del profesional y el del consultorio (`bookingCap`, mismas
+    // columnas del mismo select); sin eso, la fila es la del lector.
+    expect(plain(r.scheduleSummary.map(({ bookingCap: _cap, ...row }) => row))).toEqual(plain(summary));
+    const caps = await db.practitioner.findMany({
+      where: { id: { in: summary.map((s) => s.practitionerId) } },
+      select: { id: true, bookingCapMode: true, bookingCapCount: true, bookingCapIntervalMin: true },
+    });
+    for (const row of r.scheduleSummary) {
+      const c = caps.find((x) => x.id === row.practitionerId)!;
+      expect(row.bookingCap).toEqual({
+        mode: c.bookingCapMode,
+        count: c.bookingCapCount,
+        intervalMin: c.bookingCapIntervalMin,
+        tenant:
+          settings.bookingCapCount != null && settings.bookingCapIntervalMin != null
+            ? { count: settings.bookingCapCount, intervalMin: settings.bookingCapIntervalMin }
+            : null,
+      });
+    }
     expect(plain(r.rooms)).toEqual(plain(rooms));
     expect(plain(r.supportSessions)).toEqual(plain(support));
     // Los pickers de profesionales: los mismos (y en el mismo orden) que el resumen de horarios.
