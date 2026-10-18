@@ -1,9 +1,10 @@
 /**
  * FC · escrituras de fichas (C-FC3 «Reglas del server», brief T4 Anexo B; tests del Anexo C «FC-2a»).
  *
- * FC-1b1 deja la matriz escrita primero: los `it.fails("[FC-2a] …")` están rojos a propósito (las actions ya aceptan
- * los campos nuevos y el zod los valida, pero `pendingFcFields` en lib/clinical-notes.ts los rechaza hasta que FC-2a
- * implemente la escritura) y FC-2a los da vuelta. Los `it("[FC-1b] …")` ya pasan: los cubre el zod de FC-1b1.
+ * FC-1b1 dejó la matriz escrita primero (rojos a propósito: `pendingFcFields` rechazaba los campos nuevos) y FC-2a
+ * la dio vuelta al implementar la escritura (lib/clinical-notes.ts + lib/clinical-notes-write-internal.ts). Los
+ * `it("[FC-1b] …")` los cubre el zod de FC-1b1. Los diagnósticos se re-leen con `resolveDiagnosesInTx` de FC-2c: estos
+ * casos son también su integración cruzada (sin mock: el símbolo real contra la base).
  *
  * Símbolos reales contra Postgres en los dos roles (`npm run test:integration -- fichas-writes` = kinesoft_app con RLS;
  * `:owner` = BYPASSRLS como prod). Se mockea solo lo externo (sesión, cookies, `next/cache`: integration-setup). Cada
@@ -106,7 +107,7 @@ describe.skipIf(!RUN)("[FC-2a] escrituras de fichas", () => {
 
   // ── Rojos esperados: los da vuelta FC-2a ────────────────────────────────────────────────────────────────────
 
-  it.fails("[FC-2a] `body` derivado de `bodyDoc`", async () => {
+  it("[FC-2a] `body` derivado de `bodyDoc`", async () => {
     const pid = await patient();
     const r = await create({ patientId: pid, bodyDoc: doc("Dolor lumbar 6/10", "Mejora con movilidad") });
     expect(r.ok).toBe(true);
@@ -115,7 +116,7 @@ describe.skipIf(!RUN)("[FC-2a] escrituras de fichas", () => {
     expect(row.body).toBe("Dolor lumbar 6/10\n\nMejora con movilidad");
   });
 
-  it.fails("[FC-2a] diagnósticos re-leídos (retirado, propio ajeno, kine sin módulo)", async () => {
+  it("[FC-2a] diagnósticos re-leídos (retirado, propio ajeno, kine sin módulo)", async () => {
     const pid = await patient();
     const live = await icd();
     const retired = await icd({ retired: true });
@@ -143,7 +144,7 @@ describe.skipIf(!RUN)("[FC-2a] escrituras de fichas", () => {
     expect(await notesOf(pid2)).toHaveLength(0);
   });
 
-  it.fails("[FC-2a] `setActiveDiagnosis` false/true en la misma tx", async () => {
+  it("[FC-2a] `setActiveDiagnosis` false/true en la misma tx", async () => {
     const pid = await patient();
     await db.patient.update({ where: { id: pid }, data: { diagnosisTitle: "Anterior", diagnosisNote: "Nota que no se toca" } });
     const text = { kind: "text" as const, text: "Lumbalgia mecánica" };
@@ -156,7 +157,7 @@ describe.skipIf(!RUN)("[FC-2a] escrituras de fichas", () => {
     });
   });
 
-  it.fails("[FC-2a] `authorLicense` congelado", async () => {
+  it("[FC-2a] `authorLicense` congelado", async () => {
     const pid = await patient();
     const r = await create({ patientId: pid, body: "Con matrícula" });
     expect(r.ok && r.data.note.authorLicense).toBe("MN 1234");
@@ -169,7 +170,7 @@ describe.skipIf(!RUN)("[FC-2a] escrituras de fichas", () => {
     }
   });
 
-  it.fails("[FC-2a] `importSource` una sola vez; con turno → rechazo; `lateEntry`", async () => {
+  it("[FC-2a] `importSource` una sola vez; con turno → rechazo; `lateEntry`", async () => {
     const pid = await patient();
     const batchId = randomUUID();
     const r = await create({
@@ -187,7 +188,7 @@ describe.skipIf(!RUN)("[FC-2a] escrituras de fichas", () => {
     expect(typeof (row.importSource as { importedAt?: unknown }).importedAt).toBe("string");
   });
 
-  it.fails("[FC-2a] `body` plano limpia `bodyDoc`", async () => {
+  it("[FC-2a] `body` plano limpia `bodyDoc`", async () => {
     const pid = await patient();
     const r = await create({ patientId: pid, bodyDoc: doc("Con formato") });
     expect(r.ok).toBe(true);
@@ -199,7 +200,7 @@ describe.skipIf(!RUN)("[FC-2a] escrituras de fichas", () => {
     expect(row).toMatchObject({ body: "Sin formato", bodyDoc: null, revision: 2 });
   });
 
-  it.fails("[FC-2a] editar conserva congelados los retirados", async () => {
+  it("[FC-2a] editar conserva congelados los retirados", async () => {
     const pid = await patient();
     const code = await icd();
     const r = await create({ patientId: pid, body: "x", diagnoses: [{ kind: "icd11", id: code.id }] });

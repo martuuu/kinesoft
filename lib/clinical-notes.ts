@@ -17,6 +17,10 @@
  *   sin zona depende del TimeZone de la sesión (brief R11) y la ventana de 24 h se mide contra él.
  * - Los rechazos de acceso no distinguen «no existe» de «no podés» (copy único `forbidden`); una nota de otro
  *   consultorio no se encuentra (`notFound`) porque se busca con `tenantId`.
+ * - FC-2a (C-FC3 «Reglas del server»): `body` se deriva del `bodyDoc` re-armado; los diagnósticos se re-leen y congelan
+ *   en la tx (`resolveDiagnosesInTx`); `authorLicense` e `importSource` se escriben solo al nacer la fila (identidad:
+ *   el trigger de M14 los vuelve inmutables); el diagnóstico activo del paciente va en la misma tx y después del CAS.
+ *   Las piezas con Prisma están en `lib/clinical-notes-write-internal.ts`; las puras, en `-logic.ts`.
  * - Errores de la base que se traducen: 23505/P2002 (raíz viva del turno o clave de idempotencia; bajo RLS
  *   `meta.target` llega null, así que se decide releyendo en una tx nueva, precedente
  *   `resolveBookingUpdateUniqueViolation`) y P0001 de la red de 24 h + 10 min (EV2-D17).
@@ -45,9 +49,19 @@ import {
   bookingTargetDecision,
   defaultOccurredAt,
   editDecision,
+  importSourceRecord,
+  noteAuditFacts,
   occurredAtDecision,
   voidDecision,
 } from "@/lib/clinical-notes-logic";
+import {
+  applyActiveDiagnosisInTx,
+  authorLicenseInTx,
+  diagnosesData,
+  noteBodyData,
+  resolveNoteDiagnosesInTx,
+  storedDiagnoses,
+} from "@/lib/clinical-notes-write-internal";
 import {
   CLINICAL_NOTE_COPY as COPY,
   type AmendClinicalNoteInput,
@@ -108,9 +122,7 @@ async function createImpl(input: CreateClinicalNoteInput): Promise<ActionResult<
     assertModule(actor, "evoluciones");
     const parsed = CreateClinicalNoteSchema.safeParse(input);
     if (!parsed.success) return invalid(parsed.error);
-    const pending = pendingFcFields(parsed.data);
-    if (pending) return pending;
-    const p = { ...parsed.data, body: parsed.data.body as string };
+    const p = parsed.data;
     const now = new Date();
 
     let result: ActionResult<{ note: ClinicalNoteDTO; replayed: boolean }>;
@@ -142,7 +154,7 @@ async function createImpl(input: CreateClinicalNoteInput): Promise<ActionResult<
 async function createInTx(
   tx: DbClient,
   actor: Actor,
-  p: CreateClinicalNoteParsed & { body: string },
+  p: CreateClinicalNoteParsed,
   now: Date
 ): Promise<Fail | Ok<{ note: ClinicalNoteDTO; replayed: boolean }>> {
   const tenantId = actor.tenantId;
@@ -174,6 +186,16 @@ async function createInTx(
   const occurredAt = p.occurredAt ?? defaultOccurredAt(booking, now);
   if (!occurredAtDecision(occurredAt, now).ok) return fail(bookingId ? COPY.future : COPY.futureNoBooking);
 
+  // El zod garantiza exactamente uno de body/bodyDoc al crear; sin ninguno no hay ficha (defensa, no rama esperada).
+  const content = noteBodyData(p);
+  if (!content) return fail(COPY.invalid);
+  // FC regla 2: después de los rechazos baratos (gate, replay, turno, fecha) para no re-leer catálogos en vano.
+  const dx = await resolveNoteDiagnosesInTx(tx, actor, p.diagnoses);
+  if (!dx.ok) return fail(dx.error);
+  const authorPractitionerId = requireActorPractitionerId(actor);
+  const authorLicense = await authorLicenseInTx(tx, tenantId, authorPractitionerId);
+  const diagnoses = diagnosesData(dx.snapshots);
+
   const row = await tx.clinicalNote.create({
     data: {
       tenantId,
@@ -181,24 +203,43 @@ async function createInTx(
       bookingId,
       ...(p.kind ? { kind: p.kind } : {}),
       title: p.title ?? null,
-      body: p.body,
+      body: content.body,
+      bodyDoc: content.bodyDoc,
+      ...(diagnoses !== undefined ? { diagnoses } : {}),
       occurredAt,
       authorUserId: actor.userId,
-      authorPractitionerId: requireActorPractitionerId(actor),
+      authorPractitionerId,
       // Nombre congelado tal como firmó (brief R14: ya es displayUserName, nunca el email).
       authorName: actor.practitionerName,
+      authorLicense,
+      // FC regla 4: solo al crear, y el zod ya rechazó `importSource` con turno (el CHECK de M14 es la red).
+      ...(p.importSource ? { importSource: importSourceRecord(p.importSource, now) } : {}),
       idempotencyKey: p.idempotencyKey,
       createdAt: now,
     },
     select: CLINICAL_NOTE_SELECT,
   });
+  // Después del INSERT: si la ficha no se guarda (23505 → la tx aborta) el diagnóstico activo tampoco.
+  const activeDiagnosis = await applyActiveDiagnosisInTx(tx, {
+    tenantId,
+    patientId: row.patientId,
+    setActive: p.setActiveDiagnosis,
+    snapshots: dx.snapshots,
+  });
+  // La importación de Word se audita como `clinicalNote.create` con `imported: true` (regla 6 de C-FC3: un solo
+  // evento de alta, la bandera dice de dónde vino), no como una acción aparte.
   await auditInTx(tx, {
     tenantId,
     actorId: actor.userId,
     action: "clinicalNote.create",
     entity: "Patient",
     entityId: row.patientId,
-    payload: { noteId: row.id, bookingId: row.bookingId, kind: row.kind },
+    payload: {
+      noteId: row.id,
+      bookingId: row.bookingId,
+      kind: row.kind,
+      ...noteAuditFacts({ diagnoses: dx.snapshots, activeDiagnosis, imported: Boolean(p.importSource) }),
+    },
   });
   return { ok: true, data: { note: dto(row, actor, gate, now), replayed: false } };
 }
@@ -211,8 +252,6 @@ async function editImpl(input: EditClinicalNoteInput): Promise<ActionResult<{ no
     assertModule(actor, "evoluciones");
     const parsed = EditClinicalNoteSchema.safeParse(input);
     if (!parsed.success) return invalid(parsed.error);
-    const pendingEdit = pendingFcFields(parsed.data);
-    if (pendingEdit) return pendingEdit;
     const p = parsed.data;
     const tenantId = actor.tenantId;
     const now = new Date();
@@ -220,7 +259,10 @@ async function editImpl(input: EditClinicalNoteInput): Promise<ActionResult<{ no
     let result: Fail | Ok<{ note: ClinicalNoteDTO }>;
     try {
       result = await runWithRls(tenantId, async (tx) => {
-        const note = await tx.clinicalNote.findFirst({ where: { id: p.noteId, tenantId }, select: RULE_SELECT });
+        const note = await tx.clinicalNote.findFirst({
+          where: { id: p.noteId, tenantId },
+          select: { ...RULE_SELECT, diagnoses: true },
+        });
         if (!note) return fail(COPY.notFound);
         const gate = await clinicalNoteGateInTx(tx, actor, note.patientId);
         if (!gate.canWrite) return fail(COPY.forbidden);
@@ -230,27 +272,49 @@ async function editImpl(input: EditClinicalNoteInput): Promise<ActionResult<{ no
           return fail(note.bookingId ? COPY.future : COPY.futureNoBooking);
         }
 
+        // FC regla 2: `keep` = lo congelado hoy, así un CIE-11 retirado DESPUÉS de firmar no traba la edición.
+        const dx = await resolveNoteDiagnosesInTx(tx, actor, p.diagnoses, storedDiagnoses(note.diagnoses));
+        if (!dx.ok) return fail(dx.error);
+        const content = noteBodyData(p);
+        const diagnoses = diagnosesData(dx.snapshots);
+
         // Solo el contenido que vino (`title: null` borra el título; `undefined` no lo toca). Sin `revision`: el
-        // trigger guarda la versión anterior en ClinicalNoteRevision y pone OLD.revision + 1.
+        // trigger guarda la versión anterior en ClinicalNoteRevision y pone OLD.revision + 1. Sin `authorLicense` ni
+        // `importSource`: son identidad (el trigger de M14 rechaza cambiarlos).
         const n = await tx.clinicalNote.updateMany({
           where: { id: note.id, tenantId, revision: p.expectedRevision, voidedAt: null },
           data: {
             ...(p.kind !== undefined ? { kind: p.kind } : {}),
             ...(p.title !== undefined ? { title: p.title } : {}),
-            ...(p.body !== undefined ? { body: p.body } : {}),
+            ...(content ? { body: content.body, bodyDoc: content.bodyDoc } : {}),
+            ...(diagnoses !== undefined ? { diagnoses } : {}),
             ...(p.occurredAt !== undefined ? { occurredAt: p.occurredAt } : {}),
           },
         });
         const row = await tx.clinicalNote.findFirstOrThrow({ where: { id: note.id, tenantId }, select: CLINICAL_NOTE_SELECT });
-        // 0 filas: la anularon o la editaron entre la lectura del editor y este guardado (CAS).
+        // 0 filas: la anularon o la editaron entre la lectura del editor y este guardado (CAS). El diagnóstico activo
+        // va DESPUÉS de este chequeo: un `{ ok:false }` no aborta la tx, así que escribirlo antes lo dejaría aplicado
+        // con la edición perdida.
         if (n.count === 0) return fail(row.voidedAt ? COPY.voided : COPY.stale);
+        const activeDiagnosis = await applyActiveDiagnosisInTx(tx, {
+          tenantId,
+          patientId: row.patientId,
+          setActive: p.setActiveDiagnosis,
+          snapshots: dx.snapshots,
+        });
         await auditInTx(tx, {
           tenantId,
           actorId: actor.userId,
           action: "clinicalNote.edit",
           entity: "Patient",
           entityId: row.patientId,
-          payload: { noteId: row.id, bookingId: row.bookingId, revision: row.revision, kind: row.kind },
+          payload: {
+            noteId: row.id,
+            bookingId: row.bookingId,
+            revision: row.revision,
+            kind: row.kind,
+            ...noteAuditFacts({ diagnoses: storedDiagnoses(row.diagnoses), activeDiagnosis, imported: row.importSource !== null }),
+          },
         });
         return { ok: true as const, data: { note: dto(row, actor, gate, now) } };
       });
@@ -275,9 +339,7 @@ async function amendImpl(input: AmendClinicalNoteInput): Promise<ActionResult<{ 
     assertModule(actor, "evoluciones");
     const parsed = AmendClinicalNoteSchema.safeParse(input);
     if (!parsed.success) return invalid(parsed.error);
-    const pendingAmend = pendingFcFields(parsed.data);
-    if (pendingAmend) return pendingAmend;
-    const p = { ...parsed.data, body: parsed.data.body as string };
+    const p = parsed.data;
     const tenantId = actor.tenantId;
     const now = new Date();
 
@@ -296,7 +358,18 @@ async function amendImpl(input: AmendClinicalNoteInput): Promise<ActionResult<{ 
         const replay = await replayByKey(tx, actor, gate, p.idempotencyKey, { patientId: root.patientId, amendsNoteId: root.id }, now);
         if (replay) return replay;
 
-        // EV2-D14: hereda paciente, turno y tipo de la raíz; occurredAt = ahora (es lo que se agrega hoy).
+        const content = noteBodyData(p);
+        if (!content) return fail(COPY.invalid);
+        // Una enmienda es una ficha nueva (lo que se agrega hoy): sus diagnósticos se resuelven sin `keep`, como al
+        // crear (regla 2 de C-FC3: `keep` es solo de editar). Un CIE-11 ya retirado no entra en una firma nueva.
+        const dx = await resolveNoteDiagnosesInTx(tx, actor, p.diagnoses);
+        if (!dx.ok) return fail(dx.error);
+        const authorPractitionerId = requireActorPractitionerId(actor);
+        const authorLicense = await authorLicenseInTx(tx, tenantId, authorPractitionerId);
+        const diagnoses = diagnosesData(dx.snapshots);
+
+        // EV2-D14: hereda paciente, turno y tipo de la raíz; occurredAt = ahora (es lo que se agrega hoy). Sin
+        // `importSource`: el CHECK de M14 no deja una enmienda importada (FC-D10).
         const row = await tx.clinicalNote.create({
           data: {
             tenantId,
@@ -305,15 +378,24 @@ async function amendImpl(input: AmendClinicalNoteInput): Promise<ActionResult<{ 
             amendsNoteId: root.id,
             kind: root.kind,
             title: p.title ?? null,
-            body: p.body,
+            body: content.body,
+            bodyDoc: content.bodyDoc,
+            ...(diagnoses !== undefined ? { diagnoses } : {}),
             occurredAt: now,
             authorUserId: actor.userId,
-            authorPractitionerId: requireActorPractitionerId(actor),
+            authorPractitionerId,
             authorName: actor.practitionerName,
+            authorLicense,
             idempotencyKey: p.idempotencyKey,
             createdAt: now,
           },
           select: CLINICAL_NOTE_SELECT,
+        });
+        const activeDiagnosis = await applyActiveDiagnosisInTx(tx, {
+          tenantId,
+          patientId: row.patientId,
+          setActive: p.setActiveDiagnosis,
+          snapshots: dx.snapshots,
         });
         await auditInTx(tx, {
           tenantId,
@@ -321,7 +403,13 @@ async function amendImpl(input: AmendClinicalNoteInput): Promise<ActionResult<{ 
           action: "clinicalNote.amend",
           entity: "Patient",
           entityId: row.patientId,
-          payload: { noteId: row.id, amendsNoteId: root.id, bookingId: row.bookingId, kind: row.kind },
+          payload: {
+            noteId: row.id,
+            amendsNoteId: root.id,
+            bookingId: row.bookingId,
+            kind: row.kind,
+            ...noteAuditFacts({ diagnoses: dx.snapshots, activeDiagnosis, imported: false }),
+          },
         });
         return { ok: true as const, data: { note: dto(row, actor, gate, now), replayed: false } };
       });
@@ -429,27 +517,6 @@ const EDIT_REJECTION = {
   "not-author": COPY.notAuthor,
   "window-closed": COPY.windowClosed,
 } as const;
-
-/**
- * FC-1b1: las firmas ya aceptan los campos de C-FC3 (`bodyDoc`, `diagnoses`, `setActiveDiagnosis`, `importSource`)
- * y el zod los valida, pero la ESCRITURA la implementa FC-2a (bodyDoc → body, diagnósticos re-leídos con
- * `resolveDiagnosesInTx`, diagnóstico activo, `authorLicense`, `importSource`). Hasta entonces se rechazan con el copy
- * genérico en vez de guardar a medias (p. ej. una ficha con formato sin su `bodyDoc`, o diagnósticos perdidos en
- * silencio). Lo de EV2 (solo `body`) sigue igual. Con esto, el zod garantiza que `body` vino.
- */
-function pendingFcFields(p: {
-  bodyDoc?: unknown;
-  diagnoses?: unknown[] | null;
-  setActiveDiagnosis?: boolean;
-  importSource?: unknown;
-}): Fail | null {
-  const pending =
-    p.bodyDoc !== undefined ||
-    p.diagnoses !== undefined ||
-    p.setActiveDiagnosis === true ||
-    (p.importSource !== undefined && p.importSource !== null);
-  return pending ? fail(COPY.invalid) : null;
-}
 
 function fail(error: string): Fail {
   return { ok: false, error };

@@ -35,7 +35,6 @@ describe("[EV2-3d] actividad: evoluciones e impresión", () => {
     ["patientDocument.download", "Ficha compartida descargada por el paciente"],
     ["clinicalNote.download", "Ficha descargada"],
     ["clinicalRecord.download", "Historia clínica descargada"],
-    ["clinicalNote.import", "Ficha importada"],
   ])("%s → «%s»", (action, label) => {
     const html = renderToStaticMarkup(<ActivityTimeline events={[ev(action, 1)]} />);
     expect(html).toContain(label);

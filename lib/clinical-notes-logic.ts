@@ -14,9 +14,13 @@ import {
   TIMELINE_QUERY_MAX,
   type ClinicalNoteDTO,
   type ClinicalNotePermissions,
+  type ImportSourceInput,
   type TimelineItem,
   type TimelineSessionDTO,
 } from "@/lib/clinical-notes-types";
+// Solo el tipo: este archivo lo importan componentes cliente y `lib/hc-doc.ts` (el validador) no tiene que entrar a
+// sus bundles por acá. La función de texto plano la inyecta el server (`noteBodyFields`).
+import type { HcDoc } from "@/lib/hc-doc";
 
 export type Decision<R extends string> = { ok: true } | { ok: false; reason: R };
 
@@ -143,6 +147,57 @@ export function occurredAtDecision(occurredAt: Date, now: Date): Decision<"futur
 /** EV2-D24: la hora del turno; sin turno, ahora. Copia (nunca la misma instancia de Date del caller). */
 export function defaultOccurredAt(booking: { scheduledFor: Date } | null, now: Date): Date {
   return new Date((booking?.scheduledFor ?? now).getTime());
+}
+
+// ─── FC (C-FC3 «Reglas del server»): contenido de la ficha ──────────────────
+
+/**
+ * Regla 1 de C-FC3: qué `body`/`bodyDoc` se escriben.
+ *  - Con `bodyDoc` (ya re-armado por `validateHcDoc` en el zod): se guarda el doc canónico y `body` = su texto plano.
+ *    El texto se re-deriva acá con `hcDocToPlainText(doc)` y no se toma el `plainText` del parse: así `body` sale
+ *    SIEMPRE del doc que se guarda (búsqueda, mail, portal sin formato y el CHECK de la base miran `body`), aunque
+ *    alguien cambie el schema.
+ *  - Con `body` plano: `bodyDoc = null` (en una edición limpia el formato viejo; si quedara, la ficha mostraría el doc
+ *    anterior y el texto nuevo a la vez, uno en el editor y otro en la búsqueda).
+ *  - Sin ninguno (edición que solo cambia título, tipo o fecha): `undefined`, no se toca el contenido.
+ * El zod ya garantiza que no vienen los dos; si vinieran, gana el doc (nunca se guarda un `body` que no sale del doc).
+ */
+export function noteBodyFields(
+  p: { body?: string; bodyDoc?: { doc: HcDoc } },
+  toPlainText: (doc: HcDoc) => string
+): { body: string; bodyDoc: HcDoc | null } | undefined {
+  if (p.bodyDoc !== undefined) return { body: toPlainText(p.bodyDoc.doc), bodyDoc: p.bodyDoc.doc };
+  if (p.body !== undefined) return { body: p.body, bodyDoc: null };
+  return undefined;
+}
+
+/** Lo que se guarda en `ClinicalNote.importSource` (regla 4 de C-FC3): `{v:1, ...input, importedAt}`, solo al crear. */
+export type ImportSourceRecord = ImportSourceInput & { v: 1; importedAt: string };
+
+export function importSourceRecord(input: ImportSourceInput, now: Date): ImportSourceRecord {
+  return {
+    v: 1,
+    kind: input.kind,
+    fileName: input.fileName,
+    fileSize: input.fileSize,
+    fileLastModified: input.fileLastModified,
+    batchId: input.batchId,
+    part: input.part,
+    parts: input.parts,
+    importedAt: now.toISOString(),
+  };
+}
+
+/**
+ * Regla 6 de C-FC3: hechos del audit SIN texto clínico (ni títulos de diagnóstico ni el nombre del archivo: un .docx
+ * se llama «HC Pérez lumbalgia.docx»). Solo conteos y banderas.
+ */
+export function noteAuditFacts(p: {
+  diagnoses: readonly unknown[] | null | undefined;
+  activeDiagnosis: boolean;
+  imported: boolean;
+}): { diagnosesCount: number; activeDiagnosis: boolean; imported: boolean } {
+  return { diagnosesCount: p.diagnoses?.length ?? 0, activeDiagnosis: p.activeDiagnosis, imported: p.imported };
 }
 
 // ─── Cursor y búsqueda ───────────────────────────────────────────────────────

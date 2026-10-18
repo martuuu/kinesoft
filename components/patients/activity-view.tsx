@@ -250,9 +250,7 @@ function humanizeAction(action: string): string {
     "clinicalNote.void": "Ficha anulada",
     "clinicalRecord.print": "Historia clínica impresa",
     // FC (C-FC7): compartir/dejar de compartir con el paciente (auditInTx) y descargas (auditSecurityEvent). La
-    // importación de Word se audita hoy como `clinicalNote.create` (con `importSource`); la clave `clinicalNote.import`
-    // queda mapeada por si FC-2a la separa, así el historial no muestra la clave cruda.
-    "clinicalNote.import": "Ficha importada",
+    // importación de Word se audita como `clinicalNote.create` con `imported: true` (FC-2a, regla 6).
     "patientDocument.share": "Ficha compartida con el paciente",
     "patientDocument.revoke": "Ficha que dejó de compartirse",
     "patientDocument.download": "Ficha compartida descargada por el paciente",
