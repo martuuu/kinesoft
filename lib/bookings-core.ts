@@ -1263,6 +1263,9 @@ const UPDATE_BEFORE_SELECT = {
   pricedByPlan: true,
   paymentStatus: true,
   insurerPaidAt: true,
+  // T3-Z (B2): escalar, sin sentencia. Sin mover el turno de intervalo, el tope solo lo sigue marcando sobreturno si
+  // YA lo era (ver `isOverbooked` más abajo).
+  isOverbooked: true,
 } satisfies Prisma.BookingSelect;
 
 export type BookingUpdateBefore = Prisma.BookingGetPayload<{ select: typeof UPDATE_BEFORE_SELECT }>;
@@ -1355,7 +1358,7 @@ export type BookingUpdateTxOutcome =
        * T3 (C-AS3): el turno quedó como 2.º+ de su intervalo NUEVO, bajo el tope (aviso informativo, sin
        * confirmar). Solo cuando se chequeó el tope (cambio de intervalo o reactivación, sin `capLocksHeld`).
        */
-      intervalCapNotice?: { practitionerName: string; used: number; time: string };
+      intervalCapNotice?: { practitionerName: string; used: number; time: string; to?: string; intervalMin?: number };
     };
 
 /**
@@ -1594,7 +1597,7 @@ export async function applyBookingUpdateInTx(
    */
   let icap: IntervalCap | null = null;
   /** T3: aviso informativo del 2.º+ turno del intervalo nuevo (el nombre se lee recién después del UPDATE). */
-  let intervalNotice: { used: number; time: string } | null = null;
+  let intervalNotice: { used: number; time: string; to: string; intervalMin: number } | null = null;
 
   if (finalStatus !== "CANCELLED") {
     const pat =
@@ -1726,6 +1729,7 @@ export async function applyBookingUpdateInTx(
     }
     let capacityReached = false;
     let intervalFull = false;
+    let intervalMoved = false;
     if (windowChanged) {
       // B3.1 (TOCTOU): el lock de cupo de los días del horario NUEVO ya se
       // tomó arriba (antes de clasificar); el conteo y el update van en este
@@ -1753,7 +1757,7 @@ export async function applyBookingUpdateInTx(
       const v = intervalCapVerdict(occ.intervalStarts, icap, newWhen);
       if (v) {
         intervalFull = v.state === "full";
-        const intervalMoved =
+        intervalMoved =
           reactivating ||
           (slotChanged && arIntervalKeyOf(newWhen, v.cap.intervalMin) !== arIntervalKeyOf(before.scheduledFor, v.cap.intervalMin));
         if (intervalMoved && intervalFull && !force.allowIntervalCap) {
@@ -1770,7 +1774,7 @@ export async function applyBookingUpdateInTx(
             finalPatientId,
           };
         }
-        if (intervalMoved && v.state === "notice") intervalNotice = { used: v.used, time: v.fromTime };
+        if (intervalMoved && v.state === "notice") intervalNotice = { used: v.used, time: v.fromTime, to: v.toTime, intervalMin: icap!.intervalMin };
       }
     }
     // B3.1: `isOverbooked` refleja el horario NUEVO: forzado (cupo, tope o
@@ -1778,8 +1782,14 @@ export async function applyBookingUpdateInTx(
     // horario no se toca (salvo que un cambio de sede lo deje sobre un
     // bloqueo forzado). El prefijo "[SOBRETURNO]" de notes no se toca acá
     // (como antes: el update nunca lo escribió).
-    if (windowChanged) isOverbooked = capacityReached || blocked || intervalFull;
-    else if (blocked) isOverbooked = true;
+    // T3-Z (B2): el tope solo marca sobreturno si el turno ENTRA al intervalo (lo movieron o lo reactivaron: ahí se
+    // preguntó y se forzó). Sin moverlo de intervalo, `intervalFull` solo dice que sus compañeros ya llenan el tope,
+    // cosa que pasa también si el tope se bajó después en Configuración (T3e-2c) o si el lleno es de turnos forzados
+    // más tarde: alargar un turno normal no lo convierte en sobreturno; uno que YA lo era por el tope lo sigue siendo.
+    if (windowChanged) {
+      isOverbooked =
+        capacityReached || blocked || (intervalMoved ? intervalFull : intervalFull && before.isOverbooked);
+    } else if (blocked) isOverbooked = true;
   }
 
   // Sede elegida: lock compartido + activa en este tx (carrera con

@@ -326,6 +326,41 @@ describe.skipIf(!RUN)("[AS-2w] tope de turnos por intervalo (C-AS3)", () => {
     expect(await db.booking.findUniqueOrThrow({ where: { id: y.id } })).toMatchObject({ isOverbooked: false });
   });
 
+  it("[T3Z-s2] edición: alargar o mover dentro del intervalo un turno normal en un intervalo ya pasado de tope NO lo marca sobreturno", async () => {
+    // Tres turnos normales en [10:00, 10:15) con tope 2: pasa si el tope se bajó después (T3e-2c) o si el 3.º se
+    // cargó antes del tope. Ninguno es sobreturno; tocarles la duración no los convierte en uno (B2 de T3-Z: antes
+    // `intervalFull` sin mover de intervalo marcaba `isOverbooked` a cualquiera).
+    await mk({ prac: T.practitionerId, when: ar("2027-11-16T10:00") });
+    await mk({ prac: T.practitionerId, when: ar("2027-11-16T10:05"), svc: svcB, dur: 30 });
+    const x = await mk({ prac: T.practitionerId, when: ar("2027-11-16T10:10") });
+
+    const dur = await updateBooking({ id: x.id, durationMin: 30, expectedUpdatedAt: x.updatedAt.toISOString() });
+    expect(dur).toMatchObject({ ok: true });
+    expect(dur.intervalCap ?? null).toBeNull();
+    const longer = await db.booking.findUniqueOrThrow({ where: { id: x.id } });
+    expect(longer).toMatchObject({ durationMin: 30, isOverbooked: false });
+
+    const same = await updateBooking({ id: x.id, scheduledFor: ar("2027-11-16T10:12").toISOString(), expectedUpdatedAt: longer.updatedAt.toISOString() });
+    expect(same).toMatchObject({ ok: true });
+    expect(await db.booking.findUniqueOrThrow({ where: { id: x.id } })).toMatchObject({
+      scheduledFor: ar("2027-11-16T10:12"),
+      isOverbooked: false,
+    });
+
+    // Moverlo a OTRO intervalo lleno sí: forzado queda sobreturno.
+    await mk({ prac: T.practitionerId, when: ar("2027-11-16T11:00") });
+    await mk({ prac: T.practitionerId, when: ar("2027-11-16T11:05"), svc: svcB, dur: 30 });
+    const cur = await db.booking.findUniqueOrThrow({ where: { id: x.id } });
+    const moved = await updateBooking({
+      id: x.id,
+      scheduledFor: ar("2027-11-16T11:07").toISOString(),
+      expectedUpdatedAt: cur.updatedAt.toISOString(),
+      allowIntervalCap: true,
+    });
+    expect(moved).toMatchObject({ ok: true });
+    expect(await db.booking.findUniqueOrThrow({ where: { id: x.id } })).toMatchObject({ isOverbooked: true });
+  });
+
   it("[AS-2w] reactivar un cancelado en un intervalo lleno pide sobreturno (setBookingStatus)", async () => {
     await mk({ prac: T.practitionerId, when: ar("2027-11-09T10:00") });
     await mk({ prac: T.practitionerId, when: ar("2027-11-09T10:05"), svc: svcB, dur: 30 });

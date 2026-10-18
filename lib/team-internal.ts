@@ -996,8 +996,17 @@ export async function changeMemberRoleInTx(
   const grantsChanged = nextGrants.grantSettings !== m.grantSettings || nextGrants.grantBilling !== m.grantBilling;
   // CAS sobre el rol leído: si otro cambio ganó en el medio, no se pisa. Tirar (no devolver) revierte el
   // Practitioner/agenda que se haya creado arriba en esta misma tx.
+  // T3-Z (B1): si el rol trae o saca delegaciones, el CAS mira también las leídas. `nextGrants` sale de ESA lectura:
+  // sin esto, un «Configuración» o «Planes y pagos» que el Titular delegó o quitó en paralelo (`setMemberGrantsInTx`)
+  // se pisaba en silencio con lo de antes. Sin cambio de delegaciones no se escriben, así que no hace falta mirarlas.
   const upd = await tx.membership.updateMany({
-    where: { id: m.id, tenantId, role: m.role, clinical: m.clinical },
+    where: {
+      id: m.id,
+      tenantId,
+      role: m.role,
+      clinical: m.clinical,
+      ...(grantsChanged ? { grantSettings: m.grantSettings, grantBilling: m.grantBilling } : {}),
+    },
     data: { role: nextRole, clinical: nextClinical, ...(grantsChanged ? nextGrants : {}) },
   });
   if (upd.count !== 1) throw new RoleChangeRaceError();

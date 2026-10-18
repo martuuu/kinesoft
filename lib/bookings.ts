@@ -1069,6 +1069,8 @@ export async function createBooking(
               practitionerName: await practitionerLabel(tx, actor.tenantId, data.practitionerId),
               used: iv.used,
               time: iv.fromTime,
+              to: iv.toTime,
+              intervalMin: icap!.intervalMin,
             }
           : null;
       return { kind: "ok" as const, row, notice };
@@ -1873,7 +1875,27 @@ async function toggleBilling(
     if (toggle.side === "insurer" && !canConfirmInsurer(caps)) {
       return { kind: "forbidden" as const, error: COLLECT_COPY.insurerOnly };
     }
+    // P2-Z · B-M3: marcar/desmarcar el cobro de un turno de plan CANCELLED o
+    // NO_SHOW cambia si la cuota de su sesión "ya se pagó" (cobro previo,
+    // `priorPaidStamp`). El turno que la reemplaza tiene que acompañar en la
+    // MISMA tx: si no, desmarcar dejaba el reemplazo en $0 para siempre y
+    // marcar después de estampar a precio pleno cobraba la sesión dos veces.
+    // Lock del paciente PRIMERO (C2: va antes que cualquier fila, incluido el
+    // FOR UPDATE del turno de T3-Z más abajo; la lectura de arriba no lockea)
+    // — serializa con el reprecio y el motor, que deciden la plata de la misma
+    // sesión. Los turnos activos o sueltos no pagan nada.
+    const planPrior = row.sessionId != null && row.patientId != null && (row.status === "CANCELLED" || row.status === "NO_SHOW");
+    if (planPrior) await lockPlanPatient(tx, { tenantId: actor.tenantId, patientId: row.patientId! });
     if (toggle.side === "copago") {
+      // T3-Z (B3): la fila del turno se toma ANTES de leer el `Payment`, como el webhook de MP (`consumeWebhook`:
+      // Booking FOR UPDATE → Payment). Sin esto, con un turno marcado a mano, un webhook «approved» en vuelo escribe
+      // el `Payment` PAID sin tocar el turno (ya estaba PAID: no cambia `updatedAt`), esta lectura no lo ve (todavía
+      // sin commitear), el CAS por `updatedAt` pasa igual y el desmarcar deja el turno «por cobrar» con la plata de
+      // MP acreditada: la recepción cobraría dos veces. Con el lock, uno espera al otro y la lectura de abajo (otra
+      // sentencia, snapshot nuevo) ve el pago. Va en su propia sentencia a propósito: un JOIN con el Payment en el
+      // mismo SELECT … FOR UPDATE leería el Payment con el snapshot de ANTES de esperar. +1 sentencia solo en el
+      // copago (marcar del Titular: 10 → 11, dentro del techo de as1c-cobros); la OS no lee el pago.
+      await tx.$queryRaw`SELECT "id" FROM "Booking" WHERE "id" = ${id} AND "tenantId" = ${actor.tenantId} FOR UPDATE`;
       // Default del 19-oct: un cobro de Mercado Pago no se desmarca ni se cambia a mano. Desmarcarlo dejaría el turno
       // «por cobrar» con la plata ya acreditada (la recepción cobraría dos veces) y el webhook no lo volvería a
       // marcar; AUTHORIZED es MP reteniendo el pago, que todavía puede acreditarse. Se mira la fila `Payment`
@@ -1884,16 +1906,6 @@ async function toggleBilling(
         return { kind: "forbidden" as const, error: COLLECT_COPY.mercadoPagoLocked };
       }
     }
-    // P2-Z · B-M3: marcar/desmarcar el cobro de un turno de plan CANCELLED o
-    // NO_SHOW cambia si la cuota de su sesión "ya se pagó" (cobro previo,
-    // `priorPaidStamp`). El turno que la reemplaza tiene que acompañar en la
-    // MISMA tx: si no, desmarcar dejaba el reemplazo en $0 para siempre y
-    // marcar después de estampar a precio pleno cobraba la sesión dos veces.
-    // Lock del paciente PRIMERO (C2: va antes que cualquier fila; la lectura
-    // de arriba no lockea) — serializa con el reprecio y el motor, que deciden
-    // la plata de la misma sesión. Los turnos activos o sueltos no pagan nada.
-    const planPrior = row.sessionId != null && row.patientId != null && (row.status === "CANCELLED" || row.status === "NO_SHOW");
-    if (planPrior) await lockPlanPatient(tx, { tenantId: actor.tenantId, patientId: row.patientId! });
     // Q8 (C5, cierra parcialmente AUDIT:940): un turno fuera de plan sin copago
     // propio (`copagoCents` null) se COBRA por el copago resuelto en lectura
     // (precedencia §5.5 de lib/copago.ts, la misma que la agenda). Si no se

@@ -115,6 +115,9 @@ export type BookingIntervalCapNotice = {
   practitionerName: string;
   used: number;
   time: string;
+  /** Fin del intervalo e intervalo (15/30/60): con 30 o 60 el aviso dice «entre las {time} y las {to}» (T3-Z M5). */
+  to?: string;
+  intervalMin?: number;
 };
 
 /** Una fecha del preview/resultado de `createBookingsBatch`. `outOfHours` y
