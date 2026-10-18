@@ -7,7 +7,16 @@
  * REFUNDED se devolvió, así que restarlas le haría cobrar de menos a la recepción.
  */
 import { describe, expect, it } from "vitest";
-import { COLLECT_COPY, copagoRemainingCents, type CopagoMarkInput } from "@/lib/booking-collect";
+import {
+  COLLECT_COPY,
+  UNDO_COLLECT_CONFIRM,
+  collectModalDescription,
+  copagoCollectView,
+  copagoCollectViewFor,
+  copagoRemainingCents,
+  type CopagoMarkInput,
+} from "@/lib/booking-collect";
+import { capabilitiesFor, type Capability } from "@/lib/capabilities";
 
 describe("[AS-1k1] copagoRemainingCents", () => {
   it("[AS-1k1] sin señas: el copago entero", () => {
@@ -64,9 +73,71 @@ describe("[AS-1k1] CopagoMarkInput y copy", () => {
     expect(COLLECT_COPY).toEqual({
       ownOnly: "Solo podés registrar el cobro de tus propios turnos.",
       roleCannotCollect: "Tu rol no registra cobros.",
-      insurerOnly: "Solo Facturación, el titular o el administrador/a confirman pagos de obra social.",
+      insurerOnly: "Solo Facturación, el titular o el administrador confirman pagos de obra social.",
       mercadoPagoLocked: "Este turno se pagó por Mercado Pago: el cobro no se cambia a mano.",
       methodRequired: "Elegí cómo pagó.",
+      collectFailed: "No pudimos registrar el cobro",
+      undoFailed: "No pudimos deshacer el cobro",
     });
+  });
+});
+
+// T3-Z (Z-u1): lo que comparten el drawer, /sala y Facturación para que el mismo cobro se lea igual en las tres.
+describe("[Z-u1] UNDO_COLLECT_CONFIRM (A2)", () => {
+  it("[Z-u1] el confirm de deshacer lleva el monto formateado y es danger", () => {
+    expect(UNDO_COLLECT_CONFIRM("$ 6.000")).toEqual({
+      title: "¿Deshacer el cobro?",
+      message: "El turno vuelve a quedar por cobrar ($ 6.000) y se borra el medio de pago.",
+      confirmLabel: "Deshacer cobro",
+      tone: "danger",
+    });
+  });
+});
+
+describe("[Z-u1] copagoCollectView (A3: movido de billing-rows a lib)", () => {
+  const SECRETARIA = capabilitiesFor("ASSISTANT");
+  const NADIE: ReadonlySet<Capability> = new Set();
+  const b = (over: Partial<Parameters<typeof copagoCollectViewFor>[0]> = {}) => ({
+    paymentStatus: "UNPAID" as const,
+    copagoPaymentMethod: null,
+    publicReservation: false,
+    practitionerId: "p1",
+    copagoCents: 600_000,
+    status: "CONFIRMED" as const,
+    ...over,
+  });
+
+  it("[Z-u1] por cobrar → «Cobrar» solo a quien cobra y si el turno ocurrió", () => {
+    expect(copagoCollectView(b(), SECRETARIA, null)).toEqual({ label: "Por cobrar", action: "collect" });
+    expect(copagoCollectView(b(), NADIE, null)).toEqual({ label: "Por cobrar", action: null });
+    expect(copagoCollectViewFor(b({ status: "NO_SHOW" }), true).action).toBeNull();
+    expect(copagoCollectViewFor(b({ copagoCents: 0 }), true)).toEqual({ label: null, action: null });
+  });
+
+  it("[Z-u1] Mercado Pago: retenido y reintegrado sin botón; pública PAID sin medio sin botones", () => {
+    expect(copagoCollectViewFor(b({ paymentStatus: "AUTHORIZED" }), true)).toEqual({ label: "Pago retenido por Mercado Pago", action: null });
+    expect(copagoCollectViewFor(b({ paymentStatus: "REFUNDED" }), true)).toEqual({ label: "Reintegrado por Mercado Pago", action: null });
+    expect(copagoCollectViewFor(b({ paymentStatus: "PAID", publicReservation: true }), true)).toEqual({ label: "Pagado por Mercado Pago", action: null });
+  });
+
+  it("[Z-u1] pagado a mano: «Pagado · medio» y deshacer a quien cobra", () => {
+    expect(copagoCollectViewFor(b({ paymentStatus: "PAID", copagoPaymentMethod: "CARD" }), true)).toEqual({ label: "Pagado · Tarjeta", action: "undo" });
+    expect(copagoCollectViewFor(b({ paymentStatus: "PAID" }), false)).toEqual({ label: "Pagado · Sin informar", action: null });
+    expect(copagoCollectViewFor(b({ paymentStatus: undefined }), true)).toEqual({ label: null, action: null });
+  });
+});
+
+describe("[Z-u1] collectModalDescription (B2)", () => {
+  // 2026-10-19T13:30Z = lunes 19/10 10:30 en AR: en un host UTC el día y la hora del host darían 13:30.
+  const base = { patientName: "Juana Gómez", serviceName: "Kinesio", scheduledFor: "2026-10-19T13:30:00.000Z" };
+  it("[Z-u1] paciente · servicio · día y hora en AR", () => {
+    expect(collectModalDescription(base)).toBe("Juana Gómez · Kinesio · lun 19/10 10:30");
+  });
+  it("[Z-u1] con profesional (solo si el caller lo pasa: hay más de uno)", () => {
+    expect(collectModalDescription({ ...base, practitionerName: "Ana Pérez" })).toBe("Juana Gómez · Kinesio · lun 19/10 10:30 · Ana Pérez");
+    expect(collectModalDescription({ ...base, practitionerName: null })).toBe("Juana Gómez · Kinesio · lun 19/10 10:30");
+  });
+  it("[Z-u1] medianoche AR no se va al día anterior ni sale «24:00»", () => {
+    expect(collectModalDescription({ ...base, scheduledFor: "2026-10-20T03:00:00.000Z" })).toBe("Juana Gómez · Kinesio · mar 20/10 00:00");
   });
 });

@@ -642,6 +642,7 @@ export function PatientProfile({
           {tab === "evol" && <EvolucionView patient={patient} onRegister={() => setTab("resumen")} />}
           {tab === "fact" && (
             <FacturacionView
+              patientName={`${patient.firstName} ${patient.lastName}`}
               bookings={bookingsAll}
               loading={loadingBookings}
               patchBooking={patchBooking}
@@ -854,6 +855,7 @@ export function PatientAdminProfile({
       )}
       {tab === "fact" && (
         <FacturacionView
+          patientName={`${patient.firstName} ${patient.lastName}`}
           bookings={bookings}
           loading={false}
           patchBooking={patchBooking}

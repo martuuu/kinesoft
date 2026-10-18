@@ -5,7 +5,7 @@ import { Modal, ModalActions } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { setBookingCopagoPaid } from "@/lib/bookings";
-import { COLLECT_COPY, copagoRemainingCents } from "@/lib/booking-collect";
+import { COLLECT_COPY, collectModalDescription, copagoRemainingCents } from "@/lib/booking-collect";
 import { formatARS } from "@/lib/format";
 import { PAYMENT_METHOD_LABEL, type PaymentMethod } from "@/lib/payment-method";
 import { isStaleError } from "@/lib/reception-view-state";
@@ -96,11 +96,14 @@ export function CollectForm({
  */
 export function CollectModal({
   booking,
+  practitionerName = null,
   onClose,
   onSaved,
 }: {
   /** null = cerrado (el Modal queda montado para la animación de salida). */
   booking: DrawerBooking | null;
+  /** Solo si el consultorio tiene más de un profesional (B2): si no, el nombre no dice nada. */
+  practitionerName?: string | null;
   onClose: () => void;
   onSaved: (r: CollectResult) => void;
 }) {
@@ -132,7 +135,7 @@ export function CollectModal({
     try {
       res = await setBookingCopagoPaid(booking.id, { paid: true, method: v.method }, booking.updatedAt);
     } catch {
-      res = { ok: false, error: "No pudimos registrar el cobro. Revisá la conexión y reintentá." };
+      res = { ok: false, error: "Revisá la conexión y reintentá." };
     }
     setSaving(false);
     if (res.ok) {
@@ -150,7 +153,7 @@ export function CollectModal({
       onClose();
       return;
     }
-    toast.error("No pudimos registrar el cobro", { description: res.error });
+    toast.error(COLLECT_COPY.collectFailed, { description: res.error });
   }
 
   return (
@@ -158,7 +161,7 @@ export function CollectModal({
       open={booking != null}
       onClose={close}
       title="Registrar cobro"
-      description={booking ? `${booking.patientName} · ${booking.serviceName}` : undefined}
+      description={booking ? collectModalDescription({ ...booking, practitionerName }) : undefined}
       width={460}
     >
       {booking && (

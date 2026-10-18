@@ -4,9 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
-import { fmtHour, type BookingDTO } from "@/components/agenda/agenda-utils";
+import type { BookingDTO } from "@/components/agenda/agenda-utils";
 import { setBookingCopagoPaid } from "@/lib/bookings";
-import { COLLECT_COPY, copagoRemainingCents } from "@/lib/booking-collect";
+import { COLLECT_COPY, collectModalDescription, copagoRemainingCents } from "@/lib/booking-collect";
 import { formatARS } from "@/lib/format";
 import { PAYMENT_METHOD_LABEL, type PaymentMethod } from "@/lib/payment-method";
 import { isStaleError } from "@/lib/reception-view-state";
@@ -27,8 +27,9 @@ export function applyCopagoPaid(row: BookingDTO, updatedAt: Date | string, metho
 }
 
 /**
- * Modal «Registrar cobro» del escritorio (RX-1b, prototipo `openPay()`; T3 C-AS2, plan §23.4). Importe, cobertura,
- * profesional y hora; el medio de pago es OBLIGATORIO (`PaymentMethodPicker`, sin preselección: decisión 5 del
+ * Modal «Registrar cobro» del escritorio (RX-1b, prototipo `openPay()`; T3 C-AS2, plan §23.4). Importe y la
+ * descripción única de los tres modales de cobro (`collectModalDescription`, T3-Z B2: paciente · servicio · día y
+ * hora, y el profesional solo si el consultorio tiene más de uno); el medio de pago es OBLIGATORIO (`PaymentMethodPicker`, sin preselección: decisión 5 del
  * 19-oct) y «Marcar pagado · $ X» llama a `setBookingCopagoPaid(id, { paid: true, method }, updatedAt)`; si sale,
  * `onSaved(fila)` → `live.replaceRow` y el medio queda como «último» del dispositivo.
  *
@@ -53,7 +54,8 @@ export function DeskPayModal({
 }: {
   /** null = cerrado (el Modal queda montado para la animación de salida). */
   row: BookingDTO | null;
-  practitionerName: string;
+  /** Solo si el consultorio tiene más de un profesional (B2); null/"" = no se nombra. */
+  practitionerName?: string | null;
   viewer: DeskViewer;
   onClose: () => void;
   onSaved: (row: BookingDTO) => void;
@@ -92,7 +94,7 @@ export function DeskPayModal({
     try {
       res = await setBookingCopagoPaid(row.id, { paid: true, method }, row.updatedAt);
     } catch {
-      res = { ok: false, error: "No pudimos registrar el cobro. Revisá la conexión y reintentá." };
+      res = { ok: false, error: "Revisá la conexión y reintentá." };
     }
     setSaving(false);
     if (res.ok) {
@@ -110,14 +112,14 @@ export function DeskPayModal({
       onClose();
       return;
     }
-    toast.error(res.error);
+    // T3-Z (B3): el mismo título que el drawer y Facturación; antes el error del server salía pelado.
+    toast.error(COLLECT_COPY.collectFailed, { description: res.error });
   }
 
-  const coverage = row ? (row.obraSocial === "Particular" ? "Sesión particular" : `Copago ${row.obraSocial}`) : "";
-  const description = row ? `${coverage} · ${practitionerName} · ${fmtHour(new Date(row.scheduledFor))}` : undefined;
+  const description = row ? collectModalDescription({ ...row, practitionerName }) : undefined;
 
   return (
-    <Modal open={row != null} onClose={close} title="Registrar cobro" description={row ? `${row.patientName} · ${description}` : undefined} width={460}>
+    <Modal open={row != null} onClose={close} title="Registrar cobro" description={description} width={460}>
       {row && (
         <div className="desk-pay">
           <div className="desk-pay-amt">

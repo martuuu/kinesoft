@@ -325,7 +325,8 @@ export function ReceptionDesk({
       {payMounted && (
         <DeskPayModal
           row={payRow}
-          practitionerName={payRow ? practitionerName(payRow.practitionerId) : ""}
+          // B2: el profesional solo se nombra si hay más de uno (con uno solo es ruido).
+          practitionerName={payRow && live.practitioners.length > 1 ? practitionerName(payRow.practitionerId) : null}
           viewer={viewer}
           onClose={closePay}
           onSaved={live.replaceRow}

@@ -90,7 +90,7 @@ const ROWS: BookingDTO[] = [
   dto("demorado", "10:15", { practitionerId: "p2" }),
   dto("prox", "11:00"),
   dto("cobrar", "09:00", { status: "COMPLETED", copagoCents: 600000, obraSocial: "OSDE" }),
-  dto("pagado", "08:00", { practitionerId: "p2", status: "COMPLETED", copagoCents: 500000, paymentStatus: "PAID" }),
+  dto("pagado", "08:00", { practitionerId: "p2", status: "COMPLETED", copagoCents: 500000, paymentStatus: "PAID", copagoPaymentMethod: "CASH" }),
   dto("cancel", "12:00", { status: "CANCELLED" }),
 ];
 const PRACTITIONERS = [
@@ -221,17 +221,17 @@ describe("[RX-1b] acciones por fila y por rol", () => {
     expect(rowHtml(html, "llamado")).toContain('data-state="llamado"');
   });
 
-  it("viewer sin cobro: ni Cobrar ni Cobrado", () => {
+  it("viewer sin cobro: ni Cobrar ni Pagado", () => {
     const html = renderRows(SECRETARIA);
     expect(html).not.toContain("Cobrar");
-    expect(html).not.toContain("Cobrado");
+    expect(html).not.toContain("Pagado · ");
     expect(rowHtml(html, "cobrar")).not.toContain('data-kind="pay"');
   });
 
-  it("[AS-1c] la Secretaria (billing.collect, sin profesional) cobra cualquier fila: Cobrar y Cobrado", () => {
+  it("[AS-1c] la Secretaria (billing.collect, sin profesional) cobra cualquier fila: Cobrar y «Pagado · medio» (T3-Z M1)", () => {
     const html = renderRows(COBRA_SECRETARIA);
     expect(rowHtml(html, "cobrar")).toContain('data-kind="pay"');
-    expect(rowHtml(html, "pagado")).toContain("Cobrado");
+    expect(rowHtml(html, "pagado")).toContain("Pagado · Efectivo");
   });
 
   it("[AS-1c] profesional (billing.collectOwn): Cobrado solo en SU fila; el atendido ajeno que debe no ofrece Cobrar", () => {
@@ -239,14 +239,14 @@ describe("[RX-1b] acciones por fila y por rol", () => {
     // «cobrar» es de p1: ni el botón ni el «Cobrado» (canCollectRow, la regla del server).
     expect(rowHtml(html, "cobrar")).not.toContain('data-kind="pay"');
     // «pagado» es de p2: lo ve cobrado.
-    expect(rowHtml(html, "pagado")).toContain("Cobrado");
+    expect(rowHtml(html, "pagado")).toContain("Pagado · Efectivo");
   });
 
   it("Titular (billing.collect): Cobrar en el atendido que debe, Cobrado en el pagado", () => {
     const html = renderRows(TITULAR);
     expect(rowHtml(html, "cobrar")).toContain(`aria-label="Cobrar a Paciente cobrar, ${formatARS(600000)}"`);
     expect(rowHtml(html, "cobrar")).toContain('data-kind="pay"');
-    expect(rowHtml(html, "pagado")).toContain("Cobrado");
+    expect(rowHtml(html, "pagado")).toContain("Pagado · Efectivo");
     expect(rowHtml(html, "pagado")).not.toContain('data-kind="pay"');
   });
 
@@ -287,7 +287,12 @@ describe("[RX-1b] cobro", () => {
       <DeskPayModal row={ROWS[5]} practitionerName="Ana Pérez" viewer={TITULAR} onClose={() => {}} onSaved={() => {}} />
     );
     expect(html).toContain("Registrar cobro");
-    expect(html).toContain("Paciente cobrar · Copago OSDE · Ana Pérez · 09:00");
+    // T3-Z (B2): la descripción única de los tres modales: paciente · servicio · día y hora (+ profesional si hay
+    // más de uno; el shell lo pasa solo en ese caso).
+    expect(html).toContain("Paciente cobrar · Kinesiología · jue 15/10 09:00 · Ana Pérez");
+    const solo = renderToStaticMarkup(<DeskPayModal row={ROWS[5]} practitionerName={null} viewer={TITULAR} onClose={() => {}} onSaved={() => {}} />);
+    expect(solo).toContain("Paciente cobrar · Kinesiología · jue 15/10 09:00");
+    expect(solo).not.toContain("Ana Pérez");
     expect(html).toContain(formatARS(600000));
     // El botón dice el monto (copagoRemainingCents: sin señas en T3, el copago entero).
     expect(html).toContain(`Marcar pagado · ${formatARS(600000)}`);

@@ -40,7 +40,8 @@ vi.mock("@/components/ui/toast", () => ({
 vi.mock("@/components/ui/confirm-dialog", () => ({ useConfirm: () => vi.fn(async () => true) }));
 
 import { BookingDrawer } from "@/components/agenda/booking-drawer";
-import { BillingRows, copagoCollectView } from "@/components/agenda/booking-drawer/billing-rows";
+import { BillingRows } from "@/components/agenda/booking-drawer/billing-rows";
+import { copagoCollectView } from "@/lib/booking-collect";
 import { CollectForm, validateCollect } from "@/components/agenda/booking-drawer/collect-modal";
 import type { DrawerBooking } from "@/components/agenda/booking-drawer/types";
 import { capabilitiesFor, type Capability } from "@/lib/capabilities";

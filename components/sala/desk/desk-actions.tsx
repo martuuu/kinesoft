@@ -6,6 +6,7 @@ import Link from "next/link";
 import { IconArrow, IconBell, IconCheck } from "@/components/ui/icons";
 import { fmtHour, type BookingDTO } from "@/components/agenda/agenda-utils";
 import { formatARS } from "@/lib/format";
+import { copagoCollectViewFor } from "@/lib/booking-collect";
 import { RECEPTION_STATE_LABEL, type ReceptionAction } from "@/lib/reception-state";
 import { stateTagText, undoHint } from "@/lib/reception-view-state";
 import { canCollectRow, deskMenuItems, deskPrimary, type DeskEntry, type DeskViewer } from "@/lib/reception-desk-state";
@@ -165,7 +166,8 @@ function ActionIcon({ kind }: { kind: "arrive" | "call" | "attend" | "done" | "p
 
 /**
  * Botón primario de la fila: Llegó / Llamar / En atención / Atendido, o Cobrar para un atendido que debe (solo a
- * quien cobra). Un atendido ya cobrado muestra «Cobrado» a quien cobra (para la Secretaria no es información). Sin
+ * quien cobra). Un atendido ya cobrado muestra «Pagado · {medio}» a quien cobra (T3-Z M1: el mismo rótulo que el
+ * drawer y Facturación, de `copagoCollectViewFor`; antes decía «Cobrado» sin medio). Sin
  * primaria, nada: el menú ⋯ tiene el resto.
  */
 export function DeskPrimaryAction({ entry, block = false }: { entry: DeskEntry; block?: boolean }) {
@@ -175,15 +177,16 @@ export function DeskPrimaryAction({ entry, block = false }: { entry: DeskEntry; 
   const pending = api.pendingIds.has(b.id);
   if (!p) {
     const settled = b.paymentStatus === "PAID" || b.paymentStatus === "AUTHORIZED";
-    // T3: «Cobrado» solo a quien cobra ESTA fila (`canCollectRow`, la regla del server): al profesional no le
+    // T3: el «Pagado» solo a quien cobra ESTA fila (`canCollectRow`, la regla del server): al profesional no le
     // informa el cobro de un turno ajeno que no puede tocar.
     if (entry.state === "atendido" && canCollectRow(api.viewer, b) && b.copagoCents > 0 && settled) {
+      const paidLabel = copagoCollectViewFor(b, false).label ?? "Pagado";
       return (
-        <span className="desk-paid">
+        <span className="desk-paid" title={paidLabel}>
           <span className="desk-act-ico" aria-hidden="true">
             <IconCheck size={16} />
           </span>
-          Cobrado
+          <span className="desk-paid-t">{paidLabel}</span>
         </span>
       );
     }
