@@ -1512,6 +1512,7 @@ export function AgendaClient(props: Props) {
       <BookingDrawer
         booking={editingBooking}
         capabilities={props.capabilities ?? null}
+        viewerPractitionerId={ownPractitionerId}
         rooms={rooms}
         primaryLocationId={primaryLocationId}
         onClose={() => setEditing(null)}

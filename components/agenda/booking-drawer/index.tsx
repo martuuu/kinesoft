@@ -70,7 +70,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import type { PickedPatient } from "@/components/patients/patient-picker";
 import { recordsDiffer } from "@/lib/form-dirty";
 import type { BookingStatus } from "@prisma/client";
-import { BillingRows } from "./billing-rows";
+import { BillingRows, type CopagoChange } from "./billing-rows";
 import { EditDetailsForm } from "./edit-details-form";
 import { EditToggles } from "./edit-toggles";
 import { PatientHeader } from "./patient-header";
@@ -171,6 +171,7 @@ export function BookingDrawer({
   onClose,
   onSaved,
   capabilities,
+  viewerPractitionerId,
   rooms,
   primaryLocationId,
 }: {
@@ -190,6 +191,8 @@ export function BookingDrawer({
    * `canOperate`/`clinicalWritable`; sin ellas el fallback no habilita clínica.
    */
   capabilities?: readonly string[] | null;
+  /** T3d-1r: profesional del actor, para `canCollectCopago` (el profesional cobra solo sus turnos). */
+  viewerPractitionerId?: string | null;
 }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -199,19 +202,23 @@ export function BookingDrawer({
   // acción de recepción, Cambiar estado, Reprogramar) salía con el `updatedAt` viejo y rebotaba por stale. Se
   // descarta solo cuando la fila del padre es igual o más nueva (mismo criterio que `mergeReceptionOverrides`).
   const [receptionResult, setReceptionResult] = useState<{ id: string; result: ReceptionActionResult } | null>(null);
+  // T3d-1r: lo mismo para un cobro hecho desde el drawer: sin esto, Cambiar estado / Reprogramar después de cobrar
+  // salían con el `updatedAt` viejo y rebotaban por stale.
+  const [copagoResult, setCopagoResult] = useState<CopagoChange | null>(null);
   const booking: DrawerBooking | null = useMemo(() => {
-    if (!bookingProp || !receptionResult || receptionResult.id !== bookingProp.id) return bookingProp;
-    const r = receptionResult.result;
-    if (new Date(bookingProp.updatedAt).getTime() >= new Date(r.updatedAt).getTime()) return bookingProp;
-    return {
-      ...bookingProp,
-      status: r.status,
-      arrivedAt: r.arrivedAt,
-      calledAt: r.calledAt,
-      attendingAt: r.attendingAt,
-      updatedAt: r.updatedAt,
-    };
-  }, [bookingProp, receptionResult]);
+    if (!bookingProp) return bookingProp;
+    let b: DrawerBooking = bookingProp;
+    if (receptionResult && receptionResult.id === bookingProp.id) {
+      const r = receptionResult.result;
+      if (new Date(b.updatedAt).getTime() < new Date(r.updatedAt).getTime()) {
+        b = { ...b, status: r.status, arrivedAt: r.arrivedAt, calledAt: r.calledAt, attendingAt: r.attendingAt, updatedAt: r.updatedAt };
+      }
+    }
+    if (copagoResult && copagoResult.id === bookingProp.id && new Date(b.updatedAt).getTime() < new Date(copagoResult.updatedAt).getTime()) {
+      b = { ...b, paymentStatus: copagoResult.paymentStatus, copagoPaymentMethod: copagoResult.copagoPaymentMethod, updatedAt: copagoResult.updatedAt };
+    }
+    return b;
+  }, [bookingProp, receptionResult, copagoResult]);
   const toast = useToast();
   const confirm = useConfirm();
   const router = useRouter();
@@ -782,7 +789,7 @@ export function BookingDrawer({
           <PatientHeader booking={booking} />
 
           <div style={{ ...sectionCard, display: "grid", gap: 8, fontSize: 12.5 }}>
-            <BillingRows booking={booking} caps={caps} />
+            <BillingRows booking={booking} caps={caps} viewerPractitionerId={viewerPractitionerId ?? null} onCopagoChanged={setCopagoResult} />
             <ReceptionInfo
               booking={booking}
               room={
