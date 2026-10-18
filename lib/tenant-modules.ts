@@ -285,12 +285,13 @@ export const MODULE_REVOKED_COPY =
 
 /**
  * Mensaje de «falta el módulo» para ESTE consultorio: si Plataforma se lo sacó (`moduleRevokes`, y el revoke cuenta),
- * `MODULE_REVOKED_COPY`; si no, el de siempre (upsell o «no es para tu tipo de consultorio»). Un revoke de algo que el
- * plan tampoco trae no cambia el copy: el upsell sigue siendo la salida.
+ * `MODULE_REVOKED_COPY`; si no, el de siempre (upsell o «no es para tu tipo de consultorio»). T3c-1p: un revoke vale
+ * aunque el plan tampoco traiga el módulo (el revoke sigue al cambiar de plan; vender un plan mayor prometería algo que
+ * no se abre), igual que el muro (`moduleWallFor`).
  */
 export function moduleDeniedCopy(e: TenantEntitlements, m: TenantModule): string {
   const revoked =
-    (e.moduleRevokes ?? []).includes(m) && isModuleOverridable(m, e.vertical) && baseModules(e).includes(m);
+    (e.moduleRevokes ?? []).includes(m) && isModuleOverridable(m, e.vertical);
   return revoked ? MODULE_REVOKED_COPY : MODULE_DENIED_COPY[m];
 }
 
