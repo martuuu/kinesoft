@@ -9,6 +9,15 @@ vi.mock("@/components/ui/toast", () => ({
 }));
 
 import { StatusTag } from "@/components/ui/status-tag";
+// T3d-1r: la fila del copago del drawer usa toast y confirm (Cobrar / Deshacer cobro); este test solo mira el render.
+vi.mock("@/components/ui/toast", async (orig) => ({
+  ...(await orig<typeof import("@/components/ui/toast")>()),
+  useToast: () => ({ success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn(), show: vi.fn(), dismiss: vi.fn() }),
+}));
+vi.mock("@/components/ui/confirm-dialog", async (orig) => ({
+  ...(await orig<typeof import("@/components/ui/confirm-dialog")>()),
+  useConfirm: () => vi.fn(async () => true),
+}));
 import { ListView, StatusTag as ListStatusTag } from "@/components/agenda/views/list-view";
 import { StatusTag as DrawerStatusTag } from "@/components/agenda/booking-drawer/status-tag";
 import { PatientHeader } from "@/components/agenda/booking-drawer/patient-header";
