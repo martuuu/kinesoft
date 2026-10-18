@@ -174,6 +174,8 @@ export function PublicBookingWizard({
 
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // T3 (AS-D9 / C-AS3): el horario elegido dejó de ser reservable (paso nuevo, tope lleno, se ocupó).
+  const [slotGone, setSlotGone] = useState<string | null>(null);
 
   const practitioner = clinic.practitioners.find((p) => p.id === practitionerId) ?? null;
   const service = clinic.services.find((s) => s.id === serviceId) ?? null;
@@ -189,6 +191,7 @@ export function PublicBookingWizard({
   }, [mode, practitionerId, filters, clinic]);
 
   const setSlot = (iso: string | null, locationId: string | null) => {
+    if (iso) setSlotGone(null);
     setSlotISO(iso);
     setSlotLocationId(iso ? locationId : null);
   };
@@ -283,6 +286,14 @@ export function PublicBookingWizard({
         },
       });
       if (!r.ok) {
+        // T3: el server marca `fieldErrors.scheduledFor` cuando el horario ya no se puede reservar: volver a la ventana
+        // (se recarga al montar) sin el horario elegido, en vez de dejar al paciente trabado en «Tus datos».
+        if (r.fieldErrors?.scheduledFor) {
+          setSlot(null, null);
+          setSlotGone(r.error);
+          setStep(2);
+          return;
+        }
         setError(r.error);
         return;
       }
@@ -324,6 +335,12 @@ export function PublicBookingWizard({
                 if (mode === "any") setPractitionerId(null);
               }}
             />
+          )}
+          {step === 2 && slotGone && (
+            <div className="k-alert" role="alert">
+              <IconAlert size={18} />
+              <span>{slotGone}</span>
+            </div>
           )}
           {step === 2 && mode === "pick" && practitionerId && serviceId && (
             <SlotWindowStep
