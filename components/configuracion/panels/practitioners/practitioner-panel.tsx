@@ -58,6 +58,7 @@ export function PractitionerPanel({
   team,
   specialties,
   support = false,
+  sensitive = false,
 }: {
   summary: PractitionerScheduleSummaryRow[];
   locations: LocationRow[];
@@ -78,6 +79,11 @@ export function PractitionerPanel({
   specialties?: PractitionerSpecialtiesData | null;
   /** DIR-3c: sesión de soporte → especialidades en solo lectura. */
   support?: boolean;
+  /**
+   * T3d-1g (C-AS1): `tenant.sensitive`. El turnero de un profesional ajeno es lo delicado: sin él, la ficha no muestra
+   * el switch (el propio se prende desde el menú de perfil, que no pasa por acá). Default `false`: deny por default.
+   */
+  sensitive?: boolean;
 }) {
   const confirm = useConfirm();
   const [selectedId, setSelectedId] = useState<string | null>(summary[0]?.practitionerId ?? null);
@@ -124,12 +130,16 @@ export function PractitionerPanel({
   const activeLocations = locations.filter((l) => l.active);
   const multiLocation = activeLocations.length > 1;
   const selected = summary.find((s) => s.practitionerId === selectedId) ?? null;
-  const selectedTeam = selected ? team?.find((m) => m.practitionerId === selected.practitionerId) : undefined;
+  const selectedTeam =
+    selected && sensitive ? team?.find((m) => m.practitionerId === selected.practitionerId) : undefined;
 
   if (summary.length === 0) {
     return (
       <Card style={{ padding: 28, textAlign: "center", color: "var(--navy-500)", fontSize: 13 }}>
-        Todavía no hay profesionales con la invitación aceptada. Invitalos desde la pestaña Usuarios.
+        {/* T3d-1g: la pestaña Usuarios es `tenant.sensitive`: a quien no la ve no se le dice que invite desde ahí. */}
+        {sensitive
+          ? "Todavía no hay profesionales con la invitación aceptada. Invitalos desde la pestaña Usuarios."
+          : "Todavía no hay profesionales con la invitación aceptada. Los invita el titular o el administrador."}
       </Card>
     );
   }

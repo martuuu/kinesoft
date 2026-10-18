@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import type { Role } from "@prisma/client";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
@@ -29,13 +28,24 @@ import { useAlertPrefs } from "@/components/providers/arrival-alerts";
 import { AlertModeControl } from "@/components/realtime/alert-prefs-controls";
 import { supportContactText } from "@/lib/support-contact";
 
+/**
+ * Configuración → General. T3d-1g (C-AS1): por CAPACIDAD, no por rol (antes `role === OWNER || ADMIN`, que le
+ * deshabilitaba el horario a un Profesional con «Configuración» y le dejaba ver deshabilitado lo delicado a la
+ * Secretaria). Lo operativo (horario y vista de agenda) es `tenant.admin`; lo delicado (datos del consultorio,
+ * «Funciones del consultorio» con el turnero y «quién ve la HC») es `tenant.sensitive` y sin él NO SE MUESTRA: una
+ * tarjeta deshabilitada le hacía creer a la Secretaria que algo estaba roto. El server lo exige igual.
+ */
 export function GeneralPanel({
   tenant,
-  role,
+  admin,
+  sensitive,
   support = false,
 }: {
   tenant: TenantSettings;
-  role: Role;
+  /** `tenant.admin` («Configuración»): horario y vista de agenda del consultorio. */
+  admin: boolean;
+  /** `tenant.sensitive`: datos del consultorio, turnero y «quién ve la HC». Sin él, esas tarjetas no se muestran. */
+  sensitive: boolean;
   /** BO3-F: sesión de soporte. Ve lo de Configuración, pero no puede abrir la HC a otros ni guardar preferencias propias. */
   support?: boolean;
 }) {
@@ -56,7 +66,7 @@ export function GeneralPanel({
   useEffect(() => { setHoursEnd(tenant.businessHoursEnd); }, [tenant.businessHoursEnd]);
   useEffect(() => { setSlotMinutes(tenant.agendaSlotMinutes); }, [tenant.agendaSlotMinutes]);
 
-  const canAdmin = role === "OWNER" || role === "ADMIN";
+  const canAdmin = admin;
 
   const saveHours = () => {
     setHoursMsg(null);
@@ -115,6 +125,12 @@ export function GeneralPanel({
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 14 }}>
+      {!sensitive && (
+        <div data-sensitive-note style={{ fontSize: 13, color: "var(--navy-500)", lineHeight: 1.45 }}>
+          Algunas opciones las maneja el titular o el administrador.
+        </div>
+      )}
+      {sensitive && (
       <Card style={{ padding: 20 }}>
         <EyebrowLabel>Datos del consultorio</EyebrowLabel>
         <form action={onBasicsSubmit} style={{ display: "grid", gap: 12, marginTop: 10 }}>
@@ -178,9 +194,11 @@ export function GeneralPanel({
           </div>
         </form>
       </Card>
+      )}
 
-      <FeaturesCard tenant={tenant} canAdmin={canAdmin} />
+      {sensitive && <FeaturesCard tenant={tenant} />}
 
+      {sensitive && (
       <Card style={{ padding: 20 }}>
         <EyebrowLabel>Vista de pacientes</EyebrowLabel>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 14, gap: 16 }}>
@@ -199,7 +217,7 @@ export function GeneralPanel({
           <Switch
             on={shared}
             onChange={toggleShared}
-            disabled={support || (role !== "OWNER" && role !== "ADMIN")}
+            disabled={support}
             aria-label="Vista compartida del consultorio"
           />
         </div>
@@ -227,6 +245,7 @@ export function GeneralPanel({
           </div>
         )}
       </Card>
+      )}
 
       <Card style={{ padding: 20 }}>
         <EyebrowLabel>Horario del consultorio</EyebrowLabel>
@@ -435,14 +454,14 @@ function HourSelect({
 }
 
 /**
- * "Funciones del consultorio" (EV0, EV-K). Lo que el consultorio puede prender
+ * "Funciones del consultorio" (EV0, EV-K). T3d-1g: solo se monta con `tenant.sensitive` (el turnero del consultorio). Lo que el consultorio puede prender
  * por su cuenta (hoy: los turnos online) y, de solo lectura, el tipo de
  * consultorio y el plan, que cambia /plataforma (EV-D5/D6). Futuros toggles del
  * consultorio van como otra `PrefRow` acá, cada uno con su action que pase por
  * `applyTenantEntitlementsInTx` (source `tenant-settings`) y su key en la
  * allowlist de C-EV5.
  */
-function FeaturesCard({ tenant, canAdmin }: { tenant: TenantSettings; canAdmin: boolean }) {
+function FeaturesCard({ tenant }: { tenant: TenantSettings }) {
   const router = useRouter();
   const confirm = useConfirm();
   const [pending, start] = useTransition();
@@ -516,7 +535,7 @@ function FeaturesCard({ tenant, canAdmin }: { tenant: TenantSettings; canAdmin: 
           }
           on={booking}
           onChange={() => void toggleBooking()}
-          disabled={!canAdmin || pending}
+          disabled={pending}
         />
         {booking && (
           <div

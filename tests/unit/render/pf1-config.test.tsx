@@ -132,7 +132,7 @@ describe("[PF1.1-config · C-PF5] página y pestañas", () => {
     wrap(
       <ConfiguracionClient
         role="OWNER"
-        access={{ tenantAdmin: true, billing: true, team: true }}
+        access={{ tenantAdmin: true, billing: true, team: true, sensitive: true }}
         modules={KINE}
         tenant={TENANT}
         insurers={[]}
@@ -171,7 +171,7 @@ describe("[PF1.1-config · C-PF5] página y pestañas", () => {
 });
 
 describe("[PF1.1-config · C3/C4] General", () => {
-  const html = () => wrap(<GeneralPanel tenant={TENANT} role="OWNER" />);
+  const html = () => wrap(<GeneralPanel tenant={TENANT} admin sensitive />);
 
   it("sin jerga de rol ni «Tweaks»", () => {
     const h = html();

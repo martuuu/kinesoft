@@ -58,8 +58,12 @@ export function parseConfigTab(raw: string | string[] | null | undefined): Tab {
  *    «profesionales también, porque pueden necesitar ayuda con algo»; la misma regla que `lib/support-threads.ts` y
  *    `listSupportSessionsForTenant`). Un Profesional sin delegaciones ve solo esta pestaña.
  *  - `canExport`: Exportar datos (BO5-C: solo el titular, o el de un consultorio suspendido).
- *  - `directory` (DIR-3c, C-DIR9): Directorio = `tenant.admin` con `DIRECTORY_MODE` ≠ off (lo decide el loader: la
+ *  - `directory` (DIR-3c, C-DIR9): Directorio = `tenant.sensitive` con `DIRECTORY_MODE` ≠ off (lo decide el loader: la
  *    pestaña existe si llegaron sus datos). Opcional: sin él (tests viejos, `legacyConfigAccess`) no se ve.
+ *  - `sensitive` (T3d-1g, C-AS1: `tenant.sensitive`): lo delicado. Usuarios y Directorio lo exigen además de sus datos
+ *    (el loader ya los manda en null sin él; la pestaña no depende solo de eso). La Secretaria y Facturación con
+ *    «Configuración» no lo tienen (corte de staff): ven lo operativo y no el equipo ni el directorio. Opcional para los
+ *    tests viejos; ausente = sin lo delicado (deny por default).
  */
 export type ConfigTabAccess = {
   tenantAdmin: boolean;
@@ -67,6 +71,7 @@ export type ConfigTabAccess = {
   team: boolean;
   canExport: boolean;
   directory?: boolean;
+  sensitive?: boolean;
 };
 
 /**
@@ -75,8 +80,8 @@ export type ConfigTabAccess = {
  * (guard `tests/unit/pl-ownership-guard.test.ts`).
  */
 const LEGACY_ACCESS: Record<Role, ConfigTabAccess> = {
-  OWNER: { tenantAdmin: true, billing: true, team: true, canExport: true },
-  ADMIN: { tenantAdmin: true, billing: false, team: true, canExport: false },
+  OWNER: { tenantAdmin: true, billing: true, team: true, canExport: true, sensitive: true },
+  ADMIN: { tenantAdmin: true, billing: false, team: true, canExport: false, sensitive: true },
   PRACTITIONER: { tenantAdmin: false, billing: false, team: false, canExport: false },
   ASSISTANT: { tenantAdmin: false, billing: false, team: false, canExport: false },
   BILLING: { tenantAdmin: false, billing: false, team: false, canExport: false },
@@ -102,8 +107,9 @@ const TAB_DEFS: readonly TabDef[] = [
   { key: "diagnosticos", label: "Diagnósticos", module: "diagnostico", visible: admin },
   // DIR-3c: con el directorio en `off` (default de prod hasta que Martin lo prenda) la pestaña no existe: publicar en
   // algo que el público todavía no ve sería un switch sin efecto.
-  { key: "directorio", label: "Directorio", visible: (a) => a.tenantAdmin && !!a.directory },
-  { key: "usuarios", label: "Usuarios", visible: (a) => a.team },
+  // T3d-1g: Directorio y Usuarios son lo delicado (`tenant.sensitive`): la Secretaria con «Configuración» no los ve.
+  { key: "directorio", label: "Directorio", visible: (a) => a.tenantAdmin && !!a.sensitive && !!a.directory },
+  { key: "usuarios", label: "Usuarios", visible: (a) => a.team && !!a.sensitive },
   { key: "plan", label: "Plan y uso", visible: (a) => a.billing },
   { key: "facturacion", label: "Facturación", visible: (a) => a.billing },
   // PL-2d: «Soporte» = Mensajes + Accesos de soporte (la key no cambia: los mails ya linkean `?tab=soporte`).

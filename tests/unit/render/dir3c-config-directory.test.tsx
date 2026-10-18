@@ -113,7 +113,7 @@ function page(directory: ConfiguracionDirectoryData | null, extra: { support?: b
   return wrap(
     <ConfiguracionClient
       role="OWNER"
-      access={{ tenantAdmin: true, billing: false, team: true }}
+      access={{ tenantAdmin: true, billing: false, team: true, sensitive: true }}
       modules={KINE}
       tenant={null}
       insurers={[]}

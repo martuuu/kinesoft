@@ -236,7 +236,7 @@ describe("[PL-F1b] Soporte para cualquier miembro", () => {
           <TweaksProvider>
             <ConfiguracionClient
               role={role}
-              access={{ tenantAdmin: access.tenantAdmin, billing: access.billing, team: access.team }}
+              access={{ tenantAdmin: access.tenantAdmin, billing: access.billing, team: access.team, sensitive: access.tenantAdmin }}
               modules={KINE}
               tenant={null}
               insurers={[]}
@@ -307,7 +307,7 @@ function general(support: boolean) {
     <ToastProvider>
       <ConfirmProvider>
         <TweaksProvider>
-          <GeneralPanel tenant={TENANT} role="ADMIN" support={support} />
+          <GeneralPanel tenant={TENANT} admin sensitive support={support} />
         </TweaksProvider>
       </ConfirmProvider>
     </ToastProvider>

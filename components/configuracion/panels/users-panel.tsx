@@ -57,8 +57,23 @@ export function memberRoleLabel(m: Pick<TeamMemberRow, "role" | "clinical">, ver
 export function inviteAttendsCopy(role: Role): string {
   if (role === "PRACTITIONER") return "Atiende pacientes: tiene agenda propia y ocupa un lugar del plan.";
   const base = "No atiende pacientes: no tiene agenda ni ve historias clínicas.";
-  return role === "ADMIN" ? `${base} Entra con permiso para cambiar la Configuración.` : base;
+  // T3 (C-AS1): el ADMIN entra con «Configuración» y, si quien invita maneja el plan (Titular o «Planes y pagos»),
+  // también con «Planes y pagos» (lib/invite-activation-internal.ts).
+  return role === "ADMIN"
+    ? `${base} Entra con permiso para cambiar la Configuración y, si vos los manejás, el plan y los pagos.`
+    : base;
 }
+
+/**
+ * T3 (C-AS1, corte de staff): la Secretaria y Facturación nunca reciben lo delicado ni «Planes y pagos»
+ * (`capabilitiesForMember` los corta y `setMemberGrantsInTx` rechaza «Planes y pagos»). Un Set y no comparaciones de
+ * rol (guard `tests/unit/pl-ownership-guard.test.ts`).
+ */
+const STAFF_ROLES: ReadonlySet<Role> = new Set<Role>(["ASSISTANT", "BILLING"]);
+
+/** Qué cubre «Configuración» delegada a la Secretaria o Facturación (T3d-1g). Exportada para el test. */
+export const STAFF_SETTINGS_HINT =
+  "Servicios, obras sociales, horarios, sedes y salas. El turnero, quién ve la historia clínica, los datos del consultorio y el equipo los maneja el titular o el administrador.";
 
 // PL-Z M3: el copy anterior hablaba de «lugar de profesional / no clínico del plan», una distinción que el plan no
 // muestra en ningún lado (el cupo es uno: «Lugares»). Se dice solo lo que cambia para la persona.
@@ -208,6 +223,7 @@ function TeamRow({
   const [transferring, setTransferring] = useState(false);
   const suspended = !!member.disabledAt;
   const attends = isClinicalMember(member);
+  const staff = STAFF_ROLES.has(member.role);
   // DIR-0: nunca el email como nombre (el email ya va en su propia línea de la fila).
   const who = displayUserName(member.fullName);
   const tz = { timeZone: "America/Argentina/Buenos_Aires" } as const;
@@ -279,7 +295,10 @@ function TeamRow({
       setMemberGrants({
         membershipId: member.membershipId,
         grantSettings: key === "grantSettings" ? value : member.grantSettings,
-        grantBilling: key === "grantBilling" ? value : member.grantBilling,
+        // T3d-1g: a la Secretaria/Facturación con «Planes y pagos» legado, mandarlo de vuelta en `true` hacía que el
+        // server rechazara también el cambio de «Configuración» (`setMemberGrantsInTx`). No le daba nada (el corte de
+        // staff ya le saca `account.billing`), así que se manda en `false`.
+        grantBilling: key === "grantBilling" ? value : staff ? false : member.grantBilling,
       })
     );
   };
@@ -475,11 +494,20 @@ function TeamRow({
                 checked={member.grantSettings}
                 onChange={(v) => setGrant("grantSettings", v)}
               />
-              <GrantCheckbox
-                label="Puede ver y cambiar el plan y los pagos"
-                checked={member.grantBilling}
-                onChange={(v) => setGrant("grantBilling", v)}
-              />
+              {staff && (
+                <div data-staff-settings-hint style={{ fontSize: 11.5, color: "var(--navy-500)", lineHeight: 1.4, marginTop: -6 }}>
+                  {STAFF_SETTINGS_HINT}
+                </div>
+              )}
+              {/* T3d-1g: a la Secretaria y Facturación el server les rechaza «Planes y pagos»; se ofrece solo para
+                  sacárselo a quien lo tenía de antes (fila legada). */}
+              {(!staff || member.grantBilling) && (
+                <GrantCheckbox
+                  label="Puede ver y cambiar el plan y los pagos"
+                  checked={member.grantBilling}
+                  onChange={(v) => setGrant("grantBilling", v)}
+                />
+              )}
             </fieldset>
           )}
           {showTurnero && member.practitionerId && (

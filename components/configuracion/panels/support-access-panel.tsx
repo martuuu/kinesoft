@@ -1,9 +1,17 @@
+"use client";
+
+import { useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useToast } from "@/components/ui/toast";
 import { Tag } from "@/components/ui/tag";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { formatDateAR } from "@/lib/format";
 import { toARMinutes } from "@/lib/datetime-ar";
 import type { SupportSessionRow } from "@/lib/support-session-internal";
+import { endSupportAccessForTenant } from "@/lib/support-session-tenant";
 
 /**
  * Configuración → «Accesos de soporte» (BO3-F; decisión 3 de Martin, literal: «Entrar como soporte» abre el
@@ -13,9 +21,13 @@ import type { SupportSessionRow } from "@/lib/support-session-internal";
  * Es la contracara del mail `support_access`: el mail lleva un motivo GENÉRICO a propósito (el que tipea el
  * superadmin es una nota interna que puede nombrar un paciente o un ticket) y remite acá, detrás del login, donde
  * cualquier miembro del consultorio (PL-F1b, decisión de Martin del 16-oct) ve quién entró, cuándo, por qué y cuándo
- * terminó. Sin estado ni acciones: desde el consultorio no se termina un acceso (termina cuando soporte sale o cierra
- * sesión; la RLS de M7 es FOR SELECT). Los datos llegan de la página (`listSupportSessionsForTenant`, cualquier
- * miembro + RLS del consultorio).
+ * terminó. Los datos llegan de la página (`listSupportSessionsForTenant`, cualquier miembro + RLS del consultorio).
+ *
+ * T3d-1g (#27, plan §23.5): el consultorio puede TERMINAR un acceso en curso («Terminar acceso», con `useConfirm`) →
+ * `endSupportAccessForTenant` (lib/support-session-tenant.ts: `tenant.sensitive`, canal service porque la RLS de M7 es
+ * FOR SELECT); el superadmin cae en su próximo request. El botón sale con `canEnd` (= `tenant.sensitive` y no ser el
+ * propio soporte): la Secretaria y Facturación ven la lista pero no lo terminan. Antes era solo lectura y el acceso
+ * terminaba únicamente cuando soporte salía o cerraba sesión.
  */
 
 /** Cómo terminó cada acceso (`SupportSession.endedReason`). Exportada para el test de render. */
@@ -27,6 +39,8 @@ export function supportEndedLabel(reason: string | null): string | null {
       return "Cerró sesión";
     case "replaced":
       return "Pasó a otro consultorio";
+    case "tenant":
+      return "Lo terminó el consultorio";
     default:
       return null;
   }
@@ -43,7 +57,14 @@ export function supportWhen(iso: string): string {
   return `${formatDateAR(iso, "short")}, ${hhmm}`;
 }
 
-export function SupportAccessPanel({ sessions }: { sessions: SupportSessionRow[] }) {
+export function SupportAccessPanel({
+  sessions,
+  canEnd = false,
+}: {
+  sessions: SupportSessionRow[];
+  /** `tenant.sensitive` y no es el propio soporte: «Terminar acceso» en los accesos en curso. */
+  canEnd?: boolean;
+}) {
   return (
     <div style={{ display: "grid", gap: 14 }}>
       <Card style={{ padding: 20 }}>
@@ -70,7 +91,10 @@ export function SupportAccessPanel({ sessions }: { sessions: SupportSessionRow[]
             Todo es <strong>solo lectura</strong>, salvo Configuración: ahí puede crear y modificar (equipo, obras
             sociales, servicios, sedes, horarios y datos del consultorio) para ayudarte.
           </li>
-          <li>Cada acceso queda registrado acá, con el motivo, y termina cuando soporte sale o cierra sesión.</li>
+          <li>
+            Cada acceso queda registrado acá, con el motivo, y termina cuando soporte sale, cierra sesión o lo terminás
+            desde acá.
+          </li>
         </ul>
       </Card>
 
@@ -108,6 +132,7 @@ export function SupportAccessPanel({ sessions }: { sessions: SupportSessionRow[]
                       {s.superadminEmail}
                     </span>
                     {s.open && <Tag tone="lime">En curso</Tag>}
+                    {s.open && canEnd && <EndSupportAccessButton id={s.id} email={s.superadminEmail} />}
                   </div>
                   <div style={{ fontSize: 12.5, color: "var(--navy-500)" }}>
                     Entró el {supportWhen(s.startedAt)}
@@ -128,5 +153,54 @@ export function SupportAccessPanel({ sessions }: { sessions: SupportSessionRow[]
         )}
       </Card>
     </div>
+  );
+}
+
+/**
+ * «Terminar acceso» de un acceso en curso. Componente aparte para que los hooks (confirm, toast, router) solo se pidan
+ * cuando hay botón: el panel sin `canEnd` se sigue armando sin providers (tests de render y quien solo mira).
+ */
+function EndSupportAccessButton({ id, email }: { id: string; email: string }) {
+  const confirm = useConfirm();
+  const toast = useToast();
+  const router = useRouter();
+  const [pending, start] = useTransition();
+
+  const end = async () => {
+    const ok = await confirm({
+      title: "¿Terminar el acceso de soporte?",
+      message: `${email} deja de ver tu consultorio en su próxima acción.`,
+      tone: "danger",
+      confirmLabel: "Terminar acceso",
+      cancelLabel: "Cancelar",
+    });
+    if (!ok) return;
+    start(async () => {
+      try {
+        const r = await endSupportAccessForTenant({ id });
+        // Ya terminado (soporte salió, u otro miembro lo cortó): la action devuelve el error SIN revalidar.
+        if (!r.ok) toast.error(r.error);
+      } catch {
+        // La action tira `ForbiddenError` (sin `tenant.sensitive`, o el propio soporte): nunca un rechazo mudo.
+        toast.error("No pudimos terminar el acceso. Reintentá en un momento.");
+        return;
+      }
+      // refresh-ok: el rechazo «ya estaba terminado» no revalida y la fila seguiría «En curso»; en el ok es un render
+      // de más en una acción rara (no de alta frecuencia como la agenda), a cambio de un solo camino.
+      router.refresh();
+    });
+  };
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      onClick={() => void end()}
+      disabled={pending}
+      style={{ marginLeft: "auto" }}
+      data-support-end={id}
+    >
+      {pending ? "Terminando…" : "Terminar acceso"}
+    </Button>
   );
 }

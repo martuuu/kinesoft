@@ -10,7 +10,10 @@
  *
  * Lo usan Configuración → Profesionales (ficha de cada uno), Configuración → Usuarios (fila de quien atiende) y el
  * menú de perfil (PL-Z: el profesional sin Configuración prende/apaga el suyo). Quién
- * puede: `tenant.admin` o el propio profesional; la barrera es la action.
+ * puede: el propio profesional siempre; el de otro, solo con `tenant.sensitive` (T3, C-AS1: antes `tenant.admin`, y la
+ * Secretaria con «Configuración» prendía el turnero de cualquiera). La barrera es la action
+ * (`lib/practitioner-public.ts`); quien monta el switch decide si lo ofrece (T3d-1g: Profesionales y Usuarios solo con
+ * `tenant.sensitive`, el menú de perfil solo el propio).
  */
 import { useEffect, useState, useTransition } from "react";
 import { setPractitionerPublicBooking } from "@/lib/practitioner-public";

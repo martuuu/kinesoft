@@ -71,9 +71,11 @@ const ROLE_EQ_ALLOW: Record<string, number> = {
   "app/suspendido/page.tsx": 3,
   // PL-F1b: Soporte para todos sacó las comparaciones de rol de las pestañas; quedan 2 (eran 8).
   "components/configuracion/configuracion-client.tsx": 2,
-  "components/configuracion/controls.tsx": 3,
-  "components/configuracion/panels/general-panel.tsx": 4,
-  "components/configuracion/panels/users-panel.tsx": 7,
+  // T3d-1g: General va por capability (`tenant.admin` / `tenant.sensitive`, eran 4); controls y Usuarios ya no tenían
+  // las que les quedaban (3 → 0 y 7 → 5).
+  "components/configuracion/controls.tsx": 0,
+  "components/configuracion/panels/general-panel.tsx": 0,
+  "components/configuracion/panels/users-panel.tsx": 5,
   "components/layout/access-banner.tsx": 2,
   "components/plataforma/team/team-logic.ts": 2,
   "components/plataforma/team/team-panel.tsx": 2,

@@ -28,7 +28,13 @@ vi.mock("@/lib/directory-settings", () => proxy());
 
 import type { ReactElement } from "react";
 import type { TenantVertical } from "@prisma/client";
-import { UsersPanel, inviteAttendsCopy, memberRoleLabel, transferConfirmMatches } from "@/components/configuracion/panels/users-panel";
+import {
+  STAFF_SETTINGS_HINT,
+  UsersPanel,
+  inviteAttendsCopy,
+  memberRoleLabel,
+  transferConfirmMatches,
+} from "@/components/configuracion/panels/users-panel";
 import { PractitionerPanel } from "@/components/configuracion/panels/practitioners/practitioner-panel";
 import { TURNERO_OFF_HINT, publicBookingHint } from "@/components/configuracion/panels/practitioners/public-booking-switch";
 import { TenantModulesProvider } from "@/components/layout/tenant-modules-context";
@@ -142,6 +148,33 @@ describe("[PL-3b] Usuarios · lo que solo ve el Titular", () => {
   });
 });
 
+describe("[AS-1g] Usuarios · permisos de la Secretaria y Facturación (corte de staff, C-AS1)", () => {
+  const rowOf = (html: string, id: string) => html.split(`data-member="${id}"`)[1]?.split("data-member=")[0] ?? "";
+
+  it("[AS-1g] «Configuración» delegada a staff dice qué cubre; «Planes y pagos» no se ofrece (salvo legado, para sacarlo)", () => {
+    const html = inTenant(<UsersPanel team={TEAM} pending={[]} viewerRole="OWNER" />);
+    const fac = rowOf(html, "fac");
+    expect(fac).toContain("Puede cambiar la Configuración");
+    expect(fac).toContain(STAFF_SETTINGS_HINT);
+    expect(fac).not.toContain("Puede ver y cambiar el plan y los pagos");
+    // Secre Cuatro trae `grantBilling` de antes de T3: se muestra tildado para poder sacárselo.
+    const sec = rowOf(html, "sec");
+    expect(sec).toContain(STAFF_SETTINGS_HINT);
+    expect(sec).toMatch(/checked=""[^>]*\/>Puede ver y cambiar el plan y los pagos/);
+    // Profesional y Administrador/a: los dos permisos, sin la aclaración de staff.
+    for (const id of ["kin", "adm"]) {
+      expect(rowOf(html, id)).toContain("Puede ver y cambiar el plan y los pagos");
+      expect(rowOf(html, id)).not.toContain(STAFF_SETTINGS_HINT);
+    }
+  });
+
+  it("[AS-1g] el ADMIN invitado entra con Configuración y, si quien invita los maneja, el plan y los pagos", () => {
+    expect(inviteAttendsCopy("ADMIN")).toBe(
+      "No atiende pacientes: no tiene agenda ni ve historias clínicas. Entra con permiso para cambiar la Configuración y, si vos los manejás, el plan y los pagos."
+    );
+  });
+});
+
 describe("[PL-3b] invitar · el rol define si atiende", () => {
   it("Profesional atiende; Administrador/a, Secretaría y Facturación no", () => {
     expect(inviteAttendsCopy("PRACTITIONER")).toMatch(/^Atiende pacientes/);
@@ -191,10 +224,10 @@ describe("[PL-3b] turnero por profesional", () => {
     const summary = [
       { practitionerId: "pr-kin", name: "Kine Tres", summary: "Lun-Vie 8-13", isFallback: false, rangeCount: 5, locationIds: [] },
     ];
-    const off = inTenant(<PractitionerPanel summary={summary} locations={[]} team={TEAM} />, { turnero: false });
+    const off = inTenant(<PractitionerPanel summary={summary} locations={[]} team={TEAM} sensitive />, { turnero: false });
     expect(off).toMatch(/aria-label="Aparece en el turnero online: Kine Tres" disabled=""/);
     expect(off).toContain(TURNERO_OFF_HINT);
-    const on = inTenant(<PractitionerPanel summary={summary} locations={[]} team={TEAM} />, { turnero: true });
+    const on = inTenant(<PractitionerPanel summary={summary} locations={[]} team={TEAM} sensitive />, { turnero: true });
     expect(on).toMatch(/aria-checked="true" aria-label="Aparece en el turnero online: Kine Tres"(?! disabled)/);
     // Sin el equipo (prop opcional hasta el handoff de Configuración) no se inventa un valor: no hay switch.
     expect(inTenant(<PractitionerPanel summary={summary} locations={[]} />)).not.toContain("Aparece en el turnero online");

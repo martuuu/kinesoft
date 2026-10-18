@@ -90,7 +90,9 @@ type Props = {
   role: Role;
   /**
    * PL-3a: qué pestañas ve, por CAPACIDAD (C-PL5): `tenantAdmin` = «Configuración», `billing` = «Planes y pagos»,
-   * `team` = la página pudo leer el equipo. `canExport` lo calcula este componente (BO5-C / BO-Z B6).
+   * `team` = la página pudo leer el equipo. `canExport` lo calcula este componente (BO5-C / BO-Z B6). T3d-1g:
+   * `sensitive` = `tenant.sensitive` (lo delicado: turnero, «quién ve la HC», datos del consultorio, equipo,
+   * directorio, terminar un acceso de soporte); sin él se esconde, no se deshabilita.
    */
   access: Omit<ConfigTabAccess, "canExport">;
   /** Módulos del consultorio (EV0): esconden pestañas sin módulo (solo UI). */
@@ -147,6 +149,7 @@ export function ConfiguracionClient(props: Props) {
   // titular de un consultorio suspendido aunque en el activo sea ADMIN (ve solo el botón del suspendido).
   const canExport = !props.support && (props.role === "OWNER" || exportBlocked.length > 0);
   const directory = props.directory ?? null;
+  const sensitive = !!props.access.sensitive;
   const access: ConfigTabAccess = { ...props.access, canExport, directory: directory !== null };
   const visible = visibleConfigTabs(access, props.modules);
   const [tab, setTabRaw] = useState<Tab>(() => initialConfigTab(props.initialTab, visible));
@@ -206,7 +209,12 @@ export function ConfiguracionClient(props: Props) {
       />
 
       {tab === "general" && can("general") && props.tenant && (
-        <GeneralPanel tenant={props.tenant} role={props.role} support={props.support} />
+        <GeneralPanel
+          tenant={props.tenant}
+          admin={props.access.tenantAdmin}
+          sensitive={sensitive}
+          support={props.support}
+        />
       )}
       {tab === "sedes" && can("sedes") && <LocationsPanel locations={props.locations} rooms={props.rooms} />}
       {tab === "profesionales" && can("profesionales") && (
@@ -215,7 +223,9 @@ export function ConfiguracionClient(props: Props) {
           locations={props.locations}
           rooms={props.rooms}
           onDirtyChange={setPractitionerDirty}
-          team={props.team}
+          // T3d-1g: el turnero de cada profesional es lo delicado (el propio se prende desde el menú de perfil).
+          team={sensitive ? props.team : undefined}
+          sensitive={sensitive}
           specialties={
             directory ? { catalog: directory.specialtyCatalog, byPractitioner: directory.specialtiesByPractitioner } : null
           }
@@ -255,7 +265,11 @@ export function ConfiguracionClient(props: Props) {
         // PL-F1b: Mensajes y Accesos para cualquier miembro (antes PL-D20: `tenant.admin || account.billing`).
         <div style={{ display: "grid", gap: 16 }}>
           <SupportMessagesPanel support={props.support} draft={supportDraft} onDraftUsed={() => setSupportDraft(null)} />
-          {supportAccessVisible && <SupportAccessPanel sessions={props.supportSessions ?? []} />}
+          {supportAccessVisible && (
+            // T3d-1g (#27): terminar un acceso es `tenant.sensitive`; el soporte (que lo tiene en `SUPPORT_CAPS`) no se
+            // termina a sí mismo desde acá (la action también lo corta: sale con «Salir de soporte»).
+            <SupportAccessPanel sessions={props.supportSessions ?? []} canEnd={sensitive && !props.support} />
+          )}
         </div>
       )}
       {tab === "exportar" && can("exportar") && (
