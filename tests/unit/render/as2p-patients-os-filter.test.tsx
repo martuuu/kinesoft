@@ -129,7 +129,6 @@ const core = (coverage: PatientAdminCore["coverage"]): PatientAdminCore => ({
   assignedPractitionerName: "Juan Kine",
   nextBookingAt: null,
   updatedAt: new Date("2026-09-01T12:00:00Z"),
-  portalLinked: true,
   access: "admin",
 });
 const INSURERS = [

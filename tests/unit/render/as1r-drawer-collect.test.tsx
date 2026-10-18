@@ -139,7 +139,7 @@ describe("[AS-1r] modal «Registrar cobro» del drawer", () => {
     expect(validateCollect(null)).toEqual({ ok: false, error: "Elegí cómo pagó." });
     expect(validateCollect("CARD")).toEqual({ ok: true, method: "CARD" });
     const html = renderToStaticMarkup(
-      <CollectForm amountCents={150000} method={null} onMethod={() => {}} error="Elegí cómo pagó." saving={false} onCancel={() => {}} onConfirm={() => {}} />
+      <CollectForm amountCents={150000} imputation="Se imputa a Ana Pérez" method={null} onMethod={() => {}} error="Elegí cómo pagó." saving={false} onCancel={() => {}} onConfirm={() => {}} />
     );
     expect(html).not.toMatch(/checked=""/);
     expect(html).toContain("Elegí cómo pagó.");

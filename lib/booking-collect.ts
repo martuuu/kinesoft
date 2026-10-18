@@ -125,9 +125,10 @@ export function copagoCollectView(
 const DOW_SHORT = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"] as const;
 
 /**
- * Descripción ÚNICA del modal «Registrar cobro» (T3-Z, B2): `paciente · servicio · día y hora` y, si el caller la
- * pasa (solo cuando el consultorio tiene más de un profesional), `· profesional`. Antes cada pantalla armaba la suya:
- * /sala «cobertura · profesional · hora», el drawer sin fecha y Facturación sin paciente.
+ * Descripción ÚNICA del modal «Registrar cobro» (T3-Z, B2): `paciente · servicio · día y hora`. Antes cada pantalla
+ * armaba la suya: /sala «cobertura · profesional · hora», el drawer sin fecha y Facturación sin paciente. T3-Y: el
+ * profesional ya no va acá (antes, solo con más de un profesional): lo dice SIEMPRE la línea de imputación
+ * (`collectImputationLine`), y repetirlo en la descripción era ruido.
  *
  * Día y hora con `lib/datetime-ar.ts`: con `getDay`/`getHours` del host, en Vercel (UTC) un turno de las 22:00 AR
  * salía al día siguiente a la 01:00.
@@ -136,16 +137,38 @@ export function collectModalDescription({
   patientName,
   serviceName,
   scheduledFor,
-  practitionerName,
 }: {
   patientName: string;
   serviceName: string;
   scheduledFor: Date | string;
-  practitionerName?: string | null;
 }): string {
   const [, mm, dd] = toARDateKey(scheduledFor).split("-");
   const min = toARMinutes(scheduledFor);
   const hhmm = `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
   const when = `${DOW_SHORT[toARDow(scheduledFor)]} ${dd}/${mm} ${hhmm}`;
-  return [patientName, serviceName, when, practitionerName].filter((s): s is string => !!s).join(" · ");
+  return [patientName, serviceName, when].filter((s): s is string => !!s).join(" · ");
+}
+
+/**
+ * Línea «Se imputa a …» de los tres modales de cobro (drawer de la agenda, /sala y Facturación). T3-Y, decisión de
+ * Martin del 19-oct: «Estaría bueno que se afirme a quién se le imputa el pago». Con varios profesionales, quien
+ * cobra en recepción tiene que ver a quién va la plata antes de confirmar (antes el nombre salía solo en /sala y solo
+ * con más de un profesional; el drawer y Facturación no lo decían).
+ *
+ * - Con profesional y su nombre: `Se imputa a {nombre}`. El nombre es el PÚBLICO (`displayMemberName`): nunca un
+ *   email (guard `no-email-as-name`); lo resuelve el caller.
+ * - Sin profesional: `Se imputa al consultorio`.
+ * - Con profesional pero sin nombre a mano (p. ej. un profesional dado de baja que ya no está en la lista de la
+ *   agenda): `Se imputa al profesional del turno`. Decir «al consultorio» ahí sería falso.
+ */
+export function collectImputationLine({
+  practitionerId,
+  practitionerName,
+}: {
+  practitionerId: string | null | undefined;
+  practitionerName: string | null | undefined;
+}): string {
+  if (!practitionerId) return "Se imputa al consultorio";
+  const name = practitionerName?.trim();
+  return name ? `Se imputa a ${name}` : "Se imputa al profesional del turno";
 }

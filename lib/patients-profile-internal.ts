@@ -122,11 +122,10 @@ export async function patientCoreInTx(
 
   if (access === "admin") {
     // P0-S07sp (E1, PD-13): proyección `admin` con `select` explícito, así la
-    // HC (notes, diagnosisTitle/Note) ni siquiera sale de la DB. Antes `admin` caía en la rama básica (falla cerrado) y la
+    // HC (notes, diagnosisTitle/Note, userId del portal) ni siquiera sale de
+    // la DB. Antes `admin` caía en la rama básica (falla cerrado) y la
     // Secretaria no veía contacto ni cobertura para operar. El copago propio
     // de la cobertura sí sale desde T3e-2p: es administrativo (lo cobra).
-    // T3-Z A1: `userId` se lee solo para derivar `portalLinked` (booleano); el
-    // id de la cuenta no sale de acá.
     const patient = await tx.patient.findFirst({
       where: { id, tenantId: actor.tenantId },
       select: {
@@ -138,7 +137,6 @@ export async function patientCoreInTx(
         phone: true,
         dateOfBirth: true,
         updatedAt: true,
-        userId: true,
         // Misma regla que la rama full: la cobertura vigente es la más
         // reciente (cuid ordenable por tiempo). T3e-2p (H-1u-1): con
         // `insurerId`/`payerPlanId`/`copagoCents` (copago propio: lo cobra la
@@ -198,7 +196,6 @@ export async function patientCoreInTx(
       assignedPractitionerName: assignedUser ? displayMemberName(assignedUser.fullName) : null,
       nextBookingAt: nextBooking?.scheduledFor ?? null,
       updatedAt: patient.updatedAt,
-      portalLinked: patient.userId != null,
       access: "admin",
     };
     return core;
@@ -326,29 +323,51 @@ export async function patientBookingsAllInTx(
     orderBy: [{ scheduledFor: "desc" }, { id: "desc" }],
     take: size + 1, // +1 = sonda de "hay más"
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-    include: { service: { select: { name: true, priceCents: true } } },
   });
   const billing = await resolvePatientBillingInTx(tx, patientId, actor.tenantId);
   const redact = await bookingTextRedactor(actor, access);
   const hasMore = found.length > size;
   const page = hasMore ? found.slice(0, size) : found;
-  const rows: PatientBookingFull[] = page.map(({ service, copagoCents: bookingCopago, ...b }) => ({
-    ...redact(b),
-    serviceName: service.name,
-    obraSocial: billing.obraSocial,
-    // What the patient pays (copago) and what the OS reimburses (osAmount),
-    // kept separate for the Facturación tab. `insurerPaidAt` rides along in
-    // `...b` (booking scalar) so the UI knows if the OS already paid.
-    copagoCents: resolveBookingCopagoCents({
-      bookingOverride: bookingCopago,
-      coverageOverride: billing.coverageOverride,
-      hasCoverage: billing.hasCoverage,
-      insurerCopago: billing.insurerCopago,
-      particularCopago: billing.particularCopago,
-      servicePriceCents: service.priceCents,
-    }),
-    osAmountCents: billing.insurerFixedFeeCents,
-  }));
+  // T3-Y: el modal de cobro de Facturación dice a quién se imputa el pago (decisión de Martin 19-oct), así que la fila
+  // trae el nombre del profesional. Con `include` Prisma 5 corre UNA sentencia por relación (Service; Practitioner y
+  // UserProfile = +2, medido en pf2-profile-budget: perfil admin 22 → 24): el servicio y el nombre van en un solo
+  // SELECT con JOIN, en lugar del `include: { service }` de antes. Mismo número de sentencias (2) y sin la sonda +1.
+  // `tenantId` a mano en el WHERE (en prod la conexión tiene BYPASSRLS); las FK de servicio y profesional las valida
+  // la escritura del turno, como antes con el include.
+  const ids = page.map((b) => b.id);
+  const extras = ids.length
+    ? await tx.$queryRaw<{ id: string; serviceName: string; servicePriceCents: number; fullName: string | null }[]>`
+        SELECT b."id", s."name" AS "serviceName", s."priceCents" AS "servicePriceCents", u."fullName"
+        FROM "Booking" b
+        JOIN "Service" s ON s."id" = b."serviceId"
+        JOIN "Practitioner" p ON p."id" = b."practitionerId"
+        JOIN "UserProfile" u ON u."id" = p."userId"
+        WHERE b."tenantId" = ${actor.tenantId} AND b."id" = ANY(${ids})`
+    : [];
+  const extraById = new Map(extras.map((e) => [e.id, e]));
+  const rows: PatientBookingFull[] = page.map(({ copagoCents: bookingCopago, ...b }) => {
+    const extra = extraById.get(b.id);
+    if (!extra) throw new Error(`patientBookingsAll: turno ${b.id} sin servicio o profesional`);
+    return {
+      ...redact(b),
+      serviceName: extra.serviceName,
+      // Nombre público (nunca el email: guard `no-email-as-name`).
+      practitionerName: displayMemberName(extra.fullName),
+      obraSocial: billing.obraSocial,
+      // What the patient pays (copago) and what the OS reimburses (osAmount),
+      // kept separate for the Facturación tab. `insurerPaidAt` rides along in
+      // `...b` (booking scalar) so the UI knows if the OS already paid.
+      copagoCents: resolveBookingCopagoCents({
+        bookingOverride: bookingCopago,
+        coverageOverride: billing.coverageOverride,
+        hasCoverage: billing.hasCoverage,
+        insurerCopago: billing.insurerCopago,
+        particularCopago: billing.particularCopago,
+        servicePriceCents: extra.servicePriceCents,
+      }),
+      osAmountCents: billing.insurerFixedFeeCents,
+    };
+  });
   return { rows, hasMore, nextCursor: hasMore ? page[page.length - 1].id : null };
 }
 

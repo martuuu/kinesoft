@@ -173,6 +173,7 @@ export function BookingDrawer({
   onSaved,
   capabilities,
   viewerPractitionerId,
+  practitionerName = null,
   rooms,
   primaryLocationId,
 }: {
@@ -194,6 +195,11 @@ export function BookingDrawer({
   capabilities?: readonly string[] | null;
   /** T3d-1r: profesional del actor, para `canCollectCopago` (el profesional cobra solo sus turnos). */
   viewerPractitionerId?: string | null;
+  /**
+   * T3-Y: nombre público del profesional DEL TURNO (no del actor), para «Se imputa a …» del modal de cobro. Lo
+   * resuelve la agenda con su lista de profesionales; null = no está en la lista.
+   */
+  practitionerName?: string | null;
 }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -794,7 +800,13 @@ export function BookingDrawer({
           <PatientHeader booking={booking} />
 
           <div style={{ ...sectionCard, display: "grid", gap: 8, fontSize: 12.5 }}>
-            <BillingRows booking={booking} caps={caps} viewerPractitionerId={viewerPractitionerId ?? null} onCopagoChanged={setCopagoResult} />
+            <BillingRows
+              booking={booking}
+              caps={caps}
+              viewerPractitionerId={viewerPractitionerId ?? null}
+              practitionerName={practitionerName}
+              onCopagoChanged={setCopagoResult}
+            />
             <ReceptionInfo
               booking={booking}
               room={

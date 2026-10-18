@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import type { BookingDTO } from "@/components/agenda/agenda-utils";
 import { setBookingCopagoPaid } from "@/lib/bookings";
-import { COLLECT_COPY, collectModalDescription, copagoRemainingCents } from "@/lib/booking-collect";
+import { COLLECT_COPY, collectImputationLine, collectModalDescription, copagoRemainingCents } from "@/lib/booking-collect";
 import { formatARS } from "@/lib/format";
 import { PAYMENT_METHOD_LABEL, type PaymentMethod } from "@/lib/payment-method";
 import { isStaleError } from "@/lib/reception-view-state";
@@ -29,7 +29,7 @@ export function applyCopagoPaid(row: BookingDTO, updatedAt: Date | string, metho
 /**
  * Modal «Registrar cobro» del escritorio (RX-1b, prototipo `openPay()`; T3 C-AS2, plan §23.4). Importe y la
  * descripción única de los tres modales de cobro (`collectModalDescription`, T3-Z B2: paciente · servicio · día y
- * hora, y el profesional solo si el consultorio tiene más de uno); el medio de pago es OBLIGATORIO (`PaymentMethodPicker`, sin preselección: decisión 5 del
+ * hora) y, desde T3-Y, SIEMPRE la línea «Se imputa a …» (`collectImputationLine`); el medio de pago es OBLIGATORIO (`PaymentMethodPicker`, sin preselección: decisión 5 del
  * 19-oct) y «Marcar pagado · $ X» llama a `setBookingCopagoPaid(id, { paid: true, method }, updatedAt)`; si sale,
  * `onSaved(fila)` → `live.replaceRow` y el medio queda como «último» del dispositivo.
  *
@@ -54,7 +54,10 @@ export function DeskPayModal({
 }: {
   /** null = cerrado (el Modal queda montado para la animación de salida). */
   row: BookingDTO | null;
-  /** Solo si el consultorio tiene más de un profesional (B2); null/"" = no se nombra. */
+  /**
+   * Nombre público del profesional del turno para «Se imputa a …» (T3-Y: siempre, aunque haya uno solo). null/"" = no
+   * está en la lista de la sala: la línea dice «al profesional del turno».
+   */
   practitionerName?: string | null;
   viewer: DeskViewer;
   onClose: () => void;
@@ -116,7 +119,7 @@ export function DeskPayModal({
     toast.error(COLLECT_COPY.collectFailed, { description: res.error });
   }
 
-  const description = row ? collectModalDescription({ ...row, practitionerName }) : undefined;
+  const description = row ? collectModalDescription(row) : undefined;
 
   return (
     <Modal open={row != null} onClose={close} title="Registrar cobro" description={description} width={460}>
@@ -126,6 +129,9 @@ export function DeskPayModal({
             <span>Importe</span>
             <b>{formatARS(amountCents)}</b>
           </div>
+          <p className="desk-pay-imp" data-testid="collect-imputation">
+            {collectImputationLine({ practitionerId: row.practitionerId, practitionerName })}
+          </p>
           <PaymentMethodPicker
             value={method}
             onChange={(m) => {

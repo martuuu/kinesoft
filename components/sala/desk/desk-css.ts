@@ -187,6 +187,7 @@ export const DESK_CSS = `
 .desk-pay-amt { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 14px 16px; border-radius: 14px; background: var(--bg-panel); color: var(--navy-500); font-size: 14px; }
 .desk-pay-amt b { font-size: 28px; font-weight: 650; line-height: 1; letter-spacing: -0.02em; color: var(--navy-900); font-variant-numeric: tabular-nums; }
 .desk-pay-note { margin: 0; font-size: 13px; color: var(--navy-500); }
+.desk-pay-imp { margin: 0; font-size: 14px; font-weight: 600; color: var(--navy-900); }
 .desk-pay-f { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .desk-pay-f .k-btn { min-height: 44px; }
 

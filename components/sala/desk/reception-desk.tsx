@@ -325,8 +325,9 @@ export function ReceptionDesk({
       {payMounted && (
         <DeskPayModal
           row={payRow}
-          // B2: el profesional solo se nombra si hay más de uno (con uno solo es ruido).
-          practitionerName={payRow && live.practitioners.length > 1 ? practitionerName(payRow.practitionerId) : null}
+          // T3-Y: «Se imputa a …» siempre (antes, B2, solo con más de un profesional). Sin el fallback «Profesional» de
+          // `practitionerName`: sin nombre, el modal dice «al profesional del turno».
+          practitionerName={payRow ? proNames.get(payRow.practitionerId) ?? null : null}
           viewer={viewer}
           onClose={closePay}
           onSaved={live.replaceRow}

@@ -1583,6 +1583,9 @@ export function AgendaClient(props: Props) {
 
       <BookingDrawer
         booking={editingBooking}
+        // T3-Y: «Se imputa a …» del modal de cobro. El nombre público ya viene en el bootstrap (`displayMemberName`):
+        // ni cable nuevo ni lista nueva, solo el string del profesional del turno abierto.
+        practitionerName={editingBooking ? props.practitioners.find((p) => p.id === editingBooking.practitionerId)?.name ?? null : null}
         capabilities={props.capabilities ?? null}
         viewerPractitionerId={ownPractitionerId}
         rooms={rooms}

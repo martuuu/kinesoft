@@ -5,7 +5,7 @@ import { Modal, ModalActions } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { setBookingCopagoPaid } from "@/lib/bookings";
-import { COLLECT_COPY, collectModalDescription, copagoRemainingCents } from "@/lib/booking-collect";
+import { COLLECT_COPY, collectImputationLine, collectModalDescription, copagoRemainingCents } from "@/lib/booking-collect";
 import { formatARS } from "@/lib/format";
 import { PAYMENT_METHOD_LABEL, type PaymentMethod } from "@/lib/payment-method";
 import { isStaleError } from "@/lib/reception-view-state";
@@ -26,9 +26,13 @@ export function validateCollect(
  * Cuerpo del modal (exportado para el render test: el `Modal` monta por portal recién hidratado y en el render de
  * servidor no pinta nada). Mismo layout que «Registrar cobro» de /sala (`desk-pay-modal.tsx`), con `ModalActions`
  * para que bajo 640 px los botones se apilen a 44 px (los chips del picker ya miden 44).
+ *
+ * `imputation` (T3-Y): la línea «Se imputa a …» de `collectImputationLine`, obligatoria para que ningún caller (drawer
+ * o Facturación) la pueda olvidar.
  */
 export function CollectForm({
   amountCents,
+  imputation,
   method,
   onMethod,
   error,
@@ -37,6 +41,7 @@ export function CollectForm({
   onConfirm,
 }: {
   amountCents: number;
+  imputation: string;
   method: PaymentMethod | null;
   onMethod: (m: PaymentMethod) => void;
   error: string | null;
@@ -64,6 +69,9 @@ export function CollectForm({
           {formatARS(amountCents)}
         </b>
       </div>
+      <p data-testid="collect-imputation" style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "var(--navy-900)" }}>
+        {imputation}
+      </p>
       <PaymentMethodPicker value={method} onChange={onMethod} disabled={saving} error={error} />
       <p style={{ margin: 0, fontSize: 13, color: "var(--navy-500)" }}>
         Queda registrado como pagado en el turno, con el medio que elegiste.
@@ -102,7 +110,10 @@ export function CollectModal({
 }: {
   /** null = cerrado (el Modal queda montado para la animación de salida). */
   booking: DrawerBooking | null;
-  /** Solo si el consultorio tiene más de un profesional (B2): si no, el nombre no dice nada. */
+  /**
+   * Nombre público del profesional del turno para «Se imputa a …» (T3-Y: siempre, aunque haya uno solo). null = no
+   * está en la lista de la agenda (dado de baja): la línea dice «al profesional del turno».
+   */
   practitionerName?: string | null;
   onClose: () => void;
   onSaved: (r: CollectResult) => void;
@@ -161,12 +172,13 @@ export function CollectModal({
       open={booking != null}
       onClose={close}
       title="Registrar cobro"
-      description={booking ? collectModalDescription({ ...booking, practitionerName }) : undefined}
+      description={booking ? collectModalDescription(booking) : undefined}
       width={460}
     >
       {booking && (
         <CollectForm
           amountCents={amountCents}
+          imputation={collectImputationLine({ practitionerId: booking.practitionerId, practitionerName })}
           method={method}
           onMethod={(m) => {
             setMethod(m);

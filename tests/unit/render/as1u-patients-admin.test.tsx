@@ -51,7 +51,7 @@ import {
   patientCreatePayload,
   patientUpdatePayload,
 } from "@/components/patients/patient-form-payload";
-import { PATIENT_CLINICAL_KEYS, PATIENT_EMAIL_LOCKED_COPY } from "@/lib/validation";
+import { PATIENT_CLINICAL_KEYS } from "@/lib/validation";
 import { TenantModulesProvider } from "@/components/layout/tenant-modules-context";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { ToastProvider } from "@/components/ui/toast";
@@ -142,7 +142,6 @@ const core: PatientAdminCore = {
   assignedPractitionerName: "Juan Kine",
   nextBookingAt: null,
   updatedAt: new Date("2026-09-01T12:00:00Z"),
-  portalLinked: true,
   access: "admin",
 };
 
@@ -277,19 +276,16 @@ describe("[AS-1u] «Editar datos» en modo admin", () => {
     );
   });
 
-  it("[T3Z-s1] ficha sin portal vinculado: el email se ve deshabilitado con la ayuda; vinculada, editable", () => {
+  // T3-Y (decisión de Martin 19-oct): se revirtió el bloqueo de T3-Z A1; la recepción carga y corrige el email.
+  it("[T3-Y] «Editar datos» en modo admin: el email es editable y sin la ayuda del bloqueo", () => {
     const emailInput = (html: string) => html.match(/<input[^>]*name="email"[^>]*>/)?.[0] ?? "";
-    const locked = wrap(
-      <EditPatientModal mode="admin" patient={{ ...core, portalLinked: false }} insurers={[]} onClose={() => {}} />
-    );
-    expect(emailInput(locked)).toMatch(/disabled=""/);
-    expect(locked).toContain(PATIENT_EMAIL_LOCKED_COPY);
-    const linked = wrap(<EditPatientModal mode="admin" patient={core} insurers={[]} onClose={() => {}} />);
-    expect(emailInput(linked)).not.toMatch(/disabled/);
-    expect(linked).not.toContain(PATIENT_EMAIL_LOCKED_COPY);
+    const html = wrap(<EditPatientModal mode="admin" patient={core} insurers={[]} onClose={() => {}} />);
+    expect(emailInput(html)).not.toBe("");
+    expect(emailInput(html)).not.toMatch(/disabled/);
+    expect(html).not.toContain("El email lo cambia el profesional a cargo");
   });
 
-  it("[T3Z-s1] payload: un email que no viaja en el form (deshabilitado) no se manda; vacío sí (borrar)", () => {
+  it("[T3Z-s1] payload: un email que no viaja en el form no se manda; vacío sí (borrar)", () => {
     const without = patientUpdatePayload("admin", "pat_1", null, form({ firstName: "Lucía", lastName: "Gómez", phone: "11" }));
     expect("email" in without).toBe(false);
     const cleared = patientUpdatePayload("admin", "pat_1", null, form({ firstName: "Lucía", lastName: "Gómez", email: "" }));

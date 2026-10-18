@@ -49,7 +49,6 @@ import { asUser } from "@/tests/helpers/actor";
 
 const RUN = process.env.INTEGRATION === "1";
 const CLINICAL_COPY = "Las notas y el diagnóstico los edita el profesional a cargo.";
-const EMAIL_LOCKED_COPY = "El email lo cambia el profesional a cargo o el paciente desde el portal.";
 
 // `Patient.phone` es único por consultorio: cada teléfono del test es distinto.
 let phoneSeq = Math.floor(Math.random() * 1_000_000);
@@ -189,8 +188,7 @@ describe.skipIf(!RUN)("[AS-1b] pacientes editados por Secretaria/Admin, portal y
   });
 
   it("[AS-1b] el Admin no clínico edita contacto y tampoco toca notas", async () => {
-    // T3-Z A1: el email solo lo cambia la rama admin en una ficha YA vinculada al portal.
-    const id = await linkedPatient();
+    const id = await clinicalPatient();
     asUser(admin.userId);
     const email = `nuevo-${uniqueSuffix()}@test.local`;
     const phone = ph();
@@ -201,24 +199,21 @@ describe.skipIf(!RUN)("[AS-1b] pacientes editados por Secretaria/Admin, portal y
     expect(await updatePatient({ id, notes: "x" })).toEqual({ ok: false, error: CLINICAL_COPY });
   });
 
-  // T3-Z A1: el login del portal vincula la ficha cuyo email coincide (sin `userId` todavía). Si la recepción le pone
-  // a una ficha sin vincular el email de OTRA persona (o el suyo), esa persona entra al portal con la HC de este
-  // paciente. Por eso en la rama admin el email de una ficha sin vincular no se cambia; vinculada ya no decide nada.
-  it("[T3Z-s1] la Secretaria NO cambia el email de una ficha sin vincular: rechazo sin escribir (tampoco el teléfono)", async () => {
+  // T3-Y (decisión de Martin 19-oct, «Justamente es labor de la secretaria poder cargar y modificar emails»): se
+  // revierte el bloqueo de T3-Z A1. La red contra el auto-vínculo equivocado del portal es PD-15 (email verificado y
+  // exactamente una ficha), no la edición de la ficha.
+  it("[T3-Y] la Secretaria cambia el email de una ficha sin portal → ok y queda normalizado", async () => {
     const id = await clinicalPatient();
-    const before = await snapshot(id);
     asUser(sec.userId);
-    const r = await updatePatient({ id, email: `ajeno-${uniqueSuffix()}@test.local`, phone: ph() });
-    expect(r).toEqual({ ok: false, error: EMAIL_LOCKED_COPY });
-    expect(await snapshot(id)).toEqual(before);
-    // Vaciarlo también es cambiarlo.
-    expect(await updatePatient({ id, email: "" })).toEqual({ ok: false, error: EMAIL_LOCKED_COPY });
-    expect(await snapshot(id)).toEqual(before);
-    // Control: el mismo email que ya tenía (el drawer manda todo el form) no es cambio y el resto se guarda.
+    const email = `nuevo-${uniqueSuffix()}@test.local`;
     const phone = ph();
-    const same = await updatePatient({ id, email: before.email!.toUpperCase(), phone });
-    if (!same.ok) throw new Error(same.error);
-    expect(await snapshot(id)).toMatchObject({ email: before.email, phone });
+    const r = await updatePatient({ id, email: `  ${email.toUpperCase()} `, phone });
+    if (!r.ok) throw new Error(r.error);
+    expect(await snapshot(id)).toMatchObject({ email, phone, notes: "Lumbalgia crónica" });
+    // Vaciarlo también vale (lista cerrada `PatientAdminUpdate`: `""` = borrar).
+    const cleared = await updatePatient({ id, email: "" });
+    if (!cleared.ok) throw new Error(cleared.error);
+    expect((await snapshot(id)).email).toBeNull();
   });
 
   it("[T3Z-s1] la Secretaria cambia el email de una ficha vinculada al portal", async () => {

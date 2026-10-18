@@ -2059,13 +2059,14 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] 🔴 P0 La **Secretaria no confirma** el pago de obra social (solo Titular, Admin o Facturación).
 - [ ] 🔴 P0 Un turno pagado por **Mercado Pago** no se desmarca ni se le cambia el medio: «Este turno se pagó por Mercado Pago: el cobro no se cambia a mano.»
 - [ ] **Admin** y **Facturación** cobran desde `/sala` y Facturación igual que la Secretaria.
+- [ ] 🔴 P0 El modal «Registrar cobro» dice **a quién se imputa** en los tres lugares (drawer de la agenda, `/sala` y Facturación de la ficha): «Se imputa a {Profesional}» con el nombre (nunca un email), también con un solo profesional; la descripción ya no repite el profesional (T3-Y).
 
 ### 🔴 P0 · Permisos (C-AS1)
 - [ ] 🔴 P0 **Admin cambia el plan** desde Suscripción: pide el código de 2FA (step-up) y ve la facturación de la suscripción. Si el Titular le saca «Planes y pagos», deja de verla.
 - [ ] 🔴 P0 **Secretaria con «Configuración»** maneja servicios, obras sociales, horarios, sedes, salas y topes, pero **no ve** el switch del turnero (del consultorio ni de profesionales), Directorio, «quién ve la HC», datos del consultorio, Usuarios, diagnósticos propios ni «Terminar acceso» de soporte. Lo mismo Facturación con «Configuración».
 - [ ] 🔴 P0 **Profesional con «Configuración»** sí ve y usa todo lo delicado.
 - [ ] 🔴 P0 **Secretaria** edita teléfono, email, DNI y cobertura del paciente («Editar datos»); **no** ve ni manda notas ni diagnóstico. Facturación no edita datos.
-- [ ] 🔴 P0 Secretaria cambia el email de una ficha **sin** portal vinculado → rechazo «El email lo cambia el profesional a cargo o el paciente desde el portal.» (fix T3-Z A1); con portal vinculado sí puede.
+- [ ] 🔴 P0 Secretaria **carga, cambia y vacía** el email de cualquier ficha (con o sin portal vinculado) desde «Editar datos»: se guarda en minúsculas (T3-Y revierte el bloqueo de T3-Z A1, decisión de Martin 19-oct).
 - [ ] 🔴 P0 Facturación no aprueba ni rechaza pedidos del portal (no ve los botones).
 - [ ] 🔴 P0 Export CSV de pacientes como **Facturación**: sin email ni teléfono; como Secretaria, con contactos (fix T3-Z M1).
 - [ ] Secretaria da de alta un paciente en `/pacientes` con «Profesional a cargo» obligatorio.

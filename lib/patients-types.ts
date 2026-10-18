@@ -129,6 +129,12 @@ export type PatientBookingSummary = {
 
 export type PatientBookingFull = Prisma.BookingGetPayload<object> & {
   serviceName: string;
+  /**
+   * T3-Y (decisión de Martin 19-oct, «Estaría bueno que se afirme a quién se le imputa el pago»): nombre PÚBLICO del
+   * profesional del turno (`displayMemberName`, nunca el email) para la línea «Se imputa a …» del modal de cobro de
+   * Facturación. No es HC: es el mismo dato que la agenda le muestra a la recepción.
+   */
+  practitionerName: string;
   obraSocial: string;
   /** What the patient pays per session (resolved copago). */
   copagoCents: number;
@@ -194,12 +200,6 @@ export type PatientAdminCore = {
   nextBookingAt: Date | null;
   /** T3e-2p (H-1u-1): optimistic lock de «Editar datos» (`expectedUpdatedAt` de `updatePatient`). */
   updatedAt: Date;
-  /**
-   * T3-Z A1: la ficha tiene cuenta del portal vinculada (`Patient.userId != null`). Solo el booleano: el id de la cuenta
-   * no sale. Sin vincular, «Editar datos» deja el email deshabilitado (el login del portal vincula por email y la rama
-   * admin de `updatePatient` lo rechaza).
-   */
-  portalLinked: boolean;
   access: "admin";
 };
 

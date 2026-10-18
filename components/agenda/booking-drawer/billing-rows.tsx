@@ -69,7 +69,7 @@ export function BillingRows({
   caps?: ReadonlySet<Capability>;
   /** Profesional del actor (`viewer.practitionerId`): sin él, `billing.collectOwn` no cobra nada. */
   viewerPractitionerId?: string | null;
-  /** Nombre del profesional del turno para el modal de cobro (B2): solo si el consultorio tiene más de uno. */
+  /** Nombre público del profesional del turno para «Se imputa a …» del modal de cobro (T3-Y). */
   practitionerName?: string | null;
   /**
    * El cobro cambió en el server (nuevo `updatedAt`). La fila se actualiza sola con la respuesta; esto es para que el

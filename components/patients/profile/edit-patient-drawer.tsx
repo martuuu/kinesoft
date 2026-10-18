@@ -15,7 +15,6 @@ import {
   updatePatient,
 } from "@/lib/patients";
 import type { PatientAdminCore } from "@/lib/patients-types";
-import { PATIENT_EMAIL_LOCKED_COPY } from "@/lib/validation";
 import { copagoFieldFromCents, patientUpdatePayload, type PatientFormMode } from "@/components/patients/patient-form-payload";
 import { listPayerPlans, proposePayerPlan } from "@/lib/catalog";
 import type { PayerPlanOption } from "@/lib/catalog-schemas";
@@ -31,7 +30,7 @@ import type { PatientWithRelations, InsurerOption, PractitionerOption } from "./
  */
 export type AdminEditablePatient = Pick<
   PatientAdminCore,
-  "id" | "firstName" | "lastName" | "documentId" | "email" | "phone" | "dateOfBirth" | "updatedAt" | "coverage" | "portalLinked"
+  "id" | "firstName" | "lastName" | "documentId" | "email" | "phone" | "dateOfBirth" | "updatedAt" | "coverage"
 >;
 
 /**
@@ -67,8 +66,6 @@ type EditablePatient = {
   dateOfBirth: Date | string | null;
   updatedAt: string | null;
   coverage: EditableCoverage | null;
-  /** T3-Z A1: solo modo admin. `false` = email deshabilitado (el login del portal vincula por email). */
-  emailLocked: boolean;
   assignedPractitionerId: string | null;
   diagnosisTitle: string | null;
   diagnosisNote: string | null;
@@ -98,8 +95,6 @@ function fromFull(p: PatientWithRelations): EditablePatient {
           copagoCents: c.copagoCents ?? null,
         }
       : null,
-    // Rama full: el profesional a cargo cambia el email (vinculada o no).
-    emailLocked: false,
     assignedPractitionerId: p.assignedPractitionerId,
     diagnosisTitle: p.diagnosisTitle,
     diagnosisNote: p.diagnosisNote,
@@ -129,7 +124,6 @@ function fromAdmin(p: AdminEditablePatient): EditablePatient {
           copagoCents: c.copagoCents,
         }
       : null,
-    emailLocked: !p.portalLinked,
     assignedPractitionerId: null,
     diagnosisTitle: null,
     diagnosisNote: null,
@@ -420,15 +414,9 @@ export function EditPatientModal(props: EditPatientModalProps) {
             <FormField label="Fecha de nacimiento" name="dateOfBirth" type="date" defaultValue={dobIso} />
           </Grid2>
           <Grid2>
-            <FormField
-              label="Email"
-              name="email"
-              type="email"
-              defaultValue={patient.email ?? ""}
-              // T3-Z A1: sin portal vinculado, la recepción no cambia el email (el server tampoco lo acepta).
-              disabled={patient.emailLocked}
-              hint={patient.emailLocked ? PATIENT_EMAIL_LOCKED_COPY : undefined}
-            />
+            {/* T3-Y (decisión de Martin 19-oct): la recepción carga y corrige el email (se revirtió el bloqueo de
+                T3-Z A1). La red del portal es PD-15: auto-vínculo solo con email verificado y una sola ficha. */}
+            <FormField label="Email" name="email" type="email" defaultValue={patient.email ?? ""} />
             <FormField label="Teléfono" name="phone" defaultValue={patient.phone ?? ""} />
           </Grid2>
         </Section>

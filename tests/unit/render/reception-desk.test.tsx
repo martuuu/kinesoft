@@ -282,17 +282,19 @@ describe("[RX-1b] franja de profesionales", () => {
 });
 
 describe("[RX-1b] cobro", () => {
-  it("[AS-1c] modal «Registrar cobro»: importe, cobertura, profesional y hora; medio obligatorio sin preselección", () => {
+  it("[AS-1c] modal «Registrar cobro»: importe, a quién se imputa y hora; medio obligatorio sin preselección", () => {
     const html = renderToStaticMarkup(
       <DeskPayModal row={ROWS[5]} practitionerName="Ana Pérez" viewer={TITULAR} onClose={() => {}} onSaved={() => {}} />
     );
     expect(html).toContain("Registrar cobro");
-    // T3-Z (B2): la descripción única de los tres modales: paciente · servicio · día y hora (+ profesional si hay
-    // más de uno; el shell lo pasa solo en ese caso).
-    expect(html).toContain("Paciente cobrar · Kinesiología · jue 15/10 09:00 · Ana Pérez");
-    const solo = renderToStaticMarkup(<DeskPayModal row={ROWS[5]} practitionerName={null} viewer={TITULAR} onClose={() => {}} onSaved={() => {}} />);
-    expect(solo).toContain("Paciente cobrar · Kinesiología · jue 15/10 09:00");
-    expect(solo).not.toContain("Ana Pérez");
+    // T3-Z (B2): la descripción única de los tres modales: paciente · servicio · día y hora. T3-Y: el profesional
+    // sale SIEMPRE en la línea «Se imputa a …» y ya no se repite en la descripción.
+    expect(html).toContain("Paciente cobrar · Kinesiología · jue 15/10 09:00");
+    expect(html).not.toContain("09:00 · Ana Pérez");
+    expect(html).toContain("Se imputa a Ana Pérez");
+    const sinNombre = renderToStaticMarkup(<DeskPayModal row={ROWS[5]} practitionerName={null} viewer={TITULAR} onClose={() => {}} onSaved={() => {}} />);
+    expect(sinNombre).toContain("Se imputa al profesional del turno");
+    expect(sinNombre).not.toContain("Ana Pérez");
     expect(html).toContain(formatARS(600000));
     // El botón dice el monto (copagoRemainingCents: sin señas en T3, el copago entero).
     expect(html).toContain(`Marcar pagado · ${formatARS(600000)}`);

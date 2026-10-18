@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
   COLLECT_COPY,
   UNDO_COLLECT_CONFIRM,
+  collectImputationLine,
   collectModalDescription,
   copagoCollectView,
   copagoCollectViewFor,
@@ -133,11 +134,23 @@ describe("[Z-u1] collectModalDescription (B2)", () => {
   it("[Z-u1] paciente · servicio · día y hora en AR", () => {
     expect(collectModalDescription(base)).toBe("Juana Gómez · Kinesio · lun 19/10 10:30");
   });
-  it("[Z-u1] con profesional (solo si el caller lo pasa: hay más de uno)", () => {
-    expect(collectModalDescription({ ...base, practitionerName: "Ana Pérez" })).toBe("Juana Gómez · Kinesio · lun 19/10 10:30 · Ana Pérez");
-    expect(collectModalDescription({ ...base, practitionerName: null })).toBe("Juana Gómez · Kinesio · lun 19/10 10:30");
-  });
+  // T3-Y: el profesional ya no va en la descripción; lo dice la línea de imputación (abajo).
   it("[Z-u1] medianoche AR no se va al día anterior ni sale «24:00»", () => {
     expect(collectModalDescription({ ...base, scheduledFor: "2026-10-20T03:00:00.000Z" })).toBe("Juana Gómez · Kinesio · mar 20/10 00:00");
+  });
+});
+
+describe("[T3-Y] collectImputationLine (a quién se imputa el cobro)", () => {
+  it("[T3-Y] con profesional: «Se imputa a {nombre}»", () => {
+    expect(collectImputationLine({ practitionerId: "pr_1", practitionerName: "Ana Pérez" })).toBe("Se imputa a Ana Pérez");
+    expect(collectImputationLine({ practitionerId: "pr_1", practitionerName: "  Ana Pérez " })).toBe("Se imputa a Ana Pérez");
+  });
+  it("[T3-Y] sin profesional: «Se imputa al consultorio»", () => {
+    expect(collectImputationLine({ practitionerId: null, practitionerName: null })).toBe("Se imputa al consultorio");
+    expect(collectImputationLine({ practitionerId: "", practitionerName: "Ana Pérez" })).toBe("Se imputa al consultorio");
+  });
+  it("[T3-Y] con profesional sin nombre a mano: no dice «consultorio» (sería falso)", () => {
+    expect(collectImputationLine({ practitionerId: "pr_1", practitionerName: null })).toBe("Se imputa al profesional del turno");
+    expect(collectImputationLine({ practitionerId: "pr_1", practitionerName: " " })).toBe("Se imputa al profesional del turno");
   });
 });

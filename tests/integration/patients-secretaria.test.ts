@@ -41,6 +41,7 @@ import {
   type EphemeralTenant,
 } from "@/tests/helpers/tenant-factory";
 import { asUser } from "@/tests/helpers/actor";
+import { displayMemberName } from "@/lib/display-name";
 
 const RUN = process.env.INTEGRATION === "1";
 
@@ -60,8 +61,6 @@ const ADMIN_CORE_KEYS = [
   "lastName",
   "nextBookingAt",
   "phone",
-  // T3-Z A1: solo el booleano del vínculo con el portal (el `userId` no sale).
-  "portalLinked",
   // T3e-2p (H-1u-1): optimistic lock de «Editar datos».
   "updatedAt",
 ].sort();
@@ -310,8 +309,13 @@ describe.skipIf(!RUN)("P0-S07sp · Secretaria en pacientes", () => {
 
     const all = await getPatientBookingsAll(p);
     expect(all.rows).toHaveLength(2);
+    // T3-Y: «Se imputa a …» de Facturación. El nombre PÚBLICO del profesional del turno (`displayMemberName`), nunca
+    // el email; y el servicio sale del mismo SELECT con JOIN que lo trae.
+    const kineProfile = await db.userProfile.findUniqueOrThrow({ where: { id: kine.userId }, select: { fullName: true, email: true } });
     for (const b of all.rows) {
-      expect(b).toMatchObject({ title: null, description: null, notes: null });
+      expect(b).toMatchObject({ title: null, description: null, notes: null, serviceName: "Consulta" });
+      expect(b.practitionerName).toBe(displayMemberName(kineProfile.fullName));
+      expect(b.practitionerName).not.toBe(kineProfile.email);
     }
     expect(await getPatientBillableCount(p)).toBe(1);
     expect(await getPatientEvaScores(p)).toEqual([]);

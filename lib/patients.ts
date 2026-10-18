@@ -68,7 +68,6 @@ import {
   PatientUpdate,
   PatientAdminUpdate,
   PATIENT_CLINICAL_KEYS,
-  PATIENT_EMAIL_LOCKED_COPY,
   CoverageSet,
   type ActionResult,
   type PatientCreateInput,
@@ -937,7 +936,6 @@ async function updatePatientImpl(
     | { kind: "noEditAdmin" }
     | { kind: "clinical" }
     | { kind: "invalid" }
-    | { kind: "emailLocked" }
     | { kind: "stale" }
     | { kind: "ok"; changed: string[]; updatedAt: Date };
   let outcome: Outcome;
@@ -948,8 +946,6 @@ async function updatePatientImpl(
         select: {
           id: true,
           updatedAt: true,
-          // T3-Z A1: el vínculo con el portal decide si la rama admin puede tocar el email.
-          userId: true,
           firstName: true,
           lastName: true,
           email: true,
@@ -984,19 +980,13 @@ async function updatePatientImpl(
       const same = (a: unknown, b: unknown) =>
         a instanceof Date || b instanceof Date ? +(a as Date) === +(b as Date) : (a ?? null) === (b ?? null);
       const changed = PATIENT_EDITABLE_FIELDS.filter((f) => data[f] !== undefined && !same(prev[f], data[f]));
-      // T3-Z A1: el login del portal vincula la ficha SIN `userId` cuyo email coincide con el de la cuenta. Si la
-      // recepción le cambiaba el email a una ficha sin vincular (un tipeo, o el de otra persona), quien tuviera ese
-      // email entraba al portal con los datos y turnos de este paciente. En la rama admin, entonces, el email de una
-      // ficha sin vincular no se cambia (ni se vacía): lo hace el profesional a cargo (full) o el paciente desde el
-      // portal. Vinculada, el email ya no decide el vínculo y la recepción lo corrige. Mandar el MISMO email (el
-      // drawer manda todo el form) no es cambio.
-      // Comparación como la del vínculo (`sameEmail`: normalizada): un email viejo con mayúsculas que vuelve igual no
-      // cuenta como cambio.
-      const emailChanged =
-        data.email !== undefined && !(before.email == null && data.email == null) && !sameEmail(before.email, data.email);
-      if (access === "admin" && before.userId == null && emailChanged) {
-        return { kind: "emailLocked" };
-      }
+      // T3-Y (decisión de Martin 19-oct, plan §24.17: «Justamente es labor de la secretaria poder cargar y modificar
+      // emails»): se revierte el bloqueo de T3-Z A1 (`9f0c8f3`), que rechazaba en la rama admin cambiar o vaciar el
+      // email de una ficha sin portal vinculado. El riesgo que lo motivaba (el login del portal vincula por email la
+      // ficha sin `userId`, y un tipeo de la recepción se la abría a otra cuenta) lo cubre la red de PD-15: el
+      // auto-vínculo exige email VERIFICADO en la cuenta y EXACTAMENTE una ficha que coincida (`sameEmail`,
+      // lib/portal-link-internal.ts); con dos o más no vincula (`ambiguous`). El email sigue siendo de la lista
+      // cerrada `PatientAdminUpdate` y se guarda normalizado (`patientEmail`: trim + minúsculas).
       // `updatedAt` leído en el WHERE: si otra tx lo movió entre el SELECT y
       // acá (READ COMMITTED), count = 0 → stale en vez de pisar.
       const res = await tx.patient.updateMany({
@@ -1020,9 +1010,6 @@ async function updatePatientImpl(
   if (outcome.kind === "noEditAdmin") return { ok: false, error: "Tu rol no edita los datos de los pacientes." };
   if (outcome.kind === "clinical") {
     return { ok: false, error: "Las notas y el diagnóstico los edita el profesional a cargo." };
-  }
-  if (outcome.kind === "emailLocked") {
-    return { ok: false, error: PATIENT_EMAIL_LOCKED_COPY };
   }
   if (outcome.kind === "invalid") {
     // Mismo shape que el parseo de arriba: los `fieldErrors` del `.strict()` (si la clave de más era la única

@@ -49,9 +49,9 @@ export function patientUpdatePayload(
   fd: FormLike
 ) {
   const contact = contactFields(fd);
-  // T3-Z A1: un campo que no viaja en el form (el email deshabilitado de una ficha sin portal vinculado: un control
-  // `disabled` no entra en el FormData) es «no tocar», no «vaciar». Con `""` la rama admin lo leía como borrar el
-  // email y rechazaba el guardado entero.
+  // T3-Z A1: un email que no viaja en el form (un control `disabled` o ausente no entra en el FormData) es «no tocar»,
+  // no «vaciar»: con `""` el server lo lee como borrarlo. Nació con el email bloqueado de la recepción, que T3-Y
+  // revirtió (decisión de Martin 19-oct); se queda porque «ausente = no tocar» sigue siendo lo correcto.
   const { email, ...rest } = contact;
   return {
     id,

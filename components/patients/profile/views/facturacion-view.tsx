@@ -14,6 +14,7 @@ import { isPublicReservation } from "@/lib/booking-capacity";
 import {
   COLLECT_COPY,
   UNDO_COLLECT_CONFIRM,
+  collectImputationLine,
   collectModalDescription,
   copagoCollectViewFor,
   copagoRemainingCents,
@@ -444,36 +445,20 @@ export function FacturacionView({
     </div>
   );
 
-  const collectAmount = collecting ? copagoRemainingCents({ resolvedCopagoCents: collecting.copagoCents, deposits: [] }) : 0;
-  // El mismo cuerpo que el modal del drawer (`CollectForm`, T3-Z M1): antes Facturación tenía una copia propia sin la
-  // nota, sin el estado «Registrando…» y con los botones sin apilar en el teléfono.
   const collectModal = (
-    <Modal
-      open={collecting != null}
+    <FacturacionCollectModal
+      collecting={collecting}
+      patientName={patientName}
+      method={method}
+      onMethod={(m) => {
+        setMethod(m);
+        setMethodError(null);
+      }}
+      error={methodError}
+      saving={saving}
       onClose={closeCollect}
-      title="Registrar cobro"
-      description={
-        collecting
-          ? collectModalDescription({ patientName: patientName ?? "", serviceName: collecting.serviceName, scheduledFor: collecting.scheduledFor })
-          : undefined
-      }
-      width={460}
-    >
-      {collecting && (
-        <CollectForm
-          amountCents={collectAmount}
-          method={method}
-          onMethod={(m) => {
-            setMethod(m);
-            setMethodError(null);
-          }}
-          error={methodError}
-          saving={saving}
-          onCancel={closeCollect}
-          onConfirm={() => void submitCollect()}
-        />
-      )}
-    </Modal>
+      onConfirm={() => void submitCollect()}
+    />
   );
 
   if (grouped) {
@@ -533,5 +518,60 @@ export function FacturacionView({
       {footnote}
       {collectModal}
     </div>
+  );
+}
+
+/**
+ * Modal «Registrar cobro» de Facturación. El mismo cuerpo que el modal del drawer (`CollectForm`, T3-Z M1): antes
+ * Facturación tenía una copia propia sin la nota, sin el estado «Registrando…» y con los botones sin apilar en el
+ * teléfono. T3-Y: componente aparte (exportado) para que el render test vea la línea «Se imputa a …» sin depender del
+ * estado del view; el nombre público viene en la fila (`PatientBookingFull.practitionerName`).
+ */
+export function FacturacionCollectModal({
+  collecting,
+  patientName,
+  method,
+  onMethod,
+  error,
+  saving,
+  onClose,
+  onConfirm,
+}: {
+  /** null = cerrado (el Modal queda montado para la animación de salida). */
+  collecting: PatientBookingFull | null;
+  patientName?: string;
+  method: PaymentMethod | null;
+  onMethod: (m: PaymentMethod) => void;
+  error: string | null;
+  saving: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const amount = collecting ? copagoRemainingCents({ resolvedCopagoCents: collecting.copagoCents, deposits: [] }) : 0;
+  return (
+    <Modal
+      open={collecting != null}
+      onClose={onClose}
+      title="Registrar cobro"
+      description={
+        collecting
+          ? collectModalDescription({ patientName: patientName ?? "", serviceName: collecting.serviceName, scheduledFor: collecting.scheduledFor })
+          : undefined
+      }
+      width={460}
+    >
+      {collecting && (
+        <CollectForm
+          amountCents={amount}
+          imputation={collectImputationLine({ practitionerId: collecting.practitionerId, practitionerName: collecting.practitionerName })}
+          method={method}
+          onMethod={onMethod}
+          error={error}
+          saving={saving}
+          onCancel={onClose}
+          onConfirm={onConfirm}
+        />
+      )}
+    </Modal>
   );
 }
