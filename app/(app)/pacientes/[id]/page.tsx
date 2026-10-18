@@ -164,7 +164,7 @@ function Breadcrumbs({ name }: { name: string }) {
           textDecoration: "none",
         }}
       >
-        ← Volver al listado
+        ← Volver
       </Link>
     </div>
   );
