@@ -1,0 +1,53 @@
+/*
+ * [FC-1a] Cuerpo de la ficha (HcDocView / HcBody). Solo tipografía y espaciado: sin colores propios, hereda el de la
+ * tarjeta, el portal o la impresión donde se monte (el mismo componente vive en los tres).
+ */
+.doc {
+  font-size: var(--fs-sm);
+  line-height: var(--lh-relaxed);
+  overflow-wrap: anywhere;
+}
+.doc > :first-child {
+  margin-top: 0;
+}
+.doc > :last-child {
+  margin-bottom: 0;
+}
+.p {
+  margin: 0 0 var(--space-2);
+}
+/* Un párrafo vacío (Enter de más) ocupa una línea, como en el editor. */
+.p:empty::before {
+  content: "\200b";
+}
+.h {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--fs-md);
+  font-weight: 700;
+  line-height: var(--lh-snug);
+}
+.h + .h {
+  margin-top: var(--space-2);
+}
+.hSub {
+  margin: var(--space-3) 0 var(--space-1);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  line-height: var(--lh-snug);
+}
+.list {
+  margin: 0 0 var(--space-2);
+  padding-left: var(--space-6);
+}
+.list .list {
+  margin-bottom: 0;
+}
+.li > .p {
+  margin-bottom: 0;
+}
+.plain {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-relaxed);
+  overflow-wrap: anywhere;
+}
