@@ -82,7 +82,9 @@ const ROLE_EQ_ALLOW: Record<string, number> = {
   "lib/onboarding-internal.ts": 1,
   "lib/onboarding-logic.ts": 1,
   "lib/onboarding.ts": 3,
-  "lib/roles.ts": 2,
+  "lib/roles.ts": 0,
+  // T3a-0z2: `isClinicalMember` (OWNER con `clinical`) se mudó a roles-core.
+  "lib/roles-core.ts": 1,
   // PL-1c (misma ola) sumó 7 en team-internal y 1 en invite-activation, revisadas en PL-1b: miran el rol del
   // miembro DESTINO («nunca sobre el Titular», C-PL3/PL-D5: el ADMIN invitado nace con «Configuración»), no deciden
   // qué puede el actor. Eran 11 en HEAD 14eb013. Integrador PL-1: 19 en team-internal (§20.17: «¿Atiende?» solo
