@@ -82,10 +82,10 @@ describe.skipIf(!RUN)("authz · rol desde Membership", () => {
     await expect(requireCapability("clinical.read")).rejects.toBeInstanceOf(ForbiddenError);
   });
 
-  it("tenant-settings adoptó requireTenantAdmin: PRACTITIONER no escribe, OWNER sí", async () => {
+  it("datos del consultorio con requireTenantSensitive (T3): PRACTITIONER sin «Configuración» no escribe, OWNER sí", async () => {
     asUser(pracUser);
     await expect(updateTenantBasics({ name: "Hackeado" })).rejects.toThrow(
-      "Solo OWNER/ADMIN pueden cambiar la configuración del consultorio."
+      "Solo el titular, o un administrador/a o profesional con «Configuración», puede cambiar esto."
     );
     expect((await db.tenant.findUniqueOrThrow({ where: { id: A.tenantId } })).name).not.toBe("Hackeado");
 
