@@ -4,10 +4,13 @@
  * FC-1b3 implementa lo que T4c necesita ya para compilar y testear contra algo real:
  *  - `activeDiagnosisTitle`: lo usa FC-2a al escribir `Patient.diagnosisTitle` con `setActiveDiagnosis`.
  *  - `isLateEntry`: lo usa FC-2b para el chip «Carga tardía» y FC-2e para la marca del PDF.
- * La búsqueda (`normalizeDiagnosisText`, `parseDiagnosisQuery`, `rankDiagnosisMatch`, `dedupeRecents`) queda como
- * stub que tira: la implementa FC-2c junto con `lib/diagnoses.ts`, que es quien define el orden de los grupos.
+ * FC-2c implementa la búsqueda (`normalizeDiagnosisText`, `parseDiagnosisQuery`, `rankDiagnosisMatch`,
+ * `dedupeRecents`): las usan las actions de `lib/diagnoses.ts` y el selector del cliente.
+ *
+ * `lib/diagnoses-import-core.ts` también es puro (sin DB ni fs): importarlo acá no arrastra I/O al cliente.
  */
-import { ACTIVE_DIAGNOSIS_TITLE_MAX, type DiagnosisSnapshot } from "@/lib/diagnoses-types";
+import { normalizeIcdSearchText } from "@/lib/diagnoses-import-core";
+import { ACTIVE_DIAGNOSIS_TITLE_MAX, DIAGNOSIS_RECENTS_MAX, type DiagnosisSnapshot } from "@/lib/diagnoses-types";
 
 const ELLIPSIS = "…";
 
@@ -56,36 +59,87 @@ export function isLateEntry(p: {
   return created - occurred > LATE_ENTRY_THRESHOLD_MS;
 }
 
-// ─── Stubs (los implementa FC-2c) ────────────────────────────────────────────────────────────────────────────────────
+// ─── Búsqueda (FC-2c) ────────────────────────────────────────────────────────────────────────────────────────────────
 
 export type ParsedDiagnosisQuery = { text: string; codePrefix: string | null };
 
-function notImplemented(name: string): never {
-  throw new Error(`${name}: no implementado (FC-2c).`);
-}
-
-/** NFD, sin tildes, minúsculas, `[^a-z0-9]` → espacio. */
+/**
+ * NFD, sin tildes, minúsculas, `[^a-z0-9]` → espacio (colapsado), trim.
+ *
+ * Por qué REUSA `normalizeIcdSearchText` (FC-1d) en vez de copiar la regla: el `searchText` de `DiagnosisCode` lo
+ * escribe el importador con esa función, y la consulta del buscador tiene que normalizarse IGUAL o «cuadriceps» no
+ * encuentra «cuádriceps» (una copia que diverge en un carácter rompe la búsqueda sin que falle ningún test del
+ * importador). Con código vacío la función da exactamente la normalización del texto (el espacio inicial se recorta).
+ */
 export function normalizeDiagnosisText(s: string): string {
-  void s;
-  return notImplemented("normalizeDiagnosisText");
+  return normalizeIcdSearchText("", s);
 }
 
-/** < 2 caracteres → null; si parece un código CIE-11, `codePrefix`. */
+/**
+ * Forma de un código (CIE-11 o el código libre de un propio, p. ej. «M54.5» de CIE-10): sin espacios, 2..4 caracteres
+ * alfanuméricos con al menos una letra Y un dígito, y opcionalmente «.» + hasta 3. Exigir letra y dígito es lo que
+ * separa «ME84» / «fa20» de «lumbalgia» o «dolor» (que nunca tienen dígitos) y de «12» (un número suelto).
+ */
+const CODE_LIKE_RE = /^(?=[0-9A-Z.]*[0-9])(?=[0-9A-Z.]*[A-Z])[0-9A-Z]{2,4}(\.[0-9A-Z]{0,3})?$/;
+
+/** < 2 caracteres (normalizados) → null; si parece un código, `codePrefix` en mayúsculas (como lo guarda la OMS). */
 export function parseDiagnosisQuery(q: string): ParsedDiagnosisQuery | null {
-  void q;
-  return notImplemented("parseDiagnosisQuery");
+  const text = normalizeDiagnosisText(q);
+  if (text.length < 2) return null;
+  const raw = q.trim().toUpperCase();
+  return { text, codePrefix: CODE_LIKE_RE.test(raw) ? raw : null };
 }
 
-/** Código exacto 0 > prefijo 1 > empieza con 2 > palabra 3 > contiene 4; sin match → null. */
+/**
+ * Código exacto 0 > prefijo de código 1 > el título empieza con la consulta 2 > una palabra del título empieza con la
+ * consulta 3 > el título la contiene (o contiene todas sus palabras, en cualquier orden) 4; sin match → null.
+ *
+ * Es la fuente de verdad del orden: el SQL de `lib/diagnoses.ts` solo pre-filtra candidatos con la misma regla y el
+ * orden final sale de acá (un test unit fija el orden sin base). «Todas las palabras en cualquier orden» entra como 4
+ * porque la tabulación no trae sinónimos (§24.15): «aguda lumbalgia» tiene que encontrar «Lumbalgia aguda».
+ */
 export function rankDiagnosisMatch(o: { code: string | null; title: string }, q: ParsedDiagnosisQuery): number | null {
-  void o;
-  void q;
-  return notImplemented("rankDiagnosisMatch");
+  const code = o.code?.trim().toUpperCase() || null;
+  if (q.codePrefix && code) {
+    if (code === q.codePrefix) return 0;
+    if (code.startsWith(q.codePrefix)) return 1;
+  }
+  const title = normalizeDiagnosisText(o.title);
+  if (!title || !q.text) return null;
+  if (title.startsWith(q.text)) return 2;
+  if (` ${title}`.includes(` ${q.text}`)) return 3;
+  if (title.includes(q.text)) return 4;
+  const tokens = q.text.split(" ").filter(Boolean);
+  if (tokens.length > 1 && tokens.every((t) => title.includes(t))) return 4;
+  return null;
 }
 
-/** Recientes: los diagnósticos de las últimas fichas del usuario (la más nueva primero), sin repetir, ≤ `max`. */
-export function dedupeRecents(perNote: readonly (readonly DiagnosisSnapshot[])[], max?: number): DiagnosisSnapshot[] {
-  void perNote;
-  void max;
-  return notImplemented("dedupeRecents");
+/** Clave de «es el mismo diagnóstico»: fuente + id; el texto libre, por su texto normalizado. */
+export function diagnosisSnapshotKey(s: Pick<DiagnosisSnapshot, "source" | "refId" | "title">): string {
+  return s.source === "text" || !s.refId ? `text:${normalizeDiagnosisText(s.title)}` : `${s.source}:${s.refId}`;
+}
+
+/**
+ * Recientes: los diagnósticos de las últimas fichas del usuario (la más nueva primero; dentro de una ficha, en su
+ * orden: el principal primero), sin repetir, ≤ `max`. Lo que no tiene forma de snapshot se saltea (un JSON viejo o
+ * roto no rompe el selector).
+ */
+export function dedupeRecents(
+  perNote: readonly (readonly DiagnosisSnapshot[])[],
+  max: number = DIAGNOSIS_RECENTS_MAX
+): DiagnosisSnapshot[] {
+  const out: DiagnosisSnapshot[] = [];
+  const seen = new Set<string>();
+  for (const note of perNote) {
+    if (!Array.isArray(note)) continue;
+    for (const s of note) {
+      if (out.length >= max) return out;
+      if (!s || typeof s !== "object" || typeof s.title !== "string" || typeof s.source !== "string") continue;
+      const key = diagnosisSnapshotKey(s);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(s);
+    }
+  }
+  return out;
 }

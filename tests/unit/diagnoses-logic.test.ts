@@ -8,6 +8,7 @@ import {
   parseDiagnosisQuery,
   rankDiagnosisMatch,
 } from "@/lib/diagnoses-logic";
+import { normalizeIcdSearchText } from "@/lib/diagnoses-import-core";
 
 const snap = (code: string | null, title: string): DiagnosisSnapshot => ({
   v: 1,
@@ -91,27 +92,83 @@ describe("[FC-1b] isLateEntry", () => {
   });
 });
 
-// ─── Stubs de FC-2c ─────────────────────────────────────────────────────────────────────────────────────────────────
+// ─── Búsqueda (FC-2c) ───────────────────────────────────────────────────────────────────────────────────────────────
 
-describe("[FC-1b] búsqueda de diagnósticos (stubs de FC-2c)", () => {
-  it.fails("[FC-2c] parseDiagnosisQuery: <2 caracteres → null; patrón de código → codePrefix", () => {
+describe("[FC-2c] búsqueda de diagnósticos", () => {
+  it("[FC-2c] parseDiagnosisQuery: <2 caracteres → null; patrón de código → codePrefix", () => {
     expect(parseDiagnosisQuery("a")).toBeNull();
     expect(parseDiagnosisQuery("ME84")?.codePrefix).toBeTruthy();
     expect(parseDiagnosisQuery("lumbalgia")?.codePrefix).toBeNull();
   });
 
-  it.fails("[FC-2c] normalizeDiagnosisText sin tildes ni signos", () => {
+  it("[FC-2c] parseDiagnosisQuery: código en mayúsculas, con punto; sin letra o sin dígito no es código", () => {
+    expect(parseDiagnosisQuery("  me84.2 ")).toEqual({ text: "me84 2", codePrefix: "ME84.2" });
+    expect(parseDiagnosisQuery("fa2")?.codePrefix).toBe("FA2");
+    expect(parseDiagnosisQuery("M54.5")?.codePrefix).toBe("M54.5"); // código libre de un propio (CIE-10)
+    expect(parseDiagnosisQuery("12")?.codePrefix).toBeNull();
+    expect(parseDiagnosisQuery("dolor")?.codePrefix).toBeNull();
+    expect(parseDiagnosisQuery("me 84")?.codePrefix).toBeNull();
+    // Solo signos o una letra con tilde suelta: <2 normalizados.
+    expect(parseDiagnosisQuery("¿?")).toBeNull();
+    expect(parseDiagnosisQuery(" é ")).toBeNull();
+  });
+
+  it("[FC-2c] normalizeDiagnosisText sin tildes ni signos", () => {
     expect(normalizeDiagnosisText("Lumbalgía, AGUDA")).toBe("lumbalgia aguda");
   });
 
-  it.fails("[FC-2c] rankDiagnosisMatch: código exacto 0 > prefijo 1", () => {
+  it("[FC-2c] normalizeDiagnosisText = normalizeIcdSearchText del importador (misma regla, sin código)", () => {
+    for (const t of ["Contractura del músculo cuádriceps, niño", "  Dolor — lumbar (crónico)  ", "Ñandú ÜÖ", ""]) {
+      expect(normalizeDiagnosisText(t)).toBe(normalizeIcdSearchText("", t));
+    }
+    expect(normalizeDiagnosisText("  Dolor — lumbar (crónico)  ")).toBe("dolor lumbar cronico");
+  });
+
+  it("[FC-2c] rankDiagnosisMatch: código exacto 0 > prefijo 1", () => {
     const q = { text: "me84", codePrefix: "ME84" };
     expect(rankDiagnosisMatch({ code: "ME84", title: "Dolor" }, q)).toBe(0);
     expect(rankDiagnosisMatch({ code: "ME84.2", title: "Lumbalgia" }, q)).toBe(1);
   });
 
-  it.fails("[FC-2c] dedupeRecents sin repetir", () => {
+  it("[FC-2c] orden de la búsqueda: código exacto > prefijo > empieza con > palabra > contiene; sin tildes", () => {
+    const q = parseDiagnosisQuery("lumbal")!;
+    expect(rankDiagnosisMatch({ code: null, title: "Lumbalgia aguda" }, q)).toBe(2);
+    expect(rankDiagnosisMatch({ code: "ME84.2", title: "Dolor lumbálgico" }, q)).toBe(3);
+    expect(rankDiagnosisMatch({ code: null, title: "Dorsolumbalgia" }, q)).toBe(4);
+    expect(rankDiagnosisMatch({ code: null, title: "Cervicalgia" }, q)).toBeNull();
+    // Varias palabras en cualquier orden → contiene (4); en orden y al principio → empieza con (2).
+    const q2 = parseDiagnosisQuery("aguda lumbalgia")!;
+    expect(rankDiagnosisMatch({ code: null, title: "Lumbalgia aguda" }, q2)).toBe(4);
+    expect(rankDiagnosisMatch({ code: null, title: "Aguda lumbalgia" }, q2)).toBe(2);
+    // Sin tildes en ningún lado.
+    expect(rankDiagnosisMatch({ code: null, title: "Cuádriceps" }, parseDiagnosisQuery("CUADRICEPS")!)).toBe(2);
+    // Un código que no matchea cae a la regla del título.
+    expect(rankDiagnosisMatch({ code: "FA20", title: "Artrosis" }, parseDiagnosisQuery("ME84")!)).toBeNull();
+    const ordered = [
+      { code: null, title: "Dorsolumbalgia" },
+      { code: "ME84.2", title: "Dolor lumbálgico" },
+      { code: null, title: "Lumbalgia aguda" },
+    ].sort((a, b) => rankDiagnosisMatch(a, q)! - rankDiagnosisMatch(b, q)!);
+    expect(ordered.map((o) => o.title)).toEqual(["Lumbalgia aguda", "Dolor lumbálgico", "Dorsolumbalgia"]);
+  });
+
+  it("[FC-2c] dedupeRecents sin repetir", () => {
     const a = snap("ME84.2", "Lumbalgia");
     expect(dedupeRecents([[a], [a]], 8)).toHaveLength(1);
+  });
+
+  it("[FC-2c] recientes ≤8, la ficha más nueva primero, por fuente+id y el texto libre por texto normalizado", () => {
+    const icd = (id: string): DiagnosisSnapshot => ({ ...snap("ME84.2", `T${id}`), source: "icd11", refId: id });
+    const txt = (t: string): DiagnosisSnapshot => snap(null, t);
+    const notes = [
+      [icd("a"), txt("Contractura")],
+      [icd("a"), txt("contractúra"), icd("b")],
+      Array.from({ length: 10 }, (_, i) => icd(`n${i}`)),
+    ];
+    const out = dedupeRecents(notes);
+    expect(out).toHaveLength(8);
+    expect(out.map((s) => s.refId ?? s.title)).toEqual(["a", "Contractura", "b", "n0", "n1", "n2", "n3", "n4"]);
+    // Un JSON roto no rompe.
+    expect(dedupeRecents([[null as never, { foo: 1 } as never, icd("z")]], 8).map((s) => s.refId)).toEqual(["z"]);
   });
 });
