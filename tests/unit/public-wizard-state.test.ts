@@ -402,16 +402,27 @@ describe("[TP-1] windowNav siguientes/anteriores/ir a fecha", () => {
     // Sin «Ir a una fecha» (navegación normal o arranque) no se avisa.
     expect(W.windowNotice({ requestedFrom: "2026-10-22", jumped: false, window: w })).toBeNull();
     expect(W.windowNotice({ requestedFrom: "2026-10-23", jumped: true, window: w })).toBeNull();
-    const skipped = win({ days: [{ date: "2026-10-26", status: "open", slots: [] }], skippedFrom: "2026-10-19" });
-    expect(W.windowNotice({ requestedFrom: "2026-10-19", jumped: false, window: skipped })).toBe(
-      "No había turnos libres desde el lunes 19; te mostramos desde el lunes 26."
+    // `skippedFrom` = el `from` pedido (sáb 17); el aviso nombra el día anterior al primero mostrado.
+    const skipped = win({ days: [{ date: "2026-10-26", status: "open", slots: [] }], skippedFrom: "2026-10-17" });
+    expect(W.windowNotice({ requestedFrom: "2026-10-17", jumped: false, window: skipped })).toBe(
+      "No había turnos libres hasta el domingo 25; te mostramos desde el lunes 26."
     );
+  });
+
+  it("sin libres en 6 semanas = primera tanda toda «Completo» sin salto (o ventana vacía)", () => {
+    const allFull = win({ days: win().days.map((d) => ({ ...d, status: "full" as const, slots: [] })) });
+    expect(W.windowHasNoFreeSlots(allFull)).toBe(true);
+    expect(W.windowHasNoFreeSlots({ ...allFull, skippedFrom: "2026-10-17" })).toBe(false);
+    expect(W.windowHasNoFreeSlots(win())).toBe(false);
+    expect(W.windowHasNoFreeSlots(win({ days: [] }))).toBe(true);
   });
 
   it("«Buscar más adelante» con la ventana vacía: `nextFrom` o 6 semanas después, nunca más allá de 90 días", () => {
     const empty = win({ days: [], nextFrom: null, reachedEnd: true });
     expect(W.laterFrom({ from: TODAY, history: [] }, empty, TODAY)).toBe("2026-11-28");
-    expect(W.laterFrom({ from: TODAY, history: [] }, { ...empty, nextFrom: "2026-11-02" }, TODAY)).toBe("2026-11-02");
+    // El `nextFrom` de la tanda toda «Completo» está dentro de lo ya buscado: se salta al horizonte.
+    expect(W.laterFrom({ from: TODAY, history: [] }, { ...empty, nextFrom: "2026-10-24" }, TODAY)).toBe("2026-11-28");
+    expect(W.laterFrom({ from: TODAY, history: [] }, { ...empty, nextFrom: "2026-12-02" }, TODAY)).toBe("2026-12-02");
     expect(W.laterFrom({ from: "2026-12-20", history: [] }, empty, TODAY)).toBeNull();
   });
 });

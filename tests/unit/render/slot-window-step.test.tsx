@@ -128,8 +128,17 @@ describe("[TP-1] día full muestra «Completo»", () => {
   });
 
   it("salto automático (5 completos): aviso; ventana vacía: «No hay turnos libres…» + «Buscar más adelante»", () => {
-    const skipped = view({ notice: "No había turnos libres desde el lunes 19; te mostramos desde el lunes 26." });
-    expect(skipped).toContain("No había turnos libres desde el lunes 19; te mostramos desde el lunes 26.");
+    const skipped = view({ notice: "No había turnos libres hasta el domingo 25; te mostramos desde el lunes 26." });
+    expect(skipped).toContain("No había turnos libres hasta el domingo 25; te mostramos desde el lunes 26.");
+    // Contrato de TP-1s: sin libres en 6 semanas llega la primera tanda toda «Completo» (sin salto), no vacía.
+    const allFull: PublicSlotWindow = { ...WINDOW, days: WINDOW.days.map((d) => ({ ...d, status: "full" as const, slots: [] })) };
+    const full = view({ window: allFull, onLater: noop });
+    expect(full).toContain("No hay turnos libres en las próximas 6 semanas");
+    expect(full).toMatch(/<button[^>]*>Buscar más adelante<\/button>/);
+    expect(full.match(/<section/g)).toHaveLength(5);
+    expect(full).toMatch(/<h3[^>]*>Lunes 19 de oct · Completo<\/h3>/);
+    // Una semana con libres no muestra el aviso.
+    expect(view()).not.toContain("próximas 6 semanas");
     const empty = view({ window: { days: [], nextFrom: null, reachedEnd: true, skippedFrom: null }, onLater: noop });
     expect(empty).toContain("No hay turnos libres en las próximas 6 semanas");
     expect(empty).toMatch(/<button[^>]*>Buscar más adelante<\/button>/);

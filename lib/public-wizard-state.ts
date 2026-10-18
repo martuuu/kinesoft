@@ -391,11 +391,24 @@ export function keepSelectionInWindow(window: PublicSlotWindow, slotISO: string 
 }
 
 /**
- * «Buscar más adelante» con la ventana vacía: `nextFrom` si el server lo da; si no, 6 semanas (el horizonte de la
- * búsqueda) después del `from`. null pasado el tope de 90 días del server: más allá no hay nada que buscar.
+ * Sin libres en 6 semanas la action devuelve la PRIMERA tanda toda «Completo» (`skippedFrom` null, `nextFrom`
+ * normal), no una ventana vacía: si todos los días están completos y no hubo salto, no queda nada en el horizonte.
+ * Una ventana vacía (payload defensivo) cuenta igual.
+ */
+export function windowHasNoFreeSlots(window: PublicSlotWindow): boolean {
+  if (window.skippedFrom) return false;
+  return window.days.every((d) => d.status === "full" || !d.slots.some((x) => x.available));
+}
+
+/**
+ * «Buscar más adelante» con la ventana sin libres: 6 semanas (el horizonte de la búsqueda) después del `from`.
+ * null pasado el tope de 90 días del server: más allá no hay nada que buscar.
  */
 export function laterFrom(nav: WindowNav, window: PublicSlotWindow, today: string): string | null {
-  const cand = window.nextFrom ?? addDays(nav.from, 42);
+  // `nextFrom` de una tanda toda «Completo» cae DENTRO de las 6 semanas ya buscadas (sería repetir la búsqueda): se
+  // salta al horizonte, salvo que el server ya indique algo más lejos.
+  const horizon = addDays(nav.from, 42);
+  const cand = window.nextFrom && window.nextFrom > horizon ? window.nextFrom : horizon;
   return cand <= addDays(today, 90) ? cand : null;
 }
 
@@ -454,8 +467,10 @@ export function slotAccessibleName(dayKey: string, time: string, locationName?: 
 export function windowNotice(args: { requestedFrom: string; jumped: boolean; window: PublicSlotWindow }): string | null {
   const first = args.window.days[0]?.date;
   if (!first) return null;
+  // `skippedFrom` es el `from` PEDIDO (contrato de TP-1s), no el primer hábil salteado: el aviso nombra el día anterior
+  // al primero mostrado («hasta el domingo 25»), que es lo que el paciente puede comprobar.
   if (args.window.skippedFrom) {
-    return `No había turnos libres desde el ${dayLabel(args.window.skippedFrom)}; te mostramos desde el ${dayLabel(first)}.`;
+    return `No había turnos libres hasta el ${dayLabel(addDays(first, -1))}; te mostramos desde el ${dayLabel(first)}.`;
   }
   if (args.jumped && first > args.requestedFrom) {
     return `El ${dayLabel(args.requestedFrom)} no tiene horarios. Te mostramos los siguientes.`;

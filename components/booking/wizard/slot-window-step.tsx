@@ -27,6 +27,7 @@ import {
   nextWindow,
   prevWindow,
   slotAccessibleName,
+  windowHasNoFreeSlots,
   windowNavAt,
   windowNotice,
   windowRangeLabel,
@@ -132,7 +133,7 @@ export function SlotWindowStep({
     setJumped(byJump);
     setNav(next);
   };
-  const later = w && w.days.length === 0 ? laterFrom(nav, w, today) : null;
+  const later = w && windowHasNoFreeSlots(w) ? laterFrom(nav, w, today) : null;
 
   return (
     <div ref={rootRef} className={s.windowStep}>
@@ -272,23 +273,32 @@ export function SlotWindowView(p: SlotWindowViewProps) {
             </Button>
           </div>
         </EmptyBox>
-      ) : !w || w.days.length === 0 ? (
-        <EmptyBox>
-          {p.locationId ? "No hay turnos libres en esta sede en las próximas 6 semanas." : "No hay turnos libres en las próximas 6 semanas."}
-          {p.onLater && (
-            <div className={s.emptyActions}>
-              <Button variant="ghost" onClick={p.onLater}>
-                Buscar más adelante
-              </Button>
+      ) : (
+        <>
+          {/* Sin libres en 6 semanas la action manda la primera tanda toda «Completo» (sin salto): se avisa arriba
+              y los días quedan a la vista, para que se vea que atiende pero está lleno. */}
+          {(!w || windowHasNoFreeSlots(w)) && (
+            <EmptyBox>
+              {p.locationId
+                ? "No hay turnos libres en esta sede en las próximas 6 semanas."
+                : "No hay turnos libres en las próximas 6 semanas."}
+              {p.onLater && (
+                <div className={s.emptyActions}>
+                  <Button variant="ghost" onClick={p.onLater}>
+                    Buscar más adelante
+                  </Button>
+                </div>
+              )}
+            </EmptyBox>
+          )}
+          {w && w.days.length > 0 && (
+            <div className={s.windowDays}>
+              {w.days.map((d) => (
+                <DayColumn key={d.date} day={d} slotISO={p.slotISO} locName={locName} onPick={p.onPick} />
+              ))}
             </div>
           )}
-        </EmptyBox>
-      ) : (
-        <div className={s.windowDays}>
-          {w.days.map((d) => (
-            <DayColumn key={d.date} day={d} slotISO={p.slotISO} locName={locName} onPick={p.onPick} />
-          ))}
-        </div>
+        </>
       )}
     </>
   );
