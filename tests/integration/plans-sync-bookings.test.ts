@@ -170,7 +170,7 @@ describe.skipIf(!RUN)("S12 · sincronía turno → sesión", () => {
     await db.session.update({ where: { id: p.sessionIds[0] }, data: { completedAt: new Date(), notes: "Evolución" } });
     const undo = await markReceptionAction(b, "deshacer", await ver(b));
     expect(undo.ok).toBe(true);
-    if (undo.ok) expect(undo.data.notice).toMatch(/evolución/i);
+    if (undo.ok) expect(undo.data.notice).toMatch(/ficha/i);
     expect((await session(p.sessionIds[0])).completedAt).not.toBeNull();
     expect((await booking(b)).status).toBe("CONFIRMED");
   });
@@ -188,7 +188,7 @@ describe.skipIf(!RUN)("S12 · sincronía turno → sesión", () => {
     await db.session.update({ where: { id: p.sessionIds[0] }, data: { completedAt: new Date(), rpe: 5 } });
     const r = await setBookingStatus(p.bookingIds[0], "CANCELLED", await ver(p.bookingIds[0]));
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.notice).toMatch(/evolución/i);
+    if (r.ok) expect(r.notice).toMatch(/ficha/i);
     expect((await booking(p.bookingIds[0])).status).toBe("CANCELLED");
     expect((await session(p.sessionIds[0])).completedAt).not.toBeNull();
   });
