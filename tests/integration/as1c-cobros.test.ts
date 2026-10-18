@@ -247,7 +247,8 @@ describe.skipIf(!RUN)("[AS-1c] cobros del copago con medio de pago", () => {
     const { result, m } = await measure(() => setBookingCopagoPaid(b.id, CASH, v(b.updatedAt)));
     expect(result.ok).toBe(true);
     console.log(`[AS-1c] setBookingCopagoPaid (marcar, Titular): ${m.statements} sentencias (antes ${BASELINE_MARK_STATEMENTS}), ${m.transactions} tx`);
-    expect(m.statements).toBeLessThanOrEqual(BASELINE_MARK_STATEMENTS);
+    // T3-Z B3: +1 aceptado, el `SELECT … FOR UPDATE` del turno que serializa el cobro manual con el webhook de MP.
+    expect(m.statements).toBeLessThanOrEqual(BASELINE_MARK_STATEMENTS + 1);
     expect(m.transactions).toBe(1);
   });
 });

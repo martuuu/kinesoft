@@ -208,7 +208,7 @@ describe.skipIf(!RUN)("[AS-3h] Ocupación de la agenda", () => {
     const thu10 = cell(t, 10, "2027-11-11")!;
     expect(thu10.text).toBe("3");
     expect(thu10.atCap).toBe(true);
-    expect(thu10.note).toMatch(/intervalos topeados: 1 de 4/);
+    expect(thu10.note).toBe("En 1 de 4 intervalos de 15 min se llegó al tope de 2 turnos.");
   });
 
   it("[AS-3h] tope de 60': la celda dice «x/tope» y marca el tope", async () => {

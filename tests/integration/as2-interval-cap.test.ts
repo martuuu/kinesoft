@@ -164,7 +164,7 @@ describe.skipIf(!RUN)("[AS-2w] tope de turnos por intervalo (C-AS3)", () => {
     const a = await alta({ prac: T.practitionerId, when: ar("2027-11-02T10:05"), svc: svcB });
     expect(a.r).toMatchObject({ ok: true });
     expect(a.row).toMatchObject({ isOverbooked: false });
-    expect(a.r.intervalCapNotice).toEqual({ practitionerName: expect.any(String), used: 1, time: "10:00" });
+    expect(a.r.intervalCapNotice).toEqual({ practitionerName: expect.any(String), used: 1, time: "10:00", to: "10:15", intervalMin: 15 });
     // El intervalo siguiente arranca de cero: sin aviso.
     const b = await alta({ prac: T.practitionerId, when: ar("2027-11-02T10:15") });
     expect(b.r).toMatchObject({ ok: true });
@@ -322,7 +322,7 @@ describe.skipIf(!RUN)("[AS-2w] tope de turnos por intervalo (C-AS3)", () => {
     const y = await mk({ prac: T.practitionerId, when: ar("2027-11-05T17:00") });
     const r = await updateBooking({ id: y.id, scheduledFor: ar("2027-11-05T15:35").toISOString(), expectedUpdatedAt: y.updatedAt.toISOString() });
     expect(r).toMatchObject({ ok: true });
-    expect(r.intervalCapNotice).toEqual({ practitionerName: expect.any(String), used: 1, time: "15:30" });
+    expect(r.intervalCapNotice).toMatchObject({ used: 1, time: "15:30", intervalMin: 15 });
     expect(await db.booking.findUniqueOrThrow({ where: { id: y.id } })).toMatchObject({ isOverbooked: false });
   });
 
