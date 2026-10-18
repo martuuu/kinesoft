@@ -119,6 +119,31 @@ export const ListPublicSlotsSchema = z.object({
 });
 export type ListPublicSlotsInput = z.infer<typeof ListPublicSlotsSchema>;
 
+/**
+ * TP-1 (plan §22.5, TP-D2; contrato literal TP-1s ↔ TP-1u): ventana de 5 días HÁBILES del turnero. Un día hábil es
+ * uno en que el profesional atiende (franjas después de excepciones y bloqueos de día completo) y que todavía tiene
+ * horarios por delante desde ahora + la anticipación mínima. `slots` trae SOLO los libres; un hábil sin libres viene
+ * `full` («Completo»).
+ */
+export type PublicWindowDay = { date: string /* YYYY-MM-DD AR */; status: "open" | "full"; slots: PublicSlot[] /* solo libres */ };
+/**
+ * `nextFrom`: desde qué día pedir «Siguientes ›» (el día después del último de la ventana), null si no hay más.
+ * `reachedEnd`: la búsqueda llegó al tope (6 semanas / `maxLeadDays` / 90 días) sin completar 5 hábiles, o no queda
+ * nada después. `skippedFrom`: si los 5 primeros hábiles estaban completos y la ventana avanzó sola, el `from`
+ * pedido (para «No había turnos libres del 19 al 23; te mostramos desde el lun 26»); si no, null.
+ */
+export type PublicSlotWindow = { days: PublicWindowDay[]; nextFrom: string | null; reachedEnd: boolean; skippedFrom: string | null /* si avanzó solo: desde qué día no había libres */ };
+export type ListPublicSlotWindowInput = { tenantSlug: string; practitionerId: string; serviceId: string; from?: string /* YYYY-MM-DD; default hoy AR */; locationId?: string };
+
+/** Validación server de `ListPublicSlotWindowInput` (viene de un anónimo). Mismos topes que `ListPublicSlotsSchema`. */
+export const ListPublicSlotWindowSchema = z.object({
+  tenantSlug: z.string().min(1).max(80),
+  practitionerId: z.string().min(1).max(40),
+  serviceId: z.string().min(1).max(40),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  locationId: z.string().min(1).max(40).optional(),
+});
+
 /** Input de `findFirstPublicSlot` ("cualquier profesional", B3.2). */
 export const FirstPublicSlotSchema = z.object({
   tenantSlug: z.string().min(1).max(80),

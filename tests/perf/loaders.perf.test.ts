@@ -22,7 +22,15 @@ vi.mock("@/lib/db", async (importOriginal) => {
   return { ...actual, ...installQueryCounter() };
 });
 
+// TP-1: el rate limit REAL (memoria), envuelto solo para contar los hits por bucket del turnero.
+vi.mock("@/lib/rate-limit", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/rate-limit")>();
+  return { ...actual, rateLimit: vi.fn(actual.rateLimit) };
+});
+
 import { measure, type Measurement } from "@/tests/helpers/query-counter";
+import { rateLimit } from "@/lib/rate-limit";
+import { listPublicSlotWindow, listPublicSlots } from "@/lib/public-booking";
 import {
   listBookingsInRange,
   listPractitioners,
@@ -245,6 +253,25 @@ describe.skipIf(!RUN)("perf baseline — cargas de página y write-paths", () =>
 
   it("GET /biblioteca", async () => {
     await bench("biblioteca", () => Promise.all([listExercises({}), loadFilterFacets(), listAllTags(), gatingForActor(), getActor()]));
+  });
+
+  it("[TP-1] 1 hit de rate limit y queries ≤ escenario de un día (turnero: listPublicSlots vs listPublicSlotWindow)", async () => {
+    // El paso de horarios del turnero (canal de servicio, sin Actor). La ventana carga 6 semanas en UNA llamada al
+    // loader: tiene que costar lo mismo que un día de la lista legada (≤ 14 statements, plan §22.5), no 5 × eso.
+    const from = addDays(toARDateKey(new Date()), 7);
+    const q = { tenantSlug: T.slug, practitionerId: T.practitionerId, serviceId: T.serviceId };
+    await bench("turnero.slotsDay", () => listPublicSlots({ ...q, date: from }));
+    await bench("turnero.slotWindow", () => listPublicSlotWindow({ ...q, from }));
+    const day = rows.find((r) => r.scenario === "turnero.slotsDay")!;
+    const win = rows.find((r) => r.scenario === "turnero.slotWindow")!;
+    expect(win.statements).toBeLessThanOrEqual(day.statements);
+    expect(win.statements).toBeLessThanOrEqual(14);
+
+    const spy = vi.mocked(rateLimit);
+    spy.mockClear();
+    const w = await listPublicSlotWindow({ ...q, from });
+    expect(spy.mock.calls.map(([key]) => key.split(":").slice(0, 2).join(":"))).toEqual(["pub:slots"]);
+    expect(w.days.length).toBeGreaterThan(0);
   });
 
   it("POST createBooking (turno simple)", async () => {

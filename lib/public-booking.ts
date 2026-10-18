@@ -43,9 +43,12 @@ import { defaultRoomFor } from "@/lib/availability/rooms";
 import { acceptsInsurer, addDays, eligiblePractitioners, isDayKey, resolvePractitionerService } from "@/lib/availability";
 import {
   PUBLIC_FIRST_FREE_HORIZON_DAYS,
+  PUBLIC_MAX_AHEAD_DAYS,
+  PUBLIC_WINDOW_SCAN_DAYS,
   checkPublicSlot,
   firstPublicSlotAcross,
   publicDaySlots,
+  publicSlotWindow,
   resolvePublicOffer,
 } from "@/lib/public-booking-slots";
 import {
@@ -61,14 +64,17 @@ import { publicPractitionerName } from "@/lib/display-name";
 import { publicOpeningRanges, summarizeOpeningHours } from "@/lib/opening-hours-summary";
 import {
   FirstPublicSlotSchema,
+  ListPublicSlotWindowSchema,
   ListPublicSlotsSchema,
   SubmitSchema,
   normalizeDocumentId,
   type FirstPublicSlotInput,
+  type ListPublicSlotWindowInput,
   type ListPublicSlotsInput,
   type PublicClinic,
   type PublicFirstSlot,
   type PublicSlot,
+  type PublicSlotWindow,
   type PublicBookingStatus,
   type SubmitPublicBookingInput,
   type SubmitPublicBookingResult,
@@ -343,6 +349,59 @@ export async function listPublicSlots(raw: ListPublicSlotsInput): Promise<Public
     dayKey: input.date,
     locationId: input.locationId ?? null,
     now: new Date(),
+  });
+}
+
+/**
+ * TP-1 (plan §22.5, TP-D2): los 5 días HÁBILES del profesional desde `from` (default hoy AR), con solo sus horarios
+ * libres y «Completo» para los hábiles sin lugar; si los 5 están completos, avanza sola (`skippedFrom`). Reemplaza en
+ * el wizard a `listPublicSlots` día por día (que queda como legado).
+ *
+ * Costo: UN hit de rate limit (mismo bucket `pub:slots:<ip>` que la lista: es la misma lectura de densidad de agenda)
+ * y UNA carga del loader sobre `[from, min(from + 41, hoy + 90)]`: el loader hace las mismas queries para un día que
+ * para 42 (el rango solo cambia los `where`), y el recorrido de días es puro (`publicSlotWindow`). Antes el wizard
+ * pagaba un request + ~14 queries por cada día que el paciente miraba.
+ *
+ * Mismas compuertas que `listPublicSlots` (turnero del consultorio abierto, profesional público con
+ * `resolvePublicTarget`, servicio ofrecido online por el motor) y misma grilla que valida el submit. Input inválido,
+ * consultorio cerrado o servicio ajeno → ventana vacía (como el `[]` de la lista); el throttle tira `RATE_LIMITED`.
+ */
+export async function listPublicSlotWindow(raw: ListPublicSlotWindowInput): Promise<PublicSlotWindow> {
+  const rl = await rateLimit(`pub:slots:${callerIp()}`, { limit: 60, windowMs: 60_000 });
+  if (!rl.ok) throw new Error("RATE_LIMITED");
+
+  const empty: PublicSlotWindow = { days: [], nextFrom: null, reachedEnd: true, skippedFrom: null };
+  const parsed = ListPublicSlotWindowSchema.safeParse(raw);
+  if (!parsed.success || (parsed.data.from != null && !isDayKey(parsed.data.from))) return empty;
+  const input = parsed.data;
+
+  // Hoy AR (no el del host: en Vercel es UTC y un sábado 22:30 ya sería domingo). Un `from` pasado arranca hoy.
+  const now = new Date();
+  const today = toARDateKey(now);
+  const fromDay = input.from && input.from > today ? input.from : today;
+  const maxDay = addDays(today, PUBLIC_MAX_AHEAD_DAYS);
+  if (fromDay > maxDay) return empty;
+  const scanEnd = addDays(fromDay, PUBLIC_WINDOW_SCAN_DAYS - 1);
+  const lastDay = scanEnd < maxDay ? scanEnd : maxDay;
+
+  const tenant = await resolvePublicTarget(input.tenantSlug, input.practitionerId);
+  if (!tenant) return empty;
+
+  const availability = await loadAvailabilityInputs(prisma, {
+    tenantId: tenant.id,
+    practitionerIds: [input.practitionerId],
+    serviceId: input.serviceId,
+    locationId: input.locationId,
+    from: fromDay,
+    to: lastDay,
+  });
+  return publicSlotWindow(availability, {
+    practitionerId: input.practitionerId,
+    serviceId: input.serviceId,
+    fromDay,
+    lastDay,
+    locationId: input.locationId ?? null,
+    now,
   });
 }
 

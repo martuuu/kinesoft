@@ -33,6 +33,7 @@ import {
   PUBLIC_SLOT_STEP_MIN as ENGINE_PUBLIC_SLOT_STEP_MIN,
   addDays,
   buildSlots,
+  dayKeyOf,
   dayKeyRange,
   eligiblePractitioners,
   isDayKey,
@@ -43,8 +44,9 @@ import {
   type DayKey,
   type RangesInput,
   type ScheduleRange,
+  type SlotUnavailableReason,
 } from "@/lib/availability";
-import type { PublicFirstSlot, PublicSlot } from "@/lib/public-booking-types";
+import type { PublicFirstSlot, PublicSlot, PublicSlotWindow, PublicWindowDay } from "@/lib/public-booking-types";
 
 /** Horario por defecto si el tenant no configuró `businessHoursStart/End`. */
 export const DEFAULT_OPEN_HOUR = 8;
@@ -234,6 +236,21 @@ function slotsForOffer(
   locationId: string | null,
   now: Date
 ): PublicSlot[] {
+  return slotResultsForOffer(input, offer, dayKey, locationId, now).map(({ reason: _reason, ...slot }) => slot);
+}
+
+/**
+ * La grilla de `slotsForOffer` CON el motivo de cada no-disponible. TP-1 lo necesita para decidir si un día es hábil
+ * (¿queda algún horario por delante?) sin recalcular nada: `slotsForOffer` es esta función menos `reason`, así que la
+ * ventana, la lista de un día y el submit siguen viendo exactamente la misma grilla.
+ */
+function slotResultsForOffer(
+  input: AvailabilityInput,
+  offer: PublicOffer,
+  dayKey: DayKey,
+  locationId: string | null,
+  now: Date
+): Array<PublicSlot & { reason: SlotUnavailableReason | null }> {
   const ranges = workingRanges(offer.practitionerId, dayKey, input, { locationId });
   if (ranges.length === 0) return [];
   const bookings = input.bookings.filter(
@@ -248,10 +265,115 @@ function slotsForOffer(
     now,
     bookings,
     cap: offer.cap,
-  }).map(({ iso, time, available }) => {
+  }).map(({ iso, time, available, reason }) => {
     const [hh, mm] = time.split(":").map(Number);
-    return { iso, time, available, locationId: slotLocation(ranges, hh * 60 + mm, offer.durationMin) };
+    return { iso, time, available, locationId: slotLocation(ranges, hh * 60 + mm, offer.durationMin), reason };
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TP-1 (plan §22.5, decisión TP-D2): ventana de 5 días hábiles
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Días hábiles por ventana. */
+export const PUBLIC_WINDOW_DAYS = 5;
+/** Días de calendario que mira una ventana (6 semanas): lo que carga `listPublicSlotWindow` en UNA llamada al loader. */
+export const PUBLIC_WINDOW_SCAN_DAYS = 42;
+/** Tope duro desde hoy AR: ningún día más allá de hoy + 90 se ofrece online (ni con «Ir a una fecha»). */
+export const PUBLIC_MAX_AHEAD_DAYS = 90;
+
+/** Motivos que dejan un horario DETRÁS de la ventana de reserva: un día con solo estos no es hábil. `cupo-completo`
+ *  no está: un día con todo ocupado sí es hábil, se muestra «Completo». */
+const NOT_AHEAD: ReadonlySet<SlotUnavailableReason> = new Set(["pasado", "anticipacion-minima", "fuera-de-horizonte"]);
+
+const EMPTY_WINDOW: PublicSlotWindow = { days: [], nextFrom: null, reachedEnd: true, skippedFrom: null };
+
+/**
+ * Ventana pública de (profesional, servicio): los primeros `windowDays` días HÁBILES desde `fromDay`.
+ *
+ *   • Hábil (TP-D2 de Martin): `workingRanges` da franjas (plantilla → excepción → bloqueos restados: un bloqueo de
+ *     día completo lo saca) y la grilla tiene algún horario que no quedó atrás (`pasado` / `anticipacion-minima` /
+ *     `fuera-de-horizonte`). Los domingos, feriados cerrados o un día de hoy ya consumido no ocupan lugar.
+ *   • Cada día trae SOLO sus libres; un hábil sin libres es `full` («Completo»).
+ *   • Si la primera tanda de 5 hábiles es toda `full`, avanza de a tandas de 5 hasta la primera con algún `open` y
+ *     devuelve `skippedFrom = fromDay`. Sin ningún libre en toda la búsqueda devuelve la primera tanda (toda
+ *     «Completo», `skippedFrom` null): mostrar días vacíos de más adelante no le dice nada mejor al paciente.
+ *   • Hasta dónde mira: `lastDay` (el caller carga 6 semanas), recortado a hoy + `PUBLIC_MAX_AHEAD_DAYS` y al
+ *     `maxLeadDays` del servicio (el día de `now + maxLeadDays·24 h`; después todo es `fuera-de-horizonte`).
+ *   • `nextFrom` = el día después de la ventana si queda algún hábil antes del tope; si la búsqueda se cortó en
+ *     `lastDay` antes del tope sin encontrar más, el día después de `lastDay` (los del medio no son hábiles: no tiene
+ *     sentido re-escanearlos). null cuando ya no hay nada más → `reachedEnd`.
+ *
+ * Se recorre con `slotResultsForOffer` (= `slotsForOffer` con el motivo), la MISMA grilla de `publicDaySlots`: todo
+ * horario de la ventana pasa `checkPublicSlot` en el submit (paridad en `tests/unit/public-slot-window.test.ts`).
+ * Puro: `now` y el input los pasa el caller (`listPublicSlotWindow`).
+ */
+export function publicSlotWindow(
+  input: AvailabilityInput,
+  q: {
+    practitionerId: string;
+    serviceId: string;
+    fromDay: DayKey;
+    lastDay: DayKey;
+    locationId?: string | null;
+    now: Date;
+    windowDays?: number;
+  }
+): PublicSlotWindow {
+  const windowDays = q.windowDays ?? PUBLIC_WINDOW_DAYS;
+  if (!isDayKey(q.fromDay) || !isDayKey(q.lastDay) || !(windowDays > 0)) return EMPTY_WINDOW;
+  const offer = resolvePublicOffer(input, q.practitionerId, q.serviceId);
+  if (!offer) return EMPTY_WINDOW;
+
+  let hardEnd = addDays(dayKeyOf(q.now), PUBLIC_MAX_AHEAD_DAYS);
+  if (offer.maxLeadDays != null) {
+    const horizonDay = dayKeyOf(new Date(q.now.getTime() + offer.maxLeadDays * 86_400_000));
+    if (horizonDay < hardEnd) hardEnd = horizonDay;
+  }
+  const scanEnd = q.lastDay < hardEnd ? q.lastDay : hardEnd;
+  if (q.fromDay > scanEnd) return EMPTY_WINDOW;
+
+  const locationId = q.locationId ?? null;
+  const batches: PublicWindowDay[][] = [];
+  let current: PublicWindowDay[] = [];
+  /** Índice de la tanda elegida (la primera con algún `open`); null mientras no aparezca. */
+  let chosen: number | null = null;
+  let moreAfter = false;
+  for (const dayKey of dayKeyRange(q.fromDay, scanEnd)) {
+    const grid = slotResultsForOffer(input, offer, dayKey, locationId, q.now);
+    if (!grid.some((s) => s.reason == null || !NOT_AHEAD.has(s.reason))) continue;
+    if (chosen != null) {
+      // Ya hay ventana completa y apareció otro hábil después: alcanza para saber que hay «Siguientes».
+      moreAfter = true;
+      break;
+    }
+    const slots = grid.filter((s) => s.available).map(({ reason: _reason, ...slot }) => slot);
+    current.push({ date: dayKey, status: slots.length > 0 ? "open" : "full", slots });
+    if (current.length === windowDays) {
+      batches.push(current);
+      current = [];
+      if (batches[batches.length - 1].some((d) => d.status === "open")) chosen = batches.length - 1;
+    }
+  }
+  if (current.length > 0) {
+    batches.push(current);
+    if (chosen == null && current.some((d) => d.status === "open")) chosen = batches.length - 1;
+  }
+  if (batches.length === 0) {
+    // Sin hábiles hasta `scanEnd`: si la búsqueda se cortó antes del tope, se puede seguir después.
+    const nextFrom = scanEnd < hardEnd ? addDays(scanEnd, 1) : null;
+    return { days: [], nextFrom, reachedEnd: nextFrom == null, skippedFrom: null };
+  }
+
+  const pick = chosen ?? 0;
+  const days = batches[pick];
+  // Hay más después de la ventana si (a) se vio otro hábil, (b) hay otra tanda ya armada después de la elegida (caso
+  // «todo Completo»), o (c) la búsqueda terminó en `lastDay` antes del tope.
+  const lastShown = days[days.length - 1].date;
+  let nextFrom: DayKey | null = null;
+  if (moreAfter || pick < batches.length - 1) nextFrom = addDays(lastShown, 1);
+  else if (scanEnd < hardEnd) nextFrom = addDays(scanEnd, 1);
+  return { days, nextFrom, reachedEnd: nextFrom == null, skippedFrom: pick > 0 ? q.fromDay : null };
 }
 
 /** Días que mira "cualquier profesional" (= horizonte de `nextFreeSlot`). */
