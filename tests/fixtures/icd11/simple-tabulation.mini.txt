@@ -1,0 +1,11 @@
+﻿Foundation URI	Linearization (release) URI	Code	BlockId	Title	ClassKind	DepthInKind	IsResidual	ChapterNo	BrowserLink	isLeaf	Primary tabulation	Grouping1
+http://id.who.int/icd/entity/900000001	http://id.who.int/icd/release/11/2025-01/mms/900000001			Enfermedades sintéticas del sistema musculoesquelético	chapter	1	False	15		False		
+http://id.who.int/icd/entity/900000002	http://id.who.int/icd/release/11/2025-01/mms/900000002		BlockS15	- Dorsopatías sintéticas	block	1	False	15		False		
+http://id.who.int/icd/entity/900000010	http://id.who.int/icd/release/11/2025-01/mms/900000010	9Z10		- - Dolor lumbar sintético	category	1	False	15		False		
+http://id.who.int/icd/entity/900000011	http://id.who.int/icd/release/11/2025-01/mms/900000011	9Z10.0		- - - Lumbalgia sintética aguda	category	2	False	15		True		
+http://id.who.int/icd/entity/900000012	http://id.who.int/icd/release/11/2025-01/mms/900000012/other	9Z10.Y		- - - Otro dolor lumbar sintético especificado	category	2	True	15		True		
+http://id.who.int/icd/entity/900000013	http://id.who.int/icd/release/11/2025-01/mms/900000013/unspecified	9Z10.Z		- - - Dolor lumbar sintético, sin especificación	category	2	True	15		True		
+http://id.who.int/icd/entity/900000020	http://id.who.int/icd/release/11/2025-01/mms/900000020	9Z11		- - Cervicalgia sintética - tipo mecánico	category	1	False	15		True		
+http://id.who.int/icd/entity/900000030	http://id.who.int/icd/release/11/2025-01/mms/900000030	9Z1A		- - Contractura sintética del músculo cuádriceps, niño	category	1	False	15		True		
+http://id.who.int/icd/entity/900000050	http://id.who.int/icd/release/11/2025-01/mms/900000050	9ZV1		- Limitación sintética de la movilidad articular	category	1	False	V		True		
+http://id.who.int/icd/entity/900000060	http://id.who.int/icd/release/11/2025-01/mms/900000060	9ZX1		- Extensión sintética de lateralidad	category	1	False	X		True		

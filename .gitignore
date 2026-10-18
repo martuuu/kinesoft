@@ -22,3 +22,7 @@ tests/e2e/.results/
 tests/e2e/.report/
 playwright-report/
 test-results/
+
+# FC-1d: tabulación CIE-11 de la OMS (CC BY-ND 3.0 IGO). Se usa la versión oficial tal cual y no se versiona:
+# el import la lee de acá (`npm run diagnosis:import -- --file=data/icd11/…`).
+/data/icd11/

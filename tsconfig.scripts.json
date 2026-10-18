@@ -12,6 +12,7 @@
   "compilerOptions": {
     "incremental": false
   },
-  "include": ["scripts/plans-*.ts", "scripts/realtime-verify.ts", "scripts/diagnose-email.ts", "scripts/diagnose-auth.ts", "scripts/lib/**/*.ts"],
+  "include": ["scripts/plans-*.ts", "scripts/realtime-verify.ts", "scripts/diagnose-email.ts", "scripts/diagnose-auth.ts",
+    "scripts/diagnosis-import.ts", "scripts/lib/**/*.ts"],
   "exclude": ["node_modules"]
 }
