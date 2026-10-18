@@ -136,12 +136,10 @@ export async function storageRemove(
 }
 
 /*
- * ─── FC-1b3: firmas de C-FC10, SIN implementar todavía ─────────────────────────────────────────────────────────────
- * Las implementa FC-2f (subida firmada de 25 MB, sniff de la cabeza, descarga acotada y mover de `pending/`). Se
- * publican ya para que T4c compile en paralelo (FC-2d/FC-2h/FC-2i testean contra la firma con Storage fake).
- * Mientras tanto devuelven error (nunca tiran): sin admin client → `unconfigured`, igual que el resto del módulo (es
- * lo que ve la integración, donde el admin client está mockeado a null); con admin client → `storage` «no
- * implementado», así nadie cree que subió o leyó algo que no pasó.
+ * ─── C-FC10 (FC-2f): subida firmada, metadatos, cabeza, descarga acotada y mover ──────────────────────────────────
+ * FC-1b3 publicó las firmas; FC-2f las implementa. Mismo contrato que el resto del módulo: nunca tiran, sin admin
+ * client → `unconfigured`, cada `{ error }` de supabase-js (y cada throw de red) → `{ ok: false, reason: "storage" }`.
+ * Las claves las arma el caller desde la base o desde un token firmado (`lib/patient-file-upload-token.ts`).
  */
 
 /** Respuesta de `createSignedUploadUrl` de supabase-js: la URL a la que el cliente hace el PUT y su token. */
@@ -152,55 +150,195 @@ export type StorageObjectStat = { sizeBytes: number; contentType: string | null 
 /** Cuántos bytes lee `storageReadHead` (Range 0-63): alcanza para los magic bytes de `lib/file-sniff.ts`. */
 export const STORAGE_HEAD_BYTES = 64;
 
-function notImplemented<T>(op: string): StorageResult<T> {
-  if (!getSupabaseAdminClient()) return unconfigured();
-  return { ok: false, reason: "storage", message: `${op}: no implementado (FC-2f).` };
-}
+/** TTL de la URL firmada que usa `storageReadHead` (C-FC10: 60 s; se usa una vez y en el acto). */
+const HEAD_URL_TTL_SECONDS = 60;
+/** La lectura de la cabeza es un GET chico: si Storage no contesta en 10 s, falla y el caller limpia. */
+const HEAD_TIMEOUT_MS = 10_000;
 
-/** URL firmada de SUBIDA (PUT directo del navegador a Storage, sin pasar los bytes por la función de Vercel). */
+/**
+ * URL firmada de SUBIDA (PUT directo del navegador a Storage, sin pasar los bytes por la función de Vercel: el body de
+ * una server action corta en 4,5 MB). `upsert: false`: la clave (`pending/{tenant}/{fileId}`, id aleatorio) no se pisa.
+ * Ojo: Supabase la hace valer 2 h y no deja acortarla; el vencimiento de 15 min lo impone el token de confirmación.
+ */
 export async function storageCreateSignedUpload(
   bucket: StorageBucket,
   key: string,
 ): Promise<StorageResult<StorageSignedUpload>> {
-  void bucket;
-  void key;
-  return notImplemented("createSignedUpload");
+  const admin = getSupabaseAdminClient();
+  if (!admin) return unconfigured();
+  try {
+    const { data, error } = await admin.storage.from(bucket).createSignedUploadUrl(key, { upsert: false });
+    if (error) return failed("createSignedUpload", bucket, error);
+    if (!data?.signedUrl || !data.token) return failed("createSignedUpload", bucket, "respuesta sin signedUrl/token");
+    return { ok: true, data: { signedUrl: data.signedUrl, token: data.token } };
+  } catch (e) {
+    return failed("createSignedUpload", bucket, e);
+  }
 }
 
-/** Tamaño y tipo del objeto, para confirmar una subida firmada contra lo que dice el token. */
+/** ¿El error de Storage es «no existe»? (`info()` de un objeto ausente contesta 400/404 según la versión de la API.) */
+function isNotFound(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { status?: unknown; statusCode?: unknown; message?: unknown };
+  if (e.status === 404 || e.statusCode === "404") return true;
+  return typeof e.message === "string" && /not.?found|no existe/i.test(e.message);
+}
+
+/** Tamaño y tipo del objeto (`info()`), para confirmar una subida firmada contra lo que dice el token. */
 export async function storageStat(bucket: StorageBucket, key: string): Promise<StorageResult<StorageObjectStat>> {
-  void bucket;
-  void key;
-  return notImplemented("stat");
+  const admin = getSupabaseAdminClient();
+  if (!admin) return unconfigured();
+  try {
+    const { data, error } = await admin.storage.from(bucket).info(key);
+    if (error) {
+      if (isNotFound(error)) return { ok: true, data: null };
+      return failed("stat", bucket, error);
+    }
+    if (!data) return { ok: true, data: null };
+    const size = (data as { size?: unknown }).size;
+    // Sin tamaño no se puede confirmar nada contra el token: es error, no «0 bytes».
+    if (typeof size !== "number" || !Number.isFinite(size) || size < 0) return failed("stat", bucket, "respuesta sin size");
+    const ct = (data as { contentType?: unknown }).contentType;
+    return { ok: true, data: { sizeBytes: size, contentType: typeof ct === "string" && ct ? ct : null } };
+  } catch (e) {
+    return failed("stat", bucket, e);
+  }
 }
 
-/** Los primeros `STORAGE_HEAD_BYTES` bytes (URL firmada de 60 s + `Range: bytes=0-63`). */
+/**
+ * Los primeros `STORAGE_HEAD_BYTES` bytes (URL firmada de 60 s + `Range: bytes=0-63`). Bajar el objeto entero para
+ * mirar 64 bytes serían hasta 25 MB por confirmación en la memoria de la función. Si el server ignora el Range
+ * (200 en vez de 206) se lee el stream hasta juntar 64 bytes y se corta, así igual no baja todo.
+ */
 export async function storageReadHead(bucket: StorageBucket, key: string): Promise<StorageResult<Uint8Array>> {
-  void bucket;
-  void key;
-  return notImplemented("readHead");
+  const signed = await storageSign(bucket, key, HEAD_URL_TTL_SECONDS);
+  if (!signed.ok) return signed;
+  try {
+    const res = await fetch(signed.data, {
+      headers: { Range: `bytes=0-${STORAGE_HEAD_BYTES - 1}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(HEAD_TIMEOUT_MS),
+    });
+    if (res.status !== 200 && res.status !== 206) {
+      await res.body?.cancel().catch(() => undefined);
+      return failed("readHead", bucket, `HTTP ${res.status}`);
+    }
+    const head = new Uint8Array(STORAGE_HEAD_BYTES);
+    let got = 0;
+    if (res.body) {
+      const reader = res.body.getReader();
+      while (got < STORAGE_HEAD_BYTES) {
+        const { done, value } = await reader.read();
+        if (done || !value) break;
+        const take = Math.min(value.length, STORAGE_HEAD_BYTES - got);
+        head.set(value.subarray(0, take), got);
+        got += take;
+      }
+      await reader.cancel().catch(() => undefined);
+    }
+    return { ok: true, data: head.slice(0, got) };
+  } catch (e) {
+    return failed("readHead", bucket, e);
+  }
 }
 
-/** El objeto entero, con tope: si pesa más que `maxBytes` es error (no se carga a memoria algo arbitrario). */
+/**
+ * El objeto entero, con tope: si pesa más que `maxBytes` es error (no se carga a memoria algo arbitrario). El Blob que
+ * devuelve supabase-js ya está en memoria, así que el techo real lo dan los límites de cada bucket (practice-assets
+ * 1 MB, patient-documents 10 MB, EXTERNAL-CONFIG); el tope de acá es la segunda barrera y el contrato con el caller
+ * (nunca recibe más de lo que pidió).
+ */
 export async function storageDownload(
   bucket: StorageBucket,
   key: string,
   maxBytes: number,
 ): Promise<StorageResult<Uint8Array>> {
-  void bucket;
-  void key;
-  void maxBytes;
-  return notImplemented("download");
+  const admin = getSupabaseAdminClient();
+  if (!admin) return unconfigured();
+  try {
+    const { data, error } = await admin.storage.from(bucket).download(key);
+    if (error) return failed("download", bucket, error);
+    if (!data) return failed("download", bucket, "respuesta sin datos");
+    if (data.size > maxBytes) return failed("download", bucket, `objeto de ${data.size} bytes > tope ${maxBytes}`);
+    const bytes = new Uint8Array(await data.arrayBuffer());
+    if (bytes.length > maxBytes) return failed("download", bucket, `objeto de ${bytes.length} bytes > tope ${maxBytes}`);
+    return { ok: true, data: bytes };
+  } catch (e) {
+    return failed("download", bucket, e);
+  }
 }
 
-/** Mueve dentro del mismo bucket (p. ej. de `pending/` a la clave definitiva al confirmar). */
+/**
+ * Mueve dentro del mismo bucket (de `pending/` a la clave definitiva al confirmar). Storage no pisa un destino que
+ * existe: si dos confirmaciones corren a la vez, solo una mueve y la otra recibe error (el caller resuelve el replay).
+ */
 export async function storageMove(
   bucket: StorageBucket,
   fromKey: string,
   toKey: string,
 ): Promise<StorageResult<void>> {
-  void bucket;
-  void fromKey;
-  void toKey;
-  return notImplemented("move");
+  const admin = getSupabaseAdminClient();
+  if (!admin) return unconfigured();
+  try {
+    const { error } = await admin.storage.from(bucket).move(fromKey, toKey);
+    if (error) return failed("move", bucket, error);
+    return { ok: true, data: undefined };
+  } catch (e) {
+    return failed("move", bucket, e);
+  }
+}
+
+/**
+ * Objetos de `pending/` (subida firmada sin confirmar) más viejos que `olderThanMs` (C-FC10: el cron diario barre los
+ * de más de 24 h). Lista `pending/` → cada carpeta de consultorio → borra en tandas. Best-effort: un error en un
+ * consultorio no corta el resto; devuelve cuántos borró y cuántos errores hubo para el resumen del cron.
+ * La etapa del cron la conecta el integrador (FC-2i); acá queda la función lista.
+ */
+const PENDING_PREFIX = "pending";
+const LIST_PAGE = 1000;
+const REMOVE_BATCH = 100;
+const MAX_PENDING_SWEEP = 10_000;
+
+export async function storageSweepPending(
+  bucket: StorageBucket,
+  olderThanMs: number,
+  nowMs = Date.now(),
+): Promise<StorageResult<{ removed: number; errors: number }>> {
+  const admin = getSupabaseAdminClient();
+  if (!admin) return unconfigured();
+  const cutoff = nowMs - olderThanMs;
+  let removed = 0;
+  let errors = 0;
+  try {
+    const api = admin.storage.from(bucket);
+    const { data: folders, error } = await api.list(PENDING_PREFIX, { limit: LIST_PAGE });
+    if (error) return failed("sweepPending", bucket, error);
+    for (const folder of folders ?? []) {
+      // Las «carpetas» de Storage vienen sin id; los objetos sueltos en `pending/` (no debería haber) se ignoran.
+      if (folder.id || !folder.name) continue;
+      const prefix = `${PENDING_PREFIX}/${folder.name}`;
+      const { data: objects, error: listErr } = await api.list(prefix, { limit: LIST_PAGE });
+      if (listErr) {
+        failed("sweepPending.list", bucket, listErr);
+        errors++;
+        continue;
+      }
+      const stale = (objects ?? [])
+        .filter((o) => {
+          if (!o.id || !o.name) return false;
+          const at = Date.parse(o.created_at ?? o.updated_at ?? "");
+          return Number.isFinite(at) && at < cutoff;
+        })
+        .map((o) => `${prefix}/${o.name}`);
+      for (let i = 0; i < stale.length && removed < MAX_PENDING_SWEEP; i += REMOVE_BATCH) {
+        const batch = stale.slice(i, i + REMOVE_BATCH);
+        const rm = await storageRemove(bucket, batch);
+        if (rm.ok) removed += batch.length;
+        else errors++;
+      }
+    }
+    return { ok: true, data: { removed, errors } };
+  } catch (e) {
+    return failed("sweepPending", bucket, e);
+  }
 }

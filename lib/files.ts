@@ -37,8 +37,25 @@ import { getActor, writableError } from "@/lib/session";
 import { auditInTx, auditSecurityEvent } from "@/lib/audit";
 import { reportError } from "@/lib/error-report";
 import type { ActionResult } from "@/lib/validation";
-import { isStorageConfigured, storageRemove, storageSign, storageUpload } from "@/lib/storage-internal";
+import {
+  isStorageConfigured,
+  storageCreateSignedUpload,
+  storageMove,
+  storageReadHead,
+  storageRemove,
+  storageSign,
+  storageStat,
+  storageUpload,
+} from "@/lib/storage-internal";
 import { patientAccessFor } from "@/lib/visibility";
+import { headMatchesMime } from "@/lib/file-sniff";
+import { makePatientFileUploadToken, readPatientFileUploadToken } from "@/lib/patient-file-upload-token";
+import {
+  PATIENT_FILE_MAX_BYTES,
+  PATIENT_FILE_UPLOAD_TTL_S,
+  type PatientFileUploadClaims,
+  type PatientFileUploadTicket,
+} from "@/lib/files-types";
 import type { DbClient } from "@/lib/rls";
 import type { Actor } from "@/lib/session";
 
@@ -48,6 +65,10 @@ const BUCKET = "patient-files";
  * Allow-list of MIME types we accept on the Archivos tab. Anything outside
  * this list is rejected at upload time so the signed download URL can never
  * render arbitrary HTML / SVG / JS in the browser tab.
+ *
+ * T4 FC-2f: la lista no cambia, pero el MIME ya no se cree: los primeros bytes tienen que ser de una familia que ese
+ * MIME acepta (`PATIENT_FILE_MIME_FAMILIES` de `lib/file-sniff.ts`, que tiene exactamente estas claves). Antes un HTML
+ * con `type: "application/pdf"` pasaba.
  */
 const ALLOWED_MIME = new Set<string>([
   "application/pdf",
@@ -91,6 +112,15 @@ async function hasFullAccess(actor: Actor, patientId: string, tx: DbClient) {
 }
 
 const NO_ACCESS = "No tenés acceso completo a este paciente.";
+const TOO_BIG = "El archivo no puede superar 25 MB.";
+const BAD_TYPE = "Tipo de archivo no permitido.";
+const FAKE_FILE = "El archivo no es lo que dice ser.";
+
+function safeExt(fileName: string): string {
+  // Sanitise extension — only short alphanumerics, no traversal characters.
+  const raw = (fileName.split(".").pop() ?? "bin").toLowerCase();
+  return SAFE_EXT_RE.test(raw) ? raw : "bin";
+}
 
 export async function listPatientFiles(patientId: string): Promise<PatientFileRow[]> {
   const actor = await getActor();
@@ -144,15 +174,20 @@ export async function uploadPatientFile(
   if (!(file instanceof File) || file.size === 0) {
     return { ok: false, error: "Adjuntá un archivo." };
   }
-  if (file.size > 25 * 1024 * 1024) {
-    return { ok: false, error: "El archivo no puede superar 25 MB." };
+  if (file.size > PATIENT_FILE_MAX_BYTES) {
+    return { ok: false, error: TOO_BIG };
   }
   // MIME allow-list — protects the signed download URL from rendering
   // arbitrary HTML / SVG. Browsers honour the stored Content-Type when
   // serving a Supabase Storage signed URL inline.
   const mime = (file.type || "application/octet-stream").toLowerCase();
   if (!ALLOWED_MIME.has(mime)) {
-    return { ok: false, error: "Tipo de archivo no permitido." };
+    return { ok: false, error: BAD_TYPE };
+  }
+  // FC-2f: magic bytes ANTES de subir (también en modo stub, así dev se porta igual que prod).
+  const head = new Uint8Array(await file.slice(0, 64).arrayBuffer());
+  if (!headMatchesMime(mime, head)) {
+    return { ok: false, error: FAKE_FILE };
   }
 
   const id = randomBytes(12).toString("hex");
@@ -160,10 +195,7 @@ export async function uploadPatientFile(
 
   let uploaded = false;
   if (storageEnabled()) {
-    // Sanitise extension — only short alphanumerics, no traversal characters.
-    const raw = (file.name.split(".").pop() ?? "bin").toLowerCase();
-    const ext = SAFE_EXT_RE.test(raw) ? raw : "bin";
-    storageKey = `${actor.tenantId}/${patientId}/${id}.${ext}`;
+    storageKey = `${actor.tenantId}/${patientId}/${id}.${safeExt(file.name)}`;
     const buf = new Uint8Array(await file.arrayBuffer());
     const up = await storageUpload(BUCKET, storageKey, buf, mime);
     if (!up.ok) return { ok: false, error: "No pudimos subir el archivo." };
@@ -279,4 +311,226 @@ export async function getDownloadUrl(id: string): Promise<ActionResult<{ url: st
   const signed = await storageSign(BUCKET, row.storageKey, 600);
   if (!signed.ok) return { ok: false, error: "No pudimos generar el link." };
   return { ok: true, data: { url: signed.data } };
+}
+
+/*
+ * ─── Subida firmada (T4 FC-2f, C-FC10; brief §24.8) ─────────────────────────────────────────────────────────────────
+ * El tope de 25 MB de `uploadPatientFile` era inalcanzable: el body de una server action corta en 4,5 MB
+ * (`next.config.mjs`). Ahora:
+ *   1. `requestPatientFileUpload` valida tamaño, MIME y acceso ANTES de firmar, y firma un PUT a
+ *      `pending/{tenant}/{fileId}` (fileId aleatorio del server) + un token HMAC con todo lo declarado.
+ *   2. El navegador sube directo a Storage (XHR PUT con progreso; FC-4b), sin supabase-js en el bundle.
+ *   3. `confirmPatientFileUpload`: token → re-gate (mismo usuario y consultorio, escribible, acceso completo) → replay
+ *      (la fila ya existe con el id del token) → `storageStat` (tamaño y Content-Type contra el token) → 64 bytes con
+ *      Range → magic bytes contra la allow-list → `move` a la clave final → INSERT. Si algo falla se borra el objeto y
+ *      no queda fila: nunca hay PHI en el bucket sin una fila que la referencie (salvo lo que el cron barre en
+ *      `pending/` a las 24 h: subidas abandonadas o confirmaciones que cayeron antes de limpiar).
+ *
+ * Interruptor `PATIENT_FILES_SIGNED_UPLOAD` (default prendido; `0`/`false`/`off` lo apaga): la API firmada de Storage
+ * (CORS, `info()`, Range, `move`) recién se puede probar contra un Supabase real al final de T4. Apagado (o sin
+ * Storage), `requestPatientFileUpload` devuelve `{ mode: "stub" }` y la UI vuelve a `uploadPatientFile` (≤4 MB).
+ * `confirm` sigue andando con el interruptor apagado: lo ya subido con un token vigente se puede confirmar.
+ */
+
+const PENDING_PREFIX = "pending";
+const MAX_FILE_NAME = 255;
+const MAX_DESCRIPTION = 500;
+const UPLOAD_EXPIRED = "La subida venció o no es válida. Volvé a subir el archivo.";
+const UPLOAD_MISMATCH = "El archivo que llegó no coincide con el que elegiste. Volvé a subirlo.";
+const UPLOAD_EMPTY = "El archivo llegó vacío. Volvé a subirlo.";
+const UPLOAD_MISSING = "No encontramos el archivo subido. Volvé a subirlo.";
+const UPLOAD_FAILED = "No pudimos guardar el archivo. Probá de nuevo.";
+
+function signedUploadSwitchOn(): boolean {
+  const v = (process.env.PATIENT_FILES_SIGNED_UPLOAD ?? "").trim().toLowerCase();
+  return !(v === "0" || v === "false" || v === "off");
+}
+
+/** Clave de la subida en curso. Solo la arma el server, con ids del server o del token firmado. */
+function pendingKey(c: Pick<PatientFileUploadClaims, "tenantId" | "fileId">): string {
+  return `${PENDING_PREFIX}/${c.tenantId}/${c.fileId}`;
+}
+
+function finalKey(c: Pick<PatientFileUploadClaims, "tenantId" | "patientId" | "fileId" | "fileName">): string {
+  return `${c.tenantId}/${c.patientId}/${c.fileId}.${safeExt(c.fileName)}`;
+}
+
+/** `Content-Type` del objeto sin parámetros (`text/plain;charset=UTF-8` → `text/plain`). */
+function baseMime(ct: string | null): string | null {
+  return ct ? ct.split(";")[0].trim().toLowerCase() || null : null;
+}
+
+/** Best-effort: si el remove falla queda logueado en `storage-internal` y lo barre el cron de `pending/`. */
+async function discardObject(key: string): Promise<void> {
+  await storageRemove(BUCKET, [key]);
+}
+
+export async function requestPatientFileUpload(input: {
+  patientId: string;
+  fileName: string;
+  mime: string;
+  sizeBytes: number;
+  category?: PatientFileCategory;
+}): Promise<ActionResult<PatientFileUploadTicket>> {
+  const actor = await getActor();
+  // Mismo corte que `uploadPatientFile` (BO-Z A1): en solo lectura ni siquiera se firma una subida.
+  const readOnly = writableError(actor);
+  if (readOnly) return { ok: false, error: readOnly };
+
+  const patientId = typeof input?.patientId === "string" ? input.patientId : "";
+  const fileName = typeof input?.fileName === "string" ? input.fileName.trim() : "";
+  const mime = typeof input?.mime === "string" ? input.mime.trim().toLowerCase() : "";
+  const sizeBytes = input?.sizeBytes;
+  const category: PatientFileCategory = (typeof input?.category === "string" && ALLOWED_CATEGORIES.has(input.category)
+    ? input.category
+    : "OTHER") as PatientFileCategory;
+  // Tope y MIME antes de firmar (y antes de tocar la base): no se firma nada que después no se podría confirmar.
+  if (!fileName || fileName.length > MAX_FILE_NAME) return { ok: false, error: "El nombre del archivo no es válido." };
+  if (typeof sizeBytes !== "number" || !Number.isInteger(sizeBytes) || sizeBytes <= 0) {
+    return { ok: false, error: "Adjuntá un archivo." };
+  }
+  if (sizeBytes > PATIENT_FILE_MAX_BYTES) return { ok: false, error: TOO_BIG };
+  if (!ALLOWED_MIME.has(mime)) return { ok: false, error: BAD_TYPE };
+  if (!patientId) return { ok: false, error: "Paciente no encontrado." };
+
+  const access = await runWithRls(actor.tenantId, (tx) => patientAccessFor(actor, patientId, tx));
+  if (access === "none") return { ok: false, error: "Paciente no encontrado." };
+  if (access !== "full") return { ok: false, error: NO_ACCESS };
+
+  if (!signedUploadSwitchOn() || !storageEnabled()) return { ok: true, data: { mode: "stub" } };
+
+  const fileId = randomBytes(12).toString("hex");
+  const claims = {
+    tenantId: actor.tenantId,
+    patientId,
+    fileId,
+    mime,
+    sizeBytes,
+    category,
+    fileName,
+    userId: actor.userId,
+  };
+  let confirmToken: string;
+  try {
+    confirmToken = makePatientFileUploadToken(claims);
+  } catch {
+    // Solo pasa con ids o nombres fuera de formato (p. ej. un nombre multibyte que no entra en 2048 caracteres).
+    return { ok: false, error: "El nombre del archivo no es válido." };
+  }
+  const signed = await storageCreateSignedUpload(BUCKET, pendingKey(claims));
+  if (!signed.ok) return { ok: false, error: "No pudimos preparar la subida. Probá de nuevo." };
+  const expiresAt = new Date(Date.now() + PATIENT_FILE_UPLOAD_TTL_S * 1000).toISOString();
+  return { ok: true, data: { mode: "signed", uploadUrl: signed.data.signedUrl, confirmToken, expiresAt } };
+}
+
+export async function confirmPatientFileUpload(input: {
+  confirmToken: string;
+  description?: string | null;
+}): Promise<ActionResult<{ id: string; replayed: boolean }>> {
+  // 1. Token. Adulterado, vencido o de otra etiqueta → rechazo SIN tocar Storage: sin un token válido no hay clave
+  //    en la que confiar (y borrar «lo que dice» un token falso sería borrar a ciegas).
+  const claims = readPatientFileUploadToken(input?.confirmToken);
+  if (!claims) return { ok: false, error: UPLOAD_EXPIRED };
+
+  // 2. Re-gate. El token es de un usuario y un consultorio: otro usuario (o la misma persona en otro consultorio
+  //    activo) no lo puede usar, tampoco sin tocar Storage.
+  const actor = await getActor();
+  if (claims.tenantId !== actor.tenantId || claims.userId !== actor.userId) return { ok: false, error: UPLOAD_EXPIRED };
+  // Solo lectura (o soporte): se corta antes de Storage como en el resto del archivo (BO-Z A1); el objeto pendiente
+  // lo barre el cron.
+  const readOnly = writableError(actor);
+  if (readOnly) return { ok: false, error: readOnly };
+
+  const description =
+    typeof input?.description === "string" && input.description.trim()
+      ? input.description.trim().slice(0, MAX_DESCRIPTION)
+      : null;
+  const pending = pendingKey(claims);
+
+  // El acceso se re-chequea (pudo cambiar en los 15 min) y en la misma lectura se mira el replay.
+  const gate = await runWithRls(actor.tenantId, async (tx) => {
+    const access = await patientAccessFor(actor, claims.patientId, tx);
+    if (access !== "full") return { kind: access === "none" ? ("notfound" as const) : ("basic" as const) };
+    const existing = await tx.patientFile.findFirst({
+      where: { id: claims.fileId, tenantId: actor.tenantId, patientId: claims.patientId },
+      select: { id: true },
+    });
+    return existing ? { kind: "replay" as const } : { kind: "ok" as const };
+  });
+  if (gate.kind === "notfound" || gate.kind === "basic") {
+    // Solo se borra lo pendiente: si ya se había confirmado, la clave final es de la fila y no se toca.
+    await discardObject(pending);
+    return { ok: false, error: gate.kind === "notfound" ? "Paciente no encontrado." : NO_ACCESS };
+  }
+  // 3. Replay: doble click, reintento después de un timeout. Mismo resultado, sin volver a tocar Storage.
+  if (gate.kind === "replay") return { ok: true, data: { id: claims.fileId, replayed: true } };
+
+  /** Falló algo después del replay: si otra confirmación ganó en paralelo, es un replay; si no, se limpia. */
+  const failWith = async (error: string, keyToDiscard: string): Promise<ActionResult<{ id: string; replayed: boolean }>> => {
+    if (await rowExists(actor.tenantId, claims)) return { ok: true, data: { id: claims.fileId, replayed: true } };
+    await discardObject(keyToDiscard);
+    return { ok: false, error };
+  };
+
+  // 4. Tamaño y Content-Type contra el token. El Content-Type importa tanto como los bytes: es con el que Storage
+  //    sirve la URL firmada, y lo pone el PUT del cliente (podría decir `text/html` aunque el token diga PDF).
+  const stat = await storageStat(BUCKET, pending);
+  if (!stat.ok) return failWith(UPLOAD_FAILED, pending);
+  if (!stat.data) {
+    if (await rowExists(actor.tenantId, claims)) return { ok: true, data: { id: claims.fileId, replayed: true } };
+    return { ok: false, error: UPLOAD_MISSING };
+  }
+  if (stat.data.sizeBytes === 0) return failWith(UPLOAD_EMPTY, pending);
+  if (stat.data.sizeBytes !== claims.sizeBytes || stat.data.sizeBytes > PATIENT_FILE_MAX_BYTES) {
+    return failWith(UPLOAD_MISMATCH, pending);
+  }
+  if (baseMime(stat.data.contentType) !== claims.mime) return failWith(UPLOAD_MISMATCH, pending);
+
+  // 5. Magic bytes de los primeros 64 bytes contra lo que acepta el MIME declarado.
+  const head = await storageReadHead(BUCKET, pending);
+  if (!head.ok) return failWith(UPLOAD_FAILED, pending);
+  if (head.data.length === 0) return failWith(UPLOAD_EMPTY, pending);
+  if (!headMatchesMime(claims.mime, head.data)) return failWith(FAKE_FILE, pending);
+
+  // 6. A la clave final. Si el move falla y otra confirmación ya movió, `failWith` lo resuelve como replay.
+  const storageKey = finalKey(claims);
+  const moved = await storageMove(BUCKET, pending, storageKey);
+  if (!moved.ok) return failWith(UPLOAD_FAILED, pending);
+
+  // 7. INSERT con el id del token (así el replay es una lectura por PK).
+  try {
+    await runWithRls(actor.tenantId, (tx) =>
+      tx.patientFile.create({
+        data: {
+          id: claims.fileId,
+          tenantId: actor.tenantId,
+          patientId: claims.patientId,
+          uploaderId: actor.userId ?? undefined,
+          name: claims.fileName,
+          mime: claims.mime,
+          sizeBytes: claims.sizeBytes,
+          storageKey,
+          category: claims.category,
+          description,
+        },
+      }),
+    );
+  } catch (e) {
+    // Si la fila existe (otra confirmación la escribió) la clave final es suya y NO se borra. Si no, el objeto ya
+    // movido quedaría huérfano: PHI sin fila. Se borra y se reporta.
+    if (await rowExists(actor.tenantId, claims)) return { ok: true, data: { id: claims.fileId, replayed: true } };
+    await discardObject(storageKey);
+    reportError("patient_file.confirm_insert_failed", e, { fileId: claims.fileId });
+    return { ok: false, error: UPLOAD_FAILED };
+  }
+
+  revalidatePath(`/pacientes/${claims.patientId}`);
+  return { ok: true, data: { id: claims.fileId, replayed: false } };
+}
+
+async function rowExists(tenantId: string, c: PatientFileUploadClaims): Promise<boolean> {
+  const n = await runWithRls(tenantId, (tx) =>
+    tx.patientFile.count({ where: { id: c.fileId, tenantId, patientId: c.patientId } }),
+  );
+  return n > 0;
 }
