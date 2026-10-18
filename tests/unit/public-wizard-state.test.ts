@@ -320,3 +320,140 @@ describe("[TP-0] destinationAfterSubmit", () => {
     expect(destinationAfterSubmit({ bookingId: "a/b", next: "reserved", initPoint: null })).toBe("/booking/a%2Fb/ok");
   });
 });
+
+// ─── TP-1 · ventana de 5 días hábiles ───────────────────────────────────
+// Import con namespace: mientras las funciones no existían, `W.nextWindow` es undefined y el `it.fails` falla por eso
+// (no por un error de import que tumbaría todo el archivo).
+import * as W from "@/lib/public-wizard-state";
+import type { PublicSlotWindow } from "@/lib/public-booking-types";
+
+const slot = (date: string, time: string, locationId: string | null = null) => ({
+  iso: `${date}T${time}:00.000-03:00`,
+  time,
+  available: true,
+  locationId,
+});
+const win = (over: Partial<PublicSlotWindow> = {}): PublicSlotWindow => ({
+  days: [
+    { date: "2026-10-19", status: "full", slots: [] },
+    { date: "2026-10-20", status: "open", slots: [slot("2026-10-20", "09:00", "L1"), slot("2026-10-20", "10:00")] },
+    { date: "2026-10-21", status: "open", slots: [slot("2026-10-21", "08:00")] },
+    { date: "2026-10-22", status: "open", slots: [slot("2026-10-22", "08:00")] },
+    { date: "2026-10-23", status: "open", slots: [slot("2026-10-23", "08:00")] },
+  ],
+  nextFrom: "2026-10-24",
+  reachedEnd: false,
+  skippedFrom: null,
+  ...over,
+});
+const TODAY = "2026-10-17"; // sábado: el ejemplo de Martin (la ventana arranca el lun 19)
+
+describe("[TP-1] windowNav siguientes/anteriores/ir a fecha", () => {
+  it("arranca en hoy, sin «Anteriores»", () => {
+    const nav = W.initialWindowNav(TODAY);
+    expect(nav).toEqual({ from: TODAY, history: [] });
+    expect(W.canGoPrevWindow(nav, TODAY)).toBe(false);
+    // En hoy, «Anteriores» no hace nada (no hay ventana antes de hoy).
+    expect(W.prevWindow(nav, TODAY)).toEqual(nav);
+  });
+
+  it("«Siguientes ›» pide desde `nextFrom` y apila el arranque real de la ventana; «‹ Anteriores» vuelve", () => {
+    const nav0 = W.initialWindowNav(TODAY);
+    const nav1 = W.nextWindow(nav0, win());
+    // Se apila el primer día MOSTRADO (lun 19), no el `from` pedido (sáb 17): volver pide desde un día hábil y el
+    // server no vuelve a saltear (si salteó, volver a pedir desde el `from` viejo saltearía otra vez).
+    expect(nav1).toEqual({ from: "2026-10-24", history: ["2026-10-19"] });
+    expect(W.canGoPrevWindow(nav1, TODAY)).toBe(true);
+    const nav2 = W.nextWindow(nav1, win({ days: [{ date: "2026-10-26", status: "open", slots: [] }], nextFrom: "2026-10-31" }));
+    expect(nav2.history).toEqual(["2026-10-19", "2026-10-26"]);
+    // Vuelve al primer día mostrado de esa ventana (lun 26), no al `from` pedido (sáb 24).
+    expect(W.prevWindow(nav2, TODAY)).toEqual({ from: "2026-10-26", history: ["2026-10-19"] });
+    expect(W.prevWindow(nav1, TODAY)).toEqual({ from: "2026-10-19", history: [] });
+  });
+
+  it("sin `nextFrom` (fin de la búsqueda) «Siguientes» no se mueve", () => {
+    const nav = W.initialWindowNav(TODAY);
+    expect(W.nextWindow(nav, win({ nextFrom: null, reachedEnd: true }))).toEqual(nav);
+  });
+
+  it("«Anteriores» sin pila (llegó por fecha o por el primer turno) vuelve a hoy", () => {
+    expect(W.prevWindow({ from: "2026-11-02", history: [] }, TODAY)).toEqual({ from: TODAY, history: [] });
+  });
+
+  it("«Ir a una fecha»: piso en hoy, ignora basura y deja «Anteriores» volviendo a algo anterior", () => {
+    const nav = W.nextWindow(W.initialWindowNav(TODAY), win()); // from 24, pila [19]
+    const j = W.jumpToDate(nav, "2026-11-12", TODAY);
+    expect(j.from).toBe("2026-11-12");
+    // La pila solo guarda arranques ANTERIORES a la fecha elegida, con hoy en el fondo.
+    expect(j.history).toEqual([TODAY, "2026-10-19"]);
+    expect(W.prevWindow(j, TODAY).from).toBe("2026-10-19");
+    // Una fecha pasada (el input tiene `min`, pero se puede tipear) cae en hoy y limpia la pila.
+    expect(W.jumpToDate(nav, "2026-10-01", TODAY)).toEqual({ from: TODAY, history: [] });
+    expect(W.jumpToDate(nav, "", TODAY)).toEqual(nav);
+    expect(W.jumpToDate(nav, "2026-02-30", TODAY)).toEqual(nav);
+  });
+
+  it("aviso de día no hábil al ir a una fecha; aviso de salto si los 5 estaban completos", () => {
+    // Pidió el jueves 22 y la ventana arranca el viernes 23.
+    const w = win({ days: win().days.slice(4) });
+    expect(W.windowNotice({ requestedFrom: "2026-10-22", jumped: true, window: w })).toBe(
+      "El jueves 22 no tiene horarios. Te mostramos los siguientes."
+    );
+    // Sin «Ir a una fecha» (navegación normal o arranque) no se avisa.
+    expect(W.windowNotice({ requestedFrom: "2026-10-22", jumped: false, window: w })).toBeNull();
+    expect(W.windowNotice({ requestedFrom: "2026-10-23", jumped: true, window: w })).toBeNull();
+    const skipped = win({ days: [{ date: "2026-10-26", status: "open", slots: [] }], skippedFrom: "2026-10-19" });
+    expect(W.windowNotice({ requestedFrom: "2026-10-19", jumped: false, window: skipped })).toBe(
+      "No había turnos libres desde el lunes 19; te mostramos desde el lunes 26."
+    );
+  });
+
+  it("«Buscar más adelante» con la ventana vacía: `nextFrom` o 6 semanas después, nunca más allá de 90 días", () => {
+    const empty = win({ days: [], nextFrom: null, reachedEnd: true });
+    expect(W.laterFrom({ from: TODAY, history: [] }, empty, TODAY)).toBe("2026-11-28");
+    expect(W.laterFrom({ from: TODAY, history: [] }, { ...empty, nextFrom: "2026-11-02" }, TODAY)).toBe("2026-11-02");
+    expect(W.laterFrom({ from: "2026-12-20", history: [] }, empty, TODAY)).toBeNull();
+  });
+});
+
+describe("[TP-1] Próximo turno disponible selecciona el primer libre", () => {
+  it("firstAvailable: el primer horario del primer día con libres (saltea los «Completo»)", () => {
+    expect(W.firstAvailable(win())).toEqual({ date: "2026-10-20", slot: slot("2026-10-20", "09:00", "L1") });
+    expect(W.firstAvailable(win({ days: [{ date: "2026-10-19", status: "full", slots: [] }] }))).toBeNull();
+    expect(W.firstAvailable(win({ days: [] }))).toBeNull();
+  });
+
+  it("keepSelectionInWindow: conserva el horario si sigue libre en la ventana (con su sede), si no lo suelta", () => {
+    expect(W.keepSelectionInWindow(win(), slot("2026-10-20", "09:00").iso)).toEqual(slot("2026-10-20", "09:00", "L1"));
+    expect(W.keepSelectionInWindow(win(), slot("2026-10-20", "11:00").iso)).toBeNull();
+    expect(W.keepSelectionInWindow(win(), null)).toBeNull();
+  });
+
+  it("«Ver más horarios de X» y el primer turno posicionan la ventana en el día encontrado", () => {
+    const sel = W.selectionFromFirstSlot({
+      practitionerId: "A", iso: slot("2026-10-28", "09:00").iso, time: "09:00", date: "2026-10-28", durationMin: 45, locationId: null,
+    } as never);
+    // `dateISO` de la selección (lo lee también `first-slot-step.tsx`) es el `from` de la ventana del wizard.
+    expect(sel.dateISO).toBe("2026-10-28");
+    expect(W.windowNavAt(sel.dateISO, TODAY)).toEqual({ from: "2026-10-28", history: [TODAY] });
+    expect(W.windowNavAt(TODAY, TODAY)).toEqual({ from: TODAY, history: [] });
+  });
+});
+
+describe("[TP-1] etiquetas de la ventana (pared AR, sin depender del huso del navegador)", () => {
+  it("rango, encabezado del día y nombre accesible del horario", () => {
+    expect(W.windowRangeLabel(["2026-10-19", "2026-10-23"])).toBe("lun 19 al vie 23 de octubre");
+    expect(W.windowRangeLabel(["2026-10-30", "2026-11-05"])).toBe("vie 30 de octubre al jue 5 de noviembre");
+    expect(W.windowRangeLabel(["2026-10-19"])).toBe("lun 19 de octubre");
+    expect(W.windowRangeLabel([])).toBe("");
+    expect(W.dayHeading({ date: "2026-10-19", status: "open", slots: Array(8).fill(slot("2026-10-19", "09:00")) })).toBe(
+      "Lunes 19 de oct · 8 horarios"
+    );
+    expect(W.dayHeading({ date: "2026-10-19", status: "open", slots: [slot("2026-10-19", "09:00")] })).toBe(
+      "Lunes 19 de oct · 1 horario"
+    );
+    expect(W.dayHeading({ date: "2026-10-19", status: "full", slots: [] })).toBe("Lunes 19 de oct · Completo");
+    expect(W.slotAccessibleName("2026-10-19", "09:00")).toBe("Lunes 19 de octubre a las 09:00");
+    expect(W.slotAccessibleName("2026-10-19", "09:00", "Centro")).toBe("Lunes 19 de octubre a las 09:00, en Centro");
+  });
+});

@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 vi.mock("@/lib/public-booking", () => ({
   listPublicSlots: vi.fn(async () => []),
+  listPublicSlotWindow: vi.fn(async () => ({ days: [], nextFrom: null, reachedEnd: true, skippedFrom: null })),
   findFirstPublicSlot: vi.fn(async () => null),
   submitPublicBooking: vi.fn(),
 }));
@@ -293,5 +294,27 @@ describe("[TP-0] wizard sin cobro: «Confirmar turno», sin «Mercado Pago»", (
     expect(src).toContain("window.location.href = destinationAfterSubmit(r.data);");
     expect(src).not.toMatch(/window\.location\.href = r\.data\.initPoint/);
     expect(checkoutCopyFor({ priceCents: 1_500_000 })).toMatchObject({ cta: "Confirmar turno", ctaPending: "Reservando…" });
+  });
+});
+
+describe("[TP-1] paso Servicio", () => {
+  it("[TP-1] servicio con precio 0 no muestra $ 0", () => {
+    const c = clinic(1, false);
+    c.practitioners = [c.practitioners[0]];
+    c.services = [
+      { ...c.services[0], id: "F", name: "Primera consulta", priceCents: 0 },
+      { ...c.services[0], id: "S", name: "Sesión", priceCents: 1_500_000 },
+    ];
+    const html = renderToStaticMarkup(<PublicBookingWizard clinic={c} session={null} prefill={null} />);
+    expect(html).toContain("Primera consulta");
+    expect(html).toMatch(/\$\s?15\.000/);
+    expect(html).not.toMatch(/\$\s?0\b/);
+  });
+
+  it("el wizard usa el paso nuevo de la ventana (no la grilla de un día)", () => {
+    const src = readFileSync("components/booking/public-booking-wizard.tsx", "utf8");
+    expect(src).toContain("<SlotWindowStep");
+    expect(src).not.toMatch(/function SlotStep\b/);
+    expect(src).not.toContain("listPublicSlots(");
   });
 });

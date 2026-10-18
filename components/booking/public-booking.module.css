@@ -319,53 +319,106 @@
   min-height: 44px;
 }
 
-/* Día: anterior / fecha / siguiente. */
-.dateBar {
+/* [TP-1] Ventana de 5 días hábiles (`wizard/slot-window-step.tsx`). Mobile-first: a 390 px los días van apilados
+   (cada uno con 8 horarios y «Ver N más»); desde 900 px, 5 columnas. Reemplaza la barra ‹ día › de un solo día. */
+.windowStep {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: var(--space-2);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.7);
-  border: 1px solid rgba(15, 30, 51, 0.08);
-}
-.dateCenter {
-  text-align: center;
+  flex-direction: column;
+  gap: var(--space-4);
   min-width: 0;
 }
-.dateLabel {
+.windowBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+.windowRange {
+  flex: 1 1 100%;
+  margin: 0;
   font-size: var(--fs-base);
   font-weight: 700;
-  text-transform: capitalize;
+  min-height: 1.5em;
 }
-.dateInput {
-  border: 0;
-  background: transparent;
-  font-size: 13px;
-  color: var(--navy-500);
-  text-align: center;
-  font-family: inherit;
-  border-radius: 6px;
-  min-height: 32px;
+.windowNav,
+.windowTools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
 }
-/* El input de fecha conserva el anillo de foco nativo (antes se lo sacaban inline). */
-.navBtn {
-  width: 44px;
-  height: 44px;
-  flex-shrink: 0;
-  border-radius: 999px;
-  background: #fff;
-  border: 1px solid rgba(15, 30, 51, 0.1);
-  cursor: pointer;
-  color: var(--navy-700);
+.windowJump {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--navy-700);
 }
-.navBtn:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
+/* El input de fecha conserva el anillo de foco nativo (antes se lo sacaban inline). */
+.dateInput {
+  min-height: 44px;
+  width: auto;
+  font-family: inherit;
+}
+.windowNotice {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--r-md);
+  background: rgba(31, 79, 190, 0.06);
+  border: 1px solid rgba(31, 79, 190, 0.18);
+  font-size: var(--fs-sm);
+  color: var(--navy-700);
+}
+.windowDays {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+}
+.day {
+  min-width: 0;
+  padding: var(--space-3);
+  border-radius: var(--r-md);
+  border: 1px solid rgba(15, 30, 51, 0.08);
+  background: rgba(255, 255, 255, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+/* Completo: el texto lo dice (no solo el color, 1.4.1); el fondo apagado ayuda a saltearlo con la vista. */
+.dayFull {
+  background: rgba(15, 30, 51, 0.03);
+}
+.dayFull .dayTitle {
+  color: var(--navy-500);
+}
+.dayTitle {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--navy-900);
+}
+.daySlots {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: var(--space-2);
+}
+.dayMore {
+  align-self: flex-start;
+  min-height: 44px;
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--sky-700);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 8px;
+}
+.dayMore:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .loading {
@@ -373,11 +426,6 @@
   text-align: center;
   color: var(--navy-500);
   font-size: var(--fs-sm);
-}
-.slots {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
-  gap: var(--space-2);
 }
 .slot {
   padding: var(--space-3) var(--space-2);
@@ -578,6 +626,16 @@
   }
   .card {
     padding: var(--space-5);
+  }
+}
+/* [TP-1] 5 columnas, una por día hábil. */
+@media (min-width: 900px) {
+  .windowDays {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    align-items: start;
+  }
+  .windowRange {
+    flex: 1 1 auto;
   }
 }
 @media (min-width: 1025px) {

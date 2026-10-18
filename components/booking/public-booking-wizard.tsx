@@ -7,8 +7,8 @@
  *   1. Profesional (skip if only one) — con filtros opcionales de sede y
  *      cobertura y la opción "Primer turno disponible" (B5.6)
  *   2. Servicio (los que ofrece el profesional: `practitionerIds`)
- *   3. Fecha + hora: grilla de `listPublicSlots`, o en modo "cualquiera" el
- *      primer horario libre de `findFirstPublicSlot`
+ *   3. Fecha + hora: ventana de 5 días hábiles de `listPublicSlotWindow` (TP-1, `wizard/slot-window-step.tsx`), o en
+ *      modo "cualquiera" el primer horario libre de `findFirstPublicSlot`
  *   4. Tus datos — Google sign-in or HC form
  *   5. Confirmación: reserva sin cobro («Confirmar turno» → `/booking/<id>/ok`) o, si el consultorio cobra online,
  *      redirección a Mercado Pago (TP-0: decide el server con `next`)
@@ -30,11 +30,11 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { GoogleIcon } from "@/components/ui/brand-icons";
-import { IconAlert, IconArrow, IconCheck, IconChevL, IconChevR, IconClock } from "@/components/ui/icons";
+import { IconAlert, IconArrow, IconCheck, IconChevL, IconClock } from "@/components/ui/icons";
 import { formatARS } from "@/lib/format";
-import { listPublicSlots, submitPublicBooking } from "@/lib/public-booking";
+import { submitPublicBooking } from "@/lib/public-booking";
 import { toARDateKey } from "@/lib/datetime-ar";
-import type { PublicClinic, PublicLocation, PublicSlot, PrefillPatient } from "@/lib/public-booking-types";
+import type { PublicClinic, PublicLocation, PrefillPatient } from "@/lib/public-booking-types";
 import type { TenantVertical } from "@prisma/client";
 import {
   attemptSignature,
@@ -45,19 +45,23 @@ import {
   filterPractitioners,
   findLocation,
   formatLocationAddress,
+  initialWindowNav,
   initialWizardSelection,
   locationsForPractitioner,
   nextAttempt,
   reconcileSelection,
   servicesForAny,
   servicesForPractitioner,
+  windowNavAt,
   type Attempt,
   type CheckoutCopy,
+  type WindowNav,
   type WizardFilters,
   type WizardSelection,
 } from "@/lib/public-wizard-state";
 import { PractitionerStep } from "./wizard/practitioner-step";
 import { FirstSlotStep } from "./wizard/first-slot-step";
+import { SlotWindowStep } from "./wizard/slot-window-step";
 import { EmptyBox, StepHeader, focusStepHeading, formatWhenAR } from "./wizard/shared";
 import { clinicInitials } from "./booking-unavailable";
 import s from "./public-booking.module.css";
@@ -135,9 +139,9 @@ export function PublicBookingWizard({
   const [filters, setFilters] = useState<WizardFilters>({ insurerId: null, locationId: null });
   const [practitionerId, setPractitionerId] = useState<string | null>(initial.practitionerId);
   const [serviceId, setServiceId] = useState<string | null>(null);
-  // Hoy en calendario AR: `toISOString().slice(0,10)` pasadas las 21:00 AR
-  // (00:00 UTC) arrancaba el wizard en mañana.
-  const [dateISO, setDateISO] = useState<string>(() => toARDateKey(new Date()));
+  // TP-1: desde qué día pide la ventana de 5 días hábiles (+ pila de «Anteriores»). Antes era `dateISO`, un solo día.
+  // Hoy en calendario AR: `toISOString().slice(0,10)` pasadas las 21:00 AR (00:00 UTC) arrancaba el wizard en mañana.
+  const [windowNav, setWindowNav] = useState<WindowNav>(() => initialWindowNav(toARDateKey(new Date())));
   const [slotISO, setSlotISO] = useState<string | null>(null);
   // Sede del horario elegido (cada slot la trae; el submit la asigna sola en
   // el server: es solo para mostrar la dirección).
@@ -224,7 +228,8 @@ export function PublicBookingWizard({
 
   const applyFirstSlot = (sel: WizardSelection) => {
     setPractitionerId(sel.practitionerId);
-    setDateISO(sel.dateISO);
+    // La ventana arranca en el día encontrado: «Ver más horarios de X» muestra ese día y los 4 hábiles siguientes.
+    setWindowNav(windowNavAt(sel.dateISO, toARDateKey(new Date())));
     setSlot(sel.slotISO, sel.slotLocationId);
   };
 
@@ -321,7 +326,7 @@ export function PublicBookingWizard({
             />
           )}
           {step === 2 && mode === "pick" && practitionerId && serviceId && (
-            <SlotStep
+            <SlotWindowStep
               tenantSlug={clinic.slug}
               practitionerId={practitionerId}
               serviceId={serviceId}
@@ -332,8 +337,8 @@ export function PublicBookingWizard({
                 setFilters((f) => ({ ...f, locationId }));
                 setSlot(null, null);
               }}
-              dateISO={dateISO}
-              setDateISO={setDateISO}
+              nav={windowNav}
+              setNav={setWindowNav}
               slotISO={slotISO}
               setSlot={setSlot}
             />
@@ -552,7 +557,8 @@ function ServiceStep({
                 {sv.description && <div className={s.choiceSub}>{sv.description}</div>}
                 <div className={s.choiceMeta}>{durationFor(sv, practitionerId)} min</div>
               </div>
-              <div className={`k-display ${s.price}`}>{formatARS(sv.priceCents)}</div>
+              {/* TP-1: con precio 0 no hay monto (antes «$ 0», que se leía como un error o como «gratis» sin serlo). */}
+              {sv.priceCents > 0 && <div className={`k-display ${s.price}`}>{formatARS(sv.priceCents)}</div>}
             </button>
           ))}
         </div>
@@ -561,178 +567,7 @@ function ServiceStep({
   );
 }
 
-// ─── Step 2 ─ Slot ─────────────────────────────────────────────────────
-function SlotStep({
-  tenantSlug,
-  practitionerId,
-  serviceId,
-  locations,
-  locationId,
-  onLocationChange,
-  dateISO,
-  setDateISO,
-  slotISO,
-  setSlot,
-}: {
-  tenantSlug: string;
-  practitionerId: string;
-  serviceId: string;
-  /** Sedes donde atiende el profesional (orden del consultorio). */
-  locations: PublicLocation[];
-  /** Sede elegida (null = todas). */
-  locationId: string | null;
-  onLocationChange: (id: string | null) => void;
-  dateISO: string;
-  setDateISO: (v: string) => void;
-  slotISO: string | null;
-  setSlot: (iso: string | null, locationId: string | null) => void;
-}) {
-  const [slots, setSlots] = useState<PublicSlot[]>([]);
-  const [loading, setLoading] = useState(false);
-  // null = ok; "rate" = throttled ("esperá"), distinct from an empty day.
-  const [slotError, setSlotError] = useState<"rate" | null>(null);
-  // Sede filtrada que el profesional no tiene (filtro viejo): no se manda.
-  const effectiveLocationId = locationId && locations.some((l) => l.id === locationId) ? locationId : null;
-  const multiLoc = locations.length > 1;
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setSlotError(null);
-    listPublicSlots({
-      tenantSlug,
-      practitionerId,
-      serviceId,
-      date: dateISO,
-      ...(effectiveLocationId ? { locationId: effectiveLocationId } : {}),
-    })
-      .then((rows) => {
-        if (cancelled) return;
-        setSlots(rows);
-        const still = slotISO ? rows.find((r) => r.iso === slotISO && r.available) : null;
-        if (slotISO && !still) setSlot(null, null);
-        else if (still) setSlot(still.iso, still.locationId ?? null);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setSlots([]);
-        setSlotError("rate");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tenantSlug, practitionerId, serviceId, dateISO, effectiveLocationId]);
-
-  const shiftDate = (delta: number) => {
-    // Date-only arithmetic anchored at noon UTC so ±1 day never crosses a
-    // date boundary because of the browser's timezone.
-    const d = new Date(`${dateISO}T12:00:00Z`);
-    d.setUTCDate(d.getUTCDate() + delta);
-    setDateISO(d.toISOString().slice(0, 10));
-    setSlot(null, null);
-  };
-
-  // "Today" in AR calendar terms — a late-night browser must not roll to
-  // tomorrow (toISOString would, once past 21:00 AR = 00:00 UTC).
-  const todayKey = toARDateKey(new Date());
-  const selected = new Date(`${dateISO}T12:00:00Z`);
-  const locName = (id: string | null | undefined) => locations.find((l) => l.id === id)?.name ?? null;
-  return (
-    <>
-      <StepHeader title="Elegí día y horario" subtitle="Te mostramos solo los horarios disponibles." />
-      {multiLoc && (
-        <div role="group" aria-label="Sede" className={s.chips}>
-          {[{ id: null as string | null, name: "Todas las sedes" }, ...locations].map((l) => (
-            <button
-              key={l.id ?? "all"}
-              type="button"
-              aria-pressed={effectiveLocationId === l.id}
-              onClick={() => onLocationChange(l.id)}
-              className={`${s.choice} ${s.chip}`}
-            >
-              {l.name}
-            </button>
-          ))}
-        </div>
-      )}
-      <div className={s.dateBar}>
-        <button
-          type="button"
-          onClick={() => shiftDate(-1)}
-          aria-label="Día anterior"
-          disabled={dateISO <= todayKey}
-          className={s.navBtn}
-        >
-          <IconChevL size={14} />
-        </button>
-        <div className={s.dateCenter}>
-          <div className={`k-display ${s.dateLabel}`} aria-live="polite">
-            {selected.toLocaleDateString("es-AR", {
-              weekday: "long",
-              day: "2-digit",
-              month: "long",
-              timeZone: "America/Argentina/Buenos_Aires",
-            })}
-          </div>
-          {/* `<input type="date">` va en fecha local por definición (excepción de AGENTS §4). */}
-          <input
-            type="date"
-            aria-label="Elegir fecha"
-            value={dateISO}
-            min={todayKey}
-            onChange={(e) => {
-              setDateISO(e.target.value);
-              setSlot(null, null);
-            }}
-            className={s.dateInput}
-          />
-        </div>
-        <button type="button" onClick={() => shiftDate(1)} aria-label="Día siguiente" className={s.navBtn}>
-          <IconChevR size={14} />
-        </button>
-      </div>
-
-      {loading ? (
-        <div className={s.loading} role="status">
-          Buscando horarios…
-        </div>
-      ) : slotError === "rate" ? (
-        <EmptyBox>Demasiadas consultas seguidas. Esperá unos segundos y reintentá.</EmptyBox>
-      ) : slots.length === 0 ? (
-        <EmptyBox>
-          {effectiveLocationId
-            ? "No hay horarios en esta sede este día. Probá otro día u otra sede."
-            : "No hay horarios este día. Probá otro."}
-        </EmptyBox>
-      ) : (
-        <div className={s.slots} role="group" aria-label="Horarios">
-          {slots.map((sl) => {
-            // Con varias sedes y sin filtrar, cada horario dice dónde es.
-            const where = multiLoc && !effectiveLocationId ? locName(sl.locationId) : null;
-            return (
-              <button
-                key={sl.iso}
-                type="button"
-                onClick={() => sl.available && setSlot(sl.iso, sl.locationId ?? null)}
-                disabled={!sl.available}
-                aria-pressed={sl.iso === slotISO}
-                className={s.slot}
-              >
-                {sl.time}
-                {!sl.available && <span className="k-sr-only"> (ocupado)</span>}
-                {where && <span className={s.slotWhere}>{where}</span>}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </>
-  );
-}
+// ─── Step 2 ─ Slot: components/booking/wizard/slot-window-step.tsx (TP-1: ventana de 5 días hábiles)
 
 // ─── Step 3 ─ Patient HC ──────────────────────────────────────────────
 // Exportado solo para el render test (VX2-d1): el paso 4 no se alcanza con un render estático del wizard.

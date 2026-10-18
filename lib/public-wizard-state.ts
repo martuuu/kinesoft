@@ -9,8 +9,15 @@
  * caemos al comportamiento previo (filtro por `practitionerId`, sin filtros
  * de sede/cobertura) en vez de esconder todo.
  */
-import { addDays } from "@/lib/availability/day";
-import type { PublicClinic, PublicFirstSlot, PublicLocation } from "@/lib/public-booking-types";
+import { addDays, dowOfDayKey, isDayKey } from "@/lib/availability/day";
+import type {
+  PublicClinic,
+  PublicFirstSlot,
+  PublicLocation,
+  PublicSlot,
+  PublicSlotWindow,
+  PublicWindowDay,
+} from "@/lib/public-booking-types";
 
 type Practitioner = PublicClinic["practitioners"][number];
 type Service = PublicClinic["services"][number];
@@ -209,6 +216,7 @@ export function firstSlotQuery(args: {
 
 export type WizardSelection = {
   practitionerId: string;
+  /** Día AR del horario. TP-1: el wizard posiciona ahí la ventana de 5 días (`windowNavAt`). */
   dateISO: string;
   slotISO: string;
   slotLocationId: string | null;
@@ -309,4 +317,148 @@ export function destinationAfterSubmit(r: {
   const id = encodeURIComponent(r.bookingId);
   if (r.next === "reserved") return `/booking/${id}/ok`;
   return r.initPoint ?? `/booking/${id}/pending`;
+}
+
+// ─── Ventana de 5 días hábiles (TP-1) ──────────────────────────────────
+
+/**
+ * Navegación de la ventana del paso «Fecha y hora». `from` es lo que se le pide a `listPublicSlotWindow` (el server
+ * arranca en el primer día hábil desde ahí); `history` es la pila de «‹ Anteriores»: la ventana no se puede calcular
+ * hacia atrás sin otra búsqueda (los días hábiles dependen de franjas, excepciones y bloqueos), así que se vuelve a
+ * arranques ya vistos.
+ */
+export type WindowNav = { from: string; history: string[] };
+
+export function initialWindowNav(today: string): WindowNav {
+  return { from: today, history: [] };
+}
+
+/** Deshabilitado en hoy: no hay turnos antes. */
+export function canGoPrevWindow(nav: WindowNav, today: string): boolean {
+  return nav.from > today;
+}
+
+/**
+ * «Siguientes ›». Se apila el primer día MOSTRADO, no el `from` pedido: si el server salteó una semana completa
+ * (`skippedFrom`), volver a pedir desde el `from` viejo la saltearía otra vez y «Anteriores» quedaría clavado.
+ */
+export function nextWindow(nav: WindowNav, window: PublicSlotWindow): WindowNav {
+  if (!window.nextFrom) return nav;
+  const shown = window.days[0]?.date ?? nav.from;
+  return { from: window.nextFrom, history: [...nav.history, shown] };
+}
+
+/** «‹ Anteriores»: desapila; sin pila (llegó por fecha o por el primer turno), vuelve a hoy. */
+export function prevWindow(nav: WindowNav, today: string): WindowNav {
+  if (!canGoPrevWindow(nav, today)) return nav;
+  if (nav.history.length === 0) return initialWindowNav(today);
+  return { from: nav.history[nav.history.length - 1], history: nav.history.slice(0, -1) };
+}
+
+/**
+ * Ventana posicionada en `date` (piso en hoy) con hoy en el fondo de la pila: «Anteriores» siempre lleva a algo
+ * anterior. La usan «Ir a una fecha», el primer turno de «cualquier profesional» y «Ver más horarios de X».
+ */
+export function windowNavAt(date: string, today: string, earlier: string[] = []): WindowNav {
+  if (date <= today) return initialWindowNav(today);
+  const history = [today, ...earlier.filter((h) => h > today && h < date)];
+  return { from: date, history: history.filter((h, i) => history.indexOf(h) === i) };
+}
+
+/** «Ir a una fecha». Basura (el input se puede tipear) = no se mueve; pasada = hoy. Conserva los arranques previos. */
+export function jumpToDate(nav: WindowNav, date: string, today: string): WindowNav {
+  if (!isDayKey(date)) return nav;
+  return windowNavAt(date, today, nav.history);
+}
+
+/** El primer horario libre de la ventana (los días «Completo» no tienen slots). */
+export function firstAvailable(window: PublicSlotWindow): { date: string; slot: PublicSlot } | null {
+  for (const d of window.days) {
+    const sl = d.slots.find((x) => x.available);
+    if (sl) return { date: d.date, slot: sl };
+  }
+  return null;
+}
+
+/** El horario elegido sigue en la ventana recién cargada (con su sede) o se suelta. */
+export function keepSelectionInWindow(window: PublicSlotWindow, slotISO: string | null): PublicSlot | null {
+  if (!slotISO) return null;
+  for (const d of window.days) {
+    const sl = d.slots.find((x) => x.iso === slotISO && x.available);
+    if (sl) return sl;
+  }
+  return null;
+}
+
+/**
+ * «Buscar más adelante» con la ventana vacía: `nextFrom` si el server lo da; si no, 6 semanas (el horizonte de la
+ * búsqueda) después del `from`. null pasado el tope de 90 días del server: más allá no hay nada que buscar.
+ */
+export function laterFrom(nav: WindowNav, window: PublicSlotWindow, today: string): string | null {
+  const cand = window.nextFrom ?? addDays(nav.from, 42);
+  return cand <= addDays(today, 90) ? cand : null;
+}
+
+// Nombres a mano (no `Intl`): las claves ya son días de calendario AR y así el texto es idéntico en cualquier huso y
+// en cualquier ICU (es-AR abrevia «lun.» con punto en unos runtimes y sin punto en otros).
+const DOW_LONG = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+const DOW_SHORT = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+const MONTHS = [
+  "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre",
+  "diciembre",
+];
+const MONTHS_SHORT = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+
+function parts(dayKey: string) {
+  return { dow: dowOfDayKey(dayKey), day: Number(dayKey.slice(8, 10)), month: Number(dayKey.slice(5, 7)) - 1 };
+}
+const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
+
+/** «jueves 22». */
+export function dayLabel(dayKey: string): string {
+  const p = parts(dayKey);
+  return `${DOW_LONG[p.dow]} ${p.day}`;
+}
+
+/** «lun 19 al vie 23 de octubre»; con cambio de mes, los dos meses; un solo día, «lun 19 de octubre». */
+export function windowRangeLabel(dates: string[]): string {
+  if (dates.length === 0) return "";
+  const a = parts(dates[0]);
+  const b = parts(dates[dates.length - 1]);
+  const head = `${DOW_SHORT[a.dow]} ${a.day}`;
+  if (dates.length === 1) return `${head} de ${MONTHS[a.month]}`;
+  const tail = `${DOW_SHORT[b.dow]} ${b.day} de ${MONTHS[b.month]}`;
+  return a.month === b.month ? `${head} al ${tail}` : `${head} de ${MONTHS[a.month]} al ${tail}`;
+}
+
+/** h3 de cada día: «Lunes 19 de oct · 8 horarios» o «… · Completo». */
+export function dayHeading(day: PublicWindowDay): string {
+  const p = parts(day.date);
+  const base = `${cap(DOW_LONG[p.dow])} ${p.day} de ${MONTHS_SHORT[p.month]}`;
+  const n = day.slots.filter((x) => x.available).length;
+  if (day.status === "full" || n === 0) return `${base} · Completo`;
+  return `${base} · ${n} ${n === 1 ? "horario" : "horarios"}`;
+}
+
+/** Nombre accesible del botón: la hora sola («09:00») no dice de qué día es al recorrer con lector. */
+export function slotAccessibleName(dayKey: string, time: string, locationName?: string | null): string {
+  const p = parts(dayKey);
+  const base = `${cap(DOW_LONG[p.dow])} ${p.day} de ${MONTHS[p.month]} a las ${time}`;
+  return locationName ? `${base}, en ${locationName}` : base;
+}
+
+/**
+ * Aviso arriba de la ventana. Salto del server (los 5 hábiles completos) gana; si no, «Ir a una fecha» a un día que
+ * no es hábil. Navegar con los botones no avisa: ahí no se pidió un día puntual.
+ */
+export function windowNotice(args: { requestedFrom: string; jumped: boolean; window: PublicSlotWindow }): string | null {
+  const first = args.window.days[0]?.date;
+  if (!first) return null;
+  if (args.window.skippedFrom) {
+    return `No había turnos libres desde el ${dayLabel(args.window.skippedFrom)}; te mostramos desde el ${dayLabel(first)}.`;
+  }
+  if (args.jumped && first > args.requestedFrom) {
+    return `El ${dayLabel(args.requestedFrom)} no tiene horarios. Te mostramos los siguientes.`;
+  }
+  return null;
 }
