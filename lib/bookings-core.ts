@@ -57,10 +57,19 @@ import { loadAvailabilityInputs } from "@/lib/availability-loader";
 import { lockTenantLocationsShared } from "@/lib/location-lock";
 import {
   capacityKeysForWindow,
+  hourKeyForStart,
+  lockAgendaKeysMany,
   lockCapacityAndRoomsMany,
-  lockCapacityWindow,
   roomKeysForWindow,
 } from "@/lib/booking-cap-lock";
+import {
+  arIntervalKeyOf,
+  arIntervalLabels,
+  arIntervalWindow,
+  intervalCapState,
+  intervalStartsUsed,
+  type IntervalCap,
+} from "@/lib/availability/interval-cap";
 import { countRoomOverlapsInTx, lockActiveRoomInTx } from "@/lib/booking-rooms-internal";
 import { patientAccessFor } from "@/lib/visibility";
 import { ForbiddenError, type Actor } from "@/lib/session";
@@ -302,13 +311,53 @@ export async function countCapacityOverlaps(
     excludeKey?: string | null;
   }
 ): Promise<number> {
+  // T3 (C-AS3): envoltorio de `countAgendaOccupancy` SIN tope, que corre exactamente la query de siempre (mismo
+  // where, mismo select): el contrato de AUDIT §5 («preservar») no cambia.
+  return (await countAgendaOccupancy(tx, o)).overlap;
+}
+
+/**
+ * Cupo del servicio + tope por intervalo (T3, C-AS3) en UNA sentencia: los write-paths tienen techo estricto de
+ * statements (`f.createBooking` 35, lote 186 = ni una sentencia más por fecha), así que el conteo del tope no
+ * puede ser una query aparte.
+ *
+ *   - Sin `cap` (null/ausente): la query de `countCapacityOverlaps` byte a byte (mismo where con `serviceId`, misma
+ *     ventana de 240' hacia atrás, mismo select) e `intervalStarts = 0`.
+ *   - Con `cap`: el where PIERDE `serviceId` (el tope cruza servicios) y la ventana llega hasta el fin del intervalo
+ *     AR del inicio (un turno de 10:00 de 5' con intervalo de 60 tiene que ver el de las 10:40). `overlap` se
+ *     filtra en JS con el predicado LITERAL de antes más `serviceId` (paridad: test de `overlap ===
+ *     countCapacityOverlaps`), e `intervalStarts` = `intervalStartsUsed` (el mismo puro que el motor y el turnero)
+ *     sobre las mismas filas. La cota de abajo (inicio − 240') ya contiene al inicio del intervalo (≤ 59' antes).
+ *
+ * `excludeId` / `excludeKey` valen para los dos conteos: el turno editado (o el reintento idempotente) no se cuenta
+ * contra sí mismo ni en el cupo ni en el tope.
+ */
+export async function countAgendaOccupancy(
+  tx: Tx,
+  o: {
+    tenantId: string;
+    practitionerId: string;
+    serviceId: string;
+    start: Date;
+    end: Date;
+    now: Date;
+    excludeId?: string;
+    excludeKey?: string | null;
+    cap?: IntervalCap | null;
+  }
+): Promise<{ overlap: number; intervalStarts: number }> {
+  const cap = o.cap ?? null;
+  const intervalEnd = cap ? arIntervalWindow(o.start, cap.intervalMin).end : null;
   const candidates = await tx.booking.findMany({
     where: {
       tenantId: o.tenantId,
       practitionerId: o.practitionerId,
-      serviceId: o.serviceId,
+      ...(cap ? {} : { serviceId: o.serviceId }),
       status: { notIn: ["CANCELLED"] },
-      scheduledFor: { lt: o.end, gte: new Date(o.start.getTime() - 240 * 60_000) },
+      scheduledFor: {
+        lt: intervalEnd && intervalEnd > o.end ? intervalEnd : o.end,
+        gte: new Date(o.start.getTime() - 240 * 60_000),
+      },
       ...(o.excludeId ? { id: { not: o.excludeId } } : {}),
       // Un reintento idempotente (misma key) no choca consigo mismo.
       ...(o.excludeKey ? { idempotencyKey: { not: o.excludeKey } } : {}),
@@ -321,14 +370,42 @@ export async function countCapacityOverlaps(
       createdAt: true,
       patientId: true,
       idempotencyKey: true,
+      ...(cap ? { serviceId: true } : {}),
     },
   });
-  return candidates.filter(
+  const overlap = candidates.filter(
     (c) =>
+      (!cap || (c as { serviceId?: string }).serviceId === o.serviceId) &&
       isHoldingCapacity(c, o.now) &&
       c.scheduledFor < o.end &&
       new Date(c.scheduledFor.getTime() + c.durationMin * 60_000) > o.start
   ).length;
+  const intervalStarts = cap
+    ? intervalStartsUsed(
+        candidates.map((c) => ({ ...c, practitionerId: o.practitionerId })),
+        { practitionerId: o.practitionerId, when: o.start, intervalMin: cap.intervalMin, now: o.now }
+      )
+    : 0;
+  return { overlap, intervalStarts };
+}
+
+/**
+ * Veredicto del tope (T3, C-AS3) para un turno que EMPIEZA en `when`, con `used` = los que ya empiezan en su
+ * intervalo (`countAgendaOccupancy(...).intervalStarts`, sin contarse a sí mismo). null = sin tope. `fromTime` /
+ * `toTime` = "HH:MM" de pared AR del intervalo (copy «entre las 10:00 y las 10:15»; el cliente no recalcula husos).
+ */
+export type IntervalCapVerdict = {
+  state: "free" | "notice" | "full";
+  used: number;
+  cap: IntervalCap;
+  fromTime: string;
+  toTime: string;
+};
+
+export function intervalCapVerdict(used: number, cap: IntervalCap | null, when: Date): IntervalCapVerdict | null {
+  if (!cap) return null;
+  const { from, to } = arIntervalLabels(when, cap.intervalMin);
+  return { state: intervalCapState(used, cap), used, cap, fromTime: from, toTime: to };
 }
 
 /**
@@ -665,6 +742,9 @@ export async function suggestNextFreeSlot(
     bookings: input.bookings,
     now: new Date(),
     excludeBookingId: o.excludeBookingId ?? null,
+    // T3 (C-AS3): el «próximo libre» de cualquier aviso respeta el tope por intervalo del profesional (el loader
+    // ya lo trae, 0 sentencias): sin esto, el aviso de tope sugería otro horario del MISMO intervalo lleno.
+    intervalCap: input.intervalCaps[o.practitionerId] ?? null,
   });
 }
 
@@ -1235,6 +1315,10 @@ export type BookingUpdateTxOutcome =
   | ({ kind: "out-of-hours" } & BookingUpdatePrompt)
   | { kind: "patient-overlap"; existingISO: string }
   | ({ kind: "conflict" } & BookingUpdatePrompt)
+  // T3 (C-AS3): el intervalo AR del horario NUEVO ya tiene `used` turnos del profesional y el tope es
+  // `intervalCap`. Solo si el turno cambia de intervalo o se reactiva (cambiar la duración no pregunta) y sin
+  // `capLocksHeld` (Planes avisa sin bloquear). Forzable con `allowIntervalCap` (queda sobreturno).
+  | ({ kind: "interval-cap"; used: number; intervalCap: IntervalCap; fromTime: string; toTime: string } & BookingUpdatePrompt)
   | { kind: "bad-location" }
   // SR (contrato literal de SR-C): la sala final está llena (profesionales
   // DISTINTOS ≥ capacity, SR-D1) o bloqueada (§17.5, `blocked`). Forzable con
@@ -1267,6 +1351,11 @@ export type BookingUpdateTxOutcome =
        * cual (se recalcula, se valida y se limpia).
        */
       roomId?: string | null;
+      /**
+       * T3 (C-AS3): el turno quedó como 2.º+ de su intervalo NUEVO, bajo el tope (aviso informativo, sin
+       * confirmar). Solo cuando se chequeó el tope (cambio de intervalo o reactivación, sin `capLocksHeld`).
+       */
+      intervalCapNotice?: { practitionerName: string; used: number; time: string };
     };
 
 /**
@@ -1280,7 +1369,7 @@ export type BookingUpdateTxOutcome =
  *     la MISMA sentencia que el cupo (`lockCapacityAndRoomsMany`); la por
  *     defecto sale de las franjas, que se leen después del lock de cupo, y va
  *     en una segunda sentencia, solo si hay sala;
- *   - sin sala: `lockCapacityWindow` como siempre, 0 statements nuevos (techo
+ *   - sin sala: cupo (+ hora, T3) en una sentencia, 0 statements nuevos (techo
  *     estricto de `updateBooking`); con sala, +2 (clave de sala y conteo; la
  *     validación de la sala reemplaza la de la sede por defecto);
  *   - `room-busy` sale último de los avisos (FORCE_PROMPT_ORDER) y se fuerza
@@ -1305,10 +1394,20 @@ export type BookingUpdateTxOutcome =
  *     matcheó 0 filas y Prisma lo informa), así que la tx sigue sana y no se
  *     escribió nada; un caller multi-fila decide si sigue o hace rollback.
  *
+ * Tope por intervalo (T3, C-AS3, enmienda C2 (1c): paciente → cupo → HORA → sala → sedes → filas):
+ *   - mover de horario o reactivar suma la clave de hora del inicio nuevo a la MISMA sentencia del cupo;
+ *   - el conteo va plegado en la query del cupo (`countAgendaOccupancy`, 0 sentencias nuevas);
+ *   - pregunta (`interval-cap`, forzable con `allowIntervalCap` = sobreturno) solo si cambia el intervalo AR o se
+ *     reactiva; cambiar la duración no pregunta. 2.º+ turno bajo el tope → `ok.intervalCapNotice` (informativo).
+ *
  * `opts.capLocksHeld`: el caller ya tomó los locks de cupo de los días del
  * horario NUEVO (C2: "este y los siguientes" los toma todos ordenados antes
  * de llamar al core por fila); acá no se vuelven a pedir. Sin el flag, se
- * toman como siempre. Nunca toma `lockPlanPatient` (C2).
+ * toman como siempre. Nunca toma `lockPlanPatient` (C2). T3: `capLocksHeld`
+ * = «el caller ya tomó cupo Y hora»; los callers de Planes (superconjuntos de
+ * `lib/plans-move-internal.ts`) NO toman la hora porque en Planes el tope es
+ * solo aviso (`overIntervalCap`), así que con el flag el core tampoco chequea
+ * el tope (ni pregunta, ni marca sobreturno por tope).
  * `opts.now`: el "ahora" de la clasificación y del cupo (una reserva pública
  * impaga vencida deja de contar); el wrapper lo fija antes de abrir la tx.
  */
@@ -1488,6 +1587,14 @@ export async function applyBookingUpdateInTx(
   let newLocationId: string | null | undefined = undefined;
   let isOverbooked: boolean | undefined = undefined;
   let cap: number | null = before.service.maxConcurrent;
+  /**
+   * T3 (C-AS3): tope por intervalo efectivo del profesional (del loader, 0 sentencias). null = sin tope, o
+   * `capLocksHeld` (Planes, «este y los siguientes»): ahí el tope es SOLO aviso (`overIntervalCap` del motor de
+   * planes, precedente SR-D3) y el caller no tomó la clave de hora, así que el core no lo chequea.
+   */
+  let icap: IntervalCap | null = null;
+  /** T3: aviso informativo del 2.º+ turno del intervalo nuevo (el nombre se lee recién después del UPDATE). */
+  let intervalNotice: { used: number; time: string } | null = null;
 
   if (finalStatus !== "CANCELLED") {
     const pat =
@@ -1526,16 +1633,25 @@ export async function applyBookingUpdateInTx(
           start: newWhen,
           end,
         };
+        // T3 (C-AS3, enmienda C2 (1c)): la HORA AR del inicio nuevo, en la MISMA sentencia que el cupo (cupo →
+        // hora → sala), cuando el turno puede sumar un inicio a un intervalo: se mueve de horario o se reactiva.
+        // Cambiar solo la duración o la sede no suma inicios (el tope cuenta inicios, no solapes). La clave no
+        // depende de la config del tope (la hora contiene a cualquier intervalo de 15/30/60), así que se toma
+        // aunque el profesional no tenga tope: un tope prendido en el medio no deja una ventana sin lock.
+        const hour =
+          slotChanged || reactivating
+            ? [hourKeyForStart({ tenantId: actor.tenantId, practitionerId: before.practitionerId, start: newWhen })]
+            : [];
         if (roomCheckable && !roomDefaulted && targetRoomId) {
           // SR, enmienda C2 (1b): la sala ya se conoce (elegida o la que tenía)
-          // → cupo y sala en UNA sentencia (cupo → sala → sedes → filas). Misma
-          // cantidad de statements que `lockCapacityWindow`.
-          await lockCapacityAndRoomsMany(tx, capacityKeysForWindow(capWindow), roomKeys(targetRoomId));
+          // → cupo, hora y sala en UNA sentencia (cupo → hora → sala → sedes →
+          // filas). Misma cantidad de statements que el lock de cupo solo.
+          await lockAgendaKeysMany(tx, { cap: capacityKeysForWindow(capWindow), hour, rooms: roomKeys(targetRoomId) });
           roomKeyHeld = true;
         } else {
           // Sin sala (o la por defecto, que sale de las franjas que se cargan
-          // DESPUÉS de este lock): lo de siempre, 0 statements nuevos.
-          await lockCapacityWindow(tx, capWindow);
+          // DESPUÉS de este lock): cupo + hora, 0 statements nuevos.
+          await lockAgendaKeysMany(tx, { cap: capacityKeysForWindow(capWindow), hour });
         }
       }
       const rule = await practitionerServiceRule(tx, actor.tenantId, before.practitionerId, before.service);
@@ -1555,6 +1671,9 @@ export async function applyBookingUpdateInTx(
       if (!avail.templates.some((t) => t.practitionerId === before.practitionerId)) {
         return { kind: "practitioner-not-bookable" };
       }
+      // T3: la config del tope se lee DESPUÉS del lock (en la carga que ya corría): un cambio de config commiteado
+      // en el medio ya se ve. Con `capLocksHeld` no se chequea (ver `icap`).
+      if (!opts.capLocksHeld) icap = avail.intervalCaps[before.practitionerId] ?? null;
       const cls = classifyForWrite(avail, {
         when: newWhen,
         durationMin: newDuration,
@@ -1606,11 +1725,13 @@ export async function applyBookingUpdateInTx(
       return { kind: "patient-overlap", existingISO: pat.overlapISO };
     }
     let capacityReached = false;
+    let intervalFull = false;
     if (windowChanged) {
       // B3.1 (TOCTOU): el lock de cupo de los días del horario NUEVO ya se
       // tomó arriba (antes de clasificar); el conteo y el update van en este
-      // mismo tx.
-      const overlapCount = await countCapacityOverlaps(tx, {
+      // mismo tx. T3: con tope, la MISMA sentencia cuenta también los inicios
+      // del intervalo (`countAgendaOccupancy`); sin tope es la query de siempre.
+      const occ = await countAgendaOccupancy(tx, {
         tenantId: actor.tenantId,
         practitionerId: before.practitionerId,
         serviceId: before.serviceId,
@@ -1618,18 +1739,46 @@ export async function applyBookingUpdateInTx(
         end,
         now,
         excludeId: id,
+        cap: icap,
       });
-      capacityReached = overlapBlocks(overlapCount, cap);
+      capacityReached = overlapBlocks(occ.overlap, cap);
       if (capacityReached && !force.allowOverbooking) {
         return { kind: "conflict", before, newWhen, newDuration, cap, finalPatientId };
       }
+      // T3 (C-AS3): orden de los avisos = cupo → TOPE → (paciente, ya arriba en la edición) → sala. Se PREGUNTA
+      // solo si el turno cambia de intervalo AR o se reactiva: alargarlo o moverlo dentro del mismo intervalo no
+      // le suma un inicio a nadie. `intervalFull` igual se calcula siempre que hay conteo, para que `isOverbooked`
+      // no se pierda: un sobreturno por tope al que se le cambia la duración sigue pasado del tope (sus
+      // compañeros de intervalo, sin contarlo a él, ya llenan el tope).
+      const v = intervalCapVerdict(occ.intervalStarts, icap, newWhen);
+      if (v) {
+        intervalFull = v.state === "full";
+        const intervalMoved =
+          reactivating ||
+          (slotChanged && arIntervalKeyOf(newWhen, v.cap.intervalMin) !== arIntervalKeyOf(before.scheduledFor, v.cap.intervalMin));
+        if (intervalMoved && intervalFull && !force.allowIntervalCap) {
+          return {
+            kind: "interval-cap",
+            used: v.used,
+            intervalCap: v.cap,
+            fromTime: v.fromTime,
+            toTime: v.toTime,
+            before,
+            newWhen,
+            newDuration,
+            cap,
+            finalPatientId,
+          };
+        }
+        if (intervalMoved && v.state === "notice") intervalNotice = { used: v.used, time: v.fromTime };
+      }
     }
-    // B3.1: `isOverbooked` refleja el horario NUEVO: forzado (cupo o
+    // B3.1: `isOverbooked` refleja el horario NUEVO: forzado (cupo, tope o
     // bloqueo) → true; movido a un hueco libre → false. Sin cambio de
     // horario no se toca (salvo que un cambio de sede lo deje sobre un
     // bloqueo forzado). El prefijo "[SOBRETURNO]" de notes no se toca acá
     // (como antes: el update nunca lo escribió).
-    if (windowChanged) isOverbooked = capacityReached || blocked;
+    if (windowChanged) isOverbooked = capacityReached || blocked || intervalFull;
     else if (blocked) isOverbooked = true;
   }
 
@@ -1837,6 +1986,11 @@ export async function applyBookingUpdateInTx(
       kind: "booking",
     },
   ];
+  // T3: el nombre del aviso informativo, recién con el UPDATE hecho y solo en ese camino (+1 sentencia SOLO cuando
+  // hay aviso; sin tope o con el intervalo libre, la edición cuesta lo de siempre).
+  const intervalCapNotice = intervalNotice
+    ? { practitionerName: await practitionerLabel(tx, actor.tenantId, before.practitionerId), ...intervalNotice }
+    : undefined;
   return {
     kind: "ok",
     before,
@@ -1845,5 +1999,6 @@ export async function applyBookingUpdateInTx(
     refs,
     plan,
     ...(roomWrite ? { roomId: targetRoomId } : {}),
+    ...(intervalCapNotice ? { intervalCapNotice } : {}),
   };
 }

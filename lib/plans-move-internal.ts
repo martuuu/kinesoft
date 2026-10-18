@@ -21,6 +21,17 @@ import "server-only";
  *       vuelve a pedir las suyas dentro de `reclassifyOrThrowStaleInTx`, pero
  *       los advisory locks son reentrantes en la misma sesión: no espera nada
  *       y no queda ningún cupo tomado DESPUÉS de una fila.
+ *       T3 (C-AS3, enmienda C2 (1c): cupo → HORA → sala): el superconjunto NO
+ *       suma la clave de hora del profesional (`kinesoft:phour:…`) a propósito.
+ *       En Planes el tope «N turnos cada X min» es SOLO aviso
+ *       (`overIntervalCap` del motor, sin bloqueo; precedente SR-D3), y el
+ *       core corre con `capLocksHeld: true` («el caller ya tomó cupo y hora»),
+ *       que con este caller significa «no chequees el tope»: ni pregunta ni
+ *       marca sobreturno por tope. Sin la hora no hay ciclo posible con un alta
+ *       que espera la hora: el alta ya tiene su cupo y el plan, si choca, espera
+ *       ESE cupo sin tener ninguna hora (`locks-hour-writes.test.ts`). Si algún
+ *       día Planes tuviera que BLOQUEAR por tope, las horas van acá, en la
+ *       misma `lockAgendaKeysMany` que el cupo y después de él.
  *   (2) `lockTenantLocationsShared` una vez (el motor y el core lo re-piden
  *       compartido: reentrante).
  *   (3) Booking `FOR UPDATE` id asc de TODOS los turnos que se tocan (los de la

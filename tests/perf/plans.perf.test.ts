@@ -548,6 +548,9 @@ describe.skipIf(!RUN)("perf ES4 S26s — Planes, Seguimiento, agenda con planes 
 
   // ── updateBooking (AUDIT ev2-perf-update-booking) ───────────────────────────
 
+  /** Fila de `f.updateBooking.reschedule` (la base del escenario con tope, T3d-2w). */
+  let rescheduleBase: { statements: number; transactions: number } | null = null;
+
   /** Turno suelto nuevo (insert del owner) para que cada corrida mueva uno distinto. */
   const looseBooking = async (k: number, patientId = nextFree()) =>
     db.booking.create({
@@ -578,6 +581,45 @@ describe.skipIf(!RUN)("perf ES4 S26s — Planes, Seguimiento, agenda con planes 
     );
     expect(r.result.ok).toBe(true);
     expect(r.statements).toBeLessThanOrEqual(BUDGET.updateBookingReschedule);
+    rescheduleBase = r;
+  });
+
+  it("[AS-2w] updateBooking — reprogramar con tope por intervalo: mismas sentencias y tx que f.updateBooking.reschedule", async () => {
+    // T3d-2w (C-AS3): la clave de hora va en la MISMA sentencia que el cupo y el conteo del tope plegado en la query
+    // de capacidad (`countAgendaOccupancy`): reprogramar con el tope prendido cuesta lo mismo (techo ≤ 27). Camino
+    // dominante: el intervalo destino vacío (el aviso del 2.º turno suma solo la lectura del nombre).
+    expect(rescheduleBase).not.toBeNull();
+    const prac = T.gymPractitionerIds[1];
+    await db.practitioner.update({
+      where: { id: prac },
+      data: { bookingCapMode: "CUSTOM", bookingCapCount: 2, bookingCapIntervalMin: 60 },
+    });
+    try {
+      const r = await bench(
+        "f.updateBooking.reschedule.intervalCap",
+        // Días que no usa ningún otro escenario ni la fixture (150 planes × 20 sesiones semanales ≈ 20 semanas; los
+        // de arriba van de +8 a +13): a ~10 meses, el destino de las 11:00 está vacío.
+        async (k) => ({ b: await looseBooking(300 + k), k }),
+        ({ b, k }) =>
+          updateBooking({
+            id: b.id,
+            scheduledFor: new Date(localToARIso(`${addDays(monday, 308 + k)}T11:00:00`)).toISOString(),
+            expectedUpdatedAt: b.updatedAt.toISOString(),
+          }),
+        { budget: BUDGET.updateBookingReschedule, outcome: okOf as never, note: "tope 2 cada 60' prendido, destino vacío" },
+      );
+      expect(r.result).toMatchObject({ ok: true });
+      expect((r.result as { intervalCapNotice?: unknown }).intervalCapNotice).toBeUndefined();
+      expect({ statements: r.statements, transactions: r.transactions }).toEqual({
+        statements: rescheduleBase!.statements,
+        transactions: rescheduleBase!.transactions,
+      });
+    } finally {
+      await db.practitioner.update({
+        where: { id: prac },
+        data: { bookingCapMode: "INHERIT", bookingCapCount: null, bookingCapIntervalMin: null },
+      });
+    }
   });
 
   it("updateBooking — reprogramar un turno de plan (sincroniza la sesión): techo medido", async () => {

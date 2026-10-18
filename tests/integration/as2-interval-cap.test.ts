@@ -1,7 +1,8 @@
 /**
  * [AS-2w] / [AS-2l] T3 (C-AS3, decisión 6 del 19-oct) — tope «N turnos cada X min» en los write-paths y el turnero,
- * contra Postgres real en los dos roles. Arranca en `it.fails` (T3b-2k publica los contratos; la implementación es de
- * T3d-2w en `lib/bookings.ts` / `lib/bookings-core.ts` y de T3c-2l en el turnero): cada sesión da vuelta los suyos.
+ * contra Postgres real en los dos roles. Arrancó en `it.fails` (T3b-2k publicó los contratos); T3c-2l dio vuelta el
+ * del turnero y T3d-2w los de `lib/bookings.ts` / `lib/bookings-core.ts`, y sumó la edición, la reactivación,
+ * `rescheduleSession` y la paridad `countAgendaOccupancy` ↔ `countCapacityOverlaps`.
  *
  * Contratos que estos tests fijan (C-AS3 literal, `wip-20/brief-t3.md`):
  *   - Regla: cuentan los turnos que retienen cupo (`isHoldingCapacity`, §5.18), de CUALQUIER servicio, del
@@ -16,6 +17,8 @@
  *     cupo → hora → sala): dos altas concurrentes de servicios distintos con tope 1 → entra una.
  *   - Turnero: duro (el horario no se ofrece). Lote: la fecha sale `intervalCapped: true` y se OMITE sin
  *     `allowIntervalCap`; con el flag entra como sobreturno.
+ *   - Edición (T3d-2w): pregunta solo si el turno cambia de intervalo AR o se reactiva; cambiar la duración o
+ *     moverlo dentro del mismo intervalo no pregunta (y un sobreturno por tope sigue `isOverbooked`).
  *
  * Símbolos reales; se mockean la sesión, `next/cache` y el rate-limit del turnero (red). Fixtures por owner. Fechas
  * de nov 2027 (lun = 2027-11-01) y una fecha futura cercana para el turnero (anticipación/horizonte).
@@ -29,7 +32,12 @@ vi.mock("@/lib/rate-limit", async (importOriginal) => {
 
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
-import { createBooking, createBookingsBatch } from "@/lib/bookings";
+import { createBooking, createBookingsBatch, setBookingStatus, updateBooking } from "@/lib/bookings";
+import { rescheduleSession } from "@/lib/sessions";
+import { countAgendaOccupancy, countCapacityOverlaps } from "@/lib/bookings-core";
+import { intervalStartsUsed, type IntervalCap } from "@/lib/availability/interval-cap";
+import { runWithRls } from "@/lib/rls";
+import { createPlan } from "@/tests/helpers/plan-factory";
 import { listPublicSlots } from "@/lib/public-booking";
 import { hourKeyForStart, hourLockKey } from "@/lib/booking-cap-lock";
 import type { BookingIntervalCapNotice, BookingIntervalCapPrompt } from "@/lib/bookings-types";
@@ -150,7 +158,7 @@ describe.skipIf(!RUN)("[AS-2w] tope de turnos por intervalo (C-AS3)", () => {
     return { r, row, patientId, idempotencyKey };
   }
 
-  it.fails("[AS-2w] tope 2 cada 15': el 2.º turno del intervalo entra con aviso informativo (sin confirmar)", async () => {
+  it("[AS-2w] tope 2 cada 15': el 2.º turno del intervalo entra con aviso informativo (sin confirmar)", async () => {
     await mk({ prac: T.practitionerId, when: ar("2027-11-02T10:00") });
     // Otro servicio, 10:05: mismo intervalo [10:00, 10:15).
     const a = await alta({ prac: T.practitionerId, when: ar("2027-11-02T10:05"), svc: svcB });
@@ -163,7 +171,7 @@ describe.skipIf(!RUN)("[AS-2w] tope de turnos por intervalo (C-AS3)", () => {
     expect(b.r.intervalCapNotice ?? null).toBeNull();
   });
 
-  it.fails("[AS-2w] tope 2 cada 15': el 3.º pide sobreturno sin escribir; forzado queda isOverbooked", async () => {
+  it("[AS-2w] tope 2 cada 15': el 3.º pide sobreturno sin escribir; forzado queda isOverbooked", async () => {
     await mk({ prac: T.practitionerId, when: ar("2027-11-03T10:00") });
     await mk({ prac: T.practitionerId, when: ar("2027-11-03T10:10"), svc: svcB, dur: 30 });
     const patientId = await addPatient(db, T);
@@ -178,7 +186,7 @@ describe.skipIf(!RUN)("[AS-2w] tope de turnos por intervalo (C-AS3)", () => {
     expect(forced.row).toMatchObject({ isOverbooked: true });
   });
 
-  it.fails("[AS-2w] concurrencia con tope 1 cada 60': dos altas de servicios distintos en la misma hora → entra una", async () => {
+  it("[AS-2w] concurrencia con tope 1 cada 60': dos altas de servicios distintos en la misma hora → entra una", async () => {
     const day = "2027-11-04";
     const hk = hourLockKey(hourKeyForStart({ tenantId: T.tenantId, practitionerId: PC.practitionerId, start: ar(`${day}T11:00`) }));
     const holder = ownerClient();
@@ -233,7 +241,7 @@ describe.skipIf(!RUN)("[AS-2w] tope de turnos por intervalo (C-AS3)", () => {
     expect(slots.filter((s) => s.available && hourOf(s.iso) === 10)).toEqual([]);
   });
 
-  it.fails("[AS-2w] lote: la fecha que pasa el tope sale marcada y se omite; con allowIntervalCap entra como sobreturno", async () => {
+  it("[AS-2w] lote: la fecha que pasa el tope sale marcada y se omite; con allowIntervalCap entra como sobreturno", async () => {
     // PB hereda del consultorio: 2 cada 15'. El lun 08/11 a las 10 ya tiene 2; el 15/11 está libre.
     await mk({ prac: PB.practitionerId, when: ar("2027-11-08T10:00") });
     await mk({ prac: PB.practitionerId, when: ar("2027-11-08T10:05"), svc: svcB, dur: 30 });
@@ -272,5 +280,171 @@ describe.skipIf(!RUN)("[AS-2w] tope de turnos por intervalo (C-AS3)", () => {
       [ar("2027-11-08T10:00").toISOString(), true],
       [ar("2027-11-15T10:00").toISOString(), false],
     ]);
+  });
+  // ── Edición (T3d-2w) ───────────────────────────────────────────────────────
+
+  it("[AS-2w] edición: mover a otro intervalo lleno pide sobreturno; forzado queda isOverbooked", async () => {
+    await mk({ prac: T.practitionerId, when: ar("2027-11-05T10:00") });
+    await mk({ prac: T.practitionerId, when: ar("2027-11-05T10:05"), svc: svcB, dur: 30 });
+    const x = await mk({ prac: T.practitionerId, when: ar("2027-11-05T11:00") });
+
+    const r = await updateBooking({ id: x.id, scheduledFor: ar("2027-11-05T10:07").toISOString(), expectedUpdatedAt: x.updatedAt.toISOString() });
+    expect(r).toMatchObject({ ok: false, intervalCap: { used: 2, cap: 2, fromTime: "10:00", toTime: "10:15" } });
+    expect(r.intervalCap?.practitionerName).toEqual(expect.any(String));
+    // Sin escribir.
+    expect(await db.booking.findUniqueOrThrow({ where: { id: x.id } })).toMatchObject({ scheduledFor: ar("2027-11-05T11:00"), isOverbooked: false });
+
+    const forced = await updateBooking({
+      id: x.id,
+      scheduledFor: ar("2027-11-05T10:07").toISOString(),
+      expectedUpdatedAt: x.updatedAt.toISOString(),
+      allowIntervalCap: true,
+    });
+    expect(forced).toMatchObject({ ok: true });
+    const moved = await db.booking.findUniqueOrThrow({ where: { id: x.id } });
+    expect(moved).toMatchObject({ scheduledFor: ar("2027-11-05T10:07"), isOverbooked: true });
+
+    // Cambiar la duración NO pregunta, y el sobreturno por tope no se pierde.
+    const dur = await updateBooking({ id: x.id, durationMin: 30, expectedUpdatedAt: moved.updatedAt.toISOString() });
+    expect(dur).toMatchObject({ ok: true });
+    expect(dur.intervalCap ?? null).toBeNull();
+    const after = await db.booking.findUniqueOrThrow({ where: { id: x.id } });
+    expect(after).toMatchObject({ durationMin: 30, isOverbooked: true });
+
+    // Moverlo dentro del MISMO intervalo tampoco pregunta (no le suma un inicio a nadie).
+    const same = await updateBooking({ id: x.id, scheduledFor: ar("2027-11-05T10:12").toISOString(), expectedUpdatedAt: after.updatedAt.toISOString() });
+    expect(same).toMatchObject({ ok: true });
+    expect(same.intervalCap ?? null).toBeNull();
+  });
+
+  it("[AS-2w] edición: mover al 2.º lugar de un intervalo devuelve el aviso informativo", async () => {
+    await mk({ prac: T.practitionerId, when: ar("2027-11-05T15:30") });
+    const y = await mk({ prac: T.practitionerId, when: ar("2027-11-05T17:00") });
+    const r = await updateBooking({ id: y.id, scheduledFor: ar("2027-11-05T15:35").toISOString(), expectedUpdatedAt: y.updatedAt.toISOString() });
+    expect(r).toMatchObject({ ok: true });
+    expect(r.intervalCapNotice).toEqual({ practitionerName: expect.any(String), used: 1, time: "15:30" });
+    expect(await db.booking.findUniqueOrThrow({ where: { id: y.id } })).toMatchObject({ isOverbooked: false });
+  });
+
+  it("[AS-2w] reactivar un cancelado en un intervalo lleno pide sobreturno (setBookingStatus)", async () => {
+    await mk({ prac: T.practitionerId, when: ar("2027-11-09T10:00") });
+    await mk({ prac: T.practitionerId, when: ar("2027-11-09T10:05"), svc: svcB, dur: 30 });
+    const z = await mk({ prac: T.practitionerId, when: ar("2027-11-09T10:10") });
+    const cancelled = await db.booking.update({ where: { id: z.id }, data: { status: "CANCELLED" } });
+
+    const r = await setBookingStatus(z.id, "CONFIRMED", cancelled.updatedAt.toISOString());
+    expect(r).toMatchObject({ ok: false, intervalCap: { used: 2, cap: 2, fromTime: "10:00", toTime: "10:15" } });
+    expect(await db.booking.findUniqueOrThrow({ where: { id: z.id } })).toMatchObject({ status: "CANCELLED" });
+
+    const forced = await setBookingStatus(z.id, "CONFIRMED", cancelled.updatedAt.toISOString(), { allowIntervalCap: true });
+    expect(forced).toMatchObject({ ok: true });
+    expect(await db.booking.findUniqueOrThrow({ where: { id: z.id } })).toMatchObject({ status: "CONFIRMED", isOverbooked: true });
+  });
+
+  it("[AS-2w] rescheduleSession: mover el turno de la sesión a un intervalo lleno se rechaza; con allowIntervalCap entra como sobreturno", async () => {
+    await mk({ prac: T.practitionerId, when: ar("2027-11-10T10:00") });
+    await mk({ prac: T.practitionerId, when: ar("2027-11-10T10:05"), svc: svcB, dur: 30 });
+    const p = await createPlan(db, T, { sessions: 1, bookings: 1 });
+    const [b] = p.bookingIds;
+    const at = (await db.booking.findUniqueOrThrow({ where: { id: b } })).scheduledFor;
+    await db.session.update({ where: { id: p.sessionIds[0] }, data: { scheduledFor: at } });
+    const to = ar("2027-11-10T10:07").toISOString();
+    const FORCE = { allowOutOfHours: true, allowBlocked: true, allowPatientOverlap: true };
+
+    const r = await rescheduleSession({ sessionId: p.sessionIds[0], scheduledFor: to, force: FORCE });
+    expect(r).toMatchObject({ ok: false, error: "El profesional ya tiene 2 turnos entre las 10:00 y las 10:15 (tope: 2)." });
+    expect(+(await db.booking.findUniqueOrThrow({ where: { id: b } })).scheduledFor).toBe(+at);
+
+    const ok = await rescheduleSession({ sessionId: p.sessionIds[0], scheduledFor: to, force: { ...FORCE, allowIntervalCap: true } });
+    expect(ok).toMatchObject({ ok: true });
+    expect(await db.booking.findUniqueOrThrow({ where: { id: b } })).toMatchObject({ scheduledFor: new Date(to), isOverbooked: true });
+  });
+
+  // ── Paridad del conteo plegado (C-AS3: «Test de paridad overlap === countCapacityOverlaps») ─────────────────
+
+  it("[AS-2w] countAgendaOccupancy: overlap === countCapacityOverlaps con y sin tope; intervalStarts = intervalStartsUsed", async () => {
+    const PX = await addPractitioner(db, T, "PRACTITIONER");
+    const day = "2027-11-11";
+    const now = new Date();
+    // Cualquier servicio, solapes largos que vienen de antes (≤ 240'), un cancelado, una reserva pública impaga
+    // vencida (no retiene cupo) y una que cruza la medianoche AR.
+    const fixtures: { when: string; svc: string; dur: number; status?: "CANCELLED" | "PENDING"; pub?: boolean }[] = [
+      { when: `${day}T07:30`, svc: svcA, dur: 180 },
+      { when: `${day}T10:00`, svc: svcA, dur: 45 },
+      { when: `${day}T10:05`, svc: svcB, dur: 30 },
+      { when: `${day}T10:20`, svc: svcA, dur: 45, status: "CANCELLED" },
+      { when: `${day}T10:25`, svc: svcB, dur: 30, status: "PENDING", pub: true },
+      { when: `${day}T10:40`, svc: svcA, dur: 45 },
+      { when: `${day}T10:59`, svc: svcB, dur: 30 },
+      { when: `${day}T23:30`, svc: svcA, dur: 60 },
+    ];
+    const ids: string[] = [];
+    for (const f of fixtures) {
+      const patientId = await addPatient(db, T);
+      const row = await db.booking.create({
+        data: {
+          tenantId: T.tenantId,
+          practitionerId: PX.practitionerId,
+          serviceId: f.svc,
+          patientId,
+          scheduledFor: ar(f.when),
+          durationMin: f.dur,
+          status: f.status ?? "CONFIRMED",
+          paymentStatus: "UNPAID",
+          idempotencyKey: f.pub ? `pub:${randomUUID()}:x` : randomUUID(),
+          ...(f.pub ? { createdAt: new Date(now.getTime() - 3 * 60 * 60_000) } : {}),
+        },
+      });
+      ids.push(row.id);
+    }
+    const all = await db.booking.findMany({
+      where: { tenantId: T.tenantId, practitionerId: PX.practitionerId, status: { not: "CANCELLED" } },
+    });
+    const caps: (IntervalCap | null)[] = [null, { count: 2, intervalMin: 15 }, { count: 1, intervalMin: 30 }, { count: 3, intervalMin: 60 }];
+    const probes = [`${day}T10:00`, `${day}T10:10`, `${day}T10:30`, `${day}T10:45`, `${day}T09:00`, `${day}T23:45`];
+    const durs = [5, 45, 120];
+    let checked = 0;
+    for (const cap of caps)
+      for (const at of probes)
+        for (const dur of durs)
+          for (const svc of [svcA, svcB])
+            for (const excludeId of [undefined, ids[1]]) {
+              const start = ar(at);
+              const o = {
+                tenantId: T.tenantId,
+                practitionerId: PX.practitionerId,
+                serviceId: svc,
+                start,
+                end: new Date(start.getTime() + dur * 60_000),
+                now,
+                excludeId,
+              };
+              const [legacy, occ] = await runWithRls(T.tenantId, async (tx) => [
+                await countCapacityOverlaps(tx, o),
+                await countAgendaOccupancy(tx, { ...o, cap }),
+              ] as const);
+              expect(occ.overlap).toBe(legacy);
+              const expected = cap
+                ? intervalStartsUsed(all, { practitionerId: PX.practitionerId, when: start, intervalMin: cap.intervalMin, now, excludeId })
+                : 0;
+              expect(occ.intervalStarts).toBe(expected);
+              checked++;
+            }
+    expect(checked).toBe(caps.length * probes.length * durs.length * 2 * 2);
+    // No vacuo: hay sondas con solapes y con inicios en el intervalo.
+    const [busy] = await runWithRls(T.tenantId, async (tx) => [
+      await countAgendaOccupancy(tx, {
+        tenantId: T.tenantId,
+        practitionerId: PX.practitionerId,
+        serviceId: svcA,
+        start: ar(`${day}T10:00`),
+        end: ar(`${day}T10:45`),
+        now,
+        cap: { count: 3, intervalMin: 60 },
+      }),
+    ]);
+    // De A solapan [10:00, 10:45): 07:30 (180'), 10:00 y 10:40 (el cancelado de 10:20 no). Inicios en [10:00, 11:00)
+    // de cualquier servicio: 10:00, 10:05, 10:40, 10:59 (no el cancelado ni el público vencido).
+    expect(busy).toEqual({ overlap: 3, intervalStarts: 4 });
   });
 });

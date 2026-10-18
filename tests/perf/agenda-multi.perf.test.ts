@@ -706,4 +706,88 @@ describe.skipIf(!RUN)("perf B4.6 — agenda multi-profesional (6 profesionales, 
       { a1: "createBookingsBatch.20", outcome: okOf },
     );
   });
+
+  // ── (f) T3d-2w (C-AS3): tope por intervalo, 0 sentencias nuevas ─────────────
+  // La clave de hora va en la MISMA sentencia que el cupo (`lockAgendaKeysMany`) y el conteo del tope plegado en la
+  // query de capacidad (`countAgendaOccupancy`): con el tope prendido, el alta y el lote cuestan EXACTAMENTE lo mismo
+  // que sin él (techos estrictos 35 / 186 de tests/perf/compare.ts). Se mide el camino dominante: intervalo vacío
+  // (sin aviso). El aviso informativo del 2.º turno suma UNA sentencia (el nombre del profesional, solo en ese
+  // camino); el prompt de tope no escribe (como el de cupo).
+
+  /** Prende el tope propio del profesional mientras corre `fn` y lo apaga al final (el resto mide sin tope). */
+  async function withIntervalCap<R>(practitionerId: string, fn: () => Promise<R>): Promise<R> {
+    await db.practitioner.update({
+      where: { id: practitionerId },
+      data: { bookingCapMode: "CUSTOM", bookingCapCount: 2, bookingCapIntervalMin: 15 },
+    });
+    try {
+      return await fn();
+    } finally {
+      await db.practitioner.update({
+        where: { id: practitionerId },
+        data: { bookingCapMode: "INHERIT", bookingCapCount: null, bookingCapIntervalMin: null },
+      });
+    }
+  }
+  const rowOf = (scenario: string) => {
+    const r = rows.find((x) => x.scenario === scenario);
+    if (!r) throw new Error(`falta la fila base ${scenario} (corré el archivo entero)`);
+    return r;
+  };
+
+  it("(f) [AS-2w] createBooking con tope por intervalo: mismas sentencias y tx que f.createBooking", async () => {
+    const base = rowOf("f.createBooking");
+    let i = 0;
+    const last = await withIntervalCap(T.practitionerId, () =>
+      bench(
+        "f.createBooking.intervalCap",
+        () =>
+          createBooking({
+            patientId: T.freePatientIds[70 + i],
+            serviceId: T.serviceId,
+            practitionerId: T.practitionerId,
+            scheduledFor: new Date(localToARIso(`2028-01-1${i++}T10:00:00`)).toISOString(),
+            idempotencyKey: randomUUID(),
+          }),
+        { outcome: okOf, note: "tope 2 cada 15' prendido, intervalo vacío" },
+      ),
+    );
+    expect(last).toMatchObject({ ok: true });
+    expect(last.intervalCapNotice).toBeUndefined();
+    const row = rowOf("f.createBooking.intervalCap");
+    expect({ statements: row.statements, transactions: row.transactions }).toEqual({
+      statements: base.statements,
+      transactions: base.transactions,
+    });
+  });
+
+  it("(f) [AS-2w] createBookingsBatch 20 con tope por intervalo: mismas sentencias y tx que f.createBookingsBatch.20", async () => {
+    const base = rowOf("f.createBookingsBatch.20");
+    let i = 0;
+    const last = await withIntervalCap(T.practitionerId, () =>
+      bench(
+        "f.createBookingsBatch.20.intervalCap",
+        () =>
+          createBookingsBatch({
+            patientId: T.freePatientIds[80 + i],
+            serviceId: T.serviceId,
+            practitionerId: T.practitionerId,
+            // Mismo patrón que la base, en semanas que ninguna otra fila usa. Cada corrida a OTRA hora (09, 10, 11,
+            // 12): con tope 2 cada 15', repetir la serie llenaría el intervalo a la 3.ª corrida y las fechas se
+            // omitirían sin tx (más barato: la comparación sería vacua). Así cada fecha mide el camino completo.
+            scheduledFor: new Date(localToARIso(`2028-05-01T${String(9 + i++).padStart(2, "0")}:00:00`)).toISOString(),
+            count: 20,
+            daysOfWeek: [0, 2, 4],
+            idempotencyKey: randomUUID(),
+          }),
+        { outcome: okOf, note: "tope 2 cada 15' prendido, intervalos vacíos" },
+      ),
+    );
+    expect(last).toMatchObject({ ok: true, data: { created: 20, omitted: 0 } });
+    const row = rowOf("f.createBookingsBatch.20.intervalCap");
+    expect({ statements: row.statements, transactions: row.transactions }).toEqual({
+      statements: base.statements,
+      transactions: base.transactions,
+    });
+  });
 });

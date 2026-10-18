@@ -76,6 +76,7 @@ import {
   ROOM_BUSY_ERROR,
   BASIC_ACCESS_ERROR,
   BLOCKED_ERROR,
+  INTERVAL_CAP_ERROR,
   OUT_OF_HOURS_ERROR,
   PATIENT_OVERLAP_ERROR,
   PLAN_SESSION_NOT_PENDING_ERROR,
@@ -619,6 +620,10 @@ function bookingOutcomeError(o: Exclude<Awaited<ReturnType<typeof applyBookingUp
       return OUT_OF_HOURS_ERROR;
     case "conflict":
       return PRACTITIONER_CONFLICT_ERROR;
+    case "interval-cap":
+      // T3 (C-AS3): el tope por intervalo del profesional, sin el nombre (Seguimiento muestra solo el texto; no se
+      // suma la lectura del profesional a la tx). Se fuerza con `force.allowIntervalCap` (queda sobreturno).
+      return INTERVAL_CAP_ERROR({ used: o.used, cap: o.intervalCap.count, fromTime: o.fromTime, toTime: o.toTime });
     case "plan-session-not-pending":
       return PLAN_SESSION_NOT_PENDING_ERROR(o.ordinal);
     default:
@@ -660,7 +665,16 @@ async function rescheduleSessionImpl(input: {
   sessionId: string;
   scheduledFor: string; // ISO
   practitionerId?: string;
-  force?: { allowOverbooking?: boolean; allowPatientOverlap?: boolean; allowOutOfHours?: boolean; allowBlocked?: boolean; allowRoomConflict?: boolean };
+  // T3 (C-AS3): `allowIntervalCap` pasa el tope por intervalo del profesional (queda sobreturno; `RescheduleForce`
+  // lo acepta desde T3b-2k). El core toma la clave de hora del horario nuevo (no hay `capLocksHeld` acá).
+  force?: {
+    allowOverbooking?: boolean;
+    allowPatientOverlap?: boolean;
+    allowOutOfHours?: boolean;
+    allowBlocked?: boolean;
+    allowRoomConflict?: boolean;
+    allowIntervalCap?: boolean;
+  };
 }): Promise<ActionResult<RescheduleSessionResult>> {
   const actor = await getActor();
   const off = sessionsModuleOff(actor);

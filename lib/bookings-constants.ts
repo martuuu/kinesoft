@@ -76,6 +76,32 @@ export const OUT_OF_HOURS_ERROR =
   "Ese horario está fuera del horario de atención del profesional. Podés elegir el próximo libre o cargarlo igual.";
 export const BLOCKED_ERROR = (reason: string | null) =>
   `La agenda del profesional está bloqueada en ese horario${reason ? ` (${reason})` : ""}. Podés elegir el próximo libre o cargarlo igual como sobreturno.`;
+/**
+ * T3 (C-AS3, decisión 6): el intervalo AR del turno ya tiene `used` turnos del profesional (cualquier servicio) y
+ * el tope es `cap`. Copy literal del contrato: «{Profesional} ya tiene {n} turnos entre las {HH:mm} y las {HH:mm}
+ * (tope: {cap}).». Forzable con `allowIntervalCap` (queda sobreturno). Sin nombre (Seguimiento, que solo muestra
+ * el texto del rechazo y no hace la lectura extra del profesional) dice «El profesional».
+ */
+export const INTERVAL_CAP_ERROR = (o: {
+  practitionerName?: string | null;
+  used: number;
+  cap: number;
+  fromTime: string;
+  toTime: string;
+}) =>
+  `${o.practitionerName || "El profesional"} ya tiene ${o.used === 1 ? "1 turno" : `${o.used} turnos`} entre las ${o.fromTime} y las ${o.toTime} (tope: ${o.cap}).`;
+
+const INTERVAL_CAP_ERROR_RE = / ya tiene \d+ turnos? entre las \d{2}:\d{2} y las \d{2}:\d{2} \(tope: \d+\)\.$/;
+
+/**
+ * ¿Este texto de rechazo es el del tope por intervalo (`INTERVAL_CAP_ERROR`)? Para los callers que solo reciben el
+ * texto (Seguimiento: `rescheduleSession` devuelve `error`, sin el objeto del aviso) y tienen que ofrecer «Mover como
+ * sobreturno» con `allowIntervalCap`, como `plan-card.tsx` compara `PRACTITIONER_CONFLICT_ERROR` para «Mover igual».
+ * El texto lleva el nombre y los números, así que se reconoce por su forma y no por igualdad.
+ */
+export function isIntervalCapError(message: string | null | undefined): boolean {
+  return typeof message === "string" && INTERVAL_CAP_ERROR_RE.test(message);
+}
 
 // ─── Planes · sincronía turno ↔ sesión (S12, C4; textos literales del plan) ───
 
