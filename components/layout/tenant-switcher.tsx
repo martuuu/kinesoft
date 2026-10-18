@@ -21,7 +21,7 @@
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import type { TenantOption } from "@/lib/tenant-choice";
-import { roleLabel } from "@/lib/roles";
+import { roleLabel } from "@/lib/role-label";
 import { IconChevD } from "@/components/ui/icons";
 import { nameStyle } from "./tenant-switcher-styles";
 import type { ActionResult } from "@/lib/validation";
