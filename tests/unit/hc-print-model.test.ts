@@ -8,12 +8,19 @@ import {
   hcSourceVersion,
   honorificLabel,
   verificationCodeFromSha256,
+  hcDateLabel,
+  hcDiagnosisLine,
+  hcPatientLine,
+  hcVoidedLine,
+  HC_DIAGNOSIS_SOURCE_LABEL,
+  HC_ICD_ATTRIBUTION,
   type HcPrintSource,
   type HcPrintSourceEntry,
 } from "@/lib/hc-print-model";
+import { DIAGNOSIS_SOURCE_LABEL, ICD11_ATTRIBUTION, ICD11_SHORT_ATTRIBUTION } from "@/lib/diagnoses-types";
 
-// FC-1b3: lo chico y estable del modelo imprimible (C-FC4). `buildHcPrintableContent` y `hcFileBase` son stubs:
-// sus `it.fails` los da vuelta FC-2e.
+// FC-1b3: lo chico y estable del modelo imprimible (C-FC4). FC-2e: `buildHcPrintableContent`, `hcFileBase` y las
+// líneas de texto que comparten el PDF y el Word.
 
 describe("[FC-1b] formatLicense / formatSignatureLine", () => {
   it("número pelado → MN (el campo nació como «Matrícula Nacional»)", () => {
@@ -137,7 +144,7 @@ describe("[FC-1b] código de verificación estable ante el orden de claves", () 
   });
 });
 
-// ─── Stubs de FC-2e ─────────────────────────────────────────────────────────────────────────────────────────────────
+// ─── FC-2e ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 function entry(over: Partial<HcPrintSourceEntry> = {}): HcPrintSourceEntry {
   return {
@@ -156,6 +163,7 @@ function entry(over: Partial<HcPrintSourceEntry> = {}): HcPrintSourceEntry {
     authorPractitionerId: "prac_1",
     authorHasSignature: true,
     importSource: null,
+    lateEntry: false,
     voidedAt: null,
     voidReason: null,
     ...over,
@@ -179,27 +187,123 @@ function source(): HcPrintSource {
   };
 }
 
-describe("[FC-1b] buildHcPrintableContent (stub de FC-2e)", () => {
-  it.fails(
-    "[FC-2e] buildHcPrintableContent sin EVOLUTION, authorPractitionerId, amendsNoteId, voidReason ni ids de nota, y determinista",
-    () => {
-      const a = buildHcPrintableContent(source(), "download");
-      const b = buildHcPrintableContent(source(), "download");
-      const json = JSON.stringify(a.content);
-      for (const banned of ["EVOLUTION", "authorPractitionerId", "amendsNoteId", "voidReason", "note_root_1", "note_am_1", "prac_1", "MOTIVO_INTERNO"]) {
-        expect(json).not.toContain(banned);
-      }
-      expect(canonicalJson(a.content)).toBe(canonicalJson(b.content));
-    },
-  );
+const ICD_DX = { v: 1 as const, source: "icd11" as const, refId: "icd_1", code: "FA20.0", title: "Lumbalgia", uri: "http://id.who.int/icd/entity/1", release: "2026-01" };
 
-  it.fails("[FC-2e] shared sin enmiendas anuladas", () => {
-    const { content } = buildHcPrintableContent(source(), "shared");
-    expect(content.fichas[0].amendments).toHaveLength(1);
+describe("[FC-2e] buildHcPrintableContent", () => {
+  it("[FC-2e] buildHcPrintableContent sin EVOLUTION, authorPractitionerId, amendsNoteId, voidReason ni ids de nota, y determinista", () => {
+    const a = buildHcPrintableContent(source(), "download");
+    const b = buildHcPrintableContent(source(), "download");
+    const json = JSON.stringify(a.content);
+    for (const banned of ["EVOLUTION", "authorPractitionerId", "amendsNoteId", "voidReason", "note_root_1", "note_am_1", "note_am_2", "prac_1", "createdAt", "storage"]) {
+      expect(json).not.toContain(banned);
+    }
+    expect(canonicalJson(a.content)).toBe(canonicalJson(b.content));
+    expect(a.signatureOwners).toEqual(b.signatureOwners);
   });
 
-  it.fails("[FC-2e] hcFileBase arma el nombre del archivo", () => {
+  it("[FC-2e] shared sin enmiendas anuladas", () => {
+    const { content } = buildHcPrintableContent(source(), "shared");
+    expect(content.fichas[0].amendments).toHaveLength(1);
+    // Y ni rastro de la anulada: ni su marca ni su motivo viajan al snapshot del portal.
+    const json = JSON.stringify(content);
+    expect(json).not.toContain("MOTIVO_INTERNO");
+    expect(content.fichas[0].amendments[0].marks.voided).toBeNull();
+  });
+
+  it("download conserva la enmienda anulada con fecha y motivo (C-FC4 `marks.voided`, solo download)", () => {
+    const { content } = buildHcPrintableContent(source(), "download");
+    expect(content.fichas[0].amendments).toHaveLength(2);
+    const voided = content.fichas[0].amendments[1];
+    expect(voided.marks.voided).toEqual({ at: "2026-10-11T10:00:00.000Z", reason: "MOTIVO_INTERNO" });
+    expect(hcVoidedLine(voided)).toBe("Anulada el 11/10/2026 07:00 · Motivo: MOTIVO_INTERNO");
+  });
+
+  it("shared saltea una ficha raíz anulada (defensa: compartir ya la rechaza)", () => {
+    const src = source();
+    src.entries[0].root = entry({ voidedAt: new Date("2026-10-12T00:00:00Z"), voidReason: "x" });
+    expect(buildHcPrintableContent(src, "shared").content.fichas).toEqual([]);
+    expect(buildHcPrintableContent(src, "download").content.fichas).toHaveLength(1);
+  });
+
+  it("firma del AUTOR de cada entrada por imageRef opaco; sin firma cargada → null (FC-D26)", () => {
+    const src = source();
+    src.entries[0].amendments = [entry({ id: "am_b", authorName: "Beto Ruiz", authorHonorific: "DR", authorLicense: "MP 55", authorPractitionerId: "prac_2" })];
+    src.entries.push({ root: entry({ id: "r2", authorHasSignature: false, authorPractitionerId: "prac_3" }), amendments: [] });
+    const { content, signatureOwners } = buildHcPrintableContent(src, "download");
+    expect(content.fichas[0].main.signature).toEqual({ line: "Lic. Ana Pérez · MN 1234", imageRef: "s1" });
+    expect(content.fichas[0].amendments[0].signature).toEqual({ line: "Dr. Beto Ruiz · MP 55", imageRef: "s2" });
+    expect(content.fichas[1].main.signature.imageRef).toBeNull();
+    expect(signatureOwners).toEqual({ s1: "prac_1", s2: "prac_2" });
+  });
+
+  it("cuerpo: bodyDoc válido tal cual; viejo en texto plano → párrafos; marcas tardía e importada", () => {
+    const doc = { type: "doc", content: [{ type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "Evaluación" }] }] };
+    const src = source();
+    src.entries[0].root = entry({
+      bodyDoc: doc,
+      lateEntry: true,
+      importSource: { v: 1, kind: "docx", fileName: "informe.docx", importedAt: "2026-10-01T00:00:00Z", part: 2, parts: 3, batchId: "b" },
+    });
+    src.entries[0].amendments = [entry({ id: "x", body: "línea 1\n\nlínea 2", bodyDoc: { type: "nope" } })];
+    const { content } = buildHcPrintableContent(src, "download");
+    expect(content.fichas[0].main.body).toEqual(doc);
+    expect(content.fichas[0].main.marks.lateEntry).toBe("Carga tardía");
+    expect(content.fichas[0].main.marks.imported).toBe("Importada de informe.docx · parte 2 de 3");
+    expect(JSON.stringify(content)).not.toContain("batchId");
+    expect(content.fichas[0].amendments[0].body.content).toHaveLength(2);
+    expect(content.fichas[0].amendments[0].marks.imported).toBeNull();
+  });
+
+  it("diagnósticos con fuente y principal; atribución CIE-11 solo si hay un CIE-11", () => {
+    const src = source();
+    expect(buildHcPrintableContent(src, "download").content.icdAttribution).toBeNull();
+    src.entries[0].root = entry({ diagnoses: [ICD_DX, { ...ICD_DX, source: "text", refId: null, code: null, uri: null, release: null, title: "Dolor ≤ 3/10" }] });
+    const { content } = buildHcPrintableContent(src, "download");
+    expect(content.fichas[0].main.diagnoses).toEqual([
+      { code: "FA20.0", title: "Lumbalgia", uri: "http://id.who.int/icd/entity/1", sourceLabel: "CIE-11 (OMS)", principal: true },
+      { code: null, title: "Dolor ≤ 3/10", uri: null, sourceLabel: "Texto libre", principal: false },
+    ]);
+    expect(content.icdAttribution).toBe(HC_ICD_ATTRIBUTION);
+    expect(content.icdAttribution).toContain("CIE-11 © OMS");
+    expect(hcDiagnosisLine(content.fichas[0].main.diagnoses[0])).toBe("Principal: FA20.0 Lumbalgia (CIE-11 (OMS))");
+  });
+
+  it("las copias de la atribución y de las fuentes son literales a lib/diagnoses-types (anti-deriva)", () => {
+    expect(HC_ICD_ATTRIBUTION).toBe(`${ICD11_SHORT_ATTRIBUTION}. ${ICD11_ATTRIBUTION}`);
+    expect(HC_DIAGNOSIS_SOURCE_LABEL).toEqual(DIAGNOSIS_SOURCE_LABEL);
+  });
+
+  it("membrete, paciente y fechas en hora argentina (independiente del TZ del host)", () => {
+    const { content } = buildHcPrintableContent(source(), "download");
+    expect(content.patient).toEqual({ fullName: "Juan Gómez", documentId: "30111222", dateOfBirth: "1980-01-02" });
+    expect(hcPatientLine(content.patient)).toBe("Paciente: Juan Gómez · DNI 30111222 · Nacimiento 02/01/1980");
+    expect(content.fichas[0].main.occurredAt).toBe("2026-10-10T13:00:00.000Z");
+    expect(content.fichas[0].main.dateLabel).toBe("10/10/2026 10:00");
+    expect(hcDateLabel(new Date("2026-10-11T02:30:00Z"))).toBe("10/10/2026 23:30");
+    expect(content.fichas[0].main.revisionLabel).toBe("Versión original");
+    expect(buildHcPrintableContent({ ...source(), entries: [{ root: entry({ revision: 3 }), amendments: [] }] }, "shared").content.fichas[0].main.revisionLabel).toBe("Versión 3 (editada)");
+  });
+});
+
+describe("[FC-2e] hcFileBase", () => {
+  it("[FC-2e] hcFileBase arma el nombre del archivo", () => {
     const base = hcFileBase({ lastName: "Gómez", firstName: "Juan", occurredAt: new Date("2026-10-10T13:00:00Z"), title: "Control", shortId: "abc123" });
-    expect(base.length).toBeGreaterThan(0);
+    expect(base).toBe("Gómez Juan 2026-10-10 Control [abc123]");
+  });
+
+  it("día en Argentina, sin título → «Ficha», HC completa → «Historia clínica»", () => {
+    // 01:30 UTC del 11 = 22:30 del 10 en AR.
+    expect(hcFileBase({ lastName: "Gómez", firstName: "Juan", occurredAt: new Date("2026-10-11T01:30:00Z"), title: null, shortId: "abc123" })).toBe(
+      "Gómez Juan 2026-10-10 Ficha [abc123]",
+    );
+    expect(hcFileBase({ lastName: "Gómez", firstName: "Juan", occurredAt: null, title: "x", shortId: "abc123" })).toBe("Gómez Juan Historia clínica [abc123]");
+  });
+
+  it("saneado para Windows y con tope de largo que conserva el id", () => {
+    const base = hcFileBase({ lastName: 'Pé<r>ez:"/', firstName: "Ana\\|?*", occurredAt: new Date("2026-10-10T13:00:00Z"), title: "Control. " + "x".repeat(300) + ". ", shortId: "zz9" });
+    expect(base).not.toMatch(/[<>:"/\\|?*]/);
+    expect(Array.from(base).length).toBeLessThanOrEqual(120);
+    expect(base.endsWith(" [zz9]")).toBe(true);
+    expect(hcFileBase({ lastName: "Ruiz", firstName: "Bea", occurredAt: new Date("2026-10-10T13:00:00Z"), title: "Fin...  ", shortId: "" })).toBe("Ruiz Bea 2026-10-10 Fin");
   });
 });
