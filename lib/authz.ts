@@ -26,7 +26,7 @@ import { runWithRls } from "@/lib/rls";
 import { getActor, ForbiddenError, type Actor } from "@/lib/session";
 import { SUPPORT_CAPS, capabilitiesFor, capabilitiesForMember, type Capability } from "@/lib/capabilities";
 import type { MemberAccess } from "@/lib/saas-plans-types";
-import { modulesFor, MODULE_DENIED_COPY, type TenantModule } from "@/lib/tenant-modules";
+import { modulesFor, moduleDeniedCopy, type TenantModule } from "@/lib/tenant-modules";
 
 // Cacheado por primitivos (no por la identidad del objeto Actor) para que dos
 // llamadas con actores equivalentes en el mismo request compartan la query.
@@ -188,7 +188,7 @@ export async function requireAccountOwner(
  *    sesiones abiertas en el dashboard, catálogo de diagnóstico) **devuelven
  *    vacío** sin el módulo: no rompen una pantalla del consultorio General.
  *  - **Escrituras y lecturas de detalle** **tiran** `ForbiddenError` con
- *    `MODULE_DENIED_COPY[m]` (`assertModule` / `requireModule`).
+ *    `moduleDeniedCopy` (`assertModule` / `requireModule`; T3: «no está habilitado» si el módulo está revocado).
  *  - **El layout es UX; la barrera es la action.** `moduleWall` (`lib/module-wall.ts`) en el
  *    `layout.tsx` del segmento solo evita mostrar una pantalla inútil: en el App
  *    Router un layout no se re-ejecuta en cada navegación y las server actions se
@@ -216,7 +216,7 @@ export async function getTenantModules(): Promise<ReadonlySet<TenantModule>> {
  */
 export function assertModule(actor: Actor, m: TenantModule, message?: string): void {
   if (!modulesFor(actor.entitlements).has(m)) {
-    throw new ForbiddenError(message ?? MODULE_DENIED_COPY[m]);
+    throw new ForbiddenError(message ?? moduleDeniedCopy(actor.entitlements, m));
   }
 }
 

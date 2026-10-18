@@ -191,7 +191,7 @@ export async function validatePlanRefsInTx(tx: DbClient, actor: Actor, refs: Pla
   const tenantId = actor.tenantId;
   // Visibilidad del catálogo y módulos por los entitlements del actor (C-EV3,
   // sin query): `buildActor` ya leyó la fila de Tenant en este request.
-  const gate = resolveCapabilities(actor.entitlements.plan, tenantId, actor.entitlements.vertical);
+  const gate = resolveCapabilities(actor.entitlements.plan, tenantId, actor.entitlements.vertical, actor.entitlements);
   // P3.Z (F1): plantillas solo con el módulo `plantillas` (enmienda EV0,
   // literal: "plantillas solo por canBuildTemplates / has('plantillas')").
   // Antes lo cortaba el "aplicar" viejo (`[P0-S02t] FREE no aplica`); al
