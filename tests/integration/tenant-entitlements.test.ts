@@ -101,6 +101,8 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
         "maxUsersOverride",
         "maxProfessionalsOverride",
         "maxStaffOverride",
+        "moduleGrants", // T3b-1k2 (M12): módulos a medida, solo Plataforma
+        "moduleRevokes",
       ].sort()
     );
     expect([...ENTITLEMENT_KEYS_BY_SOURCE.billing].sort()).toEqual(["saasPlan", "subscriptionStatus", "trialEndsAt"].sort());
@@ -594,7 +596,7 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
       const p = await getTenantModulesById(P.tenantId);
       const f = await getTenantModulesById(F.tenantId);
       expect([...g].sort()).toEqual(
-        [...modulesFor({ vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: false })].sort()
+        [...modulesFor({ vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] })].sort()
       );
       expect(g.has("agenda")).toBe(true);
       expect(g.has("salas")).toBe(true);

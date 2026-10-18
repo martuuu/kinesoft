@@ -32,8 +32,8 @@ import { ToastProvider } from "@/components/ui/toast";
 import { modulesFor } from "@/lib/tenant-modules";
 import { RECEPTION_LAYOUTS, type ReceptionLayout } from "@/lib/preferences-constants";
 
-const CLINICA = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false }));
-const CONSULTORIO = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CONSULTORIO", publicBookingEnabled: false }));
+const CLINICA = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }));
+const CONSULTORIO = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CONSULTORIO", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }));
 
 function ForceOpen({ children }: { children: ReactNode }) {
   const { t } = useTweaks();

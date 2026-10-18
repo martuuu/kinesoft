@@ -231,6 +231,8 @@ describe.skipIf(!RUN)("[PF-0b] sesión con JWT local", () => {
       data: { clinical: false, grantSettings: true, grantBilling: true },
     });
     await db.userProfile.update({ where: { id: u }, data: { twoFactorEmail: true } });
+    // T3b-1k2 (M12): overrides de módulos NO vacíos (y desordenados en la fila: la sentencia los devuelve ordenados).
+    await db.tenant.update({ where: { id: A.tenantId }, data: { moduleGrants: ["salas", "plantillas"], moduleRevokes: ["diagnostico"] } });
 
     const got = await loadAccessMemberships(u);
     const ref = await db.userProfile.findUniqueOrThrow({
@@ -259,6 +261,8 @@ describe.skipIf(!RUN)("[PF-0b] sesión con JWT local", () => {
                 vertical: true,
                 saasPlan: true,
                 publicBookingEnabled: true,
+                moduleGrants: true,
+                moduleRevokes: true,
                 onboardingCompletedAt: true,
                 status: true,
                 subscriptionStatus: true,
@@ -274,9 +278,10 @@ describe.skipIf(!RUN)("[PF-0b] sesión con JWT local", () => {
     const prac = new Map(ref.practitioners.map((p) => [p.tenantId, p.id]));
     const expected = ref.memberships
       // PL-1e: `tenant.plan` del Actor/foto es el plan SaaS (`Tenant.saasPlan`).
-      .map(({ tenant: { saasPlan, ...t }, ...m }) => ({
+      .map(({ tenant: { saasPlan, moduleGrants, moduleRevokes, ...t }, ...m }) => ({
         ...m,
-        tenant: { ...t, plan: saasPlan },
+        // T3b-1k2: las listas salen normalizadas (ordenadas) de la sentencia.
+        tenant: { ...t, plan: saasPlan, moduleGrants: [...moduleGrants].sort(), moduleRevokes: [...moduleRevokes].sort() },
         hasPractitioner: prac.has(m.tenantId),
         practitionerId: prac.get(m.tenantId) ?? null,
       }))

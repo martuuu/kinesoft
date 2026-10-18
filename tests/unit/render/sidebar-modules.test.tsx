@@ -38,11 +38,15 @@ const GENERAL = modulesFor({
   vertical: "GENERAL",
   plan: "CLINICA",
   publicBookingEnabled: false,
+  moduleGrants: [],
+  moduleRevokes: [],
 });
 const KINE_PRO = modulesFor({
   vertical: "KINESIOLOGY",
   plan: "CLINICA",
   publicBookingEnabled: false,
+  moduleGrants: [],
+  moduleRevokes: [],
 });
 
 function caps(role: Role) {

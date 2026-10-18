@@ -42,7 +42,7 @@ import { NO_PLAN_PERMISSIONS, type HeroPlanChip } from "@/components/planes/plan
 import type { PatientRow } from "@/lib/patients-types";
 import type { PatientWithRelations } from "@/components/patients/profile/types";
 
-const KINE_PRO = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false }));
+const KINE_PRO = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }));
 
 function wrap(node: ReactNode) {
   return renderToStaticMarkup(

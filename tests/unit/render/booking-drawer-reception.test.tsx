@@ -52,8 +52,8 @@ const ASSISTANT = [...capabilitiesFor("ASSISTANT")];
 const BILLING = [...capabilitiesFor("BILLING")];
 const OWNER = [...capabilitiesFor("OWNER")];
 
-const consultorio = [...modulesFor({ vertical: "GENERAL", plan: "CONSULTORIO", publicBookingEnabled: false })];
-const clinica = [...modulesFor({ vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: false })];
+const consultorio = [...modulesFor({ vertical: "GENERAL", plan: "CONSULTORIO", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] })];
+const clinica = [...modulesFor({ vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] })];
 
 function booking(over: Partial<DrawerBooking> = {}): DrawerBooking {
   return {

@@ -77,7 +77,7 @@ import { modulesFor } from "@/lib/tenant-modules";
 import type { SupportSessionRow } from "@/lib/support-session-internal";
 import type { TenantSettings } from "@/lib/tenant-settings";
 
-const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false }));
+const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }));
 const tabs = (html: string) => Array.from(html.matchAll(/role="tab"[^>]*>([^<]+)</g), (m) => m[1]);
 
 const OPEN: SupportSessionRow = {

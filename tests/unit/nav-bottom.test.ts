@@ -21,10 +21,10 @@ function check(e: BottomNavEntry[]) {
   expect(new Set(hrefs(e)).size).toBe(hrefs(e).length);
 }
 
-const KINE_CLINICA = modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false });
-const GENERAL_CONSULTORIO = modulesFor({ vertical: "GENERAL", plan: "CONSULTORIO", publicBookingEnabled: false });
-const KINE_CONSULTORIO = modulesFor({ vertical: "KINESIOLOGY", plan: "CONSULTORIO", publicBookingEnabled: false });
-const GENERAL_INDIVIDUAL = modulesFor({ vertical: "GENERAL", plan: "INDIVIDUAL", publicBookingEnabled: false });
+const KINE_CLINICA = modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] });
+const GENERAL_CONSULTORIO = modulesFor({ vertical: "GENERAL", plan: "CONSULTORIO", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] });
+const KINE_CONSULTORIO = modulesFor({ vertical: "KINESIOLOGY", plan: "CONSULTORIO", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] });
+const GENERAL_INDIVIDUAL = modulesFor({ vertical: "GENERAL", plan: "INDIVIDUAL", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] });
 
 describe("[MB-0c] bottomNavFor (C-MB1)", () => {
   it("prioridad fija: Inicio, Agenda, Sala, Pacientes", () => {

@@ -23,7 +23,7 @@ import { TenantModulesProvider } from "@/components/layout/tenant-modules-contex
 import { capabilitiesFor } from "@/lib/capabilities";
 import { modulesFor } from "@/lib/tenant-modules";
 
-const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false }));
+const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }));
 const SECRETARIA = Array.from(capabilitiesFor("ASSISTANT"));
 const css = readFileSync(join(process.cwd(), "components/layout/bottom-nav.module.css"), "utf8");
 

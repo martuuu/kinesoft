@@ -74,7 +74,7 @@ beforeAll(async () => {
   await Promise.all(dynamicLoads);
 });
 
-const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: true }));
+const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: true, moduleGrants: [], moduleRevokes: [] }));
 
 function wrap(node: React.ReactNode) {
   return renderToStaticMarkup(

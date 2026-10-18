@@ -9,7 +9,7 @@ const PLANS: SaasPlan[] = ["INDIVIDUAL", "CONSULTORIO", "CLINICA", "LIBRE"];
 const VERTICALS: TenantVertical[] = ["GENERAL", "KINESIOLOGY"];
 
 const sections = (vertical: TenantVertical, plan: SaasPlan, publicBookingEnabled: boolean) =>
-  [...portalSectionsFor(modulesFor({ vertical, plan, publicBookingEnabled }))].sort();
+  [...portalSectionsFor(modulesFor({ vertical, plan, publicBookingEnabled, moduleGrants: [], moduleRevokes: [] }))].sort();
 
 describe("[P4-C] portalSectionsFor", () => {
   it("General Individual sin turnero = {inicio, cuenta}", () => {
@@ -65,7 +65,7 @@ describe("[P4-C] portalSectionsFor", () => {
   });
 
   it("el mismo set de módulos da el mismo set de secciones (identidad estable)", () => {
-    const m = modulesFor({ vertical: "KINESIOLOGY", plan: "CONSULTORIO", publicBookingEnabled: true });
+    const m = modulesFor({ vertical: "KINESIOLOGY", plan: "CONSULTORIO", publicBookingEnabled: true, moduleGrants: [], moduleRevokes: [] });
     expect(portalSectionsFor(m)).toBe(portalSectionsFor(m));
   });
 });

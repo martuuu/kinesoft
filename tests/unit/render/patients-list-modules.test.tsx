@@ -28,8 +28,8 @@ import { ToastProvider } from "@/components/ui/toast";
 import { modulesFor, type TenantModule } from "@/lib/tenant-modules";
 import type { PatientRow } from "@/lib/patients-types";
 
-const GENERAL = modulesFor({ vertical: "GENERAL", plan: "INDIVIDUAL", publicBookingEnabled: false });
-const KINE_PRO = modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false });
+const GENERAL = modulesFor({ vertical: "GENERAL", plan: "INDIVIDUAL", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] });
+const KINE_PRO = modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] });
 
 function wrap(modules: ReadonlySet<TenantModule>, node: ReactNode) {
   return renderToStaticMarkup(

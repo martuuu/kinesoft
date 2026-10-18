@@ -51,6 +51,15 @@ import "server-only";
  * (`maxUsersOverride`, `maxProfessionalsOverride`, `maxStaffOverride`) son solo de `platform`: el cobro (`billing`)
  * cambia plan y estado de la suscripción, nunca regala cupos.
  *
+ * T3b-1k2 (plan §23.6, M12): `platform` además escribe los módulos a medida (`moduleGrants` / `moduleRevokes`). Este
+ * escritor es la única puerta, así que acá se valida todo lo que el CHECK de M12 no ve: listas sin repetidos y
+ * ORDENADAS (se normaliza: misma fila, misma clave de memo y comparación estable), sin núcleo ni turnero (el núcleo es
+ * de todos y el turnero es el switch de Configuración), solo módulos que existen en la vertical FINAL (la del patch o
+ * la guardada) y sin intersección grant ∩ revoke contra el estado final (lo que viene en el patch + lo guardado). El
+ * CHECK de M12 (intersección y cardinalidad) queda de red: si saltara adentro de la tx sería un 23514 opaco.
+ * Un patch inválido TIRA antes del UPDATE (bug del caller: la action de Plataforma ya validó con zod). El audit lleva
+ * las listas completas antes/después (nombres de módulo: sin PHI).
+ *
  * Cache: el caller revalida `tenantEntitlementTags(tenantId)` (`lib/cache-tags.ts`)
  * DESPUÉS del commit, y solo si `changed` no está vacío.
  */
@@ -59,7 +68,14 @@ import { prismaService } from "@/lib/db";
 import type { DbClient } from "@/lib/rls";
 import { auditInTx, auditPlatformInTx } from "@/lib/audit";
 import type { PlatformActorRef } from "@/lib/platform-audit-types";
-import { modulesFor, type TenantModule } from "@/lib/tenant-modules";
+import {
+  TENANT_MODULES,
+  isCoreModule,
+  isModuleOverridable,
+  modulesFor,
+  parseModuleOverrides,
+  type TenantModule,
+} from "@/lib/tenant-modules";
 import { LEGACY_PLAN_OF } from "@/lib/saas-plans-logic";
 
 export type EntitlementSource = "platform" | "onboarding" | "tenant-settings" | "billing";
@@ -92,6 +108,10 @@ export type EntitlementValues = {
   maxProfessionalsOverride: number | null;
   /** PL-1a (M8): personas no clínicas a medida, ≥ 0. Solo `platform`. */
   maxStaffOverride: number | null;
+  /** T3b-1k2 (M12): módulos que Plataforma suma a la base del plan. Solo `platform`. */
+  moduleGrants: TenantModule[];
+  /** T3b-1k2 (M12): módulos que Plataforma saca de la base del plan (nunca el núcleo). Solo `platform`. */
+  moduleRevokes: TenantModule[];
 };
 export type EntitlementKey = keyof EntitlementValues;
 
@@ -109,6 +129,8 @@ export const ENTITLEMENT_KEYS_BY_SOURCE = {
     "maxUsersOverride",
     "maxProfessionalsOverride",
     "maxStaffOverride",
+    "moduleGrants",
+    "moduleRevokes",
   ],
   billing: ["saasPlan", "subscriptionStatus", "trialEndsAt"],
   onboarding: ["vertical"],
@@ -179,6 +201,52 @@ const AUDIT_KEY_ONLY: ReadonlySet<EntitlementKey> = new Set<EntitlementKey>(["st
 /** Bug del caller (no input de usuario): se tira para que salte en tests y en Sentry. */
 function programmingError(msg: string): never {
   throw new Error(`[tenant-entitlements] ${msg}`);
+}
+
+/**
+ * T3b-1k2: lo que se puede validar de una lista sin la fila (forma, módulos conocidos, repetidos, núcleo, turnero).
+ * La vertical y la intersección se validan después del lock (`assertModuleOverrides`), contra el estado final.
+ * Devuelve la lista ORDENADA: es la forma canónica que se guarda y se compara.
+ */
+function validateModuleList(key: "moduleGrants" | "moduleRevokes", v: unknown): TenantModule[] {
+  if (!Array.isArray(v)) programmingError(`${key} tiene que ser una lista`);
+  const seen = new Set<TenantModule>();
+  for (const m of v) {
+    if (typeof m !== "string" || !(TENANT_MODULES as readonly string[]).includes(m)) {
+      programmingError(`${key}: módulo desconocido «${String(m)}»`);
+    }
+    const mod = m as TenantModule;
+    if (seen.has(mod)) programmingError(`${key}: «${mod}» repetido`);
+    if (isCoreModule(mod)) programmingError(`${key}: «${mod}» es del núcleo (lo tiene todo consultorio)`);
+    if (mod === "turneroPublico") programmingError(`${key}: el turnero es el switch de Configuración, no un override`);
+    seen.add(mod);
+  }
+  return [...seen].sort();
+}
+
+/**
+ * T3b-1k2: con la fila bajo lock, contra el estado FINAL (patch ∪ lo guardado): cada módulo del patch existe en la
+ * vertical final (no se le concede ni se le saca Kine a un General) y ningún módulo queda concedido y sacado a la vez
+ * (el CHECK `Tenant_moduleOverrides_check` de M12 lo rechazaría adentro de la tx con un 23514 opaco). Si la vertical
+ * cambia sin tocar las listas, las guardadas no se revalidan: `modulesFor` ignora un grant que ya no existe en la
+ * vertical, así que cambiar de vertical nunca queda bloqueado por un override viejo.
+ */
+function assertModuleOverrides(
+  patch: Partial<EntitlementValues>,
+  current: { vertical: TenantVertical; moduleGrants: string[]; moduleRevokes: string[] }
+): void {
+  if (patch.moduleGrants === undefined && patch.moduleRevokes === undefined) return;
+  const vertical = patch.vertical ?? current.vertical;
+  const stored = parseModuleOverrides(current);
+  for (const key of ["moduleGrants", "moduleRevokes"] as const) {
+    for (const m of patch[key] ?? []) {
+      if (!isModuleOverridable(m, vertical)) programmingError(`${key}: «${m}» no existe en la vertical ${vertical}`);
+    }
+  }
+  const grants = patch.moduleGrants ?? stored.moduleGrants;
+  const revokes = new Set(patch.moduleRevokes ?? stored.moduleRevokes);
+  const both = grants.filter((m) => revokes.has(m));
+  if (both.length > 0) programmingError(`moduleGrants y moduleRevokes se pisan: ${both.join(", ")}`);
 }
 
 /**
@@ -255,6 +323,10 @@ function validatePatch(
         out[k] = v as number | null;
         break;
       }
+      case "moduleGrants":
+      case "moduleRevokes":
+        out[key as "moduleGrants" | "moduleRevokes"] = validateModuleList(key as "moduleGrants" | "moduleRevokes", v);
+        break;
     }
   }
   return out;
@@ -264,12 +336,23 @@ function sameValue(a: unknown, b: unknown): boolean {
   if (a instanceof Date || b instanceof Date) {
     return a instanceof Date && b instanceof Date ? a.getTime() === b.getTime() : false;
   }
+  // T3b-1k2: las listas de módulos se comparan por contenido y sin orden (el patch ya viene ordenado; una fila
+  // escrita a mano puede no estarlo). Mismo contenido = no-op: ni UPDATE ni audit.
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    const sa = [...a].sort();
+    const sb = [...b].sort();
+    return sa.every((x, i) => x === sb[i]);
+  }
   return a === b;
 }
 
-/** Para el payload del audit: solo enums, booleanos, el cupo (entero) y fechas ISO (sin PHI). */
-function auditValue(v: unknown): string | boolean | number | null {
+type AuditValue = string | boolean | number | null | string[];
+
+/** Para el payload del audit: solo enums, booleanos, el cupo (entero), fechas ISO y listas de módulos (sin PHI). */
+function auditValue(v: unknown): AuditValue {
   if (v instanceof Date) return v.toISOString();
+  if (Array.isArray(v)) return [...(v as string[])];
   return v as string | boolean | number | null;
 }
 
@@ -315,6 +398,8 @@ export async function applyTenantEntitlementsInTx(
       maxUsersOverride: true,
       maxProfessionalsOverride: true,
       maxStaffOverride: true,
+      moduleGrants: true,
+      moduleRevokes: true,
       onboardingCompletedAt: true,
       updatedAt: true,
     },
@@ -336,11 +421,12 @@ export async function applyTenantEntitlementsInTx(
     // alguien lo está usando fuera de la creación: bug del caller.
     programmingError("initial sobre un consultorio que ya no está en el estado de creación");
   }
+  assertModuleOverrides(patch, current);
 
   // ── Diff ───────────────────────────────────────────────────────────────────
   const changed: EntitlementKey[] = [];
-  const before: Record<string, string | boolean | number | null> = {};
-  const after: Record<string, string | boolean | number | null> = {};
+  const before: Record<string, AuditValue> = {};
+  const after: Record<string, AuditValue> = {};
   const data: Prisma.TenantUpdateInput = {};
   for (const key of ALL_KEYS) {
     if (!(key in patch)) continue;
@@ -417,8 +503,14 @@ export async function getTenantModulesById(
 ): Promise<ReadonlySet<TenantModule>> {
   const t = await db.tenant.findUnique({
     where: { id: tenantId },
-    select: { vertical: true, saasPlan: true, publicBookingEnabled: true },
+    // T3b-1k2 (M12): + los overrides de Plataforma en la misma lectura.
+    select: { vertical: true, saasPlan: true, publicBookingEnabled: true, moduleGrants: true, moduleRevokes: true },
   });
   if (!t) return new Set<TenantModule>();
-  return modulesFor({ vertical: t.vertical, plan: t.saasPlan, publicBookingEnabled: t.publicBookingEnabled });
+  return modulesFor({
+    vertical: t.vertical,
+    plan: t.saasPlan,
+    publicBookingEnabled: t.publicBookingEnabled,
+    ...parseModuleOverrides(t),
+  });
 }

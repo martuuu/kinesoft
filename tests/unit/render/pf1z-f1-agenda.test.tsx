@@ -48,7 +48,7 @@ import { capabilitiesFor } from "@/lib/capabilities";
 import { modulesFor } from "@/lib/tenant-modules";
 import type { BookingDTO } from "@/components/agenda/agenda-utils";
 
-const KINE = modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false });
+const KINE = modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] });
 const kine = (n: ReactNode) => renderToStaticMarkup(<TenantModulesProvider modules={KINE}>{n}</TenantModulesProvider>);
 const src = (rel: string) => readFileSync(join(process.cwd(), rel), "utf8");
 

@@ -51,7 +51,7 @@ import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { modulesFor } from "@/lib/tenant-modules";
 import type { PatientRow, PatientCore } from "@/lib/patients-types";
 
-const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false }));
+const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }));
 const ROOT = join(__dirname, "..", "..", "..");
 const css = (rel: string) => readFileSync(join(ROOT, rel), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 const DIR_CSS = css("components/patients/patients-directory.module.css");

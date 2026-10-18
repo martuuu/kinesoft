@@ -57,8 +57,8 @@ import type { PatientCore } from "@/lib/patients-types";
 import type { PatientWithRelations } from "@/components/patients/profile/types";
 import type { Capability } from "@/lib/capabilities";
 
-const GENERAL = modulesFor({ vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: false });
-const KINE = modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false });
+const GENERAL = modulesFor({ vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] });
+const KINE = modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] });
 
 const render = (el: ReactElement, modules = KINE) =>
   renderToStaticMarkup(

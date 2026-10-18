@@ -217,7 +217,7 @@ describe("[DIR-3d] entrada «Mi perfil público»", () => {
   it("menú de cuenta: aparece con ficha propia y no para la Secretaria", () => {
     const menu = (own: { practitionerId: string; enabled: boolean } | null) =>
       renderToStaticMarkup(
-        <TenantModulesProvider modules={Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: true }))}>
+        <TenantModulesProvider modules={Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: true, moduleGrants: [], moduleRevokes: [] }))}>
           <TenantChoiceProvider options={[]} activeTenantId="a" switchTenant={null}>
             <TopbarAccountMenu name="Ana Pérez" defaultOpen ownPublicBooking={own} />
           </TenantChoiceProvider>

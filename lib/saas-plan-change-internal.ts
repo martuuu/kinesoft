@@ -28,7 +28,7 @@ import "server-only";
 import type { Role, SaasPlan } from "@prisma/client";
 import type { DbClient } from "@/lib/rls";
 import { applyTenantEntitlementsInTx } from "@/lib/tenant-entitlements-internal";
-import { modulesFor, TENANT_MODULES, type TenantModule } from "@/lib/tenant-modules";
+import { modulesFor, parseModuleOverrides, TENANT_MODULES, type TenantModule } from "@/lib/tenant-modules";
 import {
   invitesThatFit,
   mustDisableFor,
@@ -73,6 +73,9 @@ type TenantPlanRow = {
   saasPlan: SaasPlan;
   vertical: "GENERAL" | "KINESIOLOGY";
   publicBookingEnabled: boolean;
+  /** T3b-1k2 (M12): overrides de Plataforma; sobreviven al cambio de plan, así que entran en el diff de módulos. */
+  moduleGrants: string[];
+  moduleRevokes: string[];
   maxUsersOverride: number | null;
   maxProfessionalsOverride: number | null;
   maxStaffOverride: number | null;
@@ -92,6 +95,8 @@ async function readTenantInTx(tx: DbClient, tenantId: string, lock: boolean): Pr
       saasPlan: true,
       vertical: true,
       publicBookingEnabled: true,
+      moduleGrants: true,
+      moduleRevokes: true,
       maxUsersOverride: true,
       maxProfessionalsOverride: true,
       maxStaffOverride: true,
@@ -175,8 +180,11 @@ async function loadsByUserInTx(tx: DbClient, tenantId: string, userIds: string[]
 }
 
 function modulesDiff(t: TenantPlanRow, to: SaasPlan): { lost: TenantModule[]; gained: TenantModule[] } {
-  const before = modulesFor({ vertical: t.vertical, plan: t.saasPlan, publicBookingEnabled: t.publicBookingEnabled });
-  const after = modulesFor({ vertical: t.vertical, plan: to, publicBookingEnabled: t.publicBookingEnabled });
+  // T3b-1k2: con los overrides de Plataforma de los dos lados: un módulo «habilitado a mano» no se pierde al bajar
+  // de plan y uno «deshabilitado a mano» no se gana al subir (el drawer no tiene que prometer lo que no va a pasar).
+  const overrides = parseModuleOverrides(t);
+  const before = modulesFor({ vertical: t.vertical, plan: t.saasPlan, publicBookingEnabled: t.publicBookingEnabled, ...overrides });
+  const after = modulesFor({ vertical: t.vertical, plan: to, publicBookingEnabled: t.publicBookingEnabled, ...overrides });
   // En el orden de `TENANT_MODULES` (estable para la UI y los tests).
   return {
     lost: TENANT_MODULES.filter((m) => before.has(m) && !after.has(m)),

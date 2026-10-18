@@ -71,7 +71,7 @@ beforeAll(async () => {
   await Promise.all(dynamicLoads);
 });
 
-const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false }));
+const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }));
 
 const TENANT = {
   id: "t1",

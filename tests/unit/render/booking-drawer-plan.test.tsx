@@ -115,7 +115,7 @@ const ALL: PlanPermissions = { manage: true, schedule: true, authorize: true, re
 const renderDrawer = (b: DrawerBooking, caps: readonly string[] | null) =>
   renderToStaticMarkup(<BookingDrawer booking={b} onClose={() => {}} onSaved={() => {}} capabilities={caps} />);
 
-const GENERAL = Array.from(modulesFor({ vertical: "GENERAL" as never, plan: "PRO" as never, publicBookingEnabled: false }));
+const GENERAL = Array.from(modulesFor({ vertical: "GENERAL" as never, plan: "PRO" as never, publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }));
 
 const row = (b: PlanRowBooking, model: DrawerPlanModel, next: Parameters<typeof PlanRow>[0]["nextSession"] = null) =>
   renderToStaticMarkup(

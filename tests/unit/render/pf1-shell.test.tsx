@@ -207,7 +207,7 @@ describe("[PF1.0-a] copias locales del shell = su fuente", () => {
 });
 
 // ── Render ────────────────────────────────────────────────────────────────────────────────────────────────────
-const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false }));
+const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }));
 const OWNER = Array.from(capabilitiesFor("OWNER"));
 
 function shell() {

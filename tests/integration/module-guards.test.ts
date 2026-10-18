@@ -51,12 +51,17 @@ describe.skipIf(!RUN)("EV-C1 · guards de módulo", () => {
       vertical: "GENERAL",
       plan: "CLINICA", // PL-1: `plan` = `Tenant.saasPlan` (la factory espeja PRO → CLINICA)
       publicBookingEnabled: false,
+      // T3b-1k2 (M12): sin overrides de Plataforma (default de la columna).
+      moduleGrants: [],
+      moduleRevokes: [],
     });
     asUser(K.userId);
     expect((await getActor()).entitlements).toEqual({
       vertical: "KINESIOLOGY",
       plan: "CLINICA",
       publicBookingEnabled: true,
+      moduleGrants: [],
+      moduleRevokes: [],
     });
   });
 

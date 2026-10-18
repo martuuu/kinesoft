@@ -64,7 +64,7 @@ const TEAM: TeamMemberRow[] = [
 
 function inTenant(ui: ReactElement, opts: { vertical?: TenantVertical; turnero?: boolean } = {}) {
   const vertical = opts.vertical ?? "GENERAL";
-  const modules = modulesFor({ vertical, plan: "CLINICA", publicBookingEnabled: opts.turnero ?? true });
+  const modules = modulesFor({ vertical, plan: "CLINICA", publicBookingEnabled: opts.turnero ?? true, moduleGrants: [], moduleRevokes: [] });
   return renderToStaticMarkup(
     <TenantModulesProvider modules={[...modules]} vertical={vertical}>
       {ui}

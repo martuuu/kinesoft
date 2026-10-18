@@ -34,7 +34,7 @@ import { TenantModulesProvider } from "@/components/layout/tenant-modules-contex
 import { capabilitiesFor } from "@/lib/capabilities";
 import { modulesFor } from "@/lib/tenant-modules";
 
-const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false }));
+const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }));
 
 /** Sonda: deja `set` y el estado del contexto real a mano (sin DOM no hay clicks). */
 function probe(initialPalette?: Parameters<typeof TweaksProvider>[0]["initialPalette"]) {

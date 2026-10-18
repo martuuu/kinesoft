@@ -135,6 +135,9 @@ export type SupportTarget = {
     /** PL-1e: el plan SaaS (`Tenant.saasPlan`), igual que `AccessMembership.tenant.plan`. */
     plan: SaasPlan;
     publicBookingEnabled: boolean;
+    /** T3b-1k2 (M12): overrides de Plataforma crudos; `entitlementsOf` (lib/session.ts) los normaliza. */
+    moduleGrants: string[];
+    moduleRevokes: string[];
     status: TenantStatus;
     subscriptionStatus: SubscriptionStatus;
     trialEndsAt: Date | null;
@@ -179,6 +182,8 @@ export async function resolveSupportTarget(userId: string): Promise<SupportTarge
           vertical: true,
           saasPlan: true,
           publicBookingEnabled: true,
+          moduleGrants: true,
+          moduleRevokes: true,
           status: true,
           subscriptionStatus: true,
           trialEndsAt: true,

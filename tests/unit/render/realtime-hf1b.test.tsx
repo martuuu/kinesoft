@@ -196,7 +196,7 @@ describe("[HF-1c] avisos de llegada", () => {
     alerts.live = [];
     renderToStaticMarkup(
       <AppShell
-        modules={Array.from(modulesFor({ vertical: "KINESIOLOGY", plan, publicBookingEnabled: false }))}
+        modules={Array.from(modulesFor({ vertical: "KINESIOLOGY", plan, publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }))}
         caps={OWNER}
         realtime={{ driver, tenantId: "t1", url: "https://x.supabase.co", anonKey: "k" }}
         alertViewer={{ practitionerId: "p1", canOperateAll: true }}
@@ -210,7 +210,7 @@ describe("[HF-1c] avisos de llegada", () => {
   }
 
   it("[HF-1c] ArrivalAlerts sin salaEspera no arranca aunque haya canal", () => {
-    expect(modulesFor({ vertical: "KINESIOLOGY", plan: "CONSULTORIO", publicBookingEnabled: false })).not.toContain(
+    expect(modulesFor({ vertical: "KINESIOLOGY", plan: "CONSULTORIO", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] })).not.toContain(
       "salaEspera",
     );
     expect(shell("CONSULTORIO", "supabase")).toBe(false);

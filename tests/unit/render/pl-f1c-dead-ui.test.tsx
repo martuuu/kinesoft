@@ -54,7 +54,7 @@ import { capabilitiesFor } from "@/lib/capabilities";
 import { modulesFor } from "@/lib/tenant-modules";
 import { USER_NO_NAME } from "@/lib/display-name";
 
-const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false }));
+const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }));
 const CAPS = Array.from(capabilitiesFor("OWNER"));
 const src = (rel: string) => readFileSync(join(process.cwd(), rel), "utf8");
 

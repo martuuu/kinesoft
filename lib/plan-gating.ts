@@ -27,7 +27,10 @@
 import type { Prisma, SaasPlan, TenantVertical } from "@prisma/client";
 import { withTenantDb, type DbClient } from "@/lib/rls";
 import { getActor } from "@/lib/session";
-import { modulesFor } from "@/lib/tenant-modules";
+import { modulesFor, NO_MODULE_OVERRIDES, parseModuleOverrides, type TenantEntitlements } from "@/lib/tenant-modules";
+
+/** T3b-1k2 (M12): los overrides de Plataforma que mueven el catálogo (p. ej. «Catálogo global» habilitado a mano). */
+export type ModuleOverrides = Pick<TenantEntitlements, "moduleGrants" | "moduleRevokes">;
 
 export type CatalogScope = "none" | "own" | "full";
 
@@ -64,27 +67,37 @@ export async function gatingForActor(db?: DbClient): Promise<ExerciseCapabilitie
     return resolveCapabilities(
       actor.entitlements.plan,
       actor.tenantId,
-      actor.entitlements.vertical
+      actor.entitlements.vertical,
+      actor.entitlements
     );
   }
   const tenant = await withTenantDb(actor.tenantId, db, (c) =>
     c.tenant.findUnique({
       where: { id: actor.tenantId },
-      select: { saasPlan: true, vertical: true },
+      // T3b-1k2: + los overrides en la MISMA lectura (dos columnas, 0 sentencias nuevas).
+      select: { saasPlan: true, vertical: true, moduleGrants: true, moduleRevokes: true },
     })
   );
   // Falla cerrado: sin fila de tenant → General (sin catálogo, sin nada).
   if (!tenant) return resolveCapabilities("INDIVIDUAL", actor.tenantId, "GENERAL");
-  return resolveCapabilities(tenant.saasPlan, actor.tenantId, tenant.vertical);
+  return resolveCapabilities(tenant.saasPlan, actor.tenantId, tenant.vertical, parseModuleOverrides(tenant));
 }
 
 export function resolveCapabilities(
   plan: SaasPlan,
   tenantId: string,
-  vertical: TenantVertical = "KINESIOLOGY"
+  vertical: TenantVertical = "KINESIOLOGY",
+  // T3b-1k2: sin overrides = la matriz del plan (los callers que tienen el actor pasan `actor.entitlements`).
+  overrides: ModuleOverrides = NO_MODULE_OVERRIDES
 ): ExerciseCapabilities {
   // El switch del turnero no influye en el catálogo: se pasa fijo.
-  const modules = modulesFor({ vertical, plan, publicBookingEnabled: false });
+  const modules = modulesFor({
+    vertical,
+    plan,
+    publicBookingEnabled: false,
+    moduleGrants: overrides.moduleGrants,
+    moduleRevokes: overrides.moduleRevokes,
+  });
   const catalogScope: CatalogScope = !modules.has("ejercicios")
     ? "none"
     : modules.has("ejerciciosGlobales")

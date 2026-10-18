@@ -371,7 +371,7 @@ describe("[P3-S22h] Resumen", () => {
   });
 
   it("[P3-Z-F3b] consultorio General: sin card de Plan, sin Diagnóstico ni EVA; las notas siguen", () => {
-    const general = Array.from(modulesFor({ vertical: "GENERAL", plan: "INDIVIDUAL", publicBookingEnabled: false }));
+    const general = Array.from(modulesFor({ vertical: "GENERAL", plan: "INDIVIDUAL", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }));
     // Precondición del fixture: General no trae ninguno de los tres módulos.
     expect(general).not.toContain("planes");
     expect(general).not.toContain("diagnostico");
@@ -392,7 +392,7 @@ describe("[P3-S22h] Resumen", () => {
     }
     // Kine PRO (control): las mismas props sí muestran Plan y Diagnóstico.
     const pro = renderToStaticMarkup(
-      <TenantModulesProvider modules={Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false }))}>
+      <TenantModulesProvider modules={Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }))}>
         <ResumenView patient={patient} plan={null} diagnosisName="Lumbalgia secreta" permissions={FULL} onOpenEditor={noop} />
       </TenantModulesProvider>,
     );

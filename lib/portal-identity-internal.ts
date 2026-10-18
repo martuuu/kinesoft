@@ -20,7 +20,7 @@ import "server-only";
  *
  * El alias de slug viejo se resuelve en la página (`resolveSlugAlias`), no acá.
  */
-import { modulesFor, type TenantModule } from "@/lib/tenant-modules";
+import { modulesFor, parseModuleOverrides, type TenantModule } from "@/lib/tenant-modules";
 import type { TenantAccessInput } from "@/lib/tenant-access";
 import type { SaasPlan, TenantVertical } from "@prisma/client";
 // Superficie del paciente, sin Actor: canal service (BYPASSRLS). Ver lib/db.ts#prismaService.
@@ -65,6 +65,9 @@ const TENANT_SELECT = {
   // `getTenantModulesById`, que releía la fila: `requirePortalPatient` costaba 4 sentencias y la home 1 más por ficha.
   saasPlan: true,
   publicBookingEnabled: true,
+  // T3b-1k2 (M12): overrides de Plataforma, en la misma lectura (0 sentencias nuevas).
+  moduleGrants: true,
+  moduleRevokes: true,
   // TenantAccessInput (BO2-D): lo que necesita `publicSurfacesOpenFor`.
   status: true,
   subscriptionStatus: true,
@@ -88,6 +91,8 @@ type TenantRow = TenantAccessInput & {
   vertical: TenantVertical;
   saasPlan: SaasPlan;
   publicBookingEnabled: boolean;
+  moduleGrants: string[];
+  moduleRevokes: string[];
   publicEmail: string | null;
 };
 
@@ -109,7 +114,12 @@ function toRef(
       publicEmail: tenant.publicEmail,
     },
     // Mismo cálculo que `getTenantModulesById` (lib/tenant-entitlements-internal.ts), sin releer la fila.
-    modules: modulesFor({ vertical: tenant.vertical, plan: tenant.saasPlan, publicBookingEnabled: tenant.publicBookingEnabled }),
+    modules: modulesFor({
+      vertical: tenant.vertical,
+      plan: tenant.saasPlan,
+      publicBookingEnabled: tenant.publicBookingEnabled,
+      ...parseModuleOverrides(tenant),
+    }),
     surfacesOpen: publicSurfacesOpenFor(tenant),
     patient: {
       firstName: patient.firstName,

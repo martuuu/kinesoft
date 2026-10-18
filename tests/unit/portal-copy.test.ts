@@ -75,14 +75,14 @@ describe("[P4-S24] portal-copy · plan y tabs", () => {
   });
 
   it("tabs por secciones: Kine completo vs General sin turnero", () => {
-    const kine = portalSectionsFor(modulesFor({ vertical: "KINESIOLOGY", plan: "INDIVIDUAL", publicBookingEnabled: true }));
+    const kine = portalSectionsFor(modulesFor({ vertical: "KINESIOLOGY", plan: "INDIVIDUAL", publicBookingEnabled: true, moduleGrants: [], moduleRevokes: [] }));
     expect(portalTabItems("consultorio-sur", kine)).toEqual([
       { key: "inicio", href: "/portal/c/consultorio-sur", label: "Tu plan", external: false },
       { key: "ejercicios", href: "/portal/c/consultorio-sur/ejercicios", label: "Ejercicios", external: false },
       { key: "cuenta", href: "/portal/c/consultorio-sur/cuenta", label: "Estado de cuenta", external: false },
       { key: "reservar", href: "/c/consultorio-sur/booking", label: "Sacar un turno", external: true },
     ]);
-    const general = portalSectionsFor(modulesFor({ vertical: "GENERAL", plan: "LIBRE", publicBookingEnabled: false }));
+    const general = portalSectionsFor(modulesFor({ vertical: "GENERAL", plan: "LIBRE", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }));
     const g = portalTabItems("x", general);
     expect(g.map((t) => t.key)).toEqual(["inicio", "cuenta"]);
     expect(g[0].label).toBe("Tu consultorio");
@@ -96,7 +96,7 @@ describe("[P4-S24] portal-copy · plan y tabs", () => {
     for (const vertical of ["KINESIOLOGY", "GENERAL"] as const) {
       for (const plan of ["INDIVIDUAL", "CONSULTORIO", "CLINICA", "LIBRE"] as const) {
         for (const publicBookingEnabled of [true, false]) {
-          const mods = modulesFor({ vertical, plan, publicBookingEnabled });
+          const mods = modulesFor({ vertical, plan, publicBookingEnabled, moduleGrants: [], moduleRevokes: [] });
           const keys = portalTabItems("s", portalSectionsFor(mods)).map((t) => t.key);
           expect(keys).toContain("inicio");
           expect(keys).toContain("cuenta");

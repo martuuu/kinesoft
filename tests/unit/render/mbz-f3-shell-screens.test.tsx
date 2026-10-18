@@ -34,7 +34,7 @@ import { modulesFor } from "@/lib/tenant-modules";
 const ROOT = process.cwd();
 const raw = (rel: string) => readFileSync(join(ROOT, rel), "utf8");
 const css = (rel: string) => raw(rel).replace(/\/\*[\s\S]*?\*\//g, "");
-const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false }));
+const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }));
 
 /** Cuerpo de cada bloque `@media (max-width: 767px)` (llaves balanceadas). */
 function mobileBlocks(source: string): string {

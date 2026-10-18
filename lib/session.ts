@@ -62,7 +62,7 @@ import { logger } from "@/lib/logger";
 import { ensureRequestContext, primeRequestContext } from "@/lib/request-context";
 import { timeAsync } from "@/lib/server-timing";
 import { clientIp } from "@/lib/client-ip";
-import type { TenantEntitlements } from "@/lib/tenant-modules";
+import { parseModuleOverrides, type TenantEntitlements, type TenantModule } from "@/lib/tenant-modules";
 import { tenantAccessEnforcement } from "@/lib/env";
 import { getRequestContext } from "@/lib/request-context";
 import {
@@ -134,15 +134,24 @@ export type Actor = {
 };
 
 /**
- * Solo las tres columnas: no se cuela el resto de la fila de Tenant en el Actor. PL-1e: `plan` es el plan SaaS
+ * Solo las columnas de módulos: no se cuela el resto de la fila de Tenant en el Actor. PL-1e: `plan` es el plan SaaS
  * (`Tenant.saasPlan`, PL-D1); el `Tenant.plan` legado lo espeja el escritor y ya no se lee para los módulos.
+ * T3b-1k2 (M12): + los overrides de Plataforma, crudos (`TEXT[]`) y normalizados acá (`parseModuleOverrides`: falla
+ * cerrado ante un valor desconocido), así los tres caminos (miembro, soporte, demo) los tipan igual.
  */
 function entitlementsOf(t: {
   vertical: TenantEntitlements["vertical"];
   plan: SaasPlan;
   publicBookingEnabled: boolean;
+  moduleGrants: readonly string[];
+  moduleRevokes: readonly string[];
 }): TenantEntitlements {
-  return { vertical: t.vertical, plan: t.plan, publicBookingEnabled: t.publicBookingEnabled };
+  return {
+    vertical: t.vertical,
+    plan: t.plan,
+    publicBookingEnabled: t.publicBookingEnabled,
+    ...parseModuleOverrides(t),
+  };
 }
 
 /**
@@ -204,6 +213,9 @@ export type AccessMembership = MembershipLite & {
     /** PL-1e: el plan SaaS (`Tenant.saasPlan`), no el legado. */
     plan: SaasPlan;
     publicBookingEnabled: boolean;
+    /** T3b-1k2 (M12): overrides de Plataforma, de la misma sentencia (`parseModuleOverrides`). */
+    moduleGrants: readonly TenantModule[];
+    moduleRevokes: readonly TenantModule[];
     onboardingCompletedAt: Date | null;
   } & TenantAccessInput;
 };
@@ -238,6 +250,8 @@ type AccessRow = {
   vertical: AccessMembership["tenant"]["vertical"] | null;
   saasPlan: AccessMembership["tenant"]["plan"] | null;
   publicBookingEnabled: boolean | null;
+  moduleGrants: string[] | null;
+  moduleRevokes: string[] | null;
   onboardingCompletedAt: Date | null;
   status: AccessMembership["tenant"]["status"] | null;
   subscriptionStatus: AccessMembership["tenant"]["subscriptionStatus"] | null;
@@ -273,7 +287,7 @@ export async function loadAccessMemberships(userId: string): Promise<{
            m."tenantId", m."role"::text AS "role", m."acceptedAt", m."disabledAt" AS "membershipDisabledAt",
            m."clinical", m."grantSettings", m."grantBilling",
            t."slug", t."name", t."vertical"::text AS "vertical", t."saasPlan"::text AS "saasPlan",
-           t."publicBookingEnabled", t."onboardingCompletedAt",
+           t."publicBookingEnabled", t."moduleGrants", t."moduleRevokes", t."onboardingCompletedAt",
            t."status"::text AS "status", t."subscriptionStatus"::text AS "subscriptionStatus",
            t."trialEndsAt", t."subscriptionStatusChangedAt",
            p."id" AS "practitionerId"
@@ -310,6 +324,8 @@ export async function loadAccessMemberships(userId: string): Promise<{
         vertical: r.vertical,
         plan: r.saasPlan,
         publicBookingEnabled: !!r.publicBookingEnabled,
+        // T3b-1k2 (M12): dos columnas más en la MISMA sentencia (0 sentencias nuevas; `TEXT[]` llega como string[]).
+        ...parseModuleOverrides(r),
         onboardingCompletedAt: r.onboardingCompletedAt,
         // BO1-A: las 4 columnas de `tenantAccessFor` (TENANT_ACCESS_SELECT), en la misma lectura.
         status: r.status,

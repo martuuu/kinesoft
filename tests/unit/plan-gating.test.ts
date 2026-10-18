@@ -78,7 +78,7 @@ describe("resolveCapabilities (C-EV9)", () => {
   it("los flags salen de los módulos (matriz modulesFor), no de una lista de planes propia", () => {
     for (const vertical of VERTICALS) {
       for (const plan of PLANS) {
-        const m = modulesFor({ vertical, plan, publicBookingEnabled: false });
+        const m = modulesFor({ vertical, plan, publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] });
         const g = resolveCapabilities(plan, T, vertical);
         expect(g.canCreate, `${vertical}/${plan}`).toBe(m.has("ejercicios"));
         expect(g.canFavourite, `${vertical}/${plan}`).toBe(m.has("favoritos"));

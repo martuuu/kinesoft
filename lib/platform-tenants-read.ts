@@ -31,7 +31,7 @@ import { tenantAccessEnforcement } from "@/lib/env";
 import { escapeLike } from "@/lib/email-match";
 import { displayUserName } from "@/lib/display-name";
 import { effectiveMode, tenantAccessFor } from "@/lib/tenant-access";
-import { modulesFor, TENANT_MODULES } from "@/lib/tenant-modules";
+import { modulesFor, parseModuleOverrides, TENANT_MODULES } from "@/lib/tenant-modules";
 import { PLAN_DEFAULTS, SAAS_PLANS, effectiveLimits } from "@/lib/saas-plans-logic";
 import type { PlanLimits } from "@/lib/saas-plans-types";
 import {
@@ -359,6 +359,9 @@ export async function getPlatformTenantDetail(rawId: string): Promise<PlatformTe
       publicEmail: true,
       sharedPatientView: true,
       updatedAt: true,
+      // T3b-1k2 (M12): overrides de Plataforma para el set efectivo de módulos (misma sentencia del detalle).
+      moduleGrants: true,
+      moduleRevokes: true,
       _count: {
         select: {
           ...rowSelect._count.select,
@@ -396,7 +399,13 @@ export async function getPlatformTenantDetail(rawId: string): Promise<PlatformTe
   );
 
   // C-PL1: `TenantEntitlements.plan` es el plan SaaS.
-  const modules = modulesFor({ vertical: t.vertical, plan: t.saasPlan, publicBookingEnabled: t.publicBookingEnabled });
+  // T3b-1k2: con los overrides de Plataforma: la ficha muestra lo que el consultorio ve de verdad.
+  const modules = modulesFor({
+    vertical: t.vertical,
+    plan: t.saasPlan,
+    publicBookingEnabled: t.publicBookingEnabled,
+    ...parseModuleOverrides(t),
+  });
   return {
     ...toRow(t, homes, now, limitsByPlan),
     legalName: t.legalName,

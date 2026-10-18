@@ -121,7 +121,7 @@ describe("[PL-Z B7] actividad de seguridad", () => {
 describe("[PL-Z (a)] el profesional prende su propio turnero desde el menú de perfil", () => {
   const inTenant = (ui: ReactElement, turnero: boolean) =>
     renderToStaticMarkup(
-      <TenantModulesProvider modules={[...modulesFor({ vertical: "KINESIOLOGY", plan: "CONSULTORIO", publicBookingEnabled: turnero })]} vertical="KINESIOLOGY">
+      <TenantModulesProvider modules={[...modulesFor({ vertical: "KINESIOLOGY", plan: "CONSULTORIO", publicBookingEnabled: turnero, moduleGrants: [], moduleRevokes: [] })]} vertical="KINESIOLOGY">
         {ui}
       </TenantModulesProvider>
     );

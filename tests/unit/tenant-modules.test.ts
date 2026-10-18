@@ -11,6 +11,11 @@ import {
   planRank,
   PLAN_ORDER,
   MODULE_DENIED_COPY,
+  MODULE_REVOKED_COPY,
+  moduleDeniedCopy,
+  moduleStateRows,
+  parseModuleOverrides,
+  isModuleOverridable,
   VERTICAL_LABEL,
   SAAS_PLAN_LABEL,
   PLAN_LABEL,
@@ -50,10 +55,19 @@ const EXPECTED: Record<TenantVertical, Record<SaasPlan, TenantModule[]>> = {
   },
 };
 
-const e = (vertical: TenantVertical, plan: SaasPlan, publicBookingEnabled = false): TenantEntitlements => ({
+// T3b-1k2: los overrides de Plataforma son obligatorios en el tipo; la matriz se prueba sin overrides.
+const e = (
+  vertical: TenantVertical,
+  plan: SaasPlan,
+  publicBookingEnabled = false,
+  moduleGrants: readonly TenantModule[] = [],
+  moduleRevokes: readonly TenantModule[] = []
+): TenantEntitlements => ({
   vertical,
   plan,
   publicBookingEnabled,
+  moduleGrants,
+  moduleRevokes,
 });
 
 const sorted = (s: Iterable<string>) => [...s].sort();
@@ -82,10 +96,10 @@ describe("[PL-1a] modulesFor — matriz completa (§20.5.2)", () => {
   });
 
   it("falla cerrado ante una vertical o un plan desconocidos (o un plan LEGADO colado)", () => {
-    const weird = modulesFor({ vertical: "OTRA" as TenantVertical, plan: "CLINICA", publicBookingEnabled: false });
+    const weird = modulesFor(e("OTRA" as TenantVertical, "CLINICA"));
     expect(sorted(weird)).toEqual(sorted([...CORE, ...CLINICA_UP]));
     for (const bad of ["PLATINO", "PRO", "ENTERPRISE"]) {
-      const m = modulesFor({ vertical: "KINESIOLOGY", plan: bad as SaasPlan, publicBookingEnabled: false });
+      const m = modulesFor(e("KINESIOLOGY", bad as SaasPlan));
       expect(sorted(m)).toEqual(sorted(EXPECTED.KINESIOLOGY.INDIVIDUAL));
     }
   });
@@ -331,5 +345,116 @@ describe("planRank / PLAN_ORDER", () => {
     expect(PLAN_ORDER).toEqual(["INDIVIDUAL", "CONSULTORIO", "CLINICA", "LIBRE"]);
     expect(PLAN_ORDER.map(planRank)).toEqual([0, 1, 2, 3]);
     expect(planRank("PRO" as SaasPlan)).toBe(0);
+  });
+});
+
+/**
+ * T3b-1k2 (plan §23.6): módulos a medida por consultorio desde Plataforma (`Tenant.moduleGrants`/`moduleRevokes`, M12).
+ * `modulesFor` = base del plan + grants que existen en la vertical − revokes fuera del núcleo; el turnero sigue el
+ * switch (ningún override lo toca).
+ */
+describe("[AS-1k2] overrides de módulos (moduleGrants / moduleRevokes)", () => {
+  it("[AS-1k2] un grant suma un módulo que el plan no trae (Kine Individual + plantillas; General Individual + salas)", () => {
+    const kine = modulesFor(e("KINESIOLOGY", "INDIVIDUAL", false, ["plantillas"]));
+    expect(kine.has("plantillas")).toBe(true);
+    expect(sorted(kine)).toEqual(sorted([...EXPECTED.KINESIOLOGY.INDIVIDUAL, "plantillas"]));
+    const gen = modulesFor(e("GENERAL", "INDIVIDUAL", false, ["salas", "salaEspera"]));
+    expect(sorted(gen)).toEqual(sorted([...CORE, "salas", "salaEspera"]));
+    expect(roomsEnabled(e("GENERAL", "INDIVIDUAL", false, ["salas"]))).toBe(true);
+  });
+
+  it("[AS-1k2] un revoke saca un módulo del plan (Kine Clínica − salaEspera − diagnostico)", () => {
+    const m = modulesFor(e("KINESIOLOGY", "CLINICA", false, [], ["salaEspera", "diagnostico"]));
+    expect(m.has("salaEspera")).toBe(false);
+    expect(m.has("diagnostico")).toBe(false);
+    expect(m.has("salas")).toBe(true);
+    expect(waitingRoomEnabled(e("KINESIOLOGY", "CLINICA", false, [], ["salaEspera"]))).toBe(false);
+  });
+
+  it("[AS-1k2] el núcleo no se revoca: un revoke de agenda/pacientes/facturacion/obrasSociales/evoluciones se ignora", () => {
+    const m = modulesFor(e("GENERAL", "CLINICA", false, [], [...CORE, "salas"]));
+    for (const c of CORE) expect(m.has(c)).toBe(true);
+    expect(m.has("salas")).toBe(false); // control: el revoke de un no-núcleo sí aplica
+  });
+
+  it("[AS-1k2] un módulo que no existe en la vertical no se concede (Diagnóstico en General)", () => {
+    const m = modulesFor(e("GENERAL", "LIBRE", false, ["diagnostico", "planes", "salas"]));
+    expect(m.has("diagnostico")).toBe(false);
+    expect(m.has("planes")).toBe(false);
+    for (const k of KINE_ONLY) expect(m.has(k)).toBe(false);
+    // Control: el mismo grant en Kine Individual sí entra (plantillas no está en Individual).
+    expect(modulesFor(e("KINESIOLOGY", "INDIVIDUAL", false, ["plantillas"])).has("plantillas")).toBe(true);
+  });
+
+  it("[AS-1k2] el turnero ignora los overrides: solo lo prende/apaga el switch", () => {
+    expect(modulesFor(e("KINESIOLOGY", "CLINICA", false, ["turneroPublico", "salas"])).has("turneroPublico")).toBe(false);
+    expect(modulesFor(e("KINESIOLOGY", "CLINICA", true, [], ["turneroPublico", "salas"])).has("turneroPublico")).toBe(true);
+    // Control: en la misma llamada, el revoke de salas sí aplica (los overrides se leen).
+    expect(modulesFor(e("KINESIOLOGY", "CLINICA", true, [], ["turneroPublico", "salas"])).has("salas")).toBe(false);
+    expect(isModuleOverridable("turneroPublico", "KINESIOLOGY")).toBe(false);
+  });
+
+  it("[AS-1k2] el memo distingue overrides (y no depende del orden de las listas)", () => {
+    const plain = modulesFor(e("KINESIOLOGY", "INDIVIDUAL"));
+    const granted = modulesFor(e("KINESIOLOGY", "INDIVIDUAL", false, ["plantillas", "favoritos"]));
+    const revoked = modulesFor(e("KINESIOLOGY", "INDIVIDUAL", false, [], ["plantillas"]));
+    expect(granted).not.toBe(plain);
+    expect(granted.has("plantillas")).toBe(true);
+    expect(plain.has("plantillas")).toBe(false);
+    expect(revoked.has("plantillas")).toBe(false);
+    // Grant y revoke del mismo módulo en listas distintas no comparten clave.
+    expect(revoked).not.toBe(granted);
+    // Mismo contenido en otro orden → misma identidad.
+    expect(modulesFor(e("KINESIOLOGY", "INDIVIDUAL", false, ["favoritos", "plantillas"]))).toBe(granted);
+    // Sin overrides sigue siendo la misma identidad de siempre.
+    expect(modulesFor(e("KINESIOLOGY", "INDIVIDUAL"))).toBe(plain);
+  });
+
+  it("[AS-1k2] isModuleOverridable: ni núcleo, ni turnero, ni módulos de otra vertical", () => {
+    for (const c of CORE) expect(isModuleOverridable(c, "KINESIOLOGY")).toBe(false);
+    for (const k of KINE_ONLY) {
+      expect(isModuleOverridable(k, "GENERAL")).toBe(false);
+      expect(isModuleOverridable(k, "KINESIOLOGY")).toBe(true);
+    }
+    for (const c of CLINICA_UP) {
+      expect(isModuleOverridable(c, "GENERAL")).toBe(true);
+      expect(isModuleOverridable(c, "KINESIOLOGY")).toBe(true);
+    }
+    expect(isModuleOverridable("noexiste" as TenantModule, "KINESIOLOGY")).toBe(false);
+  });
+
+  it("[AS-1k2] parseModuleOverrides: descarta lo desconocido y duplicado, ordena (falla cerrado sobre la columna cruda)", () => {
+    expect(parseModuleOverrides({ moduleGrants: ["salas", "basura", "plantillas", "salas"], moduleRevokes: ["diagnostico"] })).toEqual({
+      moduleGrants: ["plantillas", "salas"],
+      moduleRevokes: ["diagnostico"],
+    });
+    expect(parseModuleOverrides({ moduleGrants: [], moduleRevokes: [] })).toEqual({ moduleGrants: [], moduleRevokes: [] });
+  });
+
+  it("[AS-1k2] moduleStateRows: plan / granted / revoked / absent, candado en el núcleo y en lo que no existe en la vertical", () => {
+    const rows = moduleStateRows(e("KINESIOLOGY", "INDIVIDUAL", true, ["plantillas"], ["diagnostico"]));
+    const by = Object.fromEntries(rows.map((r) => [r.module, r]));
+    // El turnero no es un override: no tiene fila (se maneja con su switch).
+    expect(rows.map((r) => r.module)).toEqual(TENANT_MODULES.filter((m) => m !== "turneroPublico"));
+    expect(by.agenda).toEqual({ module: "agenda", state: "plan", locked: true });
+    expect(by.planes).toEqual({ module: "planes", state: "plan", locked: false });
+    expect(by.plantillas).toEqual({ module: "plantillas", state: "granted", locked: false });
+    expect(by.diagnostico).toEqual({ module: "diagnostico", state: "revoked", locked: false });
+    expect(by.salas).toEqual({ module: "salas", state: "absent", locked: false });
+    const gen = Object.fromEntries(moduleStateRows(e("GENERAL", "CLINICA")).map((r) => [r.module, r]));
+    expect(gen.diagnostico).toEqual({ module: "diagnostico", state: "absent", locked: true });
+    expect(gen.salas).toEqual({ module: "salas", state: "plan", locked: false });
+  });
+
+  it("[AS-1k2] moduleDeniedCopy: el revocado dice que no está habilitado; el resto, el copy de siempre", () => {
+    expect(MODULE_REVOKED_COPY).toBe("Este módulo no está habilitado para tu consultorio. Si lo necesitás, escribinos desde Soporte.");
+    const rev = e("KINESIOLOGY", "CLINICA", false, [], ["salaEspera"]);
+    expect(moduleDeniedCopy(rev, "salaEspera")).toBe(MODULE_REVOKED_COPY);
+    expect(moduleDeniedCopy(rev, "plantillas")).toBe(MODULE_DENIED_COPY.plantillas);
+    expect(moduleDeniedCopy(e("KINESIOLOGY", "INDIVIDUAL"), "salaEspera")).toBe(MODULE_DENIED_COPY.salaEspera);
+    // Un revoke ignorado (núcleo, turnero) no cambia el copy.
+    expect(moduleDeniedCopy(e("GENERAL", "INDIVIDUAL", false, [], ["turneroPublico"]), "turneroPublico")).toBe(
+      MODULE_DENIED_COPY.turneroPublico
+    );
   });
 });

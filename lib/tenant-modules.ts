@@ -48,6 +48,14 @@ export type TenantEntitlements = {
   vertical: TenantVertical;
   plan: SaasPlan;
   publicBookingEnabled: boolean;
+  /**
+   * T3b-1k2 (plan §23.6, M12): módulos a medida que Plataforma le suma (`Tenant.moduleGrants`) o le saca
+   * (`Tenant.moduleRevokes`) a la base del plan. OBLIGATORIOS a propósito: con opcionales, un sitio que arma
+   * entitlements a mano y se olvida de la columna le devolvía a un consultorio un módulo que le sacaron (o le
+   * escondía uno que le dieron) sin que el compilador avise. Las columnas crudas pasan por `parseModuleOverrides`.
+   */
+  moduleGrants: readonly TenantModule[];
+  moduleRevokes: readonly TenantModule[];
 };
 
 /**
@@ -82,7 +90,18 @@ export function planRank(p: SaasPlan): number {
   return Math.max(0, PLAN_ORDER.indexOf(p));
 }
 
-function baseModules(e: TenantEntitlements): readonly TenantModule[] {
+/**
+ * Sin overrides de Plataforma: para lo que evalúa la MATRIZ del plan y no un consultorio (precios públicos, el
+ * default del contexto de React, fixtures). Un sitio que arma los entitlements de un consultorio real lee las
+ * columnas (`parseModuleOverrides`), nunca esto.
+ */
+export const NO_MODULE_OVERRIDES: Pick<TenantEntitlements, "moduleGrants" | "moduleRevokes"> = Object.freeze({
+  moduleGrants: Object.freeze([]) as readonly TenantModule[],
+  moduleRevokes: Object.freeze([]) as readonly TenantModule[],
+});
+
+/** Base del plan, sin overrides ni turnero (solo mira vertical y plan). */
+function baseModules(e: Pick<TenantEntitlements, "vertical" | "plan">): readonly TenantModule[] {
   // Falla cerrado: un plan desconocido (enum nuevo sin actualizar esta matriz, o un valor legado colado por un
   // caller que todavía lee `Tenant.plan`) se trata como el plan más chico; una vertical desconocida, como General.
   const rank = PLAN_ORDER.indexOf(e.plan);
@@ -97,16 +116,32 @@ function baseModules(e: TenantEntitlements): readonly TenantModule[] {
   return out;
 }
 
-// 2 verticales × 4 planes × 2 switches: memoizado para que el mismo set sea la
-// misma identidad (contexto de React, deps de hooks) y no se arme por request.
+// 2 verticales × 4 planes × 2 switches (+ los overrides de Plataforma, casi siempre vacíos): memoizado para que el
+// mismo set sea la misma identidad (contexto de React, deps de hooks) y no se arme por request. Las claves posibles
+// están acotadas: las listas solo admiten `TENANT_MODULES` (el escritor las valida y `parseModuleOverrides` filtra).
 const memo = new Map<string, ReadonlySet<TenantModule>>();
 
-/** Matriz de módulos (plan §20.5.2, C-PL1). `turneroPublico` = el switch, en cualquier vertical y plan. */
+/** Clave de una lista de overrides: independiente del orden (dos lecturas del mismo consultorio dan la misma identidad). */
+function listKey(l: readonly TenantModule[]): string {
+  return l.length === 0 ? "" : l.length === 1 ? l[0] : [...l].sort().join(",");
+}
+
+/**
+ * Matriz de módulos (plan §20.5.2, C-PL1) + overrides de Plataforma (T3b-1k2, §23.6). `turneroPublico` = el switch,
+ * en cualquier vertical y plan; ningún override lo toca (lo prende el consultorio desde Configuración y su barrera es
+ * `isPublicBookingOpen`). Un grant solo cuenta si el módulo existe en la vertical (`minimumPlanFor` ≠ null: a un
+ * General no se le concede Diagnóstico ni con una fila tocada a mano) y un revoke nunca saca el núcleo.
+ */
 export function modulesFor(e: TenantEntitlements): ReadonlySet<TenantModule> {
-  const key = `${e.vertical}|${e.plan}|${e.publicBookingEnabled === true}`;
+  // `?? []`: defensa para callers en JS o fixtures viejas que no pasan las listas (el tipo las exige).
+  const grants = e.moduleGrants ?? [];
+  const revokes = e.moduleRevokes ?? [];
+  const key = `${e.vertical}|${e.plan}|${e.publicBookingEnabled === true}|${listKey(grants)}|${listKey(revokes)}`;
   const hit = memo.get(key);
   if (hit) return hit;
   const set = new Set<TenantModule>(baseModules(e));
+  for (const m of grants) if (isModuleOverridable(m, e.vertical)) set.add(m);
+  for (const m of revokes) if (isModuleOverridable(m, e.vertical)) set.delete(m);
   if (e.publicBookingEnabled === true) set.add("turneroPublico");
   memo.set(key, set);
   return set;
@@ -136,10 +171,64 @@ export function waitingRoomEnabled(e: TenantEntitlements): boolean {
  * lo trae en esa vertical (p. ej. Diagnóstico en General). `turneroPublico` es un switch: se evalúa prendido.
  */
 export function minimumPlanFor(m: TenantModule, v: TenantVertical): SaasPlan | null {
-  for (const plan of PLAN_ORDER) {
-    if (modulesFor({ vertical: v, plan, publicBookingEnabled: true }).has(m)) return plan;
-  }
+  if (m === "turneroPublico") return PLAN_ORDER[0];
+  // La matriz del plan, sin overrides: `isModuleOverridable` se apoya en esto, así que no puede depender de ellos.
+  for (const plan of PLAN_ORDER) if (baseModules({ vertical: v, plan }).includes(m)) return plan;
   return null;
+}
+
+/** ¿Es del núcleo (común a las dos verticales y a todos los planes)? El núcleo no se revoca ni se concede. */
+export function isCoreModule(m: TenantModule): boolean {
+  return CORE.includes(m);
+}
+
+/**
+ * ¿Plataforma puede conceder o sacar este módulo a mano en esta vertical? (T3b-1k2, §23.6). No: el núcleo (lo tiene
+ * todo consultorio), el turnero (es el switch de Configuración) y lo que no existe en la vertical (no se le vende
+ * Kine a un General: `minimumPlanFor` = null). Un string fuera de `TENANT_MODULES` tampoco.
+ */
+export function isModuleOverridable(m: TenantModule, v: TenantVertical): boolean {
+  if (!(TENANT_MODULES as readonly string[]).includes(m)) return false;
+  if (m === "turneroPublico" || isCoreModule(m)) return false;
+  return minimumPlanFor(m, v) !== null;
+}
+
+/**
+ * Columnas crudas `Tenant.moduleGrants` / `moduleRevokes` (`TEXT[]`, M12) → listas tipadas: descarta lo desconocido
+ * (un módulo renombrado o una fila tocada a mano no concede nada: falla cerrado) y lo repetido, y ordena (misma clave
+ * de memo y misma comparación en el escritor, venga la fila de donde venga).
+ */
+export function parseModuleOverrides(row: {
+  moduleGrants: readonly string[] | null | undefined;
+  moduleRevokes: readonly string[] | null | undefined;
+}): { moduleGrants: TenantModule[]; moduleRevokes: TenantModule[] } {
+  const clean = (l: readonly string[] | null | undefined): TenantModule[] =>
+    [...new Set((l ?? []).filter((m): m is TenantModule => (TENANT_MODULES as readonly string[]).includes(m)))].sort();
+  return { moduleGrants: clean(row.moduleGrants), moduleRevokes: clean(row.moduleRevokes) };
+}
+
+/**
+ * Estado de cada módulo para la tabla «Módulos» de Plataforma (T3b-1k2; la UI es de T3c-1p): «Del plan» (`plan`),
+ * «Habilitado a mano» (`granted`), «Deshabilitado a mano» (`revoked`), «No incluido» (`absent`). `locked` = no se
+ * puede tocar (núcleo o módulo que no existe en la vertical). El turnero no tiene fila: es el switch del consultorio.
+ * Se deriva del set efectivo (`modulesFor`), así la tabla nunca dice algo distinto de lo que ve el consultorio.
+ */
+export type ModuleState = "plan" | "granted" | "revoked" | "absent";
+export type ModuleStateRow = { module: TenantModule; state: ModuleState; locked: boolean };
+
+export function moduleStateRows(e: TenantEntitlements): ModuleStateRow[] {
+  const base = new Set(baseModules(e));
+  const effective = modulesFor(e);
+  return TENANT_MODULES.filter((m) => m !== "turneroPublico").map((m) => {
+    const state: ModuleState = effective.has(m)
+      ? base.has(m)
+        ? "plan"
+        : "granted"
+      : base.has(m)
+        ? "revoked"
+        : "absent";
+    return { module: m, state, locked: !isModuleOverridable(m, e.vertical) };
+  });
 }
 
 /**
@@ -189,6 +278,21 @@ export const MODULE_DENIED_COPY: Record<TenantModule, string> = {
   favoritos: "Los favoritos están disponibles desde el plan Consultorio.",
   ejerciciosGlobales: "El catálogo de ejercicios de la plataforma está disponible desde el plan Consultorio.",
 };
+
+/** T3b-1k2 (§23.6): copy de un módulo que Plataforma le sacó al consultorio (no hay plan que vender: es a mano). */
+export const MODULE_REVOKED_COPY =
+  "Este módulo no está habilitado para tu consultorio. Si lo necesitás, escribinos desde Soporte.";
+
+/**
+ * Mensaje de «falta el módulo» para ESTE consultorio: si Plataforma se lo sacó (`moduleRevokes`, y el revoke cuenta),
+ * `MODULE_REVOKED_COPY`; si no, el de siempre (upsell o «no es para tu tipo de consultorio»). Un revoke de algo que el
+ * plan tampoco trae no cambia el copy: el upsell sigue siendo la salida.
+ */
+export function moduleDeniedCopy(e: TenantEntitlements, m: TenantModule): string {
+  const revoked =
+    (e.moduleRevokes ?? []).includes(m) && isModuleOverridable(m, e.vertical) && baseModules(e).includes(m);
+  return revoked ? MODULE_REVOKED_COPY : MODULE_DENIED_COPY[m];
+}
 
 // BO3 (decisión de producto §19.6 ítem 1): «Clínica general», no «Consultorio general» (que se confundía con el
 // consultorio = tenant). Mismo nombre en Plataforma, onboarding y el selector.

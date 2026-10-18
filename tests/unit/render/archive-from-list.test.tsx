@@ -35,8 +35,8 @@ import { archivePatientDialogCopy } from "@/components/patients/archive-patient-
 import { TenantModulesProvider } from "@/components/layout/tenant-modules-context";
 import { modulesFor } from "@/lib/tenant-modules";
 
-const GENERAL = modulesFor({ vertical: "GENERAL", plan: "INDIVIDUAL", publicBookingEnabled: false });
-const KINE_PRO = modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false });
+const GENERAL = modulesFor({ vertical: "GENERAL", plan: "INDIVIDUAL", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] });
+const KINE_PRO = modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] });
 
 beforeEach(() => {
   setPatientArchived.mockReset();

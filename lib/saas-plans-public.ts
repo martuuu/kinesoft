@@ -24,7 +24,7 @@ import { SAAS_PLANS_TAG, ttl } from "@/lib/cache-tags";
 import { BRAND_NAME } from "@/lib/brand";
 import { SAAS_PLANS } from "@/lib/saas-plans-logic";
 import type { PlanLimits, SaasPlanConfigRow } from "@/lib/saas-plans-types";
-import { SAAS_PLAN_LABEL, modulesFor, type TenantModule } from "@/lib/tenant-modules";
+import { NO_MODULE_OVERRIDES, SAAS_PLAN_LABEL, modulesFor, type TenantModule } from "@/lib/tenant-modules";
 
 export { SAAS_PLANS_TAG };
 
@@ -87,10 +87,10 @@ function bulletsOf(mods: ReadonlySet<TenantModule>): string[] {
 export function featuresFor(plan: SaasPlan, vertical: TenantVertical, labelOf: (p: SaasPlan) => string): string[] {
   const idx = SAAS_PLANS.indexOf(plan);
   const prev = idx > 0 ? SAAS_PLANS[idx - 1] : null;
-  const mine = bulletsOf(modulesFor({ vertical, plan, publicBookingEnabled: true }));
+  const mine = bulletsOf(modulesFor({ vertical, plan, publicBookingEnabled: true, ...NO_MODULE_OVERRIDES }));
   const out: string[] = [];
   if (prev) {
-    const before = new Set(bulletsOf(modulesFor({ vertical, plan: prev, publicBookingEnabled: true })));
+    const before = new Set(bulletsOf(modulesFor({ vertical, plan: prev, publicBookingEnabled: true, ...NO_MODULE_OVERRIDES })));
     out.push(`Todo lo del plan ${labelOf(prev)}`);
     out.push(...mine.filter((b) => !before.has(b)));
   } else {

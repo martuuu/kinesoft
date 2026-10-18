@@ -286,7 +286,7 @@ describe("[P3-S19b] leyenda y filtro de plan", () => {
   });
 
   it("consultorio General (sin `planes`): sin leyenda de plan", () => {
-    const general = Array.from(modulesFor({ vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: false }));
+    const general = Array.from(modulesFor({ vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }));
     expect(general).not.toContain("planes");
     const html = renderToStaticMarkup(
       <TenantModulesProvider modules={general}>

@@ -45,7 +45,7 @@ import AppNotFound from "@/app/(app)/not-found";
 import type { InsurerRow } from "@/lib/insurers-types";
 import type { CustomConditionRow } from "@/lib/conditions";
 
-const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "INDIVIDUAL", publicBookingEnabled: false }));
+const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "INDIVIDUAL", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }));
 const ROOT = join(__dirname, "..", "..", "..");
 const css = (rel: string) => readFileSync(join(ROOT, rel), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 const CONFIG_CSS = css("components/configuracion/configuracion.module.css");

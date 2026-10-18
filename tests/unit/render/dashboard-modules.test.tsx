@@ -67,8 +67,8 @@ import {
 } from "@/lib/dashboard-kpi-options";
 import type { DashboardData } from "@/lib/dashboard";
 
-const GENERAL = modulesFor({ vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: false });
-const KINE_FREE = modulesFor({ vertical: "KINESIOLOGY", plan: "INDIVIDUAL", publicBookingEnabled: false });
+const GENERAL = modulesFor({ vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] });
+const KINE_FREE = modulesFor({ vertical: "KINESIOLOGY", plan: "INDIVIDUAL", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] });
 
 const data: DashboardData = {
   greetingName: "Martina",

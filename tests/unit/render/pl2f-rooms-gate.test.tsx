@@ -36,7 +36,7 @@ import type { DraftRange, RoomCatalogEntry } from "@/lib/schedule-editor-state";
 
 const render = (plan: SaasPlan, el: ReactElement) =>
   renderToStaticMarkup(
-    <TenantModulesProvider modules={modulesFor({ vertical: "GENERAL", plan, publicBookingEnabled: false })} vertical="GENERAL">
+    <TenantModulesProvider modules={modulesFor({ vertical: "GENERAL", plan, publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] })} vertical="GENERAL">
       <ToastProvider>
         <ConfirmProvider>{el}</ConfirmProvider>
       </ToastProvider>

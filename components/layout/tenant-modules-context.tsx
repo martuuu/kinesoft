@@ -19,7 +19,7 @@
  */
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import type { TenantVertical } from "@prisma/client";
-import { modulesFor, type TenantModule } from "@/lib/tenant-modules";
+import { modulesFor, NO_MODULE_OVERRIDES, type TenantModule } from "@/lib/tenant-modules";
 
 export type TenantModulesValue = {
   has: (m: TenantModule) => boolean;
@@ -50,6 +50,8 @@ const DEFAULT_VALUE: TenantModulesValue = valueOf(
     vertical: "KINESIOLOGY",
     plan: "CLINICA",
     publicBookingEnabled: false,
+    // T3b-1k2: el default es la matriz del plan (fuera de un provider no hay consultorio que leer).
+    ...NO_MODULE_OVERRIDES,
   }),
   "KINESIOLOGY"
 );
