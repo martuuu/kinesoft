@@ -2,6 +2,7 @@ import type { BookingStatus, PaymentStatus } from "@prisma/client";
 import type { ForceFlags, ForcePrompt } from "@/lib/booking-force-flags";
 import { canOperateBooking, canWriteClinical, type Capability } from "@/lib/capabilities";
 import type { AgendaPlanFields } from "@/lib/bookings-types";
+import type { PaymentMethod } from "@/lib/payment-method";
 
 /**
  * Lo que el drawer necesita del turno. Es un subconjunto estructural de
@@ -66,6 +67,16 @@ export type DrawerBooking = {
    */
   canOperate?: boolean;
   clinicalWritable?: boolean;
+  /**
+   * T3d-1r (C-AS2): medio del cobro del copago (`BookingDTO.copagoPaymentMethod`, wire `pm`). La fila Copago lo
+   * muestra («Pagado · Efectivo»); null = sin cobrar o cobrado sin medio («Sin informar»).
+   */
+  copagoPaymentMethod?: PaymentMethod | null;
+  /**
+   * Reserva del turnero público (ya llegaba en runtime, lo lee `paymentHoldState`). T3d-1r: una reserva pública PAID
+   * sin medio manual es un cobro de Mercado Pago, que no se deshace a mano (C-AS2).
+   */
+  publicReservation?: boolean;
 } & Partial<AgendaPlanFields>;
 /*
  * C9 (Planes) opcional en el drawer (P3-C): `programId`, `sessionId`,
@@ -106,8 +117,8 @@ export type BookingDrawerAccess = {
  *   `canOperate`; con paciente son clínicas y siguen a `clinicalWritable`.
  * - Eliminar = la regla de hoy (`patientAccess !== "basic"`) escrita como
  *   `full || guest`: es lo mismo para la fila actual, pero si mañana la fila
- *   trae `admin` no lo habilita. Los cobros no viven en el drawer (matriz de
- *   cobros en C0).
+ *   trae `admin` no lo habilita. El cobro del copago no pasa por acá: lo decide
+ *   `copagoCollectView` (billing-rows.tsx) con `canCollectCopago` (T3d-1r).
  *
  * Fallback sin los campos del server (proyección completa, o antes de S07sb):
  * operar solo con `full` o guest; clínico con `canWriteClinical`, contando el

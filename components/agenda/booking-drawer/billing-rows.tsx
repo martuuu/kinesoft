@@ -1,9 +1,26 @@
 "use client";
 
+import { useState } from "react";
+import dynamic from "next/dynamic";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { formatARS } from "@/lib/format";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
+import { useToast } from "@/components/ui/toast";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { Button } from "@/components/ui/button";
+import { setBookingCopagoPaid } from "@/lib/bookings";
+import { canCollectCopago, type Capability } from "@/lib/capabilities";
+import { paymentMethodLabel, type PaymentMethod } from "@/lib/payment-method";
+import { isStaleError } from "@/lib/reception-view-state";
+import { miniGhostBtn } from "./styles";
+import type { CollectResult } from "./collect-modal";
 import type { DrawerBooking } from "./types";
+
+// T3d-1r: el modal (y el picker de medios) es un chunk aparte. El drawer ya es diferido, pero sin esto el picker
+// viajaba con el drawer a cada apertura de turno aunque nadie cobre; /agenda estaba en 172,2 de 180 kB.
+const CollectModal = dynamic(() => import("./collect-modal").then((m) => m.CollectModal), { ssr: false });
+
+const NO_CAPS: ReadonlySet<Capability> = new Set();
 
 /** Obra social name to show, or "" when particular (never prints the
  *  literal "Particular" / "Obra social" words). */
@@ -30,9 +47,125 @@ export const COPAGO_PLAN_HINT = "Es la cuota de la sesión del plan: se cambia d
  * Diagnóstico, Descripción y Notas. Fragmento: el contenedor (y lo que va
  * debajo, como el aviso de acceso básico) lo pone `index.tsx`.
  */
-export function BillingRows({ booking }: { booking: DrawerBooking }) {
+/**
+ * Estado y acción del cobro del copago en el drawer (T3d-1r, C-AS2; plan §23.4). Puro, para el test.
+ *
+ * - **Quién cobra:** `canCollectCopago` con las capabilities del viewer y SU profesional, el mismo gate que
+ *   `toggleBilling` en el server: la Secretaria/Facturación/Admin/Titular cualquier turno, el profesional solo los
+ *   suyos. Sin el profesional del viewer (null) nunca hay «propios». Quien no cobra ve solo el estado.
+ * - **Mercado Pago no se toca a mano** (default del 19-oct): AUTHORIZED (MP retiene el pago) y una reserva pública
+ *   PAID sin medio manual (el webhook marca PAID sin `copagoPaymentMethod`) quedan sin botones. El server además mira
+ *   la fila `Payment` y rechaza con «Este turno se pagó por Mercado Pago…»; esto solo evita ofrecer lo que va a
+ *   rebotar. REFUNDED también es de MP.
+ * - **«Cobrar» solo si hay algo que cobrar:** copago > 0 y el turno no está cancelado ni ausente (mismo criterio que
+ *   «Cobrar ahora» de /sala: no se cobra un turno que no ocurrió). Deshacer un cobro de un cancelado sí se ofrece
+ *   (el cobro previo de un turno de plan, B-M3, se corrige desde acá).
+ * - Sin `paymentStatus` (proyección que no lo trae) no se adivina: ni estado ni botones.
+ */
+export type CopagoCollectView = { label: string | null; action: "collect" | "undo" | null };
+
+export function copagoCollectView(
+  booking: Pick<DrawerBooking, "paymentStatus" | "copagoPaymentMethod" | "publicReservation" | "practitionerId" | "copagoCents" | "status">,
+  caps: ReadonlySet<Capability>,
+  viewerPractitionerId: string | null
+): CopagoCollectView {
+  const ps = booking.paymentStatus;
+  if (!ps) return { label: null, action: null };
+  const can = canCollectCopago(caps, viewerPractitionerId, booking.practitionerId);
+  if (ps === "AUTHORIZED") return { label: "Pago retenido por Mercado Pago", action: null };
+  if (ps === "REFUNDED") return { label: "Reintegrado por Mercado Pago", action: null };
+  if (ps === "PAID") {
+    if (booking.copagoPaymentMethod == null && booking.publicReservation === true) {
+      return { label: "Pagado por Mercado Pago", action: null };
+    }
+    return { label: `Pagado · ${paymentMethodLabel(booking.copagoPaymentMethod ?? null)}`, action: can ? "undo" : null };
+  }
+  if (booking.copagoCents <= 0) return { label: null, action: null };
+  const happened = booking.status !== "CANCELLED" && booking.status !== "NO_SHOW";
+  return { label: "Por cobrar", action: can && happened ? "collect" : null };
+}
+
+/** Lo que devolvió el server tras cobrar/deshacer, hasta que la agenda traiga una fila igual o más nueva. */
+type CopagoOverride = { id: string; paymentStatus: "PAID" | "UNPAID"; copagoPaymentMethod: PaymentMethod | null; updatedAt: string };
+
+/** Cambio de cobro ya confirmado por el server, para que el drawer lo propague (ver `onCopagoChanged`). */
+export type CopagoChange = CopagoOverride;
+
+export function BillingRows({
+  booking: bookingProp,
+  caps = NO_CAPS,
+  viewerPractitionerId = null,
+  onCopagoChanged,
+}: {
+  booking: DrawerBooking;
+  /** Capabilities del actor (las del drawer). Sin ellas, solo el estado del cobro. */
+  caps?: ReadonlySet<Capability>;
+  /** Profesional del actor (`viewer.practitionerId`): sin él, `billing.collectOwn` no cobra nada. */
+  viewerPractitionerId?: string | null;
+  /**
+   * El cobro cambió en el server (nuevo `updatedAt`). La fila se actualiza sola con la respuesta; esto es para que el
+   * drawer la propague a sus otras acciones (si no, salen con la versión vieja y rebotan por stale).
+   */
+  onCopagoChanged?: (c: CopagoChange) => void;
+}) {
   // EV1-C1: en Clínica general el título del turno es el motivo de consulta.
   const diagnostico = useTenantModules().has("diagnostico");
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [collecting, setCollecting] = useState(false);
+  const [modalMounted, setModalMounted] = useState(false);
+  const openCollect = () => {
+    setModalMounted(true);
+    setCollecting(true);
+  };
+  const [busy, setBusy] = useState(false);
+  // La agenda le pasa al drawer la fila viva pero con el `updatedAt` que se vio al abrir (SV09, agenda-client): sin
+  // esto, después de cobrar la fila seguiría diciendo «Por cobrar» y «Deshacer» saldría con la versión vieja (stale).
+  // Mismo criterio que el `receptionResult` del drawer: se descarta cuando la fila del padre es igual o más nueva.
+  const [override, setOverride] = useState<CopagoOverride | null>(null);
+  const booking: DrawerBooking =
+    override && override.id === bookingProp.id && new Date(bookingProp.updatedAt).getTime() < new Date(override.updatedAt).getTime()
+      ? { ...bookingProp, ...override }
+      : bookingProp;
+  const view = copagoCollectView(booking, caps, viewerPractitionerId);
+
+  const applyChange = (c: CopagoOverride) => {
+    setOverride(c);
+    onCopagoChanged?.(c);
+  };
+
+  const onCollected = (r: CollectResult) =>
+    applyChange({ id: booking.id, paymentStatus: "PAID", copagoPaymentMethod: r.method, updatedAt: r.updatedAt });
+
+  async function undo() {
+    if (busy) return;
+    const ok = await confirm({
+      title: "¿Deshacer el cobro?",
+      message: `El turno vuelve a quedar por cobrar (${formatARS(booking.copagoCents)}) y se borra el medio de pago.`,
+      confirmLabel: "Deshacer cobro",
+      tone: "danger",
+    });
+    if (!ok) return;
+    setBusy(true);
+    let res: Awaited<ReturnType<typeof setBookingCopagoPaid>>;
+    try {
+      res = await setBookingCopagoPaid(booking.id, { paid: false }, booking.updatedAt);
+    } catch {
+      res = { ok: false, error: "Revisá la conexión y reintentá." };
+    }
+    setBusy(false);
+    if (res.ok) {
+      applyChange({ id: booking.id, paymentStatus: "UNPAID", copagoPaymentMethod: null, updatedAt: res.data.updatedAt });
+      toast.success("Cobro deshecho", res.data.notice ? { description: res.data.notice } : undefined);
+      return;
+    }
+    if (isStaleError(res.error)) {
+      toast.warning("El turno cambió en otra sesión", { description: "Cerrá el turno y abrilo de nuevo para ver lo último." });
+      return;
+    }
+    toast.error("No pudimos deshacer el cobro", { description: res.error });
+  }
+
   return (
     <>
       <Row label="Cuándo">
@@ -75,7 +208,31 @@ export function BillingRows({ booking }: { booking: DrawerBooking }) {
             {COPAGO_PLAN_HINT}
           </span>
         )}
+        {view.label && (
+          <span
+            data-testid="copago-collect"
+            style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginTop: 6 }}
+          >
+            <span style={{ fontSize: 12, fontWeight: 600, color: view.label === "Por cobrar" ? "var(--navy-500)" : "var(--lime-700)" }}>
+              {view.label}
+            </span>
+            {view.action === "collect" && (
+              <Button type="button" size="sm" variant="primary" onClick={openCollect}>
+                Cobrar
+              </Button>
+            )}
+            {view.action === "undo" && (
+              <button type="button" onClick={() => void undo()} disabled={busy} aria-busy={busy || undefined} style={miniGhostBtn}>
+                Deshacer cobro
+              </button>
+            )}
+          </span>
+        )}
       </Row>
+      {/* Se monta al primer «Cobrar» (recién ahí baja el chunk) y queda montado para la animación de salida. */}
+      {modalMounted && (
+        <CollectModal booking={collecting ? booking : null} onClose={() => setCollecting(false)} onSaved={onCollected} />
+      )}
       {booking.title && <Row label={diagnostico ? "Diagnóstico" : "Motivo"}>{booking.title}</Row>}
       {booking.description && <Row label="Descripción">{booking.description}</Row>}
       {booking.notes && <Row label="Notas">{booking.notes}</Row>}

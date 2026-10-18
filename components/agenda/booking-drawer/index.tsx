@@ -782,7 +782,7 @@ export function BookingDrawer({
           <PatientHeader booking={booking} />
 
           <div style={{ ...sectionCard, display: "grid", gap: 8, fontSize: 12.5 }}>
-            <BillingRows booking={booking} />
+            <BillingRows booking={booking} caps={caps} />
             <ReceptionInfo
               booking={booking}
               room={

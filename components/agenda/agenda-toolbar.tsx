@@ -50,7 +50,7 @@ const SEGMENT_LABEL: Record<ViewSegment, string> = {
  *   "Todos los profesionales" de siempre.
  * - `locationFilter`: el `<LocationFilter>` (no dibuja nada con una sede).
  * - `dayLock`: el candado del día (Día/Lista) junto al título.
- * - `zoom`/`onZoomChange`: franja 15/30/60 en el menú Vista (solo Por profesional).
+ * - `zoom`/`onZoomChange`: franja 15/30/60 en el menú Vista (todos los modos; en Día/Semana la del consultorio hasta que el usuario elige, AS-2g).
  *
  * PF1.1-agenda-a:
  * - C-PF1: sin `motion.button` (el `whileTap` es CSS `:active`) y la pastilla del
