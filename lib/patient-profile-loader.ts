@@ -9,8 +9,11 @@
  * Ahora (presupuesto C-PF8: ≤ 3):
  *  1. `runWithRls(tenantId, tx => loadPatientProfile(actor, tx, input))`: acceso UNA vez, core y todos los slices.
  *  2. `listInsurers` (lib/insurers.ts, de PF2-d): queda con su `unstable_cache` y su tx propia solo en frío.
- *  3. `getPatientClinicalSummary` (evoluciones): `lib/clinical-notes*.ts` no admite `tx` sin tocar AUDIT §5.51-55, así
- *     que queda como 1 tx propia (excepción escrita en C-PF8).
+ *  3. `getPatientClinicalHome` (FC-2b, §24.2 hallazgo 3): la «clinical home» de la HC (resumen + primera página de la
+ *     timeline + turnos candidatos del compositor + deep link) en 1 tx propia. Antes era `getPatientClinicalSummary`
+ *     y la timeline se pedía desde el cliente después del mount (una 4ª tx y un fetch en cascada). Sigue fuera de la
+ *     tx 1 porque `lib/clinical-notes*.ts` no admite `tx` sin tocar AUDIT §5.51-55 (excepción escrita en C-PF8). El
+ *     perfil sigue en exactamente 3 tx y pf2-profile-budget fija además el techo de sentencias de esta tx.
  * `generateMetadata` y la página comparten la carga por `cache()` de React (mismo request): el nombre sale del core.
  *
  * Visibilidad: tiene que dar EXACTAMENTE lo mismo que los lectores públicos. El nivel sale de
@@ -50,7 +53,8 @@ import {
 } from "@/lib/patients-profile-internal";
 import type { PatientAdminCore, PatientBasic, PatientCore } from "@/lib/patients-types";
 import { listInsurers } from "@/lib/insurers";
-import { getPatientClinicalSummary } from "@/lib/clinical-notes-read";
+import { getPatientClinicalHome } from "@/lib/clinical-notes-read";
+import type { PatientClinicalHome, PatientClinicalSummary } from "@/lib/clinical-notes-types";
 
 /** Turnos del perfil `admin` (mismo tope que pedía la página: 100). */
 export const PROFILE_ADMIN_BOOKINGS = 100;
@@ -59,8 +63,13 @@ export const PROFILE_RECENT_BOOKINGS = 5;
 
 /**
  * EV2-3a · deep link `?tab=evoluciones&turno=<bookingId>`: el id se valida con el mismo molde que el resto de los ids
- * de URL y solo se mira con el módulo `evoluciones` y la pestaña de evoluciones. Puro (sin base): lo usan la página y
- * `generateMetadata` para pedir la MISMA carga (misma clave de `cache()`).
+ * de URL y solo se mira con el módulo `evoluciones`. Puro (sin base): lo usan la página y `generateMetadata` para
+ * pedir la MISMA carga (misma clave de `cache()`).
+ *
+ * FC (§24.7, FC-3d): la HC pasa a ser la pestaña inicial, así que `?turno=` también vale SIN `tab` (y con el alias
+ * `?tab=hc`). Con OTRA pestaña no: `?tab=planes&nuevo=1&turno=` es «crear plan desde el turno» (lib/plans-deeplink.ts)
+ * y no tiene que abrir la ficha. Sin `clinical.read` el deep link igual sale null (gate de `getPatientClinicalHome`);
+ * la fila del turno de la tx 1 es la que la ficha `full` ya ve en Turnos.
  */
 export function profileNoteBookingId(actor: Actor, searchParams: SearchParamsLike): string | null {
   if (!modulesFor(actor.entitlements).has("evoluciones")) return null;
@@ -71,7 +80,8 @@ export function profileNoteBookingId(actor: Actor, searchParams: SearchParamsLik
       : typeof searchParams.turno === "string"
         ? searchParams.turno
         : null;
-  return tab === "evoluciones" && raw && /^[A-Za-z0-9_-]{1,64}$/.test(raw) ? raw : null;
+  const hcTab = tab === null || tab === "evoluciones" || tab === "hc";
+  return hcTab && raw && /^[A-Za-z0-9_-]{1,64}$/.test(raw) ? raw : null;
 }
 
 const PRACTITIONER_INCLUDE = { user: { select: { fullName: true, email: true } } } as const;
@@ -219,7 +229,13 @@ export type PatientProfileData =
   | Exclude<PatientProfileTx, { access: "full" }>
   | (Extract<PatientProfileTx, { access: "full" }> & {
       insurers: Awaited<ReturnType<typeof listInsurers>>;
-      clinicalSummary: Awaited<ReturnType<typeof getPatientClinicalSummary>>;
+      /** La tx 3 (FC-2b). null = sin módulo `evoluciones` o sin `clinical.read` (no se ve la HC). */
+      clinicalHome: PatientClinicalHome | null;
+      /**
+       * `clinicalHome.summary` (contador de la pestaña y «Última ficha» de Resumen). Se mantiene mientras la página y
+       * `PatientProfile` lo consumen así (FC-3d pasa a `clinicalHome`); no es otra lectura.
+       */
+      clinicalSummary: PatientClinicalSummary | null;
     });
 
 /**
@@ -227,18 +243,21 @@ export type PatientProfileData =
  * piden lo mismo en el mismo request y comparten UNA carga (antes el nombre era otra tx). La clave es
  * (actor, patientId, noteBookingId): el actor es el mismo objeto en el request (`getActor` también es `cache()`).
  *
- * Solo para `full`, después de la tx: obras sociales (cacheadas) y el resumen de evoluciones, en paralelo.
+ * Solo para `full`, después de la tx: obras sociales (cacheadas) y la «clinical home» de la HC, en paralelo.
  */
 export const loadPatientProfilePage = cache(
   async (actor: Actor, patientId: string, noteBookingId: string | null): Promise<PatientProfileData> => {
     const base = await runWithRls(actor.tenantId, (tx) => loadPatientProfile(actor, tx, { patientId, noteBookingId }));
     if (base.access !== "full") return base;
-    const [insurers, clinicalSummary] = await Promise.all([
+    const [insurers, clinicalHome] = await Promise.all([
       listInsurers({ onlyActive: true }),
-      // EV2-3a: contador de la pestaña + «Última evolución» de Resumen. Solo en el perfil `full` (nunca en `admin` ni
-      // en el básico); el gate de la lectura (`clinical.read` + full) devuelve null al Titular sin agenda.
-      modulesFor(actor.entitlements).has("evoluciones") ? getPatientClinicalSummary(patientId) : null,
+      // FC-2b: resumen + primera página + compositor + deep link (antes solo el resumen; la timeline la pedía el
+      // cliente al montar). Solo en el perfil `full` (nunca en `admin` ni en el básico); el gate de la lectura
+      // (`clinical.read` + full) devuelve null al Titular sin agenda.
+      modulesFor(actor.entitlements).has("evoluciones")
+        ? getPatientClinicalHome(patientId, { noteBookingId, timeline: true })
+        : null,
     ]);
-    return { ...base, insurers, clinicalSummary };
+    return { ...base, insurers, clinicalHome, clinicalSummary: clinicalHome?.summary ?? null };
   }
 );

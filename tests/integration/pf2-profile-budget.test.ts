@@ -7,6 +7,10 @@
  * la tx única: evoluciones (1 tx propia, `lib/clinical-notes*.ts` no admite `tx` sin tocar §5.51-55) y
  * `listInsurers` en frío (PF2-d, con `unstable_cache`).
  *
+ * FC-2b (§24.2 hallazgo 3): la tx 3 pasa a ser la «clinical home» de la HC (`getPatientClinicalHome`: resumen +
+ * primera página + compositor + deep link). El perfil `full` queda en EXACTAMENTE 3 tx (no «≤»: una 4ª sería la
+ * timeline pedida aparte, que es lo que se sacó) y la tx 3 tiene su techo de sentencias (`HOME_TX_STATEMENTS`).
+ *
  * Se mide el loader REAL con los mismos argumentos que la página (`loadPatientProfilePage(actor, id, noteBookingId)`),
  * con `installQueryCounter` (solo un listener en los clientes de `@/lib/db`) y `unstable_cache` en pass-through (=
  * siempre en frío: el peor caso). La visibilidad se compara contra los lectores públicos de siempre
@@ -43,12 +47,20 @@ import {
   getPatientEvaScores,
 } from "@/lib/patients";
 import { getPatientPlans, getPatientPlanBalances } from "@/lib/plans-read";
-import { getPatientClinicalSummary } from "@/lib/clinical-notes-read";
+import { getPatientClinicalHome, getPatientClinicalSummary, getPatientTimeline } from "@/lib/clinical-notes-read";
 import { listInsurers } from "@/lib/insurers";
 import { loadPatientProfilePage, profileNoteBookingId } from "@/lib/patient-profile-loader";
 
 const RUN = process.env.INTEGRATION === "1";
 const BUDGET = 3;
+/**
+ * Techo de sentencias de la tx 3 (FC-2b), peor caso: deep link + módulo `sesiones` + escritura (compositor). Medido el
+ * 19-oct: 11 = actor 1 (`getActor`, fuera de la tx) + gate 3 (paciente, ajustes, membresía) + resumen 1 (último +
+ * contador en una) + timeline 3 (raíces con el LATERAL del documento, enmiendas, sesiones) + compositor 1 + deep link 2
+ * (turno, notas). Antes de FC-2b la timeline iba en una 4ª tx pedida por el cliente al montar. Si sube, es un N+1 o una
+ * lectura nueva: se discute, no se corre el número.
+ */
+const HOME_TX_STATEMENTS = 11;
 
 /** Claves exactas de `PatientAdminCore` (congelado) y de la proyección básica. */
 const ADMIN_CORE_KEYS = [
@@ -162,8 +174,32 @@ describe.skipIf(!RUN)("PF2-b · perfil del paciente en ≤ 3 tx, misma visibilid
       const { result, m } = await measure(() => pageLoad(patientId, { tab: "evoluciones", turno: bookingId }));
       console.log(`[PF2-b] perfil full (${who === A.userId ? "Titular" : "a cargo"}): ${m.transactions} tx · ${m.statements} sentencias`);
       expect(result.access).toBe("full");
-      expect(m.transactions).toBeLessThanOrEqual(BUDGET);
+      expect(m.transactions).toBe(BUDGET);
+      // La tx 3 es la «clinical home» completa: la página no tiene que pedir nada más al montar.
+      if (result.access !== "full") return;
+      expect(result.clinicalHome?.firstPage?.items.length).toBeGreaterThan(0);
+      expect(result.clinicalHome?.composer).not.toBeNull();
     }
+  });
+
+  it(`[FC-2b] tx 3 (clinical home, peor caso con deep link): 1 tx · ≤ ${HOME_TX_STATEMENTS} sentencias`, async () => {
+    asUser(kineACargo.userId);
+    // Calentamiento: el primer `getActor` del archivo resuelve la sesión en frío (no es de la tx).
+    await getPatientClinicalHome(patientId, { noteBookingId: bookingId, timeline: true });
+    const { result, m } = await measure(() =>
+      getPatientClinicalHome(patientId, { noteBookingId: bookingId, timeline: true })
+    );
+    const sql = recorded().map((e) => e.query.replace(/\s+/g, " ").slice(0, 120));
+    console.log(`[FC-2b] clinical home: ${m.transactions} tx · ${m.statements} sentencias\n  ${sql.join("\n  ")}`);
+    expect(result?.deepLink).not.toBeNull();
+    // El turno del deep link es a 3 días: fuera de la ventana del chip (12 h, EV2-D12); el de hace 3 días sí entra.
+    expect(result?.composer?.candidates.length).toBeGreaterThan(0);
+    expect(result?.composer?.candidates.map((c) => c.id)).not.toContain(bookingId);
+    expect(m.transactions).toBe(1);
+    expect(m.statements).toBeLessThanOrEqual(HOME_TX_STATEMENTS);
+    // Anti-false-green: el techo se mide con todo prendido (timeline de verdad y sesiones del plan del fixture).
+    expect(recorded().filter((e) => /FROM "Session" s/.test(e.query))).toHaveLength(1);
+    expect(recorded().filter((e) => /LEFT JOIN LATERAL/.test(e.query) && /"PatientDocument"/.test(e.query)).length).toBeGreaterThan(0);
   });
 
   it(`[PF2-b] admin (Secretaria), básico y ajeno: 1 tx`, async () => {
@@ -234,6 +270,11 @@ describe.skipIf(!RUN)("PF2-b · perfil del paciente en ≤ 3 tx, misma visibilid
       expect(r.balances).toEqual(await getPatientPlanBalances({ patientId }));
       expect(r.clinicalSummary).toEqual(await getPatientClinicalSummary(patientId));
       expect(r.clinicalSummary?.liveCount).toBe(1);
+      // FC-2b: la tx 3 da lo mismo que los lectores sueltos (resumen, «Cargar más» desde cero, drawer del turno).
+      expect(r.clinicalHome).toEqual(await getPatientClinicalHome(patientId, { noteBookingId: bookingId, timeline: true }));
+      expect(r.clinicalHome?.summary).toEqual(r.clinicalSummary);
+      const page = await getPatientTimeline({ patientId, limit: 10 });
+      expect(r.clinicalHome?.firstPage).toEqual(page);
       expect(r.insurers).toEqual(await listInsurers({ onlyActive: true }));
       // Profesionales del selector: solo clínicos con membresía aceptada (la Secretaria no atiende).
       const ids = r.practitioners.map((p) => p.id);
@@ -244,12 +285,19 @@ describe.skipIf(!RUN)("PF2-b · perfil del paciente en ≤ 3 tx, misma visibilid
     }
   });
 
-  it("[PF2-b] deep link: un turno de otro paciente no se proyecta; sin la pestaña no se mira", async () => {
+  it("[PF2-b] deep link: un turno de otro paciente no se proyecta; con otra pestaña no se mira; sin pestaña sí (FC: HC inicial)", async () => {
     asUser(A.userId);
     const other = await pageLoad(patientId, { tab: "evoluciones", turno: foreignBookingId });
     expect(other.access === "full" && other.noteBookingRow).toBeNull();
-    const noTab = await pageLoad(patientId, { turno: bookingId });
-    expect(noTab.access === "full" && noTab.noteBookingRow).toBeNull();
+    expect(other.access === "full" && other.clinicalHome?.deepLink).toBeNull();
+    // `?tab=planes&nuevo=1&turno=` es «crear plan desde el turno»: no abre la ficha.
+    const planes = await pageLoad(patientId, { tab: "planes", turno: bookingId });
+    expect(planes.access === "full" && planes.noteBookingRow).toBeNull();
+    // §24.7 (FC-3d): la HC es la pestaña inicial, así que `?turno=` vale sin `tab` y con el alias `hc`.
+    for (const sp of [{ turno: bookingId }, { tab: "hc", turno: bookingId }] as Record<string, string>[]) {
+      const r = await pageLoad(patientId, sp);
+      expect(r.access === "full" && r.noteBookingRow?.id).toBe(bookingId);
+    }
     const garbage = await pageLoad(patientId, { tab: "evoluciones", turno: "x'; drop" });
     expect(garbage.access === "full" && garbage.noteBookingRow).toBeNull();
   });

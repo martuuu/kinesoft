@@ -8,6 +8,12 @@
  * `installQueryCounter` (tests/helpers/query-counter.ts) solo le pone un listener a los clientes de `@/lib/db`: corre
  * el símbolo real con `getActor()` real. El EXPLAIN se hace sobre la sentencia EXACTA que se registró (texto +
  * parámetros), con el owner y después de `ANALYZE` (estadísticas reales, como prod).
+ *
+ * FC-2b (§24.9 «Perf»): el documento compartido de cada raíz entra por `LEFT JOIN LATERAL` en la sentencia de raíces:
+ * sigue en ≤ 4 sentencias (3 con sesiones), ninguna aparte sobre "PatientDocument", y el LATERAL usa el índice
+ * parcial del documento vivo. Las 1.000 raíces del paciente grande están compartidas (50 con enmiendas: la subconsulta
+ * de la huella corre de verdad). Con una tabla de documentos de pocas filas el planner elige, con razón, un Seq Scan
+ * (medido el 19-oct con 31 filas: 5 páginas); con 1.000 ya va por el índice, que es el caso que importa.
  */
 import { vi, describe, it, expect, beforeAll, afterAll } from "vitest";
 
@@ -75,6 +81,20 @@ async function seedSessions(db: PrismaClient, t: EphemeralTenant, patientId: str
 
 const dataStatements = (events: { query: string }[]) => events.filter((e) => DATA_TABLE.test(e.query));
 
+/** Comparte las `n` raíces más nuevas del paciente (1 sentencia; `sourceDigest` cualquiera: acá se mide, no el estado). */
+async function seedSharedDocs(db: PrismaClient, t: EphemeralTenant, patientId: string, n: number): Promise<void> {
+  const sha = "c".repeat(64);
+  await db.$executeRaw`
+    INSERT INTO "PatientDocument" (id, "tenantId", "patientId", "noteId", "noteRevision", "sourceDigest", title,
+      "occurredAt", snapshot, "snapshotSha256", "pdfStorageKey", "pdfSha256", "pdfSizeBytes", "sharedByUserId",
+      "sharedByPractitionerId", "sharedAt", "idempotencyKey")
+    SELECT 'perfdoc-' || n.id, n."tenantId", n."patientId", n.id, n.revision, ${sha}, 'Ficha', n."occurredAt",
+      '{"v":1}'::jsonb, ${sha}, 'stub:perfdoc-' || n.id, ${sha}, 100, ${t.userId}, ${t.practitionerId},
+      now() AT TIME ZONE 'UTC', gen_random_uuid()::text
+    FROM (SELECT * FROM "ClinicalNote" WHERE "tenantId" = ${t.tenantId} AND "patientId" = ${patientId}
+            AND "amendsNoteId" IS NULL ORDER BY "occurredAt" DESC, id DESC LIMIT ${n}) n`;
+}
+
 describe.skipIf(!RUN)("EV2-2b · getPatientTimeline: sentencias constantes y sin Seq Scan", () => {
   let db: PrismaClient;
   let T: EphemeralTenant;
@@ -92,7 +112,9 @@ describe.skipIf(!RUN)("EV2-2b · getPatientTimeline: sentencias constantes y sin
     await seedNotes(db, T, small, 10);
     await seedAmendments(db, T, small, 2);
     await seedSessions(db, T, small, 2);
+    await seedSharedDocs(db, T, big, 1000);
     await db.$executeRawUnsafe(`ANALYZE "ClinicalNote"`);
+    await db.$executeRawUnsafe(`ANALYZE "PatientDocument"`);
     await db.$executeRawUnsafe(`ANALYZE "Session"`);
   }, 120_000);
 
@@ -139,6 +161,17 @@ describe.skipIf(!RUN)("EV2-2b · getPatientTimeline: sentencias constantes y sin
     // Y el total (gate + actor incluidos) tampoco depende del volumen.
     expect(b1.m.statements).toBe(s1.m.statements);
     expect(b2.m.statements).toBe(s1.m.statements);
+
+    // FC-2b: el documento compartido viaja en la sentencia de raíces (LATERAL), nunca en una propia.
+    for (const run of [b1, b2, s1]) {
+      const docs = run.events.filter((e) => /"PatientDocument"/.test(e.query));
+      expect(docs).toHaveLength(1);
+      expect(docs[0].query).toMatch(/LEFT JOIN LATERAL/);
+      expect(docs[0].query).toMatch(/"amendsNoteId" IS NULL/);
+    }
+    // Anti-false-green: el LATERAL trae datos (la primera página del grande está compartida).
+    const shared = b1.result.items.filter((i) => i.type === "note" && i.note.sharedDocument?.status !== "none");
+    expect(shared.length).toBeGreaterThan(0);
   });
 
   it("EXPLAIN de la sentencia de raíces: sin Seq Scan sobre ClinicalNote (1ª página y con cursor)", async () => {
@@ -153,6 +186,9 @@ describe.skipIf(!RUN)("EV2-2b · getPatientTimeline: sentencias constantes y sin
       const text = plan.map((r) => r["QUERY PLAN"]).join("\n");
       expect(text, text).not.toMatch(/Seq Scan on "ClinicalNote"/);
       expect(text, text).toMatch(/Index (Only )?Scan.*"ClinicalNote_tenantId_patientId_occurredAt_id_idx"/);
+      // El LATERAL corre debajo del Limit (por raíz de la página), por el índice parcial del documento vivo.
+      expect(text, text).not.toMatch(/Seq Scan on "PatientDocument"/);
+      expect(text, text).toMatch(/Index (Only )?Scan.*"PatientDocument_noteId_live_key"/);
     }
   });
 });
