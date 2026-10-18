@@ -19,8 +19,8 @@
  * página son una referencia RPC, su cuerpo nunca llega al cliente (la action de compartir de C-FC6 arma el PDF ahí).
  *
  * Los archivos del editor y del import todavía no existen en T4a (los crean FC-3a y FC-3f): el guard no exige que
- * existan, fija dónde pueden estar. Las entradas del spike (`app/(app)/hc-spike/*`, `app/api/hc-spike/*`) son
- * temporales: FC-3a y FC-2g borran los archivos y sacan sus líneas de las allow-lists.
+ * existan, fija dónde pueden estar. La entrada del spike del editor (`app/(app)/hc-spike/*`) es temporal: FC-3a borra
+ * el archivo y saca su línea de las allow-lists (el spike del render, `app/api/hc-spike/*`, ya lo borró FC-2g).
  */
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
@@ -224,7 +224,6 @@ describe("[FC-1c] dependencias pesadas de la HC (§24.9)", () => {
         .filter(([glob]) => picomatch(glob, { dot: true, contains: true })(route))
         .flatMap(([, globs]) => globs);
     for (const route of [
-      "/api/hc-spike",
       "/api/pacientes/[id]/fichas/[noteId]/[format]",
       "/api/pacientes/[id]/historia-clinica/[format]",
       "/pacientes/[id]",

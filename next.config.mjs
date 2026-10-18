@@ -198,7 +198,9 @@ export const HC_PDF_FONTS_GLOB = "./lib/hc-pdf/fonts/**/*";
 // sin `pdfkit/js/standard-fonts/` y cualquier PDF tiraba MODULE_NOT_FOUND en la función. react-pdf SIEMPRE suma
 // Helvetica al final de la pila de fuentes (`@react-pdf/layout`), así que se carga aunque no se use. ~184 kB.
 export const HC_PDFKIT_STANDARD_FONTS_GLOB = "./node_modules/pdfkit/js/standard-fonts/**/*";
-export const HC_PDF_ROUTES = ["/api/hc-spike", "/api/pacientes/**", "/pacientes/**"];
+// FC-2g: el spike (`/api/hc-spike`) se borró; `/api/pacientes/**` cubre las dos rutas de descarga de C-FC7.
+// FC-2h: la descarga del portal re-renderiza el snapshot si falta el PDF guardado (acotado a «documentos»).
+export const HC_PDF_ROUTES = ["/api/pacientes/**", "/pacientes/**", "/portal/c/*/documentos/**"];
 
 const nextConfig = {
   reactStrictMode: true,
@@ -221,7 +223,7 @@ const nextConfig = {
     // FC-1c: el renderer abre las fuentes con `path.join(process.cwd(), "lib/hc-pdf/fonts/…")`, que el trazado
     // estático de Next no sigue: sin esto la función de Vercel sale sin los .ttf y el render tira ENOENT. Lo mismo
     // con las métricas de Helvetica de pdfkit (ver `HC_PDFKIT_STANDARD_FONTS_GLOB`). Las claves son rutas (picomatch
-    // con `contains`) de todo lo que puede renderizar un PDF: el spike, las rutas de descarga de C-FC7 y el perfil
+    // con `contains`) de todo lo que puede renderizar un PDF: las rutas de descarga de C-FC7 y el perfil
     // del paciente (la action de compartir de C-FC6 arma el PDF ahí).
     outputFileTracingIncludes: Object.fromEntries(
       HC_PDF_ROUTES.map((r) => [r, [HC_PDF_FONTS_GLOB, HC_PDFKIT_STANDARD_FONTS_GLOB]]),

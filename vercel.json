@@ -11,6 +11,9 @@
     "app/api/cron/daily/route.ts": {
       "maxDuration": 60
     },
+    "app/api/pacientes/[id]/historia-clinica/[format]/route.ts": {
+      "maxDuration": 60
+    },
     "app/**/*": {
       "maxDuration": 30
     }

@@ -11,6 +11,9 @@ import { resolve } from "path";
 //   · test:integration:owner  → DATABASE_URL = owner BYPASSRLS (= prod hoy)
 // Serial en un solo proceso: todos los tests comparten la misma base.
 export default defineConfig({
+  // FC-2g: el render real del PDF (`lib/hc-pdf/render-internal.tsx`) corre en la integración; sin el runtime
+  // automático tira «React is not defined» (igual que `vitest.config.ts`).
+  esbuild: { jsx: "automatic" },
   test: {
     environment: "node",
     include: ["tests/integration/**/*.test.ts"],
