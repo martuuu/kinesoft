@@ -1,4 +1,5 @@
 import { getActor } from "@/lib/session";
+import { BRAND_NAME } from "@/lib/brand";
 import { parseOccupancyParams } from "@/lib/agenda-occupancy";
 import { loadAgendaOccupancy } from "@/lib/agenda-occupancy-internal";
 import { PageHeader } from "@/components/ui/page-header";
@@ -11,7 +12,7 @@ import { OccupancyView } from "@/components/agenda/occupancy/occupancy-view";
  * (`moduleWall`) que cortar acá. El scope lo decide `loadAgendaOccupancy` con las capabilities del actor; `?pro=` es
  * un pedido, nunca la barrera.
  */
-export const metadata = { title: "Ocupación · Agenda · KineSoft" };
+export const metadata = { title: `Ocupación · Agenda · ${BRAND_NAME}` };
 export const dynamic = "force-dynamic";
 
 type SP = { tab?: string | string[]; semanas?: string | string[]; pro?: string | string[] };

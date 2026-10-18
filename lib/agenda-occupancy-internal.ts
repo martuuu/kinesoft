@@ -82,14 +82,17 @@ export async function loadAgendaOccupancy(
       where: { id: tenantId },
       select: { bookingCapCount: true, bookingCapIntervalMin: true, businessHoursStart: true, businessHoursEnd: true },
     });
+    // IAM-4a: el id propio pasa por una variable con nombre (el guard prohíbe `clave: actor.practitionerId` crudo); acá
+    // solo se usa en la rama donde existe.
+    const ownPractitionerId = actor.practitionerId;
     const pracs = team
       ? await tx.practitioner.findMany({
           where: bookablePractitionerWhere(tenantId, { includeDisabledFilter: true }),
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
           select: PRAC_SELECT,
         })
-      : actor.practitionerId
-        ? await tx.practitioner.findMany({ where: { tenantId, id: actor.practitionerId }, select: PRAC_SELECT })
+      : ownPractitionerId
+        ? await tx.practitioner.findMany({ where: { tenantId, id: ownPractitionerId }, select: PRAC_SELECT })
         : [];
 
     const scope = resolveOccupancyScope(

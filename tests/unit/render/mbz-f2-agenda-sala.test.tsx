@@ -122,7 +122,8 @@ describe("[MB-Z-F2] Targets de 44 px bajo 768 (`.k-tap-m`, globals.css por hando
     expect(src("components/agenda/practitioner-chips.tsx").match(/className="k-tap-m"/g)).toHaveLength(4);
     // T3a-0z3: el botón «Vista» queda en el menú y los tres segmentados (densidad, franja, turnos) en el panel diferido.
     expect(src("components/agenda/view-options-menu.tsx").match(/k-tap-m/g)).toHaveLength(1);
-    expect(src("components/agenda/view-options-panel.tsx").match(/k-tap-m/g)).toHaveLength(3);
+    // T3e-3h: + el link «Ocupación» del panel.
+    expect(src("components/agenda/view-options-panel.tsx").match(/k-tap-m/g)).toHaveLength(4);
   });
 });
 
