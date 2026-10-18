@@ -251,6 +251,17 @@ WHERE b."idempotencyKey" LIKE 'pub:%'
 ORDER BY b."scheduledFor";
 ```
 
+### 0.9 Tanda B — guard de Preview y rechazo de Resend (18-oct-2026) 🔴
+
+Sin migración. Detalle en [AUDIT «Hallazgos de la Tanda B»](AUDIT.md) y [DEPLOYMENT «Guard de Preview»](DEPLOYMENT.md);
+QA en [QA «Tanda B»](QA.md).
+
+| Qué | Dónde | Cuándo / cómo |
+|---|---|---|
+| `PROD_SUPABASE_REF` | Vercel → **todos los scopes** (Production, Preview, Development) con el **mismo valor** | El `<ref>` de `https://<ref>.supabase.co` de prod (no es secreto). Con él, un build de **Preview** cuyas `DATABASE_URL` / `DIRECT_URL` / `DATABASE_URL_SERVICE` (host o usuario `postgres.<ref>` del pooler) o `NEXT_PUBLIC_SUPABASE_URL` apunten a prod **falla** en vez de escribir datos reales. En Production no hace nada; sin la variable, Preview solo avisa en el log. En `.env.local` queda vacía |
+| Rechazo de Resend | Terminal de Martin, con las variables de prod en su shell (el agente no corre nada contra prod) | `RESEND_API_KEY=… EMAIL_FROM="…" EMAIL_TRANSPORT=resend npx tsx --conditions=react-server scripts/diagnose-email.ts --to <vos> --url https://<dominio> --from-name "" --expect-domain <dominio verificado> --confirm`. Avisa si `EMAIL_FROM` es de otro dominio o está mal pegada; con `--from-name ""` y con el nombre del consultorio se ve si el problema es el display-name. Después mirar `/plataforma/sistema` → «Últimos mails que no salieron»: el motivo (401 key, 403 dominio sin verificar o cuenta en prueba, 422 remitente) dice qué corregir en Resend o en `EMAIL_FROM` |
+| Logo y marca | — | Martin elige el logo del prototipo → recién ahí se hace el renombrado (OPS-4) |
+
 ### 1. Hosting / plataforma de despliegue — Vercel
 - **Qué configura:** proyecto en Vercel (región `gru1` ya fijada en `vercel.json`); env vars de prod;
   branch protection en `main` exigiendo el check de CI como required; `KINESOFT_ALLOW_DEMO_ACTOR`
@@ -439,6 +450,8 @@ prod `supabase` + redeploy. Volver atrás = `REALTIME_DRIVER=off` + redeploy.
 - **Responsable:** dueño.
 - **Estado:** 🔴 (dominio + Resend pendientes).
 - **Gate de activación:** `RESEND_API_KEY` + `EMAIL_FROM` en Vercel (Production) con el dominio verificado.
+- **Si Resend rechaza:** `scripts/diagnose-email.ts --from-name "" --expect-domain <dominio>` y la tarjeta «Últimos
+  mails que no salieron» de `/plataforma/sistema` (**§0.9**).
 
 ### 8. Identidad / OAuth
 - **Qué configura:** proveedores OAuth adicionales. **Google** ya está cableado. **Facebook**: el código está

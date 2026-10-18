@@ -2008,3 +2008,38 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] «Ir a una fecha»: un día que no atiende arranca en el próximo hábil y lo avisa. No pasa de 90 días.
 - [ ] Botones de horario de 44 px; el lector lee «Lunes 19 de octubre a las 09:00».
 - [ ] Reservar desde la ventana termina en «¡Turno reservado!» (lo ofrecido siempre se puede reservar).
+
+## Tanda B · Modal, campana, Recepción, mobile, WhatsApp, sesión, Resend y E2E (18-oct-2026)
+
+> OPS-1a/1d (`7e71aa7`) · AS-0d (`70f2ef9`) · mobile AS-3 (`051d601`) · WA-0 + «Mantenerme conectado» (`279d4a2`) ·
+> AS-0a/0c (`915ac90`) · integración (`1270505`) · OPS-1b/1c (`641fea5`) · OPS-6 (`bde089c`) · `b1272b8`. **Sin
+> migración.** Hallazgos en [AUDIT «Hallazgos de la Tanda B»](AUDIT.md); consola en
+> [EXTERNAL-CONFIG §0.9](EXTERNAL-CONFIG.md). Fechas con `TZ=UTC`.
+
+### 🔴 Modal de nuevo turno y campana (AS-0a/0c)
+- [ ] 🔴 Ventana de **900×768** con un aviso visible (por ejemplo, marcar «Llegó» y abrir enseguida «Nuevo turno»): el toast no tapa Profesional ni Servicio; **Servicio se puede abrir** sin elegir Sala antes. A 800 y a 1024 también.
+- [ ] Con el drawer abierto, el toast queda al lado del panel o abajo a la izquierda sobre el pie, nunca encima de «Guardar».
+- [ ] Profesional sin servicios habilitados: el modal dice «<Nombre> no tiene servicios habilitados · Configuración → Profesionales».
+- [ ] La campana se actualiza sola: un turno reservado por el turnero suma al contador sin recargar (en vivo en segundos, o a lo sumo ~60 s con la pestaña visible). Al volver a la pestaña se actualiza.
+
+### Recepción y mobile a 390 (AS-0d, AS-3)
+- [ ] Recepción de la agenda a **390**: secciones plegables por estado; botones de 44.
+- [ ] Profesional con un turno **propio** cuyo paciente es de otro profesional: ve y puede usar Llegó / Llamar / Atendido en su fila. Las filas de otros profesionales siguen sin botones (SV-D2).
+- [ ] Consultorio con **2+ salas**: el filtro de salas de la toolbar no salta al cargar (sin CLS).
+- [ ] A 390, sin scroll horizontal: perfil del paciente (Turnos, Facturación, Sesiones), Plataforma (catálogo, ejercicios, importaciones, propuestas) y el asistente de diagnóstico.
+
+### WhatsApp al celular (WA-0)
+- [ ] Paciente con celular válido (`11 2345 6789`, `0351 15 512-3456`): «Compartir por WhatsApp» abre el chat **con ese número** y el recordatorio.
+- [ ] Paciente con un **fijo** o sin código de área: aviso «El paciente no tiene un celular válido» con el motivo, y WhatsApp pide elegir el contacto.
+- [ ] Como **Secretaria**: el link va al celular del paciente. Como profesional sin acceso al paciente (`basic`): sin número y **sin aviso**.
+
+### «Mantenerme conectado»
+- [ ] Login con la casilla **destildada** → cerrar el navegador **del todo** → abrir: pide login. (Con «Continuar donde lo dejaste» de Chrome la sesión puede volver: límite conocido.)
+- [ ] Destildada y navegando más de una hora: sigue siendo de navegador (al cerrar, pide login).
+- [ ] **Tildada** (default) → cerrar y abrir: sigue logueado.
+- [ ] Google: siempre queda logueado, aunque antes alguien haya entrado con la casilla destildada en ese navegador.
+
+### Operación (OPS-1, OPS-6)
+- [ ] `/plataforma/sistema` → «Últimos mails que no salieron»: fecha, tipo, motivo en castellano (por ejemplo, 403 = dominio sin verificar) y solo el **dominio** del destinatario.
+- [ ] `npm run diagnose:db` en local: rol, BYPASSRLS y modo de pool de cada URL, sin contraseñas.
+- [ ] `npm run test:e2e` en local: 15/15.

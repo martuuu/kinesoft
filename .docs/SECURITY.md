@@ -528,6 +528,24 @@ tenant reads) and its tags.
 - **El secreto.** `SUPABASE_JWT_SECRET` ya existía (realtime). Con él se puede FIRMAR una sesión de cualquier usuario:
   es tan sensible como la service key (server-only, guard (d) de `guard-realtime.mjs`, nunca en logs).
 
+### 11.2 «Mantenerme conectado» y contacto para WhatsApp (Tanda B, 18-oct-2026)
+
+- **«Mantenerme conectado»** (`lib/supabase/session-mode.ts`, ARCHITECTURE «Cache & cookies»). Destildado: las
+  cookies `sb-*` salen **sin `maxAge`** (cookies de sesión del navegador) y `kine_session_mode=ephemeral` (httpOnly,
+  `secure` en prod, `sameSite=lax`, también sin `maxAge`) hace que cada refresh las reescriba igual; si la preferencia
+  venciera antes, el primer refresh volvería a persistir 400 días. Un POST de login sin el campo = persistente (el
+  form manda hidden `remember=0` + checkbox `1`). La preferencia se escribe solo con un login exitoso; el sign-out y el
+  middleware (preferencia sin sesión, fuera de `/api/auth/*` y `/auth/*`) la borran, así otra persona que entra con
+  Google en ese navegador no la hereda. OAuth siempre persistente. **Límite:** Chrome/Edge con «Continuar donde lo
+  dejaste» restauran las cookies de sesión; el cierre por inactividad para PCs compartidas queda en el backlog C.
+  Tests: `session-mode.test.ts`, `sign-in-session-mode.test.ts`.
+- **`getPatientShareContact`** (`lib/booking-share-actions.ts`, WA-0). Lectura de **un** teléfono al abrir el drawer
+  (no un campo del DTO de la agenda, que daría el contacto de todos los pacientes del día). Acceso con
+  `patientAccessFor` del server, no el `patientAccess` de la fila (que colapsa `admin` en `basic`): `full` y `admin`
+  (Secretaria/Facturación, AUDIT §5) ven el número; `basic`/`none`, un id de otro tenant o inexistente → `hidden`, con
+  `where: { tenantId }` a mano. `hidden` **no** muestra el aviso «no tiene un celular válido»: confirmaría que hay un
+  número cargado. Sin audit a propósito (mismo dato que el perfil). `tests/integration/booking-share-contact.test.ts`.
+
 ## 12. Observability & headers (A3b, 30-sep-2026)
 
 - **Next 14.2.35** (from 14.2.18): CVE-2025-29927 (middleware bypass via

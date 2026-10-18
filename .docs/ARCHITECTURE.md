@@ -1506,6 +1506,22 @@ needed (list them in the privacy policy). Browser storage:
 (agenda toggles). Agenda mode/zoom/favourites/location live server-side in
 `UserPreferences.agendaPrefs` (B-pre).
 
+**Session-cookie policy («Mantenerme conectado», Tanda B, 18-oct).** One pure module,
+`lib/supabase/session-mode.ts`, used by `lib/supabase/server.ts`, the middleware (Edge) and the sign-in route.
+Checked (default) = `@supabase/ssr` cookies as before (400 days). Unchecked = the same `sb-*` cookies **without
+`maxAge`/`expires`** (die with the browser) plus `kine_session_mode=ephemeral` (httpOnly, itself a session cookie),
+so every later rewrite (hourly middleware refresh, `mfa.verify`) stays ephemeral. The policy is applied in each
+client's `setAll`, cookie by cookie, because `@supabase/ssr` 0.5 overwrites any `maxAge` passed in `cookieOptions`.
+Removals (`maxAge: 0`) pass untouched. OAuth (Google/Facebook) is always persistent; sign-out and a stale preference
+without a session clear it. Security notes in SECURITY §11.2.
+
+**Phone normalisation (WA-0, 18-oct).** `lib/phone-e164.ts` (`normalizeArMobile`) turns an Argentine mobile into
+E.164 `+549…` for `wa.me` links. Own, dependency-free parser of the AR numbering plan (10-digit NSN, area `11` or
+starting with 2/3, `0` + area + `15` national form) instead of `libphonenumber-js` (~140 KB of metadata for one
+country, and no new libraries in the tanda). Landlines, missing area code and foreign numbers return a reason
+(`landline` / `missing_area_code` / `not_ar` / `invalid` / `empty`), never a guess; the drawer then falls back to
+`wa.me/?text=` without recipient. Default: 10 digits without `0`/`15` is taken as a mobile.
+
 **Closed in A2/A3:** the `practitioners` tag is invalidated on accept / remove /
 role change; the dashboard resolves patient access **outside** the
 `unstable_cache` and re-hydrates `Date`s after a cache hit.
