@@ -37,7 +37,8 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
  *   el tablero es por profesional; sin prefs, el default.
  * - RX-1a: `initialLayout` (`agendaPrefs.receptionLayout`) elige la cara
  *   (Tablero, Lista y panel o Flujo) cuando no hay provider de Apariencia, y
- *   el viewer suma `canCollect` (`billing.manage`) para el cobro del escritorio.
+ *   el viewer suma `canCollect`/`canCollectAll` (`billing.collect` / `billing.collectOwn`, T3 C-AS2; antes era
+ *   `billing.manage`) para el cobro del escritorio; fila por fila decide `canCollectRow`, la regla del server.
  */
 export default async function SalaPage() {
   // VX-Z: Next renderiza el layout y la página EN PARALELO. Sin el módulo, el layout muestra el muro (o redirige),

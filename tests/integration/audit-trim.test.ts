@@ -156,9 +156,9 @@ describe.skipIf(!RUN)("[PL-A] recorte de auditoría", () => {
     asUser(A.userId);
     const p = await addPatient(db, A);
     const b = await seedBooking(p);
-    await expect(withFailingAudit(b.id, () => setBookingCopagoPaid(b.id, true, b.updatedAt.toISOString()))).rejects.toThrow();
+    await expect(withFailingAudit(b.id, () => setBookingCopagoPaid(b.id, { paid: true, method: "CASH" }, b.updatedAt.toISOString()))).rejects.toThrow();
     expect((await db.booking.findUniqueOrThrow({ where: { id: b.id } })).paymentStatus).not.toBe("PAID");
-    expect((await setBookingCopagoPaid(b.id, true, b.updatedAt.toISOString())).ok).toBe(true);
+    expect((await setBookingCopagoPaid(b.id, { paid: true, method: "CASH" }, b.updatedAt.toISOString())).ok).toBe(true);
     expect((await db.booking.findUniqueOrThrow({ where: { id: b.id } })).paymentStatus).toBe("PAID");
     expect((await auditsOf(b.id)).map((e) => e.action)).toEqual(["booking.copago_paid"]);
   });

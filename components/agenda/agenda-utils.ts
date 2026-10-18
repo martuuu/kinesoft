@@ -161,6 +161,8 @@ export function toBookingDTO(row: BookingRow | AgendaBookingRow): BookingDTO {
     isTelemedicine: row.isTelemedicine,
     telemedicineUrl: row.telemedicineUrl,
     clinicalHidden: row.clinicalHidden,
+    // T3 (C-AS2): medio del cobro; null = sin cobrar o «Sin informar». En el cable, `pm` con default null.
+    copagoPaymentMethod: row.copagoPaymentMethod ?? null,
     ...serverPermissions(row),
     ...compactRoomField(row),
     ...compactCalledField(row),

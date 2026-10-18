@@ -99,7 +99,11 @@ const PRACTITIONERS = [
 ];
 const ROOMS = [{ id: "r1", name: "Consultorio 1", capacity: 1 }];
 
+// Viewer que recepciona y NO cobra (el nombre viene de antes de T3; la Secretaria real cobra desde T3: `COBRA_SECRETARIA`).
 const SECRETARIA = deskViewer(null, ["agenda.viewAll", "agenda.reception", "agenda.operateAll"]);
+// T3c-1c (C-AS1): la Secretaria de verdad (`billing.collect`, sin profesional) y un profesional con `billing.collectOwn`.
+const COBRA_SECRETARIA = deskViewer(null, ["agenda.viewAll", "agenda.reception", "agenda.operateAll", "billing.collect"]);
+const PROFESIONAL_P2 = deskViewer("p2", ["agenda.viewAll", "agenda.reception", "clinical.read", "billing.collectOwn"]);
 // T3b-1k1 (C-AS1): cobrar el copago es `billing.collect` (el Titular la trae por rol), no `billing.manage`.
 const TITULAR = deskViewer("p1", ["agenda.viewAll", "agenda.reception", "agenda.operateAll", "billing.manage", "billing.collect", "clinical.read"]);
 
@@ -217,14 +221,28 @@ describe("[RX-1b] acciones por fila y por rol", () => {
     expect(rowHtml(html, "llamado")).toContain('data-state="llamado"');
   });
 
-  it("Secretaria (sin billing.manage): ni Cobrar ni Cobrado", () => {
+  it("viewer sin cobro: ni Cobrar ni Cobrado", () => {
     const html = renderRows(SECRETARIA);
     expect(html).not.toContain("Cobrar");
     expect(html).not.toContain("Cobrado");
     expect(rowHtml(html, "cobrar")).not.toContain('data-kind="pay"');
   });
 
-  it("Titular (billing.manage): Cobrar en el atendido que debe, Cobrado en el pagado", () => {
+  it("[AS-1c] la Secretaria (billing.collect, sin profesional) cobra cualquier fila: Cobrar y Cobrado", () => {
+    const html = renderRows(COBRA_SECRETARIA);
+    expect(rowHtml(html, "cobrar")).toContain('data-kind="pay"');
+    expect(rowHtml(html, "pagado")).toContain("Cobrado");
+  });
+
+  it("[AS-1c] profesional (billing.collectOwn): Cobrado solo en SU fila; el atendido ajeno que debe no ofrece Cobrar", () => {
+    const html = renderRows(PROFESIONAL_P2);
+    // «cobrar» es de p1: ni el botón ni el «Cobrado» (canCollectRow, la regla del server).
+    expect(rowHtml(html, "cobrar")).not.toContain('data-kind="pay"');
+    // «pagado» es de p2: lo ve cobrado.
+    expect(rowHtml(html, "pagado")).toContain("Cobrado");
+  });
+
+  it("Titular (billing.collect): Cobrar en el atendido que debe, Cobrado en el pagado", () => {
     const html = renderRows(TITULAR);
     expect(rowHtml(html, "cobrar")).toContain(`aria-label="Cobrar a Paciente cobrar, ${formatARS(600000)}"`);
     expect(rowHtml(html, "cobrar")).toContain('data-kind="pay"');
@@ -264,21 +282,27 @@ describe("[RX-1b] franja de profesionales", () => {
 });
 
 describe("[RX-1b] cobro", () => {
-  it("modal: importe con formatARS, cobertura, profesional y hora; sin medio de pago (RX-D4)", () => {
+  it("[AS-1c] modal «Registrar cobro»: importe, cobertura, profesional y hora; medio obligatorio sin preselección", () => {
     const html = renderToStaticMarkup(
       <DeskPayModal row={ROWS[5]} practitionerName="Ana Pérez" viewer={TITULAR} onClose={() => {}} onSaved={() => {}} />
     );
-    expect(html).toContain("Cobrar a Paciente cobrar");
-    expect(html).toContain("Copago OSDE · Ana Pérez · 09:00");
-    expect(html).toContain(formatARS(600000));
     expect(html).toContain("Registrar cobro");
-    expect(html).not.toContain("Medio de pago");
+    expect(html).toContain("Paciente cobrar · Copago OSDE · Ana Pérez · 09:00");
+    expect(html).toContain(formatARS(600000));
+    // El botón dice el monto (copagoRemainingCents: sin señas en T3, el copago entero).
+    expect(html).toContain(`Marcar pagado · ${formatARS(600000)}`);
+    // Los seis medios, como radios, y ninguno marcado (decisión 5: nadie elige por el usuario).
+    for (const label of ["Efectivo", "Transferencia", "Tarjeta", "Billetera virtual", "Mercado Pago", "Otro"]) expect(html).toContain(label);
+    expect(html.match(/type="radio"/g)).toHaveLength(6);
+    expect(html).not.toMatch(/checked=""/);
+    expect(html).toContain("¿Cómo pagó?");
     expect(renderToStaticMarkup(<DeskPayModal row={null} practitionerName="" viewer={TITULAR} onClose={() => {}} onSaved={() => {}} />)).toBe("");
   });
 
-  it("applyCopagoPaid: PAID y el updatedAt nuevo del server (el próximo expectedUpdatedAt)", () => {
-    const next = applyCopagoPaid(ROWS[5], new Date("2026-10-15T13:45:00Z"));
+  it("applyCopagoPaid: PAID, el medio y el updatedAt nuevo del server (el próximo expectedUpdatedAt)", () => {
+    const next = applyCopagoPaid(ROWS[5], "2026-10-15T13:45:00.000Z", "CASH");
     expect(next.paymentStatus).toBe("PAID");
+    expect(next.copagoPaymentMethod).toBe("CASH");
     expect(next.updatedAt).toBe("2026-10-15T13:45:00.000Z");
     expect(next.copagoCents).toBe(600000);
     expect(ROWS[5].paymentStatus).toBe("UNPAID"); // no muta

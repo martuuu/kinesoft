@@ -36,7 +36,10 @@ import { countRoomOverlapsInTx, loadRoomBookingsInTx, lockActiveRoomInTx } from 
 import { bulkPatientAccess } from "@/lib/visibility";
 import { ForbiddenError, type Actor } from "@/lib/session";
 import { memberCapabilitiesForActor, requireCapability } from "@/lib/authz";
-import { canOperateBooking, canWriteClinical, type Capability } from "@/lib/capabilities";
+import { canCollectCopago, canConfirmInsurer, canOperateBooking, canWriteClinical, type Capability } from "@/lib/capabilities";
+import { COLLECT_COPY, type CopagoMarkInput } from "@/lib/booking-collect";
+import { PAYMENT_METHODS, type PaymentMethod } from "@/lib/payment-method";
+import { z } from "zod";
 import { bookingFieldAccess } from "@/lib/booking-field-access";
 import { applyReceptionAction, RECEPTION_ACTION_LABEL } from "@/lib/reception-state";
 import { MODULE_DENIED_COPY, roomsEnabled, waitingRoomEnabled } from "@/lib/tenant-modules";
@@ -57,6 +60,7 @@ import { afterBookingsCommitted, type BookingChangeRef } from "@/lib/booking-eve
 // `audit()` aparte podía divergir del write.
 import {
   acceptClientKey,
+  actorCapsInTx,
   applyBookingUpdateInTx,
   PRACTITIONER_NOT_BOOKABLE_ERROR,
   bookingRefsError,
@@ -370,6 +374,8 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
         description: true,
         updatedAt: true,
         paymentStatus: true,
+        // T3 (C-AS2): cómo pagó el copago; escalar en la misma sentencia (cable `pm`, default null).
+        copagoPaymentMethod: true,
         createdAt: true,
         idempotencyKey: true,
         isOverbooked: true,
@@ -494,6 +500,7 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
       updatedAt: b.updatedAt,
       patientAccess: access,
       paymentStatus: b.paymentStatus,
+      copagoPaymentMethod: b.copagoPaymentMethod,
       createdAt: b.createdAt,
       publicReservation: isPublicReservation(b),
       isOverbooked: b.isOverbooked,
@@ -1706,6 +1713,23 @@ async function deleteBookingImpl(
 }
 
 /**
+ * Qué cobro se toca y con qué (T3, C-AS2). El gate se elige por el lado: el copago lo registra quien cobra
+ * (`canCollectCopago`) y lleva el medio; la obra social la confirma `billing.manage` (`canConfirmInsurer`).
+ */
+type BillingToggle = { side: "copago"; mark: CopagoMarkInput } | { side: "insurer"; paid: boolean };
+
+/**
+ * Lo que `setBookingCopagoPaid` acepta del cliente (C-AS2). `discriminatedUnion` y no `{ paid, method? }`: «pagado
+ * sin medio» no es representable (decisión 5 del 19-oct: un cobro por turno CON medio). Cualquier forma inválida
+ * (sin medio, uno inventado, el `true` pelado de antes de T3 desde una pestaña vieja) cae en el mismo «Elegí cómo
+ * pagó.» sin escribir.
+ */
+const CopagoMarkSchema = z.discriminatedUnion("paid", [
+  z.object({ paid: z.literal(true), method: z.enum(PAYMENT_METHODS) }).strict(),
+  z.object({ paid: z.literal(false) }).strict(),
+]);
+
+/**
  * Shared body of the two Facturación toggles (A2a-S06). Before: lookup and
  * update in two separate transactions, `where: { id }` only on the write, no
  * optimistic lock and no access check — a second quick toggle (or another
@@ -1713,14 +1737,19 @@ async function deleteBookingImpl(
  * foreign patient's copago as cobrado. Now: one transaction, tenant-scoped
  * write guarded by `updatedAt`, and the new `updatedAt` goes back to the
  * client so its next toggle isn't stale.
+ *
+ * T3 (C-AS2, plan §23.4): orden notfound → stale → gate → Mercado Pago. El gate ya NO es `hasFullAccess`: con él
+ * nadie no clínico podía cobrar (Secretaria, Facturación, Admin y Titular sin agenda son nivel `admin` sobre los
+ * pacientes; /sala le mostraba «Cobrar» al Admin y el server lo rechazaba, hallazgo §23.2 y AUDIT §5.35 enmendado).
+ * El cobro es un dato administrativo del TURNO, no acceso a la HC: se decide con las capabilities del rol
+ * (`actorCapsInTx`, la membresía leída en ESTA tx) y el profesional del turno. Sale además más barato: una lectura de
+ * la membresía (+ el pago de MP en el copago) en lugar de paciente + settings + membresía + share.
  */
 async function toggleBilling(
   id: string,
-  data: Prisma.BookingUpdateManyMutationInput,
-  expectedUpdatedAt: string | undefined,
-  action: string,
-  opts: { freezeCopago?: boolean } = {}
-): Promise<ActionResult<{ updatedAt: Date; notice?: string }>> {
+  toggle: BillingToggle,
+  expectedUpdatedAt: string | undefined
+): Promise<ActionResult<{ updatedAt: Date; method: PaymentMethod | null; notice?: string }>> {
   const actor = await getActor();
   const outcome = await runWithRls(actor.tenantId, async (tx) => {
     const row = await tx.booking.findFirst({
@@ -1743,13 +1772,33 @@ async function toggleBilling(
         // P3.Z: idem `insurerPaidAt` (la OS se cuenta por esa fecha).
         insurerPaidAt: true,
         roomId: true, // SR: sala del ref (escalar)
+        // T3 (M12): re-marcar con otro medio corrige solo el medio y audita de cuál a cuál.
+        copagoPaymentMethod: true,
       },
     });
     if (!row) return { kind: "notfound" as const };
     if (expectedUpdatedAt && +row.updatedAt !== +new Date(expectedUpdatedAt)) {
       return { kind: "stale" as const };
     }
-    if (!(await hasFullAccess(actor, row.patientId, tx))) return { kind: "basic" as const };
+    const caps = await actorCapsInTx(tx, actor);
+    if (toggle.side === "copago" && !canCollectCopago(caps, actor.practitionerId, row.practitionerId)) {
+      // `collectOwn` sin ser su turno vs. un rol que no cobra nada: dos copys distintos (C-AS2).
+      return { kind: "forbidden" as const, error: caps.has("billing.collectOwn") ? COLLECT_COPY.ownOnly : COLLECT_COPY.roleCannotCollect };
+    }
+    if (toggle.side === "insurer" && !canConfirmInsurer(caps)) {
+      return { kind: "forbidden" as const, error: COLLECT_COPY.insurerOnly };
+    }
+    if (toggle.side === "copago") {
+      // Default del 19-oct: un cobro de Mercado Pago no se desmarca ni se cambia a mano. Desmarcarlo dejaría el turno
+      // «por cobrar» con la plata ya acreditada (la recepción cobraría dos veces) y el webhook no lo volvería a
+      // marcar; AUTHORIZED es MP reteniendo el pago, que todavía puede acreditarse. Se mira la fila `Payment`
+      // (PAID aunque el turno se haya desmarcado antes de T3) y el estado del turno. Solo en el copago: confirmar
+      // la obra social no toca lo que pagó el paciente.
+      const payment = await tx.payment.findUnique({ where: { bookingId: row.id }, select: { status: true } });
+      if (payment?.status === "PAID" || payment?.status === "AUTHORIZED" || row.paymentStatus === "AUTHORIZED") {
+        return { kind: "forbidden" as const, error: COLLECT_COPY.mercadoPagoLocked };
+      }
+    }
     // P2-Z · B-M3: marcar/desmarcar el cobro de un turno de plan CANCELLED o
     // NO_SHOW cambia si la cuota de su sesión "ya se pagó" (cobro previo,
     // `priorPaidStamp`). El turno que la reemplaza tiene que acompañar en la
@@ -1767,7 +1816,7 @@ async function toggleBilling(
     // retroactivamente cuánto "se cobró". Un turno de plan nunca entra acá
     // (`pricedByPlan` ⇒ copago no nulo, CHECK). Solo al marcar cobrado.
     let frozen: { copagoCents: number } | null = null;
-    if (opts.freezeCopago && row.copagoCents == null) {
+    if (toggle.side === "copago" && toggle.mark.paid && row.copagoCents == null) {
       const [coverage, particularCopago, service] = await Promise.all([
         row.patientId
           ? tx.coverage.findFirst({
@@ -1790,19 +1839,47 @@ async function toggleBilling(
         }),
       };
     }
-    // P3.Z (revisor b · B1): `copagoPaidAt` es la fecha con la que el widget
-    // de ingresos cuenta el cobro en la semana/mes. Si el turno YA estaba PAID,
-    // re-marcarlo (otra pestaña, la Facturación agrupada, un doble click con el
-    // `updatedAt` nuevo) la reescribía con `new Date()` y el cobro se mudaba de
-    // mes. Ya PAID → no se toca (tampoco si quedó null de antes de M3a: no
-    // se le inventa una fecha). Desmarcar la sigue limpiando.
-    const write: Prisma.BookingUpdateManyMutationInput = { ...data };
-    if (data.paymentStatus === "PAID" && row.paymentStatus === "PAID") delete write.copagoPaidAt;
-    // Mismo bug en la OS (hallazgo de F1): el widget cuenta lo que pagó la obra
-    // social por `insurerPaidAt`. Re-marcar una OS ya cobrada no la muda de mes.
-    // Se reescribe la MISMA fecha (no se borra la clave): un `updateMany` sin
-    // datos devuelve count 0 y se leería como stale.
-    if (data.insurerPaidAt instanceof Date && row.insurerPaidAt != null) write.insurerPaidAt = row.insurerPaidAt;
+    const now = new Date();
+    let write: Prisma.BookingUpdateManyMutationInput;
+    let action: string;
+    let payload: Record<string, unknown> | undefined;
+    let method: PaymentMethod | null = null;
+    if (toggle.side === "insurer") {
+      action = toggle.paid ? "booking.insurer_paid" : "booking.insurer_unpaid";
+      // Mismo bug que el copago (hallazgo de F1): el widget cuenta lo que pagó la obra social por `insurerPaidAt`.
+      // Re-marcar una OS ya cobrada no la muda de mes. Se reescribe la MISMA fecha (no se omite la clave): un
+      // `updateMany` sin datos devuelve count 0 y se leería como stale.
+      write = { insurerPaidAt: toggle.paid ? (row.insurerPaidAt ?? now) : null };
+      method = row.copagoPaymentMethod;
+    } else if (toggle.mark.paid && row.paymentStatus === "PAID") {
+      // P3.Z (revisor b · B1): `copagoPaidAt` es la fecha con la que el widget de ingresos cuenta el cobro en la
+      // semana/mes; re-marcar uno ya PAID (otra pestaña, un doble click con el `updatedAt` nuevo) la reescribía y el
+      // cobro se mudaba de mes. T3: re-marcar con OTRO medio es corregir cómo pagó («era transferencia»): cambia
+      // solo el medio; ni la fecha ni quién cobró (el cobro es el mismo). Con el mismo medio, el write igual va
+      // (idempotente; sube `updatedAt` como antes).
+      method = toggle.mark.method;
+      write = { copagoPaymentMethod: method };
+      if (row.copagoPaymentMethod !== method) {
+        action = "booking.copago_method_change";
+        payload = { from: row.copagoPaymentMethod, to: method };
+      } else {
+        action = "booking.copago_paid";
+        payload = { method, copagoCents: frozen?.copagoCents ?? row.copagoCents };
+      }
+    } else if (toggle.mark.paid) {
+      // S14r (M3a) + T3 (M12): PAID, cuándo, cómo y quién, en el MISMO `updateMany` con CAS (o todo o nada; los
+      // CHECK de M12 exigen el medio con PAID/REFUNDED y quién cobró solo con medio).
+      method = toggle.mark.method;
+      action = "booking.copago_paid";
+      write = { paymentStatus: "PAID", copagoPaidAt: now, copagoPaymentMethod: method, copagoCollectedById: actor.userId };
+      payload = { method, copagoCents: frozen?.copagoCents ?? row.copagoCents };
+    } else {
+      // Desmarcar limpia todo: el cobro deja de contar en el período y no queda un medio ni un cobrador de un cobro
+      // que no existe (los CHECK de M12 tampoco lo admiten con UNPAID).
+      action = "booking.copago_unpaid";
+      write = { paymentStatus: "UNPAID", copagoPaidAt: null, copagoPaymentMethod: null, copagoCollectedById: null };
+      payload = { method: row.copagoPaymentMethod, copagoCents: row.copagoCents };
+    }
     const res = await tx.booking.updateMany({
       // El CAS por `updatedAt` ata la decisión de arriba a ESTA versión de la fila.
       where: { id, tenantId: actor.tenantId, updatedAt: row.updatedAt },
@@ -1816,27 +1893,32 @@ async function toggleBilling(
     const refs: BookingChangeRef[] = [
       { bookingId: row.id, practitionerId: row.practitionerId, scheduledFor: row.scheduledFor, kind: "booking", roomId: row.roomId },
     ];
-    const sync = planPrior ? await syncPriorPaidReplacementInTx(tx, actor.tenantId, row.sessionId!, new Date()) : null;
+    const sync = planPrior ? await syncPriorPaidReplacementInTx(tx, actor.tenantId, row.sessionId!, now) : null;
     if (sync?.ref) refs.push(sync.ref);
-    // PL-A (plata): el cobro y su audit, o ninguno (un stale de arriba revierte los dos).
+    // PL-A (plata): el cobro y su audit, o ninguno (un stale de arriba revierte los dos). Payload sin PHI: medio y
+    // monto en centavos (AUDIT §5: ids y nombres de campo, nunca datos clínicos).
     await auditInTx(tx, {
       tenantId: actor.tenantId,
       actorId: actor.userId ?? undefined,
       action,
       entity: "Booking",
       entityId: id,
+      ...(payload ? { payload } : {}),
     });
-    return { kind: "ok" as const, patientId: row.patientId, updatedAt: after!.updatedAt, refs, notice: sync?.notice ?? null };
+    return { kind: "ok" as const, patientId: row.patientId, updatedAt: after!.updatedAt, method, refs, notice: sync?.notice ?? null };
   }).catch((e) => {
     if (e instanceof BillingReplacementStale) return { kind: "stale" as const };
     throw e;
   });
   if (outcome.kind === "notfound") return { ok: false, error: "Turno no encontrado." };
   if (outcome.kind === "stale") return { ok: false, error: STALE_ERROR };
-  if (outcome.kind === "basic") return { ok: false, error: BASIC_ACCESS_ERROR };
+  if (outcome.kind === "forbidden") return { ok: false, error: outcome.error };
   if (outcome.patientId) revalidatePath(`/pacientes/${outcome.patientId}`);
   await afterBookingsCommitted(actor.tenantId, outcome.refs);
-  return { ok: true, data: { updatedAt: outcome.updatedAt, ...(outcome.notice ? { notice: outcome.notice } : {}) } };
+  return {
+    ok: true,
+    data: { updatedAt: outcome.updatedAt, method: outcome.method, ...(outcome.notice ? { notice: outcome.notice } : {}) },
+  };
 }
 
 /** El reemplazo cambió entre la lectura y el CAS: rollback de TODO el toggle (C5: conteo esperado o nada). */
@@ -1948,46 +2030,51 @@ async function syncPriorPaidReplacementInTx(
  * Facturación tab. Tenant-scoped; `paid=false` clears the confirmation.
  * `expectedUpdatedAt` is optional only for legacy callers; the Facturación
  * tab always sends it and patches the returned `updatedAt`.
+ *
+ * T3 (C-AS2): gate «insurer» = `canConfirmInsurer` (`billing.manage`: Facturación, Titular, Admin). La Secretaria
+ * cobra copagos pero no confirma obra social; el profesional tampoco (antes alcanzaba el acceso full al paciente).
  */
 export async function setBookingInsurerPaid(
   id: string,
   paid: boolean,
   expectedUpdatedAt?: string
 ): Promise<ActionResult<{ updatedAt: Date; notice?: string }>> {
-  return withReadOnlyResult(() => toggleBilling(
-    id,
-    { insurerPaidAt: paid ? new Date() : null },
-    expectedUpdatedAt,
-    paid ? "booking.insurer_paid" : "booking.insurer_unpaid"
-  ));
+  return withReadOnlyResult(async () => {
+    const r = await toggleBilling(id, { side: "insurer", paid: paid === true }, expectedUpdatedAt);
+    if (!r.ok) return r;
+    return { ok: true as const, data: { updatedAt: r.data.updatedAt, ...(r.data.notice ? { notice: r.data.notice } : {}) } };
+  });
 }
 
 /**
- * Mark a turno's copago as collected / pending (in-person payments) by
- * flipping `Booking.paymentStatus` between PAID and UNPAID. Complements the
- * OS confirmation so the Facturación tab tracks both sides. Same lock
- * contract as `setBookingInsurerPaid`.
+ * Registrar / deshacer el cobro del copago de un turno (en mano: efectivo, transferencia, tarjeta…). Complementa la
+ * confirmación de la OS, así Facturación sigue los dos lados.
  *
- * S14r (M3a): `copagoPaidAt` = cuándo se marcó cobrado. Es la fecha con la que
- * el widget de ingresos del dashboard cuenta el copago en la semana/mes (antes
- * solo contaba MP: el cobro en mano no aparecía). Desmarcar la limpia, así el
- * cobro deja de contar en el período. Va en el mismo `updateMany` con CAS que
- * el `paymentStatus` (y la re-sincronización del cobro previo de P2-Z sigue
- * igual en `toggleBilling`): o cambian los dos o ninguno. Re-marcar uno que ya
- * estaba PAID no mueve la fecha (P3.Z, en `toggleBilling`).
+ * T3 (C-AS2, plan §23.4; decisiones 1 y 5 del 19-oct): `input` = `{ paid: true, method }` (el medio es obligatorio:
+ * «Elegí cómo pagó.») o `{ paid: false }`. Gate «copago» = `canCollectCopago` (la Secretaria, Facturación, el
+ * Titular y el Admin cobran cualquier turno; el profesional, solo los suyos). Devuelve el `updatedAt` nuevo en ISO
+ * (la próxima acción sobre la fila lo manda como `expectedUpdatedAt`) y el medio que quedó (`null` al desmarcar).
+ *
+ * S14r (M3a): `copagoPaidAt` = cuándo se marcó cobrado; es la fecha con la que el widget de ingresos cuenta el
+ * copago en la semana/mes. Desmarcar la limpia. Va en el mismo `updateMany` con CAS que el `paymentStatus`, el medio
+ * y quién cobró (y la re-sincronización del cobro previo de P2-Z sigue igual en `toggleBilling`): o cambian todos o
+ * ninguno. Re-marcar uno que ya estaba PAID no mueve la fecha (P3.Z); con otro medio corrige solo el medio.
  */
 export async function setBookingCopagoPaid(
   id: string,
-  paid: boolean,
+  input: CopagoMarkInput,
   expectedUpdatedAt?: string
-): Promise<ActionResult<{ updatedAt: Date; notice?: string }>> {
-  return withReadOnlyResult(() => toggleBilling(
-    id,
-    { paymentStatus: paid ? "PAID" : "UNPAID", copagoPaidAt: paid ? new Date() : null },
-    expectedUpdatedAt,
-    paid ? "booking.copago_paid" : "booking.copago_unpaid",
-    { freezeCopago: paid }
-  ));
+): Promise<ActionResult<{ updatedAt: string; method: PaymentMethod | null; notice?: string }>> {
+  const parsed = CopagoMarkSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: COLLECT_COPY.methodRequired };
+  return withReadOnlyResult(async () => {
+    const r = await toggleBilling(id, { side: "copago", mark: parsed.data }, expectedUpdatedAt);
+    if (!r.ok) return r;
+    return {
+      ok: true as const,
+      data: { updatedAt: r.data.updatedAt.toISOString(), method: r.data.method, ...(r.data.notice ? { notice: r.data.notice } : {}) },
+    };
+  });
 }
 
 /**

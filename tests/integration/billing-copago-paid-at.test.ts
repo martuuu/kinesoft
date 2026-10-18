@@ -2,7 +2,7 @@
  * P3.Z (F1, revisor b · B1) · re-marcar un copago ya PAID no mueve su fecha.
  *
  * `copagoPaidAt` (M3a) es la fecha con la que el widget de ingresos cuenta el
- * copago en la semana/mes (S14r). Antes `setBookingCopagoPaid(id, true)` la
+ * copago en la semana/mes (S14r). Antes `setBookingCopagoPaid(id, { paid: true, method: "CASH" })` la
  * reescribía con `new Date()` aunque el turno ya estuviera PAID: un segundo
  * "Cobrado" (otra pestaña, doble click con el `updatedAt` nuevo, la Facturación
  * agrupada) movía el cobro de mes. Ahora, si ya estaba PAID, la fecha queda.
@@ -60,18 +60,18 @@ describe.skipIf(!RUN)("[P3-Z] copagoPaidAt idempotente al re-marcar", () => {
     const lastMonth = new Date(Date.now() - 35 * 86_400_000);
     const b = await booking({ paymentStatus: "PAID", copagoPaidAt: lastMonth });
 
-    const again = await setBookingCopagoPaid(b.id, true, b.updatedAt.toISOString());
+    const again = await setBookingCopagoPaid(b.id, { paid: true, method: "CASH" }, b.updatedAt.toISOString());
     expect(again).toMatchObject({ ok: true });
     const r1 = await row(b.id);
     expect(r1.paymentStatus).toBe("PAID");
     expect(r1.copagoPaidAt?.toISOString()).toBe(lastMonth.toISOString());
 
-    const off = await setBookingCopagoPaid(b.id, false, r1.updatedAt.toISOString());
+    const off = await setBookingCopagoPaid(b.id, { paid: false }, r1.updatedAt.toISOString());
     expect(off).toMatchObject({ ok: true });
     expect(await row(b.id)).toMatchObject({ paymentStatus: "UNPAID", copagoPaidAt: null });
 
     const before = Date.now();
-    const on = await setBookingCopagoPaid(b.id, true, (await row(b.id)).updatedAt.toISOString());
+    const on = await setBookingCopagoPaid(b.id, { paid: true, method: "CASH" }, (await row(b.id)).updatedAt.toISOString());
     expect(on).toMatchObject({ ok: true });
     const r3 = await row(b.id);
     expect(r3.paymentStatus).toBe("PAID");
@@ -81,11 +81,11 @@ describe.skipIf(!RUN)("[P3-Z] copagoPaidAt idempotente al re-marcar", () => {
   it("marcar dos veces seguidas (sin expectedUpdatedAt) deja la fecha del primero", async () => {
     asUser(T.userId);
     const b = await booking();
-    expect(await setBookingCopagoPaid(b.id, true)).toMatchObject({ ok: true });
+    expect(await setBookingCopagoPaid(b.id, { paid: true, method: "CASH" })).toMatchObject({ ok: true });
     const first = (await row(b.id)).copagoPaidAt;
     expect(first).not.toBeNull();
     await new Promise((r) => setTimeout(r, 20));
-    expect(await setBookingCopagoPaid(b.id, true)).toMatchObject({ ok: true });
+    expect(await setBookingCopagoPaid(b.id, { paid: true, method: "CASH" })).toMatchObject({ ok: true });
     expect((await row(b.id)).copagoPaidAt?.toISOString()).toBe(first!.toISOString());
   });
 

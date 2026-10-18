@@ -315,7 +315,7 @@ describe.skipIf(!RUN)("[BO1-A] acceso del consultorio y bloqueos de sesión", ()
       ["updateBooking", () => updateBooking({ id: b.id, notes: "x", expectedUpdatedAt: v } as never)],
       ["setBookingStatus", () => setBookingStatus(b.id, "CANCELLED", v)],
       ["markReceptionAction", () => markReceptionAction(b.id, "llego", v)],
-      ["setBookingCopagoPaid", () => setBookingCopagoPaid(b.id, true, v)],
+      ["setBookingCopagoPaid", () => setBookingCopagoPaid(b.id, { paid: true, method: "CASH" }, v)],
       ["setBookingInsurerPaid", () => setBookingInsurerPaid(b.id, true, v)],
       ["deleteBooking", () => deleteBooking(b.id, v)],
       ["createPatient", () => createPatient({ firstName: "Nuevo", lastName: "Paciente", documentId: `DNI-${uniqueSuffix()}` } as never)],

@@ -90,6 +90,9 @@ const FIELDS: ReadonlyArray<Field> = [
   { key: "isTelemedicine", wire: "tm", dflt: false },
   { key: "telemedicineUrl", wire: "tu", dflt: null },
   { key: "clinicalHidden", wire: "ch", dflt: false },
+  // T3 (C-AS2): medio del cobro del copago. Default null: solo crecen las filas pagadas (la semana es casi toda sin
+  // cobrar). Va acá porque `toBookingDTO` lo arma después de `clinicalHidden` (el orden de claves es contrato).
+  { key: "copagoPaymentMethod", wire: "pm", dflt: null },
   { key: "canOperate", wire: "co", dflt: true },
   { key: "clinicalWritable", wire: "cw", dflt: true },
   { key: "roomId", wire: "r" },

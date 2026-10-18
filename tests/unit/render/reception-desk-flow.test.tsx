@@ -270,6 +270,15 @@ describe("[RX-2b] carriles por estado", () => {
     expect(ticket(cash, "cobrar")).toContain(`aria-label="Cobrar a Paciente cobrar, ${formatARS(600000)}"`);
   });
 
+  it("[AS-1c] profesional (billing.collectOwn): Por cobrar solo con SUS turnos y su total", () => {
+    const html = flow(deskViewer("p2", ["agenda.viewAll", "agenda.reception", "clinical.read", "billing.collectOwn"]));
+    const cash = section(html, "Por cobrar");
+    // «cobrar» es de p1: ni se lista ni se suma (cashEntries con el viewer = canCollectRow, la regla del server).
+    expect(rowIds(cash)).toEqual(["cobrar2"]);
+    expect(cash).toContain(formatARS(450_000));
+    expect(cash).not.toContain(formatARS(1_050_000));
+  });
+
   it("tercer carril sin billing.manage: En atención (quién está en el box y hace cuánto), sin Por cobrar ni Cobrar", () => {
     const html = flow(SECRETARIA);
     expect(html).not.toContain(">Por cobrar</h2>");

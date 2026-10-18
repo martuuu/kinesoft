@@ -443,7 +443,7 @@ describe.skipIf(!RUN)("S12 · sincronía turno → sesión", () => {
   it("Q8: marcar 'Cobrado' con copago null congela el copago resuelto", async () => {
     const p = await createPlan(db, T, { sessions: 1 });
     const b = await addPlanBooking(db, T, { patientId: p.patientId, copagoCents: null });
-    const r = await setBookingCopagoPaid(b, true, await ver(b));
+    const r = await setBookingCopagoPaid(b, { paid: true, method: "CASH" }, await ver(b));
     expect(r.ok).toBe(true);
     const row = await booking(b);
     expect(row.paymentStatus).toBe("PAID");
@@ -453,7 +453,7 @@ describe.skipIf(!RUN)("S12 · sincronía turno → sesión", () => {
 
     // Un copago ya fijado no se pisa.
     const b2 = await addPlanBooking(db, T, { patientId: p.patientId, copagoCents: 1234 });
-    expect((await setBookingCopagoPaid(b2, true, await ver(b2))).ok).toBe(true);
+    expect((await setBookingCopagoPaid(b2, { paid: true, method: "CASH" }, await ver(b2))).ok).toBe(true);
     expect((await booking(b2)).copagoCents).toBe(1234);
   });
 

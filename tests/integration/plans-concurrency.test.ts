@@ -492,7 +492,7 @@ describe.skipIf(!RUN)("P2-S11x · carreras del motor de planes", () => {
       // "Cobrado" con la versión que ve la UI: lee la fila vieja (MVCC), pasa su
       // chequeo de expectedUpdatedAt y su UPDATE … WHERE updatedAt queda
       // esperando la fila que tiene el reprecio.
-      cobrado = setBookingCopagoPaid(target.id, true, target.updatedAt.toISOString());
+      cobrado = setBookingCopagoPaid(target.id, { paid: true, method: "CASH" }, target.updatedAt.toISOString());
       await waitBlockedBy(db, pid, 2);
     } finally {
       h.release();
@@ -508,7 +508,7 @@ describe.skipIf(!RUN)("P2-S11x · carreras del motor de planes", () => {
     expect(await db.auditEvent.count({ where: { tenantId: K.tenantId, action: "booking.copago_paid", entityId: target.id } })).toBe(0);
 
     // Con la versión nueva (lo que hace la UI tras "refrescá"), cobra el monto nuevo.
-    const again = await setBookingCopagoPaid(target.id, true, after.updatedAt.toISOString());
+    const again = await setBookingCopagoPaid(target.id, { paid: true, method: "CASH" }, after.updatedAt.toISOString());
     expect(again.ok).toBe(true);
     expect(await db.booking.findUniqueOrThrow({ where: { id: target.id } })).toMatchObject({
       paymentStatus: "PAID",

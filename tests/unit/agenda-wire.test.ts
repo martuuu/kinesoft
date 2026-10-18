@@ -102,6 +102,8 @@ const ROWS: Record<string, AgendaBookingRow> = {
   sinNombreDeSede: row({ locationId: "loc_vieja", locationName: null }),
   principalSinNombre: row({ locationName: null }),
   servicioLibre: row({ serviceId: "svc_libre", serviceName: "Libre", serviceColor: null }),
+  // T3 (C-AS2): cobrado con medio.
+  pagadoConMedio: row({ status: "COMPLETED", paymentStatus: "PAID", copagoPaymentMethod: "TRANSFER" }),
 };
 
 describe("[PF2-c] cable de la agenda", () => {
@@ -125,6 +127,18 @@ describe("[PF2-c] cable de la agenda", () => {
     expect(Object.keys(w)).not.toContain("sn");
     expect(Object.keys(w)).not.toContain("ln");
     expect(Object.keys(w)).not.toContain("ob");
+  });
+
+  it("[AS-1c] el medio del cobro viaja como `pm` y solo en las filas pagadas (default null)", () => {
+    const paid = toBookingDTO(ROWS.pagadoConMedio);
+    expect(paid.copagoPaymentMethod).toBe("TRANSFER");
+    const [wPaid, wOpen] = encodeAgendaWire([paid, toBookingDTO(ROWS.neutro)], catalog);
+    expect(wPaid.pm).toBe("TRANSFER");
+    expect(Object.keys(wPaid)).not.toContain("copagoPaymentMethod");
+    // Sin cobrar: la clave no viaja (la semana es casi toda sin cobrar) y al decodificar vuelve en null.
+    expect(Object.keys(wOpen)).not.toContain("pm");
+    const [, back] = decodeAgendaWire([wPaid, wOpen], catalog);
+    expect(back.copagoPaymentMethod).toBeNull();
   });
 
   it("un campo nuevo del DTO viaja con su nombre completo (no se pierde)", () => {

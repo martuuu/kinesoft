@@ -11,7 +11,8 @@
  *   - el `copagoCents` de un actor sin full se ignora (rige lib/copago.ts);
  *   - re-vínculo sin `clinical.read`: guest → paciente sí; paciente → paciente
  *     solo si título, descripción y notas (sin `[SOBRETURNO]`) están vacíos;
- *   - `deleteBooking` y los toggles de cobro siguen exigiendo full.
+ *   - `deleteBooking` sigue exigiendo full. Los toggles de cobro, desde T3 (C-AS2), van por capability:
+ *     la Secretaria cobra el copago (`billing.collect`) y no confirma la obra social (`billing.manage`).
  *
  * Desde PD-13 (S02p) la Secretaria (ASSISTANT) tiene SIEMPRE el nivel `admin`
  * sobre los pacientes del tenant: nunca full. Antes de S07sb eso la dejaba en
@@ -330,16 +331,29 @@ describe.skipIf(!RUN)("Secretaria en turnos (P0-S07sb)", () => {
     });
   }
 
-  it("[P0-S07sb] ASSISTANT no borra ni marca cobros", async () => {
+  it("[P0-S07sb] ASSISTANT no borra el turno", async () => {
     const b = await seedBooking({ patientId: pat, day: "2031-04-07" });
     asUser(assistant.userId);
     expect((await deleteBooking(b.id, v(b.updatedAt))).ok).toBe(false);
-    expect((await setBookingCopagoPaid(b.id, true, v(b.updatedAt))).ok).toBe(false);
-    expect((await setBookingInsurerPaid(b.id, true, v(b.updatedAt))).ok).toBe(false);
     const row = await db.booking.findUniqueOrThrow({ where: { id: b.id } });
-    expect(row.paymentStatus).toBe("UNPAID");
-    expect(row.insurerPaidAt).toBeNull();
     expect(+row.updatedAt).toBe(+b.updatedAt);
+  });
+
+  // T3 (C-AS2, AUDIT §5.35 enmendado): la Secretaria COBRA el copago (decisión 1 del 19-oct: «si paga en efectivo lo
+  // marca Pagado y listo») pero no confirma la obra social (`billing.manage`). Antes de T3 los dos toggles pedían full
+  // y la Secretaria (nivel `admin`) no podía ninguno. El detalle del contrato está en as1c-cobros.test.ts.
+  it("[AS-1c] ASSISTANT cobra el copago con medio y no confirma la obra social", async () => {
+    const b = await seedBooking({ patientId: pat, day: "2031-04-08" });
+    asUser(assistant.userId);
+    const paid = await setBookingCopagoPaid(b.id, { paid: true, method: "CASH" }, v(b.updatedAt));
+    expect(paid).toMatchObject({ ok: true, data: { method: "CASH" } });
+    if (!paid.ok) return;
+    expect((await setBookingInsurerPaid(b.id, true, paid.data.updatedAt)).ok).toBe(false);
+    const row = await db.booking.findUniqueOrThrow({ where: { id: b.id } });
+    expect(row.paymentStatus).toBe("PAID");
+    expect(row.copagoPaymentMethod).toBe("CASH");
+    expect(row.copagoCollectedById).toBe(assistant.userId);
+    expect(row.insurerPaidAt).toBeNull();
   });
 
   it("listAgendaBookings: canOperate / clinicalWritable por fila y cobertura visible para `admin` (PD-13)", async () => {

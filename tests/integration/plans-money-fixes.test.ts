@@ -68,7 +68,7 @@ describe.skipIf(!RUN)("P2-Z · cobro previo ↔ reemplazo (B-M3)", () => {
 
   it("[P2-Z] (a) desmarcar el cobro previo re-estampa el reemplazo a la cuota", async () => {
     const { oldId, newId } = await fixture({ priorPaid: "copago", replacementCopago: 0 });
-    const r = await setBookingCopagoPaid(oldId, false);
+    const r = await setBookingCopagoPaid(oldId, { paid: false });
     expect(r.ok).toBe(true);
     expect(r.ok && r.data.notice).toMatch(/vuelve a la cuota del plan/);
     expect(await get(oldId)).toMatchObject({ paymentStatus: "UNPAID" });
@@ -77,11 +77,11 @@ describe.skipIf(!RUN)("P2-Z · cobro previo ↔ reemplazo (B-M3)", () => {
 
   it("[P2-Z] (b) marcar cobrado un previo con reemplazo a precio pleno → reemplazo a $0", async () => {
     const { oldId, newId } = await fixture({ priorPaid: null, replacementCopago: 500_000, status: "NO_SHOW" });
-    const r = await setBookingCopagoPaid(oldId, true);
+    const r = await setBookingCopagoPaid(oldId, { paid: true, method: "CASH" });
     expect(r.ok && r.data.notice).toMatch(/ya quedó paga/);
     expect(await get(newId)).toMatchObject({ copagoCents: 0, pricedByPlan: true });
     // Y de vuelta: desmarcar lo devuelve a la cuota (ida y vuelta sin pagar dos veces ni nunca).
-    const back = await setBookingCopagoPaid(oldId, false);
+    const back = await setBookingCopagoPaid(oldId, { paid: false });
     expect(back.ok).toBe(true);
     expect(await get(newId)).toMatchObject({ copagoCents: 500_000, pricedByPlan: true });
   });
@@ -99,7 +99,7 @@ describe.skipIf(!RUN)("P2-Z · cobro previo ↔ reemplazo (B-M3)", () => {
     const { oldId, newId } = await fixture({ priorPaid: null, replacementCopago: 500_000 });
     await db.booking.update({ where: { id: newId }, data: { paymentStatus: "PAID" } });
     const before = await get(newId);
-    const r = await setBookingCopagoPaid(oldId, true);
+    const r = await setBookingCopagoPaid(oldId, { paid: true, method: "CASH" });
     expect(r.ok).toBe(true);
     expect(r.ok && r.data.notice).toMatch(/revisá su cobro a mano/);
     expect(await get(oldId)).toMatchObject({ paymentStatus: "PAID" });
@@ -112,7 +112,7 @@ describe.skipIf(!RUN)("P2-Z · cobro previo ↔ reemplazo (B-M3)", () => {
     const r = await setBookingInsurerPaid(oldId, true);
     expect(r.ok && r.data.notice).toBeUndefined();
     const loose = await addPlanBooking(db, K, { patientId: null, status: "CANCELLED", scheduledFor: new Date(Date.UTC(2030, 5, 1, 13)), copagoCents: 100 });
-    const l = await setBookingCopagoPaid(loose, true);
+    const l = await setBookingCopagoPaid(loose, { paid: true, method: "CASH" });
     expect(l.ok && l.data.notice).toBeUndefined();
   });
 });

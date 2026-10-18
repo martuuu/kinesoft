@@ -259,7 +259,7 @@ describe.skipIf(!RUN)("S16b · reprecio C5 (plans-pricing)", () => {
     const rp = repricePlan({ programId, expectedUpdatedAt: iso(s.program.updatedAt), pricing: { mode: "PER_SESSION", pricePerSessionCents: 15_000_00 } });
     await waitForAdvisoryWaiter(db, key);
     // "Cobrado" real (no toma el lock del paciente): commitea mientras el reprecio espera.
-    const paid = await setBookingCopagoPaid(s.booking(2).id, true);
+    const paid = await setBookingCopagoPaid(s.booking(2).id, { paid: true, method: "CASH" });
     expect(paid.ok).toBe(true);
     h.release();
     await h.done;

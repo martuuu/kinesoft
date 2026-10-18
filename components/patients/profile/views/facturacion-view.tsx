@@ -1,11 +1,17 @@
 "use client";
 
-import { useTransition, type CSSProperties } from "react";
+import { useMemo, useState, useTransition, type CSSProperties } from "react";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { IconCheck } from "@/components/ui/icons";
+import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast";
+import { PaymentMethodPicker, rememberPaymentMethod } from "@/components/billing/payment-method-picker";
 import { setBookingInsurerPaid, setBookingCopagoPaid } from "@/lib/bookings";
+import { COLLECT_COPY, copagoRemainingCents } from "@/lib/booking-collect";
+import { canCollectCopago, canConfirmInsurer, type Capability } from "@/lib/capabilities";
 import { formatARS } from "@/lib/format";
+import { paymentMethodLabel, type PaymentMethod } from "@/lib/payment-method";
 import { Summary, BookingStatusTag } from "../ui";
 import type { PatientBookingFull } from "@/lib/patients-types";
 import type { PatientPlanBalances, PlanDTO } from "@/lib/plans-read-types";
@@ -51,35 +57,55 @@ function TableScroll({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Money + a "Confirmar / Cobrado" toggle for one billing side (OS or copago). */
+/**
+ * Money + a "Confirmar / Cobrado" toggle for one billing side (OS or copago).
+ *
+ * T3 (C-AS2): `paidLabel` dice cómo pagó el copago («Pagado · Efectivo»; «Sin informar» si se cobró antes de M12) y
+ * `canToggle=false` deja solo el estado, sin botón: quien no cobra esa fila (el profesional en un turno ajeno, la
+ * Secretaria en la obra social, un cobro de Mercado Pago) ve qué pasó pero no lo cambia. El server decide igual.
+ */
 function PaidCell({
   amountCents,
   paid,
   available,
   pending,
   onToggle,
+  paidLabel = "Cobrado",
+  canToggle = true,
 }: {
   amountCents: number;
   paid: boolean;
   available: boolean;
   pending: boolean;
   onToggle: (next: boolean) => void;
+  paidLabel?: string;
+  canToggle?: boolean;
 }) {
   if (!available) return <span style={{ fontSize: 12, color: "var(--navy-500)" }}>—</span>;
+  const paidChip = { display: "inline-flex", alignItems: "center", gap: 4, border: "none", background: "var(--success-bg)", color: "var(--success-fg)", fontSize: 10.5, fontWeight: 700, padding: "3px 8px", borderRadius: 999 } as const;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
       <span className="k-mono" style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-900)" }}>
         {formatARS(amountCents)}
       </span>
-      {paid ? (
+      {!canToggle ? (
+        paid ? (
+          <span style={paidChip}>
+            <IconCheck size={9} stroke={3} /> {paidLabel}
+          </span>
+        ) : (
+          <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--navy-500)" }}>Pendiente</span>
+        )
+      ) : paid ? (
         <button
           type="button"
           onClick={() => onToggle(false)}
           disabled={pending}
-          title="Cobrado — click para deshacer"
-          style={{ display: "inline-flex", alignItems: "center", gap: 4, border: "none", cursor: "pointer", background: "var(--success-bg)", color: "var(--success-fg)", fontSize: 10.5, fontWeight: 700, padding: "3px 8px", borderRadius: 999 }}
+          title={`${paidLabel} — click para deshacer`}
+          aria-label={`${paidLabel}. Deshacer cobro`}
+          style={{ ...paidChip, cursor: "pointer" }}
         >
-          <IconCheck size={9} stroke={3} /> Cobrado
+          <IconCheck size={9} stroke={3} /> {paidLabel}
         </button>
       ) : (
         <button
@@ -122,6 +148,12 @@ export type FacturacionViewProps = {
   showPlanTitles?: boolean;
   /** Después de un toggle de cobro OK: el perfil vuelve a pedir el saldo al server. */
   onBillingChanged?: () => void;
+  /**
+   * T3 (C-AS2): capabilities y profesional del VIEWER, para mostrar solo los toggles que el server acepta
+   * (`canCollectCopago` por fila; la obra social con `canConfirmInsurer` = `billing.manage`). Sin esto (un caller
+   * de antes de T3) se muestran los dos como antes y decide el server.
+   */
+  billingAccess?: { capabilities: readonly Capability[]; practitionerId: string | null };
 };
 
 export function FacturacionView({
@@ -133,9 +165,21 @@ export function FacturacionView({
   planBalances = null,
   showPlanTitles = false,
   onBillingChanged,
+  billingAccess,
 }: FacturacionViewProps) {
   const toast = useToast();
   const [pending, start] = useTransition();
+  // T3: el turno cuyo cobro se está registrando (modal con el medio de pago, obligatorio) y el medio elegido.
+  const [collecting, setCollecting] = useState<PatientBookingFull | null>(null);
+  const [method, setMethod] = useState<PaymentMethod | null>(null);
+  const [methodError, setMethodError] = useState<string | null>(null);
+  const caps = useMemo(
+    () => (billingAccess ? new Set<Capability>(billingAccess.capabilities) : null),
+    [billingAccess]
+  );
+  const canCollect = (b: PatientBookingFull) =>
+    !caps || canCollectCopago(caps, billingAccess?.practitionerId ?? null, b.practitionerId);
+  const canInsurer = !caps || canConfirmInsurer(caps);
 
   if (loading || bookings === null) {
     return (
@@ -168,19 +212,39 @@ export function FacturacionView({
       onBillingChanged?.();
     });
   };
+  // Desmarcar va directo (como antes); marcar abre el modal del medio de pago: «pagado» sin medio no existe (C-AS2).
   const confirmCopago = (b: PatientBookingFull, next: boolean) => {
-    patchBooking(b.id, { paymentStatus: next ? "PAID" : "UNPAID" });
+    if (next) {
+      setMethod(null);
+      setMethodError(null);
+      setCollecting(b);
+      return;
+    }
+    writeCopago(b, { paid: false });
+  };
+  const writeCopago = (b: PatientBookingFull, input: { paid: true; method: PaymentMethod } | { paid: false }) => {
+    patchBooking(b.id, input.paid ? { paymentStatus: "PAID", copagoPaymentMethod: input.method } : { paymentStatus: "UNPAID", copagoPaymentMethod: null });
     start(async () => {
-      const r = await setBookingCopagoPaid(b.id, next, new Date(b.updatedAt).toISOString());
+      const r = await setBookingCopagoPaid(b.id, input, new Date(b.updatedAt).toISOString());
       if (!r.ok) {
-        patchBooking(b.id, { paymentStatus: b.paymentStatus });
+        patchBooking(b.id, { paymentStatus: b.paymentStatus, copagoPaymentMethod: b.copagoPaymentMethod });
         toast.error("No pudimos actualizar el copago", { description: r.error });
         return;
       }
-      patchBooking(b.id, { updatedAt: new Date(r.data.updatedAt) });
+      if (input.paid) rememberPaymentMethod(input.method);
+      patchBooking(b.id, { updatedAt: new Date(r.data.updatedAt), copagoPaymentMethod: r.data.method });
       if (r.data.notice) toast.info(r.data.notice);
       onBillingChanged?.();
     });
+  };
+  const submitCollect = () => {
+    if (!collecting) return;
+    if (!method) {
+      setMethodError(COLLECT_COPY.methodRequired);
+      return;
+    }
+    writeCopago(collecting, { paid: true, method });
+    setCollecting(null);
   };
 
   const columnsHeader = (
@@ -223,10 +287,19 @@ export function FacturacionView({
           {insured ? b.obraSocial : "Particular"}
         </span>
         <div data-label="OS (prestadora)">
-          <PaidCell amountCents={b.osAmountCents} paid={!!b.insurerPaidAt} available={hasOS} pending={pending} onToggle={(n) => confirmOS(b, n)} />
+          <PaidCell amountCents={b.osAmountCents} paid={!!b.insurerPaidAt} available={hasOS} pending={pending} onToggle={(n) => confirmOS(b, n)} canToggle={canInsurer} />
         </div>
         <div data-label="Copago (paciente)">
-          <PaidCell amountCents={b.copagoCents} paid={b.paymentStatus === "PAID"} available pending={pending} onToggle={(n) => confirmCopago(b, n)} />
+          <PaidCell
+            amountCents={b.copagoCents}
+            paid={b.paymentStatus === "PAID"}
+            available
+            pending={pending}
+            onToggle={(n) => confirmCopago(b, n)}
+            paidLabel={`Pagado · ${paymentMethodLabel(b.copagoPaymentMethod)}`}
+            // AUTHORIZED = Mercado Pago retuvo el pago: no se toca a mano (el server lo rechaza igual).
+            canToggle={canCollect(b) && b.paymentStatus !== "AUTHORIZED"}
+          />
         </div>
         {/* B4b: el estado del turno va arriba a la derecha de la card bajo 768, al lado de la fecha. */}
         <div className={tableStyles.actions} style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -263,6 +336,42 @@ export function FacturacionView({
     </div>
   );
 
+  const collectAmount = collecting ? copagoRemainingCents({ resolvedCopagoCents: collecting.copagoCents, deposits: [] }) : 0;
+  const collectModal = (
+    <Modal
+      open={collecting != null}
+      onClose={() => setCollecting(null)}
+      title="Registrar cobro"
+      description={collecting ? `${collecting.serviceName} · ${factDateLabel(collecting.scheduledFor)}` : undefined}
+      width={460}
+    >
+      {collecting && (
+        <div style={{ display: "grid", gap: 16 }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, fontSize: 14, color: "var(--navy-500)" }}>
+            <span>Importe</span>
+            <b className="k-mono" style={{ fontSize: 24, color: "var(--navy-900)" }}>{formatARS(collectAmount)}</b>
+          </div>
+          <PaymentMethodPicker
+            value={method}
+            onChange={(m) => {
+              setMethod(m);
+              setMethodError(null);
+            }}
+            error={methodError}
+          />
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+            <Button type="button" variant="ghost" onClick={() => setCollecting(null)}>
+              Cancelar
+            </Button>
+            <Button type="button" variant="primary" onClick={submitCollect}>
+              {`Marcar pagado · ${formatARS(collectAmount)}`}
+            </Button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+
   if (grouped) {
     const groups = groupBookingsByPlan(visible, planGroupMetas({ plans, planBalances, showPlanTitles }), {
       includeBalanceOnly: true,
@@ -294,6 +403,7 @@ export function FacturacionView({
           );
         })}
         {footnote}
+        {collectModal}
       </div>
     );
   }
@@ -317,6 +427,7 @@ export function FacturacionView({
         )}
       </Card>
       {footnote}
+      {collectModal}
     </div>
   );
 }

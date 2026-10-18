@@ -294,6 +294,16 @@ describe("[RX-2a] panel", () => {
     expect(card(html, "attending")).toBe("");
   });
 
+  it("[AS-1c] profesional (billing.collectOwn): «Por cobrar» sin los turnos ajenos que no puede registrar", () => {
+    const html = face(makeLive(deskViewer("p2", ["agenda.viewAll", "agenda.reception", "clinical.read", "billing.collectOwn"])));
+    const cash = card(html, "cash");
+    expect(cash).toContain(">Por cobrar</h2>");
+    // El único que debe («cobrar») es de p1: la card queda vacía y sin total.
+    expect(cash).not.toContain("Paciente cobrar");
+    expect(cash).not.toContain(formatARS(600000));
+    expect(cash).toContain("No hay cobros pendientes.");
+  });
+
   it("Secretaria: «En atención» (quién y hace cuánto) y NI «Por cobrar» NI «Cobrar» en ningún lado", () => {
     const html = face(makeLive(SECRETARIA));
     const att = card(html, "attending");

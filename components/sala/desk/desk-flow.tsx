@@ -45,7 +45,8 @@ import { FoldButton } from "@/components/sala/sala-fold";
  *     (`scrollAnchorIndex`), una sola vez por día: después no se le mueve la lista a quien la está leyendo.
  *   - Carriles: «Llegan pronto» = demorados + por llegar en ≤ 30' (`soonEntries`); «Sala de espera» = llamados
  *     primero y después por orden de LLEGADA (`waitingEntries`); el tercero es «Por cobrar» con el total
- *     (`cashEntries`) SOLO con `billing.manage` (RX-D4: la Secretaria no cobra). Para quien no cobra, el tercero es
+ *     (`cashEntries` con el viewer) para quien cobra (T3: `billing.collect`, o el profesional con `billing.collectOwn`
+ *     y solo sus turnos; RX-D4 quedó resuelto por la decisión 1 del 19-oct). Para quien no cobra, el tercero es
  *     «En atención» (quién está en cada box y hace cuánto).
  *   - Ticket de la sala: además de la primaria («Llamar»), «En atención» como secundaria (saltear el llamado: el
  *     paciente entra directo porque el box estaba libre). Solo si el rol la permite (`salaActions`). En compacto se
@@ -268,7 +269,8 @@ export function DeskFlow({
   const timeline = useMemo(() => flowTimeline(chronological(visible), now), [visible, now]);
   const soon = useMemo(() => soonEntries(visible, now), [visible, now]);
   const waiting = useMemo(() => waitingEntries(visible, now), [visible, now]);
-  const cash = useMemo(() => (canCollect ? cashEntries(visible) : null), [visible, canCollect]);
+  // T3: `cashEntries` con el viewer: el profesional solo ve y suma lo que puede cobrar (sus turnos).
+  const cash = useMemo(() => (canCollect ? cashEntries(visible, live.viewer) : null), [visible, canCollect, live.viewer]);
   const attending = useMemo(() => (canCollect ? [] : attendingEntries(visible, now)), [visible, now, canCollect]);
   const done = visible.filter((e) => e.state === "atendido" || e.state === "ausente").length;
 

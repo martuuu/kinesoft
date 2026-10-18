@@ -306,14 +306,14 @@ describe.skipIf(!RUN)("core de turnos (S07c)", () => {
       const b = await book(p, ar("2027-11-16", "10:00"));
       expect(bookingDaysCalls()).toBe(1);
       revalidateTagSpy.mockReset();
-      const paid = await setBookingCopagoPaid(b.id, true, b.updatedAt.toISOString());
+      const paid = await setBookingCopagoPaid(b.id, { paid: true, method: "CASH" }, b.updatedAt.toISOString());
       expect(paid.ok).toBe(true);
       expect(bookingDaysCalls()).toBe(1);
       if (!paid.ok) return;
-      const unpaid = await setBookingCopagoPaid(b.id, false, paid.data.updatedAt.toISOString());
+      const unpaid = await setBookingCopagoPaid(b.id, { paid: false }, paid.data.updatedAt);
       if (!unpaid.ok) throw new Error(unpaid.error);
       revalidateTagSpy.mockReset();
-      expect((await deleteBooking(b.id, unpaid.data.updatedAt.toISOString())).ok).toBe(true);
+      expect((await deleteBooking(b.id, unpaid.data.updatedAt)).ok).toBe(true);
       expect(bookingDaysCalls()).toBe(1);
     });
 

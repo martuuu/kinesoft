@@ -24,7 +24,7 @@ import { loadDeskFlow, loadDeskList, loadDeskPayModal } from "@/components/sala/
  * `next/dynamic`): el primer pintado sigue en el HTML y `SalaClient` ya pidió su chunk en paralelo con el de este shell
  * (`preloadSalaFace`). El `loading` (un bloque del alto del cuerpo) solo se ve al cambiar de cara sin recargar.
  * El modal de cobro no se ve en el primer pintado: va sin SSR, se monta recién la primera vez que alguien cobra y
- * su chunk se precarga después del mount si el viewer cobra (`billing.manage`), así «Cobrar» no espera red.
+ * su chunk se precarga después del mount si el viewer cobra (`viewer.canCollect`, T3), así «Cobrar» no espera red.
  */
 const DeskList = dynamic(() => loadDeskList().then((mod) => mod.DeskList), {
   loading: () => <div className="desk-body-skel" aria-busy="true" />,
@@ -102,7 +102,7 @@ function isEditable(t: EventTarget | null): boolean {
  *     (abre Apariencia con `set("minimised", false)`, solo si hay provider);
  *   - la banda «Pase …» (8 s, del hook) flotando sobre el cuerpo, con «Cerrar»;
  *   - el toast con «Deshacer» después de cada acción guardada (`act(row, "deshacer")`);
- *   - el modal de cobro (`DeskPayModal`, solo con `billing.manage`), montado FUERA de `.desk` (ver desk-css.ts);
+ *   - el modal de cobro (`DeskPayModal`, solo para quien cobra: `viewer.canCollect`, y por fila `canCollectRow`), montado FUERA de `.desk` (ver desk-css.ts);
  *   - el estado de la búsqueda y del filtro por profesional, que reciben las caras (C-RX5);
  *   - `DeskActionsProvider`: el botón primario y el menú ⋯ de cada fila llaman acá sin callbacks por props.
  *

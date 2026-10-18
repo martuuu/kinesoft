@@ -23,6 +23,7 @@ import {
   waitingEntries,
   type DeskEntry,
   type DeskFilter,
+  type DeskViewer,
 } from "@/lib/reception-desk-state";
 import type { SalaLive } from "@/components/sala/sala-live-types";
 import { DESK_COMPACT_MAX, DESK_STACK_MAX } from "./desk-css";
@@ -35,11 +36,11 @@ import { FoldButton } from "@/components/sala/sala-fold";
  *
  *   - Arriba, a todo el ancho, la franja de profesionales (`DeskStrip`; clic = filtro de uno, C-RX5 `proFilter`).
  *   - A la izquierda, «Turnos de hoy»: la tabla del día en orden CRONOLÓGICO (`chronological`, como se lee el día),
- *     con chips de filtro (`deskFilters`: «Por cobrar» solo con `billing.manage`) y la línea de «ahora» entre el
+ *     con chips de filtro (`deskFilters`: «Por cobrar» solo para quien cobra, `viewer.canCollect`) y la línea de «ahora» entre el
  *     último turno que ya empezó y el primero que falta. Al abrir, la tabla scrollea sola a la línea con 3 turnos de
  *     contexto (`scrollAnchorIndex`), una sola vez: después el scroll es de quien la usa.
  *   - A la derecha, el panel: «Sala de espera» (llamados primero, después por llegada), «Próximos 30 min» y la
- *     tercera card según el rol: «Por cobrar» con el total pendiente (quien cobra, RX-D4) o «En atención» (el resto:
+ *     tercera card según el rol: «Por cobrar» con el total pendiente (quien cobra: desde T3 la Secretaria y Facturación todo, el profesional sus turnos) o «En atención» (el resto:
  *     quién está en cada box y hace cuánto).
  *
  * Qué filtra qué (igual que el prototipo): la búsqueda y el profesional filtran la tabla Y el panel; el chip, solo
@@ -70,7 +71,7 @@ export function DeskList(p: {
   const [filterState, setFilter] = useState<DeskFilter>("todos");
   // [MB-1c] Pliegue de «Turnos de hoy» en una columna (C-MB3); en escritorio el botón no se ve y no esconde nada.
   const [dayOpen, setDayOpen] = useState(true);
-  // Sin `billing.manage` el chip «Por cobrar» no existe: un filtro que quedó apretado (cambio de rol en caliente) no
+  // Sin cobro (`viewer.canCollect`) el chip «Por cobrar» no existe: un filtro que quedó apretado (cambio de rol en caliente) no
   // puede dejar la tabla filtrada por algo invisible.
   const filter: DeskFilter = filterState === "por-cobrar" && !viewer.canCollect ? "todos" : filterState;
 
@@ -246,7 +247,7 @@ export function DeskList(p: {
         <WaitingCard entries={visible} now={now} pro={pro} roomById={live.roomById} />
         <SoonCard entries={visible} now={now} pro={pro} />
         {viewer.canCollect ? (
-          <CashCard entries={visible} pro={pro} />
+          <CashCard entries={visible} pro={pro} viewer={viewer} />
         ) : (
           <AttendingCard entries={visible} now={now} pro={pro} roomById={live.roomById} />
         )}
@@ -527,8 +528,9 @@ function SoonCard({ entries, now, pro }: { entries: ReadonlyArray<DeskEntry>; no
   );
 }
 
-function CashCard({ entries, pro }: { entries: ReadonlyArray<DeskEntry>; pro: ProOf }) {
-  const { entries: list, totalCents } = cashEntries(entries);
+function CashCard({ entries, pro, viewer }: { entries: ReadonlyArray<DeskEntry>; pro: ProOf; viewer: DeskViewer }) {
+  // T3: solo lo que ESTE viewer cobra (al profesional, sus turnos): ni la lista ni el total suman copagos ajenos.
+  const { entries: list, totalCents } = cashEntries(entries, viewer);
   return (
     <PanelCard
       id="cash"

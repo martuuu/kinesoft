@@ -154,7 +154,7 @@ describe.skipIf(!RUN)("turnos · write-paths (caracterización)", () => {
     const r = await createBooking({ ...base(p, ar("2027-03-06", "10:00")), idempotencyKey: key() });
     if (!r.ok) throw new Error(r.error);
     const stale = new Date(0).toISOString();
-    const res = await setBookingCopagoPaid(r.data.id, true, stale);
+    const res = await setBookingCopagoPaid(r.data.id, { paid: true, method: "CASH" }, stale);
     expect(res.ok).toBe(false);
     expect(res.ok ? "" : res.error).toMatch(/cambió en otra sesión/);
     expect((await db.booking.findUnique({ where: { id: r.data.id } }))?.paymentStatus).toBe("UNPAID");
@@ -168,8 +168,8 @@ describe.skipIf(!RUN)("turnos · write-paths (caracterización)", () => {
     const t1 = await setBookingInsurerPaid(r.data.id, true, row.updatedAt.toISOString());
     if (!t1.ok) throw new Error(t1.error);
     // Con la versión VIEJA el segundo rebota (es lo que parchea facturacion-view).
-    expect((await setBookingCopagoPaid(r.data.id, true, row.updatedAt.toISOString())).ok).toBe(false);
-    const t2 = await setBookingCopagoPaid(r.data.id, true, new Date(t1.data.updatedAt).toISOString());
+    expect((await setBookingCopagoPaid(r.data.id, { paid: true, method: "CASH" }, row.updatedAt.toISOString())).ok).toBe(false);
+    const t2 = await setBookingCopagoPaid(r.data.id, { paid: true, method: "CASH" }, new Date(t1.data.updatedAt).toISOString());
     expect(t2.ok).toBe(true);
     const after = await db.booking.findUniqueOrThrow({ where: { id: r.data.id } });
     expect(after.paymentStatus).toBe("PAID");
@@ -385,7 +385,7 @@ describe.skipIf(!RUN)("turnos · write-paths (caracterización)", () => {
     const p = await addPatient(db, A);
     const r = await createBooking({ ...base(p, ar("2027-03-16", "10:00")), idempotencyKey: key() });
     if (!r.ok) throw new Error(r.error);
-    await setBookingCopagoPaid(r.data.id, true); // paymentStatus=PAID, sin fila Payment
+    await setBookingCopagoPaid(r.data.id, { paid: true, method: "CASH" }); // paymentStatus=PAID, sin fila Payment
     const d = await deleteBooking(r.data.id);
     expect(d.ok).toBe(false);
     expect(d.ok ? "" : d.error).toMatch(/cobro registrado \(copago u OS\)/);
@@ -539,13 +539,16 @@ describe.skipIf(!RUN)("turnos · actor con acceso básico al paciente", () => {
       await updateBooking({ id: bookingId, notes: "pisado", expectedUpdatedAt: v }),
       await setBookingStatus(bookingId, "CANCELLED", v),
       await deleteBooking(bookingId, v),
-      await setBookingCopagoPaid(bookingId, true, v),
+      await setBookingCopagoPaid(bookingId, { paid: true, method: "CASH" }, v),
       await setBookingInsurerPaid(bookingId, true, v),
     ];
-    for (const r of results) {
+    // T3 (C-AS2): los toggles de cobro ya no miran el acceso al paciente sino el rol y el turno: un profesional
+    // con acceso básico a un turno AJENO rechaza por eso («solo tus propios turnos») y la OS por `billing.manage`.
+    const copy = [/acceso básico/, /acceso básico/, /acceso básico/, /Solo podés registrar el cobro de tus propios turnos/, /Solo Facturación/];
+    results.forEach((r, i) => {
       expect(r.ok).toBe(false);
-      expect(r.ok ? "" : r.error).toMatch(/acceso básico/);
-    }
+      expect(r.ok ? "" : r.error).toMatch(copy[i]);
+    });
     const after = await snapshot();
     expect(after).toEqual(before);
   });

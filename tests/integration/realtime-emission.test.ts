@@ -374,7 +374,7 @@ describe.skipIf(!RUN)("SV08 · emisión por write-path (realtime)", () => {
     const probe = assertOnPublish(async (call) => {
       expect((await db.booking.findUniqueOrThrow({ where: { id: call.refs![0].bookingId } })).paymentStatus).toBe("PAID");
     });
-    const r = await setBookingCopagoPaid(b.id, true, b.updatedAt.toISOString());
+    const r = await setBookingCopagoPaid(b.id, { paid: true, method: "CASH" }, b.updatedAt.toISOString());
     expect(r).toMatchObject({ ok: true });
     probe.done();
     expect(onlyCall(T.tenantId)).toEqual([await refOfRow(b.id)]);

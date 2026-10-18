@@ -116,7 +116,7 @@ describe.skipIf(!RUN)("S14r · ingresos del dashboard (Mes/Semana)", () => {
     expect((await revenue("week")).totalCents).toBe(0);
 
     const before = Date.now();
-    const marked = await setBookingCopagoPaid(b.id, true, b.updatedAt.toISOString());
+    const marked = await setBookingCopagoPaid(b.id, { paid: true, method: "CASH" }, b.updatedAt.toISOString());
     expect(marked.ok).toBe(true);
     const row = await db.booking.findUniqueOrThrow({ where: { id: b.id } });
     expect(row.paymentStatus).toBe("PAID");
@@ -129,7 +129,7 @@ describe.skipIf(!RUN)("S14r · ingresos del dashboard (Mes/Semana)", () => {
     // La KPI del mes del dashboard dice lo mismo que el widget.
     expect((await getDashboardData()).monthRevenue?.totalCents).toBe(250_000);
 
-    const unmarked = await setBookingCopagoPaid(b.id, false, marked.ok ? marked.data.updatedAt.toISOString() : undefined);
+    const unmarked = await setBookingCopagoPaid(b.id, { paid: false }, marked.ok ? marked.data.updatedAt : undefined);
     expect(unmarked.ok).toBe(true);
     const after = await db.booking.findUniqueOrThrow({ where: { id: b.id } });
     expect(after).toMatchObject({ paymentStatus: "UNPAID", copagoPaidAt: null });
@@ -142,7 +142,7 @@ describe.skipIf(!RUN)("S14r · ingresos del dashboard (Mes/Semana)", () => {
     const T = await tenant();
     const b = await booking(T, { patientId: await addPatient(db, T), copagoCents: 100_000 });
     asUser(T.userId);
-    const r = await setBookingCopagoPaid(b.id, true, new Date(b.updatedAt.getTime() - 60_000).toISOString());
+    const r = await setBookingCopagoPaid(b.id, { paid: true, method: "CASH" }, new Date(b.updatedAt.getTime() - 60_000).toISOString());
     expect(r.ok).toBe(false);
     expect(await db.booking.findUniqueOrThrow({ where: { id: b.id } })).toMatchObject({
       paymentStatus: "UNPAID",

@@ -250,20 +250,22 @@ describe.skipIf(!RUN)("P0.Z · hallazgos del revisor (b) de ES1", () => {
     expect(row.copagoCents).toBe(1234);
   });
 
-  it("[P0-Z] H-b3 BILLING no borra ni cobra un guest; la Secretaria y el kine sí (como hoy)", async () => {
+  // T3 (C-AS1/C-AS2): BILLING sigue sin borrar un guest, pero desde T3 lo COBRA (`billing.collect`: «cobrar el copago
+  // de cualquier turno, guest incluido»). Lo que H-b3 cerraba era que BILLING operara guests por `hasFullAccess`; el
+  // cobro ya no pasa por ahí.
+  it("[P0-Z] H-b3 BILLING no borra un guest (sí lo cobra desde T3); la Secretaria y el kine borran (como hoy)", async () => {
     const g = await seedGuest("2031-06-09");
     asUser(billing.userId);
     expect((await deleteBooking(g.id, v(g.updatedAt))).ok).toBe(false);
-    expect((await setBookingCopagoPaid(g.id, true, v(g.updatedAt))).ok).toBe(false);
     const row = await db.booking.findUniqueOrThrow({ where: { id: g.id } });
     expect(row.paymentStatus).toBe(g.paymentStatus);
     expect(+row.updatedAt).toBe(+g.updatedAt);
+    const paid = await setBookingCopagoPaid(g.id, { paid: true, method: "CASH" }, v(g.updatedAt));
+    expect(paid).toMatchObject({ ok: true });
+    expect((await db.booking.findUniqueOrThrow({ where: { id: g.id } })).paymentStatus).toBe("PAID");
 
     // Controles.
     asUser(assistant.userId);
-    const paid = await setBookingCopagoPaid(g.id, true, v(g.updatedAt));
-    expect(paid).toMatchObject({ ok: true });
-    expect((await db.booking.findUniqueOrThrow({ where: { id: g.id } })).paymentStatus).toBe("PAID");
     // (Un turno cobrado no se borra, regla aparte: el borrado va sobre otro guest.)
     const g1 = await seedGuest("2031-06-09", "11:00");
     expect(await deleteBooking(g1.id, v(g1.updatedAt))).toMatchObject({ ok: true });

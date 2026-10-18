@@ -8,7 +8,7 @@ import { fmtHour, type BookingDTO } from "@/components/agenda/agenda-utils";
 import { formatARS } from "@/lib/format";
 import { RECEPTION_STATE_LABEL, type ReceptionAction } from "@/lib/reception-state";
 import { stateTagText, undoHint } from "@/lib/reception-view-state";
-import { deskMenuItems, deskPrimary, type DeskEntry, type DeskViewer } from "@/lib/reception-desk-state";
+import { canCollectRow, deskMenuItems, deskPrimary, type DeskEntry, type DeskViewer } from "@/lib/reception-desk-state";
 
 /**
  * Piezas por fila del escritorio de Recepción (RX-1b, brief RX §1.1): el tag de estado, el botón primario y el menú
@@ -17,7 +17,7 @@ import { deskMenuItems, deskPrimary, type DeskEntry, type DeskViewer } from "@/l
  * (`{ live, query, proFilter, onProFilter }`) no crece con cada acción nueva.
  *
  * Qué botón y qué ítems: la lógica es pura y vive en `lib/reception-desk-state.ts` (`deskPrimary`, `deskMenuItems`:
- * rol, «solo hoy», `canOperate`, Cobrar solo con `billing.manage`). Acá solo se dibuja.
+ * rol, «solo hoy», `canOperate`, Cobrar solo a quien cobra esa fila: `canCollectRow`). Acá solo se dibuja.
  *
  * PD-13: se lee nombre, hora, estado y copago. Nunca `title`, `notes`, `description` ni `patientCondition` (el
  * render test pasa filas con esos campos llenos y verifica que no aparecen).
@@ -175,7 +175,9 @@ export function DeskPrimaryAction({ entry, block = false }: { entry: DeskEntry; 
   const pending = api.pendingIds.has(b.id);
   if (!p) {
     const settled = b.paymentStatus === "PAID" || b.paymentStatus === "AUTHORIZED";
-    if (entry.state === "atendido" && api.viewer.canCollect && b.copagoCents > 0 && settled) {
+    // T3: «Cobrado» solo a quien cobra ESTA fila (`canCollectRow`, la regla del server): al profesional no le
+    // informa el cobro de un turno ajeno que no puede tocar.
+    if (entry.state === "atendido" && canCollectRow(api.viewer, b) && b.copagoCents > 0 && settled) {
       return (
         <span className="desk-paid">
           <span className="desk-act-ico" aria-hidden="true">
