@@ -58,6 +58,8 @@ export function PracticeAssetField({
   const [previewFailed, setPreviewFailed] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
   const [pending, start] = useTransition();
+  // [T4-Z] Qué operación corre: con un solo `pending`, al quitar el botón decía «Subiendo…».
+  const [op, setOp] = useState<"upload" | "remove">("upload");
   const inputRef = useRef<HTMLInputElement>(null);
   const confirm = useConfirm();
   const inputId = `practice-asset-${kind}`;
@@ -91,6 +93,7 @@ export function PracticeAssetField({
       if (inputRef.current) inputRef.current.value = "";
       return;
     }
+    setOp("upload");
     start(async () => {
       try {
         const bytes = new Uint8Array(await file.arrayBuffer());
@@ -127,6 +130,7 @@ export function PracticeAssetField({
     });
     if (!ok) return;
     setMsg(null);
+    setOp("remove");
     start(async () => {
       try {
         const r = kind === "logo" ? await removeTenantLogo() : await removeOwnSignature();
@@ -145,9 +149,10 @@ export function PracticeAssetField({
   return (
     <div data-practice-asset={kind} style={{ display: "grid", gap: 10 }}>
       <div>
-        <div id={`${inputId}-label`} style={{ fontSize: 15, fontWeight: 600, color: "var(--navy-900)" }}>
+        {/* [T4-Z] Título de la Card (sin eyebrow arriba que lo repita), mismo estilo que «Carpeta de respaldo». */}
+        <h3 id={`${inputId}-label`} style={{ margin: 0, fontSize: 15, fontWeight: 600, color: "var(--navy-900)" }}>
           {label}
-        </div>
+        </h3>
         <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 4, lineHeight: 1.45 }}>
           {hint} {formatHint}
         </div>
@@ -176,7 +181,7 @@ export function PracticeAssetField({
             />
           ) : (
             <span style={{ fontSize: 12, color: "var(--navy-500)", padding: 8, textAlign: "center" }}>
-              {state.has ? (previewFailed ? COPY.previewUnavailable : "…") : COPY.noImage}
+              {state.has ? (previewFailed ? COPY.previewUnavailable : COPY.previewLoading) : COPY.noImage}
             </span>
           )}
         </div>
@@ -192,18 +197,28 @@ export function PracticeAssetField({
             tabIndex={-1}
             aria-hidden="true"
           />
+          {/* [T4-Z] `size="sm"`: 44 px en mobile (`.k-btn-sm`). El `aria-label` nombra el campo: en «Mis fichas»
+              conviven el logo y la firma, y dos «Quitar» sueltos no se distinguen. */}
           <Button
             type="button"
             variant="ghost"
+            size="sm"
             disabled={disabled || pending}
-            aria-describedby={`${inputId}-label`}
+            aria-label={`${pending && op === "upload" ? COPY.uploading : state.has ? COPY.replace : COPY.upload}: ${label}`}
             onClick={() => inputRef.current?.click()}
           >
-            {pending ? COPY.uploading : state.has ? COPY.replace : COPY.upload}
+            {pending && op === "upload" ? COPY.uploading : state.has ? COPY.replace : COPY.upload}
           </Button>
           {state.has && (
-            <Button type="button" variant="ghost" disabled={disabled || pending} onClick={() => void onRemove()}>
-              {COPY.remove}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={disabled || pending}
+              aria-label={`${pending && op === "remove" ? COPY.removing : COPY.remove}: ${label}`}
+              onClick={() => void onRemove()}
+            >
+              {pending && op === "remove" ? COPY.removing : COPY.remove}
             </Button>
           )}
         </div>

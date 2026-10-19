@@ -9,7 +9,7 @@ import { readFixture } from "./support/fixture";
 test("cobro manual: «Cobrar» el copago pide el medio, lo deja «Pagado · Efectivo» y estampa copagoPaidAt y el medio", async ({ page }) => {
   const fx = readFixture();
   await page.goto(`/pacientes/${fx.payPatient.id}`);
-  await page.getByRole("navigation", { name: "Secciones de la ficha" }).getByRole("button", { name: /^Facturación/ }).click();
+  await page.getByRole("navigation", { name: "Secciones del perfil del paciente" }).getByRole("button", { name: /^Facturación/ }).click();
   // La fila del turno. «Cobrar» es solo del copago (la OS dice «Confirmar»). No se usa `data-label`: entró después
   // (AS-0d) y la suite tiene que andar en los dos.
   const row = page.locator('[data-testid="fact-row"]').filter({ hasText: /\$\s*50/ });

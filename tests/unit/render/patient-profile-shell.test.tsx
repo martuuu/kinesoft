@@ -195,7 +195,7 @@ describe("[P3-Z-F3b] TabsBar: botones con aria-current, sin tabs a medias", () =
     const html = renderToStaticMarkup(
       <TabsBar active="turnos" onChange={() => {}} counts={{ turnos: 3 }} only={["resumen", "turnos"]} />,
     );
-    expect(html).toMatch(/^<nav aria-label="Secciones de la ficha"/);
+    expect(html).toMatch(/^<nav aria-label="Secciones del perfil del paciente"/);
     expect(html).not.toContain('role="tab');
     expect(html).not.toContain("aria-selected");
     expect(html).toMatch(/data-profile-tab="turnos" aria-current="true"[^>]*>Turnos/);

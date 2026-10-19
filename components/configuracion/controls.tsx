@@ -278,9 +278,12 @@ function useScrollFade(ref: React.RefObject<HTMLElement>) {
 // llamadores de Configuración como estaban.
 export { Switch } from "@/components/ui/switch";
 
+// [T4-Z] `role="alert"`: el error aparece después de un guardado (sin cambio de foco) y sin el rol el lector no se
+// entera. Todos los usos lo montan condicionalmente, así que se anuncia una vez al aparecer.
 export function ErrorBox({ children }: { children: React.ReactNode }) {
   return (
     <div
+      role="alert"
       style={{
         padding: "10px 12px",
         borderRadius: 10,

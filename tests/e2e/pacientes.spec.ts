@@ -8,7 +8,7 @@ test("alta de paciente: el Drawer crea la ficha y lleva a /pacientes/[id]", asyn
   await page.goto("/pacientes");
   await page.getByRole("button", { name: "Nuevo paciente" }).first().click();
   const drawer = page.getByRole("dialog");
-  await expect(drawer.getByRole("heading", { name: "Crear ficha" })).toBeVisible();
+  await expect(drawer.getByRole("heading", { name: "Cargar paciente" })).toBeVisible();
   await drawer.getByLabel("Nombre").fill("Julieta");
   await drawer.getByLabel("Apellido").fill("Alta E2E");
   await drawer.getByLabel("DNI").fill(dni);

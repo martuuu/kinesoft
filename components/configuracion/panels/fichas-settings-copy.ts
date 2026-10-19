@@ -13,6 +13,8 @@ export const FICHAS_SETTINGS_COPY = {
   logoHint: "Sale en el membrete de las fichas en PDF y en Word.",
   honorific: "Cómo firmás",
   honorificNone: "Sin título",
+  /** Label del select: el eyebrow de la Card ya dice «Cómo firmás» y repetirlo no decía qué se elige. */
+  honorificLabel: "Título",
   license: "Matrícula",
   licenseHint: "Como la querés ver impresa, por ejemplo «MN 12345» o «MP 4567 (Córdoba)».",
   signatureIntro:
@@ -29,6 +31,7 @@ export const FICHAS_SETTINGS_COPY = {
   noImage: "Todavía no cargaste ninguna imagen.",
   previewAlt: (what: string) => `Vista previa: ${what}`,
   previewUnavailable: "No pudimos mostrar la vista previa.",
+  previewLoading: "Cargando vista previa…",
   uploaded: "Imagen guardada.",
   removed: "Imagen quitada.",
   removeLogoTitle: "¿Quitar el logo del consultorio?",

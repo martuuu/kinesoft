@@ -842,7 +842,7 @@ export function BookingModal({
         mode === "block"
           ? "El bloqueo todavía no se guardó. Si cerrás, se pierde lo que cargaste."
           : createdPatient
-            ? `La ficha de ${createdPatient.name} ya quedó creada, pero el turno todavía no. Si cerrás, se pierde lo que cargaste del turno.`
+            ? `${createdPatient.name} ya quedó registrado como paciente, pero el turno todavía no. Si cerrás, se pierde lo que cargaste del turno.`
             : "El turno todavía no se creó. Si cerrás, se pierde lo que cargaste."
       }
     >

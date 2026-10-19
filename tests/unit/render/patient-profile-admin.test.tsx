@@ -265,7 +265,7 @@ describe("[P0-S07v] página del paciente con nivel admin", () => {
     const el = await PatientPage({ params: { id: admin.id } });
     const html = renderToStaticMarkup(<Providers>{el}</Providers>);
 
-    expect(html).toContain("Ficha administrativa");
+    expect(html).toContain("Datos administrativos");
     expect(html).toContain("+54 11 5555-0001");
     expect(html).not.toContain("Sin acceso");
     expect(html).toContain("Agregar turno");
@@ -279,7 +279,7 @@ describe("[P0-S07v] página del paciente con nivel admin", () => {
     member.current = { role: "BILLING", clinical: false, grantSettings: false, grantBilling: false };
     const el = await PatientPage({ params: { id: admin.id } });
     const html = renderToStaticMarkup(<Providers>{el}</Providers>);
-    expect(html).toContain("Ficha administrativa");
+    expect(html).toContain("Datos administrativos");
     expect(html).not.toContain("Agregar turno");
     expect(html).not.toContain("Editar datos");
     expect(data.listInsurers).not.toHaveBeenCalled();

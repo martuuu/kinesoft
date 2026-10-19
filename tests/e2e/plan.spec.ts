@@ -6,7 +6,7 @@ import { readFixture } from "./support/fixture";
 test("plan: 2 sesiones los lunes a las 10:00 crean el plan y sus turnos", async ({ page }) => {
   const fx = readFixture();
   await page.goto(`/pacientes/${fx.planPatient.id}`);
-  await page.getByRole("navigation", { name: "Secciones de la ficha" }).getByRole("button", { name: /^Planes/ }).click();
+  await page.getByRole("navigation", { name: "Secciones del perfil del paciente" }).getByRole("button", { name: /^Planes/ }).click();
   await page.getByRole("button", { name: "Plan nuevo" }).click();
   const drawer = page.getByRole("dialog", { name: "Nuevo plan" });
   await expect(drawer).toBeVisible();

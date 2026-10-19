@@ -216,7 +216,7 @@ describe("[MB-1d] pesta√±as del perfil: scroll horizontal con fade de borde", ()
     const html = renderToStaticMarkup(
       <TabsBar active="turnos" onChange={() => {}} counts={{ turnos: 3 }} only={["resumen", "turnos"]} />,
     );
-    expect(html).toMatch(/^<nav aria-label="Secciones de la ficha" class="[^"]*tabs/);
+    expect(html).toMatch(/^<nav aria-label="Secciones del perfil del paciente" class="[^"]*tabs/);
     expect(html).toMatch(/data-profile-tab="turnos" aria-current="true" class="[^"]*tab/);
     // SSR sin fade (no se sabe el ancho): el efecto lo prende si hay overflow. Es solo `mask`: no mueve layout.
     expect(html).not.toContain("data-fade-start");
@@ -300,7 +300,7 @@ describe("[MB-1d] perfil del paciente sin interactivos anidados (C-MB3: hoy 1 ‚Ü
         initialTab="resumen"
       />,
     );
-    expect(html).toContain('aria-label="Secciones de la ficha"');
+    expect(html).toContain('aria-label="Secciones del perfil del paciente"');
     expect(nestedInteractive(html)).toEqual([]);
   });
 

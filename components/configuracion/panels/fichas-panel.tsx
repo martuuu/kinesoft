@@ -46,19 +46,15 @@ const BackupSetup = dynamic(() => import("@/components/fichas/backup-setup").the
  */
 export function LogoAssetField({ initial, disabled }: { initial: PracticeAssetState; disabled?: boolean }) {
   return (
-    <>
-      <EyebrowLabel>{COPY.logo}</EyebrowLabel>
-      <div style={{ marginTop: 10 }}>
-        <PracticeAssetField
-          kind="logo"
-          initial={initial}
-          label={COPY.logo}
-          hint={COPY.logoHint}
-          formatHint={PRACTICE_ASSET_COPY.logoFormat}
-          disabled={disabled}
-        />
-      </div>
-    </>
+    // [T4-Z] Sin eyebrow: el título del campo ya dice «Logo del consultorio» (se leía dos veces seguidas).
+    <PracticeAssetField
+      kind="logo"
+      initial={initial}
+      label={COPY.logo}
+      hint={COPY.logoHint}
+      formatHint={PRACTICE_ASSET_COPY.logoFormat}
+      disabled={disabled}
+    />
   );
 }
 
@@ -93,17 +89,14 @@ export function FichasPanel({
       </Card>
 
       <Card style={{ padding: 20 }}>
-        <EyebrowLabel>{COPY.signature}</EyebrowLabel>
-        <div style={{ marginTop: 10 }}>
-          <PracticeAssetField
-            kind="signature"
-            initial={me.signature}
-            label={COPY.signature}
-            hint={COPY.signatureHint}
-            formatHint={PRACTICE_ASSET_COPY.signatureFormat}
-            disabled={readOnly}
-          />
-        </div>
+        <PracticeAssetField
+          kind="signature"
+          initial={me.signature}
+          label={COPY.signature}
+          hint={COPY.signatureHint}
+          formatHint={PRACTICE_ASSET_COPY.signatureFormat}
+          disabled={readOnly}
+        />
       </Card>
 
       <Card style={{ padding: 20 }}>
@@ -167,7 +160,7 @@ function SignatureInfoForm({
       <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
         <FormField
           as="select"
-          label={COPY.honorific}
+          label={COPY.honorificLabel}
           name="honorific"
           value={honorific}
           onChange={(v) => setHonorific(v as Honorific | "")}
@@ -193,7 +186,7 @@ function SignatureInfoForm({
             {msg.text}
           </span>
         )}
-        <Button type="submit" variant="primary" disabled={!dirty || pending || readOnly}>
+        <Button type="submit" variant="primary" size="sm" disabled={!dirty || pending || readOnly}>
           {pending ? COPY.saving : COPY.saveInfo}
         </Button>
       </div>
@@ -263,7 +256,7 @@ function OwnDiagnosesCard({ readOnly }: { readOnly: boolean }) {
       {list.status === "error" && (
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <ErrorBox>{COPY.ownDiagnosesFailed}</ErrorBox>
-          <Button type="button" variant="ghost" onClick={load}>
+          <Button type="button" variant="ghost" size="sm" onClick={load}>
             Reintentar
           </Button>
         </div>
@@ -287,7 +280,8 @@ function OwnDiagnosesCard({ readOnly }: { readOnly: boolean }) {
       )}
       {archived.length > 0 && (
         <details style={{ marginTop: 12 }}>
-          <summary style={{ fontSize: 13, color: "var(--navy-700)", cursor: "pointer", minHeight: 32 }}>
+          {/* [T4-Z] 44 px de alto (target táctil): 12 + 20 + 12. */}
+          <summary style={{ fontSize: 13, lineHeight: "20px", padding: "12px 0", color: "var(--navy-700)", cursor: "pointer", minHeight: 44 }}>
             {COPY.archivedCount(archived.length)}
           </summary>
           <ul style={{ listStyle: "none", margin: "8px 0 0", padding: 0, display: "grid", gap: 6 }}>
@@ -366,10 +360,11 @@ export function DiagnosisRowItem({
       </div>
       {manage && (
         <div style={{ display: "flex", gap: 8 }}>
-          <Button type="button" variant="ghost" size="sm" onClick={onRename} disabled={busy}>
+          {/* [T4-Z] El nombre del diagnóstico en el `aria-label`: en la lista hay un «Renombrar»/«Archivar» por fila. */}
+          <Button type="button" variant="ghost" size="sm" onClick={onRename} disabled={busy} aria-label={`${COPY.rename} «${row.title}»`}>
             {COPY.rename}
           </Button>
-          <Button type="button" variant="ghost" size="sm" onClick={onArchive} disabled={busy}>
+          <Button type="button" variant="ghost" size="sm" onClick={onArchive} disabled={busy} aria-label={`${COPY.archive} «${row.title}»`}>
             {COPY.archive}
           </Button>
         </div>
@@ -431,16 +426,13 @@ function RenameDiagnosisDrawer({
       >
         <FormField label={COPY.diagnosisTitle} name="title" value={title} onChange={setTitle} required autoFocus />
         <FormField label={COPY.diagnosisCode} name="code" value={code} onChange={setCode} autoComplete="off" />
-        {error && (
-          <div role="alert">
-            <ErrorBox>{error}</ErrorBox>
-          </div>
-        )}
+        {/* `ErrorBox` ya trae `role="alert"`. */}
+        {error && <ErrorBox>{error}</ErrorBox>}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <Button type="button" variant="ghost" onClick={() => void cancel()} disabled={pending}>
+          <Button type="button" variant="ghost" size="sm" onClick={() => void cancel()} disabled={pending}>
             {COPY.cancel}
           </Button>
-          <Button type="submit" variant="primary" disabled={!dirty || pending}>
+          <Button type="submit" variant="primary" size="sm" disabled={!dirty || pending}>
             {pending ? COPY.saving : COPY.saveRename}
           </Button>
         </div>

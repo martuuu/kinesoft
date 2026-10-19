@@ -244,7 +244,7 @@ export function PatientAdminHero({
         <HeroAvatar firstName={patient.firstName} lastName={patient.lastName} />
         <div style={{ flex: 1, minWidth: 220 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
-            <Tag tone="soft">Ficha administrativa</Tag>
+            <Tag tone="soft">Datos administrativos</Tag>
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
             <h1 className="k-display" style={{ fontSize: 28, margin: 0, letterSpacing: "-0.02em" }}>
@@ -351,7 +351,7 @@ function PatientHeroActions({
           }
         : {
             title: "Archivar paciente",
-            message: `${patient.firstName} ${patient.lastName} deja de aparecer en el listado. La ficha, los turnos y el historial se conservan, y lo podés reactivar cuando quieras. Si usaba el portal, se desvincula su cuenta.`,
+            message: `${patient.firstName} ${patient.lastName} deja de aparecer en el listado. Sus datos, los turnos, la historia clínica y el historial se conservan, y lo podés reactivar cuando quieras. Si usaba el portal, se desvincula su cuenta.`,
             confirmLabel: "Archivar",
           }
     );
@@ -425,7 +425,7 @@ function PatientHeroActions({
           title={
             isArchived
               ? "Volver a mostrar el paciente en el listado"
-              : "Ocultar del listado sin borrar la ficha ni el historial"
+              : "Ocultar del listado sin borrar sus datos ni su historia clínica"
           }
           style={{ fontSize: 12, padding: "8px 14px", color: "var(--warn-fg)" }}
         >

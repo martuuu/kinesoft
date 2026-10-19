@@ -165,7 +165,7 @@ export function PortalRequestCard({
     setError(null);
     const ok = await confirm({
       title: "Rechazar el pedido",
-      message: "La ficha queda como está. El paciente puede mandar un pedido nuevo desde el portal.",
+      message: "Los datos del paciente quedan como están. El paciente puede mandar un pedido nuevo desde el portal.",
       confirmLabel: "Rechazar",
       tone: "danger",
     });
@@ -212,7 +212,7 @@ export function PortalRequestCard({
                   <strong>{next}</strong>
                   {f === "email" && !row.emailApplies && (
                     <span style={{ display: "block", fontSize: 12, color: "var(--navy-500)" }}>
-                      No se va a aplicar: la ficha ya no está vinculada a la cuenta que lo pidió.
+                      No se va a aplicar: el paciente ya no está vinculado a la cuenta que lo pidió.
                     </span>
                   )}
                   {f === "coverage" && row.osChanges && (

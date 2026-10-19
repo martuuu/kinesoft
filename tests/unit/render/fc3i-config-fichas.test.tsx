@@ -185,7 +185,9 @@ describe("[FC-3i] radio «¿Quién ve la historia clínica de cada paciente?»",
     // Radio (no switch), con «Cada profesional» marcado cuando `sharedPatientView` es false.
     expect(html).toMatch(/<input type="radio" name="hc-visibility"[^>]*checked=""[^>]*value="own"/);
     expect(html).not.toMatch(/<input type="radio" name="hc-visibility"[^>]*checked=""[^>]*value="all"/);
-    expect(html).toContain('role="radiogroup"');
+    // [T4-Z] Sin radiogroup propio: el fieldset + legend agrupan y nombran los radios (la pregunta no se lee dos veces).
+    expect(html).not.toContain('role="radiogroup"');
+    expect(html).toContain("<fieldset data-hc-visibility");
   });
 
   it("[FC-3i] con «Todos» marcado se ve el aviso; el soporte lo ve deshabilitado", () => {

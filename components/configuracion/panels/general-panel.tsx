@@ -73,6 +73,10 @@ export function GeneralPanel({
   const { agenda, setAgenda } = useTweaks();
   const [pending, start] = useTransition();
   const [shared, setShared] = useState(tenant.sharedPatientView);
+  // [T4-Z] Transición y error propios del radio de la HC: con el `pending`/`error` del panel, «Guardando…» se
+  // encendía también al guardar el horario y el error del radio caía en el ErrorBox del fondo, lejos de la Card.
+  const [sharedPending, startShared] = useTransition();
+  const [sharedError, setSharedError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hoursStart, setHoursStart] = useState(tenant.businessHoursStart);
   const [hoursEnd, setHoursEnd] = useState(tenant.businessHoursEnd);
@@ -103,13 +107,13 @@ export function GeneralPanel({
 
   // [FC-3i] El radio (`HcVisibilityCard`) ya confirmó si amplía; acá solo se aplica, optimista con vuelta atrás.
   const applyShared = (value: boolean) => {
-    setError(null);
+    setSharedError(null);
     setShared(value);
-    start(async () => {
+    startShared(async () => {
       const r = await setSharedPatientView(value);
       if (!r.ok) {
         setShared(!value);
-        setError(r.error);
+        setSharedError(r.error);
       }
       // [PF1.1-config · C-PF4] Sin `router.refresh()`: la action revalida `/configuracion`.
     });
@@ -218,7 +222,16 @@ export function GeneralPanel({
 
       {sensitive && <FeaturesCard tenant={tenant} />}
 
-      {sensitive && <HcVisibilityCard shared={shared} onApply={applyShared} pending={pending} support={support} />}
+      {sensitive && (
+        <HcVisibilityCard
+          shared={shared}
+          onApply={applyShared}
+          pending={pending || sharedPending}
+          saving={sharedPending}
+          error={sharedError}
+          support={support}
+        />
+      )}
 
       {sensitive && logo && (
         <Card style={{ padding: 20 }}>
@@ -650,7 +663,7 @@ function FeaturesCard({ tenant }: { tenant: TenantSettings }) {
                 minWidth: 0,
                 padding: "8px 12px",
                 borderRadius: 10,
-                background: "rgba(15,30,51,0.04)",
+                background: "color-mix(in srgb, var(--navy-900) 4%, transparent)",
                 fontSize: 12,
                 wordBreak: "break-all",
                 fontFamily: "var(--font-mono, monospace)",
@@ -693,7 +706,7 @@ function ReadOnlyValue({ children }: { children: ReactNode }) {
         color: "var(--navy-900)",
         padding: "6px 12px",
         borderRadius: 999,
-        background: "rgba(15,30,51,0.06)",
+        background: "color-mix(in srgb, var(--navy-900) 6%, transparent)",
         whiteSpace: "nowrap",
         flexShrink: 0,
       }}
@@ -750,11 +763,16 @@ function HcVisibilityCard({
   shared,
   onApply,
   pending,
+  saving,
+  error,
   support,
 }: {
   shared: boolean;
   onApply: (value: boolean) => void;
   pending: boolean;
+  /** Solo este radio guardando (no el horario ni los datos del consultorio). */
+  saving: boolean;
+  error: string | null;
   support: boolean;
 }) {
   const confirm = useConfirm();
@@ -785,7 +803,9 @@ function HcVisibilityCard({
         <legend style={{ padding: 0, fontSize: 15, fontWeight: 600, color: "var(--navy-900)" }}>
           {VIS_COPY.visibilityQuestion}
         </legend>
-        <div role="radiogroup" aria-label={VIS_COPY.visibilityQuestion} style={{ display: "grid", gap: 8, marginTop: 12 }}>
+        {/* [T4-Z] Sin role/aria-label propios: el `fieldset` + `legend` ya agrupan y nombran los radios; un
+            radiogroup adentro hacía que el lector leyera la pregunta dos veces. */}
+        <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
           {options.map((o) => {
             const on = current === o.value;
             return (
@@ -823,6 +843,15 @@ function HcVisibilityCard({
         </div>
       </fieldset>
       <div style={{ fontSize: 12.5, color: "var(--navy-500)", marginTop: 10, lineHeight: 1.45 }}>{VIS_COPY.visibilityRoles}</div>
+      {/* [T4-Z] Live region siempre montada: si aparece junto con el texto, el lector no la anuncia. */}
+      <div role="status" style={{ fontSize: 12.5, color: "var(--navy-500)", marginTop: saving ? 8 : 0 }}>
+        {saving ? "Guardando…" : ""}
+      </div>
+      {error && (
+        <div style={{ marginTop: 10 }}>
+          <ErrorBox>{error}</ErrorBox>
+        </div>
+      )}
       {support && (
         <div data-support-note style={{ marginTop: 10, fontSize: 12.5, color: "var(--navy-500)", lineHeight: 1.45 }}>
           {VIS_COPY.supportNote}

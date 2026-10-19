@@ -346,7 +346,7 @@ export function FacturacionView({
       return;
     }
     if (isStaleError(r.error)) {
-      toast.warning("El turno cambió en otra sesión", { description: "Recargá la ficha para ver lo último." });
+      toast.warning("El turno cambió en otra sesión", { description: "Recargá la página para ver lo último." });
       setCollecting(null);
       return;
     }

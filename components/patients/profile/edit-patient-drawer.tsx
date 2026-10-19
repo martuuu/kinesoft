@@ -496,11 +496,11 @@ export function EditPatientModal(props: EditPatientModalProps) {
           <Section title={isKine ? "Asignación - Kinesiólogo asignado" : "Asignación - Profesional asignado"}>
             <FormField
               as="select"
-              label=""
+              label="Profesional asignado"
               // A2b: el hint anterior ("visible para todos los kines") era falso —
               // sin asignación, la HC completa la ven OWNER/ADMIN y los demás
               // profesionales solo ven datos básicos (salvo que se la compartan).
-              hint="«Consultorio común» = la ficha completa la ven el titular o el administrador; los profesionales ven datos básicos."
+              hint="Sin profesional asignado: la historia clínica la ven el Titular y los administradores que atienden, y a quien se la compartas. El resto del equipo ve los datos básicos."
               value={assignedKine}
               onChange={(v) => setAssignedKine(v)}
               options={[

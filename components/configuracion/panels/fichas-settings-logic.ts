@@ -33,10 +33,10 @@ export const HC_VISIBILITY_COPY = {
   visibilityAll: "Todos los profesionales del consultorio",
   visibilityAllHint: "Cualquier profesional que atiende en el consultorio ve la historia clínica de todos los pacientes.",
   visibilityRoles:
-    "El Titular y los administradores la ven solo si atienden pacientes. La Secretaria y Facturación nunca ven la historia clínica, con ninguna de las dos opciones.",
+    "El Titular y los administradores que atienden ven la historia clínica de todos los pacientes, con cualquiera de las dos opciones; si no atienden, no la ven. La Secretaria y Facturación nunca ven la historia clínica.",
   visibilityAllWarning:
     "Con esta opción no hace falta compartir: lo que se compartió paciente por paciente deja de importar mientras esté elegida.",
-  widenTitle: "¿Mostrar la historia clínica de todos los pacientes a todo el equipo?",
+  widenTitle: "¿Mostrar la historia clínica de todos los pacientes a todos los profesionales?",
   widenMessage:
     "Todos los profesionales que atienden en el consultorio van a ver la historia clínica completa de cada paciente, también la de los que no atienden ellos. Podés volver a «Cada profesional» cuando quieras.",
   widenConfirm: "Mostrar a todos",

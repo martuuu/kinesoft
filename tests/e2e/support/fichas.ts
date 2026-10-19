@@ -47,7 +47,7 @@ export async function insertNote(
 /** Perfil del paciente: la HC es la primera pestaña y la que abre (FC-3d), sin clicks. */
 export async function openHc(page: Page, patientId: string): Promise<void> {
   await page.goto(`/pacientes/${patientId}`);
-  await expect(page.getByRole("navigation", { name: "Secciones de la ficha" }).getByRole("button", { name: /^Historia clínica/ })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Secciones del perfil del paciente" }).getByRole("button", { name: /^Historia clínica/ })).toBeVisible();
 }
 
 export const card = (page: Page, noteId: string): Locator => page.locator(`article[data-note-id="${noteId}"]`);

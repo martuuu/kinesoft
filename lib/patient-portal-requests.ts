@@ -47,7 +47,7 @@ const COPY = {
   notFound: "Pedido no encontrado.",
   patientNotFound: "Paciente no encontrado.",
   forbidden: "No tenés acceso a los pedidos de este paciente.",
-  stale: "El pedido cambió o ya lo resolvió otra persona. Recargá la ficha para ver la versión actual.",
+  stale: "El pedido cambió o ya lo resolvió otra persona. Recargá la página para ver la versión actual.",
   badChanges: "El pedido tiene datos que ya no son válidos: rechazalo y pedile al paciente que lo vuelva a enviar.",
 } as const;
 

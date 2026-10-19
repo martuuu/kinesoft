@@ -124,7 +124,7 @@ export function PatientSection({
             lineHeight: 1.45,
           }}
         >
-          Ya registramos a <b>{createdPatient.name}</b>. El turno se crea para esa ficha;
+          Ya registramos a <b>{createdPatient.name}</b>. El turno se crea para ese paciente;
           los datos se corrigen después desde su perfil.
         </div>
       ) : isGuest ? (

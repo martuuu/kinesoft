@@ -81,7 +81,7 @@ export function NewPatientModal({
       <header style={{ marginBottom: 16, paddingRight: 40 }}>
         <EyebrowLabel tone="accent">Nuevo paciente</EyebrowLabel>
         <h2 className="k-display" style={{ fontSize: 22, margin: "6px 0 0", fontWeight: 700 }}>
-          Crear ficha
+          Cargar paciente
         </h2>
       </header>
 

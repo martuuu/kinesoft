@@ -215,7 +215,7 @@ describe("[P3-S22h] hero: chips por disciplina", () => {
       assignedPractitionerName: null,
     } as unknown as PatientAdminCore;
     const html = renderToStaticMarkup(<PatientAdminHero patient={admin} canBook />);
-    expect(html).toContain("Ficha administrativa");
+    expect(html).toContain("Datos administrativos");
     expect(html).not.toContain("hero-plan-chip");
     expect(html).not.toContain("Plan");
   });

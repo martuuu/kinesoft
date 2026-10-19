@@ -131,7 +131,7 @@ export function TabsBar({
 
   return (
     <nav
-      aria-label="Secciones de la ficha"
+      aria-label="Secciones del perfil del paciente"
       className={styles.tabs}
       ref={navRef}
       data-fade-start={fade.start ? "" : undefined}
