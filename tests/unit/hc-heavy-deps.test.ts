@@ -19,8 +19,8 @@
  * página son una referencia RPC, su cuerpo nunca llega al cliente (la action de compartir de C-FC6 arma el PDF ahí).
  *
  * Los archivos del editor y del import todavía no existen en T4a (los crean FC-3a y FC-3f): el guard no exige que
- * existan, fija dónde pueden estar. La entrada del spike del editor (`app/(app)/hc-spike/*`) es temporal: FC-3a borra
- * el archivo y saca su línea de las allow-lists (el spike del render, `app/api/hc-spike/*`, ya lo borró FC-2g).
+ * existan, fija dónde pueden estar. Los spikes de FC-1c ya no están: el del render lo borró FC-2g y el del editor
+ * (`app/(app)/hc-spike/*`) FC-3a, junto con su línea de las allow-lists.
  */
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
@@ -64,11 +64,9 @@ const TIPTAP_ALLOWED = [
   "components/hc/editor/hc-editor-logic.ts",
   "components/**/word-import-logic.ts",
   "components/**/word-reader.ts",
-  // Spike de FC-1c (temporal: lo borra FC-3a con su línea).
-  "app/(app)/hc-spike/spike-editor.tsx",
 ];
-/** mammoth: solo `word-reader.ts` (FC-3f) y el spike (temporal, FC-3a). */
-const MAMMOTH_ALLOWED = ["components/**/word-reader.ts", "app/(app)/hc-spike/spike-editor.tsx"];
+/** mammoth: solo `word-reader.ts` (FC-3f). */
+const MAMMOTH_ALLOWED = ["components/**/word-reader.ts"];
 
 const SOURCE_DIRS = ["app", "components", "lib", "hooks"];
 const EXTS = [".ts", ".tsx"];
@@ -189,7 +187,7 @@ describe("[FC-1c] detector del guard (anti-false-green)", () => {
     expect(isUseServer('"use server";\nexport async function a() {}')).toBe(true);
     expect(matchesAny("components/fichas/word-reader.ts", MAMMOTH_ALLOWED)).toBe(true);
     expect(matchesAny("components/fichas/ficha-form.tsx", MAMMOTH_ALLOWED)).toBe(false);
-    // El scan no pasa en vacío: el spike importa los cuatro.
+    // El scan no pasa en vacío: el editor (FC-3a) importa Tiptap y el render del PDF importa react-pdf.
     expect(importersOf("tiptap").length).toBeGreaterThan(0);
     expect(importersOf("reactPdf").length).toBeGreaterThan(0);
   });

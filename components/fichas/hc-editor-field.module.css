@@ -1,0 +1,47 @@
+/*
+ * [FC-3a] Parte estática del editor de fichas (first load): la franja que reserva el alto de la barra de formato
+ * mientras Tiptap no llegó (sin salto de layout al hacer el swap) y la barra de «Sin formato».
+ * Las medidas copian `components/hc/editor/hc-editor.module.css` (.toolbar + .btn): 32 px + 4 + 4 + 1 de borde, y
+ * 44 px de botón en touch.
+ */
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 41px;
+  padding: 4px 4px 4px 8px;
+  border: 1px solid rgba(15, 30, 51, 0.16);
+  border-bottom: 0;
+  border-radius: 12px 12px 0 0;
+  background: #fff;
+  font-size: 12px;
+  color: var(--navy-400);
+}
+.bar + textarea {
+  border-top-left-radius: 0 !important;
+  border-top-right-radius: 0 !important;
+}
+.btn {
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--sky-100);
+  color: var(--navy-900);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn:focus-visible {
+  outline: 2px solid var(--sky-700);
+  outline-offset: 1px;
+}
+@media (pointer: coarse) {
+  .bar {
+    min-height: 53px;
+  }
+  .btn {
+    height: 44px;
+  }
+}
