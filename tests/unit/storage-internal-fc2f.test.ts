@@ -159,8 +159,21 @@ describe("[FC-2f] storageSweepPending (etapa del cron que conecta FC-2i)", () =>
     });
     const { api } = fakeApi({ list });
     const r = await storageSweepPending("patient-files", 24 * 3600_000, now);
-    expect(r).toEqual({ ok: true, data: { removed: 1, errors: 1 } });
+    expect(r).toEqual({ ok: true, data: { removed: 1, errors: 1, truncated: false } });
     expect(api.remove).toHaveBeenCalledWith(["pending/tenA/f1"]);
+  });
+
+  it("[FC-2i] con el plazo vencido corta sin borrar y avisa `truncated` (presupuesto del cron diario)", async () => {
+    const now = Date.UTC(2026, 9, 18, 12);
+    const old = new Date(now - 25 * 3600_000).toISOString();
+    const list = vi.fn(async (prefix: string) => {
+      if (prefix === "pending") return { data: [{ name: "tenA", id: null }], error: null };
+      return { data: [{ name: "f1", id: "1", created_at: old }], error: null };
+    });
+    const { api } = fakeApi({ list });
+    const r = await storageSweepPending("patient-files", 24 * 3600_000, now, Date.now() - 1);
+    expect(r).toEqual({ ok: true, data: { removed: 0, errors: 0, truncated: true } });
+    expect(api.remove).not.toHaveBeenCalled();
   });
 
   it("sin admin client → unconfigured", async () => {

@@ -9,7 +9,8 @@
  * rechaza SIN escribir. Lo que hoy falla va con `it.fails("[sesión] …")`.
  *
  * [FC-1e] Fila «FC · portal «Documentos»» (T4, C-FC8): ninguna columna de staff baja el PDF compartido por el portal
- * (→ 404). Nace `it.fails("[FC-2h] …")`.
+ * (→ 404). Nació `it.fails("[FC-2h] …")`; FC-2i la dio vuelta (la ruta existe).
+ * [FC-2i] Filas de fichas (T4): compartir/revocar, diagnósticos propios, logo/firma y las descargas del equipo.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
@@ -63,6 +64,11 @@ import { renewPlanAuthorization } from "@/lib/plans-edit";
 import { getPlanDetail, getPatientPlanBalances } from "@/lib/plans-read";
 import { decidePatientPortalRequest } from "@/lib/patient-portal-requests";
 import { createClinicalNote, voidClinicalNote } from "@/lib/clinical-notes";
+import { shareClinicalNoteWithPatient, revokePatientDocument } from "@/lib/patient-documents";
+import { searchDiagnoses, createTenantDiagnosis } from "@/lib/diagnoses";
+import { removeTenantLogo, updateOwnSignatureInfo } from "@/lib/practice-assets";
+import { GET as getFichaDownload } from "@/app/api/pacientes/[id]/fichas/[noteId]/[format]/route";
+import { GET as getRecordDownload } from "@/app/api/pacientes/[id]/historia-clinica/[format]/route";
 import { getPatientTimeline, getPatientClinicalSummary } from "@/lib/clinical-notes-read";
 import { getBillingOverview, previewPlanChange, applyPlanChange, submitPaymentReceipt, getReceiptUrl } from "@/lib/saas-billing";
 import { setSharedPatientView, setPublicBookingEnabled, updateTenantBasics } from "@/lib/tenant-settings";
@@ -1120,13 +1126,158 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     // ─────────────────────────────────────────── FC · portal «Documentos» ───────────────────────────────────────────
     // [FC-1e] T4 (C-FC8): el staff nunca entra al portal (`requirePortalPatient` corta a quien tiene Membership, AUDIT
     // §5.22), ni con una ficha vinculada a SU cuenta que tiene un documento vivo compartido (peor caso: dato viejo).
-    // La descarga del PDF → 404 y sin fila de audit. Nace `it.fails` porque la ruta no existe; la da vuelta FC-2h.
+    // La descarga del PDF → 404 y sin fila de audit. Nació `it.fails` (la ruta no existía); la dio vuelta FC-2i.
     {
       kind: "read",
       name: "FC · portal «Documentos»: PDF del documento compartido, ficha vinculada a la cuenta del staff",
-      cells: Object.fromEntries(COLS.map((c) => [c, { exp: "deny", fails: "FC-2h", note: "staff → 404" }])) as Cells,
+      cells: Object.fromEntries(COLS.map((c) => [c, { exp: "deny", note: "staff → 404" }])) as Cells,
       setup: (fx) => fxSharedDocument(fx),
       seen: (fx) => portalPdfSeenByCurrentUser(fx),
+    },
+    // ─────────────────────────────────────────── FC · fichas (T4, FC-2i) ───────────────────────────────────────────
+    // Compartir y revocar: escritura clínica (full sobre el paciente). Secretaria, Facturación, ADMIN (no atiende) y
+    // soporte → rechazo sin documento. Sin Storage en el Docker local el PDF queda `stub:<id>` (FC-2d).
+    {
+      kind: "write",
+      name: "FC · shareClinicalNoteWithPatient",
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: { exp: "deny", note: "no atiende: sin HC" }, GENERAL: "ok", SUPPORT: "ro" },
+      setup: (fx) => fxNote(fx, "S26b ficha a compartir"),
+      act: (fx) => shareClinicalNoteWithPatient({ noteId: fx.noteId as string, idempotencyKey: randomUUID(), notify: false }),
+      effect: async (fx, db) => (await db.patientDocument.count({ where: { noteId: fx.noteId as string } })) > 0,
+    },
+    {
+      kind: "write",
+      name: "FC · revokePatientDocument",
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: { exp: "deny", note: "no atiende: sin HC" }, GENERAL: "ok", SUPPORT: "ro" },
+      setup: (fx) => fxSharedDocument(fx),
+      act: (fx) => revokePatientDocument({ documentId: fx.documentId as string }),
+      effect: async (fx, db) => (await db.patientDocument.findUniqueOrThrow({ where: { id: fx.documentId as string } })).revokedAt !== null,
+    },
+    // Diagnósticos propios (FC-D22): buscar = `clinical.read` (vocabulario del consultorio, no un paciente: el básico
+    // también); crear = escritura clínica con profesional o `tenant.sensitive`.
+    {
+      kind: "read",
+      name: "FC · searchDiagnoses (propio del consultorio)",
+      cells: {
+        XT: "deny",
+        OWNER: "ok",
+        BASIC: { exp: "ok", note: "vocabulario del consultorio, no un paciente" },
+        ASSISTANT: "deny",
+        BILLING: "deny",
+        ADMIN: { exp: "deny", note: "no clínico → null" },
+        GENERAL: "ok",
+        SUPPORT: { exp: "deny", note: "soporte → null" },
+      },
+      setup: async (fx) => {
+        fx.dxTitle = `Dx S26b ${uniqueSuffix()}`;
+        await db.tenantDiagnosis.create({
+          data: { tenantId: fx.host.tenantId, title: fx.dxTitle as string, searchText: (fx.dxTitle as string).toLowerCase() },
+        });
+      },
+      seen: async (fx) => {
+        const r = await searchDiagnoses({ q: fx.dxTitle as string });
+        return !!r?.groups.some((g) => g.options.some((o) => o.title === fx.dxTitle));
+      },
+    },
+    {
+      kind: "write",
+      name: "FC · createTenantDiagnosis",
+      cells: {
+        XT: "isolated",
+        OWNER: "ok",
+        BASIC: { exp: "ok", note: "FC-D22: cualquier profesional con escritura clínica" },
+        ASSISTANT: "deny",
+        ASSISTANT_CFG: { exp: "deny", note: "corte de staff: sin tenant.sensitive" },
+        BILLING: "deny",
+        ADMIN: { exp: "ok", note: "FC-D22: `tenant.sensitive` (Configuración), sin ver HC" },
+        PRO_CFG: "ok",
+        GENERAL: "ok",
+        SUPPORT: "ro",
+      },
+      act: (fx) => {
+        fx.dxTitle = `Propio S26b ${uniqueSuffix()}`;
+        return createTenantDiagnosis({ title: fx.dxTitle as string });
+      },
+      effect: async (fx, db) => (await db.tenantDiagnosis.count({ where: { tenantId: fx.host.tenantId, title: fx.dxTitle as string } })) > 0,
+    },
+    // Logo (`tenant.sensitive`) y firma (solo la propia, solo quien atiende). Se mide quitar el logo y los datos de la
+    // firma: no piden Storage (la subida, sí; sus rechazos están en tests/integration/practice-assets*.test.ts).
+    {
+      kind: "write",
+      name: "FC · removeTenantLogo",
+      cells: {
+        XT: "isolated",
+        OWNER: "ok",
+        BASIC: "deny",
+        ASSISTANT: "deny",
+        ASSISTANT_CFG: { exp: "deny", note: "corte de staff: sin tenant.sensitive" },
+        BILLING: "deny",
+        ADMIN: { exp: "ok", note: "Configuración delegada (tenant.sensitive)" },
+        PRO_CFG: "ok",
+        GENERAL: "ok",
+        SUPPORT: "ro",
+      },
+      setup: async (fx) => {
+        await db.tenant.update({ where: { id: fx.host.tenantId }, data: { logoStorageKey: `${fx.host.tenantId}/logo/s26b.png`, logoUpdatedAt: new Date() } });
+      },
+      act: () => removeTenantLogo(),
+      effect: async (fx, db) => (await tenantRow(fx.host.tenantId)).logoStorageKey === null,
+    },
+    {
+      kind: "write",
+      name: "FC · updateOwnSignatureInfo (la propia)",
+      cells: {
+        XT: "isolated",
+        OWNER: "ok",
+        BASIC: { exp: "ok", note: "la firma es de quien firma, cualquier acceso" },
+        ASSISTANT: { exp: "deny", note: "no atiende (practitionerId null)" },
+        BILLING: { exp: "deny", note: "no atiende (practitionerId null)" },
+        ADMIN: { exp: "deny", note: "sin Practitioner" },
+        GENERAL: "ok",
+        SUPPORT: "ro",
+      },
+      act: (fx) => {
+        fx.license = `S26B-${uniqueSuffix()}`.slice(0, 40);
+        return updateOwnSignatureInfo({ honorific: "LIC", licenseNumber: fx.license as string });
+      },
+      effect: async (fx, db) => (await db.practitioner.count({ where: { tenantId: fx.host.tenantId, licenseNumber: fx.license as string } })) > 0,
+    },
+    // Descargas del equipo (FC-2g): 200 solo con `canRead` de la HC; Secretaria/Facturación/ADMIN/ajeno → 404 y
+    // soporte → 403, sin evento de audit.
+    {
+      kind: "read",
+      name: "FC · GET /api/pacientes/[id]/fichas/[noteId]/pdf",
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "deny", GENERAL: "ok", SUPPORT: { exp: "deny", note: "403" } },
+      setup: (fx) => fxNote(fx, "S26b ficha a descargar"),
+      seen: async (fx) => {
+        __rateLimitInternals.reset();
+        const id = fx.patientId;
+        const noteId = fx.noteId as string;
+        const res = await getFichaDownload(new Request(`http://localhost/api/pacientes/${id}/fichas/${noteId}/pdf`), {
+          params: { id, noteId, format: "pdf" },
+        });
+        if (res.status === 200) return true;
+        expect(res.status).toBe(fx.col === "SUPPORT" ? 403 : 404);
+        expect(await db.auditEvent.count({ where: { action: "clinicalNote.download", entityId: id } })).toBe(0);
+        return false;
+      },
+    },
+    {
+      kind: "read",
+      name: "FC · GET /api/pacientes/[id]/historia-clinica/pdf",
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "deny", GENERAL: "ok", SUPPORT: { exp: "deny", note: "403" } },
+      setup: (fx) => fxNote(fx, "S26b HC a descargar"),
+      seen: async (fx) => {
+        __rateLimitInternals.reset();
+        const id = fx.patientId;
+        const res = await getRecordDownload(new Request(`http://localhost/api/pacientes/${id}/historia-clinica/pdf`), {
+          params: { id, format: "pdf" },
+        });
+        if (res.status === 200) return true;
+        expect(res.status).toBe(fx.col === "SUPPORT" ? 403 : 404);
+        expect(await db.auditEvent.count({ where: { action: "clinicalRecord.download", entityId: id } })).toBe(0);
+        return false;
+      },
     },
     // ─────────────────────────────────────────── PL · cuenta del consultorio ───────────────────────────────────────────
     {

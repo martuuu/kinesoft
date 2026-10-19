@@ -46,6 +46,7 @@ import {
   staffInviteEmail,
   portalInviteEmail,
   portalMagicLinkEmail,
+  portalDocumentEmail,
   emailVerificationEmail,
   passwordResetEmail,
   adminPasswordResetEmail,
@@ -100,6 +101,8 @@ function samples(base: string): Record<DiagnosableKind, () => RenderedEmail> {
       staffInviteEmail({ tenantName: TENANT, inviterName: "Laura Ramos", roleLabel: "Profesional", url: link("/invite/diagnostico"), expiresAt: inAWeek }),
     portal_invite: () => portalInviteEmail({ tenantName: TENANT, url: link("/portal") }),
     portal_magic_link: () => portalMagicLinkEmail({ tenantName: TENANT, url: link("/portal") }),
+    // T4 FC-2d: aviso de documento compartido (sin datos clínicos en el cuerpo).
+    portal_document: () => portalDocumentEmail({ tenantName: TENANT, url: link("/portal"), replaced: false }),
     email_verification: () => emailVerificationEmail({ url: link("/onboarding") }),
     password_reset: () => passwordResetEmail({ url: link("/reset") }),
     admin_password_reset: () => adminPasswordResetEmail({ tenantName: TENANT, url: link("/reset") }),

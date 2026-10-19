@@ -128,6 +128,10 @@ const PAGE: Record<ExportEntity, (tx: Tx, tenantId: string, args: PageArgs, sinc
     tx.clinicalNote.findMany({ where: { tenantId }, select: selectOf("clinicalNotes"), ...a }).then(asRows),
   clinicalNoteRevisions: (tx, tenantId, a) =>
     tx.clinicalNoteRevision.findMany({ where: { tenantId }, select: selectOf("clinicalNoteRevisions"), ...a }).then(asRows),
+  patientDocuments: (tx, tenantId, a) =>
+    tx.patientDocument.findMany({ where: { tenantId }, select: selectOf("patientDocuments"), ...a }).then(asRows),
+  tenantDiagnoses: (tx, tenantId, a) =>
+    tx.tenantDiagnosis.findMany({ where: { tenantId }, select: selectOf("tenantDiagnoses"), ...a }).then(asRows),
   planTemplates: (tx, tenantId, a) =>
     tx.planTemplate.findMany({ where: { tenantId }, select: selectOf("planTemplates"), ...a }).then(asRows),
   // Solo los PROPIOS (`tenantId` = este): los del catálogo global no son datos del consultorio.

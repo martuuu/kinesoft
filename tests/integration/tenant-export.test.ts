@@ -12,7 +12,7 @@
  * en integration-setup; el DESPACHO del mail con `__setEmailTransportForTests`).
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
 import type { PrismaClient } from "@prisma/client";
 import { GET as exportTenant } from "@/app/api/consultorio/export/route";
@@ -50,7 +50,11 @@ type Seeded = {
   markers: string[];
   patientId: string;
   notes: { root: string; revision: string; amend: string; voided: string };
+  /** T4 FC-2i: documento compartido (de la raíz) y diagnóstico propio. */
+  fc: { document: string; tenantDiagnosis: string };
 };
+
+const sha = (x: string) => createHash("sha256").update(x).digest("hex");
 
 /** Una fila con PHI marcada en cada entidad que el export lleva. Devuelve todos los ids y marcas creados. */
 async function seed(db: PrismaClient, t: EphemeralTenant, tag: string): Promise<Seeded> {
@@ -116,8 +120,36 @@ async function seed(db: PrismaClient, t: EphemeralTenant, tag: string): Promise<
   await db.clinicalNote.update({ where: { id: voided.id }, data: { voidedAt: new Date(), voidedByUserId: t.userId, voidReason: mk("motivo") } });
   ids.push(loc.id, room.id, cov.id, ec.id, booking.id, pay.id, cond.id, ex.id, cc.id, dx.id, prog.id, ses.id, se.id, eva.id, file.id, ev.id);
   ids.push(root.id, rev.id, amend.id, voided.id);
+  // T4 FC-2i (C-FC7): documento compartido de la raíz (vivo; el trigger exige raíz viva del mismo paciente) con la clave
+  // de Storage MARCADA (no puede salir), y un diagnóstico propio. `searchText` es derivado: tampoco sale.
+  const snapshot = { v: 1, content: { centinela: mk("snapshot") } };
+  const doc = await db.patientDocument.create({
+    data: {
+      tenantId: t.tenantId,
+      patientId,
+      noteId: root.id,
+      noteRevision: 2,
+      sourceDigest: sha(`src-${root.id}`),
+      title: mk("documento"),
+      occurredAt: new Date("2031-05-05T13:00:00Z"),
+      snapshot,
+      snapshotSha256: sha(JSON.stringify(snapshot)),
+      pdfStorageKey: `STORAGE-${tag}-doc-${s}`,
+      pdfSha256: sha(`pdf-${root.id}`),
+      pdfSizeBytes: 1000,
+      sharedByUserId: t.userId,
+      sharedByPractitionerId: t.practitionerId,
+      sharedAt: new Date(),
+      idempotencyKey: `IDEMP-${tag}-${randomUUID()}`,
+    },
+  });
+  const tdx = await db.tenantDiagnosis.create({
+    data: { tenantId: t.tenantId, title: mk("diagnostico"), code: "X1", searchText: `SEARCH-${tag}-${s}` },
+  });
+  ids.push(doc.id, tdx.id);
   return {
     ids,
+    fc: { document: doc.id, tenantDiagnosis: tdx.id },
     notes: { root: root.id, revision: rev.id, amend: amend.id, voided: voided.id },
     patientId,
     markers: [`PHI-${tag}-`, `IDEMP-${tag}`, `STORAGE-${tag}`],
@@ -199,6 +231,24 @@ describe.skipIf(!RUN)("[BO5-C] export completo del consultorio", () => {
     for (const r of json.data.bookings) expect(r).not.toHaveProperty("idempotencyKey");
     for (const r of json.data.payments) expect(r).not.toHaveProperty("rawPayload");
     for (const r of json.data.patientFiles) expect(r).not.toHaveProperty("storageKey");
+  });
+
+  it("[FC-2i] documentos compartidos y diagnósticos propios salen con su allowlist (sin clave de Storage, ni sourceDigest, ni searchText); nada de B", async () => {
+    asUser(A.userId);
+    const { text, json } = await body(await exportTenant(new Request(URL_)));
+    const docs = json.data.patientDocuments;
+    const tdx = json.data.tenantDiagnoses;
+    expect(docs.map((d) => d.id)).toEqual([seedA.fc.document]);
+    expect(tdx.map((d) => d.id)).toEqual([seedA.fc.tenantDiagnosis]);
+    expect(docs[0]).toMatchObject({ noteId: seedA.notes.root, noteRevision: 2, kind: "FICHA", revokedAt: null, pdfSizeBytes: 1000 });
+    expect((docs[0].snapshot as { content: { centinela: string } }).content.centinela).toMatch(/^PHI-A-snapshot-/);
+    expect(tdx[0]).toMatchObject({ code: "X1", archivedAt: null });
+    for (const d of docs) {
+      for (const k of ["pdfStorageKey", "sourceDigest", "idempotencyKey", "tenantId"]) expect(d).not.toHaveProperty(k);
+    }
+    for (const d of tdx) for (const k of ["searchText", "tenantId"]) expect(d).not.toHaveProperty(k);
+    expect(text).not.toMatch(/STORAGE-A-doc|SEARCH-A-/);
+    for (const id of Object.values(seedB.fc)) expect(text).not.toContain(id);
   });
 
   it("[EV2-1b] evoluciones: raíz, enmienda, anulada y revisión salen (todas), sin idempotencyKey, con conteos; nada de B", async () => {

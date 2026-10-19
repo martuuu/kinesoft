@@ -80,7 +80,9 @@ async function gateFor(actor: Actor): Promise<DiagnosesGate> {
   const clinical = modules.has("evoluciones") && caps.has("clinical.read");
   return {
     clinical,
-    canWrite: clinical && typeof actor.practitionerId === "string" && actor.practitionerId.length > 0,
+    // Truthiness (no `=== "string"`): el guard de IAM-4a (actor-practitioner-guard) prohíbe comparar
+    // `actor.practitionerId` contra algo que no sea null; null o "" = rol no clínico → no escribe.
+    canWrite: clinical && Boolean(actor.practitionerId),
     sensitive: caps.has("tenant.sensitive"),
     kine: clinical && modules.has("diagnostico"),
   };

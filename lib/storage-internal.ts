@@ -292,7 +292,9 @@ export async function storageMove(
  * Objetos de `pending/` (subida firmada sin confirmar) más viejos que `olderThanMs` (C-FC10: el cron diario barre los
  * de más de 24 h). Lista `pending/` → cada carpeta de consultorio → borra en tandas. Best-effort: un error en un
  * consultorio no corta el resto; devuelve cuántos borró y cuántos errores hubo para el resumen del cron.
- * La etapa del cron la conecta el integrador (FC-2i); acá queda la función lista.
+ * La etapa del cron (`runStoragePendingSweep` en lib/cron-jobs-internal.ts, FC-2i) pasa `deadlineAtMs`: el cron diario
+ * tiene 45 s de presupuesto para TODAS sus etapas y un barrido grande (hasta 100 tandas de borrado) podría pasarse. Al
+ * llegar al plazo corta con `truncated: true`; lo que quedó lo barre la corrida de mañana (borrar es idempotente).
  */
 const PENDING_PREFIX = "pending";
 const LIST_PAGE = 1000;
@@ -303,12 +305,16 @@ export async function storageSweepPending(
   bucket: StorageBucket,
   olderThanMs: number,
   nowMs = Date.now(),
-): Promise<StorageResult<{ removed: number; errors: number }>> {
+  deadlineAtMs = Number.POSITIVE_INFINITY,
+): Promise<StorageResult<{ removed: number; errors: number; truncated: boolean }>> {
   const admin = getSupabaseAdminClient();
   if (!admin) return unconfigured();
   const cutoff = nowMs - olderThanMs;
   let removed = 0;
   let errors = 0;
+  let truncated = false;
+  // Reloj REAL (no `nowMs`, que es el «ahora» lógico del corte de antigüedad y en los tests está fijo).
+  const pastDeadline = () => Date.now() >= deadlineAtMs;
   try {
     const api = admin.storage.from(bucket);
     const { data: folders, error } = await api.list(PENDING_PREFIX, { limit: LIST_PAGE });
@@ -316,6 +322,10 @@ export async function storageSweepPending(
     for (const folder of folders ?? []) {
       // Las «carpetas» de Storage vienen sin id; los objetos sueltos en `pending/` (no debería haber) se ignoran.
       if (folder.id || !folder.name) continue;
+      if (pastDeadline()) {
+        truncated = true;
+        break;
+      }
       const prefix = `${PENDING_PREFIX}/${folder.name}`;
       const { data: objects, error: listErr } = await api.list(prefix, { limit: LIST_PAGE });
       if (listErr) {
@@ -331,13 +341,17 @@ export async function storageSweepPending(
         })
         .map((o) => `${prefix}/${o.name}`);
       for (let i = 0; i < stale.length && removed < MAX_PENDING_SWEEP; i += REMOVE_BATCH) {
+        if (pastDeadline()) {
+          truncated = true;
+          break;
+        }
         const batch = stale.slice(i, i + REMOVE_BATCH);
         const rm = await storageRemove(bucket, batch);
         if (rm.ok) removed += batch.length;
         else errors++;
       }
     }
-    return { ok: true, data: { removed, errors } };
+    return { ok: true, data: { removed, errors, truncated } };
   } catch (e) {
     return failed("sweepPending", bucket, e);
   }

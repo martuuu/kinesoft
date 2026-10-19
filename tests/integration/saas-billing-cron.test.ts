@@ -230,6 +230,8 @@ describe.skipIf(!RUN)("[PL-2b] cron diario: cobros", () => {
       invitations: { ok: true },
       trialReminders: { ok: true },
       healthDigest: { ok: true },
+      // [FC-2i] la etapa del Storage corre última; sin Storage configurado (Docker local/CI) se saltea sin fallar.
+      storagePending: { ok: true, result: { skipped: true, reason: "unconfigured" } },
     });
   });
 });

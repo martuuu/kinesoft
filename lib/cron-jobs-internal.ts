@@ -38,6 +38,7 @@ import { toARDateKey } from "@/lib/datetime-ar";
 import { checkCronAuth } from "@/lib/cron-auth";
 import { maintenanceMode } from "@/lib/maintenance";
 import { runSaasBilling, type SaasBillingRunResult } from "@/lib/saas-billing-internal";
+import { storageSweepPending } from "@/lib/storage-internal";
 import {
   healthDigestFindings,
   healthDigestKey,
@@ -132,20 +133,50 @@ async function stage<T>(name: string, fn: () => Promise<T>): Promise<DailyStage<
 
 /**
  * Etapas en orden: cobros (precios con vigencia → suscripciones → cargos del período → vencidos/al día → mails) →
- * invitaciones → recordatorios de prueba → resumen de salud. Si los cobros agotan su presupuesto, cortan y siguen
- * mañana (`truncated`); los demás jobs corren igual.
+ * invitaciones → recordatorios de prueba → resumen de salud → barrido de `pending/` del Storage. Si los cobros agotan
+ * su presupuesto, cortan y siguen mañana (`truncated`); los demás jobs corren igual. El barrido va ÚLTIMO y con lo
+ * que quede del presupuesto de 45 s (es mantenimiento: si hoy no entra, entra mañana).
  */
 export async function runDaily(now: Date): Promise<{
   billing: DailyStage<SaasBillingRunResult>;
   invitations: DailyStage<InvitationsExpireResult>;
   trialReminders: DailyStage<TrialRemindersResult>;
   healthDigest: DailyStage<HealthDigestResult>;
+  storagePending: DailyStage<StoragePendingSweepResult>;
 }> {
+  // Reloj real (no `now`): el presupuesto es de la ejecución de la función, no del día lógico del cron.
+  const deadlineAtMs = Date.now() + DAILY_BUDGET_MS;
   const billing = await stage("billing", () => runSaasBilling(now, BILLING_BUDGET_MS));
   const invitations = await stage("invitations", () => runInvitationsExpire(now));
   const trialReminders = await stage("trial_reminders", () => runTrialReminders(now));
   const healthDigest = await stage("health_digest", () => runHealthDigest(now));
-  return { billing, invitations, trialReminders, healthDigest };
+  const storagePending = await stage("storage_pending", () => runStoragePendingSweep(now, deadlineAtMs));
+  return { billing, invitations, trialReminders, healthDigest, storagePending };
+}
+
+// ── 0b. Barrido de subidas firmadas sin confirmar (T4 FC-2i, C-FC10) ──────────────────────────────────────────
+
+export type StoragePendingSweepResult =
+  | { skipped: true; reason: "unconfigured" }
+  | { skipped: false; removed: number; errors: number; truncated: boolean };
+
+/** C-FC10: lo que quedó en `pending/` del bucket de archivos (subida firmada sin `confirm`) con más de 24 h. */
+export const STORAGE_PENDING_MAX_AGE_MS = 24 * 3600_000;
+
+/**
+ * Idempotente por construcción: borra objetos viejos de `pending/`, y uno ya borrado no aparece en la próxima lista.
+ * No toca filas (la fila de `PatientFile` se crea recién en el `confirm`, después del move fuera de `pending/`), ni
+ * lee PHI: el log lleva solo conteos. Sin Storage configurado (dev/CI) se saltea; un error de Storage tira para que
+ * `stage` lo registre como etapa fallida (se reintenta mañana) sin frenar a las demás.
+ */
+export async function runStoragePendingSweep(now: Date, deadlineAtMs: number): Promise<StoragePendingSweepResult> {
+  const r = await storageSweepPending("patient-files", STORAGE_PENDING_MAX_AGE_MS, now.getTime(), deadlineAtMs);
+  if (!r.ok) {
+    if (r.reason === "unconfigured") return { skipped: true, reason: "unconfigured" };
+    throw new Error("storage_sweep_failed");
+  }
+  logger.info("cron.daily.storage_pending", { removed: r.data.removed, errors: r.data.errors, truncated: r.data.truncated });
+  return { skipped: false, ...r.data };
 }
 
 // ── 1. Invitaciones vencidas ──────────────────────────────────────────────────────────────────────────────────

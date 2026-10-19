@@ -47,6 +47,11 @@ export const TENANT_EXPORT_RATE_LIMIT = { limit: 3, windowMs: 60 * 60_000 } as c
  *    reintento.
  *  - `Payment.rawPayload`: respuesta cruda de Mercado Pago (datos del pagador y del medio de pago de MP).
  *  - `PatientFile.storageKey`: la ruta en el bucket. Los binarios no viajan (ni URLs firmadas): solo metadatos.
+ *  - T4 FC-2i (C-FC7): `PatientDocument.pdfStorageKey`, `Tenant.logoStorageKey` y `Practitioner.signatureStorageKey`,
+ *    por lo mismo (rutas del bucket). Del documento compartido sale el `snapshot` (el contenido que vio el paciente) y
+ *    los sha256 para verificar el PDF; no salen `sourceDigest` (huella interna de «desactualizada») ni
+ *    `idempotencyKey`. `TenantDiagnosis.searchText` es derivado del título. `DiagnosisFavorite` no se exporta
+ *    (preferencia por usuario, como `Favorite`), y el catálogo CIE-11 (`DiagnosisCode`) es global, no del consultorio.
  *  - `AuditEvent.ip/userAgent`, `SupportSession.ip/userAgent`: datos de red de cada persona, no del consultorio.
  *  - `Invitation` entera (tokens), `EmailLog`, `Notification`, `DismissedReminder`, `Favorite`, `UserPreferences`
  *    (preferencias de UI por usuario), `PatientTenantLink` (puede apuntar a pacientes cuyo consultorio «casa» es
@@ -74,7 +79,7 @@ export const EXPORT_FIELDS = {
   ],
   payerPlans: ["id", "payerId", "name", "slug", "archivedAt", "createdAt", "updatedAt"],
   team: ["id", "userId", "role", "invitedAt", "acceptedAt", "disabledAt"],
-  practitioners: ["id", "licenseNumber", "specialty", "bio", "yearsExp", "createdAt"],
+  practitioners: ["id", "licenseNumber", "honorific", "specialty", "bio", "yearsExp", "createdAt"],
   practitionerSchedules: [
     "id", "practitionerId", "locationId", "roomId", "dow", "startMin", "endMin", "validFrom", "validUntil",
     "createdAt", "updatedAt",
@@ -115,6 +120,8 @@ export const EXPORT_FIELDS = {
     "createdAt", "updatedAt",
   ],
   clinicalCases: ["id", "authorId", "patientId", "selectedZones", "refinements", "notes", "createdAt"],
+  // OJO (hallazgo 10 de T4): `diagnoses` es el resultado del ASISTENTE de diagnóstico (`Diagnosis`); los diagnósticos
+  // propios del consultorio para las fichas son `tenantDiagnoses` (más abajo).
   diagnoses: ["id", "caseId", "conditionId", "matchScore", "confirmed", "rank"],
   treatmentPrograms: [
     "id", "patientId", "caseId", "title", "totalSessions", "frequency", "startDate", "status", "discipline",
@@ -135,12 +142,23 @@ export const EXPORT_FIELDS = {
   // (el contenido anterior de cada edición). Portabilidad: mismo criterio que AUDIT §5.50. `authorUserId` y
   // `voidedByUserId` son ids opacos del equipo (se cruzan con `team.userId`, igual que `auditEvents.actorId`).
   // Sin `idempotencyKey` (clave interna de reintento, ya en EXPORT_FORBIDDEN_FIELDS).
+  // T4 FC-2i (C-FC7): + `bodyDoc` (formato del editor), `diagnoses` (snapshot congelado de la ficha),
+  // `authorLicense` (matrícula con la que firmó) e `importSource` (ficha importada de Word: nombre y fecha del archivo).
   clinicalNotes: [
-    "id", "patientId", "bookingId", "amendsNoteId", "kind", "title", "body", "occurredAt", "authorUserId",
-    "authorPractitionerId", "authorName", "revision", "voidedAt", "voidedByUserId", "voidReason", "createdAt",
-    "updatedAt",
+    "id", "patientId", "bookingId", "amendsNoteId", "kind", "title", "body", "bodyDoc", "diagnoses", "occurredAt",
+    "authorUserId", "authorPractitionerId", "authorName", "authorLicense", "importSource", "revision", "voidedAt",
+    "voidedByUserId", "voidReason", "createdAt", "updatedAt",
   ],
-  clinicalNoteRevisions: ["id", "noteId", "revision", "kind", "title", "body", "occurredAt", "savedAt", "createdAt"],
+  clinicalNoteRevisions: [
+    "id", "noteId", "revision", "kind", "title", "body", "bodyDoc", "diagnoses", "occurredAt", "savedAt", "createdAt",
+  ],
+  // T4 FC-2i (C-FC7): documentos compartidos con el paciente (vivos y revocados) y diagnósticos propios.
+  patientDocuments: [
+    "id", "patientId", "kind", "noteId", "noteRevision", "title", "occurredAt", "snapshot", "snapshotVersion",
+    "snapshotSha256", "pdfSha256", "pdfSizeBytes", "sharedByUserId", "sharedByPractitionerId", "sharedAt",
+    "revokedAt", "revokedByUserId", "revokeReason", "createdAt",
+  ],
+  tenantDiagnoses: ["id", "title", "code", "createdByUserId", "archivedAt", "createdAt", "updatedAt"],
   planTemplates: [
     "id", "authorId", "name", "description", "totalSessions", "frequency", "exerciseIds", "discipline", "serviceId",
     "durationMin", "schedule", "pricingMode", "pricePerSessionCents", "totalPriceCents", "notes", "archivedAt",
@@ -172,6 +190,9 @@ export const EXPORT_FORBIDDEN_FIELDS = [
   "idempotencyKey",
   "rawPayload",
   "storageKey",
+  "pdfStorageKey",
+  "logoStorageKey",
+  "signatureStorageKey",
   "ip",
   "userAgent",
   "statusReason",

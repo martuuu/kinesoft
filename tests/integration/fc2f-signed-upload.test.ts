@@ -254,9 +254,28 @@ describe.skipIf(!RUN)("[FC-2f] subida firmada de archivos del paciente", () => {
     storageFake.put(BUCKET, `${A.tenantId}/${patA}/final.pdf`, pdfBytes(10), "application/pdf");
     storageFake.get(BUCKET, `pending/${A.tenantId}/aaaaaaaaaaaaaaaaaaaaaaaa`)!.createdAt = new Date(Date.now() - 25 * 3600_000);
     const r = await storageSweepPending(BUCKET, 24 * 3600_000);
-    expect(r).toEqual({ ok: true, data: { removed: 1, errors: 0 } });
+    expect(r).toEqual({ ok: true, data: { removed: 1, errors: 0, truncated: false } });
     expect(storageFake.keys(BUCKET).sort()).toEqual(
       [`${A.tenantId}/${patA}/final.pdf`, `pending/${A.tenantId}/bbbbbbbbbbbbbbbbbbbbbbbb`].sort(),
     );
+  });
+
+  it("[FC-2i] etapa del cron diario: barre pending/ de más de 24 h, idempotente, y con el plazo vencido no borra", async () => {
+    const { runStoragePendingSweep } = await import("@/lib/cron-jobs-internal");
+    const oldKey = `pending/${A.tenantId}/cccccccccccccccccccccccc`;
+    storageFake.put(BUCKET, oldKey, pdfBytes(10), "application/pdf");
+    storageFake.get(BUCKET, oldKey)!.createdAt = new Date(Date.now() - 25 * 3600_000);
+    const late = await runStoragePendingSweep(new Date(), Date.now() - 1);
+    expect(late).toEqual({ skipped: false, removed: 0, errors: 0, truncated: true });
+    expect(storageFake.keys(BUCKET)).toContain(oldKey);
+    const first = await runStoragePendingSweep(new Date(), Date.now() + 30_000);
+    expect(first).toEqual({ skipped: false, removed: 1, errors: 0, truncated: false });
+    expect(storageFake.keys(BUCKET)).not.toContain(oldKey);
+    expect(await runStoragePendingSweep(new Date(), Date.now() + 30_000)).toEqual({
+      skipped: false,
+      removed: 0,
+      errors: 0,
+      truncated: false,
+    });
   });
 });

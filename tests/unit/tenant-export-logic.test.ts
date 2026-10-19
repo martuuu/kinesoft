@@ -91,19 +91,32 @@ describe("[BO5-C] allowlist de columnas", () => {
     for (const e of ["invitations", "emailLogs", "patientTenantLinks", "notifications"]) expect(EXPORT_ENTITIES).not.toContain(e);
   });
 
-  it("[EV2-1b] evoluciones (EV2-D22): clinicalNotes y clinicalNoteRevisions después de evaScores, allowlist literal de C-EV2-7", () => {
+  it("[EV2-1b] evoluciones (EV2-D22): clinicalNotes y clinicalNoteRevisions después de evaScores, allowlist literal de C-EV2-7 (+ columnas de C-FC7)", () => {
     const i = EXPORT_ENTITIES.indexOf("evaScores");
     expect(EXPORT_ENTITIES.slice(i + 1, i + 3)).toEqual(["clinicalNotes", "clinicalNoteRevisions"]);
+    // C-EV2-7 + T4 C-FC7: `bodyDoc, diagnoses, authorLicense, importSource` en las fichas; `bodyDoc, diagnoses` en las
+    // revisiones.
     expect(EXPORT_FIELDS.clinicalNotes).toEqual([
-      "id", "patientId", "bookingId", "amendsNoteId", "kind", "title", "body", "occurredAt", "authorUserId",
-      "authorPractitionerId", "authorName", "revision", "voidedAt", "voidedByUserId", "voidReason", "createdAt",
-      "updatedAt",
+      "id", "patientId", "bookingId", "amendsNoteId", "kind", "title", "body", "bodyDoc", "diagnoses", "occurredAt",
+      "authorUserId", "authorPractitionerId", "authorName", "authorLicense", "importSource", "revision", "voidedAt",
+      "voidedByUserId", "voidReason", "createdAt", "updatedAt",
     ]);
     expect(EXPORT_FIELDS.clinicalNoteRevisions).toEqual([
-      "id", "noteId", "revision", "kind", "title", "body", "occurredAt", "savedAt", "createdAt",
+      "id", "noteId", "revision", "kind", "title", "body", "bodyDoc", "diagnoses", "occurredAt", "savedAt", "createdAt",
     ]);
     // Anuladas y enmiendas salen (nada clínico se pierde): sus columnas están; la clave de reintento no.
     expect(EXPORT_FIELDS.clinicalNotes).not.toContain("idempotencyKey");
+  });
+
+  it("[FC-2i] export con las allow-lists literales (C-FC7): patientDocuments, tenantDiagnoses y honorific; claves de Storage prohibidas", () => {
+    expect(EXPORT_FIELDS.patientDocuments).toEqual(["id","patientId","kind","noteId","noteRevision","title","occurredAt","snapshot","snapshotVersion","snapshotSha256","pdfSha256","pdfSizeBytes","sharedByUserId","sharedByPractitionerId","sharedAt","revokedAt","revokedByUserId","revokeReason","createdAt"]);
+    expect(EXPORT_FIELDS.tenantDiagnoses).toEqual(["id","title","code","createdByUserId","archivedAt","createdAt","updatedAt"]);
+    expect(EXPORT_FIELDS.practitioners).toContain("honorific");
+    expect(EXPORT_FORBIDDEN_FIELDS).toEqual(expect.arrayContaining(["pdfStorageKey", "logoStorageKey", "signatureStorageKey"]));
+    // Hallazgo 10: `diagnoses` (asistente de diagnóstico) sigue siendo otra entidad, con su allowlist de siempre.
+    expect(EXPORT_FIELDS.diagnoses).toEqual(["id", "caseId", "conditionId", "matchScore", "confirmed", "rank"]);
+    // Favoritos no se exportan.
+    expect(EXPORT_ENTITIES as readonly string[]).not.toContain("diagnosisFavorites");
   });
 
   it("rate limit: 3 por hora", () => {
