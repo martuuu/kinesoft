@@ -163,7 +163,7 @@ describe("[FC-3b] DiagnosisPicker (diferido)", () => {
     const html = picker();
     const create = html.indexOf(esc(COPY.createOwn("lumb")));
     expect(create).toBeGreaterThan(-1);
-    expect(html.indexOf(esc(COPY.useAsText("lumb")))).toBeGreaterThan(create);
+    expect(html.indexOf(esc(COPY.asFreeText("lumb")))).toBeGreaterThan(create);
     expect(picker({ initialResult: result("lumb", { canCreateOwn: false }) })).not.toContain(esc(COPY.createOwn("lumb")));
   });
 

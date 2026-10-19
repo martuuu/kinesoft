@@ -17,7 +17,6 @@
  */
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast";
 import { HC_HOME_COPY } from "@/components/fichas/fichas-copy";
 import type { FichaBackupScope } from "@/components/fichas/fichas-ui-types";
@@ -27,7 +26,26 @@ import { HC_EXPORT_COPY } from "@/lib/hc-export-logic";
 const loadWordImport = () => import("@/components/fichas/word-import-drawer");
 const WordImportDrawer = dynamic(() => loadWordImport().then((m) => m.WordImportDrawer), { ssr: false, loading: () => null });
 const loadBackupSetup = () => import("@/components/fichas/backup-setup");
-const BackupSetup = dynamic(() => loadBackupSetup().then((m) => m.BackupSetup), { ssr: false, loading: () => null });
+const loadModal = () => import("@/components/ui/modal");
+/**
+ * FC-3i1 (bundle, §24.9): el `Modal` de la carpeta de respaldo viajaba ESTÁTICO en el first load de /pacientes/[id]
+ * (Modal + focus trap ≈ 1,5 kB gz) solo para un diálogo que se abre desde el menú «⋯». Ahora Modal y `BackupSetup`
+ * bajan juntos, en el mismo `import()`, al elegir la opción (la precarga del `pointerenter` ya trae los dos).
+ */
+const BackupDialog = dynamic(
+  () =>
+    Promise.all([loadModal(), loadBackupSetup()]).then(([{ Modal }, { BackupSetup }]) => {
+      function BackupDialogInner({ scope, onClose }: { scope: FichaBackupScope; onClose: () => void }) {
+        return (
+          <Modal open onClose={onClose} title={HC_HOME_COPY.backupFolder} width={520}>
+            <BackupSetup scope={scope} variant="dialog" onClose={onClose} />
+          </Modal>
+        );
+      }
+      return BackupDialogInner;
+    }),
+  { ssr: false, loading: () => null }
+);
 
 /** Ruta auditada de la HC completa (C-FC7). Solo PDF (FC-D31). */
 export function hcRecordPdfUrl(patientId: string): string {
@@ -210,7 +228,7 @@ export function HcHeaderActions({ patientId, patientName, hasNotes, canWrite, ba
             onPointerEnter={() => {
               // Precarga barata de lo que el menú abre (dos chunks chicos; mammoth no: lo carga el drawer al leer).
               if (showImport) void loadWordImport().catch(() => {});
-              if (showBackup) void loadBackupSetup().catch(() => {});
+              if (showBackup) void Promise.all([loadModal(), loadBackupSetup()]).catch(() => {});
             }}
             style={{ fontSize: 16, fontWeight: 700, padding: "6px 12px", lineHeight: 1 }}
           >
@@ -266,9 +284,7 @@ export function HcHeaderActions({ patientId, patientName, hasNotes, canWrite, ba
         />
       )}
       {backupOpen && backupScope && (
-        <Modal open onClose={() => setBackupOpen(false)} title={HC_HOME_COPY.backupFolder} width={520}>
-          <BackupSetup scope={backupScope} variant="dialog" onClose={() => setBackupOpen(false)} />
-        </Modal>
+        <BackupDialog scope={backupScope} onClose={() => setBackupOpen(false)} />
       )}
     </div>
   );

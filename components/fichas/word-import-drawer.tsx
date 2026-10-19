@@ -13,7 +13,7 @@
  */
 import { Drawer } from "@/components/ui/drawer";
 import { Button } from "@/components/ui/button";
-import { WORD_IMPORT_COPY as COPY } from "@/components/fichas/fichas-copy";
+import { WORD_IMPORT_COPY as COPY } from "@/components/fichas/fichas-copy-deferred";
 import type { WordImportDrawerProps } from "@/components/fichas/fichas-ui-types";
 
 export function WordImportDrawer({ open, onClose, patientName }: WordImportDrawerProps) {

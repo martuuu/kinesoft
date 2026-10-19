@@ -78,14 +78,25 @@ const fmt = (hits: [string, string[]][]) => hits.map(([t, chain]) => `${t}\n    
 
 /** Archivos que tienen que estar en el first load (estáticos desde la página). */
 const MUST_BE_STATIC = [
-  // Inicio de la HC (FC-3e1) y la timeline/tarjeta.
+  // Inicio de la HC (FC-3e1): encabezado, búsqueda y la lista de la timeline.
   "components/patients/profile/views/evoluciones-view.tsx",
-  // Composer inline (FC-3c) con el campo del editor (textarea SSR, FC-3a) y el de diagnósticos (chips, FC-3b).
-  "components/fichas/ficha-form.tsx",
-  "components/fichas/hc-editor-field.tsx",
-  "components/fichas/diagnosis-field.tsx",
-  // Render del doc (FC-1a): las tarjetas se pintan desde el SSR.
-  "components/hc/hc-doc-view.tsx",
+];
+
+/**
+ * FC-3i1 · fallback de §24.9 («la timeline pasa a dinámica SSR con precarga»): con todo estático el first load medía
+ * 187,2 kB gz (tope 175). La tarjeta (`NoteCard`, y con ella `HcDocView`) pasó a `next/dynamic` CON SSR desde
+ * `evoluciones-view.tsx`: el HTML de las tarjetas sigue saliendo del server (la HC se pinta sin esperar ningún chunk) y
+ * el chunk se pide al evaluar el módulo (precarga), en paralelo con la hidratación. Lo que este guard fija ahora:
+ * la tarjeta NO es estática (si vuelve, el tope se pasa), PERO su `dynamic()` es con SSR y con precarga: un
+ * `ssr: false` dejaría la HC vacía hasta que baje el chunk, que es justo lo que §24.7 prohíbe.
+ */
+const SSR_PARTS = "components/patients/profile/views/hc-ssr-parts.ts";
+const SSR_DYNAMIC: { file: string; from: string; loader: string; exportName: string }[] = [
+  { file: "components/clinical-notes/note-card.tsx", from: "components/patients/profile/views/evoluciones-view.tsx", loader: "loadHcSsrParts", exportName: "NoteCard" },
+  // Composer inline (FC-3c) con el campo del editor (textarea SSR, FC-3a) y el de diagnósticos (chips, FC-3b): con la
+  // tarjeta ya diferida el first load seguía en 182,9 kB gz, así que el form tomó el mismo camino (SSR + precarga), en
+  // el MISMO chunk que la tarjeta (`hc-ssr-parts.ts`).
+  { file: "components/fichas/ficha-form.tsx", from: "components/patients/profile/views/evoluciones-view.tsx", loader: "loadHcSsrParts", exportName: "FichaForm" },
 ];
 
 /** Prefijo de carpeta (termina en `/`) o archivo exacto. */
@@ -112,9 +123,32 @@ describe("[FC-3k] first load de /pacientes/[id] (§24.9)", () => {
     expect(closure.files.has("components/patients/patient-profile.tsx")).toBe(true);
   });
 
-  it("[FC-3k] la HC es estática: inicio, composer, editor (textarea), diagnósticos y HcDocView en el first load", () => {
+  it("[FC-3k → FC-3i1] el inicio de la HC es estático (composer y tarjeta: dynamic con SSR, ver abajo)", () => {
     const missing = MUST_BE_STATIC.filter((f) => !closure.files.has(f));
     expect(missing, `no alcanzados estáticamente desde ${ENTRY}:\n${missing.join("\n")}`).toEqual([]);
+  });
+
+  it("[FC-3i1] fallback §24.9: tarjeta (con HcDocView) y composer son dynamic CON SSR y precarga, no estáticos", () => {
+    for (const f of ["components/hc/hc-doc-view.tsx", "components/fichas/hc-editor-field.tsx", "components/fichas/diagnosis-field.tsx"]) {
+      expect(closure.files.has(f), `${f} volvió al first load estático`).toBe(false);
+    }
+    expect(closure.files.has(SSR_PARTS), `${SSR_PARTS} se importó estático`).toBe(false);
+    const parts = stripComments(readFileSync(abs(SSR_PARTS), "utf8"));
+    for (const { file, from, loader, exportName } of SSR_DYNAMIC) {
+      expect(closure.files.has(file), `${file} volvió al first load estático`).toBe(false);
+      const spec = file.replace(/\.tsx?$/, "");
+      // El módulo de partes re-exporta el componente…
+      expect(parts).toMatch(new RegExp(`export \\{ ${exportName} \\} from "@/${spec}"`));
+      const src = stripComments(readFileSync(abs(from), "utf8"));
+      // …el loader importa ese módulo…
+      expect(src).toMatch(new RegExp(`const ${loader} = \\(\\) => import\\("@/${SSR_PARTS.replace(/\.ts$/, "")}"\\)`));
+      // …el dynamic() del componente NO lleva `ssr: false` (el HTML de la HC sale del server)…
+      const dyn = new RegExp(`const ${exportName} = dynamic\\(\\(\\) => ${loader}\\(\\)[^;]*;`).exec(src)?.[0] ?? "";
+      expect(dyn, `no encontré el dynamic() de ${exportName}`).not.toBe("");
+      expect(dyn).not.toMatch(/ssr:\s*false/);
+      // …y se precarga al evaluar el módulo en el cliente (no al montar).
+      expect(src).toMatch(new RegExp(`if \\(typeof window !== "undefined"\\) void ${loader}\\(\\)`));
+    }
   });
 
   // FC-3d lo dio vuelta: Resumen es `next/dynamic` con SSR desde el shell (patient-profile.tsx, TAB_LOADERS.resumen).

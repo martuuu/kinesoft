@@ -15,8 +15,7 @@ import { useCallback, useState } from "react";
 import { Drawer } from "@/components/ui/drawer";
 import { FichaForm } from "@/components/fichas/ficha-form";
 import { FICHA_FORM_COPY as COPY } from "@/components/fichas/fichas-copy";
-import type { FichaDrawerProps, FichaFormMode } from "@/components/fichas/fichas-ui-types";
-import type { HcDoc } from "@/lib/hc-doc";
+import type { FichaCarry, FichaDrawerProps, FichaFormMode } from "@/components/fichas/fichas-ui-types";
 
 export const FICHA_DRAWER_WIDTH = 560;
 
@@ -29,7 +28,7 @@ export function fichaDrawerTitle(mode: FichaFormMode): string {
 export function FichaDrawer({ open, onClose, mode, onSaved, onDirtyChange, onSwitchToAmend, ...rest }: FichaDrawerProps) {
   const [dirty, setDirty] = useState(false);
   const [override, setOverride] = useState<FichaFormMode | null>(null);
-  const [carry, setCarry] = useState<{ doc: HcDoc | null; text: string } | null>(null);
+  const [carry, setCarry] = useState<FichaCarry | null>(null);
   const active = override ?? mode;
   const keepsDraft = active.type === "create" && Boolean(rest.draftScope);
 

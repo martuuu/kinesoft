@@ -17,6 +17,11 @@ import type { ReactNode } from "react";
  */
 // FC-3c: el perfil llega a FichaForm → DiagnosisField → lib/diagnoses ("use server", importa la sesión).
 vi.mock("@/lib/diagnoses", () => ({ getDiagnosisPickerHome: vi.fn(), searchDiagnoses: vi.fn() }));
+// FC-3i1: el composer (FichaForm) importa estático las actions de `lib/clinical-notes` y la tarjeta/compartir llega a
+// `lib/patient-documents`; los dos son "use server" que arrastran `lib/session` (React `cache`, que en node no existe)
+// y tiraban «cache is not a function» al cargar el archivo (0 tests). En prod son referencias RPC: mockearlos es la red.
+vi.mock("@/lib/clinical-notes", () => ({ createClinicalNote: vi.fn(), editClinicalNote: vi.fn(), amendClinicalNote: vi.fn(), voidClinicalNote: vi.fn() }));
+vi.mock("@/lib/patient-documents", () => ({ shareClinicalNoteWithPatient: vi.fn(), revokePatientDocument: vi.fn() }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
   usePathname: () => "/pacientes",

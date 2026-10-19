@@ -128,6 +128,9 @@ export type FichaDraft = {
 
 export type FichaSavedInfo = { type: FichaFormMode["type"]; replayed: boolean };
 
+/** Texto que el editor de 24 h vencido trae a la enmienda (EV2-Z M5). */
+export type FichaCarry = { doc: HcDoc | null; text: string };
+
 export type FichaFormProps = {
   mode: FichaFormMode;
   /** `inline` = composer de la HC (≥640 px); `drawer` = adentro de `FichaDrawer` (alto completo en mobile). */
@@ -142,7 +145,13 @@ export type FichaFormProps = {
   /** Dirty-guard del Drawer y punto de «borrador sin guardar» en la pestaña (FC-3d). */
   onDirtyChange?: (dirty: boolean) => void;
   /** Editar con la ventana de 24 h vencida: el texto pasa a la enmienda (EV2-Z M5). Solo raíces. */
-  onSwitchToAmend?: (carry: { doc: HcDoc | null; text: string }) => void;
+  onSwitchToAmend?: (carry: FichaCarry) => void;
+  /**
+   * FC-3i1: el texto traído del editor vencido (EV2-Z M5). Lo pasan `FichaDrawer` (al cambiar a enmendar) y el shim
+   * `note-editor-drawer.tsx`; era un prop interno de `ficha-form.tsx` y se publicó al tener dos callers. Con texto, el
+   * form arranca «sucio» (cerrar sin guardar lo pierde y el guard avisa).
+   */
+  carry?: FichaCarry | null;
   /** Precarga del picker, si el caller ya la tiene. */
   pickerHome?: DiagnosisPickerHome | null;
   /** Solo tests: reloj fijo. */
@@ -150,7 +159,7 @@ export type FichaFormProps = {
 };
 
 /** `FichaDrawer` (FC-3c, diferido): el mismo formulario en un Drawer. */
-export type FichaDrawerProps = Omit<FichaFormProps, "variant" | "onCancel"> & { open: boolean; onClose: () => void };
+export type FichaDrawerProps = Omit<FichaFormProps, "variant" | "onCancel" | "carry"> & { open: boolean; onClose: () => void };
 
 // ─── Importar Word (FC-3f) · `components/fichas/word-import-drawer.tsx` ────────────────────────────────────────────
 

@@ -10,12 +10,8 @@
  * El nombre lo pone el server (`Content-Disposition`, `hcFileBase` + `hcShortId`); acá solo se lee.
  */
 import type { HcFichaFormat } from "@/lib/hc-export-logic";
-import {
-  CARD_COPY,
-  downloadErrorMessage,
-  filenameFromDisposition,
-  fichaDownloadUrl,
-} from "@/components/fichas/ficha-card-logic";
+import { FICHA_CARD_COPY as CARD_COPY } from "@/components/fichas/fichas-copy";
+import { downloadErrorMessage, filenameFromDisposition, fichaDownloadUrl } from "@/components/fichas/ficha-share-download-logic";
 
 export type FichaDownloadResult = { ok: true; filename: string } | { ok: false; error: string };
 

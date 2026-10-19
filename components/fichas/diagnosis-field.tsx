@@ -27,18 +27,13 @@ import { toggleDiagnosisFavorite } from "@/lib/diagnoses";
 import { DIAGNOSES_MAX, DIAGNOSIS_TEXT_MAX, DIAGNOSIS_TEXT_MIN, DIAGNOSIS_COPY, type DiagnosisOption, type DiagnosisPickerHome } from "@/lib/diagnoses-types";
 import { DIAGNOSIS_FIELD_COPY as COPY } from "@/components/fichas/fichas-copy";
 import type { DiagnosisFieldProps } from "@/components/fichas/fichas-ui-types";
-import { addDiagnosis, applyFavorite, diagnosisOptionKey, makePrincipal, removeDiagnosis } from "@/components/fichas/diagnosis-picker-logic";
+import { addDiagnosis, applyFavorite, diagnosisOptionKey, makePrincipal, removeDiagnosis } from "@/components/fichas/diagnosis-field-logic";
 
 /** Diferido (§24.9): sin SSR y sin fallback propio (el input estático hace de fallback hasta `onReady`). */
 const DiagnosisPicker = dynamic(() => import("@/components/fichas/diagnosis-picker").then((m) => m.DiagnosisPicker), {
   ssr: false,
   loading: () => null,
 });
-
-/** Copy que todavía no está en `DIAGNOSIS_FIELD_COPY` (handoff al integrador, mismas claves). */
-const PENDING_COPY = {
-  favoriteFailed: "No pudimos guardar el favorito. Probá de nuevo.",
-} as const;
 
 export function DiagnosisField({ id, value, onChange, disabled, error, label = COPY.label, pickerHome }: DiagnosisFieldProps) {
   const [text, setText] = useState("");
@@ -100,7 +95,7 @@ export function DiagnosisField({ id, value, onChange, disabled, error, label = C
       try {
         r = await toggleDiagnosisFavorite({ ref: o.ref, on });
       } catch {
-        r = { ok: false, error: PENDING_COPY.favoriteFailed };
+        r = { ok: false, error: COPY.favoriteFailed };
       }
       if (!r.ok) {
         set(was);

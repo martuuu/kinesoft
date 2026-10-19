@@ -33,7 +33,6 @@ import { KindTag } from "@/components/clinical-notes/kind-tag";
 import { FICHA_FORM_COPY as COPY } from "@/components/fichas/fichas-copy";
 import type { FichaDraft, FichaFormProps, HcEditorChange } from "@/components/fichas/fichas-ui-types";
 import {
-  CLINICAL_NOTES_UI_COPY,
   KIND_OPTIONS,
   editableUntilLabel,
   newIdempotencyKey,
@@ -57,16 +56,9 @@ import {
 } from "@/components/fichas/ficha-form-logic";
 import { occurredAtAfterBookingChange } from "@/lib/hc-composer-logic";
 import { hcDraftStore } from "@/lib/hc-draft-store";
-import type { HcDoc } from "@/lib/hc-doc";
 import { amendClinicalNote, createClinicalNote, editClinicalNote } from "@/lib/clinical-notes";
 
 export { kindKeyStep };
-
-/**
- * Prop interno (no está en `FichaFormProps`, que es congelado): el texto que trae el editor de 24 h vencido a la
- * enmienda (EV2-Z M5). Lo pasa `FichaDrawer`; si el integrador lo quiere público, va a fichas-ui-types (handoff).
- */
-export type FichaFormInternalProps = { carry?: { doc: HcDoc | null; text: string } | null };
 
 const labelStyle: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: "var(--navy-500)" };
 const hintStyle: React.CSSProperties = { fontSize: 12, color: "var(--navy-500)", margin: 0 };
@@ -84,7 +76,7 @@ export function FichaForm({
   pickerHome,
   now: nowProp,
   carry,
-}: FichaFormProps & FichaFormInternalProps) {
+}: FichaFormProps) {
   const toast = useToast();
   const confirm = useConfirm();
   const formRef = useRef<HTMLFormElement>(null);
@@ -220,7 +212,7 @@ export function FichaForm({
       title: COPY.discard,
       message: COPY.discardConfirm,
       confirmLabel: COPY.discard,
-      cancelLabel: CLINICAL_NOTES_UI_COPY.cancel,
+      cancelLabel: COPY.cancel,
       tone: "danger",
     });
     if (!ok) return;
@@ -234,7 +226,7 @@ export function FichaForm({
   const until = mode.type === "edit" ? editableUntilLabel(mode.note, clock()) : null;
   const showChip = mode.type !== "create" ? Boolean(note?.booking) : true;
   const submitLabel =
-    mode.type === "edit" ? CLINICAL_NOTES_UI_COPY.saveEdit : mode.type === "amend" ? CLINICAL_NOTES_UI_COPY.saveAmend : COPY.save;
+    mode.type === "edit" ? COPY.saveEdit : mode.type === "amend" ? COPY.saveAmend : COPY.save;
 
   return (
     <form
@@ -263,12 +255,12 @@ export function FichaForm({
           {mode.type === "amend" && (
             <p style={hintStyle}>
               Enmienda a la ficha del {noteDateLabel(mode.note.occurredAt)} de {mode.note.author.name}.{" "}
-              {CLINICAL_NOTES_UI_COPY.amendHint}
+              {COPY.amendHint}
             </p>
           )}
           {mode.type === "amend" && carry?.text.trim() && (
             <p style={{ ...hintStyle, fontWeight: 600, color: "var(--sky-700)" }} data-testid="amend-carried">
-              {CLINICAL_NOTES_UI_COPY.amendCarriedHint}
+              {COPY.amendCarriedHint}
             </p>
           )}
           {until && (

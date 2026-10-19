@@ -6,7 +6,8 @@
  * mockean solo las server actions (red). Permisos de cada nota armados con el `permissionsFor` real. Fechas afirmadas
  * en hora AR: corre igual en TZ=UTC y TZ=AR.
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import Loadable from "next/dist/shared/lib/loadable.shared-runtime";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -186,6 +187,12 @@ const home = (summary: { latest: ClinicalNoteDTO | null; liveCount: number }) =>
   composer: null,
   deepLink: null,
 });
+
+// FC-3i1: la tarjeta de la timeline es `next/dynamic` con SSR (fallback de §24.9) y Resumen también. En prod el SSR
+// espera esos chunks; `renderToStaticMarkup` no espera nada, así que sin esto el primer render de cada uno pintaba el
+// fallback y el resultado dependía del orden de los tests. `preloadAll` es lo que hace el SSR de Next con los
+// `dynamic()` (no toca los `ssr: false`, que siguen pintando su `loading`).
+beforeAll(() => Loadable.preloadAll());
 
 describe("[EV2-3a] pestañas del perfil por acceso", () => {
   // FC-3d (§24.7): la HC pasó a primera (antes segunda, después de Resumen).

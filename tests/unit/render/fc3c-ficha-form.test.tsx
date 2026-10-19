@@ -131,7 +131,7 @@ describe("[FC-3c] FichaForm", () => {
     const box = /<input[^>]*data-testid="ficha-set-active"[^>]*>/.exec(html)?.[0] ?? "";
     expect(box).toContain('type="checkbox"');
     expect(box).not.toContain("checked");
-    expect(html).toContain("Usar el principal como diagnóstico activo del paciente");
+    expect(html).toContain("Usar como diagnóstico activo del paciente");
   });
 
   it("[FC-3c] editar: texto, «Podés editar hasta …», fecha guardada y «Guardar cambios»; turno fijo", () => {

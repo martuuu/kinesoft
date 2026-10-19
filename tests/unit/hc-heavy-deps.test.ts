@@ -43,6 +43,18 @@ const PINS: Record<string, string> = {
   "@tiptap/pm": "3.31.4",
   "@tiptap/starter-kit": "3.31.4",
   "@tiptap/core": "3.31.4",
+  // FC-3a importa las extensiones SUELTAS (no StarterKit, 138,9 kB gz): cada una pineada exacta (FC-3i1). StarterKit
+  // sigue declarado hasta que FC-3f confirme que el import de Word tampoco lo usa.
+  "@tiptap/extension-document": "3.31.4",
+  "@tiptap/extension-paragraph": "3.31.4",
+  "@tiptap/extension-text": "3.31.4",
+  "@tiptap/extension-heading": "3.31.4",
+  "@tiptap/extension-bold": "3.31.4",
+  "@tiptap/extension-italic": "3.31.4",
+  "@tiptap/extension-underline": "3.31.4",
+  "@tiptap/extension-hard-break": "3.31.4",
+  "@tiptap/extension-list": "3.31.4",
+  "@tiptap/extensions": "3.31.4",
   mammoth: "1.13.0",
   docx: "9.8.1",
   "@react-pdf/renderer": "4.9.0",

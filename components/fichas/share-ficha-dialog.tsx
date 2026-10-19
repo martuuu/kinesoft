@@ -22,13 +22,13 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { newIdempotencyKey } from "@/components/clinical-notes/clinical-notes-ui";
 import type { ShareFichaDialogProps } from "@/components/fichas/fichas-ui-types";
+import { SHARE_FICHA_COPY as SHARE_COPY } from "@/components/fichas/fichas-copy";
 import {
-  SHARE_COPY,
   sharedDocumentAfterShare,
   shareDialogVariant,
   shareOutcomeView,
   type ShareOutcomeView,
-} from "@/components/fichas/ficha-card-logic";
+} from "@/components/fichas/ficha-share-download-logic";
 import { shareClinicalNoteWithPatient } from "@/lib/patient-documents";
 import { sendPatientPortalInvite } from "@/lib/patients";
 

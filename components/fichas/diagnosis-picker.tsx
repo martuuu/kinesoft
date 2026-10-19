@@ -45,22 +45,6 @@ import {
 } from "@/components/fichas/diagnosis-picker-logic";
 import { parseDiagnosisQuery } from "@/lib/diagnoses-logic";
 
-/**
- * Copy que todavía no está en `DIAGNOSIS_FIELD_COPY` (fichas-copy.ts no es de esta sesión): handoff al integrador
- * para moverlo a ese bloque con estas mismas claves.
- */
-const PENDING_COPY = {
-  searching: "Buscando…",
-  hint: "Escribí al menos 2 letras o un código.",
-  creating: "Creando…",
-} as const;
-
-/**
- * Alias a nivel de módulo: `COPY.useAsText(...)` adentro de una función no-componente dispara `rules-of-hooks` por el
- * prefijo «use» del nombre de la clave (no es un hook). Handoff: renombrar la clave en fichas-copy.ts.
- */
-const asFreeTextLabel = COPY.useAsText;
-
 /** Espera entre teclas antes de pedirle al server (mismo valor que `PatientPicker`). */
 const SEARCH_DEBOUNCE_MS = 200;
 
@@ -233,7 +217,7 @@ export function DiagnosisPicker({
   };
 
   const statusText =
-    model.status === "searching" ? PENDING_COPY.searching : model.status === "no-results" ? COPY.noResults : model.status === "hint" ? PENDING_COPY.hint : null;
+    model.status === "searching" ? COPY.searching : model.status === "no-results" ? COPY.noResults : model.status === "hint" ? COPY.hint : null;
   const listOpen = open && !disabled;
 
   let idx = -1;
@@ -262,10 +246,10 @@ export function DiagnosisPicker({
       },
     };
     if (item.type !== "option") {
-      const label = item.type === "create" ? COPY.createOwn(item.text) : asFreeTextLabel(item.text);
+      const label = item.type === "create" ? COPY.createOwn(item.text) : COPY.asFreeText(item.text);
       return (
         <div key={item.key} {...common} aria-disabled={item.type === "create" && creating ? true : undefined} data-picker-action={item.type} style={{ ...base, fontWeight: 600, color: "var(--sky-700)" }}>
-          <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>{item.type === "create" && creating ? PENDING_COPY.creating : label}</span>
+          <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>{item.type === "create" && creating ? COPY.creating : label}</span>
         </div>
       );
     }

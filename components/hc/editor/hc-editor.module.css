@@ -79,7 +79,14 @@
 .content {
   position: relative;
   padding: 12px 14px;
-  outline: none;
+  /*
+   * El anillo de foco lo pinta `.wrap:focus-within` (mismo que `.k-input:focus`: el swap textarea → editor no se nota).
+   * Contorno TRANSPARENTE y no `none` (FC-3i1, ratchet `outlineNone` de ui-ratchets): en modo de alto contraste de
+   * Windows (forced-colors) el navegador pinta el contorno con el color del sistema y el foco sigue viéndose; con
+   * `none` el contenteditable quedaba sin foco visible ahí, porque el box-shadow del wrap se descarta.
+   */
+  outline: 2px solid transparent;
+  outline-offset: -2px;
   /* 16 px como `.k-input`: con menos, Safari de iOS hace zoom al enfocar. */
   font-size: 16px;
   color: var(--navy-900);

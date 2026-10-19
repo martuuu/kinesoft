@@ -56,6 +56,10 @@ vi.mock("@/lib/session", () => proxy());
 vi.mock("@/lib/conditions", () => proxy());
 vi.mock("@/lib/clinical-notes", () => proxy());
 vi.mock("@/lib/clinical-notes-read", () => proxy());
+// FC-3i1: el mock de `next/dynamic` resuelve cada `import()` en `beforeAll`, así que también carga el diálogo de
+// compartir de la tarjeta → `lib/patient-documents` ("use server" → `lib/authz` → React `cache`): sin este mock las 5
+// suites que renderizan la agenda no cargaban («cache is not a function», 37 skipped).
+vi.mock("@/lib/patient-documents", () => proxy());
 
 import { AgendaClient, type Props } from "@/components/agenda/agenda-client";
 import type { BookingDTO } from "@/components/agenda/agenda-utils";

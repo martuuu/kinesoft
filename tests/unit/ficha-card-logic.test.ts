@@ -7,20 +7,22 @@
 import { describe, expect, it } from "vitest";
 import {
   diagnosisChips,
-  downloadErrorMessage,
   fichaAuthorLine,
   fichaBackupTarget,
   fichaChips,
-  fichaDownloadUrl,
   fichaMenuItems,
   fichaRootId,
-  filenameFromDisposition,
   isFoldableBody,
+  type FichaMenuOptions,
+} from "@/components/fichas/ficha-card-logic";
+import {
+  downloadErrorMessage,
+  fichaDownloadUrl,
+  filenameFromDisposition,
   shareDialogVariant,
   shareOutcomeView,
   sharedDocumentAfterShare,
-  type FichaMenuOptions,
-} from "@/components/fichas/ficha-card-logic";
+} from "@/components/fichas/ficha-share-download-logic";
 import { downloadFicha } from "@/components/fichas/download";
 import { fichaPdfUrl } from "@/components/fichas/use-ficha-backup";
 import { FICHA_CARD_COPY, SHARE_FICHA_COPY } from "@/components/fichas/fichas-copy";

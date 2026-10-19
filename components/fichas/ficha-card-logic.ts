@@ -8,55 +8,19 @@
  * diferido; las dos necesitan la misma regla de «qué ítems hay» (la tarjeta, para saber si pinta el «⋯»; el panel,
  * para listarlos). Si cada uno la calculara, divergirían.
  */
-import { CLINICAL_NOTE_COPY, CLINICAL_NOTE_KIND_LABEL, type ClinicalNoteDTO } from "@/lib/clinical-notes-types";
+import { CLINICAL_NOTE_KIND_LABEL, type ClinicalNoteDTO } from "@/lib/clinical-notes-types";
 import type { DiagnosisSnapshot } from "@/lib/diagnoses-types";
 import { DIAGNOSIS_SOURCE_LABEL, ICD11_SHORT_ATTRIBUTION } from "@/lib/diagnoses-types";
-import { HC_EXPORT_COPY, type HcFichaFormat } from "@/lib/hc-export-logic";
-import { PATIENT_DOCUMENT_COPY, type DocumentDeliveryOutcome } from "@/lib/patient-documents-types";
 import type { FichaBackupStatus, FichaBackupTarget, UseFichaBackupResult } from "@/components/fichas/fichas-ui-types";
 import { FICHA_CARD_COPY, SHARE_FICHA_COPY } from "@/components/fichas/fichas-copy";
 import { CLINICAL_NOTES_UI_COPY, noteActions, shortDateTime } from "@/components/clinical-notes/clinical-notes-ui";
 
 /**
- * Copy que FALTA en `FICHA_CARD_COPY` / `SHARE_FICHA_COPY` (fichas-copy.ts es compartido y lo edita solo el
- * integrador). Handoff a FC-3i1: mover estas claves a esos bloques y borrar este objeto; los consumidores ya leen
- * `CARD_COPY`/`SHARE_COPY` de abajo, así que el cambio es de un solo archivo.
+ * Alias de los bloques de `fichas-copy.ts` (FC-3i1 movió ahí lo que faltaba, que vivía en `FICHA_CARD_COPY_PENDING`):
+ * los consumidores siguen leyendo `CARD_COPY`/`SHARE_COPY`.
  */
-export const FICHA_CARD_COPY_PENDING = {
-  /** FICHA_CARD_COPY */
-  downloading: "Preparando el archivo…",
-  // 503 vacío = el audit de la descarga falló y la ruta no mandó nada a propósito (C-FC7: sin audit no hay bytes).
-  downloadUnavailable: "No pudimos registrar la descarga, así que no se hizo. Probá de nuevo en un rato.",
-  downloadSession: "Tu sesión se cerró. Volvé a entrar para descargar.",
-  downloadNetwork: "No pudimos descargar el archivo. Revisá la conexión y probá de nuevo.",
-  importedFrom: (fileName: string) => `Importada de «${fileName}»`,
-  sharedOn: (when: string) => `Compartida con el paciente el ${when}`,
-  sharedStaleHint: "La ficha cambió después de compartirla: el paciente ve la versión anterior.",
-  lateEntryHint: "Cargada más de 24 h después de la atención.",
-  unshareFailed: "No pudimos dejar de compartir la ficha. Probá de nuevo.",
-  /** SHARE_FICHA_COPY */
-  sharing: "Compartiendo…",
-  shareNetwork: "No pudimos compartir la ficha. Revisá la conexión y probá de nuevo.",
-  inviting: "Invitando…",
-  invited: "Le mandamos la invitación al portal. Cuando entre, va a ver la ficha en «Documentos».",
-  inviteFailed: "No pudimos mandar la invitación. Probá de nuevo en un rato.",
-  close: "Cerrar",
-  cancel: "Cancelar",
-} as const;
-
-export const CARD_COPY = { ...FICHA_CARD_COPY, ...pick(FICHA_CARD_COPY_PENDING, [
-  "downloading", "downloadUnavailable", "downloadSession", "downloadNetwork", "importedFrom", "sharedOn",
-  "sharedStaleHint", "lateEntryHint", "unshareFailed",
-] as const) };
-export const SHARE_COPY = { ...SHARE_FICHA_COPY, ...pick(FICHA_CARD_COPY_PENDING, [
-  "sharing", "shareNetwork", "inviting", "invited", "inviteFailed", "close", "cancel",
-] as const) };
-
-function pick<T extends object, K extends keyof T>(o: T, keys: readonly K[]): Pick<T, K> {
-  const out = {} as Pick<T, K>;
-  for (const k of keys) out[k] = o[k];
-  return out;
-}
+export const CARD_COPY = FICHA_CARD_COPY;
+export const SHARE_COPY = SHARE_FICHA_COPY;
 
 // ─── Raíz, URL y nombres ────────────────────────────────────────────────────────────────────────────────────────
 
@@ -65,10 +29,6 @@ export function fichaRootId(note: Pick<ClinicalNoteDTO, "id" | "amendsNoteId">):
   return note.amendsNoteId ?? note.id;
 }
 
-/** `/api/pacientes/{id}/fichas/{rootId}/{pdf|docx}` (C-FC7). Mismo armado que `fichaPdfUrl` de use-ficha-backup. */
-export function fichaDownloadUrl(patientId: string, rootId: string, format: HcFichaFormat): string {
-  return `/api/pacientes/${encodeURIComponent(patientId)}/fichas/${encodeURIComponent(rootId)}/${format}`;
-}
 
 /** Lo que el respaldo necesita de la ficha raíz (la ruta del archivo la arma FC-3g con `backupPathFor`). */
 export function fichaBackupTarget(
@@ -212,106 +172,8 @@ export function fichaMenuItems(note: ClinicalNoteDTO, o: FichaMenuOptions): Fich
   return [...items, ...tail];
 }
 
-// ─── Descargas ──────────────────────────────────────────────────────────────────────────────────────────────────
-
-/** Tope del texto del server que se muestra en un toast (es nuestro, pero un proxy podría devolver un HTML entero). */
-const SERVER_TEXT_MAX = 300;
-function serverText(body: string | null | undefined, fallback: string): string {
-  const t = (body ?? "").trim();
-  if (!t || t.length > SERVER_TEXT_MAX || t.startsWith("<")) return fallback;
-  return t;
-}
-
-/**
- * Status de la ruta (C-FC7) → mensaje. 413, 429 y 500 traen el copy en texto plano (FC-2g); 503 viene vacío a
- * propósito (falló el audit y no salió ni un byte). 404 no distingue ajeno de inexistente (igual que la ruta).
- */
-export function downloadErrorMessage(status: number, body: string | null): string {
-  switch (status) {
-    case 401:
-      return CARD_COPY.downloadSession;
-    case 403:
-      return CLINICAL_NOTE_COPY.forbidden;
-    case 404:
-      return CLINICAL_NOTE_COPY.notFound;
-    case 413:
-      return serverText(body, HC_EXPORT_COPY.fichaTooLarge);
-    case 429:
-      return serverText(body, HC_EXPORT_COPY.rateLimited);
-    case 503:
-      return CARD_COPY.downloadUnavailable;
-    default:
-      return serverText(body, HC_EXPORT_COPY.renderFailed);
-  }
-}
-
-/**
- * Nombre del archivo desde el `Content-Disposition` de la ruta (`attachmentDisposition`: `filename*=UTF-8''…` con el
- * nombre real y `filename="…"` ASCII de respaldo). Se saca cualquier separador de ruta: el nombre lo arma el server,
- * pero el atributo `download` es una frontera igual.
- */
-export function filenameFromDisposition(header: string | null, fallback: string): string {
-  if (header) {
-    const star = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(header);
-    if (star) {
-      try {
-        const v = decodeURIComponent(star[1].trim());
-        if (v) return sanitizeFilename(v);
-      } catch {
-        // `filename*` mal codificado: se prueba el ASCII.
-      }
-    }
-    const plain = /filename\s*=\s*"([^"]*)"/i.exec(header);
-    if (plain && plain[1].trim()) return sanitizeFilename(plain[1].trim());
-  }
-  return fallback;
-}
-function sanitizeFilename(name: string): string {
-  return name.replace(/[\\/\u0000-\u001f]/g, "_");
-}
-
-// ─── Compartir ──────────────────────────────────────────────────────────────────────────────────────────────────
-
-/** `first` = nunca compartida (o revocada); `reshare` = el documento vivo quedó viejo (la ficha cambió después). */
-export function shareDialogVariant(note: Pick<ClinicalNoteDTO, "sharedDocument">): "first" | "reshare" {
-  return note.sharedDocument?.status === "stale" ? "reshare" : "first";
-}
-
-export type ShareOutcomeView =
-  | { kind: "linked"; message: string; warning: string | null }
-  | { kind: "not-linked"; message: string; canInvite: boolean; noEmail: string | null };
-
-/**
- * Qué muestra el diálogo después de compartir.
- * - Con portal: «Listo: el paciente ya lo ve…»; si se pidió aviso y el mail falló, el aviso aparte (`emailFailed`):
- *   el documento SÍ quedó compartido y no hay que reintentar.
- * - Sin portal (`patientPortal: "not-linked"`, `delivery.status: "no-portal-user"`): se ofrece «Invitar al portal y
- *   compartir» con `sendPatientPortalInvite` (§24.5); sin email cargado no hay a quién invitar → se dice cómo seguir.
- */
-export function shareOutcomeView(
-  data: { patientPortal: "linked" | "not-linked"; delivery: DocumentDeliveryOutcome | null },
-  patientEmail: string | null,
-): ShareOutcomeView {
-  if (data.patientPortal === "not-linked") {
-    const hasEmail = Boolean(patientEmail && patientEmail.trim());
-    return {
-      kind: "not-linked",
-      message: PATIENT_DOCUMENT_COPY.sharedNoPortal,
-      canInvite: hasEmail,
-      noEmail: hasEmail ? null : SHARE_COPY.noEmail,
-    };
-  }
-  return {
-    kind: "linked",
-    message: PATIENT_DOCUMENT_COPY.shared,
-    warning: data.delivery?.status === "failed" ? PATIENT_DOCUMENT_COPY.emailFailed : null,
-  };
-}
-
-/** El estado nuevo de la tarjeta después de compartir (C-FC6 no devuelve la nota). */
-export function sharedDocumentAfterShare(doc: { id: string; sharedAt: string }) {
-  return { status: "live" as const, documentId: doc.id, sharedAt: doc.sharedAt };
-}
+// ─── Descargas y compartir: en `ficha-share-download-logic.ts` (FC-3i1) ────────────────────────────────────────────
+// Los usan `download.ts` y `ShareFichaDialog` (diferido); separados para que el diálogo no viaje con la tarjeta (§24.9).
 
 /** Lo mínimo de `useFichaBackup` que usa la tarjeta (el caller monta el hook UNA vez para toda la HC). */
 export type FichaCardBackup = Pick<UseFichaBackupResult, "status" | "save">;

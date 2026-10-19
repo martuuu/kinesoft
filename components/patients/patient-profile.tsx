@@ -576,6 +576,12 @@ export function PatientProfile({
     }),
     [patientCore, bookingsAll, recentBookings, evaScores]
   );
+  // FC-3i1: lo que la tarjeta de ficha necesita para compartir y para el respaldo (memo: el contexto de la HC no cambia
+  // cuando cambian los turnos).
+  const hcPatientContact = useMemo(
+    () => ({ email: patientCore.email, firstName: patientCore.firstName, lastName: patientCore.lastName, dni: patientCore.documentId }),
+    [patientCore.email, patientCore.firstName, patientCore.lastName, patientCore.documentId]
+  );
 
   const { focusPlan, otherActiveCount, sessionCount, livePlanCount } = useMemo(
     () => pickProfilePlans(plans),
@@ -657,6 +663,7 @@ export function PatientProfile({
               // (la página siempre lo manda; null = la lectura negó el acceso → rechazo genérico).
               clinicalHome={clinicalHome}
               patientName={`${patient.firstName} ${patient.lastName}`}
+              patientContact={hcPatientContact}
               viewerPractitionerId={viewerPractitionerId}
               viewerScope={viewerScope}
               onDirtyChange={onHcDirtyChange}

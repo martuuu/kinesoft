@@ -11,6 +11,11 @@ import { HC_DOC_ERROR_COPY, hcDocToPlainText, plainTextToHcDoc, validateHcDoc, t
 import { isoToARLocalInput, localToARIso } from "@/lib/datetime-ar";
 import { composerOccurredAtLocal, pickDefaultComposerBooking } from "@/lib/hc-composer-logic";
 import { DIAGNOSES_MAX, type DiagnosisOption, type DiagnosisRef, type DiagnosisSnapshot } from "@/lib/diagnoses-types";
+// FC-3i1: un solo `snapshotToOption` (el de FC-3b, que sabe marcar `retired`). Vive en `diagnosis-field-logic.ts` y lo
+// re-exporta `diagnosis-picker-logic.ts`; se importa del primero para no sumar el modelo del picker al chunk del
+// composer (que se precarga en paralelo con la hidratación de la HC, §24.9).
+import { snapshotToOption } from "@/components/fichas/diagnosis-field-logic";
+import { FICHA_FORM_COPY } from "@/components/fichas/fichas-copy";
 import {
   CLINICAL_NOTE_COPY,
   CLINICAL_NOTE_FUTURE_LIMIT_MS,
@@ -22,23 +27,15 @@ import {
 } from "@/lib/clinical-notes-types";
 
 /**
- * Snapshot congelado → opción del campo. Sin `refId` (o texto libre) vuelve como texto: el server lo re-congela igual.
- * `retired: false` porque el snapshot no dice si el código se retiró DESPUÉS de guardar (hallazgo de FC-3c, ver
- * `amendInitialDiagnoses`); FC-3b deja la versión que lo marca en `diagnosis-picker-logic.ts` y FC-3i1 reemplaza esta.
- */
-export function snapshotToOption(s: DiagnosisSnapshot): DiagnosisOption {
-  const ref: DiagnosisRef =
-    s.source === "text" || !s.refId ? { kind: "text", text: s.title } : { kind: s.source, id: s.refId };
-  return { ref, source: s.source, code: s.code, title: s.title, retired: false, favorite: false };
-}
-
-/**
  * Diagnósticos con los que arranca una ENMIENDA (handoff de FC-2a): la enmienda resuelve sin `keep`, así que uno
  * retirado de la CIE-11 la haría rechazar con `DIAGNOSIS_COPY.retired`. Se precargan los de la raíz SIN los retirados
  * (el profesional suele enmendar el texto, no el diagnóstico, y obligarlo a recargarlos era perderlos).
  */
-export function amendInitialDiagnoses(snapshots: readonly DiagnosisSnapshot[], toOption = snapshotToOption): DiagnosisOption[] {
-  return snapshots.map(toOption).filter((o) => !o.retired);
+export function amendInitialDiagnoses(
+  snapshots: readonly DiagnosisSnapshot[],
+  toOption: (s: DiagnosisSnapshot) => DiagnosisOption = (s) => snapshotToOption(s)
+): DiagnosisOption[] {
+  return snapshots.map((s) => toOption(s)).filter((o) => !o.retired);
 }
 
 export const refsOf = (v: readonly DiagnosisOption[]): DiagnosisRef[] => v.slice(0, DIAGNOSES_MAX).map((o) => o.ref);
@@ -102,7 +99,7 @@ export function initialFichaDraft(
       occurredAtLocal: isoToARLocalInput(n.occurredAt),
       doc: n.bodyDoc,
       text: n.bodyDoc ? hcDocToPlainText(n.bodyDoc) : n.body,
-      diagnoses: n.diagnoses.map(snapshotToOption),
+      diagnoses: n.diagnoses.map((s) => snapshotToOption(s)),
     };
   }
   return {
@@ -165,7 +162,7 @@ export function validateFicha(mode: FichaFormMode, d: FichaDraft, now: Date): Fi
   if (mode.type !== "amend" && (mode.type === "edit" || d.occurredAtTouched)) {
     const iso = localToARIso(d.occurredAtLocal);
     const at = iso ? new Date(iso) : null;
-    if (!at || Number.isNaN(at.getTime())) errors.occurredAt = "Elegí la fecha y la hora.";
+    if (!at || Number.isNaN(at.getTime())) errors.occurredAt = FICHA_FORM_COPY.occurredAtRequired;
     else if (at.getTime() - now.getTime() > CLINICAL_NOTE_FUTURE_LIMIT_MS) {
       errors.occurredAt = d.bookingId ? CLINICAL_NOTE_COPY.future : CLINICAL_NOTE_COPY.futureNoBooking;
     }

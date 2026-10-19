@@ -27,11 +27,9 @@ import dynamic from "next/dynamic";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
-import { NoteCard } from "@/components/clinical-notes/note-card";
+import type { FichaCardContext } from "@/components/fichas/ficha-card-logic";
+import { useFichaBackup } from "@/components/fichas/use-ficha-backup";
 import type { NoteEditorBooking } from "@/components/clinical-notes/clinical-notes-ui";
-// Estático a propósito (§24.9, FC-UI-D9): el composer inline está en el first load; lo que se tipea antes de hidratar
-// queda en el `<textarea>` de `HcEditorField` (no controlado). Lo pesado (Tiptap, picker) lo difiere FichaForm adentro.
-import { FichaForm } from "@/components/fichas/ficha-form";
 import { ComposerBar } from "@/components/fichas/composer-bar";
 import { HcHeaderActions } from "@/components/fichas/hc-header-actions";
 import { HC_HOME_COPY } from "@/components/fichas/fichas-copy";
@@ -53,6 +51,33 @@ const FichaDrawer = dynamic<FichaDrawerProps>(() => loadFichaDrawer().then((m) =
 function preloadFichaDrawer() {
   void loadFichaDrawer().catch(() => {});
 }
+
+/**
+ * FC-3i1 · fallback de §24.9 («la timeline pasa a dinámica SSR con precarga»). Con la HC estática entera el first load
+ * de /pacientes/[id] medía 187,2 kB gz (tope 175) aun después de diferir el Modal del encabezado, la cadena del picker,
+ * la validación del doc, las descargas y el copy de Word. La tarjeta de la ficha (`NoteCard` + chips, menú, cuerpo con
+ * `HcDocView`) es lo más grande de la timeline y no hace falta para PINTAR: con `next/dynamic` y SSR (sin
+ * `ssr: false`) el HTML de las tarjetas sale del server igual que antes (la HC se ve completa sin esperar ningún
+ * chunk, y el buscador del navegador la encuentra) y el boundary se hidrata cuando llega su chunk.
+ *
+ * La precarga arranca al evaluar este módulo en el cliente (no al montar): el chunk baja EN PARALELO con la
+ * hidratación del resto, así «⋯», «Editar» y «Ver todo» responden en el mismo tiempo que con el import estático.
+ * `hc-first-load-guard.test.ts` fija que siga así (SSR, precarga y sin `ssr: false`).
+ */
+const loadHcSsrParts = () => import("@/components/patients/profile/views/hc-ssr-parts");
+const NoteCard = dynamic(() => loadHcSsrParts().then((m) => m.NoteCard));
+
+/**
+ * FC-3i1 · mismo fallback para el composer inline (`FichaForm` → `HcEditorField`, `DiagnosisField`, chip del turno,
+ * fecha): con la tarjeta ya diferida el first load seguía en 182,9 kB gz. Con SSR el `<textarea>` del composer sale en
+ * el HTML como antes (FC-UI-D9): lo que se tipea antes de hidratar queda en el textarea no controlado de
+ * `HcEditorField`, que lo lee al montar, igual que cuando el form era estático (también entonces había que esperar
+ * el JS para hidratar; ahora ese JS viene en un chunk que se pide en paralelo al evaluar este módulo). El `FichaDrawer`
+ * de mobile usa el mismo chunk del form. Lo pesado (Tiptap, picker) sigue diferido adentro del form.
+ */
+const FichaForm = dynamic(() => loadHcSsrParts().then((m) => m.FichaForm));
+// Tarjeta y composer viajan en el MISMO chunk (`hc-ssr-parts.ts`): un pedido y una entrada menos en el runtime.
+if (typeof window !== "undefined") void loadHcSsrParts().catch(() => {});
 import { bookingTargetDecision } from "@/lib/clinical-notes-logic";
 import type { BookingClinicalNoteView, PatientClinicalHome } from "@/lib/clinical-notes-types";
 import {
@@ -110,6 +135,11 @@ export type EvolucionesViewProps = {
   clinicalHome?: PatientClinicalHome | null;
   /** Nombre para el import de Word y el formulario («Paciente: …»). */
   patientName?: string;
+  /**
+   * [FC-3e2 → FC-3i1] Datos del paciente para la tarjeta (compartir con el paciente y nombre del archivo de la carpeta
+   * de respaldo). Sin ellos la tarjeta no ofrece «Compartir» ni «Guardar en la carpeta».
+   */
+  patientContact?: { email: string | null; firstName: string; lastName: string; dni: string | null } | null;
   /** `actor.practitionerId`: el chip del turno pone los propios primero. */
   viewerPractitionerId?: string | null;
   /**
@@ -304,6 +334,7 @@ export function EvolucionesView({
   onChanged,
   clinicalHome,
   patientName = "",
+  patientContact = null,
   viewerPractitionerId = null,
   viewerScope = null,
   onDirtyChange,
@@ -348,6 +379,18 @@ export function EvolucionesView({
   const backupScope = useMemo<FichaBackupScope | null>(
     () => (viewerScope ? { tenantId: viewerScope.tenantId, userId: viewerScope.userId } : null),
     [viewerScope]
+  );
+  // Un solo `useFichaBackup` para toda la HC (handoff de FC-3e2): cada tarjeta recibe el mismo `backup` por contexto.
+  const { status: backupStatus, save: backupSave } = useFichaBackup(backupScope);
+  const cardContext = useMemo<FichaCardContext | null>(
+    () =>
+      patientContact
+        ? {
+            patient: { id: patientId, name: patientName || `${patientContact.firstName} ${patientContact.lastName}`.trim(), ...patientContact },
+            backup: { status: backupStatus, save: backupSave },
+          }
+        : null,
+    [patientContact, patientId, patientName, backupStatus, backupSave]
   );
   // Memo: FichaForm arma su estado inicial desde `mode`; un objeto nuevo por render lo re-inicializaría.
   const composerMode = useMemo<FichaFormCreateMode>(
@@ -646,6 +689,7 @@ export function EvolucionesView({
                     amendments={it.amendments}
                     onNoteChange={onNoteChange}
                     onAmendmentAdded={onAmendmentAdded}
+                    context={cardContext}
                     now={now}
                   />
                   {it.session && <SessionBlock session={it.session} nested />}

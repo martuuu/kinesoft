@@ -6,7 +6,8 @@
  * server actions (red). Lo que no se puede ver en un render estático (que un efecto no lea) se afirma con
  * `firstLoadState`, que es exactamente lo que la vista usa para decidir si lee al montar.
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import Loadable from "next/dist/shared/lib/loadable.shared-runtime";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -125,6 +126,12 @@ const view = (props: Partial<Parameters<typeof EvolucionesView>[0]> = {}) =>
 function buttons(html: string): string[] {
   return [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)].map((m) => m[1].replace(/<[^>]+>/g, "").trim());
 }
+
+// FC-3i1: la tarjeta de la timeline es `next/dynamic` con SSR (fallback de §24.9) y Resumen también. En prod el SSR
+// espera esos chunks; `renderToStaticMarkup` no espera nada, así que sin esto el primer render de cada uno pintaba el
+// fallback y el resultado dependía del orden de los tests. `preloadAll` es lo que hace el SSR de Next con los
+// `dynamic()` (no toca los `ssr: false`, que siguen pintando su `loading`).
+beforeAll(() => Loadable.preloadAll());
 
 describe("[FC-3e] inicio de la HC: primera página desde props (sin fetch al montar)", () => {
   it("con la clinical home la lista sale pintada del SSR y la vista no lee al montar", () => {

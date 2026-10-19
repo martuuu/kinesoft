@@ -42,9 +42,14 @@ export const FICHA_FORM_COPY = {
   noBooking: "Sin turno",
   changeBooking: "Cambiar turno",
   diagnosesLabel: "Diagnósticos",
-  setActiveDiagnosis: "Usar el principal como diagnóstico activo del paciente",
+  setActiveDiagnosis: "Usar como diagnóstico activo del paciente",
   setActiveDiagnosisHint: "Se actualiza el diagnóstico que se ve en el perfil.",
   save: "Guardar ficha",
+  saveEdit: "Guardar cambios",
+  saveAmend: "Guardar enmienda",
+  amendHint: "La enmienda se agrega debajo de la ficha original, que queda como estaba.",
+  amendCarriedHint: "Copiamos tu texto: dejá solo lo que agrega o corrige.",
+  occurredAtRequired: "Elegí la fecha y la hora.",
   saveShortcut: "Ctrl o ⌘ + Enter",
   saving: "Guardando…",
   cancel: "Cancelar",
@@ -91,15 +96,18 @@ export const DIAGNOSIS_FIELD_COPY = {
   favoriteOff: "Sacar de favoritos",
   add: "Agregar diagnóstico",
   searchPlaceholder: "Buscá por código o nombre",
-  textPlaceholder: "Escribí un diagnóstico",
   favorites: "Favoritos",
   recents: "Recientes",
   /** «Crear "{texto}" como diagnóstico propio» (literal de §24.7). */
   createOwn: (text: string) => `Crear "${text}" como diagnóstico propio`,
-  useAsText: (text: string) => `Usar "${text}" como texto libre`,
+  asFreeText: (text: string) => `Usar "${text}" como texto libre`,
   noResults: "No encontramos diagnósticos con ese texto.",
   retiredChip: "Código no vigente",
   max: "Podés cargar hasta 5 diagnósticos.",
+  searching: "Buscando…",
+  hint: "Escribí al menos 2 letras o un código.",
+  creating: "Creando…",
+  favoriteFailed: "No pudimos guardar el favorito. Probá de nuevo.",
 } as const;
 
 /** Tarjeta y menú (FC-3e2). */
@@ -120,6 +128,16 @@ export const FICHA_CARD_COPY = {
   amend: "Enmendar",
   versions: "Versiones",
   void: "Anular",
+  downloading: "Preparando el archivo…",
+  // 503 vacío = el audit de la descarga falló y la ruta no mandó nada a propósito (C-FC7: sin audit no hay bytes).
+  downloadUnavailable: "No pudimos registrar la descarga, así que no se hizo. Probá de nuevo en un rato.",
+  downloadSession: "Tu sesión se cerró. Volvé a entrar para descargar.",
+  downloadNetwork: "No pudimos descargar el archivo. Revisá la conexión y probá de nuevo.",
+  importedFrom: (fileName: string) => `Importada de «${fileName}»`,
+  sharedOn: (when: string) => `Compartida con el paciente el ${when}`,
+  sharedStaleHint: "La ficha cambió después de compartirla: el paciente ve la versión anterior.",
+  lateEntryHint: "Cargada más de 24 h después de la atención.",
+  unshareFailed: "No pudimos dejar de compartir la ficha. Probá de nuevo.",
 } as const;
 
 /** Compartir (FC-3e2, `ShareFichaDialog`). */
@@ -136,30 +154,19 @@ export const SHARE_FICHA_COPY = {
   shared: "Ficha compartida",
   unshareConfirm: "¿Dejás de compartir la ficha? El paciente deja de verla en el portal.",
   unshared: "La ficha ya no se comparte",
+  sharing: "Compartiendo…",
+  shareNetwork: "No pudimos compartir la ficha. Revisá la conexión y probá de nuevo.",
+  inviting: "Invitando…",
+  invited: "Le mandamos la invitación al portal. Cuando entre, va a ver la ficha en «Documentos».",
+  inviteFailed: "No pudimos mandar la invitación. Probá de nuevo en un rato.",
+  close: "Cerrar",
+  cancel: "Cancelar",
 } as const;
 
-/** Importar Word (FC-3f). */
-export const WORD_IMPORT_COPY = {
-  title: "Importar fichas de Word",
-  intro: "Elegí uno o más archivos .docx. Cada uno se carga como una ficha nueva con la fecha que indiques.",
-  pick: "Elegir archivos",
-  limits: "Hasta 50 archivos de 10 MB cada uno.",
-  notDocx: "Ese archivo no es un Word .docx.",
-  docWarning: "Los .doc (Word viejo) no se pueden leer: abrilo en Word y guardalo como .docx.",
-  tooBig: "El archivo pesa más de 10 MB.",
-  tooMany: "Podés importar hasta 50 archivos por vez.",
-  dateFromName: "Fecha tomada del nombre del archivo",
-  dateFromModified: "Fecha tomada de la última modificación del archivo",
-  datesReviewed: "Revisé las fechas",
-  /** «Dividir en N fichas» (literal de §24.7). */
-  split: (n: number) => `Dividir en ${n} fichas`,
-  imagesOmitted: (n: number) => `${n === 1 ? "Se omitió 1 imagen" : `Se omitieron ${n} imágenes`}: las fichas guardan solo texto.`,
-  confirm: "Importar",
-  importing: "Importando…",
-  done: (n: number) => (n === 1 ? "Se importó 1 ficha" : `Se importaron ${n} fichas`),
-  unavailable: "La importación desde Word todavía no está disponible.",
-  close: "Cerrar",
-} as const;
+/**
+ * Importar Word (FC-3f): `WORD_IMPORT_COPY` vive en `fichas-copy-deferred.ts` (FC-3i1). Solo lo lee el drawer diferido
+ * y webpack reparte por módulo: acá viajaba en el first load de /pacientes/[id] (§24.9).
+ */
 
 /** Carpeta de respaldo (FC-3g). */
 export const BACKUP_COPY = {
