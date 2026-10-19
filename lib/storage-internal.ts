@@ -317,9 +317,24 @@ export async function storageSweepPending(
   const pastDeadline = () => Date.now() >= deadlineAtMs;
   try {
     const api = admin.storage.from(bucket);
-    const { data: folders, error } = await api.list(PENDING_PREFIX, { limit: LIST_PAGE });
+    // T4Z-B3: `list` devuelve como mucho una página. Antes se leía solo la primera (1000): con más de 1000 consultorios
+    // en `pending/`, o más de 1000 subidas abandonadas en uno, lo de más allá no se barría NUNCA (cada corrida volvía a
+    // ver la misma primera página). Se pagina con `offset` y se junta la carpeta ENTERA antes de borrar: borrar mientras
+    // se pagina corre los offsets y saltea objetos. Orden por nombre explícito: el offset necesita un orden estable.
+    const listAll = async (prefix: string) => {
+      const out: { name: string; id: string | null; created_at?: string | null; updated_at?: string | null }[] = [];
+      for (let offset = 0; offset < MAX_PENDING_SWEEP + LIST_PAGE; offset += LIST_PAGE) {
+        const { data, error } = await api.list(prefix, { limit: LIST_PAGE, offset, sortBy: { column: "name", order: "asc" } });
+        if (error) return { error, items: out };
+        const page = data ?? [];
+        out.push(...page);
+        if (page.length < LIST_PAGE || pastDeadline()) break;
+      }
+      return { error: null, items: out };
+    };
+    const { error, items: folders } = await listAll(PENDING_PREFIX);
     if (error) return failed("sweepPending", bucket, error);
-    for (const folder of folders ?? []) {
+    for (const folder of folders) {
       // Las «carpetas» de Storage vienen sin id; los objetos sueltos en `pending/` (no debería haber) se ignoran.
       if (folder.id || !folder.name) continue;
       if (pastDeadline()) {
@@ -327,13 +342,13 @@ export async function storageSweepPending(
         break;
       }
       const prefix = `${PENDING_PREFIX}/${folder.name}`;
-      const { data: objects, error: listErr } = await api.list(prefix, { limit: LIST_PAGE });
+      const { error: listErr, items: objects } = await listAll(prefix);
       if (listErr) {
         failed("sweepPending.list", bucket, listErr);
         errors++;
         continue;
       }
-      const stale = (objects ?? [])
+      const stale = objects
         .filter((o) => {
           if (!o.id || !o.name) return false;
           const at = Date.parse(o.created_at ?? o.updated_at ?? "");

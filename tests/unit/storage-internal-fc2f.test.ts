@@ -176,6 +176,27 @@ describe("[FC-2f] storageSweepPending (etapa del cron que conecta FC-2i)", () =>
     expect(api.remove).not.toHaveBeenCalled();
   });
 
+  it("[T4Z-B3] pagina con `offset`: más de 1000 consultorios y más de 1000 objetos por carpeta se barren enteros", async () => {
+    const now = Date.UTC(2026, 9, 18, 12);
+    const old = new Date(now - 25 * 3600_000).toISOString();
+    const tenants = Array.from({ length: 1001 }, (_, i) => `ten${String(i).padStart(4, "0")}`);
+    const big = Array.from({ length: 1500 }, (_, i) => ({ name: `f${String(i).padStart(4, "0")}`, id: `id${i}`, created_at: old }));
+    const page = <T,>(xs: T[], o?: { limit?: number; offset?: number }) => xs.slice(o?.offset ?? 0, (o?.offset ?? 0) + (o?.limit ?? 100));
+    const list = vi.fn(async (prefix: string, o?: { limit?: number; offset?: number }) => {
+      if (prefix === "pending") return { data: page(tenants.map((name) => ({ name, id: null })), o), error: null };
+      if (prefix === "pending/ten0000") return { data: page(big, o), error: null };
+      if (prefix === "pending/ten1000") return { data: page([{ name: "last", id: "x", created_at: old }], o), error: null };
+      return { data: [], error: null };
+    });
+    const { api } = fakeApi({ list });
+    const r = await storageSweepPending("patient-files", 24 * 3600_000, now);
+    expect(r).toEqual({ ok: true, data: { removed: 1501, errors: 0, truncated: false } });
+    const removed = api.remove.mock.calls.flatMap((c: unknown[]) => c[0] as string[]);
+    expect(new Set(removed).size).toBe(1501);
+    expect(removed).toContain("pending/ten0000/f1499");
+    expect(removed).toContain("pending/ten1000/last");
+  });
+
   it("sin admin client → unconfigured", async () => {
     expect(await storageSweepPending("patient-files", 1)).toMatchObject({ ok: false, reason: "unconfigured" });
   });

@@ -126,6 +126,33 @@ describe("[FC-1d] diagnosis-import (escritor, Docker local)", () => {
     expect(all.find((x) => x.code === "9Z12")).toMatchObject({ retiredInRelease: "2025-01" });
   });
 
+  it("[T4Z-B4] retiro masivo (archivo truncado): el --apply aborta sin escribir; con --allow-mass-retire pasa", async () => {
+    // 30 vigentes más del alcance que V2 no trae: V2 retiraría 31 (30 + 9Z11) de 37, por encima del tope (25).
+    await prismaService.diagnosisCode.createMany({
+      data: ["Q", "R", "S"].flatMap((l) =>
+        Array.from({ length: 10 }, (_, i) => ({
+          code: `9Z${l}${i}`,
+          title: `Sintético masivo ${l}${i}`,
+          uri: `http://id.who.int/icd/release/11/2026-01/mms/9000009${l.charCodeAt(0)}${i}`,
+          chapter: "01",
+          release: "2026-01",
+          searchText: `9z${l.toLowerCase()}${i} sintetico masivo`,
+        })),
+      ),
+    });
+    const before = await rows();
+    const runs = await prismaService.catalogImportRun.count({ where: { ranBy: RAN_BY } });
+    const dry = await run(V2, "2026-01", false);
+    expect(summarizeIcdPlan(dry.plan).retire).toBe(31);
+    await expect(run(V2, "2026-01", true)).rejects.toThrow(/--allow-mass-retire/);
+    expect(await rows()).toEqual(before);
+    expect(await prismaService.catalogImportRun.count({ where: { ranBy: RAN_BY } })).toBe(runs);
+
+    const r = await run(V2, "2026-01", true, { allowMassRetire: true });
+    expect(r.result).toMatchObject({ retired: 31 });
+    expect(await prismaService.diagnosisCode.count({ where: { code: { startsWith: "9ZQ" }, retiredAt: null } })).toBe(0);
+  });
+
   it("[FC-1d] --apply sin --by no escribe", async () => {
     const before = await prismaService.catalogImportRun.count({ where: { ranBy: RAN_BY } });
     await expect(run(V2, "2026-01", true, { ranBy: null })).rejects.toThrow(/--by/);

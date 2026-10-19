@@ -269,3 +269,59 @@ describe("[FC-1d] plan", () => {
     expect(p.retire).toEqual([]);
   });
 });
+
+describe("[T4Z-B4] freno de retiro masivo", () => {
+  // Códigos 9Z00..9Z99 / 9Y00.. sintéticos: el freno mira cuántos de los VIGENTES del alcance retiraría la corrida.
+  const code = (i: number) => `9${i < 100 ? "Z" : "Y"}${String(i % 100).padStart(2, "0")}`;
+  const existingN = (n: number): ExistingDiagnosisCode[] =>
+    Array.from({ length: n }, (_, i) => ({
+      id: `e${i}`,
+      code: code(i),
+      title: `Sintético ${i}`,
+      uri: `http://id.who.int/icd/release/11/2025-01/mms/90000${i}`,
+      foundationUri: null,
+      chapter: "01",
+      isLeaf: true,
+      isResidual: false,
+      release: "2025-01",
+      searchText: `sintetico ${i}`,
+      retiredAt: null,
+      retiredInRelease: null,
+    }));
+  const rowsFor = (xs: ExistingDiagnosisCode[]) =>
+    xs.map((e, i) => ({
+      line: i + 2,
+      code: e.code,
+      rawTitle: e.title,
+      title: e.title,
+      classKind: "category",
+      uri: e.uri,
+      foundationUri: null,
+      chapter: "01",
+      isLeafRaw: null,
+      isResidualRaw: null,
+    }));
+
+  it("[T4Z-B4] retirar más del 5 % de los vigentes (y más de 25) aborta salvo --allow-mass-retire", async () => {
+    const core = await import("@/lib/diagnoses-import-core");
+    const existing = existingN(199);
+    // Un archivo truncado: trae 150 de 199 → retiraría 49 (24 %).
+    const p = planIcdImport(rowsFor(existing.slice(0, 150)), existing, { release: "2025-01", chapters: CHAPTERS, now: NOW });
+    expect(p.retire).toHaveLength(49);
+    expect(core.icdMassRetireCheck(p, existing)).toEqual({ activeInScope: 199, retire: 49, limit: 25, exceeded: true });
+    expect(() => core.assertIcdRetireWithinLimit(p, existing, { allowMassRetire: false })).toThrow(IcdImportError);
+    expect(() => core.assertIcdRetireWithinLimit(p, existing, { allowMassRetire: false })).toThrow(/--allow-mass-retire/);
+    expect(() => core.assertIcdRetireWithinLimit(p, existing, { allowMassRetire: true })).not.toThrow();
+  });
+
+  it("[T4Z-B4] dentro del margen (≤ 5 % o ≤ 25 códigos) pasa; un import parcial cuenta solo su alcance", async () => {
+    const core = await import("@/lib/diagnoses-import-core");
+    const existing = existingN(199);
+    const few = planIcdImport(rowsFor(existing.slice(0, 180)), existing, { release: "2025-01", chapters: CHAPTERS, now: NOW });
+    expect(core.icdMassRetireCheck(few, existing)).toMatchObject({ retire: 19, exceeded: false });
+    expect(() => core.assertIcdRetireWithinLimit(few, existing, { allowMassRetire: false })).not.toThrow();
+    // --chapters=V: lo del capítulo 01 no está en alcance ni se retira.
+    const onlyV = planIcdImport([], existing, { release: "2025-01", chapters: ["V"], now: NOW });
+    expect(core.icdMassRetireCheck(onlyV, existing)).toMatchObject({ activeInScope: 0, retire: 0, exceeded: false });
+  });
+});

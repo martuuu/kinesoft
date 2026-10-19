@@ -443,6 +443,8 @@ async function voidImpl(input: VoidClinicalNoteInput): Promise<ActionResult<{ no
     const p = parsed.data;
     const tenantId = actor.tenantId;
     const now = new Date();
+    /** ¿Esta anulación sacó un documento del portal del paciente? (para revalidar el portal solo entonces) */
+    let revokedShared = false;
 
     const result = await runWithRls(tenantId, async (tx): Promise<Fail | Ok<{ note: ClinicalNoteDTO }>> => {
       const note = await tx.clinicalNote.findFirst({
@@ -455,6 +457,15 @@ async function voidImpl(input: VoidClinicalNoteInput): Promise<ActionResult<{ no
       const current = () => tx.clinicalNote.findFirstOrThrow({ where: { id: note.id, tenantId }, select: CLINICAL_NOTE_SELECT });
 
       const d = voidDecision(note, { userId: actor.userId, isClinicalOwner: gate.isClinicalOwner });
+      // T4Z-M1: anular una ENMIENDA revoca lo compartido de su RAÍZ (abajo). Antes se toma la raíz con
+      // `FOR NO KEY UPDATE`, que choca con el `FOR SHARE` de la tx2 de compartir: si no, compartir podía leer la huella
+      // SIN la anulación, la revocación de acá correr antes de que existiera el documento nuevo, y ese documento (con la
+      // enmienda anulada adentro) quedaba vivo. Orden raíz → enmienda → documentos; compartir hace raíz → documentos y
+      // anular la raíz, raíz → documentos (trigger): sin ciclo. No choca con el `FOR KEY SHARE` de crear otra enmienda.
+      if (d.ok && note.amendsNoteId) {
+        await tx.$queryRaw`
+          SELECT 1 FROM "ClinicalNote" WHERE id = ${note.amendsNoteId} AND "tenantId" = ${tenantId} FOR NO KEY UPDATE`;
+      }
       if (!d.ok) {
         // EV2-D15: anular es idempotente para quien anuló (doble click): ok con la nota tal como quedó, sin audit.
         if (d.reason === "voided" && note.voidedByUserId === actor.userId) {
@@ -473,6 +484,21 @@ async function voidImpl(input: VoidClinicalNoteInput): Promise<ActionResult<{ no
         if (row.voidedAt) return row.voidedByUserId === actor.userId ? { ok: true, data: { note: dto(row, actor, gate, now) } } : fail(COPY.voided);
         return fail(COPY.stale);
       }
+      // T4Z-M1 (enmienda del Anexo C, «anular una enmienda no revoca»): el documento compartido de la raíz INCLUYE las
+      // enmiendas, así que con la enmienda anulada el paciente seguía viendo un texto que el profesional retiró. Se
+      // revoca en la misma tx con el reloj y el autor de la anulación, como hace el trigger de M14 con una raíz
+      // (`revokedAt = voidedAt`). Para volver a mostrarle la ficha, se comparte de nuevo (ya sin la enmienda anulada).
+      if (row.amendsNoteId) {
+        const revoked = await tx.patientDocument.updateMany({
+          where: { tenantId, noteId: row.amendsNoteId, revokedAt: null },
+          data: { revokedAt: now, revokedByUserId: actor.userId, revokeReason: "NOTE_VOIDED" },
+        });
+        revokedShared = revoked.count > 0;
+      } else {
+        // Raíz: lo revocó el trigger en el mismo UPDATE, con `revokedAt = voidedAt` (= `now`).
+        revokedShared =
+          (await tx.patientDocument.count({ where: { tenantId, noteId: row.id, revokeReason: "NOTE_VOIDED", revokedAt: now } })) > 0;
+      }
       // Sin el motivo (EV2-D16): puede contener texto clínico.
       await auditInTx(tx, {
         tenantId,
@@ -484,7 +510,11 @@ async function voidImpl(input: VoidClinicalNoteInput): Promise<ActionResult<{ no
       });
       return { ok: true, data: { note: dto(row, actor, gate, now) } };
     });
-    if (result.ok) revalidateNote(result.data.note, { rootLiveChanged: true });
+    if (result.ok) {
+      revalidateNote(result.data.note, { rootLiveChanged: true });
+      // Anular (raíz por trigger, enmienda acá) sacó un documento del portal del paciente.
+      if (revokedShared) revalidatePath(`/portal/c/${actor.tenantSlug}/documentos`);
+    }
     return result;
   } catch (e) {
     return forbiddenResult(e);

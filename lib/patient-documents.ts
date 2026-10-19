@@ -20,7 +20,16 @@
  * Los PDF reemplazados NO se borran: son copia de lo que el paciente recibió (HC, Ley 26.529). Anular la ficha revoca
  * por trigger (M14), no acá.
  *
- * Archivo `"use server"`: exporta solo las dos actions. La lógica chica va en `lib/patient-documents-internal.ts`.
+ * T4-Z (revisor a):
+ *   - M-2: rate limit por usuario ANTES de la tx1 (30 envíos / 10 min: cada envío es un render de segundos y un PDF de
+ *     HC nuevo en el bucket; sin tope, un script con una sesión robada llenaba Storage y la cola de render) y tope de
+ *     AVISO por paciente (3 / h): pasado el tope se comparte igual pero sin mail (`skipped`), así nadie usa «compartir»
+ *     para bombardear el buzón de un paciente con mails que salen con el nombre del consultorio.
+ *   - M-3: `getPatientPortalShareInfo` le da al diálogo el email ENMASCARADO de la cuenta vinculada antes de confirmar.
+ *   - B-6: un replay cuyo documento ya no está vivo (la ficha se anuló, se reemplazó o se dejó de compartir) no se
+ *     devuelve como vigente: antes el doble click después de anular decía «Listo: el paciente ya lo ve».
+ *
+ * Archivo `"use server"`: exporta solo las actions. La lógica chica va en `lib/patient-documents-internal.ts`.
  */
 import { randomBytes } from "node:crypto";
 import { revalidatePath } from "next/cache";
@@ -54,6 +63,7 @@ import {
 import {
   PATIENT_DOCUMENT_COPY as COPY,
   type DocumentDeliveryOutcome,
+  type PatientPortalShareInfo,
   type SharedDocumentDTO,
 } from "@/lib/patient-documents-types";
 import { withReadOnlyResult } from "@/lib/read-only-result";
@@ -62,6 +72,8 @@ import { ForbiddenError, getActor, requireActorPractitionerId, writableError, ty
 import { isStorageConfigured, storageRemove, storageUpload } from "@/lib/storage-internal";
 import type { ActionResult } from "@/lib/validation";
 import { logger } from "@/lib/logger";
+import { rateLimit } from "@/lib/rate-limit";
+import { maskEmail } from "@/lib/email/transport";
 
 type Fail = { ok: false; error: string };
 type ShareData = {
@@ -88,7 +100,43 @@ export async function revokePatientDocument(input: {
   return withReadOnlyResult(() => revokeImpl(input));
 }
 
+/**
+ * T4Z-M3 · ¿A qué cuenta del portal le llega el aviso? Lectura liviana para el diálogo de compartir, ANTES de confirmar.
+ * Mismo gate que compartir (escritura clínica sobre el paciente: soporte, Secretaria y Facturación → forbidden). El
+ * email sale de la cuenta VINCULADA (`Patient.userId` → `UserProfile.email`, el mismo destinatario que usa
+ * `deliverPatientDocument`) y viaja enmascarado: el email completo nunca llega al cliente.
+ */
+export async function getPatientPortalShareInfo(input: {
+  patientId: string;
+}): Promise<{ ok: true; data: PatientPortalShareInfo } | { ok: false; error: string }> {
+  try {
+    const actor = await getActor();
+    assertModule(actor, "evoluciones");
+    if (typeof input?.patientId !== "string" || !ID_RE.test(input.patientId)) return fail(COPY.patientNotFound);
+    const tenantId = actor.tenantId;
+    const patientId = input.patientId;
+    return await runWithRls(tenantId, async (tx) => {
+      const patient = await tx.patient.findFirst({
+        where: { id: patientId, tenantId },
+        select: { userId: true, user: { select: { email: true } } },
+      });
+      if (!patient) return fail(COPY.patientNotFound);
+      const gate = await clinicalNoteGateInTx(tx, actor, patientId);
+      if (!gate.canWrite) return fail(COPY.forbidden);
+      if (!patient.userId || !patient.user?.email) return { ok: true as const, data: { portal: "not-linked" as const, maskedEmail: null } };
+      return { ok: true as const, data: { portal: "linked" as const, maskedEmail: maskEmail(patient.user.email) } };
+    });
+  } catch (e) {
+    return forbiddenResult(e);
+  }
+}
+
 // ─── Compartir ───────────────────────────────────────────────────────────────
+
+/** T4Z-M2: envíos por usuario (cualquier ficha, cualquier paciente). Ver la cabecera. */
+const SHARE_RATE_LIMIT = { limit: 30, windowMs: 10 * 60_000 } as const;
+/** T4Z-M2: avisos por mail por paciente. Pasado el tope se comparte igual, sin mail. */
+const NOTIFY_RATE_LIMIT = { limit: 3, windowMs: 60 * 60_000 } as const;
 
 /** Mismo formato que la clave de `PatientDocument_idempotencyKey_check` (8..100); el cliente manda un UUID. */
 const KEY_RE = /^[A-Za-z0-9_-]{8,100}$/;
@@ -118,6 +166,11 @@ async function shareImpl(input: { noteId: string; idempotencyKey: string; notify
     const key = input.idempotencyKey;
     const notify = input.notify === true;
     const tenantId = actor.tenantId;
+
+    // T4Z-M2: antes de la tx1, el render y Storage. Va por usuario (no por consultorio): un consultorio grande con
+    // varios profesionales compartiendo a la vez no se frena entre sí.
+    const rl = await rateLimit(`patient-document:share:user:${actor.userId}`, SHARE_RATE_LIMIT);
+    if (!rl.ok) return fail(COPY.rateLimited);
 
     // ── 1. tx1: gate, raíz viva, replay y fuente desde la base ──
     const step1 = await runWithRls(tenantId, async (tx): Promise<Fail | { kind: "replay"; data: ShareData } | Prepared> => {
@@ -275,7 +328,13 @@ async function shareImpl(input: { noteId: string; idempotencyKey: string; notify
     revalidatePath(`/pacientes/${result.patientId}`);
     revalidatePath(`/portal/c/${actor.tenantSlug}/documentos`);
     let delivery: DocumentDeliveryOutcome | null = null;
-    if (notify) {
+    // T4Z-M2: el tope de avisos es por PACIENTE (el buzón que se protege), se cuenta solo cuando se pidió avisar y
+    // después del commit: el documento ya está compartido y el paciente lo ve en su portal aunque no llegue el mail.
+    const notifyAllowed = notify && (await rateLimit(`patient-document:notify:patient:${result.patientId}`, NOTIFY_RATE_LIMIT)).ok;
+    if (notify && !notifyAllowed) {
+      logger.info("patientDocument.notify_capped", { tenantId, documentId: result.data.document.id });
+      delivery = { channel: "email", status: "skipped" };
+    } else if (notify) {
       delivery = await deliverPatientDocument({
         tenantId,
         documentId: result.data.document.id,
@@ -303,11 +362,14 @@ async function replayInTx(
 ): Promise<Fail | { kind: "replay"; data: ShareData } | null> {
   const prev = await tx.patientDocument.findFirst({
     where: { tenantId: actor.tenantId, idempotencyKey: key },
-    select: { ...SHARED_DOCUMENT_SELECT, patient: { select: { userId: true } } },
+    select: { ...SHARED_DOCUMENT_SELECT, revokeReason: true, patient: { select: { userId: true } } },
   });
   const d = replayDecision(prev, { noteId, userId: actor.userId });
   if (d === "free" || !prev) return null;
   if (d === "key-reused") return fail(COPY.keyReused);
+  // T4Z-B6: el mismo envío, pero su documento ya no está vivo. Devolverlo como `ok` hacía que la UI dijera «el paciente
+  // ya lo ve» de un documento que el portal ya no muestra.
+  if (prev.revokedAt) return fail(prev.revokeReason === "NOTE_VOIDED" ? COPY.voided : COPY.notLive);
   // ¿Qué reemplazó? El que quedó REPLACED en el mismo instante por este actor (revokedAt = sharedAt del nuevo).
   const replaced = await tx.patientDocument.findFirst({
     where: {

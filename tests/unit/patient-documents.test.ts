@@ -94,7 +94,7 @@ describe("[FC-2d] mail `portal_document`: sin título ni contenido clínico", ()
   const URL = "https://app.kinesoft.com.ar/portal/c/ramos/documentos";
   it("nuevo: asunto, cuerpo, CTA y pie literales de C-FC6", () => {
     const m = portalDocumentEmail({ tenantName: "Consultorio Ramos", url: URL, replaced: false });
-    expect(m.subject).toBe("Tenés un documento nuevo de Consultorio Ramos");
+    expect(m.subject).toBe("Tenés un documento nuevo de Consultorio Ramos en tu portal");
     expect(m.text).toContain("Consultorio Ramos compartió un documento con vos.");
     expect(m.text).toContain("Lo podés ver y descargar desde tu portal de paciente.");
     expect(m.text).toContain("Ver mis documentos");
@@ -119,11 +119,15 @@ describe("[FC-2d] mail `portal_document`: sin título ni contenido clínico", ()
 
 describe("[FC-2d] forma de los módulos", () => {
   const src = (p: string) => readFileSync(p, "utf8");
-  it("`lib/patient-documents.ts` es \"use server\" y exporta solo las dos actions async", () => {
+  it("`lib/patient-documents.ts` es \"use server\" y exporta solo actions async (T4Z-M3 suma la lectura del portal)", () => {
     const s = src("lib/patient-documents.ts");
     expect(s.trimStart().startsWith('"use server"')).toBe(true);
     const exports = [...s.matchAll(/^export\s+(\w+(?:\s+\w+)?)\s+(\w+)/gm)].map((m) => `${m[1]} ${m[2]}`);
-    expect(exports).toEqual(["async function shareClinicalNoteWithPatient", "async function revokePatientDocument"]);
+    expect(exports).toEqual([
+      "async function shareClinicalNoteWithPatient",
+      "async function revokePatientDocument",
+      "async function getPatientPortalShareInfo",
+    ]);
   });
   it("la tx2 toma la nota con FOR SHARE antes de tocar documentos (hallazgo 8)", () => {
     const s = src("lib/patient-documents.ts");

@@ -494,6 +494,39 @@ export function planIcdImport(
   return plan;
 }
 
+/**
+ * T4Z-B4 · Freno de retiro masivo. El import retira todo lo vigente del alcance que no viene en el archivo: un archivo
+ * truncado (Excel que cortó la exportación, una hoja equivocada, `--chapters` mal escrito) retiraba miles de códigos de
+ * un saque y el buscador de diagnósticos de todos los consultorios quedaba vacío. Entre releases de la OMS el recambio
+ * real es chico. Límite = máx(25, 5 % de los vigentes del alcance): el piso de 25 deja pasar las bases chicas (los
+ * fixtures, un capítulo suelto) donde un solo retiro ya es más del 5 %. Pasarse aborta salvo `--allow-mass-retire`.
+ */
+export const ICD_MASS_RETIRE_RATIO = 0.05;
+export const ICD_MASS_RETIRE_FLOOR = 25;
+
+export function icdMassRetireCheck(
+  p: Pick<IcdImportPlan, "chapters" | "retire">,
+  existing: readonly ExistingDiagnosisCode[],
+): { activeInScope: number; retire: number; limit: number; exceeded: boolean } {
+  const chapters = new Set(p.chapters);
+  const activeInScope = existing.filter((e) => e.retiredAt === null && inScope(e.chapter, e.code, chapters)).length;
+  const limit = Math.max(ICD_MASS_RETIRE_FLOOR, Math.floor(activeInScope * ICD_MASS_RETIRE_RATIO));
+  return { activeInScope, retire: p.retire.length, limit, exceeded: p.retire.length > limit };
+}
+
+export function assertIcdRetireWithinLimit(
+  p: Pick<IcdImportPlan, "chapters" | "retire">,
+  existing: readonly ExistingDiagnosisCode[],
+  opts: { allowMassRetire?: boolean },
+): void {
+  const c = icdMassRetireCheck(p, existing);
+  if (c.exceeded && !opts.allowMassRetire) {
+    throw new IcdImportError(
+      `el import retiraría ${c.retire} de ${c.activeInScope} códigos vigentes (tope ${c.limit}): ¿el archivo está completo? Si es a propósito: --allow-mass-retire`,
+    );
+  }
+}
+
 export function icdPlanHasChanges(p: IcdImportPlan): boolean {
   return p.create.length + p.update.length + p.retire.length + p.unretire.length > 0;
 }

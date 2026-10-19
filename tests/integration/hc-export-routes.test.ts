@@ -379,7 +379,7 @@ describe.skipIf(!RUN)("[FC-2g] rutas de descarga del equipo", () => {
     const res = await record(patientId);
     expect(res.status).toBe(413);
     expect(await res.text()).toBe(HC_EXPORT_COPY.recordTooLarge);
-    expect(HC_EXPORT_COPY.recordTooLarge).toContain("Usá Imprimir historia clínica");
+    expect(HC_EXPORT_COPY.recordTooLarge).toBe("La historia clínica completa es demasiado pesada para un PDF. Usá «Imprimir historia clínica».");
     const r2 = await ficha(patientId, root, "pdf");
     expect(r2.status).toBe(413);
     expect(r2.headers.get("content-disposition")).toBeNull();

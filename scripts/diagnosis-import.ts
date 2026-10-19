@@ -29,12 +29,15 @@
  *    `retiredInRelease`); lo retirado que vuelve se reactiva.
  *  - Downgrade (release más vieja que la de la base) rechazado salvo
  *    `--allow-downgrade`.
+ *  - T4Z-B4: retirar más de máx(25, 5 % de los vigentes del alcance) aborta el
+ *    `--apply` salvo `--allow-mass-retire` (un archivo truncado vaciaba el
+ *    buscador). El dry-run imprime el plan y avisa.
  *
  * Uso:
  *   npm run diagnosis:import -- --file=data/icd11/SimpleTabulation-ICD-11-MMS-es.txt --release=2025-01 --inspect
  *   npm run diagnosis:import -- --file=… --release=2025-01                 # local, dry-run
  *   npm run diagnosis:import -- --file=… --release=2025-01 --apply --by=martin
- *   [--chapters=01-26,V] [--allow-downgrade]
+ *   [--chapters=01-26,V] [--allow-downgrade] [--allow-mass-retire]
  * Prod (después del deploy de M14; backup antes; primero dry-run):
  *   KINESOFT_CONFIRM_PROD=<ref> npx dotenv -e .env.prod.local -- npx tsx scripts/diagnosis-import.ts --file=… --release=…
  *   KINESOFT_CONFIRM_PROD=<ref> npx dotenv -e .env.prod.local -- npx tsx scripts/diagnosis-import.ts --file=… --release=… --apply --by=martin
@@ -45,6 +48,8 @@ import { basename, relative, resolve } from "node:path";
 import { Prisma, PrismaClient } from "@prisma/client";
 import {
   DEFAULT_ICD_CHAPTERS,
+  assertIcdRetireWithinLimit,
+  icdMassRetireCheck,
   ICD_RELEASE_RE,
   IcdImportError,
   decodeTabulationBytes,
@@ -189,6 +194,8 @@ export type IcdRunOptions = {
   chapters?: string;
   apply: boolean;
   allowDowngrade?: boolean;
+  /** T4Z-B4: deja pasar un retiro por encima del tope (ver `icdMassRetireCheck`). */
+  allowMassRetire?: boolean;
   ranBy?: string | null;
   now?: Date;
   log?: (msg: string) => void;
@@ -225,8 +232,13 @@ export async function runDiagnosisImport(opts: IcdRunOptions): Promise<IcdRunRes
   log(`[${SCRIPT}] archivo ${basename(opts.file)} · ${encoding} · sha256 ${sha256.slice(0, 12)}… · ${rows.length} filas`);
 
   if (!opts.apply) {
-    const plan = planIcdImport(rows, await loadExistingCodes(opts.db, opts.existingScope), planOpts);
+    const existing = await loadExistingCodes(opts.db, opts.existingScope);
+    const plan = planIcdImport(rows, existing, planOpts);
     printPlan(plan, log);
+    const mass = icdMassRetireCheck(plan, existing);
+    if (mass.exceeded && !opts.allowMassRetire) {
+      log(`⚠ retiraría ${mass.retire} de ${mass.activeInScope} vigentes (tope ${mass.limit}): el --apply va a abortar salvo --allow-mass-retire.`);
+    }
     log("Dry-run: no se escribió nada. Repetí con --apply --by=<nombre> para escribir.");
     return { applied: false, plan, sha256, encoding, result: null };
   }
@@ -235,7 +247,10 @@ export async function runDiagnosisImport(opts: IcdRunOptions): Promise<IcdRunRes
     async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${ADVISORY_LOCK_KEY}))`;
       // Estado y plan ADENTRO de la tx: se escribe exactamente lo planificado contra la base de este momento.
-      const plan = planIcdImport(rows, await loadExistingCodes(tx, opts.existingScope), planOpts);
+      const existing = await loadExistingCodes(tx, opts.existingScope);
+      const plan = planIcdImport(rows, existing, planOpts);
+      // Antes de escribir nada: el throw vuelve atrás la tx entera (y no queda CatalogImportRun).
+      assertIcdRetireWithinLimit(plan, existing, { allowMassRetire: opts.allowMassRetire });
       const result = await applyIcdPlan(tx, plan, now);
       await tx.catalogImportRun.create({
         data: {
@@ -335,6 +350,7 @@ async function main() {
       chapters: arg("chapters"),
       apply,
       allowDowngrade: process.argv.includes("--allow-downgrade"),
+      allowMassRetire: process.argv.includes("--allow-mass-retire"),
       ranBy: arg("by") ?? null,
     });
   } finally {

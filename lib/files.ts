@@ -49,6 +49,7 @@ import {
 } from "@/lib/storage-internal";
 import { patientAccessFor } from "@/lib/visibility";
 import { headMatchesMime } from "@/lib/file-sniff";
+import { rateLimit } from "@/lib/rate-limit";
 import { makePatientFileUploadToken, readPatientFileUploadToken } from "@/lib/patient-file-upload-token";
 import {
   PATIENT_FILE_MAX_BYTES,
@@ -114,7 +115,8 @@ async function hasFullAccess(actor: Actor, patientId: string, tx: DbClient) {
 const NO_ACCESS = "No tenés acceso completo a este paciente.";
 const TOO_BIG = "El archivo no puede superar 25 MB.";
 const BAD_TYPE = "Tipo de archivo no permitido.";
-const FAKE_FILE = "El archivo no es lo que dice ser.";
+// T4-Z (revisor b): «no es lo que dice ser» no le decía al profesional qué pasó ni si se subió algo.
+const FAKE_FILE = "El contenido del archivo no coincide con su tipo (por ejemplo, un programa renombrado como PDF). No se subió.";
 
 function safeExt(fileName: string): string {
   // Sanitise extension — only short alphanumerics, no traversal characters.
@@ -340,6 +342,13 @@ const UPLOAD_MISMATCH = "El archivo que llegó no coincide con el que elegiste. 
 const UPLOAD_EMPTY = "El archivo llegó vacío. Volvé a subirlo.";
 const UPLOAD_MISSING = "No encontramos el archivo subido. Volvé a subirlo.";
 const UPLOAD_FAILED = "No pudimos guardar el archivo. Probá de nuevo.";
+const UPLOAD_RATE_LIMITED = "Subiste muchos archivos seguidos. Esperá unos minutos y probá de nuevo.";
+/**
+ * T4Z-B2: subidas firmadas por usuario. Cada firma es un PUT de hasta 25 MB directo al bucket que, sin confirmar, queda
+ * 24 h en `pending/` hasta que lo barre el cron: sin tope, una sesión robada (o un script) llenaba Storage de basura que
+ * pagamos. 60 / 10 min cubre cargar todos los estudios de un paciente de una vez.
+ */
+const UPLOAD_RATE_LIMIT = { limit: 60, windowMs: 10 * 60_000 } as const;
 
 function signedUploadSwitchOn(): boolean {
   const v = (process.env.PATIENT_FILES_SIGNED_UPLOAD ?? "").trim().toLowerCase();
@@ -398,6 +407,10 @@ export async function requestPatientFileUpload(input: {
   if (access !== "full") return { ok: false, error: NO_ACCESS };
 
   if (!signedUploadSwitchOn() || !storageEnabled()) return { ok: true, data: { mode: "stub" } };
+
+  // Después de validar y del gate (un pedido inválido o sin acceso no gasta cupo) y antes de firmar.
+  const rl = await rateLimit(`patient-file:upload:user:${actor.userId}`, UPLOAD_RATE_LIMIT);
+  if (!rl.ok) return { ok: false, error: UPLOAD_RATE_LIMITED };
 
   const fileId = randomBytes(12).toString("hex");
   const claims = {

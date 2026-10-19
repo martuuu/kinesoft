@@ -42,9 +42,10 @@ export const HC_EXPORT_RATE_LIMIT = {
 } as const;
 
 export const HC_EXPORT_COPY = {
-  // FC-D31 (literal): si la HC completa pasa de 4 MB → «Usá Imprimir historia clínica».
+  // FC-D31: si la HC completa pasa de 4 MB → «Usá «Imprimir historia clínica»». T4-Z (revisor b): el nombre del botón
+  // va entre comillas, como en el resto del copy; sin ellas se lee como una instrucción genérica.
   recordTooLarge:
-    "La historia clínica completa es demasiado pesada para un PDF. Usá Imprimir historia clínica.",
+    "La historia clínica completa es demasiado pesada para un PDF. Usá «Imprimir historia clínica».",
   fichaTooLarge: "La ficha es demasiado pesada para un PDF. Descargala en Word o usá Imprimir historia clínica.",
   renderFailed: "No pudimos armar el archivo. Probá de nuevo en un rato.",
   rateLimited: "Descargaste muchos archivos seguidos. Esperá unos minutos y probá de nuevo.",

@@ -10,6 +10,7 @@ import type { PrismaClient } from "@prisma/client";
 import { addPatient, addPractitioner, createEphemeralTenant, ownerClient, type EphemeralTenant } from "@/tests/helpers/tenant-factory";
 import { asUser } from "@/tests/helpers/actor";
 import { storageFake } from "@/tests/helpers/storage-fake";
+import { __rateLimitInternals } from "@/lib/rate-limit";
 
 vi.mock("@/lib/supabase/admin", async () => {
   const { storageFake: fake } = await import("@/tests/helpers/storage-fake");
@@ -77,6 +78,7 @@ describe.skipIf(!RUN)("[FC-2f] subida firmada de archivos del paciente", () => {
 
   afterEach(() => {
     storageFake.reset();
+    __rateLimitInternals.reset();
     delete process.env.PATIENT_FILES_SIGNED_UPLOAD;
   });
 
@@ -103,6 +105,17 @@ describe.skipIf(!RUN)("[FC-2f] subida firmada de archivos del paciente", () => {
     expect(exp - before).toBeGreaterThanOrEqual(900_000 - 1000);
     expect(exp - before).toBeLessThanOrEqual(900_000 + 5000);
     expect(t.confirmToken.length).toBeLessThanOrEqual(2048);
+  });
+
+  it("[T4Z-B2] rate limit por usuario al firmar: 60 / 10 min; la 61 no firma nada", async () => {
+    asUser(A.userId);
+    for (let i = 0; i < 60; i++) await signed();
+    const before = storageFake.calls.length;
+    expect(await request()).toEqual({ ok: false, error: "Subiste muchos archivos seguidos. Esperá unos minutos y probá de nuevo." });
+    expect(storageFake.calls.length).toBe(before);
+    // Es por usuario: otra persona del consultorio sigue pudiendo.
+    asUser(otherUser.userId);
+    await signed();
   });
 
   it("[FC-2f] interruptor PATIENT_FILES_SIGNED_UPLOAD=0 → { mode: \"stub\" } (vuelta al camino ≤4 MB)", async () => {
@@ -149,7 +162,7 @@ describe.skipIf(!RUN)("[FC-2f] subida firmada de archivos del paciente", () => {
   it.each([
     ["tamaño distinto al declarado", pdfBytes(1000), "application/pdf", "El archivo que llegó no coincide con el que elegiste. Volvé a subirlo."],
     ["vacío", new Uint8Array(0), "application/pdf", "El archivo llegó vacío. Volvé a subirlo."],
-    ["magic bytes de HTML con type PDF", (() => { const b = new Uint8Array(2048).fill(0x20); b.set(enc("<!doctype html><script>")); return b; })(), "application/pdf", "El archivo no es lo que dice ser."],
+    ["magic bytes de HTML con type PDF", (() => { const b = new Uint8Array(2048).fill(0x20); b.set(enc("<!doctype html><script>")); return b; })(), "application/pdf", "El contenido del archivo no coincide con su tipo (por ejemplo, un programa renombrado como PDF). No se subió."],
     ["Content-Type del PUT distinto al token", pdfBytes(2048), "text/html", "El archivo que llegó no coincide con el que elegiste. Volvé a subirlo."],
   ])("[FC-2f] %s → objeto borrado y sin fila", async (_n, body, contentType, error) => {
     asUser(A.userId);
@@ -239,7 +252,7 @@ describe.skipIf(!RUN)("[FC-2f] subida firmada de archivos del paciente", () => {
     fd.set("file", new File([enc("<html><script>alert(1)</script></html>")], "estudio.pdf", { type: "application/pdf" }));
     fd.set("category", "REPORT");
     const { uploadPatientFile } = await files();
-    expect(await uploadPatientFile(patA, fd)).toEqual({ ok: false, error: "El archivo no es lo que dice ser." });
+    expect(await uploadPatientFile(patA, fd)).toEqual({ ok: false, error: "El contenido del archivo no coincide con su tipo (por ejemplo, un programa renombrado como PDF). No se subió." });
     expect(storageFake.calls).toEqual([]);
     const ok = new FormData();
     ok.set("file", new File([pdfBytes(100)], "ok.pdf", { type: "application/pdf" }));

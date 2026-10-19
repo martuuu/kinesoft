@@ -67,7 +67,7 @@ describe("[FC-1b] tipos de documentos compartidos (C-FC6)", () => {
       voided: "La ficha está anulada: no se puede compartir.",
       changed: "La ficha cambió mientras la compartías. Probá de nuevo.",
       raced: "Alguien compartió esta ficha recién. Recargá para ver el estado.",
-      keyReused: "Ese envío ya se usó. Cerrá y volvé a abrir «Compartir».",
+      keyReused: "Ese envío ya se usó. Cerrá y volvé a abrir «Compartir con el paciente».",
       pdfFailed: "No pudimos generar el PDF. Probá de nuevo en un rato.",
       storageFailed: "No pudimos guardar el documento. Probá de nuevo.",
       tooLarge: "El documento quedó demasiado pesado para compartirlo. Probá sin logo o sin firma.",
@@ -76,6 +76,9 @@ describe("[FC-1b] tipos de documentos compartidos (C-FC6)", () => {
       emailFailed: "Se compartió, pero no pudimos mandarle el aviso por mail.",
       revoked: "Dejaste de compartir el documento.",
       docNotFound: "No encontramos el documento.",
+      rateLimited: "Compartiste muchas fichas seguidas. Esperá unos minutos y probá de nuevo.",
+      patientNotFound: "No encontramos al paciente.",
+      notLive: "Ese documento ya no está compartido. Recargá para ver el estado.",
     });
   });
 });

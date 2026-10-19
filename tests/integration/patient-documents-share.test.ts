@@ -17,7 +17,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } 
 import { randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { revokePatientDocument, shareClinicalNoteWithPatient } from "@/lib/patient-documents";
+import { getPatientPortalShareInfo, revokePatientDocument, shareClinicalNoteWithPatient } from "@/lib/patient-documents";
 import { voidClinicalNote } from "@/lib/clinical-notes";
 import { PATIENT_DOCUMENT_COPY } from "@/lib/patient-documents-types";
 import { READ_ONLY_MESSAGE } from "@/lib/tenant-access";
@@ -164,6 +164,8 @@ describe.skipIf(!RUN)("[FC-2d] compartir con el paciente", () => {
     fx.renderBytes = null;
     fx.renderThrows = false;
     fx.assetCalls = [];
+    // T4Z-M2: compartir tiene rate limit por usuario y tope de aviso por paciente; cada test arranca con cupo entero.
+    __rateLimitInternals.reset();
     mails = [];
     transport = async () => ({ ok: true, transport: "resend", providerId: "fake" });
     __setEmailTransportForTests(async (i) => {
@@ -389,7 +391,7 @@ describe.skipIf(!RUN)("[FC-2d] compartir con el paciente", () => {
       expect(part).not.toContain("Dolor");
       expect(part).not.toContain("Ingreso");
     }
-    expect(mails[0].subject).toBe(`Tenés un documento nuevo de ${tenantName}`);
+    expect(mails[0].subject).toBe(`Tenés un documento nuevo de ${tenantName} en tu portal`);
     expect(mails[0].text).toContain(`/portal/c/${A.slug}/documentos`);
 
     expect(revalidatePathSpy).toHaveBeenCalledWith(`/pacientes/${pid}`);
@@ -453,7 +455,7 @@ describe.skipIf(!RUN)("[FC-2d] compartir con el paciente", () => {
     // Los PDF reemplazados son copia de HC: no se borran.
     expect(fx.removed).toEqual([]);
     expect(fx.objects.has(`patient-documents:${old.pdfStorageKey}`)).toBe(true);
-    expect(mails.map((m) => m.subject)).toEqual([`Tenés un documento nuevo de ${tenantName}`, `${tenantName} actualizó un documento en tu portal`]);
+    expect(mails.map((m) => m.subject)).toEqual([`Tenés un documento nuevo de ${tenantName} en tu portal`, `${tenantName} actualizó un documento en tu portal`]);
     const audits = await sharesOf(pid);
     expect(audits.map((a) => (a.payload as { replacedDocumentId: string | null }).replacedDocumentId)).toEqual([null, first.data.document.id]);
 
@@ -737,4 +739,126 @@ describe.skipIf(!RUN)("[FC-2d] compartir con el paciente", () => {
       WHERE d."tenantId" = ${A.tenantId} AND d."revokedAt" IS NULL AND c."voidedAt" IS NOT NULL`;
     expect(n).toBe(0);
   }, 30_000);
+
+  // ── T4-Z (revisor a): anular una enmienda, replay de anulada, rate limit y email enmascarado ─────────────────
+
+  it("[T4Z-M1] anular una ENMIENDA revoca el documento vivo de su raíz (NOTE_VOIDED): el paciente deja de verla", async () => {
+    const pid = await patient();
+    const root = await seedNote(A, pid, P1);
+    const amend = await seedNote(A, pid, P1, { amendsNoteId: root });
+    const shared = await shareAs(P1.userId, root, { notify: false });
+    expect(shared.ok).toBe(true);
+    if (!shared.ok) return;
+    asUser(P1.userId);
+    const v = await voidClinicalNote({ noteId: amend, expectedRevision: 1, reason: "Enmienda equivocada" });
+    expect(v.ok).toBe(true);
+    const doc = await db.patientDocument.findUniqueOrThrow({ where: { id: shared.data.document.id } });
+    const note = await db.clinicalNote.findUniqueOrThrow({ where: { id: amend } });
+    expect(doc).toMatchObject({ revokeReason: "NOTE_VOIDED", revokedByUserId: P1.userId });
+    expect(doc.revokedAt!.getTime()).toBe(note.voidedAt!.getTime());
+    // La raíz sigue viva y se puede volver a compartir (sin la enmienda anulada).
+    expect(await db.clinicalNote.count({ where: { id: root, voidedAt: null } })).toBe(1);
+    expect(revalidatePathSpy).toHaveBeenCalledWith(`/portal/c/${A.slug}/documentos`);
+    // Idempotente: el doble click de anular no revoca otra cosa ni falla.
+    expect((await voidClinicalNote({ noteId: amend, expectedRevision: 1, reason: "Enmienda equivocada" })).ok).toBe(true);
+  });
+
+  it("[T4Z-M1] compartir ∥ anular una enmienda con dos conexiones: nunca queda vivo un documento armado con la enmienda anulada", async () => {
+    const pid = await patient();
+    const root = await seedNote(A, pid, P1);
+    const amend = await seedNote(A, pid, P1, { amendsNoteId: root });
+    const live = await insertLiveDoc(db, A, pid, root, P1);
+    const c3 = ownerClient();
+    try {
+      // Compartir llega a la tx2 (raíz en FOR SHARE, huella SIN la anulación) y queda esperando el documento vivo.
+      const h = hold((tx) => tx.$queryRaw`SELECT 1 FROM "PatientDocument" WHERE id = ${live} FOR UPDATE`, c3);
+      const holder = await h.ready;
+      asUser(P1.userId);
+      const shareP = shareClinicalNoteWithPatient({ noteId: root, idempotencyKey: randomUUID(), notify: false });
+      const sharer = await blockedBy(holder);
+      // Anular la enmienda tiene que esperar a compartir (lock de la RAÍZ): si no, revoca antes de que exista el
+      // documento nuevo y ese documento, con la enmienda adentro, queda vivo.
+      const voidP = voidClinicalNote({ noteId: amend, expectedRevision: 1, reason: "Enmienda equivocada" });
+      await blockedBy(sharer);
+      h.release();
+      await h.done;
+      const [shared, voided] = await Promise.all([shareP, voidP]);
+      expect(shared.ok).toBe(true);
+      expect(voided.ok).toBe(true);
+      if (!shared.ok) return;
+      const doc = await db.patientDocument.findUniqueOrThrow({ where: { id: shared.data.document.id } });
+      expect(doc.revokeReason).toBe("NOTE_VOIDED");
+    } finally {
+      await c3.$disconnect();
+    }
+    expect(await db.patientDocument.count({ where: { noteId: root, revokedAt: null } })).toBe(0);
+  }, 30_000);
+
+  it("[T4Z-B6] replay después de anular: la misma clave responde `voided`, no el documento revocado como vigente", async () => {
+    const pid = await patient();
+    const noteId = await seedNote(A, pid, P1);
+    const key = randomUUID();
+    const first = await shareAs(P1.userId, noteId, { idempotencyKey: key, notify: false });
+    expect(first.ok).toBe(true);
+    asUser(P1.userId);
+    expect((await voidClinicalNote({ noteId, expectedRevision: 1, reason: "Paciente equivocado" })).ok).toBe(true);
+    fx.renders = 0;
+    expect(await shareAs(P1.userId, noteId, { idempotencyKey: key, notify: false })).toEqual({ ok: false, error: C.voided });
+    expect(fx.renders).toBe(0);
+
+    // Reemplazado por otro envío: el replay de la clave vieja tampoco lo devuelve como vigente.
+    const n2 = await seedNote(A, pid, P1);
+    const k2 = randomUUID();
+    expect((await shareAs(P1.userId, n2, { idempotencyKey: k2, notify: false })).ok).toBe(true);
+    expect((await shareAs(P2.userId, n2, { notify: false })).ok).toBe(true);
+    expect(await shareAs(P1.userId, n2, { idempotencyKey: k2, notify: false })).toEqual({ ok: false, error: C.notLive });
+  });
+
+  it("[T4Z-M2] rate limit por usuario: 30 envíos / 10 min; el 31 se rechaza ANTES de render y Storage", async () => {
+    const pid = await patient();
+    const noteId = await seedNote(A, pid, P1);
+    for (let i = 0; i < 30; i++) expect((await shareAs(P2.userId, noteId, { notify: false })).ok).toBe(true);
+    fx.renders = 0;
+    fx.uploads = [];
+    expect(await shareAs(P2.userId, noteId, { notify: false })).toEqual({ ok: false, error: C.rateLimited });
+    expect(fx.renders).toBe(0);
+    expect(fx.uploads).toEqual([]);
+    // Es por usuario: otro profesional sigue pudiendo.
+    expect((await shareAs(P1.userId, noteId, { notify: false })).ok).toBe(true);
+  }, 60_000);
+
+  it("[T4Z-M2] tope de aviso por paciente (3 / h): pasado el tope se comparte igual, sin mail, y la entrega vuelve `skipped`", async () => {
+    const pid = await patient();
+    await linkPortal(pid);
+    const noteId = await seedNote(A, pid, P1);
+    for (let i = 0; i < 3; i++) {
+      expect(await shareAs(P1.userId, noteId)).toMatchObject({ ok: true, data: { delivery: { channel: "email", status: "sent" } } });
+    }
+    const r = await shareAs(P2.userId, noteId);
+    expect(r).toMatchObject({ ok: true, data: { replayed: false, delivery: { channel: "email", status: "skipped" } } });
+    expect(mails).toHaveLength(3);
+    expect(await db.patientDocument.count({ where: { noteId, revokedAt: null } })).toBe(1);
+  }, 30_000);
+
+  it("[T4Z-M3] getPatientPortalShareInfo: email de la cuenta vinculada ENMASCARADO; sin vínculo → null; mismo gate que compartir", async () => {
+    const pid = await patient();
+    asUser(P1.userId);
+    expect(await getPatientPortalShareInfo({ patientId: pid })).toEqual({ ok: true, data: { portal: "not-linked", maskedEmail: null } });
+    const email = await linkPortal(pid);
+    const r = await getPatientPortalShareInfo({ patientId: pid });
+    expect(r).toEqual({ ok: true, data: { portal: "linked", maskedEmail: `${email[0]}***@paciente.test` } });
+    expect(JSON.stringify(r)).not.toContain(email.split("@")[0]);
+    // Profesional con share también (FC-D8).
+    asUser(P2.userId);
+    expect(await getPatientPortalShareInfo({ patientId: pid })).toMatchObject({ ok: true, data: { portal: "linked" } });
+    // Sin escritura clínica → forbidden; de otro consultorio → notFound (ni existe).
+    for (const m of [P3, SEC, FAC, ADM]) {
+      asUser(m.userId);
+      expect(await getPatientPortalShareInfo({ patientId: pid })).toEqual({ ok: false, error: C.forbidden });
+    }
+    const pidB = await patient(B);
+    asUser(P1.userId);
+    expect(await getPatientPortalShareInfo({ patientId: pidB })).toEqual({ ok: false, error: C.patientNotFound });
+    expect(await getPatientPortalShareInfo({ patientId: "../x" })).toEqual({ ok: false, error: C.patientNotFound });
+  });
 });

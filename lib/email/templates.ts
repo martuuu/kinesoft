@@ -708,8 +708,10 @@ export function portalDocumentEmail(p: { tenantName: string; url: string; replac
   const lead = `${tenant} compartió un documento con vos.`;
   const leadHtml = `${strong(tenant)} compartió un documento con vos.`;
   const second = "Lo podés ver y descargar desde tu portal de paciente.";
+  // T4-Z (revisor b): «en tu portal» en el asunto nuevo, como el de «actualizó»: sin eso el asunto no dice dónde está
+  // el documento y parece un adjunto que no vino (o un phishing).
   return compose({
-    subject: p.replaced ? `${tenant} actualizó un documento en tu portal` : `Tenés un documento nuevo de ${tenant}`,
+    subject: p.replaced ? `${tenant} actualizó un documento en tu portal` : `Tenés un documento nuevo de ${tenant} en tu portal`,
     preheader: "Entrá a tu portal de paciente para verlo.",
     context: tenant,
     title: p.replaced ? "Documento actualizado" : "Documento nuevo",
