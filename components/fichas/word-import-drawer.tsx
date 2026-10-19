@@ -32,6 +32,7 @@ import { Drawer } from "@/components/ui/drawer";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { WORD_IMPORT_COPY as COPY } from "@/components/fichas/fichas-copy-deferred";
+import { FICHA_FORM_COPY } from "@/components/fichas/fichas-copy";
 import type { WordImportDrawerProps } from "@/components/fichas/fichas-ui-types";
 import {
   buildImportInputs,
@@ -185,6 +186,7 @@ export function WordImportDrawer({ open, onClose, patientId, patientName, onImpo
   const total = importable.reduce((n, r) => n + pendingParts(r), 0);
   const stillReading = rows.some((r) => r.reading);
   const canImport = !busy && !stillReading && total > 0 && dateIssues.length === 0 && reviewed;
+  const needsReview = !busy && !stillReading && total > 0 && dateIssues.length === 0 && !reviewed;
   const dirty = rows.some((r) => r.reading || (!r.error && pendingParts(r) > 0));
 
   const runImport = async () => {
@@ -230,7 +232,9 @@ export function WordImportDrawer({ open, onClose, patientId, patientName, onImpo
     <Drawer open={open} onClose={() => !busy && onClose()} title={COPY.title} width={560} dirty={dirty} dirtyMessage={COPY.dirty}>
       <div style={{ display: "grid", gap: 14 }}>
         <p style={{ margin: 0, fontSize: 14, color: "var(--navy-900)" }}>
-          <strong>Paciente: {patientName}</strong>
+          <strong>
+            {FICHA_FORM_COPY.patientPrefix} {patientName}
+          </strong>
         </p>
         <div style={{ display: "grid", gap: 4, fontSize: 13, color: "var(--navy-700)" }}>
           <p style={{ margin: 0 }}>{COPY.intro}</p>
@@ -297,11 +301,23 @@ export function WordImportDrawer({ open, onClose, patientId, patientName, onImpo
               <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>
                 {COPY.close}
               </Button>
-              <Button type="button" disabled={!canImport} onClick={() => void runImport()} data-testid="word-import-confirm">
+              <Button
+                type="button"
+                disabled={!canImport}
+                onClick={() => void runImport()}
+                data-testid="word-import-confirm"
+                aria-describedby={needsReview ? `${uid}-review-hint` : undefined}
+              >
                 {progress ? COPY.importing(progress.done, progress.total) : total > 0 ? COPY.confirm(total) : COPY.confirmEmpty}
               </Button>
             </div>
-            <p role="status" aria-live="polite" style={{ margin: 0, fontSize: 0, height: 0, overflow: "hidden" }}>
+            {/* T4-Z: el botón deshabilitado no decía por qué; falta solo la casilla → se dice cuál. */}
+            {needsReview && (
+              <p id={`${uid}-review-hint`} style={{ margin: 0, fontSize: 12, color: "var(--navy-500)", textAlign: "right" }}>
+                {COPY.reviewHint}
+              </p>
+            )}
+            <p role="status" aria-live="polite" className="k-sr-only">
               {progress ? COPY.importing(progress.done, progress.total) : ""}
             </p>
           </div>

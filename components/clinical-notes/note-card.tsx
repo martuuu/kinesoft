@@ -42,6 +42,7 @@ import {
 } from "@/components/fichas/ficha-card-logic";
 import { BACKUP_COPY, DIAGNOSIS_FIELD_COPY } from "@/components/fichas/fichas-copy";
 import { downloadFicha } from "@/components/fichas/download";
+import type { FichaMenuProps } from "@/components/fichas/ficha-card-logic";
 
 /*
  * PF1.1 (C-PF2): editor, anular e historial se bajan recién al abrirlos (solo existen después de un click; por eso
@@ -64,7 +65,11 @@ const NoteHistoryModal = dynamic(
 );
 /** Se precarga al pasar el mouse o enfocar «⋯»: así el primer click abre sin esperar el chunk. */
 const loadFichaMenu = () => import("@/components/fichas/ficha-menu");
-const FichaMenu = dynamic(() => loadFichaMenu().then((m) => m.FichaMenu), { ssr: false, loading: () => null });
+// El cast fija el genérico del id (`next/dynamic` lo pierde): la tarjeta usa los ids de `fichaMenuItems`.
+const FichaMenu = dynamic(
+  () => loadFichaMenu().then((m) => m.FichaMenu as (p: FichaMenuProps<FichaMenuItemId>) => JSX.Element),
+  { ssr: false, loading: () => null }
+);
 const ShareFichaDialog = dynamic(
   () => import("@/components/fichas/share-ficha-dialog").then((m) => m.ShareFichaDialog),
   { ssr: false, loading: () => null }
@@ -266,6 +271,10 @@ export function NoteCard({
 
   /** Corre SINCRÓNICO dentro del click del ítem: «Guardar en la carpeta» no puede tener un await antes (§24.6). */
   const onSelect = (id: FichaMenuItemId) => {
+    // T4-Z (a11y): el foco vuelve a «⋯» ANTES de desmontar el panel. Si no, queda en el <body> (el ítem enfocado
+    // desaparece) y el diálogo que se abre después devuelve el foco al body al cerrarse. Es sincrónico: no rompe el
+    // gesto de «Guardar en la carpeta».
+    triggerRef.current?.focus();
     setMenuOpen(false);
     switch (id) {
       case "pdf":
@@ -274,7 +283,13 @@ export function NoteCard({
         return;
       case "saveToFolder": {
         if (!backup || !context) return;
-        void backup.save(fichaBackupTarget(note, context.patient)).then((o) => {
+        // `save` primero: su `requestPermission` tiene que correr dentro del gesto (el toast es un setState, no lo
+        // consume, pero así queda explícito). El aviso de progreso: el PDF tarda 1-2 s y sin él el click parece muerto.
+        const saving = backup.save(fichaBackupTarget(note, context.patient));
+        const progressId = `ficha-backup:${note.id}`;
+        toast.info(BACKUP_COPY.saving, { id: progressId, duration: 0 });
+        void saving.then((o) => {
+          toast.dismiss(progressId);
           if (!o.ok) toast.error(o.error || BACKUP_COPY.failed);
           else toast.success(o.via === "folder" ? BACKUP_COPY.savedToFolder(o.path) : BACKUP_COPY.downloaded);
         });
@@ -310,10 +325,13 @@ export function NoteCard({
           )}
           <span style={metaStyle}>{noteDateLabel(isAmendment ? note.createdAt : note.occurredAt)}</span>
           {chips.map((c) => (
+            // T4-Z: el detalle vivía solo en `title` (ni touch ni lector de pantalla lo ven). Queda en `title` para el
+            // mouse y además como texto `k-sr-only`; «desactualizada» lo muestra visible debajo (es una acción a tomar).
             <span key={c.key} title={c.title} data-chip={c.key}>
               <Tag tone={c.key === "shared" ? "lime" : "soft"} variant={c.key === "shared" ? "fill" : "outline"}>
                 {c.label}
               </Tag>
+              <span className="k-sr-only">{` (${c.title})`}</span>
             </span>
           ))}
           {items.length > 0 && (
@@ -321,7 +339,7 @@ export function NoteCard({
               <button
                 ref={triggerRef}
                 type="button"
-                aria-label={CARD_COPY.menuLabel}
+                aria-label={CARD_COPY.menuTrigger(noteDateLabel(isAmendment ? note.createdAt : note.occurredAt))}
                 aria-haspopup="menu"
                 aria-expanded={menuOpen}
                 aria-controls={menuOpen ? menuId : undefined}
@@ -330,11 +348,11 @@ export function NoteCard({
                 onFocus={() => void loadFichaMenu()}
                 onClick={() => setMenuOpen((v) => !v)}
                 style={{
-                  minWidth: 40,
-                  minHeight: 40,
+                  minWidth: 44,
+                  minHeight: 44,
                   borderRadius: 8,
                   border: "none",
-                  background: menuOpen ? "rgba(31,79,190,0.1)" : "transparent",
+                  background: menuOpen ? "var(--sky-100)" : "transparent",
                   color: "var(--navy-500)",
                   cursor: "pointer",
                   fontSize: 18,
@@ -357,6 +375,11 @@ export function NoteCard({
             </div>
           )}
         </div>
+        {chips.some((c) => c.key === "sharedStale") && (
+          <span style={{ fontSize: 12, color: "var(--navy-500)" }} aria-hidden="true">
+            {CARD_COPY.sharedStaleHint}
+          </span>
+        )}
         {note.title && <strong style={{ fontSize: isAmendment ? 14 : 15 }}>{note.title}</strong>}
         <span style={metaStyle}>
           {fichaAuthorLine(note)}
@@ -387,6 +410,7 @@ export function NoteCard({
             >
               {d.code && <strong style={{ marginRight: 4 }}>{d.code}</strong>}
               {d.title}
+              <span className="k-sr-only">{` (${d.hint})`}</span>
               {d.principal && diagnoses.length > 1 && (
                 <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 600, color: "var(--sky-700)" }}>
                   · {DIAGNOSIS_FIELD_COPY.principal}
@@ -433,6 +457,13 @@ export function NoteCard({
           open
           onClose={() => setVoidOpen(false)}
           note={note}
+          // M-1: anular una enmienda también revoca el documento de su raíz; la enmienda no trae `sharedDocument`, así
+          // que el aviso del diálogo sale del estado de la raíz. En la raíz, el diálogo lee su propio `sharedDocument`.
+          sharedWithPatient={
+            isAmendment
+              ? rootNote?.sharedDocument?.status === "live" || rootNote?.sharedDocument?.status === "stale"
+              : undefined
+          }
           onVoided={(n) => {
             onNoteChange?.(n);
             refreshBackup(isAmendment ? rootNote : n);
@@ -496,7 +527,7 @@ export function FoldableHcBody({ note, defaultExpanded = false }: { note: Pick<C
               background: "transparent",
               border: "none",
               padding: "6px 0",
-              minHeight: 32,
+              minHeight: 44,
               fontSize: 13,
               fontWeight: 600,
               color: "var(--sky-700)",

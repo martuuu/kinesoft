@@ -64,6 +64,11 @@ export const UPLOAD_COPY = {
   putFailed: "No pudimos subir el archivo. Probá de nuevo.",
   network: "Se cortó la conexión. Revisá tu internet y probá de nuevo.",
   cancelled: "Subida cancelada.",
+  // T4-Z (pestaña Archivos): un error de la lista se veía igual que «Sin archivos cargados» (y el profesional creía
+  // que no había nada); la subida terminaba sin ningún aviso.
+  uploaded: "Archivo subido",
+  listFailed: "No pudimos cargar los archivos. Probá de nuevo.",
+  retry: "Reintentar",
 } as const;
 
 /**

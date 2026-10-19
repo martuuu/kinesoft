@@ -8,15 +8,19 @@
  *   dentro de la misma apertura es replay del server (no dos documentos ni dos mails); cerrar y abrir genera otra.
  * - Variantes: `first` (nunca compartida o revocada) y `reshare` (el documento vivo quedó desactualizado: se reemplaza
  *   por la versión actual, el server lo marca `REPLACED`).
+ * - Antes de confirmar (T4-Z A2/M-3, `shareConfirmView`): sin email del paciente ni cuenta del portal conocida, la
+ *   casilla del mail no aparece, se avisa antes y se comparte sin aviso; con la cuenta del portal se muestra su email
+ *   ENMASCARADO (`getPatientPortalShareInfo` al abrir; el completo nunca viaja), para que se vea a quién le llega. Si
+ *   esa lectura falla o tarda, el diálogo funciona igual con lo que sabe del paciente.
  * - Después de compartir: con portal, listo (+ aviso aparte si el mail falló); sin portal (`patientPortal:
- *   "not-linked"`) se ofrece «Invitar al portal y compartir» (`sendPatientPortalInvite`, que ya existía); sin email
- *   cargado, se dice cómo seguir. El documento ya quedó compartido en los dos casos: el paciente lo ve al entrar.
+ *   "not-linked"`) se ofrece «Invitar al portal» (`sendPatientPortalInvite`, que ya existía); sin email cargado, se
+ *   dice cómo seguir. El documento ya quedó compartido en los dos casos: el paciente lo ve al entrar.
  * - «Dejar de compartir» está en el menú de la tarjeta (FC-UI-D6), con `useConfirm`.
  *
  * Copy: `SHARE_COPY` (= SHARE_FICHA_COPY + las claves pendientes de handoff) y los rechazos tal cual los manda la
  * action (`PATIENT_DOCUMENT_COPY`).
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Modal, ModalActions } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
@@ -24,12 +28,14 @@ import { newIdempotencyKey } from "@/components/clinical-notes/clinical-notes-ui
 import type { ShareFichaDialogProps } from "@/components/fichas/fichas-ui-types";
 import { SHARE_FICHA_COPY as SHARE_COPY } from "@/components/fichas/fichas-copy";
 import {
+  shareConfirmView,
   sharedDocumentAfterShare,
   shareDialogVariant,
   shareOutcomeView,
+  type PortalShareInfo,
   type ShareOutcomeView,
 } from "@/components/fichas/ficha-share-download-logic";
-import { shareClinicalNoteWithPatient } from "@/lib/patient-documents";
+import { getPatientPortalShareInfo, shareClinicalNoteWithPatient } from "@/lib/patient-documents";
 import { sendPatientPortalInvite } from "@/lib/patients";
 
 export type ShareDialogPhase =
@@ -38,17 +44,37 @@ export type ShareDialogPhase =
   | { step: "done"; view: ShareOutcomeView }
   | { step: "inviting"; view: Extract<ShareOutcomeView, { kind: "not-linked" }> };
 
-export function ShareFichaDialog({ open, onClose, note, patient, onChanged }: ShareFichaDialogProps) {
+export function ShareFichaDialog({
+  open,
+  onClose,
+  note,
+  patient,
+  onChanged,
+}: ShareFichaDialogProps) {
   const [idempotencyKey] = useState(newIdempotencyKey);
   const [notify, setNotify] = useState(true);
   const [phase, setPhase] = useState<ShareDialogPhase>({ step: "confirm", error: null });
   const toast = useToast();
+  const [portalInfo, setPortalInfo] = useState<PortalShareInfo | null>(null);
+  const confirmView = shareConfirmView(patient.email, portalInfo);
+
+  useEffect(() => {
+    let alive = true;
+    getPatientPortalShareInfo({ patientId: patient.id })
+      .then((r) => {
+        if (alive && r.ok) setPortalInfo({ portal: r.data.portal, maskedEmail: r.data.maskedEmail });
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [patient.id]);
 
   const share = async () => {
     setPhase({ step: "sharing" });
     let r: Awaited<ReturnType<typeof shareClinicalNoteWithPatient>>;
     try {
-      r = await shareClinicalNoteWithPatient({ noteId: note.id, idempotencyKey, notify });
+      r = await shareClinicalNoteWithPatient({ noteId: note.id, idempotencyKey, notify: confirmView.showNotify && notify });
     } catch {
       setPhase({ step: "confirm", error: SHARE_COPY.shareNetwork });
       return;
@@ -96,6 +122,7 @@ export function ShareFichaDialog({ open, onClose, note, patient, onChanged }: Sh
       <ShareFichaContent
         variant={shareDialogVariant(note)}
         patientName={patient.name}
+        confirmView={confirmView}
         notify={notify}
         onNotifyChange={setNotify}
         phase={phase}
@@ -113,6 +140,7 @@ const textStyle: React.CSSProperties = { margin: 0, fontSize: 14, lineHeight: 1.
 export function ShareFichaContent({
   variant,
   patientName,
+  confirmView = { showNotify: true, noEmail: null, portalAccount: null },
   notify,
   onNotifyChange,
   phase,
@@ -122,6 +150,7 @@ export function ShareFichaContent({
 }: {
   variant: "first" | "reshare";
   patientName: string;
+  confirmView?: ReturnType<typeof shareConfirmView>;
   notify: boolean;
   onNotifyChange: (v: boolean) => void;
   phase: ShareDialogPhase;
@@ -138,7 +167,6 @@ export function ShareFichaContent({
         <p role="status" style={{ ...textStyle, fontWeight: 600 }}>
           {view.message}
         </p>
-        <p style={textStyle}>{SHARE_COPY.noPortal}</p>
         {view.noEmail && <p style={{ ...textStyle, color: "var(--warn-fg)" }}>{view.noEmail}</p>}
         <ModalActions>
           <Button type="button" variant="ghost" onClick={onClose} disabled={inviting}>
@@ -159,10 +187,18 @@ export function ShareFichaContent({
     <div style={{ display: "grid", gap: 12 }} data-share-step={variant}>
       {patientName && <p style={{ ...textStyle, fontWeight: 600, color: "var(--navy-900)" }}>{patientName}</p>}
       <p style={textStyle}>{variant === "reshare" ? SHARE_COPY.reshareBody : SHARE_COPY.body}</p>
-      <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 14, minHeight: 44, cursor: "pointer" }}>
-        <input type="checkbox" checked={notify} onChange={(e) => onNotifyChange(e.target.checked)} disabled={sharing} />
-        {SHARE_COPY.notify}
-      </label>
+      {confirmView.portalAccount && (
+        <p style={textStyle} data-share-portal-account="">
+          {confirmView.portalAccount}
+        </p>
+      )}
+      {confirmView.noEmail && <p style={{ ...textStyle, color: "var(--warn-fg)" }}>{confirmView.noEmail}</p>}
+      {confirmView.showNotify && (
+        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 14, minHeight: 44, cursor: "pointer" }}>
+          <input type="checkbox" checked={notify} onChange={(e) => onNotifyChange(e.target.checked)} disabled={sharing} />
+          {SHARE_COPY.notify}
+        </label>
+      )}
       {error && (
         <p role="alert" style={{ ...textStyle, color: "var(--danger-fg)" }}>
           {error}

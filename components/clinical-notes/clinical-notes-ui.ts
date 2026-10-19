@@ -361,11 +361,12 @@ export function voidReasonCounter(reason: string): string {
 
 /**
  * Quién la anuló. El DTO trae solo el `byUserId`; por la regla de EV2-D15 anula el autor o el/la Titular clínico/a,
- * así que si no fue el autor fue el/la Titular (sin otra query, y nunca un email).
+ * así que si no fue el autor fue la cuenta Titular (sin otra query, y nunca un email). T4-Z: «la cuenta Titular» y no
+ * «el/la Titular» (la barra se leía como un formulario).
  */
 export function voidedByLabel(note: ClinicalNoteDTO): string {
   if (!note.voided) return "";
-  return note.voided.byUserId === note.author.userId ? note.author.name : "el/la Titular";
+  return note.voided.byUserId === note.author.userId ? note.author.name : "la cuenta Titular";
 }
 
 /**

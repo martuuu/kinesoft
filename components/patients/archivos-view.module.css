@@ -50,7 +50,7 @@ label:has(> .fileInput:focus-visible) {
 .progress {
   height: 6px;
   border-radius: 999px;
-  background: rgba(31, 79, 190, 0.12);
+  background: var(--sky-100);
   overflow: hidden;
   position: relative;
 }

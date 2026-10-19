@@ -286,12 +286,12 @@ describe("[EV2-2e] anular", () => {
     expect(voidReasonError("x".repeat(501))).toContain("500");
   });
 
-  it("[EV2-2e] quién anuló: el autor por nombre; si no, el/la Titular (nunca un email); fecha AR", () => {
+  it("[EV2-2e] quién anuló: el autor por nombre; si no, la cuenta Titular (nunca un email); fecha AR", () => {
     const voided = { at: "2026-10-15T20:15:00.000Z", byUserId: AUTHOR, reason: "Paciente equivocado" };
     const byAuthor = note({ voided });
     expect(voidedByLabel(byAuthor)).toBe("Lic. Pérez");
     expect(voidedSummary(byAuthor)).toBe("Anulada el 15/10/26 17:15 por Lic. Pérez");
-    expect(voidedByLabel(note({ voided: { ...voided, byUserId: "owner" } }))).toBe("el/la Titular");
+    expect(voidedByLabel(note({ voided: { ...voided, byUserId: "owner" } }))).toBe("la cuenta Titular");
     expect(noteActions(byAuthor, new Date("2026-10-15T21:00:00.000Z"))).toEqual({
       edit: false,
       amend: false,

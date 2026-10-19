@@ -45,12 +45,14 @@ describe("[FC-3g] BackupSetup", () => {
     expect(html).toContain(BACKUP_COPY.close);
   });
 
-  it("sin carpeta: aviso de datos de salud + casilla destildada → «Elegir carpeta» deshabilitado", () => {
+  it("sin carpeta: aviso de datos de salud + casilla destildada → «Elegir carpeta» habilitado (el click explica la casilla)", () => {
     const html = view({});
     expect(html).toContain(esc(BACKUP_COPY.soloUserHint));
     expect(html).toMatch(/<input[^>]*type="checkbox"(?![^>]*checked)[^>]*>/);
     expect(html).toContain(BACKUP_COPY.soloUser);
-    expect(chooseButton(html, BACKUP_COPY.choose)).toContain("disabled");
+    // T4-Z: habilitado; sin la casilla, el click muestra `soloUserRequired` (el contenedor no llama al selector).
+    expect(chooseButton(html, BACKUP_COPY.choose)).not.toContain("disabled");
+    expect(view({ error: BACKUP_COPY.soloUserRequired })).toContain(BACKUP_COPY.soloUserRequired);
   });
 
   it("con la casilla tildada se habilita; con carpeta, «Cambiar» y «Dejar de usar»", () => {

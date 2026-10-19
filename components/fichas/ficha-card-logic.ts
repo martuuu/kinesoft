@@ -119,6 +119,22 @@ export function isFoldableBody(text: string): boolean {
 export type FichaMenuItemId = "pdf" | "docx" | "saveToFolder" | "share" | "shareCurrent" | "unshare" | "amend" | "versions" | "void";
 export type FichaMenuItem = { id: FichaMenuItemId; label: string; danger?: boolean; separatorBefore?: boolean };
 
+/** Ítem genérico del panel `FichaMenu` (también lo usa el «⋯» del encabezado de la HC). */
+export type MenuItemBase<Id extends string = string> = { id: Id; label: string; danger?: boolean; separatorBefore?: boolean };
+
+export type FichaMenuProps<Id extends string = FichaMenuItemId> = {
+  id: string;
+  /** Etiqueta del menú (`aria-labelledby` del botón no alcanza: el botón es un ícono). */
+  label: string;
+  items: readonly MenuItemBase<Id>[];
+  /** El caller devuelve el foco a su botón ANTES de cerrar (el ítem enfocado se desmonta). */
+  onSelect: (id: Id) => void;
+  /** `restoreFocus`: Esc sí (el foco vuelve al botón), click afuera / Tab no (el usuario ya lo movió). */
+  onClose: (restoreFocus: boolean) => void;
+  /** El botón «⋯»: un mousedown sobre él no cuenta como «afuera» (lo maneja su propio toggle). */
+  triggerRef?: { readonly current: HTMLElement | null };
+};
+
 export type FichaMenuOptions = {
   now: Date;
   /** false = tarjeta de una enmienda: solo versiones y anular (la descarga y el compartir son de la raíz). */

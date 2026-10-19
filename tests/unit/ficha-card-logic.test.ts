@@ -20,6 +20,7 @@ import {
   fichaDownloadUrl,
   filenameFromDisposition,
   shareDialogVariant,
+  shareConfirmView,
   shareOutcomeView,
   sharedDocumentAfterShare,
 } from "@/components/fichas/ficha-share-download-logic";
@@ -271,6 +272,10 @@ describe("[FC-3e2] compartir", () => {
     expect(shareOutcomeView({ patientPortal: "linked", delivery: { channel: "email", status: "failed" } }, null)).toMatchObject({
       warning: PATIENT_DOCUMENT_COPY.emailFailed,
     });
+    // M-2: el tope de avisos por paciente no es un error del compartir: aviso aparte.
+    expect(shareOutcomeView({ patientPortal: "linked", delivery: { channel: "email", status: "skipped" } }, "a@b.c")).toMatchObject({
+      warning: SHARE_FICHA_COPY.emailSkipped,
+    });
     expect(shareOutcomeView({ patientPortal: "not-linked", delivery: { channel: "email", status: "no-portal-user" } }, "a@b.c")).toEqual({
       kind: "not-linked",
       message: PATIENT_DOCUMENT_COPY.sharedNoPortal,
@@ -279,10 +284,26 @@ describe("[FC-3e2] compartir", () => {
     });
     expect(shareOutcomeView({ patientPortal: "not-linked", delivery: null }, "  ")).toEqual({
       kind: "not-linked",
-      message: PATIENT_DOCUMENT_COPY.sharedNoPortal,
+      message: SHARE_FICHA_COPY.sharedNoPortalNoEmail,
       canInvite: false,
       noEmail: SHARE_FICHA_COPY.noEmail,
     });
+  });
+
+  it("[T4-Z A2/M-3] confirmar: la casilla del mail solo si el mail puede salir", () => {
+    // Sin dato del portal: decide el email del paciente.
+    expect(shareConfirmView("a@b.c", null)).toEqual({ showNotify: true, noEmail: null, portalAccount: null });
+    expect(shareConfirmView(" ", null)).toEqual({ showNotify: false, noEmail: SHARE_FICHA_COPY.noEmail, portalAccount: null });
+    // Portal vinculado: el mail sale a la cuenta del portal aunque el paciente no tenga email cargado.
+    expect(shareConfirmView(null, { portal: "linked", maskedEmail: "j***@gmail.com" })).toEqual({
+      showNotify: true,
+      noEmail: null,
+      portalAccount: "Lo va a ver la cuenta del portal j***@gmail.com.",
+    });
+    expect(shareConfirmView(null, { portal: "linked", maskedEmail: null })).toMatchObject({ showNotify: true, portalAccount: null });
+    // Sin portal el server no manda mail (`no-portal-user`): sin casilla; con email se lo invita después.
+    expect(shareConfirmView("a@b.c", { portal: "not-linked", maskedEmail: null })).toEqual({ showNotify: false, noEmail: null, portalAccount: null });
+    expect(shareConfirmView(null, { portal: "not-linked", maskedEmail: null })).toMatchObject({ noEmail: SHARE_FICHA_COPY.noEmail });
   });
 
   it("[FC-3e] el estado nuevo de la tarjeta sale del documento devuelto", () => {

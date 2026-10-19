@@ -80,6 +80,11 @@ export function BackupSetup({ scope, variant, onClose, onConfigured }: BackupSet
 
   /** Click de «Elegir/Cambiar carpeta»: `chooseBackupFolder` abre el selector ANTES de cualquier await. */
   const onChoose = () => {
+    // T4-Z: el botón ya no se deshabilita sin la casilla (un botón gris no dice por qué); el click lo explica.
+    if (!soloUser) {
+      setError(COPY.soloUserRequired);
+      return;
+    }
     const pending = chooseBackupFolder({ tenantId, userId }, soloUser, window as unknown as DirectoryPickerHost);
     setError(null);
     setBusy(true);
@@ -242,7 +247,7 @@ export function BackupSetupView(p: BackupSetupViewProps) {
             </Button>
           )}
           {pickable && (
-            <Button type="button" onClick={p.onChoose} disabled={p.busy || !p.soloUser} aria-describedby={hintId}>
+            <Button type="button" onClick={p.onChoose} disabled={p.busy} aria-describedby={hintId}>
               {configured ? COPY.change : COPY.choose}
             </Button>
           )}

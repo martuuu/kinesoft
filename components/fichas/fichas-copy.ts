@@ -15,6 +15,7 @@ export const HC_HOME_COPY = {
   tabLabel: "Historia clínica",
   print: "Imprimir historia clínica",
   downloadRecord: "Descargar historia clínica completa (PDF)",
+  preparingPdf: "Preparando el PDF…",
   moreActions: "Más acciones de la historia clínica",
   importWord: "Importar fichas de Word",
   backupFolder: "Carpeta de respaldo",
@@ -49,6 +50,10 @@ export const FICHA_FORM_COPY = {
   saveAmend: "Guardar enmienda",
   amendHint: "La enmienda se agrega debajo de la ficha original, que queda como estaba.",
   amendCarriedHint: "Copiamos tu texto: dejá solo lo que agrega o corrige.",
+  /** T4-Z (handoff de ZF3): antes armado a mano en ficha-form. */
+  amendOf: (date: string, author: string) => `Enmienda a la ficha del ${date} de ${author}.`,
+  /** T4-Z A1: título y diagnósticos plegados en el composer inline hasta que se piden. */
+  addExtras: "Agregar título y diagnósticos",
   occurredAtRequired: "Elegí la fecha y la hora.",
   saveShortcut: "Ctrl o ⌘ + Enter",
   saving: "Guardando…",
@@ -56,7 +61,6 @@ export const FICHA_FORM_COPY = {
   discard: "Descartar",
   discardConfirm: "¿Descartás la ficha? Lo que escribiste se pierde.",
   dirtyMessage: "Tenés una ficha sin guardar. Si cerrás, se pierde.",
-  beforeUnload: "Tenés una ficha sin guardar.",
   saved: "Ficha guardada",
   savedEdit: "Cambios guardados",
   savedAmend: "Enmienda guardada",
@@ -70,8 +74,9 @@ export const HC_EDITOR_COPY = {
   bold: "Negrita",
   italic: "Cursiva",
   underline: "Subrayado",
-  heading: "Título",
-  subheading: "Subtítulo",
+  // T4-Z: «Título» a secas se confundía con el título de la ficha (campo aparte del formulario).
+  heading: "Título de sección",
+  subheading: "Subtítulo de sección",
   bulletList: "Lista con viñetas",
   orderedList: "Lista numerada",
   undo: "Deshacer",
@@ -119,6 +124,8 @@ export const FICHA_CARD_COPY = {
   showMore: "Ver todo",
   showLess: "Ver menos",
   menuLabel: "Acciones de la ficha",
+  /** Nombre del botón «⋯» (T4-Z): con la fecha, para distinguir una tarjeta de otra en la lista de botones. */
+  menuTrigger: (date: string) => `Más acciones de la ficha del ${date}`,
   pdf: "PDF",
   word: "Word",
   saveToFolder: "Guardar en la carpeta",
@@ -143,15 +150,20 @@ export const FICHA_CARD_COPY = {
 /** Compartir (FC-3e2, `ShareFichaDialog`). */
 export const SHARE_FICHA_COPY = {
   title: "Compartir con el paciente",
-  body: "El paciente va a ver esta ficha en su portal, en «Documentos», como PDF.",
-  notify: "Avisarle por mail",
+  // T4-Z (A2): el copy anterior prometía portal y mail aunque el paciente no tuviera ninguno de los dos.
+  body: "Va a quedar en el portal del paciente, en «Documentos», como PDF. Si todavía no tiene portal, te ofrecemos invitarlo.",
+  notify: "Avisarle por mail (el mail no incluye datos de la ficha)",
+  /** M-3: a qué cuenta del portal va (email enmascarado que arma el server, nunca el completo). */
+  portalAccount: (maskedEmail: string) => `Lo va a ver la cuenta del portal ${maskedEmail}.`,
   confirm: "Compartir",
   reshareBody: "La ficha cambió desde que la compartiste. Se reemplaza el documento del portal por la versión actual.",
   reshareConfirm: "Compartir la versión actual",
-  noPortal: "El paciente todavía no tiene cuenta en el portal.",
-  invite: "Invitar al portal y compartir",
+  /** Sin portal y sin email para invitarlo (con email se usa `PATIENT_DOCUMENT_COPY.sharedNoPortal`). */
+  sharedNoPortalNoEmail: "Listo: la ficha quedó compartida. El paciente todavía no tiene portal.",
+  invite: "Invitar al portal",
   noEmail: "El paciente no tiene email cargado: agregalo en sus datos para invitarlo al portal.",
   shared: "Ficha compartida",
+  emailSkipped: "Se compartió, pero no le mandamos el mail: ya le avisamos varias veces en la última hora.",
   unshareConfirm: "¿Dejás de compartir la ficha? El paciente deja de verla en el portal.",
   unshared: "La ficha ya no se comparte",
   sharing: "Compartiendo…",
@@ -184,6 +196,7 @@ export const BACKUP_COPY = {
     "Este navegador no permite elegir una carpeta. Usá Chrome o Edge en una computadora; mientras tanto, el PDF se descarga.",
   savedToFolder: (path: string) => `Guardada en ${path}`,
   downloaded: "Se descargó el PDF",
+  saving: "Guardando en la carpeta…",
   failed: "No pudimos guardar el PDF. Probá de nuevo.",
   checking: "Revisando la carpeta…",
   grant: "Dar permiso ahora",

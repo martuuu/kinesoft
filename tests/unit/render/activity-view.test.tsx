@@ -31,8 +31,8 @@ describe("[EV2-3d] actividad: evoluciones e impresión", () => {
     ["clinicalRecord.print", "Historia clínica impresa"],
     // [FC-3h2] compartir con el paciente y descargas (C-FC7).
     ["patientDocument.share", "Ficha compartida con el paciente"],
-    ["patientDocument.revoke", "Ficha que dejó de compartirse"],
-    ["patientDocument.download", "Ficha compartida descargada por el paciente"],
+    ["patientDocument.revoke", "Se dejó de compartir una ficha con el paciente"],
+    ["patientDocument.download", "El paciente descargó una ficha compartida"],
     ["clinicalNote.download", "Ficha descargada"],
     ["clinicalRecord.download", "Historia clínica descargada"],
   ])("%s → «%s»", (action, label) => {

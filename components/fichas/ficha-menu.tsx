@@ -11,25 +11,21 @@
  * Teclado (patrón WAI-ARIA «menu button»): al abrir, foco en el primer ítem; ↑/↓ en ronda, Inicio/Fin; Esc cierra y
  * devuelve el foco al botón; Tab cierra (sale del menú). Click afuera cierra. Sin animación: con reducedMotion el
  * estado final es el mismo.
+ *
+ * T4-Z: genérico en el id del ítem porque también lo usa el «⋯» del encabezado de la HC (`hc-header-actions`): antes
+ * tenía su propio menú, sin Inicio/Fin, sin Tab que cierre, con ítems tabulables y un «click afuera» que contaba los
+ * botones vecinos como adentro. Mismo chunk diferido: no suma bytes ni chunks.
  */
-import { useEffect, useRef, type KeyboardEvent, type RefObject } from "react";
-import type { FichaMenuItem, FichaMenuItemId } from "@/components/fichas/ficha-card-logic";
+import { useEffect, useRef, type KeyboardEvent } from "react";
+import type { FichaMenuItemId, FichaMenuProps } from "@/components/fichas/ficha-card-logic";
 
-export type FichaMenuProps = {
-  id: string;
-  /** Etiqueta del menú (`aria-labelledby` del botón no alcanza: el botón es un ícono). */
-  label: string;
-  items: readonly FichaMenuItem[];
-  onSelect: (id: FichaMenuItemId) => void;
-  /** `restoreFocus`: Esc sí (el foco vuelve al botón), click afuera / Tab no (el usuario ya lo movió). */
-  onClose: (restoreFocus: boolean) => void;
-  /** El botón «⋯»: un mousedown sobre él no cuenta como «afuera» (lo maneja su propio toggle). */
-  triggerRef?: RefObject<HTMLElement | null>;
-};
+// Los tipos viven en `ficha-card-logic` (estático): la tarjeta y el encabezado de la HC los usan sin importar este
+// módulo, que es diferido (el guard de fuente de la tarjeta frena cualquier import estático de acá, también `type`).
+export type { FichaMenuProps, MenuItemBase } from "@/components/fichas/ficha-card-logic";
 
 const itemStyle: React.CSSProperties = {
   width: "100%",
-  minHeight: 36,
+  minHeight: 44,
   textAlign: "left",
   background: "transparent",
   border: "none",
@@ -41,7 +37,7 @@ const itemStyle: React.CSSProperties = {
   cursor: "pointer",
 };
 
-export function FichaMenu({ id, label, items, onSelect, onClose, triggerRef }: FichaMenuProps) {
+export function FichaMenu<Id extends string = FichaMenuItemId>({ id, label, items, onSelect, onClose, triggerRef }: FichaMenuProps<Id>) {
   const panelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {

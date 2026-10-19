@@ -51,7 +51,7 @@ import {
 } from "@/components/patients/profile/views/evoluciones-view";
 import { composerBarBooking } from "@/components/fichas/composer-bar";
 import { filenameFromDisposition, hcRecordDownloadError, hcRecordPdfUrl } from "@/components/fichas/hc-header-actions";
-import { HC_HOME_COPY } from "@/components/fichas/fichas-copy";
+import { FICHA_CARD_COPY, HC_HOME_COPY } from "@/components/fichas/fichas-copy";
 import { HC_EXPORT_COPY } from "@/lib/hc-export-logic";
 import { modulesFor } from "@/lib/tenant-modules";
 import type { ClinicalNoteDTO, ComposerBookingCandidate, PatientClinicalHome, TimelineItem } from "@/lib/clinical-notes-types";
@@ -209,13 +209,14 @@ describe("[FC-3e] HC completa y menú «⋯»", () => {
     expect(ro).not.toContain(`aria-label="${HC_HOME_COPY.moreActions}"`);
   });
 
-  it("descarga: 413 con el copy de la ruta, 429 rate limit, 503 sin cuerpo y el resto → «No pudimos armar el archivo»", () => {
+  it("descarga: 413 con el copy de la ruta, 429 rate limit, 503 sin cuerpo (audit caído) y el resto → «No pudimos armar el archivo»", () => {
     expect(hcRecordPdfUrl("p 1")).toBe("/api/pacientes/p%201/historia-clinica/pdf");
     expect(hcRecordDownloadError(200, null)).toBeNull();
     expect(hcRecordDownloadError(413, HC_EXPORT_COPY.recordTooLarge)).toBe(HC_EXPORT_COPY.recordTooLarge);
     expect(hcRecordDownloadError(413, "")).toBe(HC_EXPORT_COPY.recordTooLarge);
     expect(hcRecordDownloadError(429, "x")).toBe(HC_EXPORT_COPY.rateLimited);
-    expect(hcRecordDownloadError(503, null)).toBe(HC_EXPORT_COPY.renderFailed);
+    // T4-Z: 503 = el audit falló y no salió nada (C-FC7): el mismo copy que la descarga de una ficha.
+    expect(hcRecordDownloadError(503, null)).toBe(FICHA_CARD_COPY.downloadUnavailable);
     expect(hcRecordDownloadError(404, "Not found")).toBe(HC_EXPORT_COPY.renderFailed);
   });
 

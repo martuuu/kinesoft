@@ -15,10 +15,12 @@
  * `next/dynamic` y se bajan recién al elegir la opción del menú (§24.9; `hc-first-load-guard` lo frena si alguien
  * los importa estático desde acá).
  */
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useToast } from "@/components/ui/toast";
-import { HC_HOME_COPY } from "@/components/fichas/fichas-copy";
+import { Button, buttonClassName } from "@/components/ui/button";
+import { FICHA_CARD_COPY, HC_HOME_COPY } from "@/components/fichas/fichas-copy";
+import type { FichaMenuProps } from "@/components/fichas/ficha-card-logic";
 import type { FichaBackupScope } from "@/components/fichas/fichas-ui-types";
 import type { ClinicalNoteDTO } from "@/lib/clinical-notes-types";
 import { HC_EXPORT_COPY } from "@/lib/hc-export-logic";
@@ -27,6 +29,16 @@ const loadWordImport = () => import("@/components/fichas/word-import-drawer");
 const WordImportDrawer = dynamic(() => loadWordImport().then((m) => m.WordImportDrawer), { ssr: false, loading: () => null });
 const loadBackupSetup = () => import("@/components/fichas/backup-setup");
 const loadModal = () => import("@/components/ui/modal");
+/**
+ * T4-Z: el panel del «⋯» es el MISMO `FichaMenu` diferido de la tarjeta (mismo `import()` → mismo chunk, +0 kB). Se
+ * precarga al pasar el mouse o enfocar el botón, igual que en la tarjeta.
+ */
+type HcMenuItemId = "importWord" | "backupFolder";
+const loadFichaMenu = () => import("@/components/fichas/ficha-menu");
+const HcMenu = dynamic(
+  () => loadFichaMenu().then((m) => m.FichaMenu as (p: FichaMenuProps<HcMenuItemId>) => JSX.Element),
+  { ssr: false, loading: () => null }
+);
 /**
  * FC-3i1 (bundle, §24.9): el `Modal` de la carpeta de respaldo viajaba ESTÁTICO en el first load de /pacientes/[id]
  * (Modal + focus trap ≈ 1,5 kB gz) solo para un diálogo que se abre desde el menú «⋯». Ahora Modal y `BackupSetup`
@@ -56,14 +68,16 @@ export function hcRecordPdfUrl(patientId: string): string {
  * Status de la ruta → mensaje para el toast (null = OK). Pura, con test.
  * - 413: el texto plano que manda la ruta (FC-D31); si viniera vacío, el mismo copy de `HC_EXPORT_COPY`.
  * - 429: rate limit (5 / 10 min, la HC completa es el render caro).
- * - 503 (audit caído, sin cuerpo), 500, 404 y cualquier otro: «No pudimos armar el archivo». No se distingue el 404
- *   (paciente ajeno o sin acceso): el botón solo existe si la HC se ve, así que un 404 acá es una carrera.
+ * - 503: el audit falló y la ruta no mandó nada a propósito (C-FC7) → el mismo copy que la descarga de una ficha.
+ * - 500, 404 y cualquier otro: «No pudimos armar el archivo». No se distingue el 404 (paciente ajeno o sin acceso): el
+ *   botón solo existe si la HC se ve, así que un 404 acá es una carrera.
  */
 export function hcRecordDownloadError(status: number, bodyText: string | null): string | null {
   if (status >= 200 && status < 300) return null;
   const text = bodyText?.trim() ?? "";
   if (status === 413) return text || HC_EXPORT_COPY.recordTooLarge;
   if (status === 429) return HC_EXPORT_COPY.rateLimited;
+  if (status === 503) return FICHA_CARD_COPY.downloadUnavailable;
   return HC_EXPORT_COPY.renderFailed;
 }
 
@@ -99,26 +113,12 @@ export type HcHeaderActionsProps = {
   onImported?: (notes: ClinicalNoteDTO[]) => void;
 };
 
-const MENU_ITEM_STYLE: React.CSSProperties = {
-  width: "100%",
-  textAlign: "left",
-  background: "transparent",
-  border: "none",
-  padding: "10px 12px",
-  borderRadius: 8,
-  fontSize: 13,
-  color: "var(--navy-900)",
-  cursor: "pointer",
-  minHeight: 44,
-};
-
 export function HcHeaderActions({ patientId, patientName, hasNotes, canWrite, backupScope, onImported }: HcHeaderActionsProps) {
   const toast = useToast();
   const [downloading, setDownloading] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
   const menuBtnRef = useRef<HTMLButtonElement | null>(null);
   const menuId = `hc-more-${patientId}`;
 
@@ -126,39 +126,39 @@ export function HcHeaderActions({ patientId, patientName, hasNotes, canWrite, ba
   const showBackup = backupScope != null;
   const hasMenu = showImport || showBackup;
 
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setMenuOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setMenuOpen(false);
-        menuBtnRef.current?.focus();
-      }
-    };
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    // Foco al primer ítem al abrir (patrón de menú: la flecha y Enter siguen desde ahí).
-    wrapRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [menuOpen]);
+  const menuItems: { id: HcMenuItemId; label: string }[] = [
+    ...(showImport ? [{ id: "importWord" as const, label: HC_HOME_COPY.importWord }] : []),
+    ...(showBackup ? [{ id: "backupFolder" as const, label: HC_HOME_COPY.backupFolder }] : []),
+  ];
 
-  const onMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    e.preventDefault();
-    const items = [...(wrapRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])];
-    const i = items.indexOf(document.activeElement as HTMLButtonElement);
-    const next = e.key === "ArrowDown" ? (i + 1) % items.length : (i - 1 + items.length) % items.length;
-    items[next]?.focus();
+  const preloadMenu = () => {
+    // Precarga barata de lo que el menú abre (chunks chicos; mammoth no: lo carga el drawer al leer).
+    void loadFichaMenu().catch(() => {});
+    if (showImport) void loadWordImport().catch(() => {});
+    if (showBackup) void Promise.all([loadModal(), loadBackupSetup()]).catch(() => {});
+  };
+
+  const closeMenu = (restoreFocus: boolean) => {
+    setMenuOpen(false);
+    if (restoreFocus) menuBtnRef.current?.focus();
+  };
+
+  const onMenuSelect = (id: HcMenuItemId) => {
+    // T4-Z (a11y): el foco vuelve a «⋯» antes de desmontar el panel; si no, queda en el <body> y el drawer/diálogo
+    // que se abre lo devuelve ahí al cerrarse.
+    menuBtnRef.current?.focus();
+    setMenuOpen(false);
+    if (id === "importWord") setImportOpen(true);
+    else setBackupOpen(true);
   };
 
   const downloadRecord = async () => {
     if (downloading) return;
     setDownloading(true);
+    // La HC completa tarda varios segundos en armarse: sin aviso el click parece no haber hecho nada. Mismo id → no
+    // se apila con un segundo click; se cierra al terminar (bien o mal).
+    const progressId = `hc-dl:${patientId}`;
+    toast.info(HC_HOME_COPY.preparingPdf, { id: progressId, duration: 0 });
     try {
       const res = await fetch(hcRecordPdfUrl(patientId), { credentials: "same-origin", cache: "no-store" });
       if (!res.ok) {
@@ -182,6 +182,7 @@ export function HcHeaderActions({ patientId, patientName, hasNotes, canWrite, ba
       console.error("descarga de la HC completa falló", e);
       toast.error(HC_EXPORT_COPY.renderFailed);
     } finally {
+      toast.dismiss(progressId);
       setDownloading(false);
     }
   };
@@ -189,89 +190,59 @@ export function HcHeaderActions({ patientId, patientName, hasNotes, canWrite, ba
   const printHref = `/pacientes/${encodeURIComponent(patientId)}/imprimir`;
 
   return (
-    <div ref={wrapRef} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", position: "relative" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", position: "relative" }}>
       {hasNotes && (
         <>
           <a
-            className="k-btn k-btn-ghost k-evo-head-btn"
+            className={buttonClassName({ variant: "ghost", size: "sm" })}
             href={printHref}
             target="_blank"
             rel="noopener noreferrer"
-            style={{ fontSize: 12, padding: "8px 12px", textDecoration: "none" }}
+            style={{ textDecoration: "none" }}
           >
             {HC_HOME_COPY.print}
           </a>
-          <button
+          <Button
             type="button"
-            className="k-btn k-btn-ghost k-evo-head-btn"
+            variant="ghost"
+            size="sm"
             onClick={() => void downloadRecord()}
             disabled={downloading}
             aria-busy={downloading || undefined}
             data-hc-download-record=""
-            style={{ fontSize: 12, padding: "8px 12px" }}
           >
             {HC_HOME_COPY.downloadRecord}
-          </button>
+          </Button>
         </>
       )}
       {hasMenu && (
-        <>
+        <div style={{ position: "relative" }}>
           <button
             ref={menuBtnRef}
             type="button"
-            className="k-btn k-btn-ghost k-evo-head-btn"
+            className={buttonClassName({ variant: "ghost", size: "sm" })}
             aria-label={HC_HOME_COPY.moreActions}
             aria-haspopup="menu"
             aria-expanded={menuOpen}
             aria-controls={menuOpen ? menuId : undefined}
             onClick={() => setMenuOpen((v) => !v)}
-            onPointerEnter={() => {
-              // Precarga barata de lo que el menú abre (dos chunks chicos; mammoth no: lo carga el drawer al leer).
-              if (showImport) void loadWordImport().catch(() => {});
-              if (showBackup) void Promise.all([loadModal(), loadBackupSetup()]).catch(() => {});
-            }}
-            style={{ fontSize: 16, fontWeight: 700, padding: "6px 12px", lineHeight: 1 }}
+            onPointerEnter={preloadMenu}
+            onFocus={preloadMenu}
+            style={{ fontSize: 16, fontWeight: 700, lineHeight: 1, minWidth: 44 }}
           >
-            ⋯
+            <span aria-hidden="true">⋯</span>
           </button>
           {menuOpen && (
-            <div
+            <HcMenu
               id={menuId}
-              role="menu"
-              aria-label={HC_HOME_COPY.moreActions}
-              className="k-glass-strong"
-              onKeyDown={onMenuKeyDown}
-              style={{ position: "absolute", top: "100%", right: 0, marginTop: 4, minWidth: 240, borderRadius: 12, padding: 4, zIndex: 25 }}
-            >
-              {showImport && (
-                <button
-                  type="button"
-                  role="menuitem"
-                  style={MENU_ITEM_STYLE}
-                  onClick={() => {
-                    setMenuOpen(false);
-                    setImportOpen(true);
-                  }}
-                >
-                  {HC_HOME_COPY.importWord}
-                </button>
-              )}
-              {showBackup && (
-                <button
-                  type="button"
-                  role="menuitem"
-                  style={MENU_ITEM_STYLE}
-                  onClick={() => {
-                    setMenuOpen(false);
-                    setBackupOpen(true);
-                  }}
-                >
-                  {HC_HOME_COPY.backupFolder}
-                </button>
-              )}
-            </div>
+              label={HC_HOME_COPY.moreActions}
+              items={menuItems}
+              onSelect={onMenuSelect}
+              onClose={closeMenu}
+              triggerRef={menuBtnRef}
+            />
           )}
-        </>
+        </div>
       )}
 
       {importOpen && (

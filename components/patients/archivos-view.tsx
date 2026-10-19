@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { IconFile, IconX } from "@/components/ui/icons";
 import styles from "./archivos-view.module.css";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useToast } from "@/components/ui/toast";
 import {
   confirmPatientFileUpload,
   deletePatientFile,
@@ -70,16 +71,19 @@ export function ArchivosView({
 }) {
   const [files, setFiles] = useState<PatientFileRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [listFailed, setListFailed] = useState(false);
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [bump, setBump] = useState(0);
   const confirm = useConfirm();
+  const toast = useToast();
 
   // Sequence-guarded fetch: a rapid patientId switch can't have a stale
   // response from the previous patient overwrite the current one.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setListFailed(false);
     listPatientFiles(patientId)
       .then((r) => {
         if (cancelled) return;
@@ -88,6 +92,7 @@ export function ArchivosView({
       })
       .catch(() => {
         if (cancelled) return;
+        setListFailed(true);
         setLoading(false);
       });
     return () => {
@@ -157,6 +162,7 @@ export function ArchivosView({
       formRef.current?.reset();
       setChosen(null);
       setUpload(null);
+      toast.success(UPLOAD_COPY.uploaded);
       refresh();
       return;
     }
@@ -188,14 +194,30 @@ export function ArchivosView({
     });
   };
 
+  /**
+   * T4-Z: la pestaña se abre SINCRÓNICA dentro del click y la URL firmada se asigna después. Antes `window.open` corría
+   * después del await de la action: sin activación del usuario, Safari y los bloqueadores de pop-ups lo frenaban sin
+   * avisar. Sin `noopener` en el `open` (devolvería null y no se podría asignar la URL): se corta `opener` a mano.
+   */
   const onDownload = (id: string) => {
+    const win = typeof window !== "undefined" ? window.open("", "_blank") : null;
+    if (win) win.opener = null;
     start(async () => {
-      const r = await getDownloadUrl(id);
+      let r: Awaited<ReturnType<typeof getDownloadUrl>>;
+      try {
+        r = await getDownloadUrl(id);
+      } catch {
+        win?.close();
+        setError(UPLOAD_COPY.network);
+        return;
+      }
       if (!r.ok) {
+        win?.close();
         setError(r.error);
         return;
       }
-      window.open(r.data.url, "_blank");
+      if (win) win.location.href = r.data.url;
+      else window.open(r.data.url, "_blank", "noopener");
     });
   };
 
@@ -211,11 +233,11 @@ export function ArchivosView({
           <label
             style={{
               padding: "20px 14px",
-              border: "1.5px dashed rgba(31,79,190,0.4)",
+              border: "1.5px dashed var(--sky-300)",
               borderRadius: 14,
               textAlign: "center",
               cursor: "pointer",
-              background: "rgba(31,79,190,0.05)",
+              background: "var(--sky-50)",
               fontSize: 12.5,
               color: "var(--navy-700)",
               display: "block",
@@ -236,7 +258,7 @@ export function ArchivosView({
             <div style={{ marginTop: 6, fontWeight: 600, overflowWrap: "anywhere" }}>
               {chosen ? chosen.name : "Elegir archivo"}
             </div>
-            <div style={{ fontSize: 10.5, color: "var(--navy-300)", marginTop: 2 }}>
+            <div style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 2 }}>
               {chosen ? formatSize(chosen.size) : "Hasta 25 MB · PDF, imágenes, video, Word, Excel…"}
             </div>
           </label>
@@ -324,7 +346,7 @@ export function ArchivosView({
             gap: 14,
             fontSize: 10,
             fontWeight: 700,
-            color: "var(--navy-300)",
+            color: "var(--navy-500)",
             letterSpacing: "0.06em",
             textTransform: "uppercase",
             borderBottom: "1px solid rgba(15,30,51,0.06)",
@@ -337,11 +359,18 @@ export function ArchivosView({
           <span style={{ textAlign: "right" }}>{readOnly ? "" : "Acción"}</span>
         </div>
         {loading ? (
-          <div style={{ padding: 24, color: "var(--navy-300)", textAlign: "center", fontSize: 13 }}>
+          <div role="status" style={{ padding: 24, color: "var(--navy-500)", textAlign: "center", fontSize: 13 }}>
             Cargando archivos…
           </div>
+        ) : listFailed ? (
+          <div role="alert" style={{ padding: 24, color: "var(--navy-700)", textAlign: "center", fontSize: 13, display: "grid", gap: 10, justifyItems: "center" }}>
+            {UPLOAD_COPY.listFailed}
+            <Button type="button" variant="ghost" size="sm" onClick={refresh}>
+              {UPLOAD_COPY.retry}
+            </Button>
+          </div>
         ) : files.length === 0 ? (
-          <div style={{ padding: 24, color: "var(--navy-300)", textAlign: "center", fontSize: 13 }}>
+          <div style={{ padding: 24, color: "var(--navy-500)", textAlign: "center", fontSize: 13 }}>
             Sin archivos cargados.
           </div>
         ) : (
@@ -361,16 +390,16 @@ export function ArchivosView({
               <div>
                 <div style={{ fontWeight: 600, color: "var(--navy-900)" }}>{f.name}</div>
                 {f.description && (
-                  <div style={{ fontSize: 11, color: "var(--navy-300)" }}>{f.description}</div>
+                  <div style={{ fontSize: 11, color: "var(--navy-500)" }}>{f.description}</div>
                 )}
               </div>
               <span style={{ fontSize: 11.5, color: "var(--navy-500)" }}>
                 {FILE_CATEGORIES.find((c) => c.value === f.category)?.label ?? f.category}
               </span>
               <span className="k-mono" style={{ fontSize: 11.5, color: "var(--navy-500)" }}>
-                {(f.sizeBytes / 1024).toFixed(0)} KB
+                {formatSize(f.sizeBytes)}
               </span>
-              <span className="k-mono" style={{ fontSize: 11, color: "var(--navy-300)" }}>
+              <span className="k-mono" style={{ fontSize: 11, color: "var(--navy-500)" }}>
                 {f.createdAt.toLocaleDateString("es-AR", { day: "2-digit", month: "short", timeZone: "America/Argentina/Buenos_Aires" })}
               </span>
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 4 }}>
@@ -380,7 +409,7 @@ export function ArchivosView({
                     className={styles.action}
                     onClick={() => onDownload(f.id)}
                     style={{
-                      background: "rgba(31,79,190,0.08)",
+                      background: "var(--sky-100)",
                       color: "var(--sky-700)",
                       border: "none",
                       padding: "5px 10px",
@@ -456,6 +485,10 @@ function UploadProgress({ state }: { state: UploadState }) {
       <div aria-hidden="true" style={{ fontSize: 11, color: "var(--navy-500)" }}>
         {label}
       </div>
+      {/* El lector anuncia la FASE (no cada %: sería un anuncio por evento de progreso). */}
+      <span role="status" className="k-sr-only">
+        {state.phase === "requesting" ? "Preparando la subida…" : state.phase === "confirming" ? "Verificando el archivo…" : "Subiendo…"}
+      </span>
     </div>
   );
 }

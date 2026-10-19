@@ -18,7 +18,7 @@ export const WORD_IMPORT_COPY = {
   limits: "Hasta 50 archivos de 10 MB cada uno.",
   notDocx: "Ese archivo no es un Word .docx.",
   docWarning: "Los .doc (Word viejo) no se pueden leer: abrilo en Word y guardalo como .docx.",
-  tooBig: "El archivo pesa más de 10 MB.",
+  tooBig: "El archivo pesa más de 10 MB: partilo en Word en archivos más chicos.",
   tooMany: "Podés importar hasta 50 archivos por vez.",
   dropped: (n: number) =>
     n === 1 ? "Quedó afuera 1 archivo: podés importar hasta 50 por vez." : `Quedaron afuera ${n} archivos: podés importar hasta 50 por vez.`,
@@ -33,6 +33,7 @@ export const WORD_IMPORT_COPY = {
   dateInvalid: "Elegí una fecha válida.",
   dateFuture: "La fecha no puede ser posterior a hoy.",
   datesReviewed: "Revisé las fechas",
+  reviewHint: "Tildá «Revisé las fechas» para importar.",
   lateEntryHint: "Las fichas importadas quedan marcadas como «Carga tardía», con la fecha de la consulta que elijas.",
   chars: (n: number) => `${n.toLocaleString("es-AR")} caracteres`,
   /** «Dividir en N fichas» (literal de §24.7). */

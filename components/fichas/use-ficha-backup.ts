@@ -19,6 +19,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BACKUP_COPY as COPY } from "@/components/fichas/fichas-copy";
+import { downloadFicha } from "@/components/fichas/download";
 import type {
   FichaBackupOutcome,
   FichaBackupScope,
@@ -48,22 +49,14 @@ function mayHavePicker(): boolean {
 }
 
 /**
- * Fallback de Safari/Firefox/mobile: descarga común desde la ruta auditada. `attachment` + mismo origen: el navegador
- * baja el archivo sin navegar. Un <a> y no `window.open`: no abre una pestaña en blanco ni lo frena el bloqueador.
+ * Fallback de Safari/Firefox/mobile y de «sin carpeta»: la MISMA descarga que «PDF» del menú (`downloadFicha`: fetch
+ * + blob desde la ruta auditada). T4-Z: antes era un `<a href download>` directo, y un 413/429/503 bajaba un archivo
+ * roto o navegaba a texto plano mientras el toast decía «Se descargó el PDF». Ahora el status se lee y el error llega
+ * al caller como cualquier otro. Sin toast propio: el caller ya avisa con el resultado.
  */
-function downloadFallback(target: FichaBackupTarget): FichaBackupOutcome {
-  try {
-    const a = document.createElement("a");
-    a.href = fichaPdfUrl(target);
-    a.rel = "noopener";
-    a.download = "";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    return { ok: true, via: "download" };
-  } catch {
-    return { ok: false, error: COPY.failed };
-  }
+async function downloadFallback(target: FichaBackupTarget): Promise<FichaBackupOutcome> {
+  const r = await downloadFicha({ patientId: target.patientId, rootId: target.noteId, format: "pdf" });
+  return r.ok ? { ok: true, via: "download" } : { ok: false, error: r.error };
 }
 
 export type BackupSaveDeps = {
@@ -71,7 +64,7 @@ export type BackupSaveDeps = {
   getHandle: () => BackupDirHandle | null;
   load: () => Promise<Pick<BackupRuntime, "backupPathFor" | "writeBackupFile" | "downloadErrorMessage">>;
   fetch: typeof fetch;
-  download: (target: FichaBackupTarget) => FichaBackupOutcome;
+  download: (target: FichaBackupTarget) => FichaBackupOutcome | Promise<FichaBackupOutcome>;
   onStatus: (s: FichaBackupStatus) => void;
 };
 

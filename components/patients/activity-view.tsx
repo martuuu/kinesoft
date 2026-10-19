@@ -252,8 +252,9 @@ function humanizeAction(action: string): string {
     // FC (C-FC7): compartir/dejar de compartir con el paciente (auditInTx) y descargas (auditSecurityEvent). La
     // importación de Word se audita como `clinicalNote.create` con `imported: true` (FC-2a, regla 6).
     "patientDocument.share": "Ficha compartida con el paciente",
-    "patientDocument.revoke": "Ficha que dejó de compartirse",
-    "patientDocument.download": "Ficha compartida descargada por el paciente",
+    // T4-Z: en frase, con sujeto (antes «Ficha que dejó de compartirse» no se entendía en una lista de eventos).
+    "patientDocument.revoke": "Se dejó de compartir una ficha con el paciente",
+    "patientDocument.download": "El paciente descargó una ficha compartida",
     "clinicalNote.download": "Ficha descargada",
     "clinicalRecord.download": "Historia clínica descargada",
   };

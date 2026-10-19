@@ -14,6 +14,7 @@ import { join } from "node:path";
 vi.mock("@/lib/clinical-notes-read", () => ({ getClinicalNoteHistory: async () => null }));
 vi.mock("@/lib/patient-documents", () => ({
   shareClinicalNoteWithPatient: async () => ({ ok: false, error: "x" }),
+  getPatientPortalShareInfo: async () => ({ ok: false, error: "x" }),
   revokePatientDocument: async () => ({ ok: false, error: "x" }),
 }));
 vi.mock("@/lib/patients", () => ({ sendPatientPortalInvite: async () => ({ ok: false, error: "x" }) }));
@@ -26,6 +27,7 @@ import { FoldableHcBody, NoteCard } from "@/components/clinical-notes/note-card"
 import { NoteHistoryContent } from "@/components/clinical-notes/note-history-modal";
 import { FichaMenu, menuKeyStep } from "@/components/fichas/ficha-menu";
 import { ShareFichaContent } from "@/components/fichas/share-ficha-dialog";
+import { shareConfirmView } from "@/components/fichas/ficha-share-download-logic";
 import { fichaMenuItems, type FichaCardContext } from "@/components/fichas/ficha-card-logic";
 import { FICHA_CARD_COPY, SHARE_FICHA_COPY } from "@/components/fichas/fichas-copy";
 import { permissionsFor } from "@/lib/clinical-notes-logic";
@@ -91,7 +93,8 @@ describe("[FC-3e2] tarjeta: permisos (reglas de EV2 con el menú «⋯»)", () =
   it("[FC-3e] autor dentro de 24 h: «⋯» y Editar a la vista; texto, autor, turno y fecha AR", () => {
     const html = render(<NoteCard note={note()} now={NOW} />);
     expect(buttons(html)).toEqual([MENU, "Editar"]);
-    expect(html).toContain(`aria-label="${FICHA_CARD_COPY.menuLabel}"`);
+    // T4-Z: el nombre del «⋯» lleva la fecha (en la lista de botones del lector, todas las tarjetas se llamaban igual).
+    expect(html).toMatch(/aria-label="Más acciones de la ficha del [^"]+"/);
     expect(html).toContain('aria-haspopup="menu"');
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain("Podés editar hasta mañana 10:00");
@@ -137,7 +140,7 @@ describe("[FC-3e2] tarjeta: permisos (reglas de EV2 con el menú «⋯»)", () =
     expect(html).toContain('<span class="k-tag k-tag-soft" style="border:1px solid var(--navy-200)">Anulada</span>');
     expect(html).not.toContain(FICHA_CARD_COPY.shared);
     expect(buttons(html)).toEqual([]);
-    expect(render(<NoteCard note={{ ...n, voided: { ...n.voided!, byUserId: "user-owner" } }} now={NOW} />)).toContain("por el/la Titular");
+    expect(render(<NoteCard note={{ ...n, voided: { ...n.voided!, byUserId: "user-owner" } }} now={NOW} />)).toContain("por la cuenta Titular");
   });
 
   it("[FC-3e] drawer del turno (`hideBooking`, solo lectura): la anulada editada ofrece el historial; la viva, el «⋯»", () => {
@@ -263,20 +266,41 @@ describe("[FC-3e2] ShareFichaDialog", () => {
     expect(err).toContain(PATIENT_DOCUMENT_COPY.voided);
   });
 
-  it("[FC-3e] sin portal: ya quedó compartida y se ofrece «Invitar al portal y compartir»", () => {
+  it("[T4-Z A2/M-3] sin email ni portal: sin casilla de mail y el aviso ANTES de compartir; con portal, su email enmascarado", () => {
+    const none = renderToStaticMarkup(
+      <ShareFichaContent {...base} confirmView={shareConfirmView(null, null)} variant="first" phase={{ step: "confirm", error: null }} />,
+    );
+    expect(none).not.toContain('type="checkbox"');
+    expect(none).toContain(SHARE_FICHA_COPY.noEmail);
+    expect(none.indexOf(SHARE_FICHA_COPY.noEmail)).toBeLessThan(none.indexOf(SHARE_FICHA_COPY.confirm));
+    const linked = renderToStaticMarkup(
+      <ShareFichaContent
+        {...base}
+        confirmView={shareConfirmView(null, { portal: "linked", maskedEmail: "j***@gmail.com" })}
+        variant="first"
+        phase={{ step: "confirm", error: null }}
+      />,
+    );
+    expect(linked).toContain("Lo va a ver la cuenta del portal j***@gmail.com.");
+    expect(linked).toContain('type="checkbox"');
+    expect(linked).not.toContain(SHARE_FICHA_COPY.noEmail);
+  });
+
+  it("[FC-3e] sin portal: ya quedó compartida y se ofrece «Invitar al portal»", () => {
     const view = { kind: "not-linked" as const, message: PATIENT_DOCUMENT_COPY.sharedNoPortal, canInvite: true, noEmail: null };
     const html = renderToStaticMarkup(<ShareFichaContent {...base} variant="first" phase={{ step: "done", view }} />);
     expect(html).toContain('data-share-step="no-portal"');
     expect(html).toContain(PATIENT_DOCUMENT_COPY.sharedNoPortal);
-    expect(html).toContain(SHARE_FICHA_COPY.noPortal);
-    expect(buttons(html)).toEqual(["Cerrar", "Invitar al portal y compartir"]);
+    expect(buttons(html)).toEqual(["Cerrar", "Invitar al portal"]);
     const inviting = renderToStaticMarkup(<ShareFichaContent {...base} variant="first" phase={{ step: "inviting", view }} />);
     expect(buttons(inviting)).toEqual(["Cerrar", "Invitando…"]);
   });
 
   it("[FC-3e] sin portal y sin email: no hay a quién invitar; se dice cómo seguir", () => {
-    const view = { kind: "not-linked" as const, message: PATIENT_DOCUMENT_COPY.sharedNoPortal, canInvite: false, noEmail: SHARE_FICHA_COPY.noEmail };
+    const view = { kind: "not-linked" as const, message: SHARE_FICHA_COPY.sharedNoPortalNoEmail, canInvite: false, noEmail: SHARE_FICHA_COPY.noEmail };
     const html = renderToStaticMarkup(<ShareFichaContent {...base} variant="first" phase={{ step: "done", view }} />);
+    expect(html).toContain("Listo: la ficha quedó compartida. El paciente todavía no tiene portal.");
+    expect(html).not.toContain("invitalo");
     expect(html).toContain(SHARE_FICHA_COPY.noEmail);
     expect(buttons(html)).toEqual(["Cerrar"]);
   });

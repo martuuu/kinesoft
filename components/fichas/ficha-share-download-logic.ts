@@ -89,9 +89,11 @@ export type ShareOutcomeView =
 /**
  * Qué muestra el diálogo después de compartir.
  * - Con portal: «Listo: el paciente ya lo ve…»; si se pidió aviso y el mail falló, el aviso aparte (`emailFailed`):
- *   el documento SÍ quedó compartido y no hay que reintentar.
- * - Sin portal (`patientPortal: "not-linked"`, `delivery.status: "no-portal-user"`): se ofrece «Invitar al portal y
- *   compartir» con `sendPatientPortalInvite` (§24.5); sin email cargado no hay a quién invitar → se dice cómo seguir.
+ *   el documento SÍ quedó compartido y no hay que reintentar. Si el server no lo mandó por el tope de avisos por
+ *   paciente (`skipped`, M-2), lo mismo con `emailSkipped`.
+ * - Sin portal (`patientPortal: "not-linked"`, `delivery.status: "no-portal-user"`): se ofrece «Invitar al portal»
+ *   con `sendPatientPortalInvite` (§24.5); sin email cargado no hay a quién invitar → «Listo: la ficha quedó
+ *   compartida…» + cómo seguir (T4-Z A2: antes decía «invitalo» aunque no hubiera cómo).
  */
 export function shareOutcomeView(
   data: { patientPortal: "linked" | "not-linked"; delivery: DocumentDeliveryOutcome | null },
@@ -101,7 +103,7 @@ export function shareOutcomeView(
     const hasEmail = Boolean(patientEmail && patientEmail.trim());
     return {
       kind: "not-linked",
-      message: PATIENT_DOCUMENT_COPY.sharedNoPortal,
+      message: hasEmail ? PATIENT_DOCUMENT_COPY.sharedNoPortal : SHARE_COPY.sharedNoPortalNoEmail,
       canInvite: hasEmail,
       noEmail: hasEmail ? null : SHARE_COPY.noEmail,
     };
@@ -109,7 +111,35 @@ export function shareOutcomeView(
   return {
     kind: "linked",
     message: PATIENT_DOCUMENT_COPY.shared,
-    warning: data.delivery?.status === "failed" ? PATIENT_DOCUMENT_COPY.emailFailed : null,
+    warning:
+      data.delivery?.status === "failed"
+        ? PATIENT_DOCUMENT_COPY.emailFailed
+        : // M-2: tope de avisos por paciente; el documento SÍ quedó compartido, solo no salió el mail.
+          data.delivery?.status === "skipped"
+          ? SHARE_COPY.emailSkipped
+          : null,
+  };
+}
+
+/** Lo que el server dice de la cuenta del portal antes de compartir (M-3). Null = no llegó (falló o todavía no). */
+export type PortalShareInfo = { portal: "linked" | "not-linked"; maskedEmail: string | null };
+
+/**
+ * Qué muestra el paso de confirmar (T4-Z A2 + M-3). La casilla «Avisarle por mail» solo aparece si el mail puede
+ * salir: con portal vinculado sí (y se muestra su email ENMASCARADO, que arma el server: el completo nunca viaja);
+ * con el portal sin vincular no (el server no manda nada, `no-portal-user`); sin el dato, si el paciente tiene email.
+ * Sin email ni portal se avisa ANTES (`noEmail`) y se comparte sin aviso: no se manda un mail que la pantalla no mostró.
+ */
+export function shareConfirmView(patientEmail: string | null, info: PortalShareInfo | null) {
+  const hasEmail = Boolean(patientEmail && patientEmail.trim());
+  const masked = info?.maskedEmail?.trim() || null;
+  if (info?.portal === "linked") {
+    return { showNotify: true, noEmail: null, portalAccount: masked ? SHARE_COPY.portalAccount(masked) : null };
+  }
+  return {
+    showNotify: info === null ? hasEmail : false,
+    noEmail: hasEmail ? null : SHARE_COPY.noEmail,
+    portalAccount: null,
   };
 }
 
