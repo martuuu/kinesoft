@@ -43,7 +43,7 @@ vi.mock("@/lib/clinical-notes", () => ({
   amendClinicalNote: async () => ({ ok: false, error: "x" }),
   voidClinicalNote: async () => ({ ok: false, error: "x" }),
 }));
-vi.mock("@/components/clinical-notes/note-editor-drawer", () => ({ NoteEditorDrawer: () => null }));
+vi.mock("@/components/fichas/ficha-drawer", () => ({ FichaDrawer: () => null }));
 vi.mock("@/lib/dashboard", () => ({ getSessionsChart: vi.fn(), getMonthBookingDays: vi.fn(), getRevenue: vi.fn() }));
 vi.mock("@/lib/preferences", () => ({ updateUserPreferences: vi.fn(), updateDashboardPrefs: vi.fn() }));
 vi.mock("@/lib/practitioner-public", () => ({ setPractitionerPublicBooking: vi.fn() }));

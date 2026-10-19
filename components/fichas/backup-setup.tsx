@@ -10,7 +10,7 @@
  *
  * Qué hace:
  * - Aviso de datos de salud y casilla OBLIGATORIA «Esta computadora la uso solo yo»: los PDF quedan en el disco sin
- *   cifrar, fuera de la sesión de KineSoft; en una PC compartida (recepción) cualquiera que abra la carpeta los ve.
+ *   cifrar, fuera de la sesión de la app; en una PC compartida (recepción) cualquiera que abra la carpeta los ve.
  *   Sin la casilla tildada no se abre el selector (y `chooseBackupFolder` lo vuelve a chequear).
  * - Elegir / cambiar la carpeta (`showDirectoryPicker`, llamado PRIMERO dentro del click), dar permiso de nuevo
  *   (`requestPermission`, idem) y dejar de usarla (borra el handle del IndexedDB; los PDF ya escritos quedan).

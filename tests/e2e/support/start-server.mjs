@@ -14,6 +14,7 @@
  *   - POST /auth/v1/token?grant_type=refresh_token → re-emite la sesión del dueño del refresh token
  *   - GET  /auth/v1/user                       → el usuario del Bearer (firma verificada)
  *   - POST /auth/v1/logout                     → 204
+ *   - Storage en memoria para subir y bajar objetos (FC-E; ver `handleStorage`);
  *   - todo lo demás (admin de service-role, otp, etc.) → 200 `{}`: ningún mail ni usuario real sale de acá.
  * Lee el archivo de usuarios en CADA request: así no importa si Playwright arranca el webServer antes o después del
  * global-setup.
@@ -134,8 +135,63 @@ function json(res, status, body) {
 }
 const invalid = { code: "invalid_credentials", error: "invalid_grant", error_description: "Invalid login credentials", msg: "Invalid login credentials" };
 
+/*
+ * FC-E (T4): Storage en memoria. `SUPABASE_SERVICE_ROLE_KEY` está puesto (lo pide el admin de GoTrue), así que la app
+ * cree que hay Storage (`isStorageConfigured`) y sube el PDF de la ficha compartida acá; con el `{}` de abajo el upload
+ * «andaba» pero la descarga del portal devolvía JSON y el sha256 no coincidía (500). Lo mínimo de supabase-js 2.x:
+ *   - POST/PUT /storage/v1/object/<bucket>/<clave>   (cuerpo crudo; POST sin `x-upsert: true` no pisa: 409)
+ *   - GET      /storage/v1/object/<bucket>/<clave>   (los bytes con su Content-Type; 404 si no está)
+ *   - DELETE   /storage/v1/object/<bucket>           ({ prefixes }) → borra
+ * El resto (sign, info, move, list, subida firmada) sigue en `{}`: la suite no lo usa (QA manual con Supabase real).
+ */
+const objects = new Map();
+function readRaw(req) {
+  return new Promise((ok) => {
+    const parts = [];
+    req.on("data", (c) => parts.push(c));
+    req.on("end", () => ok(Buffer.concat(parts)));
+  });
+}
+const STORAGE_RESERVED = new Set(["sign", "info", "move", "list", "upload", "copy", "public", "authenticated"]);
+async function handleStorage(req, res, url) {
+  const rest = decodeURIComponent(url.pathname.slice("/storage/v1/object/".length));
+  const [bucket, ...keyParts] = rest.split("/");
+  if (!bucket || STORAGE_RESERVED.has(bucket)) return false;
+  const key = keyParts.join("/");
+  if (req.method === "DELETE" && !key) {
+    const body = JSON.parse((await readRaw(req)).toString("utf8") || "{}");
+    const removed = (body.prefixes ?? []).filter((k) => objects.delete(`${bucket}/${k}`));
+    json(res, 200, removed.map((name) => ({ name, bucket_id: bucket })));
+    return true;
+  }
+  if (!key) return false;
+  const id = `${bucket}/${key}`;
+  if (req.method === "POST" || req.method === "PUT") {
+    const bytes = await readRaw(req);
+    if (req.method === "POST" && req.headers["x-upsert"] !== "true" && objects.has(id)) {
+      json(res, 400, { statusCode: "409", error: "Duplicate", message: "The resource already exists" });
+      return true;
+    }
+    objects.set(id, { bytes, contentType: String(req.headers["content-type"] ?? "application/octet-stream") });
+    json(res, 200, { Key: id, Id: randomUUID() });
+    return true;
+  }
+  if (req.method === "GET") {
+    const o = objects.get(id);
+    if (!o) {
+      json(res, 400, { statusCode: "404", error: "not_found", message: "Object not found" });
+      return true;
+    }
+    res.writeHead(200, { "content-type": o.contentType, "content-length": String(o.bytes.length) });
+    res.end(o.bytes);
+    return true;
+  }
+  return false;
+}
+
 const authServer = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", E2E_AUTH_URL);
+  if (url.pathname.startsWith("/storage/v1/object/") && (await handleStorage(req, res, url))) return;
   if (req.method === "POST" && url.pathname === "/auth/v1/token") {
     const body = await readBody(req);
     const users = readUsers();

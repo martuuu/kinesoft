@@ -30,6 +30,8 @@ export type PortalLinkTarget =
       kind: "send";
       /** Destino después de `/auth/confirm`: `/portal/c/<slug>` si tiene ficha en ese consultorio, si no `/portal`. */
       next: string;
+      /** FC-4i: slug del consultorio cuando `next` es `/portal/c/<slug>` (el `?n=` afina la sección); null si no. */
+      slug: string | null;
       /** Consultorio del mail (remitente, EmailLog): el del slug, o el único donde tiene ficha. */
       tenant: { id: string; name: string; publicEmail: string | null } | null;
       /** Ficha que motivó el envío (EmailLog `entityId`), si es una sola. */
@@ -64,6 +66,7 @@ export async function resolvePortalLinkTarget(email: string, slug: string | null
     return {
       kind: "send",
       next: `/portal/c/${t.slug}`,
+      slug: t.slug,
       tenant: { id: t.id, name: t.name, publicEmail: t.publicEmail },
       patientId: inSlug.length === 1 ? inSlug[0].id : null,
     };
@@ -75,6 +78,7 @@ export async function resolvePortalLinkTarget(email: string, slug: string | null
   return {
     kind: "send",
     next: "/portal",
+    slug: null,
     tenant: only ? { id: only.id, name: only.name, publicEmail: only.publicEmail } : null,
     patientId: patients.length === 1 ? patients[0].id : null,
   };

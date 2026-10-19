@@ -225,6 +225,23 @@ describe.skipIf(!RUN)("IAM-3c · portal con magic link, invitación por mail pro
       expect(gotrue.users.size).toBe(1);
     });
 
+    it("[FC-4i] con slug y n=documentos → next=/portal/c/<slug>/documentos; n fuera de la allow-list se ignora", async () => {
+      const to = fresh("pac-docs");
+      await addPatient(db, A, { email: to });
+      await requestPortalLink(form({ email: to, slug: A.slug, n: "documentos" }));
+      await requestPortalLink(form({ email: to, slug: A.slug, n: "../cuenta" }));
+      expect(mail.sent).toHaveLength(2);
+      expect(confirmLink(mail.sent[0])!.q.next).toBe(`/portal/c/${A.slug}/documentos`);
+      expect(confirmLink(mail.sent[1])!.q.next).toBe(`/portal/c/${A.slug}`);
+    });
+
+    it("[FC-4i] n=documentos con el slug de un consultorio donde NO tiene ficha → /portal (sin sección)", async () => {
+      const to = fresh("pac-docs-otro");
+      await addPatient(db, A, { email: to });
+      await requestPortalLink(form({ email: to, slug: B.slug, n: "documentos" }));
+      expect(confirmLink(mail.sent[0])!.q.next).toBe("/portal");
+    });
+
     it("slug de un consultorio donde NO tiene ficha → igual le llega el link, pero a /portal (sin nombrar ese consultorio)", async () => {
       const to = fresh("pac-otro");
       await addPatient(db, A, { email: to });

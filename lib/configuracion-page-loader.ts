@@ -34,6 +34,10 @@ import "server-only";
  * relación (`user.practitioners.some.tenantId`). El `userId` se usa solo para cruzar y NO sale de este archivo: al
  * cliente le llega practitionerId + nombre + estado. Con `DIRECTORY_MODE=off` no se lee nada de esto (la pestaña no
  * existe todavía para nadie).
+ *
+ * FC-4i (handoff de FC-3i): «Mis fichas» (honorífico, matrícula, ¿hay firma?) y el logo de General se leen DENTRO de
+ * la misma tx (antes la página abría una tx chica aparte en paralelo: 1 tx menos por carga). Solo flags y `updatedAt`
+ * (el CAS de C-FC9): las claves de Storage no salen de acá; la vista previa se pide aparte con una URL firmada de 60 s.
  */
 import { runWithRls, type DbClient } from "@/lib/rls";
 // DIR-3c: solo para `ProfessionalPublicProfile` (SERVICE_ONLY, DIR-D12); ver la cabecera.
@@ -65,6 +69,8 @@ import type { LocationRow } from "@/lib/locations-schemas";
 import type { RoomRow } from "@/lib/rooms-schemas";
 import type { PractitionerScheduleSummaryRow } from "@/lib/practitioner-schedule-schemas";
 import type { PractitionerBookingCapView } from "@/lib/booking-cap-config";
+import { isClinicalMember } from "@/lib/roles-core";
+import type { Honorific } from "@/lib/directory-constants";
 
 /** Mismo texto que `READ_MSG` de lib/locations.ts y lib/practitioner-schedule.ts (lo que tiraban sus lectores). */
 const AGENDA_READ_MSG = "No tenés permiso para ver la agenda del consultorio.";
@@ -120,6 +126,15 @@ export function directoryProfileStatus(p: Omit<ProfileStatusRow, "userId"> | nul
 /** Fila del resumen de horarios + el tope por intervalo (T3e-2c). Mismas columnas del mismo select: 0 sentencias. */
 export type ConfiguracionScheduleRow = PractitionerScheduleSummaryRow & { bookingCap: PractitionerBookingCapView };
 
+/** FC-3i: estado de un asset del consultorio (logo, firma) sin la clave de Storage. */
+export type PracticeAssetFlag = { has: boolean; updatedAt: string | null };
+
+/** FC-3i: «Mis fichas» del que mira (null = no es miembro clínico con `Practitioner`, o es soporte). */
+export type ConfiguracionFichasData = {
+  me: { honorific: Honorific | null; licenseNumber: string | null; signature: PracticeAssetFlag };
+  backupScope: { tenantId: string; userId: string };
+};
+
 export type ConfiguracionTxData = {
   tenant: TenantSettings | null;
   insurers: InsurerRow[];
@@ -135,6 +150,10 @@ export type ConfiguracionTxData = {
   rooms: RoomRow[];
   supportSessions: SupportSessionRow[] | null;
   directory: DirectoryTxPart | null;
+  /** FC-3i: «Mis fichas» (miembro clínico con `Practitioner`, nunca el soporte). */
+  fichas: ConfiguracionFichasData | null;
+  /** FC-3i: logo del consultorio en General (`tenant.sensitive`); null = sin la tarjeta. */
+  logo: PracticeAssetFlag | null;
 };
 
 type Gates = {
@@ -150,6 +169,8 @@ type Gates = {
    * en solo lectura) y modo ≠ off.
    */
   directory: boolean;
+  /** FC-3i (FC-UI-D3): «Mis fichas» = miembro clínico con `Practitioner`. El soporte nunca (no es miembro). */
+  fichas: boolean;
 };
 
 /**
@@ -175,6 +196,7 @@ function gatesFor(actor: Actor, caps: ReadonlySet<Capability>): Gates {
     // `tenantAdmin` también: la pestaña se arma sobre la fila del Tenant, que se lee con `tenant.admin`. Hoy
     // `tenant.sensitive` sin `tenant.admin` no existe (los dos vienen de «Configuración»), pero no se asume.
     directory: tenantAdmin && sensitive && directoryMode() !== "off",
+    fichas: !actor.support && !!actor.practitionerId && !!actor.membership && isClinicalMember(actor.membership),
   };
 }
 
@@ -192,6 +214,8 @@ export async function loadConfiguracionInTx(
   const g = gatesFor(actor, caps);
   const tenantId = actor.tenantId;
   const today = dayKeyToDbDate(toARDateKey(now));
+  // FC-3i: ya chequeado no-null (guard IAM-4a: nunca `actor.practitionerId` crudo como valor de una clave).
+  const myPractitionerId: string | null = g.fichas ? actor.practitionerId : null;
 
   // Dentro de una tx interactiva Prisma manda las sentencias en serie por la misma conexión: el `Promise.all` solo
   // las encola sin esperar a que el código de una termine para pedir la siguiente.
@@ -208,6 +232,8 @@ export async function loadConfiguracionInTx(
     supportRows,
     specialtyCatalog,
     specialtyRows,
+    logoRow,
+    me,
   ] = await Promise.all([
       // = getTenantSettings (lib/tenant-settings.ts); además da el horario del consultorio para el resumen de
       // horarios (= `tenantHours` de lib/practitioner-schedule.ts): una sentencia menos.
@@ -318,6 +344,17 @@ export async function loadConfiguracionInTx(
             select: { practitionerId: true, specialtyId: true },
           })
         : [],
+      // FC-3i: logo de General (misma regla que `sensitive`). Aparte de la consulta del Tenant de arriba para que
+      // `tenant` siga igual a `getTenantSettings` y porque esa solo corre con `tenant.admin`.
+      g.sensitive
+        ? tx.tenant.findFirst({ where: { id: tenantId }, select: { logoStorageKey: true, logoUpdatedAt: true } })
+        : null,
+      g.fichas && myPractitionerId
+        ? tx.practitioner.findFirst({
+            where: { id: myPractitionerId, tenantId },
+            select: { honorific: true, licenseNumber: true, signatureStorageKey: true, signatureUpdatedAt: true },
+          })
+        : null,
     ]);
 
   let tenant: TenantSettings | null = null;
@@ -389,6 +426,17 @@ export async function loadConfiguracionInTx(
     rooms,
     supportSessions: supportRows ? supportRows.map(toSupportSessionRow) : null,
     directory,
+    logo: logoRow ? { has: !!logoRow.logoStorageKey, updatedAt: logoRow.logoUpdatedAt?.toISOString() ?? null } : null,
+    fichas: me
+      ? {
+          me: {
+            honorific: (me.honorific as Honorific | null) ?? null,
+            licenseNumber: me.licenseNumber,
+            signature: { has: !!me.signatureStorageKey, updatedAt: me.signatureUpdatedAt?.toISOString() ?? null },
+          },
+          backupScope: { tenantId, userId: actor.userId },
+        }
+      : null,
   };
 }
 
@@ -453,7 +501,7 @@ export async function loadConfiguracionPage(
   // todo `tenant.admin` la tiene (lib/capabilities.ts), pero si la matriz cambia, el resultado sigue siendo el mismo.
   if (caps.has("tenant.admin") && !caps.has("agenda.viewAll")) throw new ForbiddenError(AGENDA_READ_MSG);
   const g = gatesFor(actor, caps);
-  const needsTx = g.tenantAdmin || g.rooms || g.support;
+  const needsTx = g.tenantAdmin || g.rooms || g.support || g.sensitive || g.fichas;
   const empty: ConfiguracionTxData = {
     tenant: null,
     insurers: [],
@@ -467,6 +515,8 @@ export async function loadConfiguracionPage(
     rooms: [],
     supportSessions: null,
     directory: null,
+    fichas: null,
+    logo: null,
   };
   const [data, planUsage, billingOverview, catalog, snapshot, profileStatuses] = await Promise.all([
     needsTx ? runWithRls(actor.tenantId, (tx) => loadConfiguracionInTx(tx, actor, caps)) : empty,

@@ -246,6 +246,17 @@ describe.skipIf(!RUN)("[PF2-d] /configuracion: presupuesto de tx e igualdad con 
     asUser(practitionerUserId);
     expect(plain(r.supportSessions)).toEqual(plain(await listSupportSessionsForTenant()));
     expect(r.supportSessions?.length).toBe(1);
+    // [FC-4i] «Mis fichas» sale de la MISMA tx (antes la página abría otra en paralelo); sin `tenant.sensitive`, sin logo.
+    expect(r.fichas?.backupScope).toEqual({ tenantId: T.tenantId, userId: practitionerUserId });
+    expect(r.fichas?.me.signature).toEqual({ has: false, updatedAt: null });
+    expect(r.logo).toBeNull();
+  });
+
+  it("[FC-4i] Titular: logo y «Mis fichas» dentro de la tx de Configuración (sigue ≤ 3 tx)", async () => {
+    const { result: r, m } = await load(T.userId);
+    expect(m.transactions).toBeLessThanOrEqual(3);
+    expect(r.logo).toEqual({ has: false, updatedAt: null });
+    expect(r.fichas?.backupScope).toEqual({ tenantId: T.tenantId, userId: T.userId });
   });
 });
 

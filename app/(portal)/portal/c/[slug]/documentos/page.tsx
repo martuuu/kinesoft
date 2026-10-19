@@ -32,7 +32,8 @@ export async function generateMetadata({ params }: { params: { slug: string } })
 export default async function PortalDocumentsPage({ params }: { params: { slug: string } }) {
   const ref = await requirePortalPatient(params.slug);
   if (!ref) {
-    if (!(await getPortalUser())) redirect(`/portal?c=${encodeURIComponent(params.slug)}`);
+    // FC-4i: `&n=documentos` → después de entrar vuelve a «Documentos» (allow-list en lib/portal-nav.ts).
+    if (!(await getPortalUser())) redirect(`/portal?c=${encodeURIComponent(params.slug)}&n=documentos`);
     // BO2-D: slug viejo → 308 al vigente, solo si el paciente está vinculado allá (misma regla que /c/<slug>).
     const moved = await resolveSlugAlias(params.slug);
     if (moved && (await requirePortalPatient(moved.slug))) {

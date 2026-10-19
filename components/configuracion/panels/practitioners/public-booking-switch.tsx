@@ -18,7 +18,10 @@
 import { useEffect, useState, useTransition } from "react";
 import { setPractitionerPublicBooking } from "@/lib/practitioner-public";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
-import { Switch } from "../../controls";
+// FC-4i: directo de la primitiva y no por `../../controls` (que la re-exporta): esta switch viaja en el layout de
+// todas las rutas del equipo (topbar → menú de la cuenta) y `controls.tsx` arrastraba las pestañas de Configuración,
+// su barra y el copy (medido: +36 B gz en `/agenda` solo por sumar «Mis fichas», FC-3i).
+import { Switch } from "@/components/ui/switch";
 
 export const TURNERO_OFF_HINT = "Primero prendé el turnero del consultorio.";
 /**

@@ -40,3 +40,25 @@ export function portalSectionsFor(modules: ReadonlySet<TenantModule>): ReadonlyS
   memo.set(modules, out);
   return out;
 }
+
+/**
+ * FC-4i (handoff de FC-4a): `?n=<sección>` en `/portal?c=<slug>` = a qué sección volver después de entrar. El mail
+ * «Tenés un documento nuevo» lleva a `/portal/c/{slug}/documentos`; sin sesión esa página manda a `/portal?c=<slug>` y,
+ * sin esto, después del login el paciente caía en el inicio del consultorio y tenía que buscar «Documentos».
+ * Allow-list cerrada (hoy solo «documentos»): nunca un path libre en la URL (open redirect) ni un id.
+ */
+export const PORTAL_RETURN_SECTIONS = ["documentos"] as const;
+export type PortalReturnSection = (typeof PORTAL_RETURN_SECTIONS)[number];
+
+export function portalReturnSection(raw: unknown): PortalReturnSection | null {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  return typeof v === "string" && (PORTAL_RETURN_SECTIONS as readonly string[]).includes(v)
+    ? (v as PortalReturnSection)
+    : null;
+}
+
+/** Destino después del login: el consultorio (y su sección, si vino una válida) o el portal general. */
+export function portalReturnPath(slug: string | null, section: PortalReturnSection | null): string {
+  if (!slug) return "/portal";
+  return section ? `/portal/c/${slug}/${section}` : `/portal/c/${slug}`;
+}

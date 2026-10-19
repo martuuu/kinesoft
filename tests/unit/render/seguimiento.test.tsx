@@ -35,7 +35,7 @@ vi.mock("@/lib/plans-adopt", () => ({
   generatePlanBookings: async () => ({ ok: false, error: "x" }),
 }));
 vi.mock("@/lib/exercises", () => ({ listExercises: async () => [] }));
-// EV2-3c: el detalle monta el `NoteEditorDrawer` (2e), que importa las actions de evoluciones (red).
+// EV2-3c: el detalle monta el editor de fichas (`FichaDrawer` desde FC-3h), que importa las actions de fichas (red).
 vi.mock("@/lib/clinical-notes", () => ({
   createClinicalNote: async () => ({ ok: false, error: "x" }),
   editClinicalNote: async () => ({ ok: false, error: "x" }),

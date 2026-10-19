@@ -47,8 +47,11 @@ import { downloadFicha } from "@/components/fichas/download";
  * PF1.1 (C-PF2): editor, anular e historial se bajan recién al abrirlos (solo existen después de un click; por eso
  * `ssr: false` y se montan solo abiertos). FC-3e2: lo mismo para el panel del menú y `ShareFichaDialog`.
  */
-const NoteEditorDrawer = dynamic(
-  () => import("@/components/clinical-notes/note-editor-drawer").then((m) => m.NoteEditorDrawer),
+// FC-4i: editar y enmendar abren `FichaDrawer` directo, el MISMO chunk que la HC, la agenda y Seguimiento. Antes
+// pasaba por el shim de EV2 `note-editor-drawer` (borrado): su chunk sumaba ~20 B al runtime de webpack de TODAS las
+// rutas y /agenda no tenía margen (FC-3i1).
+const FichaDrawer = dynamic(
+  () => import("@/components/fichas/ficha-drawer").then((m) => m.FichaDrawer),
   { ssr: false, loading: () => null }
 );
 const VoidNoteDialog = dynamic(
@@ -413,10 +416,11 @@ export function NoteCard({
       {amendmentList}
 
       {editor && (
-        <NoteEditorDrawer
+        <FichaDrawer
           open
           onClose={() => setEditor(null)}
-          mode={{ type: editor, note }}
+          mode={editor === "edit" ? { type: "edit", note } : { type: "amend", note }}
+          viewerPractitionerId={null}
           onSaved={(saved, info) => {
             if (info.type === "amend") onAmendmentAdded?.(saved);
             else onNoteChange?.(saved);

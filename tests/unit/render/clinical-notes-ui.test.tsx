@@ -14,7 +14,7 @@ vi.mock("@/lib/clinical-notes", () => ({
   voidClinicalNote: async () => ({ ok: false, error: "x" }),
 }));
 vi.mock("@/lib/clinical-notes-read", () => ({ getClinicalNoteHistory: async () => null }));
-// [FC-3c] el editor es el shim sobre `FichaForm`, cuyo `DiagnosisField` (FC-3b) importa las actions de diagnósticos (red).
+// [FC-3c] el editor es `FichaForm` (el shim de EV2 se borró en FC-4i), cuyo `DiagnosisField` (FC-3b) importa las actions de diagnósticos (red).
 vi.mock("@/lib/diagnoses", () => ({
   getDiagnosisPickerHome: async () => ({ ok: false, error: "x" }),
   searchDiagnoses: async () => ({ ok: false, error: "x" }),
@@ -25,7 +25,9 @@ import type { ReactElement } from "react";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { ToastProvider } from "@/components/ui/toast";
 import { NoteCard } from "@/components/clinical-notes/note-card";
-import { NoteEditorDrawer, NoteEditorForm, kindKeyStep } from "@/components/clinical-notes/note-editor-drawer";
+import { FichaForm, kindKeyStep } from "@/components/fichas/ficha-form";
+import { FichaDrawer } from "@/components/fichas/ficha-drawer";
+import type { FichaFormMode } from "@/components/fichas/fichas-ui-types";
 import { DateTime24Picker } from "@/components/ui/datetime-24-picker";
 import { VoidNoteDialog } from "@/components/clinical-notes/void-note-dialog";
 import { NoteHistoryContent } from "@/components/clinical-notes/note-history-modal";
@@ -40,6 +42,30 @@ const render = (el: ReactElement) =>
     </ToastProvider>
   );
 const noop = () => {};
+
+/*
+ * FC-4i: el shim de EV2 (`NoteEditorDrawer`/`NoteEditorForm`) se borró; estos tests de EV2 renderizan `FichaForm` /
+ * `FichaDrawer` directo con el mismo `variant` y `viewerPractitionerId` que usaba el shim.
+ */
+function NoteEditorForm(p: {
+  mode: FichaFormMode;
+  onCancel: () => void;
+  onSaved: () => void;
+  carryBody?: string;
+  now?: Date;
+}): ReactElement {
+  return (
+    <FichaForm
+      mode={p.mode}
+      variant="drawer"
+      viewerPractitionerId={null}
+      onCancel={p.onCancel}
+      onSaved={p.onSaved}
+      carry={p.carryBody ? { doc: null, text: p.carryBody } : null}
+      now={p.now}
+    />
+  );
+}
 
 const AUTHOR = "user-author";
 const NOW = new Date("2026-10-15T14:00:00.000Z"); // 11:00 AR
@@ -84,19 +110,28 @@ function buttons(html: string): string[] {
 
 describe("[EV2-2e] editor de evoluciones", () => {
   it("[EV2-2e] cerrado no renderiza nada", () => {
-    expect(render(<NoteEditorDrawer open={false} onClose={noop} mode={{ type: "create", patientId: "p" }} onSaved={noop} />)).toBe("");
+    expect(render(<FichaDrawer open={false} onClose={noop} mode={{ type: "create", patientId: "p", patientHasNotes: true }} viewerPractitionerId={null} onSaved={noop} />)).toBe("");
   });
 
   it("[EV2-2e] crear desde un turno: Drawer, 3 tipos con Tag, contador a 20.000, fecha del turno en hora AR", () => {
     const html = render(
-      <NoteEditorDrawer
+      <FichaDrawer
         open
         onClose={noop}
         mode={{
           type: "create",
           patientId: "pat-1",
-          booking: { id: "bk-1", scheduledFor: "2026-10-15T12:30:00.000Z", serviceName: "Sesión kinésica" },
+          patientHasNotes: true,
+          fixedBooking: {
+            id: "bk-1",
+            scheduledFor: "2026-10-15T12:30:00.000Z",
+            serviceName: "Sesión kinésica",
+            status: "CONFIRMED",
+            practitionerId: null,
+            hasLiveNote: false,
+          },
         }}
+        viewerPractitionerId={null}
         onSaved={noop}
       />
     );
@@ -194,7 +229,7 @@ describe("[EV2-2e] anular en Modal y versiones", () => {
 });
 
 describe("[EV2-Z] fixes de UI del editor y la tarjeta", () => {
-  const createMode = { type: "create" as const, patientId: "pat-1" };
+  const createMode = { type: "create" as const, patientId: "pat-1", patientHasNotes: true };
 
   it("[EV2-Z A1] modo create con `patientName`: «Paciente: …» arriba y en negrita; sin él, nada", () => {
     const html = render(

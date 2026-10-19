@@ -45,6 +45,15 @@ export default defineConfig({
       dependencies: ["setup"],
       use: { storageState: `${E2E_STATE_DIR}/owner.json` },
     },
+    {
+      // FC-E (T4): los flujos que cambian abajo de 640 px (composer = barra + Drawer, portal mobile-first) corren
+      // también a 390. Solo los tests marcados `@390` en el título; el resto ya lo cubre `chromium`.
+      name: "mobile-390",
+      testMatch: /\.spec\.ts$/,
+      grep: /@390/,
+      dependencies: ["setup"],
+      use: { storageState: `${E2E_STATE_DIR}/owner.json`, viewport: { width: 390, height: 844 }, hasTouch: true },
+    },
   ],
   webServer: {
     command: "node tests/e2e/support/start-server.mjs",

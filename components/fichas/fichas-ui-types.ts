@@ -147,8 +147,8 @@ export type FichaFormProps = {
   /** Editar con la ventana de 24 h vencida: el texto pasa a la enmienda (EV2-Z M5). Solo raíces. */
   onSwitchToAmend?: (carry: FichaCarry) => void;
   /**
-   * FC-3i1: el texto traído del editor vencido (EV2-Z M5). Lo pasan `FichaDrawer` (al cambiar a enmendar) y el shim
-   * `note-editor-drawer.tsx`; era un prop interno de `ficha-form.tsx` y se publicó al tener dos callers. Con texto, el
+   * FC-3i1: el texto traído del editor vencido (EV2-Z M5). Lo pasa `FichaDrawer` (al cambiar a enmendar); era un prop
+   * interno de `ficha-form.tsx` y se publicó cuando lo usaba también el shim de EV2 (borrado en FC-4i). Con texto, el
    * form arranca «sucio» (cerrar sin guardar lo pierde y el guard avisa).
    */
   carry?: FichaCarry | null;

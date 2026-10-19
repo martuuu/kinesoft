@@ -7,9 +7,6 @@ import { canWrite, effectiveMode } from "@/lib/tenant-access";
 import { tenantAccessEnforcement } from "@/lib/env";
 import { ConfiguracionClient } from "@/components/configuracion/configuracion-client";
 import type { PlanChoice } from "@/components/configuracion/panels/plan-change-drawer";
-import { runWithRls } from "@/lib/rls";
-import { isClinicalMember } from "@/lib/roles-core";
-import type { Honorific } from "@/lib/directory-constants";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Configuración · KineSoft" };
@@ -41,11 +38,7 @@ export default async function ConfiguracionPage({
     redirect("/dashboard");
   }
 
-  // FC-3i: en paralelo con el loader (misma regla que su `sensitive`: `tenant.sensitive`, lib/configuracion-page-loader.ts).
-  const [loaded, practiceAssets] = await Promise.all([
-    loadConfiguracionPage(actor, caps),
-    loadPracticeAssetsView(actor, caps.has("tenant.sensitive")),
-  ]);
+  const loaded = await loadConfiguracionPage(actor, caps);
   const {
     tenant,
     insurers,
@@ -64,6 +57,8 @@ export default async function ConfiguracionPage({
     snapshot,
     directory,
     sensitive,
+    fichas,
+    logo,
   } = loaded;
   // BO3-F: el soporte entra con `getMembershipRole` = ASSISTANT (su nivel de lectura clínica), que en la UI le
   // apagaba horarios, turnero y la pestaña Usuarios aunque el server se los deja (allowlist `withSupportWritable`,
@@ -124,56 +119,9 @@ export default async function ConfiguracionPage({
       rooms={rooms}
       scheduleSummary={scheduleSummary}
       directory={directory}
-      fichas={practiceAssets.fichas}
-      logo={practiceAssets.logo}
+      // FC-3i: «Mis fichas» y el logo salen de la misma tx del loader (FC-4i).
+      fichas={fichas}
+      logo={logo}
     />
   );
-}
-
-type Actor = Awaited<ReturnType<typeof getActor>>;
-
-/**
- * FC-3i: lo que necesitan «Mis fichas» (honorífico, matrícula, ¿hay firma?) y el logo de General. Solo flags y
- * `updatedAt` (el CAS de C-FC9): las claves de Storage no viajan al cliente; la vista previa se pide aparte con una URL
- * firmada de 60 s. Una tx chica y SOLO si hace falta: quien no es miembro clínico ni tiene `tenant.sensitive` no la
- * abre. `where: { tenantId }` a mano (en prod la conexión tiene BYPASSRLS).
- *
- * Va acá y no dentro de `loadConfiguracionPage` porque ese archivo no es de FC-3i (handoff al integrador: moverlo a la
- * tx de Configuración deja /configuracion en 1 tx menos para el Titular).
- */
-async function loadPracticeAssetsView(actor: Actor, sensitive: boolean) {
-  // «Mis fichas» = miembro clínico con `Practitioner` (FC-UI-D3). El soporte nunca (no es miembro).
-  const practitionerId = actor.practitionerId;
-  const clinical = !actor.support && !!practitionerId && !!actor.membership && isClinicalMember(actor.membership);
-  if (!clinical && !sensitive) return { fichas: null, logo: null };
-  const { tenantRow, me } = await runWithRls(actor.tenantId, async (tx) => ({
-    tenantRow: sensitive
-      ? await tx.tenant.findFirst({
-          where: { id: actor.tenantId },
-          select: { logoStorageKey: true, logoUpdatedAt: true },
-        })
-      : null,
-    me:
-      clinical && practitionerId
-        ? await tx.practitioner.findFirst({
-            where: { id: practitionerId, tenantId: actor.tenantId },
-            select: { honorific: true, licenseNumber: true, signatureStorageKey: true, signatureUpdatedAt: true },
-          })
-        : null,
-  }));
-  return {
-    logo: tenantRow
-      ? { has: !!tenantRow.logoStorageKey, updatedAt: tenantRow.logoUpdatedAt?.toISOString() ?? null }
-      : null,
-    fichas: me
-      ? {
-          me: {
-            honorific: (me.honorific as Honorific | null) ?? null,
-            licenseNumber: me.licenseNumber,
-            signature: { has: !!me.signatureStorageKey, updatedAt: me.signatureUpdatedAt?.toISOString() ?? null },
-          },
-          backupScope: { tenantId: actor.tenantId, userId: actor.userId },
-        }
-      : null,
-  };
 }

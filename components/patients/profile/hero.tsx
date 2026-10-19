@@ -480,6 +480,10 @@ function PatientHeroActions({
           // Fixed AR timezone so the server (UTC) and the client format the
           // same string — otherwise it's a hydration mismatch.
           timeZone: "America/Argentina/Buenos_Aires",
+          // FC-E (e2e, 18-oct): con reloj de 12 h el ICU de Node escribe «11:11 p. m.» y el de Chrome «11:11 p. m.»
+          // con otro espacio (U+202F): React #425/#422 en CADA carga del perfil (descarta el SSR y re-renderiza todo).
+          // 24 h no lleva marca a. m./p. m. y es el formato del resto de la app (DateTime24Picker).
+          hourCycle: "h23",
         })}
       </div>
     </div>

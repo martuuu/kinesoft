@@ -18,6 +18,7 @@ import {
 } from "@/lib/portal-copy";
 import type { PortalPatient } from "@/lib/portal-types";
 import { PortalTabs } from "@/components/portal/portal-tabs";
+import { portalReturnPath, portalReturnSection, type PortalReturnSection } from "@/lib/portal-nav";
 import { PortalEmailForm } from "./portal-email-form";
 
 export const dynamic = "force-dynamic";
@@ -64,7 +65,10 @@ export default async function PortalHome({
     const google = (await visibleOAuthProviders()).includes("google");
     const rawError = searchParams?.error;
     const error = loginErrorMessage(Array.isArray(rawError) ? rawError[0] : rawError);
-    return <PortalSignIn slug={slugParam(searchParams?.c)} google={google} error={error} />;
+    const slug = slugParam(searchParams?.c);
+    // FC-4i: `?n=documentos` (allow-list) vuelve a esa sección del consultorio; sin `?c=` no hay a dónde.
+    const section = slug ? portalReturnSection(searchParams?.n) : null;
+    return <PortalSignIn slug={slug} section={section} google={google} error={error} />;
   }
 
   const searched = searchParam(searchParams?.buscar);
@@ -285,7 +289,17 @@ function PatientCard({ p }: { p: PortalPatient }) {
   );
 }
 
-function PortalSignIn({ slug, google, error }: { slug: string | null; google: boolean; error: string | null }) {
+function PortalSignIn({
+  slug,
+  section,
+  google,
+  error,
+}: {
+  slug: string | null;
+  section: PortalReturnSection | null;
+  google: boolean;
+  error: string | null;
+}) {
   // IAM-3c: además de Google, «Entrar con tu email» (magic link propio; IAM-D5). El `next` de Google vuelve
   // al consultorio del CTA si vino con `?c=`.
   // VX2-f (D-VX28): copy neutral (sin saber el consultorio no se sabe la vertical: nada de «recuperación» ni «la
@@ -293,7 +307,7 @@ function PortalSignIn({ slug, google, error }: { slug: string | null; google: bo
   // (`.k-btn-social` + `GoogleIcon`, la misma del login).
   // VX-Z: `SocialButtons` (la misma primitiva del login) postea a la ruta canónica `/api/auth/oauth/google` (C-PL12) en
   // vez del alias viejo `/api/auth/google`; solo Google (IAM-D5: el portal no ofrece Facebook) y solo si está prendido.
-  const next = slug ? `/portal/c/${slug}` : "/portal";
+  const next = portalReturnPath(slug, section);
   return (
     <Card glass style={{ padding: "clamp(20px, 5vw, 32px)", display: "flex", flexDirection: "column", gap: 16 }}>
       <div
@@ -331,7 +345,7 @@ function PortalSignIn({ slug, google, error }: { slug: string | null; google: bo
           <div className="k-divider">o con tu email</div>
         </>
       )}
-      <PortalEmailForm slug={slug} />
+      <PortalEmailForm slug={slug} section={section} />
       <p className="k-hint" style={{ margin: 0, textAlign: "center" }}>
         {PORTAL_HOME.signInFootnote}
       </p>

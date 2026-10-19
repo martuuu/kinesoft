@@ -112,7 +112,8 @@ const FORBIDDEN_FILES: { what: string; paths: string[] }[] = [
   { what: "respaldo (FC-3g)", paths: ["components/fichas/backup-setup.tsx", "lib/hc-backup.ts", "lib/hc-backup-idb.ts"] },
   { what: "compartir (FC-3e2)", paths: ["components/fichas/share-ficha-dialog.tsx"] },
 ];
-const FORBIDDEN_PACKAGES = ["@tiptap/core", "@tiptap/react", "@tiptap/pm", "@tiptap/starter-kit", "mammoth"];
+// FC-4i: sin "@tiptap/starter-kit" (FC-3f lo desinstaló; el editor importa las extensiones sueltas).
+const FORBIDDEN_PACKAGES = ["@tiptap/core", "@tiptap/react", "@tiptap/pm", "mammoth"];
 
 const reached = (paths: string[]) =>
   [...closure.files].filter(([f]) => paths.some((p) => (p.endsWith("/") ? f.startsWith(p) : f === p)));

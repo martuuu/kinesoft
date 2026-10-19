@@ -35,6 +35,7 @@ import { portalMagicLinkEmail } from "@/lib/email/templates";
 import { resolvePortalLinkTarget } from "@/lib/portal-auth-internal";
 import { portalEmailHash, readPortalInviteToken } from "@/lib/portal-invite-token";
 import { portalVincularPath } from "@/lib/portal-vincular-copy";
+import { portalReturnPath, portalReturnSection } from "@/lib/portal-nav";
 import { logger } from "@/lib/logger";
 import type { ActionResult } from "@/lib/validation";
 
@@ -93,10 +94,15 @@ export async function requestPortalLink(formData: FormData): Promise<ActionResul
 
   // El token solo cambia el destino, y solo si es para este email (hash del email normalizado).
   const claims = readPortalInviteToken(parsed.data.t);
+  // FC-4i: `n` (allow-list) solo afina el destino DENTRO del consultorio que resolvió el server (el del slug, donde
+  // tiene ficha); al portal general nunca se le agrega nada.
+  const section = portalReturnSection(formData.get("n"));
   const next =
     claims && parsed.data.t && claims.emailHash === portalEmailHash(email)
       ? portalVincularPath(parsed.data.t)
-      : target.next;
+      : target.slug && section
+        ? portalReturnPath(target.slug, section)
+        : target.next;
 
   const link = await issueAccessLink({ email, kind: "magiclink", next });
   if (!link.ok) {

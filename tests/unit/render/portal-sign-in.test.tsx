@@ -81,6 +81,20 @@ describe("[IAM-3c] /portal sin sesión", () => {
     expect(html).toContain('<input type="hidden" name="slug" value="consultorio-sur"/>');
   });
 
+  it("[FC-4i] ?c=<slug>&n=documentos (mail «Tenés un documento nuevo») vuelve a «Documentos»; otro ?n= se ignora", async () => {
+    const html = renderToStaticMarkup(await PortalHome({ searchParams: { c: "consultorio-sur", n: "documentos" } }));
+    expect(html).toContain('action="/api/auth/oauth/google?next=%2Fportal%2Fc%2Fconsultorio-sur%2Fdocumentos"');
+    expect(html).toContain('<input type="hidden" name="n" value="documentos"/>');
+    for (const n of ["../../evil", "cuenta", "documentos/abc", "//evil.com"]) {
+      const other = renderToStaticMarkup(await PortalHome({ searchParams: { c: "consultorio-sur", n } }));
+      expect(other, n).toContain('action="/api/auth/oauth/google?next=%2Fportal%2Fc%2Fconsultorio-sur"');
+      expect(other, n).not.toContain('name="n"');
+    }
+    // Sin ?c= no hay consultorio al que volver: `n` solo no arma nada.
+    const noSlug = renderToStaticMarkup(await PortalHome({ searchParams: { n: "documentos" } }));
+    expect(noSlug).toContain('action="/api/auth/oauth/google?next=%2Fportal"');
+  });
+
   it("un ?c= inválido se ignora (no se arma un next raro)", async () => {
     const html = renderToStaticMarkup(await PortalHome({ searchParams: { c: "../../evil" } }));
     expect(html).toContain('action="/api/auth/oauth/google?next=%2Fportal"');

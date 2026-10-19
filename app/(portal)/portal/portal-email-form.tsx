@@ -24,7 +24,16 @@ import type { PortalLinkFormState } from "@/components/auth/auth-form-state";
 import { requestPortalLink } from "@/lib/portal-auth";
 import { portalLinkFormAction } from "./portal-link-action";
 
-export function PortalEmailForm({ slug, inviteToken }: { slug: string | null; inviteToken?: string }) {
+export function PortalEmailForm({
+  slug,
+  section,
+  inviteToken,
+}: {
+  slug: string | null;
+  /** FC-4i: sección a la que vuelve el link (`?n=`, allow-list de `lib/portal-nav.ts`); el server la re-valida. */
+  section?: string | null;
+  inviteToken?: string;
+}) {
   const [state, formAction] = useFormState<PortalLinkFormState, FormData>(portalLinkFormAction, null);
   // «Usar otro email» descarta ESTE estado (cada envío trae un objeto nuevo).
   const [dismissed, setDismissed] = useState<PortalLinkFormState>(null);
@@ -37,6 +46,7 @@ export function PortalEmailForm({ slug, inviteToken }: { slug: string | null; in
         email={sent.email}
         message={sent.message}
         slug={slug}
+        section={section}
         inviteToken={inviteToken}
         onBack={() => setDismissed(sent)}
       />
@@ -51,6 +61,7 @@ export function PortalEmailForm({ slug, inviteToken }: { slug: string | null; in
       noValidate
     >
       {slug && <input type="hidden" name="slug" value={slug} />}
+      {slug && section && <input type="hidden" name="n" value={section} />}
       {inviteToken && <input type="hidden" name="t" value={inviteToken} />}
       <Field id="portal-email" label="Tu email" error={error ?? undefined}>
         <input
@@ -102,12 +113,14 @@ export function PortalLinkSent({
   email,
   message,
   slug,
+  section,
   inviteToken,
   onBack,
 }: {
   email: string;
   message: string;
   slug: string | null;
+  section?: string | null;
   inviteToken?: string;
   onBack: () => void;
 }) {
@@ -119,6 +132,7 @@ export function PortalLinkSent({
     const fd = new FormData();
     fd.set("email", email);
     if (slug) fd.set("slug", slug);
+    if (slug && section) fd.set("n", section);
     if (inviteToken) fd.set("t", inviteToken);
     return requestPortalLink(fd);
   };

@@ -320,6 +320,8 @@ describe("[FC-3h] entradas a la ficha", () => {
       "components/agenda/booking-drawer/index.tsx",
       "components/seguimiento/session-detail.tsx",
       "components/patients/profile/views/evoluciones-view.tsx",
+      // FC-4i: la tarjeta (editar/enmendar) también; el shim se borró.
+      "components/clinical-notes/note-card.tsx",
     ]) {
       expect(src(f), f).toContain(FICHA_DRAWER_IMPORT);
     }

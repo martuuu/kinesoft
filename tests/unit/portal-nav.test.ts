@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { SaasPlan, TenantVertical } from "@prisma/client";
 import { modulesFor } from "@/lib/tenant-modules";
-import { PORTAL_SECTIONS, portalSectionsFor, type PortalSection } from "@/lib/portal-nav";
+import { PORTAL_SECTIONS, portalReturnPath, portalReturnSection, portalSectionsFor, type PortalSection } from "@/lib/portal-nav";
 
 /** [P4-C] Gates del portal por módulo (brief ES4 §3.5): una sola fuente para pages y nav. */
 
@@ -77,5 +77,21 @@ describe("[P4-C] portalSectionsFor", () => {
   it("el mismo set de módulos da el mismo set de secciones (identidad estable)", () => {
     const m = modulesFor({ vertical: "KINESIOLOGY", plan: "CONSULTORIO", publicBookingEnabled: true, moduleGrants: [], moduleRevokes: [] });
     expect(portalSectionsFor(m)).toBe(portalSectionsFor(m));
+  });
+});
+
+describe("[FC-4i] ?n= del portal: a qué sección volver después de entrar", () => {
+  it("solo «documentos» (allow-list cerrada); el resto, null", () => {
+    expect(portalReturnSection("documentos")).toBe("documentos");
+    expect(portalReturnSection(["documentos", "x"])).toBe("documentos");
+    for (const v of [undefined, null, "", "cuenta", "../documentos", "documentos/1", "DOCUMENTOS", 1]) {
+      expect(portalReturnSection(v), String(v)).toBeNull();
+    }
+  });
+
+  it("el path: sin slug al portal general; con slug, el consultorio y su sección", () => {
+    expect(portalReturnPath(null, "documentos")).toBe("/portal");
+    expect(portalReturnPath("sur", null)).toBe("/portal/c/sur");
+    expect(portalReturnPath("sur", "documentos")).toBe("/portal/c/sur/documentos");
   });
 });

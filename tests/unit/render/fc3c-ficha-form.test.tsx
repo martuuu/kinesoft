@@ -1,5 +1,5 @@
 /**
- * [FC-3c] Render real de `FichaForm`, `FichaDrawer`, `BookingChip` y el shim `NoteEditorDrawer`
+ * [FC-3c] Render real de `FichaForm`, `FichaDrawer` y `BookingChip` (el shim de EV2 `NoteEditorDrawer` se borró en FC-4i)
  * (`renderToStaticMarkup`, entorno node como el resto de tests/unit/render). Se mockean solo las server actions
  * (red); nunca el componente bajo test. Fechas afirmadas en reloj AR: corre igual en TZ=UTC y TZ=AR.
  */
@@ -22,7 +22,6 @@ import { ToastProvider } from "@/components/ui/toast";
 import { FichaForm } from "@/components/fichas/ficha-form";
 import { FichaDrawer, fichaDrawerTitle } from "@/components/fichas/ficha-drawer";
 import { BookingChip } from "@/components/fichas/booking-chip";
-import { NoteEditorDrawer, fichaModeFromNoteEditor } from "@/components/clinical-notes/note-editor-drawer";
 import type { FichaBookingOption, FichaFormMode } from "@/components/fichas/fichas-ui-types";
 import type { ClinicalNoteDTO } from "@/lib/clinical-notes-types";
 import type { DiagnosisSnapshot } from "@/lib/diagnoses-types";
@@ -169,20 +168,19 @@ describe("[FC-3c] FichaDrawer y shim", () => {
     expect(fichaDrawerTitle({ type: "amend", note: note() })).toBe("Enmendar");
   });
 
-  it("[FC-3c] NoteEditorDrawer (EV2) abre el MISMO FichaForm con el turno fijo", () => {
-    const mode = fichaModeFromNoteEditor({
-      type: "create",
-      patientId: "p",
-      patientName: "Juana Gómez",
-      booking: { id: "bk-1", scheduledFor: "2026-10-15T12:30:00.000Z", serviceName: "Kinesio" },
-    });
-    expect(mode).toMatchObject({ type: "create", patientHasNotes: true, fixedBooking: { id: "bk-1" } });
-    expect(fichaModeFromNoteEditor({ type: "create", patientId: "p", defaultKind: "FIRST_VISIT" })).toMatchObject({ patientHasNotes: false });
+  it("[FC-3c] FichaDrawer desde un turno (agenda/Seguimiento) abre el MISMO FichaForm con el turno fijo", () => {
     const html = render(
-      <NoteEditorDrawer
+      <FichaDrawer
         open
         onClose={noop}
-        mode={{ type: "create", patientId: "p", patientName: "Juana Gómez", booking: { id: "bk-1", scheduledFor: "2026-10-15T12:30:00.000Z", serviceName: "Kinesio" } }}
+        mode={{
+          type: "create",
+          patientId: "p",
+          patientName: "Juana Gómez",
+          patientHasNotes: true,
+          fixedBooking: booking({ id: "bk-1", scheduledFor: "2026-10-15T12:30:00.000Z" }),
+        }}
+        viewerPractitionerId={null}
         onSaved={noop}
       />
     );

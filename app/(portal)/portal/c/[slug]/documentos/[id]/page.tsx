@@ -28,7 +28,8 @@ export async function generateMetadata({ params }: { params: { slug: string } })
 export default async function PortalDocumentPage({ params }: { params: { slug: string; id: string } }) {
   const ref = await requirePortalPatient(params.slug);
   if (!ref) {
-    if (!(await getPortalUser())) redirect(`/portal?c=${encodeURIComponent(params.slug)}`);
+    // FC-4i: `&n=documentos` → después de entrar vuelve a «Documentos» (allow-list en lib/portal-nav.ts).
+    if (!(await getPortalUser())) redirect(`/portal?c=${encodeURIComponent(params.slug)}&n=documentos`);
     const moved = await resolveSlugAlias(params.slug);
     if (moved && (await requirePortalPatient(moved.slug))) {
       permanentRedirect(`/portal/c/${encodeURIComponent(moved.slug)}/documentos/${encodeURIComponent(params.id)}`);

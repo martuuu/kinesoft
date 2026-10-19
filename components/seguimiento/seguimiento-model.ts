@@ -16,7 +16,7 @@
  *   - EV2-D19 (Martin puede revertir): la acción que guarda la meta de la
  *     sesión (anotaciones, EVA, RPE) se llama «Registrar sesión»; «Cargar
  *     evolución» pasa a ser la evolución de la historia clínica del turno de
- *     la sesión (`NoteEditorDrawer`). EV2-D18: una evolución viva del turno
+ *     la sesión (`FichaDrawer`). EV2-D18: una evolución viva del turno
  *     también saca la sesión de «Sin evolución» (bucket y tag), pero NO
  *     bloquea «Registrar sesión» (EV2-Z A2, default del orquestador para
  *     Martin): la evolución de HC y el registro del plan (EVA, ejercicios)
