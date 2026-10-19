@@ -22,33 +22,46 @@
  * - Nunca se monta sin `clinical.read` + acceso `full` + módulo `evoluciones` (lo filtra `profileTabsFor`); igual, si
  *   la lectura devuelve `null` se muestra el rechazo genérico (no revela nada).
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
-import { IconPlus } from "@/components/ui/icons";
 import { NoteCard } from "@/components/clinical-notes/note-card";
-import type { NoteEditorBooking, NoteEditorMode } from "@/components/clinical-notes/clinical-notes-ui";
+import type { NoteEditorBooking } from "@/components/clinical-notes/clinical-notes-ui";
+// Estático a propósito (§24.9, FC-UI-D9): el composer inline está en el first load; lo que se tipea antes de hidratar
+// queda en el `<textarea>` de `HcEditorField` (no controlado). Lo pesado (Tiptap, picker) lo difiere FichaForm adentro.
+import { FichaForm } from "@/components/fichas/ficha-form";
+import { ComposerBar } from "@/components/fichas/composer-bar";
+import { HcHeaderActions } from "@/components/fichas/hc-header-actions";
+import { HC_HOME_COPY } from "@/components/fichas/fichas-copy";
+import type {
+  FichaBackupScope,
+  FichaBookingOption,
+  FichaDraftScope,
+  FichaDrawerProps,
+  FichaFormCreateMode,
+} from "@/components/fichas/fichas-ui-types";
 import { getBookingClinicalNote, getPatientTimeline } from "@/lib/clinical-notes-read";
 
-/** PF1.1 (C-PF2): el editor se baja al abrirlo; «Nueva evolución» lo precarga en hover/foco. */
-const loadNoteEditor = () => import("@/components/clinical-notes/note-editor-drawer");
-const NoteEditorDrawer = dynamic(() => loadNoteEditor().then((m) => m.NoteEditorDrawer), {
+/** Mobile (FC-UI-D9): `FichaDrawer` a alto completo, diferido; la barra lo precarga en hover/foco/touch. */
+const loadFichaDrawer = () => import("@/components/fichas/ficha-drawer");
+const FichaDrawer = dynamic<FichaDrawerProps>(() => loadFichaDrawer().then((m) => m.FichaDrawer), {
   ssr: false,
   loading: () => null,
 });
-function preloadNoteEditor() {
-  void loadNoteEditor().catch(() => {});
+function preloadFichaDrawer() {
+  void loadFichaDrawer().catch(() => {});
 }
 import { bookingTargetDecision } from "@/lib/clinical-notes-logic";
-import type { BookingClinicalNoteView } from "@/lib/clinical-notes-types";
+import type { BookingClinicalNoteView, PatientClinicalHome } from "@/lib/clinical-notes-types";
 import {
   CLINICAL_NOTE_COPY,
   TIMELINE_PAGE_SIZE,
   TIMELINE_QUERY_MAX,
   type ClinicalNoteDTO,
   type TimelineItem,
+  type TimelinePage,
   type TimelineSessionDTO,
 } from "@/lib/clinical-notes-types";
 import { stripPlanIntentParams } from "@/lib/plans-deeplink-params";
@@ -56,18 +69,19 @@ import { formatDateAR } from "@/lib/format";
 import type { BookingStatus } from "@prisma/client";
 
 export const EVOLUCIONES_VIEW_COPY = {
-  title: "Historia clínica",
-  newNote: "Nueva ficha",
-  print: "Imprimir historia clínica",
+  // FC-3e1: los textos del inicio de la HC salen de `HC_HOME_COPY` (fichas-copy.ts); acá quedan los de la timeline.
+  title: HC_HOME_COPY.tabLabel,
+  newNote: HC_HOME_COPY.composerBar,
+  print: HC_HOME_COPY.print,
   searchLabel: "Buscar en las fichas",
   searchPlaceholder: "Buscar por título o texto…",
   loading: "Cargando fichas…",
-  loadMore: "Cargar más",
+  loadMore: HC_HOME_COPY.loadMore,
   loadingMore: "Cargando…",
   loadFailed: "No pudimos cargar las fichas. Probá de nuevo.",
   retry: "Reintentar",
-  empty: "Todavía no hay fichas de este paciente.",
-  emptyWrite: "Escribí la primera arriba o desde el turno en la agenda.",
+  empty: HC_HOME_COPY.empty,
+  emptyWrite: HC_HOME_COPY.emptyHint,
   emptySearch: (q: string) => `No encontramos fichas con «${q}».`,
   sessionTitle: "Sesión del plan",
   sessionInNote: "Sesión registrada",
@@ -79,14 +93,32 @@ export type DeepLinkBooking = NoteEditorBooking & { status: BookingStatus };
 
 export type EvolucionesViewProps = {
   patientId: string;
-  /** `canWriteClinicalNotes(caps, "full", actor.practitionerId)` (la UI solo esconde «Nueva evolución»). */
+  /** `canWriteClinicalNotes(caps, "full", actor.practitionerId)` (la UI solo esconde el composer; la barrera es la action). */
   canWrite: boolean;
   /** `?turno=` crudo validado por la página; null sin deep link. */
   deepLinkBookingId?: string | null;
   /** El turno del deep link si es de este paciente (null si no existe o es ajeno). */
   deepLinkBooking?: DeepLinkBooking | null;
-  /** Se escribió algo (crear, editar, enmendar, anular): el shell relee el resumen. */
+  /** Se escribió algo (crear, editar, enmendar, anular, importar): el shell relee el resumen. */
   onChanged?: () => void;
+  /**
+   * FC-3e1 (FC-UI-D10): la «clinical home» que el loader leyó en la tx 3 del perfil (`getPatientClinicalHome`):
+   * primera página (10 ítems, 60k caracteres), candidatos del composer y la vista del deep link. Con ella la vista NO
+   * hace ninguna lectura al montar. `null` = sin acceso (rechazo genérico). `undefined` = el caller todavía no la pasa
+   * (transición mientras FC-3d la cablea): se cae a la lectura al montar de EV2.
+   */
+  clinicalHome?: PatientClinicalHome | null;
+  /** Nombre para el import de Word y el formulario («Paciente: …»). */
+  patientName?: string;
+  /** `actor.practitionerId`: el chip del turno pone los propios primero. */
+  viewerPractitionerId?: string | null;
+  /**
+   * Usuario + consultorio del viewer: alcance del borrador en memoria del composer (§24.7) y del handle de la carpeta
+   * de respaldo (§24.6). null = sin borrador y sin «Carpeta de respaldo».
+   */
+  viewerScope?: { tenantId: string; userId: string } | null;
+  /** Borrador sin guardar en el composer o el Drawer: el shell pinta el punto en la pestaña (FC-3d). */
+  onDirtyChange?: (dirty: boolean) => void;
   /** Solo tests: primera página ya cargada (el efecto inicial no corre en render estático). */
   initialPage?: { items: TimelineItem[]; nextCursor: string | null } | null;
   /** Solo tests: reloj fijo para las tarjetas. */
@@ -94,6 +126,35 @@ export type EvolucionesViewProps = {
   /** Solo tests: nota resaltada por un deep link (el efecto que la elige no corre en render estático). */
   highlightNoteId?: string | null;
 };
+
+/**
+ * Estado inicial de la lista (pura, con test). FC-3e1: con la clinical home del SSR la lista sale pintada y NO se
+ * lee nada al montar (antes la pestaña montaba en «Cargando…» y pedía la timeline: un round-trip más con la HC como
+ * pestaña inicial, hallazgo 3 de §24.2).
+ */
+export function firstLoadState(input: {
+  initialPage?: TimelinePage | null;
+  clinicalHome?: PatientClinicalHome | null;
+}): { status: "loading" | "ready" | "forbidden"; page: TimelinePage | null; fetchOnMount: boolean } {
+  if (input.initialPage) return { status: "ready", page: input.initialPage, fetchOnMount: false };
+  if (input.clinicalHome === null) return { status: "forbidden", page: null, fetchOnMount: false };
+  if (input.clinicalHome?.firstPage) return { status: "ready", page: input.clinicalHome.firstPage, fetchOnMount: false };
+  // Sin home (caller viejo) o una home armada sin timeline (`timeline: false`): la lectura de EV2.
+  return { status: "loading", page: null, fetchOnMount: true };
+}
+
+/** ¿El paciente tiene alguna ficha? (decide imprimir/descargar). Con más páginas se asume que sí. */
+export function pageHasNotes(page: TimelinePage | null): boolean {
+  return !!page && (page.items.some((it) => it.type === "note") || page.nextCursor != null);
+}
+
+/** Turno del deep link → opción del chip fijo del composer (no es del candidato: no se sabe el profesional). */
+export function deepLinkFixedBooking(b: NoteEditorBooking & { status: BookingStatus }): FichaBookingOption {
+  return { id: b.id, scheduledFor: b.scheduledFor, serviceName: b.serviceName, status: b.status, practitionerId: null, hasLiveNote: false };
+}
+
+/** Breakpoint del composer (FC-UI-D9): inline desde 640 px; abajo, barra + Drawer. */
+export const COMPOSER_INLINE_MIN_PX = 640;
 
 /** Cuánto dura el resaltado de la nota del deep link (EV2-Z M4). */
 export const DEEP_LINK_HIGHLIGHT_MS = 2000;
@@ -143,7 +204,31 @@ const EVOLUCIONES_CSS = `
   .k-evo-search { font-size: 16px !important; min-height: 44px; }
   .k-evo-head-btn { min-height: 44px; display: inline-flex !important; align-items: center; }
 }
+@media (max-width: 639.98px) { .k-hc-composer-inline { display: none !important; } }
+@media (min-width: 640px) { .k-hc-composer-bar { display: none !important; } }
 `;
+
+/**
+ * ¿Ancho ≥ 640? null hasta hidratar: en el SSR y el primer render van los DOS (composer inline y barra) y el CSS
+ * decide cuál se ve, así a 1024 el composer está en el HTML y se puede escribir antes de que cargue el JS. Después de
+ * hidratar, abajo de 640 se DESMONTA el inline (oculto pero montado competiría con el Drawer por el mismo borrador y
+ * el mismo `beforeunload`); en mobile nadie pudo tipear en él porque nunca se vio.
+ */
+function useComposerInline(): boolean | null {
+  const [wide, setWide] = useState<boolean | null>(null);
+  useEffect(() => {
+    const mq = window.matchMedia?.(`(min-width: ${COMPOSER_INLINE_MIN_PX}px)`);
+    if (!mq) {
+      setWide(true);
+      return;
+    }
+    const sync = () => setWide(mq.matches);
+    sync();
+    mq.addEventListener?.("change", sync);
+    return () => mq.removeEventListener?.("change", sync);
+  }, []);
+  return wide;
+}
 
 // ─── Helpers puros (los usa el render test) ──────────────────────────────────────────────────────────────────────
 
@@ -217,31 +302,62 @@ export function EvolucionesView({
   deepLinkBookingId = null,
   deepLinkBooking = null,
   onChanged,
+  clinicalHome,
+  patientName = "",
+  viewerPractitionerId = null,
+  viewerScope = null,
+  onDirtyChange,
   initialPage = null,
   now,
   highlightNoteId = null,
 }: EvolucionesViewProps) {
   const toast = useToast();
-  const [items, setItems] = useState<TimelineItem[]>(initialPage?.items ?? []);
-  const [nextCursor, setNextCursor] = useState<string | null>(initialPage?.nextCursor ?? null);
-  const [status, setStatus] = useState<"loading" | "ready" | "error" | "forbidden">(initialPage ? "ready" : "loading");
+  // Se calcula una vez: la home es del SSR de ESTA visita; las escrituras posteriores entran por los DTO de las
+  // actions, nunca re-leyendo la home.
+  const [first] = useState(() => firstLoadState({ initialPage, clinicalHome }));
+  const [items, setItems] = useState<TimelineItem[]>(first.page?.items ?? []);
+  const [nextCursor, setNextCursor] = useState<string | null>(first.page?.nextCursor ?? null);
+  const [status, setStatus] = useState<"loading" | "ready" | "error" | "forbidden">(first.status);
   const [loadingMore, setLoadingMore] = useState(false);
   const [moreError, setMoreError] = useState(false);
   const [query, setQuery] = useState("");
   const [activeQuery, setActiveQuery] = useState("");
-  const [editor, setEditor] = useState<NoteEditorMode | null>(null);
   // Búsqueda en curso con una lista ya en pantalla: la lista queda (aria-busy), no se vacía.
   const [searching, setSearching] = useState(false);
   // Nota que pidió el deep link (se busca cuando la lista está) y nota resaltada (2 s).
   const [focusNoteId, setFocusNoteId] = useState<string | null>(null);
   const [highlighted, setHighlighted] = useState<string | null>(highlightNoteId);
-  // ¿El paciente tiene alguna evolución? Decide si se ofrece imprimir. Sale de la lista sin filtro (una búsqueda sin
-  // resultados no esconde el botón); con más páginas se asume que sí (la página siguiente puede tenerla).
-  const [hasNotes, setHasNotes] = useState(
-    () => !!initialPage && (initialPage.items.some((it) => it.type === "note") || initialPage.nextCursor != null)
-  );
+  // ¿El paciente tiene alguna ficha? Decide si se ofrece imprimir/descargar y el tipo por defecto del composer
+  // (FC-UI-D5). Sale de la lista sin filtro (una búsqueda sin resultados no lo cambia).
+  const [hasNotes, setHasNotes] = useState(() => pageHasNotes(first.page));
+  // Composer: turno fijo (deep link `?turno=` sin ficha) y Drawer de mobile.
+  const [fixedBooking, setFixedBooking] = useState<FichaBookingOption | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [inlineDirty, setInlineDirty] = useState(false);
+  const [drawerDirty, setDrawerDirty] = useState(false);
+  const composerRef = useRef<HTMLDivElement | null>(null);
+  const inlineWide = useComposerInline();
   const seq = useRef(0);
-  const skipFirstLoad = useRef(initialPage != null);
+  const skipFirstLoad = useRef(!first.fetchOnMount);
+
+  const candidates = useMemo(() => clinicalHome?.composer?.candidates ?? [], [clinicalHome]);
+  const draftScope = useMemo<FichaDraftScope | null>(
+    () => (viewerScope ? { tenantId: viewerScope.tenantId, userId: viewerScope.userId, patientId } : null),
+    [viewerScope, patientId]
+  );
+  const backupScope = useMemo<FichaBackupScope | null>(
+    () => (viewerScope ? { tenantId: viewerScope.tenantId, userId: viewerScope.userId } : null),
+    [viewerScope]
+  );
+  // Memo: FichaForm arma su estado inicial desde `mode`; un objeto nuevo por render lo re-inicializaría.
+  const composerMode = useMemo<FichaFormCreateMode>(
+    () => ({ type: "create", patientId, patientName: patientName || undefined, patientHasNotes: hasNotes, bookings: candidates, fixedBooking }),
+    [patientId, patientName, hasNotes, candidates, fixedBooking]
+  );
+
+  useEffect(() => {
+    onDirtyChange?.(inlineDirty || drawerDirty);
+  }, [inlineDirty, drawerDirty, onDirtyChange]);
 
   const loadFirst = useCallback(
     async (q: string) => {
@@ -259,7 +375,7 @@ export function EvolucionesView({
         }
         setItems(page.items);
         setNextCursor(page.nextCursor);
-        if (!q) setHasNotes(page.items.some((it) => it.type === "note") || page.nextCursor != null);
+        if (!q) setHasNotes(pageHasNotes(page));
         setStatus("ready");
       } catch (e) {
         console.error("getPatientTimeline failed", e);
@@ -271,7 +387,7 @@ export function EvolucionesView({
     [patientId]
   );
 
-  // Primera página y cada búsqueda nueva.
+  // Primera página (solo sin home del SSR) y cada búsqueda nueva.
   useEffect(() => {
     if (skipFirstLoad.current) {
       skipFirstLoad.current = false;
@@ -288,6 +404,8 @@ export function EvolucionesView({
     return () => clearTimeout(t);
   }, [query, activeQuery]);
 
+  // «Cargar más» de a 20 (FC-UI-D10): la primera página del SSR es de 10 (o menos, por el tope de 60k caracteres) y
+  // su `nextCursor` sigue exactamente donde cortó; el resto va con el tamaño de página de la timeline.
   const loadMore = useCallback(async () => {
     if (!nextCursor) return;
     const mine = seq.current;
@@ -329,6 +447,25 @@ export function EvolucionesView({
     [onChanged]
   );
 
+  /** Ficha nueva (composer, Drawer o import): entra en la lista sin refrescar la ruta (H-SLOW). */
+  const onCreated = useCallback(
+    (notes: ClinicalNoteDTO[]) => {
+      if (notes.length === 0) return;
+      setItems((prev) => notes.reduce((acc, n) => insertNoteInItems(acc, n, nextCursor != null), prev));
+      setHasNotes(true);
+      onChanged?.();
+    },
+    [nextCursor, onChanged]
+  );
+  const onComposerSaved = useCallback(
+    (note: ClinicalNoteDTO) => {
+      // El turno fijo del deep link se usó: el próximo composer vuelve a los candidatos.
+      setFixedBooking(null);
+      onCreated([note]);
+    },
+    [onCreated]
+  );
+
   // ── Deep link `?turno=`: una sola vez, y se limpia la URL (un refresh no lo vuelve a abrir) ──────────────────
   const deepLinkConsumed = useRef(false);
   useEffect(() => {
@@ -343,20 +480,35 @@ export function EvolucionesView({
       toast.error(CLINICAL_NOTE_COPY.bookingNotFound);
       return;
     }
+    const apply = (view: BookingClinicalNoteView | null) => {
+      const out = deepLinkOutcome(view, deepLinkBooking, { patientId, canWrite, now: new Date() });
+      if (out.kind === "focus") setFocusNoteId(out.noteId);
+      else if (out.kind === "create") {
+        // Crear en ESE turno: el chip queda fijo. Desde 640 px es el composer inline (se lo lleva a la vista); abajo,
+        // el Drawer a alto completo con el mismo formulario.
+        setFixedBooking(deepLinkFixedBooking(deepLinkBooking));
+        const wide = window.matchMedia?.(`(min-width: ${COMPOSER_INLINE_MIN_PX}px)`).matches ?? true;
+        if (wide) {
+          const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+          requestAnimationFrame(() => composerRef.current?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" }));
+        } else setDrawerOpen(true);
+      } else if (out.level === "error") toast.error(out.message);
+      else toast.warning(out.message);
+    };
+    // FC-3e1: la vista del deep link ya vino en la home (misma tx del perfil); sin home, la lectura de EV2.
+    if (clinicalHome !== undefined) {
+      apply(clinicalHome?.deepLink ?? null);
+      return;
+    }
     void (async () => {
       try {
-        const view = await getBookingClinicalNote(deepLinkBooking.id);
-        const out = deepLinkOutcome(view, deepLinkBooking, { patientId, canWrite, now: new Date() });
-        if (out.kind === "focus") setFocusNoteId(out.noteId);
-        else if (out.kind === "create") setEditor({ type: "create", patientId, booking: out.booking });
-        else if (out.level === "error") toast.error(out.message);
-        else toast.warning(out.message);
+        apply(await getBookingClinicalNote(deepLinkBooking.id));
       } catch (e) {
         console.error("getBookingClinicalNote failed", e);
         toast.error(EVOLUCIONES_VIEW_COPY.loadFailed);
       }
     })();
-  }, [deepLinkBookingId, deepLinkBooking, patientId, canWrite, toast]);
+  }, [deepLinkBookingId, deepLinkBooking, patientId, canWrite, toast, clinicalHome]);
 
   // Nota del deep link: cuando la lista está, se la lleva a la vista y se la resalta. Si no está en lo cargado (más
   // vieja que la primera página) no se fuerza nada: aparece con «Cargar más».
@@ -376,53 +528,25 @@ export function EvolucionesView({
     return () => clearTimeout(t);
   }, [highlighted]);
 
-  const onEditorSaved = useCallback(
-    (note: ClinicalNoteDTO, info: { type: NoteEditorMode["type"] }) => {
-      if (info.type === "create") {
-        setItems((prev) => insertNoteInItems(prev, note, nextCursor != null));
-        setHasNotes(true);
-      }
-      else if (info.type === "amend") setItems((prev) => addAmendmentToItems(prev, note));
-      else setItems((prev) => replaceNoteInItems(prev, note));
-      onChanged?.();
-    },
-    [nextCursor, onChanged]
-  );
-
-  const printHref = `/pacientes/${encodeURIComponent(patientId)}/imprimir`;
+  // Composer solo con escritura y si la vista no está rechazada. `inlineWide === false` = mobile ya hidratado.
+  const showComposer = canWrite && status !== "forbidden";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <style dangerouslySetInnerHTML={{ __html: EVOLUCIONES_CSS }} />
       <Card style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <div className="k-display" style={{ fontSize: 16, fontWeight: 700, flex: 1, minWidth: 160 }}>
+          <h2 className="k-display" style={{ margin: 0, fontSize: 16, fontWeight: 700, flex: 1, minWidth: 160 }}>
             {EVOLUCIONES_VIEW_COPY.title}
-          </div>
-          {hasNotes && (
-            <a
-              className="k-btn k-btn-ghost k-evo-head-btn"
-              href={printHref}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ fontSize: 12, padding: "8px 12px", textDecoration: "none" }}
-            >
-              {EVOLUCIONES_VIEW_COPY.print}
-            </a>
-          )}
-          {canWrite && (
-            <Button
-              type="button"
-              variant="primary"
-              className="k-evo-head-btn"
-              onClick={() => setEditor({ type: "create", patientId })}
-              onPointerEnter={preloadNoteEditor}
-              onFocus={preloadNoteEditor}
-              style={{ fontSize: 12, padding: "8px 12px" }}
-            >
-              <IconPlus size={14} /> {EVOLUCIONES_VIEW_COPY.newNote}
-            </Button>
-          )}
+          </h2>
+          <HcHeaderActions
+            patientId={patientId}
+            patientName={patientName}
+            hasNotes={hasNotes}
+            canWrite={canWrite}
+            backupScope={backupScope}
+            onImported={onCreated}
+          />
         </div>
         <input
           type="search"
@@ -442,6 +566,35 @@ export function EvolucionesView({
           }}
         />
       </Card>
+
+      {showComposer && inlineWide !== false && (
+        <div ref={composerRef} className="k-hc-composer-inline" data-hc-composer="inline">
+          <Card style={{ padding: 16 }}>
+            <FichaForm
+              mode={composerMode}
+              variant="inline"
+              viewerPractitionerId={viewerPractitionerId}
+              draftScope={draftScope}
+              onSaved={onComposerSaved}
+              onCancel={fixedBooking ? () => setFixedBooking(null) : undefined}
+              onDirtyChange={setInlineDirty}
+              now={now}
+            />
+          </Card>
+        </div>
+      )}
+      {showComposer && inlineWide !== true && (
+        <ComposerBar
+          className="k-hc-composer-bar"
+          candidates={candidates}
+          fixedBooking={fixedBooking}
+          viewerPractitionerId={viewerPractitionerId}
+          onOpen={() => setDrawerOpen(true)}
+          onPreload={preloadFichaDrawer}
+          dirty={drawerDirty}
+          now={now}
+        />
+      )}
 
       {status === "loading" && (
         <div role="status" aria-busy="true" style={{ fontSize: 13, color: "var(--navy-500)", padding: 12 }}>
@@ -514,8 +667,22 @@ export function EvolucionesView({
         </div>
       )}
 
-      {editor && (
-        <NoteEditorDrawer open onClose={() => setEditor(null)} mode={editor} onSaved={onEditorSaved} />
+      {/* Montado mientras haya borrador: cerrar el Drawer sin guardar no lo pierde (el borrador vive en memoria). */}
+      {showComposer && (drawerOpen || drawerDirty) && (
+        <FichaDrawer
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          mode={composerMode}
+          viewerPractitionerId={viewerPractitionerId}
+          draftScope={draftScope}
+          onSaved={(note) => {
+            setDrawerOpen(false);
+            setDrawerDirty(false);
+            onComposerSaved(note);
+          }}
+          onDirtyChange={setDrawerDirty}
+          now={now}
+        />
       )}
     </div>
   );

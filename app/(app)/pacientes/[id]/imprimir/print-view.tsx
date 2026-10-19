@@ -1,10 +1,17 @@
 import type { ClinicalRecordPrint } from "@/lib/clinical-notes-print-internal";
 import { CLINICAL_NOTE_KIND_LABEL, CLINICAL_RECORD_PRINT_MAX, type ClinicalNoteDTO } from "@/lib/clinical-notes-types";
+import { ICD11_SHORT_ATTRIBUTION, type DiagnosisSnapshot } from "@/lib/diagnoses-types";
+import { HcBody } from "@/components/hc/hc-doc-view";
 import { ClosePrintButton, PrintButton } from "./print-button";
 
 /**
  * EV2-3d / EV2-Z · Vista de la impresión de la HC, separada de `page.tsx` (que lee, audita y decide el 404) para
  * poder renderizarla en un test sin base ni sesión. Sin estado: lo que se ve es lo que sale en papel.
+ *
+ * FC-3e1: el cuerpo sale de `bodyDoc` con `HcBody`/`HcDocView` (títulos, negrita, listas; server-safe, +0 kB de
+ * cliente). Antes se imprimía `body` (el texto plano derivado) y una ficha con formato perdía la estructura en papel.
+ * Las fichas viejas sin doc siguen en texto con sus saltos (`HcBody` cae a pre-wrap). Suma los diagnósticos
+ * congelados (el primero = principal) y la matrícula congelada del autor (`authorLicense`, «Lic. … · MN …»).
  */
 
 const TZ = "America/Argentina/Buenos_Aires";
@@ -34,6 +41,10 @@ export const PRINT_COPY = {
   // Titular: el DTO no lo trae y para la HC alcanza con el rol.
   voidedBy: "el/la Titular",
   close: "Cerrar",
+  diagnoses: "Diagnósticos",
+  principal: "principal",
+  lateEntry: "Carga tardía",
+  imported: "Importada",
 } as const;
 
 /** «Anulada el {fecha} por {quién} · Motivo: {motivo}»; quién = el autor si anuló él, si no «el/la Titular». */
@@ -47,6 +58,16 @@ export function voidedLine(note: ClinicalNoteDTO): string | null {
 export function printFooter(p: ClinicalRecordPrint["patient"]): string {
   const name = `${p.lastName}, ${p.firstName}`;
   return p.documentId ? `${name} · DNI ${p.documentId}` : name;
+}
+
+/** «Lic. Pérez · MN 1234» (la matrícula congelada al crear o enmendar); sin matrícula, solo el nombre. */
+export function authorWithLicense(note: Pick<ClinicalNoteDTO, "author" | "authorLicense">): string {
+  return note.authorLicense ? `${note.author.name} · ${note.authorLicense}` : note.author.name;
+}
+
+/** «M54.5 Lumbalgia» (texto libre o sin código: solo el título). */
+export function diagnosisLine(d: Pick<DiagnosisSnapshot, "code" | "title">): string {
+  return d.code ? `${d.code} ${d.title}` : d.title;
 }
 
 type Entry = { note: ClinicalNoteDTO; amendments: ClinicalNoteDTO[] };
@@ -91,7 +112,9 @@ export const PRINT_CSS = `
 .k-print-note { border-top: 1px solid rgba(15,30,51,0.15); padding: 12px 0; break-inside: avoid; }
 .k-print-note-head { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--navy-500); }
 .k-print-note-head strong { color: #0f1e33; }
-.k-print-body { white-space: pre-wrap; margin-top: 6px; }
+.k-print-body { margin-top: 6px; }
+.k-print-dx { margin: 6px 0 0; padding-left: 18px; font-size: 12px; }
+.k-print-attr { margin-top: 18px; font-size: 10px; color: var(--navy-500); }
 .k-print-flag { font-weight: 700; font-size: 12px; }
 .k-print-amend { margin: 10px 0 0 18px; padding-left: 12px; border-left: 2px solid rgba(15,30,51,0.2); }
 .k-print-footer { display: none; }
@@ -118,13 +141,29 @@ function NoteBlock({ note, amendment }: { note: ClinicalNoteDTO; amendment?: boo
       <div className="k-print-note-head">
         <strong>{label}</strong>
         <span>{fmtDateTime(note.occurredAt)}</span>
-        <span>{note.author.name}</span>
+        <span>{authorWithLicense(note)}</span>
         {note.booking?.serviceName && <span>Turno: {note.booking.serviceName}</span>}
         {note.revision > 1 && <span>Editada (versión {note.revision})</span>}
+        {note.importSource && <span className="k-print-flag">{PRINT_COPY.imported}</span>}
+        {note.lateEntry && <span className="k-print-flag">{PRINT_COPY.lateEntry}</span>}
       </div>
       {voided && <div className="k-print-flag">{voided}</div>}
       {note.title && <div style={{ fontWeight: 600, marginTop: 4 }}>{note.title}</div>}
-      <div className="k-print-body">{note.body}</div>
+      {note.diagnoses.length > 0 && (
+        <div style={{ marginTop: 6 }}>
+          <div style={{ fontSize: 12, fontWeight: 600 }}>{PRINT_COPY.diagnoses}</div>
+          <ul className="k-print-dx">
+            {note.diagnoses.map((d, i) => (
+              <li key={`${d.source}:${d.refId ?? d.title}:${i}`}>
+                {diagnosisLine(d)}
+                {i === 0 && ` (${PRINT_COPY.principal})`}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {/* headingOffset 1: el h1 es «Historia clínica»; los títulos de la ficha salen h3/h4 (orden de títulos válido). */}
+      <HcBody doc={note.bodyDoc} text={note.body} headingOffset={1} className="k-print-body" />
     </div>
   );
 }
@@ -197,6 +236,11 @@ export function ClinicalRecordPrintView({ record, backHref }: { record: Clinical
           ))
         )}
       </section>
+
+      {/* Atribución de la licencia de la CIE-11 (CC BY-ND 3.0 IGO), una vez, si alguna ficha usa un código de la OMS. */}
+      {record.notes.some((n) => n.diagnoses.some((d) => d.source === "icd11")) && (
+        <p className="k-print-attr">{ICD11_SHORT_ATTRIBUTION}</p>
+      )}
 
       <div className="k-print-footer" aria-hidden="true">
         {printFooter(patient)}
