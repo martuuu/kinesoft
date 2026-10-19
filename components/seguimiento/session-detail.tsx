@@ -28,6 +28,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useUnsavedGuard } from "@/components/seguimiento/use-unsaved-guard";
 import { DisciplineChip } from "@/components/planes/discipline-chip";
 import styles from "./seguimiento.module.css";
+import type { FichaDrawerProps, FichaFormCreateMode } from "@/components/fichas/fichas-ui-types";
 import {
   AGENDAR_PARAM,
   SEGUIMIENTO_COPY,
@@ -51,26 +52,36 @@ const ScheduleSessionModal = dynamic(
 );
 
 /**
- * PF1.2 (C-PF2): el editor de evolución de HC (Tiptap/markdown, versiones) no está en el primer pintado: baja al
- * primer «Cargar evolución» y se precarga en hover/foco del botón.
+ * PF1.2 (C-PF2): el editor de la ficha (Tiptap, diagnósticos) no está en el primer pintado: baja al primer «Cargar
+ * ficha» y se precarga en hover/foco del botón. [FC-3h] Es el MISMO `FichaDrawer` de la HC del perfil y de la agenda,
+ * con el MISMO especificador que `evoluciones-view.tsx` (un solo chunk: el runtime de webpack no suma entrada y
+ * /seguimiento/[sessionId] queda +0). Antes pasaba por el shim de EV2 `note-editor-drawer`.
  */
-const loadNoteEditor = () => import("@/components/clinical-notes/note-editor-drawer");
-const NoteEditorDrawer = dynamic(() => loadNoteEditor().then((m) => m.NoteEditorDrawer), { ssr: false, loading: () => null });
+const loadNoteEditor = () => import("@/components/fichas/ficha-drawer");
+const FichaDrawer = dynamic<FichaDrawerProps>(() => loadNoteEditor().then((m) => m.FichaDrawer), {
+  ssr: false,
+  loading: () => null,
+});
 
 /**
- * Con qué `mode` se abre el editor de evolución de HC desde una sesión. Puro y exportado: desde PF1.2 el editor se
- * monta recién al primer click (chunk dinámico), así que el render test fija el contrato acá y no en el HTML inicial.
- * Contrato A1 (EV2-Z): el editor dice de quién es la evolución («Paciente: Apellido, Nombre»).
+ * Con qué `mode` se abre la ficha desde una sesión. Puro y exportado: desde PF1.2 el editor se monta recién al primer
+ * click (chunk dinámico), así que el render test fija el contrato acá y no en el HTML inicial.
+ * - Contrato A1 (EV2-Z): el editor dice de quién es («Paciente: Apellido, Nombre»).
+ * - [FC-3h] `fixedBooking`: el turno activo de la sesión, fijo (el chip no se cambia). El DTO de la sesión no trae
+ *   estado ni profesional del turno; el chip no los muestra y la action solo recibe el `bookingId`, así que van
+ *   neutros. `hasLiveNote: false`: solo se ofrece con `canCreate` del server. Arranca en «Evolución» (en una sesión de
+ *   plan es lo común; el tipo se cambia en el radio).
  */
 export function sessionNoteEditorMode(
   session: { program: { patient: { firstName: string; lastName: string } } },
   clinicalNote: Pick<SessionClinicalNote, "patientId" | "booking">
-) {
+): FichaFormCreateMode {
   return {
-    type: "create" as const,
+    type: "create",
     patientId: clinicalNote.patientId,
     patientName: `${session.program.patient.lastName}, ${session.program.patient.firstName}`,
-    booking: clinicalNote.booking,
+    patientHasNotes: true,
+    fixedBooking: { ...clinicalNote.booking, status: "CONFIRMED", practitionerId: null, hasLiveNote: false },
   };
 }
 
@@ -165,7 +176,7 @@ export function SessionDetail({
   // no se ofrece crear otra (EV2-D2: una viva por turno).
   const [noteSaved, setNoteSaved] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
-  // Se monta al primer «Cargar evolución» (así el chunk dinámico no baja con la página) y queda montado para que el
+  // Se monta al primer «Cargar ficha» (así el chunk dinámico no baja con la página) y queda montado para que el
   // Drawer anime el cierre.
   const [noteMounted, setNoteMounted] = useState(false);
   const noteState: SessionClinicalNote | null = clinicalNote
@@ -457,10 +468,13 @@ export function SessionDetail({
         />
 
         {clinicalNote && noteAction?.kind === "create" && noteMounted && (
-          <NoteEditorDrawer
+          <FichaDrawer
             open={noteOpen}
             onClose={() => setNoteOpen(false)}
             mode={sessionNoteEditorMode(session, clinicalNote)}
+            // Sin el profesional del actor ni `draftScope` a mano (igual que el shim de EV2): el chip es fijo y el
+            // borrador en memoria es del composer del perfil; el Drawer conserva su dirty-guard.
+            viewerPractitionerId={null}
             onSaved={() => {
               // «Sin evolución» del landing y el tag de acá salen del server (EV2-D18): `createClinicalNote`
               // revalida el layout de /seguimiento si la raíz es de un turno (EV2-Z), y la respuesta de la action ya

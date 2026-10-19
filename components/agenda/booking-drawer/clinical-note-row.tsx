@@ -1,19 +1,21 @@
 "use client";
 
 /**
- * EV2-3b · fila «Evolución» del drawer del turno.
+ * EV2-3b · fila «Ficha» del drawer del turno.
  *
  * Carga perezosa: el drawer pide `getBookingClinicalNote(bookingId)` al abrir el turno, y SOLO si
  * `clinicalNoteRowEligible` (`./status-actions`: paciente vinculado + `clinical.read` + módulo `evoluciones`).
  * La Secretaria no tiene `clinical.read`: ni siquiera viaja la lectura. La barrera real es el server: `null` (sin acceso,
- * turno guest o ajeno) → la fila no se renderiza, sin decir si el turno tiene evolución.
+ * turno guest o ajeno) → la fila no se renderiza, sin decir si el turno tiene ficha.
  *
  * La nota se muestra con `NoteCard` en modo LECTURA (`readOnlyNote`). El motivo original (EV2-3b) era que el panel
  * del Drawer tenía `transform` y los diálogos que monta `NoteCard` quedaban `position: fixed` relativos al panel;
- * desde PF1.0-b Drawer y Modal van por portal, por eso «Ver versiones anteriores» ya se ofrece acá (PF1.1). Editar,
- * enmendar y anular siguen en la HC a propósito (un solo lugar para escribir). Se hacen desde la pestaña Evoluciones del paciente
- * (link «Abrir en la historia clínica», `clinicalNoteDeepLink`). Crear sí se ofrece acá: el editor se abre
- * AFUERA del drawer (lo monta `BookingDrawer`, que se cierra antes).
+ * desde PF1.0-b Drawer y Modal van por portal, por eso «Versiones» ya se ofrece acá (PF1.1; desde FC-3e2, en el menú
+ * «⋯» de la tarjeta). Editar, enmendar y anular siguen en la HC a propósito (un solo lugar para escribir), desde la
+ * pestaña «Historia clínica» del paciente (link «Abrir en la historia clínica», `clinicalNoteDeepLink`). Sin
+ * `context` en la tarjeta, el menú tampoco ofrece Compartir ni la carpeta de respaldo: también son de la HC.
+ * Crear sí se ofrece acá: [FC-3h] «Cargar ficha» abre el MISMO `FichaDrawer` de la HC, AFUERA del drawer (lo monta
+ * `BookingDrawer`, que se cierra antes), con el turno fijo.
  *
  * Este archivo va en un chunk aparte (`dynamic` en `./index`): la lógica pura vive en `./status-actions`.
  */
@@ -63,7 +65,7 @@ export function ClinicalNoteRow({
   now?: Date;
 }) {
   if (!view) return null;
-  // Sin viva y sin poder crear (p. ej. solo lectura, o turno cancelado sin evolución): nada que mostrar,
+  // Sin viva y sin poder crear (p. ej. solo lectura, o turno cancelado sin ficha): nada que mostrar,
   // salvo anuladas, que se listan colapsadas.
   if (!view.note && !view.canCreate && view.voided.length === 0) return null;
   const href = clinicalNoteDeepLink(patientId, bookingId);

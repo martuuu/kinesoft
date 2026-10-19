@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * EV2-2e · Anular una evolución (EV2-D15): `Modal` con motivo obligatorio (3..500), nunca `window.confirm`. Anular no
+ * EV2-2e · Anular una ficha (EV2-D15): `Modal` con motivo obligatorio (3..500), nunca `window.confirm`. Anular no
  * borra: la nota queda colapsada con el motivo y quién la anuló. `expectedRevision` = la revisión que se ve en
  * pantalla: si otro la editó en el medio, la action responde `stale` y se muestra tal cual.
  *

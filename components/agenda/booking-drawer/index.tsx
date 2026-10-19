@@ -86,6 +86,7 @@ import {
   statusToastPayload,
 } from "./status-actions";
 import type { BookingClinicalNoteView } from "@/lib/clinical-notes-types";
+import type { FichaDrawerProps, FichaFormCreateMode } from "@/components/fichas/fichas-ui-types";
 import { sectionCard } from "./styles";
 import { successInfoText } from "./force-outcome";
 import {
@@ -131,11 +132,11 @@ const RenewAuthorizationDialog = dynamic(
   { ssr: false }
 );
 
-// EV2-3b: la fila «Evolución» (con `NoteCard`) y el editor van en chunks
+// EV2-3b: la fila «Ficha» (con `NoteCard`) y el editor van en chunks
 // aparte: solo los usa quien tiene `clinical.read`, y la Secretaria (la que más
 // vive en la agenda) no los descarga. La lectura `getBookingClinicalNote` se
 // importa al usarla por lo mismo (y para que el drawer no arrastre el módulo de
-// actions de evoluciones a quien no lo usa).
+// actions de la historia clínica a quien no lo usa).
 // [PF1.2 · C-PF2] Lo que se abre tras un click (reprogramar, agendar la próxima sesión del plan) va en chunks aparte:
 // abrir el turno no los espera. «Reprogramar» se precarga al pasar el puntero o el foco por la fila de acciones
 // (`EditToggles`), y su skeleton tiene el alto del form para que el panel no salte.
@@ -152,8 +153,11 @@ const ScheduleSessionModal = dynamic(
 const ClinicalNoteRow = dynamic(() => import("./clinical-note-row").then((m) => m.ClinicalNoteRow), {
   ssr: false,
 });
-const NoteEditorDrawer = dynamic(
-  () => import("@/components/clinical-notes/note-editor-drawer").then((m) => m.NoteEditorDrawer),
+// [FC-3h] «Cargar ficha» (fila y toast de Realizado) abre el MISMO `FichaDrawer` que la HC del perfil, con el MISMO
+// especificador que `evoluciones-view.tsx`: webpack reusa ese chunk y el runtime (que suma ~20 B por chunk diferido en
+// TODAS las rutas) no crece; /agenda no tenía margen (FC-3i1). Antes pasaba por el shim de EV2 `note-editor-drawer`.
+const FichaDrawer = dynamic<FichaDrawerProps>(
+  () => import("@/components/fichas/ficha-drawer").then((m) => m.FichaDrawer),
   { ssr: false }
 );
 const readBookingClinicalNote = (bookingId: string) =>
@@ -305,10 +309,10 @@ export function BookingDrawer({
   // cierra el drawer y `booking` pasa a null).
   const [planDialog, setPlanDialog] = useState<PlanDialog | null>(null);
 
-  // EV2-3b · fila «Evolución». Se pide al abrir el turno y solo si vale la pena
+  // EV2-3b · fila «Ficha». Se pide al abrir el turno y solo si vale la pena
   // (`clinicalNoteRowEligible`: paciente + `clinical.read` + módulo); `null`
   // del server = sin acceso / guest → la fila no se renderiza. El editor de
-  // «Cargar evolución» va AFUERA del drawer (como `planDialog`: el panel tiene
+  // «Cargar ficha» va AFUERA del drawer (como `planDialog`: el panel tiene
   // `transform`) y guarda su propio blanco, porque el drawer se cierra antes.
   const evolutionsModule = tenantModules.has("evoluciones");
   const noteRowEligible =
@@ -353,7 +357,7 @@ export function BookingDrawer({
     // turno". UNA lectura (allowlist sin títulos, apta para la Secretaria) y
     // solo en turnos de plan con `plans.schedule`; un error deja el botón
     // oculto (no hay nada que hacer distinto desde acá).
-    // EV2-3b: lectura perezosa de la evolución del turno (ver arriba).
+    // EV2-3b: lectura perezosa de la ficha del turno (ver arriba).
     setNoteView(null);
     if (booking && noteRowEligible) {
       readBookingClinicalNote(booking.id)
@@ -404,9 +408,9 @@ export function BookingDrawer({
       // T3e-2u2: al reactivar, el 2.º turno del intervalo bajo el tope suma el aviso informativo de C-AS3.
       const description =
         successInfoText(r) ?? planStatusToastDescription(status, { isPlan: isPlanBooking, ordinal: planOrdinal });
-      // EV2-3b: al marcar Realizado, si el actor puede crear la evolución de
+      // EV2-3b: al marcar Realizado, si el actor puede crear la ficha de
       // ESTE turno (se relee después del cambio: `canCreate` depende del estado),
-      // el toast ofrece «Cargar evolución». Solo para quien tiene acceso de
+      // el toast ofrece «Cargar ficha». Solo para quien tiene acceso de
       // lectura (la Secretaria no paga el viaje); la barrera es la action.
       let target: NoteEditorTarget | null = null;
       if (status === "COMPLETED" && noteRowEligible && booking.patientId && !noteView?.note) {
@@ -771,7 +775,7 @@ export function BookingDrawer({
 
   // P3.Z (F3a): "Crear plan desde este turno" / "Ver plan" eran `<Link>` y
   // salían de la agenda sin pasar por el dirty-guard.
-  /** EV2-3b: «Cargar evolución» de la fila: cierra el drawer (dirty-guard) y abre el editor afuera. */
+  /** EV2-3b: «Cargar ficha» de la fila: cierra el drawer (dirty-guard) y abre el editor afuera. */
   const openNoteEditor = async () => {
     if (!booking?.patientId) return;
     if (!(await confirmDiscard())) return;
@@ -1077,16 +1081,14 @@ export function BookingDrawer({
         />
       )}
       {noteEditor && (
-        <NoteEditorDrawer
+        <FichaDrawer
           open
           onClose={() => setNoteEditor(null)}
-          mode={{
-            type: "create",
-            patientId: noteEditor.patientId,
-            patientName: noteEditor.patientName,
-            booking: noteEditor.booking,
-          }}
-          // El editor ya muestra su toast de guardado; la agenda no cambia.
+          mode={noteEditor}
+          // Ordena el chip y la autoría como en la HC; sin `draftScope`: la agenda no tiene tenant/usuario a mano y el
+          // borrador en memoria es del composer del perfil (el Drawer conserva su dirty-guard).
+          viewerPractitionerId={viewerPractitionerId ?? null}
+          // El form ya muestra su toast de guardado; la agenda no cambia.
           onSaved={() => {}}
         />
       )}
@@ -1109,19 +1111,30 @@ export function BookingDrawer({
   );
 }
 
-/** EV2-3b: blanco del editor «Cargar evolución» (el drawer ya se cerró). */
-export type NoteEditorTarget = {
-  patientId: string;
-  /** EV2-Z A1: el editor se abre con el drawer ya cerrado: sin esto no decía de qué paciente era. */
-  patientName: string;
-  booking: { id: string; scheduledFor: string; serviceName: string | null };
-};
+/**
+ * EV2-3b · blanco del editor «Cargar ficha» (el drawer ya se cerró). [FC-3h] Es directamente el `mode` de `FichaDrawer`:
+ * - `fixedBooking`: desde un turno el chip queda en ESE turno (no se ofrece cambiarlo). `hasLiveNote: false` porque
+ *   solo se llega acá con `canCreate` del server (sin raíz viva); la barrera es `createClinicalNote`.
+ * - `patientName` (EV2-Z A1): el editor se abre con el drawer ya cerrado; sin esto no decía de qué paciente era.
+ * - `patientHasNotes: true` → arranca en «Evolución»: la agenda no sabe si el paciente tiene fichas (pedirlo sería
+ *   otro viaje por turno) y es el caso común de un turno; el tipo se cambia en el radio. Mismo default que el shim.
+ */
+export type NoteEditorTarget = FichaFormCreateMode & { patientName: string };
 
 export function noteTargetOf(booking: DrawerBooking, patientId: string): NoteEditorTarget {
   return {
+    type: "create",
     patientId,
     patientName: booking.patientName,
-    booking: { id: booking.id, scheduledFor: booking.scheduledFor, serviceName: booking.serviceName ?? null },
+    patientHasNotes: true,
+    fixedBooking: {
+      id: booking.id,
+      scheduledFor: booking.scheduledFor,
+      serviceName: booking.serviceName ?? null,
+      status: booking.status,
+      practitionerId: booking.practitionerId,
+      hasLiveNote: false,
+    },
   };
 }
 

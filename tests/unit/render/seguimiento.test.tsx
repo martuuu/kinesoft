@@ -43,17 +43,6 @@ vi.mock("@/lib/clinical-notes", () => ({
   voidClinicalNote: async () => ({ ok: false, error: "x" }),
 }));
 
-// EV2-Z A1: se fija con qué `mode` monta Seguimiento el editor (el render del nombre lo testea el editor). Se
-// mockea el componente hijo, no el que está bajo test (`SessionDetail`).
-vi.mock("@/components/clinical-notes/note-editor-drawer", () => ({
-  NoteEditorDrawer: (p: { open: boolean; mode: { type: string; patientName?: string; booking?: { id: string } | null } }) =>
-    React.createElement("div", {
-      "data-editor-mode": p.mode.type,
-      "data-editor-patient-name": p.mode.patientName ?? "",
-      "data-editor-booking": p.mode.booking?.id ?? "",
-    }),
-}));
-
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
@@ -422,7 +411,7 @@ describe("[EV2-3c] Seguimiento: evolución de HC del turno de la sesión (EV2-D1
     // [PF1.2] El editor es dinámico y se monta al primer «Cargar evolución»: el `mode` se fija en el helper que usa
     // SessionDetail, y el HTML inicial ya no trae el editor (ni su chunk).
     const mode = sessionNoteEditorMode(detail(done), note());
-    expect(mode).toMatchObject({ type: "create", patientName: "Pérez, Ana", booking: { id: "bk1" } });
+    expect(mode).toMatchObject({ type: "create", patientName: "Pérez, Ana", fixedBooking: { id: "bk1" } });
     const out = html(<SessionDetail session={detail(done)} scheduledLabel="x" clinicalNote={note()} />);
     expect(out).toContain(">Cargar ficha<");
     expect(out).not.toContain("data-editor-mode");

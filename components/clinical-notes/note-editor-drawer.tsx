@@ -3,10 +3,11 @@
 /**
  * [FC-3c] Shim del editor de EV2 (`NoteEditorDrawer`) sobre el formulario ÚNICO `FichaForm` (§24.7).
  *
- * Por qué un shim y no borrar el archivo: lo cargan por `next/dynamic` la agenda (drawer del turno), Seguimiento, la
- * tarjeta de la ficha y la vista de evoluciones, con su firma de EV2 (`NoteEditorMode`). FC-3h pasa esas entradas a
- * `FichaDrawer`; mientras tanto, todas ya abren el MISMO formulario (editor con formato, diagnósticos, casilla del
- * diagnóstico activo, fecha AR) sin que cada caller cambie. Cuando nadie lo importe, se borra.
+ * Por qué un shim y no borrar el archivo: lo cargaban por `next/dynamic` la agenda (drawer del turno), Seguimiento, la
+ * tarjeta de la ficha y la vista de evoluciones, con su firma de EV2 (`NoteEditorMode`). FC-3h pasó la agenda y
+ * Seguimiento a `FichaDrawer` directo (mismo chunk que la HC); queda SOLO la tarjeta (`note-card.tsx`, editar y
+ * enmendar) y los render tests de EV2. Cuando la tarjeta cargue `@/components/fichas/ficha-drawer` (handoff de FC-3h),
+ * se borra junto con sus tests: además, el runtime de webpack pierde la entrada de este chunk (~20 B en cada ruta).
  *
  * - `booking` de EV2 → `fixedBooking`: desde un turno el chip queda en ese turno. Los campos que el chip no usa
  *   (`status`, `practitionerId`) se rellenan neutros: no se muestran ni viajan (la action solo recibe `bookingId`).

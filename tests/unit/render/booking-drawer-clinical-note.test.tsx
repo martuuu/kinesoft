@@ -37,11 +37,17 @@ vi.mock("@/lib/time-blocks", () => proxy());
 vi.mock("@/lib/session", () => proxy());
 vi.mock("@/lib/clinical-notes", () => proxy());
 vi.mock("@/lib/clinical-notes-read", () => proxy());
-// [FC-3c] el editor es el shim sobre `FichaForm`, cuyo `DiagnosisField` (FC-3b) importa las actions de diagnósticos.
+// [FC-3c] el editor es `FichaForm`, cuyo `DiagnosisField` (FC-3b) importa las actions de diagnósticos.
 vi.mock("@/lib/diagnoses", () => proxy());
+// [FC-3h] `sessionNoteEditorMode` vive en el detalle de Seguimiento, que importa el buscador de ejercicios.
+vi.mock("@/lib/exercises", () => proxy());
 
 import { BookingDrawer, noteTargetOf } from "@/components/agenda/booking-drawer";
-import { NoteEditorDrawer } from "@/components/clinical-notes/note-editor-drawer";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { FichaDrawer } from "@/components/fichas/ficha-drawer";
+import { sessionNoteEditorMode } from "@/components/seguimiento/session-detail";
+import { attendedNoteHref } from "@/components/agenda/reception/attended-note-toast";
 import { PlanHistoryBody, planHistoryEventLabel } from "@/components/planes/plan-history";
 import { ClinicalNoteRow, CLINICAL_NOTE_ROW_COPY } from "@/components/agenda/booking-drawer/clinical-note-row";
 import {
@@ -211,12 +217,7 @@ describe("[EV2-Z] fixes de UI del drawer del turno", () => {
     const target = noteTargetOf(booking(), "pt1");
     expect(target.patientName).toBe("Juana Gómez");
     const html = renderToStaticMarkup(
-      <NoteEditorDrawer
-        open
-        onClose={() => {}}
-        mode={{ type: "create", patientId: target.patientId, patientName: target.patientName, booking: target.booking }}
-        onSaved={() => {}}
-      />
+      <FichaDrawer open onClose={() => {}} mode={target} viewerPractitionerId="p1" onSaved={() => {}} />
     );
     expect(html).toContain("<strong>Paciente: Juana Gómez</strong>");
     expect(html).toContain("Turno del 15/10/26 09:30 · Kinesio");
@@ -271,5 +272,60 @@ describe("[EV2-Z] fixes de UI del drawer del turno", () => {
     );
     expect(html).toContain("Sesión registrada");
     expect(html).not.toContain("Ficha cargada");
+  });
+});
+
+const src = (rel: string) => readFileSync(path.join(process.cwd(), rel), "utf8");
+const FICHA_DRAWER_IMPORT = 'import("@/components/fichas/ficha-drawer")';
+
+describe("[FC-3h] entradas a la ficha", () => {
+  it("[FC-3h] «Cargar ficha» abre `FichaDrawer` desde el drawer, el toast y Seguimiento", () => {
+    // Drawer del turno y toast «Realizado»: los dos abren el MISMO blanco (`noteTargetOf` → `setNoteEditor`), que ya es
+    // el `mode` de `FichaDrawer` con el turno fijo (el chip no se cambia).
+    const target = noteTargetOf(booking({ status: "COMPLETED" }), "pt1");
+    expect(target).toMatchObject({
+      type: "create",
+      patientId: "pt1",
+      patientName: "Juana Gómez",
+      patientHasNotes: true,
+      fixedBooking: { id: "b1", scheduledFor: "2026-10-15T12:30:00.000Z", serviceName: "Kinesio", status: "COMPLETED", practitionerId: "p1", hasLiveNote: false },
+    });
+    const drawerSrc = src("components/agenda/booking-drawer/index.tsx");
+    expect(drawerSrc).toContain("onCreateNote: target ? () => setNoteEditor(target) : null");
+    expect(drawerSrc).toMatch(/<FichaDrawer\s+open\s+onClose=\{\(\) => setNoteEditor\(null\)\}\s+mode=\{noteEditor\}/);
+
+    // Seguimiento: el mismo formulario con el turno de la sesión fijo y el nombre del paciente.
+    const mode = sessionNoteEditorMode(
+      { program: { patient: { firstName: "Ana", lastName: "Pérez" } } },
+      { patientId: "pt9", booking: { id: "bk1", scheduledFor: "2026-10-15T12:30:00.000Z", serviceName: null } }
+    );
+    expect(mode).toMatchObject({ type: "create", patientId: "pt9", patientName: "Pérez, Ana", fixedBooking: { id: "bk1", hasLiveNote: false } });
+    const html = renderToStaticMarkup(<FichaDrawer open onClose={() => {}} mode={mode} viewerPractitionerId={null} onSaved={() => {}} />);
+    expect(html).toContain("<strong>Paciente: Pérez, Ana</strong>");
+
+    // Toast «Atendido» de Recepción y /sala: deep link al perfil con `?turno=` (la HC abre el composer con ese turno).
+    expect(
+      attendedNoteHref({ practitionerId: "p1", canReadClinical: true, evolucionesOn: true }, "atendido", {
+        id: "b1",
+        status: "COMPLETED",
+        patientId: "pt1",
+        practitionerId: "p1",
+        patientAccess: "full",
+      })
+    ).toBe(clinicalNoteDeepLink("pt1", "b1"));
+
+    // /agenda +0 (§24.7): el drawer del turno y Seguimiento cargan `FichaDrawer` con el MISMO especificador que la HC
+    // del perfil, así webpack reusa ese chunk y el runtime no suma una entrada. Nadie de estos carga el shim de EV2.
+    for (const f of [
+      "components/agenda/booking-drawer/index.tsx",
+      "components/seguimiento/session-detail.tsx",
+      "components/patients/profile/views/evoluciones-view.tsx",
+    ]) {
+      expect(src(f), f).toContain(FICHA_DRAWER_IMPORT);
+    }
+    for (const f of ["components/agenda/booking-drawer/index.tsx", "components/seguimiento/session-detail.tsx"]) {
+      expect(src(f), f).not.toMatch(/(import\(|from )"@\/components\/clinical-notes\/note-editor-drawer"/);
+      expect(src(f), f).not.toMatch(/^import [^;]*from "@\/components\/fichas\/ficha-drawer"/m);
+    }
   });
 });
