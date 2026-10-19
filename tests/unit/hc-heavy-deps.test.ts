@@ -41,10 +41,9 @@ const read = (f: string) => readFileSync(resolve(ROOT, f), "utf8");
 const PINS: Record<string, string> = {
   "@tiptap/react": "3.31.4",
   "@tiptap/pm": "3.31.4",
-  "@tiptap/starter-kit": "3.31.4",
   "@tiptap/core": "3.31.4",
-  // FC-3a importa las extensiones SUELTAS (no StarterKit, 138,9 kB gz): cada una pineada exacta (FC-3i1). StarterKit
-  // sigue declarado hasta que FC-3f confirme que el import de Word tampoco lo usa.
+  // FC-3a importa las extensiones SUELTAS (no StarterKit, 138,9 kB gz): cada una pineada exacta (FC-3i1). FC-3f
+  // (import de Word: `generateJSON` con `hcExtensions()`) tampoco lo usa, así que `@tiptap/starter-kit` se desinstaló.
   "@tiptap/extension-document": "3.31.4",
   "@tiptap/extension-paragraph": "3.31.4",
   "@tiptap/extension-text": "3.31.4",
