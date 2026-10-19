@@ -150,8 +150,8 @@ describe("[FC-1b] renderers y assets (FC-2e)", () => {
   });
 });
 
-describe("[FC-1b] composer (stub de FC-3c)", () => {
-  it.fails("[FC-3c] pickDefaultComposerBooking: sin turno hoy → null", async () => {
+describe("[FC-1b] composer (implementado por FC-3c)", () => {
+  it("[FC-3c] pickDefaultComposerBooking: sin turno hoy → null", async () => {
     const { pickDefaultComposerBooking } = await import("@/lib/hc-composer-logic");
     expect(pickDefaultComposerBooking({ candidates: [], ownPractitionerId: null, now: new Date() })).toBeNull();
   });

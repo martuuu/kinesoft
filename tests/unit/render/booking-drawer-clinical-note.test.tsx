@@ -37,6 +37,8 @@ vi.mock("@/lib/time-blocks", () => proxy());
 vi.mock("@/lib/session", () => proxy());
 vi.mock("@/lib/clinical-notes", () => proxy());
 vi.mock("@/lib/clinical-notes-read", () => proxy());
+// [FC-3c] el editor es el shim sobre `FichaForm`, cuyo `DiagnosisField` (FC-3b) importa las actions de diagnósticos.
+vi.mock("@/lib/diagnoses", () => proxy());
 
 import { BookingDrawer, noteTargetOf } from "@/components/agenda/booking-drawer";
 import { NoteEditorDrawer } from "@/components/clinical-notes/note-editor-drawer";

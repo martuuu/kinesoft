@@ -50,6 +50,8 @@ vi.mock("@/lib/patients", () => proxy());
 vi.mock("@/lib/time-blocks", () => proxy());
 vi.mock("@/lib/exercises", () => proxy());
 vi.mock("@/lib/diagnosis", () => proxy());
+// FC-3c: el drawer del turno llega a FichaForm → DiagnosisField → lib/diagnoses ("use server").
+vi.mock("@/lib/diagnoses", () => proxy());
 vi.mock("@/lib/session", () => proxy());
 vi.mock("@/lib/conditions", () => proxy());
 vi.mock("@/lib/clinical-notes", () => proxy());

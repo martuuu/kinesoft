@@ -15,6 +15,8 @@ import type { ReactNode } from "react";
  *  - El payload del modo admin no tiene claves clínicas (ni vacías: el server rechaza el pedido entero).
  *  - Facturación (BILLING) ve el pedido del portal pero no Aprobar/Rechazar.
  */
+// FC-3c: el perfil llega a FichaForm → DiagnosisField → lib/diagnoses ("use server", importa la sesión).
+vi.mock("@/lib/diagnoses", () => ({ getDiagnosisPickerHome: vi.fn(), searchDiagnoses: vi.fn() }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
   usePathname: () => "/pacientes",
