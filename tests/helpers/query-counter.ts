@@ -58,7 +58,18 @@ export type Measurement = {
   slowest: QueryEvent[];
 };
 
-/** Runs `fn` recording every statement; BEGIN/COMMIT/ROLLBACK are counted apart. */
+/**
+ * Ping de salud del pool del query engine de Prisma (mobc), NO del código bajo test: al sacar del pool una conexión
+ * que estuvo ociosa ≳ 15 s, el engine manda un `SELECT 1` pelado y lo emite como evento `query`. Medido el 19-oct
+ * (FC-ZG-f) con un cliente aislado contra el Docker local: ociosa 1 s / 5 s → sin ping; 15 s / 31 s / 61 s → `SELECT 1`
+ * antes de la query. Contarlo hacía flaky los techos exactos (gate T4: `getAgendaAvailability` 14 vs 13, con la sentencia
+ * extra = `SELECT 1` en el cliente app fuera de la tx), según cuánto tardara lo que corrió antes en el mismo proceso.
+ * Se filtra solo el texto EXACTO `SELECT 1` (el `pingDb` de lib/db-ping.ts también lo es, pero ningún camino medido lo
+ * llama); un `SELECT 1 FROM …` o `EXISTS (SELECT 1 …)` del código se sigue contando.
+ */
+export const isPoolPing = (q: string) => q.trim() === "SELECT 1";
+
+/** Runs `fn` recording every statement; BEGIN/COMMIT/ROLLBACK are counted apart (and pool pings are dropped). */
 export async function measure<T>(fn: () => Promise<T>): Promise<{ result: T; m: Measurement }> {
   rec.events = [];
   rec.active = true;
@@ -70,7 +81,7 @@ export async function measure<T>(fn: () => Promise<T>): Promise<{ result: T; m: 
     rec.active = false;
   }
   const wallMs = performance.now() - t0;
-  const ev = rec.events;
+  const ev = rec.events.filter((e) => !isPoolPing(e.query));
   const isTx = (q: string) => /^(BEGIN|COMMIT|ROLLBACK)\b/i.test(q.trim());
   const real = ev.filter((e) => !isTx(e.query) && !/set_config\('app\.current_tenant_id'/.test(e.query));
   return {

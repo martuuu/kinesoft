@@ -416,10 +416,19 @@ describe.skipIf(!RUN)("EV2-2b · lecturas de evoluciones", () => {
         [2, "T2", "v2"],
         [1, "T1", "v1"],
       ]);
+      // Dos relojes distintos: `savedAt` es el `updatedAt` que estampa Prisma con el reloj de Node (el trigger lo copia)
+      // y `replacedAt` es el `createdAt` de la fila de revisión, `now()` de Postgres. Contra el Docker local el skew
+      // medido en el gate de T4 fue de −1,5..+44 ms y la comparación exacta fallaba 1 de cada tantas (…368 < …369).
+      // Por eso: entre relojes, tolerancia explícita; dentro del MISMO reloj, orden estricto (eso sigue afirmando que
+      // cada versión se reemplazó después de guardarse y que las revisiones salen más nueva primero).
+      const CLOCK_SKEW_MS = 250;
       for (const r of h!) {
-        expect(Date.parse(r.replacedAt)).toBeGreaterThanOrEqual(Date.parse(r.savedAt));
+        expect(Date.parse(r.replacedAt)).toBeGreaterThanOrEqual(Date.parse(r.savedAt) - CLOCK_SKEW_MS);
         expect(r.occurredAt).toBe("2026-02-01T12:00:00.000Z");
       }
+      const [r2, r1] = h!;
+      expect(Date.parse(r2.savedAt)).toBeGreaterThanOrEqual(Date.parse(r1.savedAt));
+      expect(Date.parse(r2.replacedAt)).toBeGreaterThanOrEqual(Date.parse(r1.replacedAt));
       // Sin ediciones → lista vacía (no null).
       expect(await getClinicalNoteHistory(liveRoot)).toEqual([]);
     });

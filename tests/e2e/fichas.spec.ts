@@ -36,6 +36,16 @@ test("@390 ficha nueva con formato y diagnóstico de texto libre", async ({ page
   await toolbar.getByRole("button", { name: "Negrita" }).click();
   await page.keyboard.type(" 6/10.");
 
+  // T4-Z ZF3: en el composer inline (≥ 640 px) título y diagnósticos arrancan plegados detrás de «Agregar título y
+  // diagnósticos» para que el composer no tape la primera tarjeta a 768 px de alto; el Drawer (390) los trae abiertos.
+  if (!isNarrow(page)) {
+    const addExtras = form.getByRole("button", { name: "Agregar título y diagnósticos" });
+    await addExtras.click();
+    await expect(addExtras).toHaveCount(0);
+  } else {
+    await expect(form.getByRole("button", { name: "Agregar título y diagnósticos" })).toHaveCount(0);
+  }
+
   // El input estático (textbox) se cambia por el combobox del picker diferido al enfocarlo (FC-3b).
   await form.getByRole("textbox", { name: "Diagnósticos" }).or(form.getByRole("combobox", { name: "Diagnósticos" })).click();
   const dx = form.getByRole("combobox", { name: "Diagnósticos" });

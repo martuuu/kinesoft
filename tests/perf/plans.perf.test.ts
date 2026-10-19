@@ -48,7 +48,7 @@ vi.mock("@/lib/db", async (importOriginal) => {
   return { ...actual, ...installQueryCounter() };
 });
 
-import { measure, type Measurement, type QueryEvent } from "@/tests/helpers/query-counter";
+import { isPoolPing, measure, type Measurement, type QueryEvent } from "@/tests/helpers/query-counter";
 import { createPlan, previewPlan } from "@/lib/plans";
 import type { PlanCreateInput, PlanPreview, PlanRowResolution } from "@/lib/plans-types";
 import { getPlanDetail } from "@/lib/plans-read";
@@ -111,7 +111,7 @@ type Row = { scenario: string; runs: number; note?: string; budget?: number; out
 };
 
 const isTxMark = (q: string) => /^(BEGIN|COMMIT|ROLLBACK)\b/i.test(q.trim());
-const isGuc = (q: string) => /set_config\('app\.current_tenant_id'/.test(q);
+const isGuc = (q: string) => /set_config\('app\.current_tenant_id'/.test(q) || isPoolPing(q); // el ping del pool tampoco es del código (ver query-counter)
 
 /**
  * Sentencias por tx de la última `measure()`. Con un solo flujo secuencial (las
