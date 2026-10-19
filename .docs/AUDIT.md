@@ -2367,14 +2367,72 @@ y 40. Revisores de T3-Z: (a) seguridad/plata/concurrencia, (b) UX/copy/a11y; sus
 | t3z-a1 email-autovinculo-portal | alta | B | lib/patients.ts (`updatePatientImpl`, rama admin) | ⚪ revertido por decisión de Martin 19-oct (T3-Y) | T3-Z `9f0c8f3` rechazaba en la rama admin cambiar o vaciar el email de una ficha **sin** portal vinculado (el auto-vínculo del portal es por email). Martin (19-oct, plan §24.17): «Justamente es labor de la secretaria poder cargar y modificar emails». T3-Y lo revierte: la rama admin vuelve a la lista cerrada `PatientAdminUpdate` con email (normalizado), sin `PATIENT_EMAIL_LOCKED_COPY` ni `portalLinked`; el drawer lo deja editable. La red es PD-15: el auto-vínculo exige email **verificado** y **exactamente una** ficha (`linkPortalPatientOnCallback`, lib/portal-link-internal.ts) |
 | t3z-m2 compartir-reasignar-con-admin | media | B | lib/patients.ts (`requireShareAuthority`, `assignPatientToPractitioner`) | 🟢 fix T3-Z `9f0c8f3` (default, confirma Martin) | Compartir y reasignar pacientes colgaban de `tenant.admin`: una Secretaria con Configuración decidía quién ve la HC de un paciente. Default: `tenant.sensitive`; `createPatient` con `assignTo` sigue igual |
 | t3z-m1 export-csv-contactos | media | C1 | lib/patients-export-internal.ts:39-75,89 | 🟢 `9f0c8f3` | El CSV de la Secretaria traía email/teléfono de las filas `admin` y el audit `basicCount` no las contaba. Fix: contactos solo con `full` o `patients.editAdmin` (Facturación sin contactos) y audit con `adminCount` |
-| invite-admin-sin-step-up | media | C0 | lib/invitations.ts:183 (`createInvitationImpl`) vs :282 (`changeMemberRole`) | 🔴 abierto · **decide Martin** | Pasar a alguien a Administrador/a pide step-up (PL-Z a2#7), pero **invitar** directamente como ADMIN no. Con T3 el ADMIN trae «Planes y pagos» (decisión 2), así que una sesión robada del Titular invita una cuenta propia como ADMIN sin código. Recomendado: `requireStepUp` en `createInvitation` con rol ADMIN |
-| contacto-sin-audit | baja | C1 — **decide Martin** | lib/patients.ts (`updatePatient`, ramas full y admin) | 🔴 abierto | Las ediciones de contacto y DNI no dejan audit (igual que la rama full desde PL-A). Ahora la Secretaria también edita: recomendado auditar `patient.contact_update` con los nombres de campo, sin valores |
+| invite-admin-sin-step-up | media | C0 | lib/invitations.ts:183 (`createInvitationImpl`) vs :282 (`changeMemberRole`) | ⚪ en pausa por decisión de Martin (19-oct, plan §24.17: el step-up al invitar un Admin no se agrega; la 2FA sigue a elección App o email) | Pasar a alguien a Administrador/a pide step-up (PL-Z a2#7), pero **invitar** directamente como ADMIN no. Con T3 el ADMIN trae «Planes y pagos» (decisión 2), así que una sesión robada del Titular invita una cuenta propia como ADMIN sin código. Recomendado: `requireStepUp` en `createInvitation` con rol ADMIN |
+| contacto-sin-audit | baja | C1 | lib/patients.ts (`updatePatient`, ramas full y admin) | ⚪ aceptado por Martin (19-oct, §24.17: «Ediciones de contacto sin audit: OK») | Las ediciones de contacto y DNI no dejan audit (igual que la rama full desde PL-A). Ahora la Secretaria también edita: recomendado auditar `patient.contact_update` con los nombres de campo, sin valores |
 | os-texto-libre-es-particular | baja | C2 | lib/bookings.ts:474 · lib/patients.ts:195 | 🟡 por diseño | Una cobertura de texto libre sin vincular (`insurerId` null) cae en «Particular» en los dos filtros, igual que cobra (`resolveBookingCopagoCents`). Se arregla vinculando la cobertura; si molesta, un ítem «Sin vincular» en el filtro |
 | t3z-b4 plan-sin-clave-de-hora | baja | B (riesgo aceptado) | lib/plans-engine-internal.ts · lib/booking-cap-lock.ts | 🟡 aceptado | Planes no toman `kinesoft:phour:` (el tope es aviso, precedente SR-D3): un turno de plan y uno del turnero concurrentes en el mismo intervalo pueden pasar el tope **duro** del turnero. Sin sentencias nuevas en Planes; se revisa si aparece en la agenda real |
 | dashboard-filas-admin-basico | baja | C2 | lib/dashboard.ts:95 | 🔴 | Las filas `admin` se rotulan «Acceso básico» (copy) |
 | t3z-b10 franja-del-consultorio | baja | C2 | franja de la agenda | 🔴 | Volver a «Del consultorio» (revisor (b) B10) |
 | t3z-b-ux-fixes | baja | B | components/billing/* · facturacion-view · week-grid-view · occupancy-view · access-wall | 🟢 `84b53c1` `0dc1645` `37fa0ce` (B10 → C2; el profesional en el modal del drawer lo cerró T3-Y: «Se imputa a …» en los tres modales de cobro) | Revisor (b) A1-A3, M1-M9, B1-B9: Semana 15' (`WEEK_ROW_PX[15]`), deshacer cobro con `useConfirm` en Facturación, vista de cobro MP compartida, copy único de cobro, targets de 44, copy del tope y del muro |
 | t3z-a-bajos | baja | B | lib/team-internal.ts:~1000 · lib/bookings-core.ts:~1755 · lib/bookings.ts:~1882 | 🟢 `c86b92d` (+1 sentencia en el cobro, techo 12) | Revisor (a) B1 (carrera de grants en `changeMemberRoleInTx`), B2 (alargar un turno no lo marca sobreturno por un intervalo ya lleno), B3 (`FOR UPDATE` del turno antes de leer el pago, serializa con el webhook) |
+
+### Ronda T4 (19-oct): fichas clínicas (FC, M14)
+
+Ronda 33. T4 = FC (§24 del plan, brief `wip-20/brief-t4.md`; contratos C-FC1..C-FC11), con T3-Y antes (`59b6181`) y los
+commits `5d07636`..`a2d1dcd` (T4a → T4b → T4c → T4c-2 → T4d0 → T4d → T4e → T4-Z), **local, sin push**. M14
+`20261021120000_fichas_clinicas` (`fc97be9`) aplicada solo en el Docker local (orden para prod en RUNBOOK «M14 en
+prod»). Diseño en ARCHITECTURE ADR-025 + enmienda T4 de ADR-020; «preservar» nuevos §5.56-61 y enmienda de §5.54.
+Revisores de T4-Z de solo lectura: (a) seguridad/PHI/RLS/audit/portal/respaldo (sin altos), (b) UX/a11y/mobile/copy
+(capturas a 390/1024/1366). Sus fixes van en ZF1..ZF5 (`007ef3f` `0822eb3` `e0f9ecb` `a0cf925` `a2d1dcd`).
+
+**Cerrado por T4 (§24.2 y T3-Y)**
+
+| Slug | Sev | Bloque | Ubicación | Estado | Cierre |
+|---|---|---|---|---|---|
+| H-FC1 licencia-oms | alta | B | prisma/migrations/20261021120000_fichas_clinicas · lib/diagnoses-types.ts:16-17 · lib/diagnoses-import-core.ts | 🟢 FC-0 `fc97be9` + FC-1d `b528fd5` + FC-2c `4ed070a` + ZF2 `0822eb3` | `DiagnosisCode.uri` obligatoria con CHECK; snapshot con código + título + URI; atribución en el selector, el PDF, el Word y el portal (URI junto al código); `searchText` nuestro; archivo de la OMS fuera del repo (`/data/icd11/`). §5.57 |
+| H-FC2 guard-portal-literal | alta | B | tests/unit/clinical-notes-guard.test.ts · tests/helpers/import-graph.ts · tests/unit/portal-documents-guard.test.ts | 🟢 FC-1e `65044d2` + FC-2h `c2fa291` | El guard literal no cambia; allow-list de módulos HC + BFS del grafo de imports; el portal lee solo `PatientDocument` con `select` sin ids de nota. §5.59 |
+| H-FC3 perfil-3-tx | media | PF | lib/patient-profile-loader.ts · tests/integration/pf2-profile-budget.test.ts:63,185 | 🟢 FC-2b `c75bbee` | La tx 3 es la «clinical home» (primera página, candidatos, deep link, documento compartido por `LEFT JOIN LATERAL`): siguen 3 tx, techo de 11 sentencias en la tx 3 |
+| H-FC4 bundle-dynamic-no-cuenta | media | PF | scripts/check-bundle-budget.mjs · components/patients/profile/views/hc-ssr-parts.ts | 🟢 FC-3d `3f558f1` + FC-3i1 `739ed6d` | HC estática e inicial, Resumen diferido; tarjeta y composer diferidos con SSR (ver abajo); `/pacientes/[id]` 172,2 tras T4d (tope 175) |
+| H-FC5 matricula-honorifico | media | B | prisma/schema.prisma (`Practitioner.honorific`) · components/configuracion/panels/fichas-panel.tsx | 🟢 FC-0 + FC-3i `1063a41` | «Mis fichas» edita honorífico, matrícula y firma propios; `authorLicense` congelada en la ficha |
+| H-FC6 sin-subida-firmada-25mb | alta | B | lib/files.ts:377,439 · lib/patient-file-upload-token.ts · lib/storage-internal.ts | 🟢 FC-2f `71eae4c` + FC-4b `a43caac` + ZF1 `e0f9ecb` | Subida firmada con token HMAC, `pending/`, magic bytes, barrido paginado; buckets nuevos. §5.61 |
+| H-FC7 audit-cerrado-portal-sin-ip | media | B | lib/audit.ts · tests/unit/audit-guard.test.ts | 🟢 FC-1b2 `69029a2` + FC-2i `209ccfc` | +3 acciones de seguridad; el portal pasa ip/ua explícitos; la descarga del portal se audita sobre el paciente (aparece en Actividad) |
+| H-FC8 deadlock-compartir-anular | alta | B | lib/patient-documents-internal.ts:151-159 · tests/integration/fichas-m14.test.ts | 🟢 FC-2d `2f516d8` | Orden nota → documentos en los dos caminos; test de dos conexiones con `pg_locks`. §5.58 |
+| H-FC9 build-migra-prod | alta | ops | scripts/vercel-build.mjs:29-34 | 🟢 por procedimiento | Sin spike en Vercel; `db:prod:deploy` antes del push (RUNBOOK «M14 en prod») |
+| H-FC10 diagnosis-ya-existe | baja | B | lib/diagnoses-*.ts · lib/tenant-export-logic.ts | 🟢 FC-2c + FC-2i `be59ec9` | Prefijo plural `lib/diagnoses-*`; export `tenantDiagnoses`, con fichas y documentos |
+| H-FC11 adr-024-usado | — | docs | .docs/ARCHITECTURE.md | 🟢 FC-ZD | FC = ADR-025; MPS → siguiente libre; AUDIT §5.56-61 |
+| H-FC12 orden-m18-viejo | — | docs | .docs/ROADMAP.md · .docs/MIGRACIONES-RUNBOOK.md | 🟢 FC-ZD | Orden real M12 → M14 → M18 → M17 → M15/M16 |
+| H-FC13 copy-falso-quien-ve-hc | media | B | components/configuracion/panels/general-panel.tsx · fichas-settings-logic.ts | 🟢 FC-3i + ZF5 `007ef3f` | «El Titular y los administradores que atienden ven…; si no atienden, no la ven»; error del radio con su propio estado |
+| H-FC14 compartir-doble-sentido | baja | B | share-patient-button.tsx · hero.tsx | 🟢 FC-3h2 `ef42749` | «Compartir con un profesional» ≠ «Compartir con el paciente» |
+| H-FC15 drawer-en-first-load | baja | PF | hero.tsx · tests/unit/render/pf1-shell.test.tsx | 🟢 FC-3d | Drawer de ficha y `ArchivePatientDialog` dinámicos |
+| fc3h1 ficha-doble-sentido | baja | B | hero.tsx:247 · new-patient-drawer.tsx:84 · lib/portal-copy.ts · portal/vincular | 🟢 ZF5 `007ef3f` + ZF2 `0822eb3` | «Datos administrativos», «Cargar paciente», «tu cuenta con el consultorio», «Paciente: {name}» (revisor (b) A4 y «Perfil y copy») |
+| T3-Y secretaria-email + cobro-imputa | alta | B | lib/patients.ts · components/billing/* | 🟢 T3-Y `59b6181` | Decisiones del 19-oct (§24.17): la Secretaria carga y cambia emails (revierte t3z-a1) y el modal de cobro dice a quién se imputa |
+| t4z-a M-2 / B-2 / B-3 / B-4 / B-6 | media/baja | B | lib/patient-documents.ts:137-139,172,333,372 · lib/files.ts:351,412 · lib/storage-internal.ts:322-326 · scripts/diagnosis-import.ts:238-240 | 🟢 ZF1 `e0f9ecb` | Rate limit al compartir y al pedir subida; barrido de `pending/` paginado; freno al retiro masivo de CIE-11; el replay después de anular responde `voided` |
+| t4z-a B-1 | baja | B | lib/hc-pdf/render-internal.tsx · lib/hc-docx-internal.ts · components/hc/hc-printable-view.tsx | 🟢 ZF2 `0822eb3` | URI CIE-11 junto al código |
+| t4z-b A1-A4 + medias/bajas | alta/media | B | composer, tarjeta, menús, portal, Archivos, Configuración | 🟢 ZF2..ZF5 | Composer compacto a 768 de alto (ZF3); compartir honesto sin portal ni email (ZF4); errores de descarga del portal sin página en blanco (ZF2); menús con foco y targets de 44; copy «ficha» sin doble sentido (ZF5) |
+| hidratacion-hero | media | PF | components/patients/profile/hero.tsx:480-486 | 🟢 FC-4i `966463b` | La hora del hero con reloj de 12 h daba «p. m.» con distinto espacio en Node y Chrome → React #425/#422 en cada carga del perfil (se descartaba el SSR). `hourCycle: "h23"` |
+
+**Abiertos y para decidir** (★ = default aplicado, lo confirma Martin)
+
+| Slug | Sev | Bloque | Ubicación | Estado | Detalle / destino |
+|---|---|---|---|---|---|
+| t4z-a M-1 ★ anular-enmienda-revoca | media | B | lib/clinical-notes.ts:460-496 | 🟢 fix ZF1 `e0f9ecb` · **confirma Martin** | Anular una ENMIENDA dejaba vivo el documento de la raíz (el paciente seguía viendo la enmienda anulada). Default: revocar también (`NOTE_VOIDED`, `FOR NO KEY UPDATE` sobre la raíz) y avisarlo en el diálogo de anular. Enmienda el Anexo C del brief (ADR-020 enmienda T4). Si Martin prefiere que no, se saca el bloque y vuelve la línea del contrato |
+| t4z-a M-3 ★ email-enmascarado | media | B | lib/patient-documents.ts:109-127 · components/fichas/share-ficha-dialog.tsx:65 | 🟢 fix ZF4 `a0cf925` · **confirma Martin** | El diálogo de compartir muestra el email **enmascarado** de la cuenta del portal vinculada (`j***@gmail.com`, `maskEmail`) antes de confirmar; el email completo nunca viaja al cliente |
+| t4z-rate-limits-nuevos | baja | B | lib/patient-documents.ts:137-139 · lib/files.ts:351 · rutas de descarga | 🟡 defaults | Compartir 30/10 min por usuario; aviso 3/h por paciente (pasado el tope comparte sin mail, `skipped`); pedir subida 60/10 min; ficha 60/10 min; HC completa 5/10 min; PDF del portal 30/10 min por IP. Revisar con uso real |
+| t4z-a B-5 cola-de-render | baja | PF | lib/hc-pdf/render-internal.tsx (renders serializados por proceso + `freshFonts()`) | 🔴 a medir | Sin código: medir en Vercel (`gru1`, frío y en caliente, HC de 300 fichas: 6-7 s local) en el checklist final (EXTERNAL-CONFIG §0.11) |
+| t4z-fallbacks-zf4 | baja | B | components/fichas/diagnosis-field.tsx:32 · diagnosis-picker.tsx:48 · hc-editor-field.tsx:51 · ficha-form.tsx:69 | 🔴 limpieza | Copy con fallback `// handoff ZF4` (`favorite`, `overBy`, `amendOf`, `addExtras`): pasarlos a `fichas-copy.ts` y borrar los fallbacks en la próxima tanda que toque esos archivos |
+| t4-composer-diferido-ssr | — | PF | components/patients/profile/views/hc-ssr-parts.ts | 🟡 para Martin | El composer también quedó diferido con SSR + precarga (más allá del fallback de §24.9, que era solo la timeline). El budget no lo cuenta: JS total antes de interactuar ~190 kB en `/pacientes/[id]` |
+| t4-agenda-171 | — | PF | /agenda | 🟢 FC-4i `966463b` | `/agenda` 171,3 (tope ≤ cierre de T3, +0), con el shim `note-editor-drawer` borrado; el número final es el del gate FC-ZG |
+| fc3c enmienda-con-cie11-retirado | baja | C1 | lib/clinical-notes.ts (enmendar) · components/fichas/ficha-form.tsx | 🔴 abierto | `DiagnosisSnapshot` no dice si el código se retiró después: una enmienda que precarga un CIE-11 retirado se rechaza con `DIAGNOSIS_COPY.retired` y hay que quitar el chip a mano. Recomendado: `retired` por diagnóstico en el DTO de lectura. Solo pasa después de un re-import que retire códigos |
+| fc2h pdf-respaldo-sin-logo | baja | B | lib/portal-documents-internal.ts | 🟡 default para Martin | Si falta el PDF guardado, el portal re-renderiza desde la foto, sin logo ni firma escaneada |
+| t4z-a compartir-automatico-a6 | — | C0 | — | 🔴 diferido | a6 (a), compartir automático al atender, sigue en C0 (la (b) la cerró T3c-1s) |
+
+**Incidente de FC-4i (19-oct).** Durante la integración se corrió un `next build` + E2E en una **copia del árbol que
+tenía el `.env`**. Next inlineó `NEXT_PUBLIC_SUPABASE_URL` del `.env` (que puede ser PROD) y el E2E hizo **un intento de
+login de un usuario de prueba inexistente** contra ese Supabase. Supabase lo rechazó: **sin lecturas ni escrituras** de
+datos, sin cuentas creadas. Regla nueva en las reglas de sesión (`wip-20/t4-common.md` «Regla nueva») y en TESTING:
+**nunca** `next build`/`next start`/E2E en una copia del árbol que tenga `.env` o `.env.prod.local`. Las copias
+aisladas se hacen con `rsync --exclude '.env*'` y los builds de medición, con las variables del E2E/fake. El gate
+oficial usa los scripts npm.
 
 ### Resumen del checklist (al 2026-09-29)
 
@@ -2746,9 +2804,50 @@ era intencional.
     (`lib/clinical-notes-internal.ts`): módulo `evoluciones` + `clinical.read` + acceso `full` al paciente (+ ser
     profesional para escribir). Ninguna superficie decide por su cuenta (la Secretaria tiene acceso `admin` a todos
     los pacientes: el error clásico). Nunca en el portal, ⌘K, la sala, realtime, mails ni CSV (guard de superficies).
+    **T4:** el portal ve solo lo **compartido** (`PatientDocument`, §5.59), nunca la ficha.
 55. **Un turno con evolución no se borra ni cambia de paciente (EV2-D21/D23).** FKs compuestas RESTRICT
     (`(bookingId, tenantId, patientId)`); la app rechaza antes con «cancelalo» / «no se puede cambiar el paciente» y
     traduce el P2003/23503 de la carrera. Aun anulada, bloquea. No mapear ese P2003 a un borrado ni pasar la FK a CASCADE.
+56. **El `body` de la ficha es derivado (M14, ADR-025).** Con formato, el server guarda `bodyDoc` re-armado por
+    `validateHcDoc` (`lib/hc-doc.ts:256`: allow-list, topes, idempotente) y deriva `body = hcDocToPlainText(bodyDoc)`
+    (`lib/clinical-notes-write-internal.ts:31-35`). Tope de 20.000, CHECK, búsqueda, impresión, export y guards siguen
+    sobre `body`. Exactamente uno de `body | bodyDoc` por escritura. Nunca se guarda HTML ni se confía en el `body` que
+    manda el cliente junto a un doc. No agregar marcas, links, imágenes ni tablas sin pasar por la allow-list.
+57. **Diagnósticos congelados con la licencia de la OMS (M14, FC-D17/D25/D27).** La ficha guarda un snapshot
+    `{v, source, refId, code, title, uri, release}` que el server re-lee (`resolveDiagnosesInTx`,
+    `lib/diagnoses-internal.ts:55`). El título del cliente se ignora y nunca se acorta un título CIE-11 en la ficha
+    (`diagnosisTitle` del paciente sí, a 80 con «…», FC-D32). CC BY-ND 3.0 IGO: código + título oficial + URI (CHECK en
+    `DiagnosisCode` y en `ClinicalNote_diagnoses_check`), sin traducciones propias, `searchText` marcado como nuestro y la
+    atribución (`ICD11_ATTRIBUTION`, `lib/diagnoses-types.ts:16-17`) en el selector, el PDF, el Word y el portal.
+    `DiagnosisCode` es GLOBAL_READONLY: lo escribe solo `scripts/diagnosis-import.ts`, que nunca borra (retira y
+    reactiva) y frena el retiro masivo. Kine va sin `cie10`. No editar títulos ni «limpiar» códigos retirados de
+    fichas viejas.
+58. **`PatientDocument` es inalterable y lo revoca la base (M14).** `patient_document_guard()` rechaza DELETE y TRUNCATE
+    (también al owner BYPASSRLS), solo deja nacer documentos vigentes de una raíz viva (`FOR SHARE`) y solo permite
+    revocar una vez (`REPLACED | NOTE_VOIDED | MANUAL`). Un único vivo por ficha (parcial `PatientDocument_noteId_live_key`,
+    no se borra si `migrate dev` lo propone). Anular una raíz revoca en la misma sentencia (trigger) y anular una enmienda
+    revoca el de su raíz desde la action con `FOR NO KEY UPDATE` sobre la raíz (`lib/clinical-notes.ts:465-496`, ADR-020
+    enmienda T4). **Orden de locks nota → documentos** en compartir (`FOR SHARE` primero,
+    `lib/patient-documents-internal.ts:151-159`) y en anular. No invertirlo ni revocar fuera de esa tx.
+59. **El portal lee solo `PatientDocument` (C-FC8; enmienda acotada de EV2-D5 y de §5.54).** `lib/portal-documents-internal.ts`
+    filtra por `tenantId` + `patientId` del ref, con `select` explícito sin `noteId`, `sourceDigest`, `pdfStorageKey`,
+    `idempotencyKey` ni `sharedBy*`, y **deriva** la clave del PDF (`{tenantId}/{patientId}/{documentId}.pdf`,
+    `:15-16,163`) verificando el sha256. La foto lleva `label` (texto), nunca el enum. Ningún archivo del portal nombra
+    el modelo de notas (guard literal, comentarios incluidos) ni importa fuera de la allow-list `lib/hc-*`/`components/hc/*`
+    (grafo de imports). Solo lo compartido y vivo: otro paciente o un documento revocado dan 404.
+60. **Las descargas se auditan antes del primer byte (C-FC7, FC-D28).** Rutas del equipo y del portal:
+    `auditSecurityEvent` (`clinicalNote.download` / `clinicalRecord.download` / `patientDocument.download`, con
+    `entity: "Patient"` para que se vea en Actividad) **después del render y antes de devolver bytes**. Si el audit
+    falla → 503 sin cuerpo (`lib/hc-export-internal.ts:16-18,199`). Headers `no-store`, `nosniff` y `attachment` con
+    `filename*`. No streamear antes del audit ni «auditar después si salió bien». La vista en pantalla del portal no se
+    audita (decisión).
+61. **Subida firmada y assets (C-FC10, FC-D29).** Ningún archivo del paciente entra a su clave final sin pasar por
+    `confirmPatientFileUpload` (`lib/files.ts:439`): token HMAC de 15 min → re-gate → replay → `info()` con el tamaño →
+    64 bytes por `Range` → magic bytes contra la allow-list → `move`. Si algo falla, se borra el objeto y no se crea la
+    fila. Lo que no se confirma queda en `pending/` y lo barre el cron (> 24 h). Logo y firma (`lib/practice-assets.ts`):
+    PNG/JPEG con magic bytes y tope de dimensiones; logo con `tenant.sensitive`, firma solo la propia. El PDF lleva la
+    firma del **autor** de la ficha. Los buckets `patient-documents`, `practice-assets` y `patient-files` son privados y
+    sin policies: todo pasa por la service role del server.
 
 ---
 

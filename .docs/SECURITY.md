@@ -186,7 +186,8 @@ staff (con `Membership`) ≠ paciente.
   3/h); lo aprueba el consultorio en una tx con CAS y audit sin valores. Un cambio de OS que borra copago propio o cambia
   el copago de turnos impagos pide confirmación.
 - **Estado de cuenta y ejercicios:** DTO por allowlist (sin montos de la OS, aranceles ni notas); el plan es el mismo
-  `PORTAL_PROGRAM_WHERE` en todas las vistas. Evoluciones nunca (guard `clinical-notes-guard`).
+  `PORTAL_PROGRAM_WHERE` en todas las vistas. La ficha nunca (guard `clinical-notes-guard`): desde T4 el portal ve solo
+  lo **compartido** en «Documentos» (`PatientDocument`, §23).
 - **Logs del portal:** slug, motivo y nombres de campo; **nunca** email, token, valores del pedido ni `e.message` de un
   error que pueda traerlos (ES4-Z B5).
 
@@ -261,6 +262,15 @@ and `deletePatientFile` checks the storage `{ error }`).
   characters in the Supabase Storage path.
 - `getDownloadUrl` writes an `AuditEvent` for every signed URL minted.
   PHI exfiltration via repeated download is observable.
+
+**Subida firmada (T4, FC-4b, C-FC10; AUDIT §5.61).** Desde T4 los archivos de hasta 25 MB no pasan por el body de la
+action (tope de 4,5 MB de Vercel): `requestPatientFileUpload` (`lib/files.ts:377`, acceso `full`, 60 pedidos cada
+10 min por usuario) firma una subida a `pending/{tenant}/{fileId}` y devuelve un token HMAC de 15 min (clave derivada de
+`SUPABASE_SERVICE_ROLE_KEY` con la etiqueta `kinesoft:patient-file-upload:v1`, sin variable nueva). El navegador sube con
+un PUT directo a Storage, y `confirmPatientFileUpload` (`:439`) re-valida todo antes de crear la fila: token, gate,
+replay, tamaño por `info()`, magic bytes de los primeros 64 bytes (`lib/file-sniff.ts`; un `.exe` renombrado a `.pdf`
+se rechaza) y `move` a la clave final. Si algo falla, se borra el objeto. Lo que queda en `pending/` lo barre el cron
+diario a las 24 h. El interruptor `PATIENT_FILES_SIGNED_UPLOAD=off` vuelve al camino viejo de ≤ 4 MB.
 
 ## 7. Notification fan-out
 
@@ -1044,7 +1054,7 @@ verificación en dos pasos» y eso bloquea las acciones `high` de Plataforma.
   riesgo incluidas). Mitigación: contraseña única, 14 días (tope 30), solo su id. Arreglo de fondo en backlog:
   «Recordar este dispositivo 30 días» + step-up de 60 min para superadmin.
 
-## 21. Evoluciones de HC (EV2, 15/16-oct-2026)
+## 21. Evoluciones de HC (EV2, 15/16-oct-2026; desde T4 se llaman «fichas», §23)
 
 Modelo e invariantes en [ARCHITECTURE.md ADR-020](ARCHITECTURE.md); «preservar» en AUDIT §5.50-55; hallazgos en
 [AUDIT.md «Hallazgos de EV2»](AUDIT.md). Un solo gate (`clinicalNoteGateInTx`): módulo `evoluciones` + `clinical.read` +
@@ -1060,11 +1070,11 @@ acceso `full` al paciente para leer; además `practitionerId` para escribir. Los
 | ADMIN (nunca atiende, §20.17) | no (aunque la fila diga `clinical = true`) | no | no | no | no | — |
 | Secretaria (ASSISTANT) / Facturación (BILLING) | no | no | no | no | no | — |
 | Soporte de Plataforma | no (SUPPORT_CAPS sin clínico) | no | no | no | no | — |
-| Paciente (portal) | **nunca** (EV2-D5) | — | — | — | — | — |
+| Paciente (portal) | **nunca** la ficha (EV2-D5); desde T4, solo la foto que le compartieron en «Documentos» (§23) | — | — | — | — | — |
 
 - **Superficies sin HC** (guard `tests/unit/clinical-notes-guard.test.ts`): portal, ⌘K, turnero público, Plataforma,
-  `/sala` y realtime, notificaciones y mails, CSV y exports internos. La sala recibe el toast «Cargar evolución» pero
-  ningún texto clínico.
+  `/sala` y realtime, notificaciones y mails, CSV y exports internos. La sala recibe el toast «Cargar ficha» pero
+  ningún texto clínico. El portal ve solo lo compartido (§23).
 - **Audit** en la misma tx: `clinicalNote.create|edit|amend|void` y `clinicalRecord.print` con `entity: "Patient"` y
   solo ids/kind/revisión — **nunca** el texto ni el motivo de anulación. La impresión audita **antes** de devolver
   datos: si el audit falla, no hay datos.
@@ -1112,3 +1122,48 @@ hallazgos en [AUDIT.md «DIR y MB (16-oct)»](AUDIT.md). Por default **apagado**
   lectura por PK; el 404 de ficha sí queda en ISR 600 s); B2 las actions de `lib/public-profile.ts` sin rate limit
   (sesión + 2FA, solo abuso); usuario deshabilitado por Plataforma **sigue reservable en el turnero** (pre-DIR,
   `bookablePractitionerWhere` solo mira `Membership.disabledAt`).
+
+## 23. Fichas clínicas y documentos compartidos (T4, 19-oct-2026; local, sin push)
+
+Diseño en [ARCHITECTURE.md ADR-025](ARCHITECTURE.md) (+ enmienda T4 de ADR-020); «preservar» en AUDIT §5.56-61;
+hallazgos en [AUDIT «Ronda T4»](AUDIT.md); M14 en [RUNBOOK «M14 en prod»](MIGRACIONES-RUNBOOK.md). Leer y escribir fichas
+sigue pasando por el gate único de §21 (`clinicalNoteGateInTx`).
+
+**Superficies nuevas**
+
+| Superficie | Quién | Barrera | Audit |
+|---|---|---|---|
+| `GET /api/pacientes/[id]/fichas/[noteId]/[pdf\|docx]` | equipo con `canRead` sobre el paciente | 401 sin sesión, 403 soporte, 404 ajena o enmienda (se baja por la raíz), 60/10 min por usuario | `clinicalNote.download` **antes del primer byte**; audit caído → 503 sin cuerpo |
+| `GET /api/pacientes/[id]/historia-clinica/pdf` | ídem | ídem, 5/10 min por usuario, 300 fichas, 60 s (`vercel.json`) | `clinicalRecord.download` antes de los bytes |
+| Portal «Documentos» (`/portal/c/[slug]/documentos`, lista y vista) | el paciente vinculado (`requirePortalPatient`) | solo `PatientDocument` propios y vivos; `select` sin ids de nota ni claves; otro paciente o revocado → 404; staff → 404 | la vista no se audita (FC-D28) |
+| `GET /portal/c/[slug]/documentos/[id]/pdf` | ídem | proxeada (nunca una URL firmada al navegador), sha256 verificado, clave **derivada** (`{tenantId}/{patientId}/{id}.pdf`), 30/10 min por IP | `patientDocument.download` con ip/ua explícitos **antes de los bytes**; si falla → 503 |
+| `shareClinicalNoteWithPatient` / `revokePatientDocument` / `getPatientPortalShareInfo` (`lib/patient-documents.ts`) | profesional con escritura clínica (FC-D8); nunca BASIC/ASSISTANT/BILLING/soporte/ADMIN | raíz viva, re-gate en tx2, orden nota → documentos, 30/10 min por usuario | `patientDocument.share` / `.revoke` en la tx |
+| Subida firmada de archivos (§6) | acceso `full` | token HMAC 15 min + magic bytes + `move` | el de `patient-files` |
+| Logo y firma (`lib/practice-assets.ts`) | logo: `tenant.sensitive`; firma: solo la propia | PNG/JPEG con magic bytes y tope de dimensiones; logo ≤ 1 MB, firma ≤ 512 KB; `expectedUpdatedAt` | `tenant.logo.update/remove`, `practitioner.signature.update/remove`, `practitioner.signature_info.update` |
+| Diagnósticos (`lib/diagnoses.ts`) | escritura clínica crea propios; editar/archivar quien lo creó o `tenant.sensitive` (FC-D22) | el server re-lee y congela; `DiagnosisCode` GLOBAL_READONLY | — |
+
+**Buckets** (privados, **sin policies**: todo pasa por la service role del server; se crean a mano, EXTERNAL-CONFIG
+§0.11): `patient-documents` (PDF compartidos, 10 MB, `application/pdf`), `practice-assets` (logo y firmas, 1 MB,
+png/jpeg) y `patient-files` (ya existía; límite de 25 MB). La firma de la subida vale 2 h en Storage, pero el token
+propio la corta a 15 min.
+
+**Mail sin PHI.** El aviso `portal_document` dice solo «Tenés un documento nuevo de {Consultorio} en tu portal» (o
+«{Consultorio} actualizó un documento en tu portal», `lib/email/templates.ts:714`) con el link a «Documentos». Sin título,
+sin tipo ni contenido de la ficha. Va solo al email **verificado** de la cuenta del portal vinculada; sin portal, la UI
+ofrece invitar (el mail de invitación de siempre). Tope de 3 avisos por hora por paciente: pasado, se comparte sin mail.
+Resend caído → se comparte igual. El diálogo de compartir muestra ese email **enmascarado** (`maskEmail`); el completo
+nunca viaja al cliente (M-3 ★).
+
+**Nombre del archivo descargado.** PDF y Word se llaman `{Apellido Nombre} {AAAA-MM-DD} {título de la ficha} [id6]`
+(`hcFileBase`, `lib/hc-print-model.ts:432`; la HC completa usa un rótulo fijo en vez de fecha y título). El nombre del
+paciente y el título quedan en la carpeta de descargas y en la carpeta de respaldo
+(`Pacientes/<Apellido Nombre> (DNI n)/…`). Es intencional (el profesional los tiene que encontrar), pero cuenta como PHI
+en la PC: por eso la carpeta de respaldo exige la casilla «Esta computadora la uso solo yo» y el permiso se pide dentro
+del gesto. El título lo escribe el profesional: el copy no sugiere poner diagnósticos ahí.
+
+**Rate limits nuevos** (`lib/rate-limit.ts`, Upstash en prod): compartir 30/10 min por usuario; aviso 3/h por paciente;
+pedir subida 60/10 min por usuario; descargar ficha 60/10 min por usuario; HC completa 5/10 min por usuario; PDF del
+portal 30/10 min por IP.
+
+- 🔴 **Abierto (baja, a medir):** la cola serial de render de react-pdf (un render por proceso) puede encolar descargas
+  bajo carga; se mide en Vercel al final (AUDIT B-5).

@@ -87,6 +87,19 @@
     `tenant.sensitive`), «C-AS2» = cobros con medio de pago, «C-AS3» = tope de turnos por intervalo (clave
     `kinesoft:phour:`); no son los C1-C14 de Planes. «AS-D*» son sus decisiones con default; «Hallazgo B» (lookback 240'
     del cupo) es un hallazgo de §23.2, no el revisor B de T3-Z.
+  - **§24 del plan (19-oct; T4 = FC, fichas clínicas):**
+    - «T4a..T4e» (más T4c-2 y T4d0) son sus tandas y «T4-Z» el cierre. Sesiones: «FC-0» (= **M14** `fichas_clinicas`),
+      «FC-1a..1e», «FC-2a..2i», «FC-3a..3k» (más 3h1/3h2, 3e1/3e2, 3i1), «FC-4a/4b», integradores «FC-2i/3i1/4i»,
+      «FC-E» (E2E) y en el cierre «FC-ZA/ZB» (revisores), «FC-ZG» (gate) y «FC-ZD» (docs). «ZF1..ZF5» son los fixers de
+      T4-Z: no son F1/F2 de P3.Z ni F-a..F-e de la Ola F. «T3-Y» fue la sesión suelta previa a T4.
+    - «FC-D1..D32» son sus decisiones con default (§24.14: FC-D22..D32 son las nuevas de T4) y «FC-UI-D1..D11» las de UI.
+      «C-FC1..C-FC11» son sus contratos (no los C1-C14 de Planes). «M-1/M-3 ★» y «B-1..B-6» son hallazgos del revisor (a)
+      de T4-Z; «A1-A4» los del revisor (b), que no son las olas A0-A3. «H-FC1..15» son los hallazgos de §24.2.
+    - En el portal, **«Documentos»** (lo que el profesional compartió, `PatientDocument`) no es la pestaña
+      **«Archivos»** del perfil (`PatientFile`, adjuntos del equipo). **«Compartir con el paciente»** (una ficha al portal)
+      no es **«Compartir con un profesional»** (dar acceso al paciente a otro kine). «Ficha» es la ficha clínica: los
+      datos del paciente son «datos del paciente», no «ficha».
+    - ADR-025 = fichas. El ADR de MPS toma el siguiente libre (ADR-026).
   - «Plan» choca en tres sentidos: plan de tratamiento, plan SaaS del tenant y plan de la obra social.
   - «Vertical» (`Tenant.vertical`: General / Kinesiología) es el tipo de consultorio: no es la «disciplina» de un
     servicio o plan (Kine / Osteo) ni el plan SaaS (`Tenant.plan`). «Kine PRO» = vertical Kinesiología + plan PRO.

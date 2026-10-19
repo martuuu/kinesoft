@@ -2094,3 +2094,41 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] Agenda → «Más opciones» → **Ocupación**: «Lo que pasó» (4/8/12 semanas) y «Lo que viene» (1/2/4) con número en cada celda y «x de tope». Secretaria/Titular ven todos; un profesional, solo lo suyo.
 - [ ] A **390**: lista por día, sin scroll horizontal, targets de 44. A **1366×768**: la tabla entra sin scroll horizontal.
 - [ ] Un turno a las 23:30 AR cae en su día y hora AR (probar con `TZ=UTC`).
+
+## T4 · Fichas clínicas (19-oct-2026)
+
+> T3-Y (`59b6181`) + T4a..T4e + fixers ZF1..ZF5 de T4-Z (`5d07636`..`a2d1dcd`). **Con migración M14** (`fichas_clinicas`,
+> solo en local: probar contra el Docker local). `TZ=UTC npm run dev`, a **390**, **1024×768** y **1366×768**. Plan §24.12
+> (Anexo C) + revisores de T4-Z; hallazgos en [AUDIT «Ronda T4»](AUDIT.md). **🔴 P0** = PHI o portal: no se pasa a prod
+> con uno en ❌. Usuarios: Titular que atiende, Profesional, Secretaria, un paciente con portal y otro sin portal ni email.
+> Sin Storage local, el PDF compartido queda como `stub:` y el portal lo re-renderiza desde la foto.
+
+### 🔴 P0 · PHI y portal
+- [ ] 🔴 P0 **Compartir sin portal** (paciente sin cuenta): el diálogo no promete mail ni portal; tras compartir dice «Listo: la ficha quedó compartida. El paciente todavía no tiene portal.» y ofrece «Invitar al portal». **Sin email** cargado: no aparece la casilla de aviso y se ve el aviso de falta de email antes de confirmar.
+- [ ] 🔴 P0 **Compartir con portal:** el diálogo muestra el email de la cuenta **enmascarado** (`j***@gmail.com`), nunca completo (M-3 ★). El paciente lo ve en «Documentos». El mail dice solo «Tenés un documento nuevo de {Consultorio} en tu portal»: sin título, tipo ni texto de la ficha.
+- [ ] 🔴 P0 Editar la ficha compartida → chip «Compartida · desactualizada» → «Compartir la versión actual» → el portal muestra la nueva. «Dejar de compartir» → desaparece del portal.
+- [ ] 🔴 P0 **Anular** una ficha compartida (el diálogo avisa «…al anularla, deja de verla en su portal») → desaparece del portal. **Anular una enmienda** de una ficha compartida → el diálogo avisa «Esta enmienda va en el documento compartido con el paciente: al anularla, deja de verlo en su portal…» y el documento de la raíz desaparece del portal (M-1 ★); volver a compartir la raíz lo muestra sin la enmienda anulada.
+- [ ] 🔴 P0 **Portal a 390** (QA 14): lista, vista y descarga del PDF; el id de un documento de **otro** paciente (o revocado) da 404. Forzar errores de descarga: 429 (bajar muchos seguidos), 503 y 500 vuelven a la página con un aviso claro (`role="alert"`), nunca una página en blanco.
+- [ ] 🔴 P0 La Secretaria, Facturación, un Admin que no atiende y el soporte **no** ven la HC ni «Compartir con el paciente» ni las descargas (las rutas dan 403/404).
+- [ ] 🔴 P0 En DevTools → Network, importando Word: **ningún** request lleva el .docx (QA 8).
+
+### Historia clínica y composer
+- [ ] **QA 1.** Un profesional abre un paciente: «Historia clínica» es la primera pestaña y está activa (`?tab=hc` también). **A 1024×768 y 1366×768** el composer compacto (editor de 4 filas que crece hasta 10; tipo, turno y fecha en una fila; «Agregar título y diagnósticos» plegado) y la **primera tarjeta** entran sin scroll. A 390 la barra «Nueva ficha» queda a mano y muestra el turno de hoy.
+- [ ] **QA 2.** Slow 4G: escribir antes de que cargue el editor y no perder nada. Atajos, «Insertar estructura» + Ctrl+Z (un solo paso), pegar desde Word (colores, tabla, link): solo queda el formato permitido. «Sin formato» vuelve al textarea.
+- [ ] **QA 3.** Ir a Resumen y a Agenda y volver: el borrador sigue (punto en la pestaña). Recargar: el navegador avisa. Descartar pide confirmación.
+- [ ] **QA 4.** Turno de las **23:30 AR** preseleccionado (con `TZ=UTC`); «Sin turno»; la fecha sigue al turno. Guardar: fecha AR, títulos, diagnósticos y «Lic. … · MN …».
+- [ ] **QA 5.** Diagnósticos: favoritos primero; crear uno propio inline; atribución «CIE-11 © OMS · CC BY-ND 3.0 IGO» visible; cambiar el principal; casilla «Usar como diagnóstico activo del paciente» destildada y, tildada, el Resumen se actualiza. Sin catálogo cargado: «El catálogo CIE-11 todavía no está cargado» y funcionan propios, kine y texto libre.
+- [ ] La **hora del hero** del perfil sale en 24 h (sin «p. m.») y la consola no muestra errores de hidratación (#425/#422).
+
+### PDF, Word y respaldo
+- [ ] **QA 6.** PDF: membrete, logo, firma del **autor**, código de verificación, URI CIE-11 junto al código y `≤ → ñ` bien. Word abre en Word y en LibreOffice con las **fechas** correctas. HC completa en PDF; si es demasiado pesada: «Usá «Imprimir historia clínica»».
+- [ ] **QA 9.** Carpeta de respaldo en Chrome: elegir (con la casilla «Esta computadora la uso solo yo»), guardar, editar (sobrescribe), anular. **Cerrar y reabrir el navegador**: el permiso se vuelve a pedir dentro de «Guardar en la carpeta» y guarda. Sin carpeta elegida, «Guardar» descarga. Safari y Firefox: descarga común.
+
+### Importar Word, entradas y Configuración
+- [ ] **QA 8.** Importar 3 .docx (uno de > 20.000 caracteres → «Dividir en N fichas»; uno con imágenes → aviso; uno con fecha por `lastModified`). Hay que tildar «Revisé las fechas» para importar; quedan con «Carga tardía» / «Importada» y la fecha correcta en `TZ=UTC`.
+- [ ] **QA 10.** El drawer de la agenda, el toast «Atendido» y Seguimiento abren el mismo formulario de ficha.
+- [ ] **QA 11.** Configuración: radio «¿Quién ve la historia clínica…?» con el copy nuevo y confirmación al ampliar a «Todos»; error y «Guardando…» dentro de la tarjeta. Logo del consultorio (General, solo con lo delicado). «Mis fichas» visible para un profesional sin delegaciones: honorífico, matrícula, firma, carpeta, diagnósticos propios (renombrar/archivar). Botones de 44 a 390.
+
+### Archivos y accesibilidad
+- [ ] **QA 12.** Archivos: uno de **20 MB** con barra de progreso y «Archivo subido»; cancelar a mitad no deja nada; un **.exe renombrado a .pdf** se rechaza («El contenido del archivo no coincide con su tipo…»). Error de la lista ≠ lista vacía («No pudimos cargar los archivos» + «Reintentar»).
+- [ ] **QA 13.** Solo teclado + VoiceOver/NVDA: toolbar (Alt+F10, roving), combobox de diagnósticos (opción activa visible, live region), chips («Quitar: …», «Favorito: …»), menú «⋯» (el foco vuelve al botón), contador de caracteres («Te pasaste por {n} caracteres»); `prefers-reduced-motion`.

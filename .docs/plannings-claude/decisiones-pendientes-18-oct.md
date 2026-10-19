@@ -36,13 +36,13 @@ cierra `turnero-mp-cuenta-plataforma`), 2FA de Plataforma apagada (supera BO-D6 
 
 | # | ID | Hoy (default) | Alternativa | Recomiendo | Para |
 |---|---|---|---|---|---|
-| 11 | **EV2-D19** nombres en Seguimiento | «Registrar sesión» = meta de sesión (notas, RPE, EVA); «Cargar evolución» = evolución de HC | Volver a un solo «Cargar evolución» | Así: dos acciones distintas con el mismo nombre confundían | T4 (FC renombra la pestaña a «Historia clínica») |
+| 11 | **EV2-D19** nombres en Seguimiento | «Registrar sesión» = meta de sesión (notas, RPE, EVA); «Cargar evolución» = evolución de HC | Volver a un solo «Cargar evolución» | ✅ **Decidido 19-oct** (§24.1): default. «Registrar sesión» ≠ «Cargar ficha»; T4 renombró la pestaña a «Historia clínica» (FC-3h1 `5d07636`) | hecho en T4 |
 | 12 | EV2-D18 + EV2-Z A2 | «Sin evolución» y reabrir sesión miran la evolución viva del turno; una evolución de HC **no** bloquea «Registrar sesión»; «Deshacer Atendido» no reabre la sesión | Bloquear «Registrar sesión» si ya hay evolución | Así | ya rige |
 | 13 | EV2-D13 | Turno ausente (NO_SHOW) no admite evolución, igual que cancelado | Permitir nota en ausente («no vino, llamé») | Así; la nota suelta sin turno cubre ese caso | ya rige |
 | 14 | EV2-D14 enmienda | Cualquier profesional con escritura sobre el paciente, sin límite de tiempo | Solo el autor | Así (equipo que comparte paciente) | ya rige |
 | 15 | EV2-D15 anular | El autor o el Titular clínico (nunca el Admin), motivo 3..500 | Solo el autor | Así | ya rige |
 | 16 | EV2-D16, D17, D20..D24 + EV2-Z | Auditoría sin texto clínico; la base frena edición a 24 h + 10 min; pestaña «EVA» + «Evoluciones»; no se cambia el paciente de un turno con evolución; export con evoluciones; anulada colapsada y bloquea borrar el turno; fecha = hora del turno; toast solo en turnos propios; «Sesión registrada»; impresión corta en las 2000 más recientes | — | Confirmar en bloque | ya rige |
-| 17 | a6 paciente ajeno | El kine que atiende un paciente de otro sin share ve el toast «Cargar evolución» pero al guardar falla (cerrado, correcto) | (a) share automático al atender; (b) esconder el toast sin permiso | (b) ya, chico; (a) con la visibilidad por registro de C0 | T3 o T4 |
+| 17 | a6 paciente ajeno | El kine que atiende un paciente de otro sin share ve el toast «Cargar evolución» pero al guardar falla (cerrado, correcto) | (a) share automático al atender; (b) esconder el toast sin permiso | ✅ **Decidido 19-oct** (§24.1): (b) hecha en T3c-1s (el toast pide acceso `full`); (a) va a C0 | (b) T3 · (a) C0 |
 | 18 | Título de la pestaña del perfil | «Paciente · KineSoft» sin nombre (`app/(app)/pacientes/[id]/page.tsx:21`): vuelve el esqueleto y no queda el nombre en el historial de PCs compartidas | Nombre del paciente (+1 tx, TTFB peor) | Así | ya rige |
 | 19 | Export del consultorio | Saca `authorUserId` (id de Auth) fuera de `team` (EV2-1b); incluye `team.userId` opaco para mapear la auditoría (BO5-C) | Sin ids | Así: sin ids no se reconstruye quién hizo qué | ya rige |
 
@@ -50,10 +50,10 @@ cierra `turnero-mp-cuenta-plataforma`), 2FA de Plataforma apagada (supera BO-D6 
 
 | # | ID | Hoy (default) | Alternativa | Recomiendo | Para |
 |---|---|---|---|---|---|
-| 20 | **FC-D17** fuente de la CIE-10 | A verificar: OPS/OMS o tablas del DEIS (MSal) | CIE-11 (CC BY-ND) | ✅ **Decidido 19-oct** (§23.1 decisión 9, §23.12): CIE-11 MMS en español de la OMS (CC BY-ND, sin modificar, con atribución) + propios + kine; Martin confirma con la OMS el uso en un SaaS pago; DEIS/CIE-10-ES no sin licencia | T4 (bloquea solo la carga completa) |
-| 21 | FC-D6 PDF guardado | Solo se guarda al compartir; la descarga se genera al vuelo | Guardar siempre | Así (menos storage, una sola verdad) | T4 |
-| 22 | FC-D8 quién comparte | Cualquier profesional con escritura sobre el paciente | Solo el autor | Así | T4 |
-| 23 | FC-D10/D11 importar Word | En el navegador; la persona confirma la fecha del archivo; autor = quien importa; «carga tardía» visible | Importar en el server | Así | T4 |
+| 20 | **FC-D17** fuente de la CIE-10 | A verificar: OPS/OMS o tablas del DEIS (MSal) | CIE-11 (CC BY-ND) | ✅ **Decidido 19-oct** (§23.1 decisión 9, §23.12): CIE-11 MMS en español de la OMS (CC BY-ND, sin modificar, con atribución) + propios + kine; **sin mail a la OMS ni pago** (enmienda de Martin del 19-oct: la licencia no lo pide); DEIS/CIE-10-ES no sin licencia. Import en prod al final (EXTERNAL-CONFIG §0.11) | hecho en T4 (falta el import en prod) |
+| 21 | FC-D6 PDF guardado | Solo se guarda al compartir; la descarga se genera al vuelo | Guardar siempre | ✅ **Decidido 19-oct** (§24.1): default, el PDF se guarda solo al compartir | hecho en T4 |
+| 22 | FC-D8 quién comparte | Cualquier profesional con escritura sobre el paciente | Solo el autor | ✅ **Decidido 19-oct** (§24.1): default, cualquier profesional con escritura clínica | hecho en T4 |
+| 23 | FC-D10/D11 importar Word | En el navegador; la persona confirma la fecha del archivo; autor = quien importa; «carga tardía» visible | Importar en el server | ✅ **Decidido 19-oct** (§24.1): default, en el navegador; el .docx nunca viaja | hecho en T4 |
 
 ## 4. Secretaria y permisos
 
@@ -146,10 +146,7 @@ cierra `turnero-mp-cuenta-plataforma`), 2FA de Plataforma apagada (supera BO-D6 
 
 ## Las que conviene mirar ahora
 
-> 19-oct: #24, #28, #3-#7, #59/#60 y #1 ya están decididas (arriba). #20 se decidió en §23.1 decisión 9: CIE-11 MMS en
-> español de la OMS + propios + kine (§23.12; Martin confirma por email con la OMS antes del import).
+> 19-oct: #24, #28, #3-#7, #59/#60 y #1 ya están decididas (arriba). #11, #17 y #20-#23 se decidieron al arrancar T4
+> (§24.1; #20 sin mail a la OMS, enmienda de Martin del 19-oct) y T4 las implementó.
 
-1. **#11 (EV2-D19, nombres en Seguimiento)** y **#17 (a6, toast de evolución en paciente ajeno)**: antes de T4, que
-   renombra la pestaña de HC. (a6 (b) ya quedó en T3c-1s: el toast pide acceso `full`.)
-2. **#21-#23 (FC-D6/D8/D10)**: se consultan en el planning de T4.
-3. **#33-#37 (TP-D7..D16)**: en el planning de T5 (con la seña = `copagoRemainingCents` de T3).
+1. **#33-#37 (TP-D7..D16)**: en el planning de T5 (con la seña = `copagoRemainingCents` de T3).

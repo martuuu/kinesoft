@@ -453,6 +453,12 @@ E2E_APP_DIR=<snapshot> npm run test:e2e   # buildea/sirve otro árbol (p. ej. `g
 E2E_KEEP_DATA=1 npm run test:e2e    # no borra el tenant al final (para mirar un fallo)
 ```
 
+> ⚠️ **Regla del incidente de FC-4i (19-oct, AUDIT «Ronda T4»):** **nunca** `next build`, `next start` ni E2E en una
+> copia del árbol que tenga `.env` o `.env.prod.local`. Next inlinea `NEXT_PUBLIC_SUPABASE_URL` del `.env` (puede ser
+> PROD) y el E2E le pega: pasó una vez, con un login de un usuario de prueba inexistente que Supabase rechazó. El
+> snapshot de `E2E_APP_DIR` se arma con `rsync --exclude '.env*'` (o `git archive`, que no trae los `.env`), y los builds
+> de medición, con las variables del E2E/fake. El gate oficial usa los scripts npm.
+
 - **Server** (`tests/e2e/support/start-server.mjs`, el `webServer` de la config): un **GoTrue falso** en
   127.0.0.1:3299 + `next build` + `next start -p 3300`. El falso atiende `token?grant_type=password|refresh_token`,
   `user` y `logout` contra `tests/e2e/.state/users.json`, y firma el JWT con un secreto propio que el server recibe como

@@ -49,9 +49,14 @@ van **antes** del deploy; el deploy sale con `DIRECTORY_MODE` sin setear (= `off
 prendido, [EXTERNAL-CONFIG «Directorio y PWA»](EXTERNAL-CONFIG.md)). MB no trae migración.
 
 **T3 (19-oct) suma M12** (`agenda_secretaria_config`, commit `12bb08b`, sin push): va **después de M11 y antes que
-M18**, al final de todo el planning (§22.14 del plan: consolas, push y migraciones juntos), con precheck de solo lectura
+M14**, al final de todo el planning (§22.14 del plan: consolas, push y migraciones juntos), con precheck de solo lectura
 (§23.10) → backup → `db:prod:deploy` **antes** del deploy de T3. Es aditiva y compatible con el código anterior. T3-Z no
 la tocó. Detalle en «M12 en prod».
+
+**T4 (19-oct) suma M14** (`fichas_clinicas`, commit `fc97be9`, sin push): ⚠️ **migración nueva**, va **después de M12 y
+antes que M18**, también al final del planning: precheck → buckets → backup → `db:prod:deploy` **antes** del push de T4.
+Detalle en «M14 en prod». **Orden real de las pendientes** (lo da el timestamp, no el número; enmienda el viejo «M18 antes
+que M14..M17»): **M12 → M14 → M18 → M17 → M15/M16**, cada una antes del push de su tanda.
 
 | Migración | Corrida | Estado |
 |---|---|---|
@@ -70,6 +75,7 @@ la tocó. Detalle en «M12 en prod».
 | `20261018120000_perf_fk_indexes` (**M10**) | PF-M (sola) | **escrita y aplicada solo en el Docker local (16-oct), commiteada (`633cdee`)**. sha256 de `migration.sql` = `807a05097f9f021e0d6122b11f53a43fe0ac5fcbedb97e22383ca249cfda26c3`. Aditiva: solo 13 `CREATE INDEX IF NOT EXISTS` btree de una columna, sin `WHERE`, sin `UNIQUE`, sin backfill, una tx, `lock_timeout` 5 s, sin `CONCURRENTLY` (Prisma corre la migración en una tx; tablas chicas). Objetos: `Coverage_patientId_idx`, `EmergencyContact_patientId_idx`, `Patient_userId_idx`, `PatientTenantLink_tenantId_idx`, `Service_tenantId_idx`, `Service_practitionerId_idx`, `Session_practitionerId_idx`, `SessionExercise_exerciseId_idx`, `Booking_serviceId_idx`, `Favorite_exerciseId_idx`, `ExerciseTag_tagId_idx`, `ConditionTag_tagId_idx`, `Condition_createdById_idx`. Todos declarados en `schema.prisma` con `@@index` (mismo nombre): **sin drift nuevo** (`migrate diff` solo sigue proponiendo borrar las FKs compuestas aceptadas de M1/M4/M9). Verificada objeto por objeto (13 filas `USING btree (<col>)` en `pg_indexes`, `indisvalid`/`indisready`, sin predicado; la query de FKs sin índice pasó de 47 a 34 filas); `migrate status` al día (39); integración completa en los 2 roles. Orden para prod abajo («M10») |
 | `20261019120000_public_directory` (**M11**) | DIR-1 (sola) | **commiteada (`b45be05`), aplicada solo en el Docker local (16-oct); re-verificada en DIR-Z/MB-Z (hash igual, `migrate status` al día: 40)**. sha256 `a35fdd6b3f5fe8a9b4b9bbf8fcebb0cff8a82031a9721ddfca171c6af067177d`. Aditiva: 6 columnas en `Tenant` (`directoryListed` default false, `directoryListedAt`, `directoryHiddenAt/Reason/ById`, `publicDescription`), `Location.provinceCode` y la tabla `ProfessionalPublicProfile` (por persona, `userId` único, FK CASCADE). 11 CHECK (los de matrícula/ocultamiento con `COALESCE`), trigger que des-verifica la matrícula, RLS **SERVICE_ONLY** (ENABLE + FORCE, 0 policies). Drift aceptado: CHECK, función, trigger, ENABLE/FORCE. Verificada objeto por objeto; `migrate status` al día (40); integración completa en los 2 roles. Orden: «M11 en prod» |
 | `20261020120000_agenda_secretaria_config` (**M12**) | T3b-1m (sola) | **commiteada (`12bb08b`, sin push), aplicada solo en el Docker local (18-oct); hash re-verificado en T3-Z (igual)**. sha256 de `migration.sql` = `a0849c4d28c7154acb3b9a0cf47075bbbde608161d32d126d7ae9d85f9fd7485`. Aditiva, una tx, `lock_timeout` 5 s, sin tablas nuevas (`guard:isolation` sin cambios), con backfill de datos en la misma tx. Objetos: `Tenant.moduleGrants`/`moduleRevokes` (`TEXT[] NOT NULL DEFAULT '{}'`, CHECK `Tenant_moduleOverrides_check`: sin intersección, ≤ 32 cada uno) y `bookingCapCount`/`bookingCapIntervalMin` (INT NULL, CHECK `Tenant_bookingCap_check`: los dos o ninguno, 1..60, 15/30/60); enum `BookingCapMode` (INHERIT/NONE/CUSTOM) + `Practitioner.bookingCapMode` (NOT NULL default INHERIT), `bookingCapCount`, `bookingCapIntervalMin` (CHECK `Practitioner_bookingCap_check`: CUSTOM ⇔ los dos presentes); enum `BookingPaymentMethod` (CASH/TRANSFER/CARD/WALLET/MERCADO_PAGO/OTHER) + `Booking.copagoPaymentMethod` y `Booking.copagoCollectedById TEXT` (**sin FK ni índice**: tabla caliente), CHECKs `Booking_copago_method_check` (medio ⇒ PAID/REFUNDED) y `Booking_copago_collector_check` (quién cobró ⇒ medio y PAID/REFUNDED). Los dos CHECK de tope van con `COALESCE(…, false)` (desvío del SQL del brief, precedente M11: sin eso entraba un tope sin intervalo). Datos: ADMIN con `grantBilling = false` → true, salvo los que tienen un audit `membership.grants.change` / `platform.membership.grants.change` con `from.grantBilling = true` y `to.grantBilling = false` (verificado contra `setMemberGrantsInTx`; desvío del brief: el brief no exigía `from = true`). Sin policy nueva en `SupportSession` (§23.10). Drift aceptado: los 5 CHECK (`migrate diff` no propone nada de M12). Verificada objeto por objeto (psql + `tests/integration/as-m12.test.ts`, 2 roles); `migrate status` al día (41). Orden: «M12 en prod» |
+| `20261021120000_fichas_clinicas` (**M14**) | FC-0 (T4b, sola) | **commiteada (`fc97be9`, sin push), aplicada solo en el Docker local (19-oct)**. sha256 de `migration.sql` = `f7b12bab45002308751095ee12deb717c4f375ad39e9a3e8470f16afbe4967c9`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill (FC-D24), requiere PostgreSQL ≥ 13. Objetos: enums `DiagnosisSystem` (ICD11_MMS), `PatientDocumentKind` (FICHA), `PatientDocumentRevokeReason` (REPLACED/NOTE_VOIDED/MANUAL); `ClinicalNote.bodyDoc/diagnoses/authorLicense/importSource` + `ClinicalNoteRevision.bodyDoc/diagnoses`; tablas `DiagnosisCode` (**GLOBAL_READONLY**, policy `DiagnosisCode_read` FOR SELECT, único `(system, code)`, URI obligatoria con CHECK), `TenantDiagnosis` (parcial `TenantDiagnosis_tenantId_title_active_key`), `DiagnosisFavorite` (un destino exacto, 3 únicos + 4 índices) y `PatientDocument` (parcial `PatientDocument_noteId_live_key`, FKs compuestas RESTRICT a paciente, ficha y profesional); `Practitioner.honorific/signatureStorageKey/signatureUpdatedAt` y `Tenant.logoStorageKey/logoUpdatedAt` (al final); 26 CHECK; funciones `patient_document_guard()` (nueva) y `clinical_note_guard()` (**reemplazada línea por línea** sobre M9: suma las columnas nuevas y al anular una raíz revoca sus documentos) con triggers `PatientDocument_guard`/`_no_truncate`; RLS ENABLE + FORCE + `<T>_tenant_isolation` en las 3 tablas por tenant; sin GRANT (DEFAULT PRIVILEGES). md5 local: `clinical_note_guard` M9 `0a87f3688a5002c59a7b5238e2ae8a44` → M14 `d0164760670b55036a575042e945adcf`; `patient_document_guard` `677758023a72e44e21c8af18aa2c952b`. Drift aceptado («FC M14: DRIFT ACEPTADO» en el SQL y en `schema.prisma`: parciales, CHECKs, funciones, triggers, policies). Verificada objeto por objeto (`tests/integration/fichas-m14.test.ts` + `clinical-notes-m9.test.ts`, 2 roles); `guard:isolation` OK (`DiagnosisCode` en GLOBAL_READONLY). Orden: «M14 en prod» |
 
 **M3a en prod (ES3).** Prod se resetea antes del go-live (plan §15.6), así que M3a **no se aplica sola**: va dentro de la
 cadena completa del deploy único de B (`migrate deploy` desde vacío, paso 4 de abajo). Solo si Martin decidiera
@@ -538,8 +544,9 @@ que los CHECK validan sin backfill; va **antes** del deploy de DIR. sha256 de `m
    se pierden perfiles y consentimientos (backup del paso 2).
 
 **M12 en prod (T3b-1m).** Aditiva, sin reset y sin staging separado (AGENTS). Va **al final de todo el planning**
-(§22.14 del plan: consolas, push y migraciones juntos al final), **antes** del deploy de T3 y **antes que M18**
-(`turnero_cobros_mp`, T5). Compatible con el código anterior: nadie lee las columnas nuevas y nacen vacías/NULL/INHERIT;
+(§22.14 del plan: consolas, push y migraciones juntos al final), **antes** del deploy de T3 y **antes que M14**
+(`fichas_clinicas`, T4; orden real M12 → M14 → M18 → M17 → M15/M16). Compatible con el código anterior: nadie lee las
+columnas nuevas y nacen vacías/NULL/INHERIT;
 el único cambio visible con el código viejo es el backfill: los ADMIN pasan a ver «Planes y pagos» (decisión 2 del 19-oct).
 sha256 de `migration.sql` = `a0849c4d28c7154acb3b9a0cf47075bbbde608161d32d126d7ae9d85f9fd7485` (re-verificado en T3-Z:
 T3-Z no la tocó). **Ojo con el push:** el build de Production migra (`scripts/vercel-build.mjs`), así que M12 llega a prod con el push de
@@ -593,6 +600,86 @@ T3 si no se aplicó antes. Por eso el orden es: precheck → backup → `db:prod
    nuevos). Deshacer el backfill = `UPDATE "Membership" SET "grantBilling" = false WHERE id IN (…)` con los ids de (d)
    que tenían `titular_se_lo_saco = false`. Sacar M12 = migración nueva con DROP (se pierden medios de pago y topes
    cargados; backup del paso 2).
+
+**M14 en prod (FC-0, T4).** ⚠️ **Migración nueva** (`20261021120000_fichas_clinicas`, commit `fc97be9`, sin push).
+Aditiva, una tx, `lock_timeout` 5 s, sin backfill (FC-D24), sin staging separado (AGENTS). Va **al final de todo el
+planning** (§22.14), **después de M12 y antes que M18**, y **antes** del push de T4: el build de Production migra
+(`scripts/vercel-build.mjs`). Compatible con el código anterior: el código viejo no lee las columnas nuevas (nacen NULL).
+La única diferencia con el código viejo es que `clinical_note_guard()` ya revoca documentos al anular, y sin código nuevo
+no hay documentos. sha256 de `migration.sql` = `f7b12bab45002308751095ee12deb717c4f375ad39e9a3e8470f16afbe4967c9`.
+**Locks:** el `ADD COLUMN` toma ACCESS EXCLUSIVE en `ClinicalNote`, `ClinicalNoteRevision`, `Practitioner` y `Tenant`
+hasta el COMMIT. El de `Tenant` (lo lee cada request) va al final, para que dure lo menos posible. Se aplica en una ventana
+tranquila.
+1. **Buckets antes** ([EXTERNAL-CONFIG §0.11](EXTERNAL-CONFIG.md)): `patient-documents` (10 MB, `application/pdf`),
+   `practice-assets` (1 MB, png/jpeg), `patient-files` con límite de 25 MB, los tres privados y sin policies.
+2. Precheck de solo lectura (Anexo A del brief de T4, con los valores medidos en local):
+   ```sql
+   SELECT version();                                                           -- ≥ 13
+   SELECT migration_name FROM _prisma_migrations ORDER BY started_at DESC LIMIT 3;  -- M12 aplicada (o en esta tanda, antes)
+   SELECT to_regclass('public."PatientDocument"'), to_regclass('public."DiagnosisCode"'),
+          to_regclass('public."TenantDiagnosis"'), to_regclass('public."DiagnosisFavorite"');      -- todos NULL
+   SELECT column_name FROM information_schema.columns WHERE table_name IN ('ClinicalNote','Tenant','Practitioner')
+     AND column_name IN ('bodyDoc','diagnoses','authorLicense','importSource','logoStorageKey','honorific','signatureStorageKey'); -- 0
+   SELECT typname FROM pg_type WHERE typname IN ('DiagnosisSystem','PatientDocumentKind','PatientDocumentRevokeReason'); -- 0
+   SELECT count(*) FROM "ClinicalNote"; SELECT count(*) FROM "Tenant";
+   SELECT md5(prosrc) FROM pg_proc WHERE proname = 'clinical_note_guard';      -- = 0a87f3688a5002c59a7b5238e2ae8a44 (M9 local)
+   SELECT pid, now()-xact_start AS age, left(query,80) FROM pg_stat_activity
+    WHERE xact_start IS NOT NULL AND now()-xact_start > interval '30 seconds'; -- ninguna
+   SELECT id, public, file_size_limit, allowed_mime_types FROM storage.buckets
+    WHERE id IN ('patient-documents','practice-assets','patient-files');        -- los 3, privados, con sus límites
+   ```
+   Si el md5 de `clinical_note_guard` **no** es el de M9, **frenar**: la función de prod no es la que M14 reemplaza línea
+   por línea (alguien la tocó a mano). Hay que comparar antes de seguir.
+3. Backup: `npm run db:prod:backup`.
+4. `npm run db:prod:status` → `npm run db:prod:deploy` (M12 → M14 si M12 no se aplicó antes) → `npm run db:prod:status`
+   («Database schema is up to date!»). Si da P3009 por `lock_timeout` (una tx larga sobre `Tenant`), ver §2.4 y reintentar
+   sin uso.
+5. Postcheck de solo lectura, objeto por objeto:
+   ```sql
+   SELECT md5(prosrc) FROM pg_proc WHERE proname = 'clinical_note_guard';      -- d0164760670b55036a575042e945adcf
+   SELECT md5(prosrc) FROM pg_proc WHERE proname = 'patient_document_guard';   -- 677758023a72e44e21c8af18aa2c952b
+   SELECT proname, prosecdef, proconfig FROM pg_proc
+    WHERE proname IN ('clinical_note_guard','patient_document_guard');         -- prosecdef f, {search_path=pg_catalog, public}
+   SELECT tgname FROM pg_trigger WHERE tgrelid = '"PatientDocument"'::regclass AND NOT tgisinternal;
+                                                                              -- PatientDocument_guard, PatientDocument_no_truncate
+   SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
+    WHERE relname IN ('DiagnosisCode','TenantDiagnosis','DiagnosisFavorite','PatientDocument');  -- 4 filas t, t
+   SELECT tablename, policyname, cmd FROM pg_policies
+    WHERE tablename IN ('DiagnosisCode','TenantDiagnosis','DiagnosisFavorite','PatientDocument') ORDER BY 1;
+     -- DiagnosisCode_read SELECT; <T>_tenant_isolation ALL en las otras 3 (4 filas)
+   SELECT indexname, indexdef FROM pg_indexes
+    WHERE indexname IN ('PatientDocument_noteId_live_key','TenantDiagnosis_tenantId_title_active_key','DiagnosisCode_system_code_key');
+     -- 3 filas; las 2 primeras con WHERE (parciales: drift aceptado, no se borran)
+   SELECT count(*) FROM pg_constraint WHERE contype = 'c' AND convalidated AND conname IN (
+     'ClinicalNote_authorLicense_check','ClinicalNote_bodyDoc_check','ClinicalNote_diagnoses_check','ClinicalNote_importSource_check',
+     'DiagnosisCode_code_check','DiagnosisCode_language_check','DiagnosisCode_release_check','DiagnosisCode_retired_check',
+     'DiagnosisCode_searchText_check','DiagnosisCode_title_check','DiagnosisCode_uri_check','DiagnosisFavorite_target_check',
+     'PatientDocument_digests_check','PatientDocument_idempotencyKey_check','PatientDocument_noteRevision_check',
+     'PatientDocument_pdf_check','PatientDocument_revoke_check','PatientDocument_snapshotVersion_check',
+     'PatientDocument_snapshot_check','PatientDocument_title_check','Practitioner_honorific_check',
+     'Practitioner_signature_check','TenantDiagnosis_code_check','TenantDiagnosis_searchText_check',
+     'TenantDiagnosis_title_check','Tenant_logo_check');                       -- 26
+   SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public' AND (
+     (table_name = 'ClinicalNote' AND column_name IN ('bodyDoc','diagnoses','authorLicense','importSource'))
+     OR (table_name = 'ClinicalNoteRevision' AND column_name IN ('bodyDoc','diagnoses'))
+     OR (table_name = 'Practitioner' AND column_name IN ('honorific','signatureStorageKey','signatureUpdatedAt'))
+     OR (table_name = 'Tenant' AND column_name IN ('logoStorageKey','logoUpdatedAt')));               -- 11 filas
+   SELECT has_table_privilege('kinesoft_app', '"PatientDocument"', 'SELECT,INSERT,UPDATE');   -- t (DEFAULT PRIVILEGES; ídem kinesoft_service si existe)
+   SELECT count(*) FROM "ClinicalNote";                                        -- = el del precheck
+   SELECT checksum FROM _prisma_migrations WHERE migration_name = '20261021120000_fichas_clinicas';  -- el sha256 de arriba
+   ```
+6. Push/deploy de T4 (después de M14).
+7. Smoke: ficha con formato y diagnóstico → PDF/Word → compartir con un paciente de prueba → portal «Documentos» →
+   anular → desaparece. Después, las verificaciones de Vercel/Supabase y el import de la CIE-11 de
+   [EXTERNAL-CONFIG §0.11](EXTERNAL-CONFIG.md) (backup antes del `--apply`).
+8. **Rollback.** Del código: revertir el deploy sin tocar M14 (columnas y tablas sin lector son inocuas). **De la función**
+   (solo si `clinical_note_guard()` de M14 rompiera algo): volver a crearla con el **cuerpo de M9**, literal de
+   `prisma/migrations/20261017120000_clinical_notes/migration.sql:157-222` cambiando `CREATE FUNCTION` por
+   `CREATE OR REPLACE FUNCTION`. Después, `md5(prosrc)` vuelve a dar `0a87f3688a5002c59a7b5238e2ae8a44`. Con eso las
+   columnas nuevas dejan de estar protegidas por el trigger (no generan revisión ni son inmutables) y anular deja de
+   revocar documentos: es solo un puente hasta corregir con una migración nueva. Sacar M14 = migración nueva con DROP, y
+   se pierden documentos, diagnósticos y logos/firmas cargados (backup del paso 3). `PatientDocument` no se puede vaciar
+   con DELETE ni TRUNCATE ni como owner (trigger), por diseño.
 
 **Deploy de BO** (código de `0d058bb`..`c60014f`, después de M7). Las variables nuevas nacen en su default seguro, así
 que el deploy no cambia el comportamiento de nadie salvo lo que se describe abajo.

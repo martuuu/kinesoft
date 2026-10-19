@@ -1421,6 +1421,20 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
   rollback de datos de M9 (el backup previo es la red). Un paciente, profesional o consultorio con evoluciones solo se
   da de baja lógica. Los objetos que Prisma no expresa (parcial, FKs compuestas, CHECKs, triggers, policies) son drift
   aceptado: no se borran si `migrate diff` lo propone. AUDIT §5.51-55.
+- **Enmienda T4 (19-oct, M14 + ZF1 `e0f9ecb`).** Desde T4 la «evolución» se llama **ficha** (el tipo sigue siendo
+  «Evolución», FC-UI-D1); el modelo completo de fichas está en ADR-025. Lo que cambia acá:
+  - M14 reemplaza `clinical_note_guard()` línea por línea (mismas excepciones, `search_path`, sin SECURITY DEFINER):
+    `bodyDoc`/`diagnoses` son contenido (revisión + 24 h), `authorLicense`/`importSource` son identidad (inmutables), y
+    **anular una raíz revoca en la base** sus `PatientDocument` vivos (`NOTE_VOIDED`, `revokedAt = voidedAt`) en la
+    misma sentencia.
+  - **Anular una enmienda** revoca el documento vivo de **su raíz** (el documento compartido incluye las enmiendas, y si
+    no el paciente seguía viendo un texto retirado). Lo hace la action, no el trigger: `voidImpl` toma la raíz con
+    `SELECT … FOR NO KEY UPDATE` antes del UPDATE de la enmienda (`lib/clinical-notes.ts:465-468`) y en la misma tx hace
+    `patientDocument.updateMany({ noteId: raíz, revokedAt: null } → NOTE_VOIDED)` (`:491-496`). El lock choca con el
+    `FOR SHARE` de la tx2 de compartir y evita que un documento nuevo nazca con la enmienda anulada adentro; no choca con
+    el `FOR KEY SHARE` de crear otra enmienda. Orden: raíz → enmienda → documentos (sin ciclo con compartir, que hace
+    raíz → documentos). El trigger de M14 no cambió. Esto enmienda el contrato del Anexo C del brief de T4 («anular una
+    enmienda no revoca»). Lo confirma Martin (AUDIT «Ronda T4», M-1 ★).
 
 ### ADR-021 — Cimientos visuales y superficies públicas livianas (status: ACCEPTED, VX, 15/16-oct-2026)
 
@@ -1524,6 +1538,93 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
   tabla TENANT_READONLY o SERVICE_ONLY repite este patrón (service + `tenantId` e `id` a mano + test de aislamiento) y
   lleva su ADR. Test: `tests/integration/as1s-support-end.test.ts` (titular cierra con audit doble, doble clic, Secretaria
   con Configuración no puede, el id de otro consultorio no se toca, soporte no se cierra por acá).
+
+### ADR-025 — Fichas clínicas (status: ACCEPTED, T4, 19-oct-2026)
+
+Plan §24 (brief `wip-20/brief-t4.md`, contratos C-FC1..C-FC11, defaults FC-D22..D32 y FC-UI-D1..D11); commits
+`5d07636`..`a2d1dcd` (FC-0 = `fc97be9`), **local, sin push**. M14 `20261021120000_fichas_clinicas` solo en el Docker
+local ([RUNBOOK «M14 en prod»](MIGRACIONES-RUNBOOK.md)). Extiende ADR-020 (ver su enmienda T4). «Preservar»: AUDIT
+§5.56-61.
+
+- **Contexto.** El cliente principal pidió (16-oct, puntos 2, 8, 9 y 10) fichas con formato, diagnósticos, PDF/Word con
+  membrete y firma, compartir con el paciente e importar sus Word. La HC de M9 era texto plano, sin diagnósticos, y por
+  EV2-D5 nunca llegaba al portal.
+- **Decisión.**
+  - **Se evoluciona `ClinicalNote`** (FC-D1), sin tabla nueva de notas. M14 suma `bodyDoc` (jsonb, subconjunto
+    ProseMirror), `diagnoses` (snapshot 1..5, el primero es el principal), `authorLicense` e `importSource`;
+    `ClinicalNoteRevision` suma `bodyDoc`/`diagnoses`.
+  - **`body` derivado.** `validateHcDoc` (`lib/hc-doc.ts:256`, puro, cliente y server) re-arma el doc con la allow-list
+    (párrafo, H2/H3, negrita, cursiva, subrayado, listas, hardBreak) y topes de 256 KB / 10.000 nodos / profundidad 12 /
+    3 listas anidadas. El server deriva `body = hcDocToPlainText(doc)` (`:353`; `lib/clinical-notes-write-internal.ts:31-35`):
+    tope de 20.000, CHECK, búsqueda, impresión y guards siguen sobre `body`. Exactamente uno de `body | bodyDoc`; una
+    edición con `body` limpia `bodyDoc`. Nunca HTML. Las notas viejas siguen en texto plano.
+  - **Diagnósticos congelados.** La UI manda refs (`icd11 | tenant | kine | text`, FC-D27); el server re-lee y congela
+    `{v, source, refId, code, title, uri, release}` (`resolveDiagnosesInTx`, `lib/diagnoses-internal.ts:55`): el título
+    del cliente se ignora. Un CIE-11 retirado se rechaza al crear y queda congelado al editar. Licencia CIE-11 MMS
+    (CC BY-ND 3.0 IGO): código + título oficial sin tocar + URI (CHECK en la base); `searchText` es nuestro («no OMS»);
+    atribución en el selector, PDF, Word y portal (`ICD11_ATTRIBUTION`, `lib/diagnoses-types.ts:16-17`; URI en chico
+    junto al código, ZF2 `0822eb3`). El catálogo `DiagnosisCode` es GLOBAL_READONLY y lo escribe solo
+    `scripts/diagnosis-import.ts` (owner; nunca borra, retira; freno al retiro masivo max(25, 5 %) salvo
+    `--allow-mass-retire`, `:238-240`). Diagnóstico activo solo con la casilla y en la misma tx (FC-D32).
+  - **`PatientDocument` inalterable y revocado en la base.** Lo compartido = foto `HcPrintable v1` + PDF en el bucket
+    `patient-documents` + sha256 + `sourceDigest` (para «desactualizada»). Uno vivo por ficha (parcial
+    `PatientDocument_noteId_live_key`). `patient_document_guard()` rechaza DELETE/TRUNCATE (también al owner), solo deja
+    nacer documentos vigentes de una **raíz viva** (`FOR SHARE`) y lo único que cambia es la revocación, una vez
+    (`REPLACED | NOTE_VOIDED | MANUAL`). Anular una raíz los revoca en la misma sentencia (trigger); anular una enmienda
+    revoca el de la raíz desde la action (enmienda T4 de ADR-020).
+  - **Orden de locks nota → documentos.** La tx2 de `shareClinicalNoteWithPatient` toma primero
+    `SELECT … FROM "ClinicalNote" … FOR SHARE` (`lib/patient-documents-internal.ts:151-159`) y después revoca/crea;
+    anular bloquea la nota y después el trigger toca documentos: mismo orden, sin deadlock (test de dos conexiones en
+    `fichas-m14`). Render y subida del PDF van **fuera** de tx (tx1 arma la fuente; tx2 re-gatea y relee la versión: si
+    cambió → `changed` y se borra el objeto). Una ficha de otro consultorio llega como P0001 («no es una raíz vigente»),
+    no 42501 (el BEFORE INSERT corre antes del WITH CHECK). El mail `portal_document` (sin título ni contenido) sale
+    después del commit y nunca bloquea. Rate limits: compartir 30/10 min por usuario y aviso 3/h por paciente (pasado el
+    tope se comparte sin mail, `skipped`) (`lib/patient-documents.ts:137-139,172,333`).
+  - **El portal lee solo `PatientDocument`** (EV2-D5 revocado acotado). Páginas server `/portal/c/[slug]/documentos`
+    (+0 kB de cliente); `lib/portal-documents-internal.ts` con `prismaService`, `tenantId` + `patientId` del ref y
+    `select` sin `noteId`, `sourceDigest`, `pdfStorageKey`, `idempotencyKey` ni `sharedBy*`. La clave del PDF **se deriva**
+    `{tenantId}/{patientId}/{documentId}.pdf` (`:15-16,163`) y los bytes se verifican contra `pdfSha256`. Si falta el PDF
+    se re-renderiza desde la foto, sin logo ni firma escaneada (default para Martin). El guard literal del portal no
+    cambia; se suman la allow-list de módulos `lib/hc-*`/`components/hc/*` y el BFS del grafo de imports
+    (`tests/helpers/import-graph.ts`).
+  - **Descargas con audit antes del primer byte.** Equipo: `GET /api/pacientes/[id]/fichas/[noteId]/[pdf|docx]` y
+    `/api/pacientes/[id]/historia-clinica/pdf` (C-FC7): 401 sin sesión, 403 soporte, rate limit (ficha 60/10 min, HC
+    completa 5/10 min por usuario), ajena o enmienda → 404 (la ficha se baja por la raíz), `auditSecurityEvent`
+    (`clinicalNote.download` / `clinicalRecord.download`, `entity: "Patient"`) **después del render y antes de devolver
+    bytes**; audit caído → 503 sin cuerpo (`lib/hc-export-internal.ts:16-18,199`). Portal: `…/documentos/[id]/pdf` proxea,
+    audita `patientDocument.download` con ip/ua explícitos antes de los bytes, 30/10 min por IP, y si lo pidió un
+    navegador redirige los 429/503/500 a la página con `?e=` (ZF2). La vista en pantalla no se audita (FC-D28). Renderers
+    solo server (`serverComponentsExternalPackages`): react-pdf 4.9.0 con Noto Sans + Noto Sans Math, renders serializados
+    por proceso con `freshFonts()` (bug de ToUnicode); docx 9.8.1. Topes: PDF 4 MB, HC completa 300 fichas y 60 s.
+  - **Subida firmada (archivos de 25 MB, C-FC10).** `requestPatientFileUpload` firma `pending/{tenant}/{fileId}` y
+    devuelve un token HMAC de 15 min (clave derivada de la service role, FC-D29, `lib/patient-file-upload-token.ts`); el
+    cliente hace PUT por XHR con progreso, sin supabase-js en el bundle; `confirmPatientFileUpload` (`lib/files.ts:439`):
+    token → re-gate → replay → `info()` → 64 bytes por `Range` → magic bytes contra la allow-list → `move` → INSERT; si
+    algo falla borra el objeto y no crea la fila. El cron diario barre `pending/` > 24 h paginando con `offset`
+    (`lib/storage-internal.ts:322-326`). Interruptor `PATIENT_FILES_SIGNED_UPLOAD` (default on) con vuelta al camino
+    ≤ 4 MB. Rate limit de pedidos 60/10 min por usuario (`lib/files.ts:351,412`).
+  - **Logo y firma** (`lib/practice-assets.ts`): PNG/JPEG con magic bytes y tope de dimensiones; logo ≤ 1 MB con
+    `tenant.sensitive`, firma ≤ 512 KB solo la propia; bucket privado `practice-assets`; se embeben en el server. El PDF
+    lleva la firma del **autor** de cada ficha, nunca la de quien descarga (FC-D26); si el asset falla, el PDF sale igual.
+  - **Respaldo local** (`lib/hc-backup*.ts`, FC-3g): File System Access en Chrome/Edge de escritorio o la PWA; handle en
+    IndexedDB crudo (`{tenant}:{user}`), casilla obligatoria «Esta computadora la uso solo yo», permiso pedido **al
+    principio del gesto**, bytes desde la ruta auditada, ruta saneada para Windows. En los demás navegadores, descarga.
+  - **Bundle.** «Historia clínica» es la primera pestaña e inicial con `clinical.read`; Resumen pasa a diferida con SSR.
+    Como `check-bundle-budget` no cuenta los chunks de `next/dynamic`, la tarjeta (`NoteCard`) y el composer
+    (`FichaForm`) quedaron **diferidos con SSR + precarga** (`components/patients/profile/views/hc-ssr-parts.ts`, FC-3i1
+    `739ed6d`): más allá del fallback de §24.9. Tiptap (`next/dynamic` `ssr:false`, extensiones sueltas, sin StarterKit),
+    picker, mammoth, respaldo, Word y `ShareFichaDialog` diferidos; docx/react-pdf solo `server-only` (guards
+    `hc-heavy-deps`, `hc-first-load-guard`). La tx 3 del perfil es la «clinical home» (primera página SSR, candidatos del
+    composer, deep link): el perfil sigue en 3 tx.
+- **Descartado.** Tabla nueva de notas; HTML guardado; PDF guardado en cada ficha (solo al compartir, FC-D6); que el
+  portal lea `ClinicalNote` (rompía el guard literal y EV2-D5); importar Word en el server (el .docx nunca viaja,
+  FC-D10/D11); firma de quien descarga; `pg_trgm`; StarterKit (138,9 kB gz); spike en Vercel (regla de Martin: las
+  verificaciones de Vercel/Supabase van al checklist final de EXTERNAL-CONFIG §0.11).
+- **Consecuencias.** Lo compartido es una foto: editar la ficha la deja «Compartida · desactualizada» hasta volver a
+  compartir. Revocar no borra (el PDF queda en el bucket; el portal deja de verlo). El catálogo CIE-11 se carga al final,
+  en prod; hasta entonces el grupo dice «El catálogo CIE-11 todavía no está cargado» y funcionan propios, kine y texto
+  libre. El borrador vive solo en memoria (TTL 12 h, LRU 20, nunca disco: PCs compartidas): un cierre del SO lo pierde.
+  La cola serial de render y la subida firmada se miden recién con Vercel/Supabase reales.
 
 ## Cache & cookies (what is implemented — updated 30-sep-2026)
 

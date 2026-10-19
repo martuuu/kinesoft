@@ -552,6 +552,37 @@ marca framer-motion / zod / @supabase / react-dom; `npm run perf:bundle:baseline
 y workspace ≤ 180 desde PF1-Z (16-oct, D-PF-B)**, cuando todas sus rutas entraron. Baseline regrabado en PF1-Z y en el
 cierre DIR-Z/MB-Z (16-oct, con el build de producción del gate).
 
+### T4 · fichas clínicas (19-oct-2026, FC-3i1 / FC-4i / T4-Z)
+
+Medido con `next build` + `check-bundle-budget.mjs` en los integradores (árbol aislado). El número final de cada ruta y
+el regrabado del baseline los da el gate FC-ZG.
+
+| Ruta | Antes (cierre T3) | T4 | Tope de T4 |
+|---|---|---|---|
+| `/pacientes/[id]` | 169,5 | ~173 (FC-3i1: 172,2; ZF3 sumó el composer compacto) | ≤ 175 |
+| `/agenda` | 173,1 | ~171 (FC-4i: 171,3) | ≤ cierre de T3 (+0) |
+| `/seguimiento/[sessionId]` | — | +58 B (aceptado, FC-3h) | +0 |
+| portal | — | +0 de cliente («Documentos» es server) | +0 |
+
+- **Diferidos (no entran al first load):** Tiptap **103 kB gz** en 3 chunks (extensiones sueltas: StarterKit eran
+  138,9 kB y su `configure` no lo saca del bundle), mammoth **96 kB gz** (`import()` en `word-reader.ts`), el picker de
+  diagnósticos, el menú «⋯», `ShareFichaDialog`, Word, respaldo, `ArchivePatientDialog` y Resumen. Los mide
+  `scripts/measure-hc-chunks.mjs` (informativo). docx y react-pdf solo `server-only` (guard `hc-heavy-deps`).
+- **Más allá de §24.9:** la HC estática sumaba +29,1 (FC-3d: 192,3). Para entrar en 175, la tarjeta y el composer quedaron
+  diferidos **con SSR + precarga** (`hc-ssr-parts.ts`), no solo la timeline. El budget no cuenta esos chunks: el JS total
+  antes de interactuar con `/pacientes/[id]` es ~190 kB.
+- **Runtime de webpack:** cada chunk diferido nuevo suma ~20 B al runtime de **todas** las rutas. `/agenda` quedó sin
+  margen en T4d (173,1 con ~19 B). FC-4i lo recuperó borrando el shim `note-editor-drawer` y reusando `FichaDrawer`.
+  Un chunk nuevo hay que medirlo en `/agenda`.
+- **Hidratación del perfil:** la hora del hero con reloj de 12 h daba React #425/#422 en cada carga (el SSR se
+  descartaba y se re-renderizaba todo). Con `hourCycle: "h23"` (FC-4i) hidrata limpio.
+
+**Sentencias (techos nuevos de T4).** El perfil sigue en **3 tx**. La tx 3 («clinical home»: resumen, primera página SSR
+de 10 fichas, candidatos del composer, deep link y documento compartido por `LEFT JOIN LATERAL`) tiene techo de **11
+sentencias** (`HOME_TX_STATEMENTS`, `tests/integration/pf2-profile-budget.test.ts:63,185`). `getPatientTimeline` sigue
+en ≤ 4 sentencias de datos. Las altas de turnos no cambian (`lib/bookings*.ts` no se tocó). Render: un PDF de 300 fichas
+tarda 6-7 s en local, con renders serializados por proceso; en Vercel se mide al final (EXTERNAL-CONFIG §0.11).
+
 ### DIR y MB (16-oct-2026, cierre DIR-Z/MB-Z)
 
 `check-bundle-budget.mjs` exit 0, todo dentro del presupuesto y del 10 %; baseline regrabado.

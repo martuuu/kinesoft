@@ -269,10 +269,46 @@ QA en [QA «T3»](QA.md).
 
 | Qué | Dónde | Cuándo / cómo |
 |---|---|---|
-| M12 `agenda_secretaria_config` | Terminal de Martin (`db:prod:*`) | Al final de todo el planning (§22.14), **antes** del push de T3 (el build de Production migra) y antes que M18: precheck (a)-(g) → `db:prod:backup` → `db:prod:deploy` → postcheck |
+| M12 `agenda_secretaria_config` | Terminal de Martin (`db:prod:*`) | Al final de todo el planning (§22.14), **antes** del push de T3 (el build de Production migra) y antes que M14 (orden real M12 → M14 → M18 → M17 → M15/M16): precheck (a)-(g) → `db:prod:backup` → `db:prod:deploy` → postcheck |
 | Admins y staff | Precheck (d) y (e) de M12 | (d) = los ADMIN que pasan a tener «Planes y pagos»; (e) = Secretaria/Facturación con «Planes y pagos» o «Configuración» que con T3 pierden lo delicado: avisarle al Titular del cliente vivo antes del deploy |
 | Módulos a medida | `/plataforma` → consultorio → Suscripción → «Módulos» | Opcional, después del deploy (pide 2FA). Nada cambia mientras no se toque |
 | «Sin conexión en vivo» en el Chrome de la Secretaria | Navegador de la Secretaria → indicador → «Ver detalle» | Pendiente desde §23.0: Martin pasa el paso que falla para decidir si hace falta un fix |
+
+### 0.11 T4 — Fichas clínicas: buckets, CIE-11 y verificaciones finales (19-oct-2026) 🔴
+
+**Con migración M14** (`fichas_clinicas`; sin variables de entorno obligatorias nuevas). Todo va **al final de todo el
+planning** (§22.14: consolas, push y migraciones juntos). Orden en [RUNBOOK «M14 en prod»](MIGRACIONES-RUNBOOK.md); QA en
+[QA «T4»](QA.md); diseño en [ARCHITECTURE ADR-025](ARCHITECTURE.md).
+
+| Qué | Dónde | Cuándo / cómo |
+|---|---|---|
+| Bucket `patient-documents` | Supabase → Storage → New bucket | **Antes del deploy.** Privado (`public = false`), **sin policies**, límite **10 MB**, MIME permitido `application/pdf`. Guarda los PDF que se comparten con el paciente (`{tenantId}/{patientId}/{documentId}.pdf`) |
+| Bucket `practice-assets` | Supabase → Storage → New bucket | **Antes del deploy.** Privado, sin policies, límite **1 MB**, MIME `image/png`, `image/jpeg`. Logo del consultorio y firmas de los profesionales |
+| Límite de `patient-files` | Supabase → Storage → `patient-files` → Edit bucket | **Antes del deploy.** Sigue privado y sin policies; límite **25 MB** (la subida firmada ya no pasa por el body de 4,5 MB de Vercel) |
+| Verificar los 3 buckets | SQL editor (solo lectura) | `SELECT id, public, file_size_limit, allowed_mime_types FROM storage.buckets WHERE id IN ('patient-documents','practice-assets','patient-files');` → 3 filas, `public = f`, con sus límites. Y `SELECT policyname FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects';` → ninguna para estos buckets |
+| `PATIENT_FILES_SIGNED_UPLOAD` | Vercel (opcional) | Sin setear = prendido. `off` vuelve al camino viejo de ≤ 4 MB si la subida firmada falla en el checklist de abajo (redeploy) |
+| Catálogo CIE-11 (OMS) | Navegador + terminal de Martin | **Sin mail a la OMS y sin pagar nada** (decisión de Martin del 19-oct: la licencia CC BY-ND 3.0 IGO no pide aviso ni pago). **Después** de M14 y del deploy: (1) bajar gratis el «Archivo de hoja de cálculo» (SimpleTabulation) de la última release con español desde `https://icd.who.int/browse/<release>/mms/es`; (2) guardarlo **fuera del repo** en `data/icd11/` (ignorado); (3) `npm run diagnosis:import -- --file=data/icd11/<archivo> --release=<AAAA-MM> --inspect` (local: confirma el formato de `ChapterNo` y de los booleanos, que no se pudo ver sin el archivo real); (4) dry-run contra prod: `KINESOFT_CONFIRM_PROD=<project-ref> npx dotenv -e .env.prod.local -- npx tsx scripts/diagnosis-import.ts --file=… --release=…` (lista altas, cambios y retiros; no escribe; **nunca** el script npm, que lee `.env.local`); (5) lo mismo con `--apply --by=martin`; (6) otro dry-run → 0 cambios. `--allow-mass-retire` **solo** si el dry-run explica un retiro de más de max(25, 5 %) de los vigentes (si no, aborta: un archivo truncado vaciaría el catálogo). Capítulos 01-26 y V; el X queda afuera (FC-D30). Hasta el import, el grupo CIE-11 dice «El catálogo CIE-11 todavía no está cargado» y funcionan propios, kine y texto libre |
+
+**Verificar al final en Vercel/Supabase** (no hubo spike en Vercel por regla de Martin; todo lo de T4 se probó con
+`next build` + `next start` local y Storage falso):
+
+- [ ] **react-pdf en frío en `gru1`:** primera descarga de una ficha después de un deploy (frío) y la segunda (caliente).
+  El tamaño de la función tiene que incluir `@react-pdf/*`, yoga y las fuentes Noto (`.nft.json` /
+  `outputFileTracingIncludes`). Una HC completa de 300 fichas tarda 6-7 s en local: tiene que entrar en los 60 s de
+  `vercel.json`.
+- [ ] **Cola de render** (AUDIT B-5): los renders van en serie por proceso (`freshFonts()`, bug de ToUnicode). Dos o tres
+  descargas a la vez desde dos pestañas: que ninguna pase de ~10 s ni dé 503.
+- [ ] **Subida firmada** (Archivos, un PDF de 20 MB):
+  - el PUT con **binario crudo** a la URL firmada funciona (supabase-js `uploadToSignedUrl` manda multipart; si Storage
+    exige multipart, cambiar el PUT a `FormData` en `lib/files-upload-logic.ts`);
+  - se respeta el `Content-Type` declarado;
+  - **CORS** del bucket `patient-files` acepta el PUT desde el dominio de la app;
+  - `info()` devuelve el tamaño, la lectura con `Range` trae 64 bytes y el `move` de `pending/` a la clave final anda;
+  - la URL firmada vale **2 h** en Storage (no se puede acortar). El token propio la corta a 15 min: subir a los 16 min
+    tiene que fallar en el confirm;
+  - un `.exe` renombrado a `.pdf` se rechaza y no queda nada en el bucket.
+- [ ] Compartir una ficha con un paciente de prueba → el PDF aparece en `patient-documents` y el mail llega sin datos
+  clínicos → el portal lo baja → anular la ficha → desaparece del portal.
 
 ### 1. Hosting / plataforma de despliegue — Vercel
 - **Qué configura:** proyecto en Vercel (región `gru1` ya fijada en `vercel.json`); env vars de prod;
@@ -309,7 +345,8 @@ QA en [QA «T3»](QA.md).
      `ExerciseMedia`/`ExerciseArticle` no tienen policy de escritura. En local no hace falta: cae a
      `DIRECT_URL` (el owner del Docker, superuser).
   3. **Bucket `patient-files` PRIVADO** — verificación bloqueante del corte E1 (el auditor no pudo
-     confirmarlo). Debe ser privado; el acceso es solo por signed URL (`getDownloadUrl`, 10 min).
+     confirmarlo). Debe ser privado; el acceso es solo por signed URL (`getDownloadUrl`, 10 min). Desde T4,
+     con límite de 25 MB, y dos buckets privados más: `patient-documents` y `practice-assets` (§0.11).
   4. **Bucket `exercise-media` PRIVADO** (nuevo, Ronda 7) — video/imagen/GIF de los ejercicios del
      catálogo global. **Hay que crearlo a mano en el proyecto Supabase de producción**: no lo crea
      el código ni ninguna migración. Privado; se sirve con **signed URLs de 1 h**
