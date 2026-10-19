@@ -3,7 +3,8 @@ import type { PortalSection } from "@/lib/portal-nav";
 import { PORTAL_TABS_LABEL, portalTabLabel, type PortalTab } from "@/lib/portal-copy";
 
 /**
- * ES4 S24 · tabs de un consultorio en el portal (`/portal/c/<slug>`, `/cuenta`, `/ejercicios` y «Sacar un turno»).
+ * ES4 S24 · tabs de un consultorio en el portal (`/portal/c/<slug>`, `/documentos`, `/cuenta`, `/ejercicios` y «Sacar un
+ * turno»).
  *
  * Por qué así:
  * - qué tabs hay lo decide `portalSectionsFor` (lib/portal-nav.ts), la misma fuente que el gate server-side de cada
@@ -17,7 +18,11 @@ import { PORTAL_TABS_LABEL, portalTabLabel, type PortalTab } from "@/lib/portal-
  * Uso (S24p/S24e): `<PortalTabs slug={slug} sections={portalSectionsFor(ref.modules)} active="cuenta" />`.
  */
 
-const TAB_ORDER: readonly PortalTab[] = ["inicio", "ejercicios", "cuenta", "reservar"];
+/*
+ * T4 (C-FC8, literal): inicio, documentos, ejercicios, cuenta, reservar. «Documentos» va segunda porque es CORE (sale
+ * en todas las combinaciones) y es adonde llega el paciente desde el mail «Tenés un documento nuevo».
+ */
+const TAB_ORDER: readonly PortalTab[] = ["inicio", "documentos", "ejercicios", "cuenta", "reservar"];
 
 export type PortalTabItem = { key: PortalTab; href: string; label: string; external: boolean };
 
@@ -31,6 +36,7 @@ export function portalTabItems(
   const base = `/portal/c/${encodeURIComponent(slug)}`;
   const href: Record<PortalTab, string> = {
     inicio: base,
+    documentos: `${base}/documentos`,
     ejercicios: `${base}/ejercicios`,
     cuenta: `${base}/cuenta`,
     reservar: `/c/${encodeURIComponent(slug)}/booking`,

@@ -146,7 +146,7 @@ export function portalSessionOfTotal(vertical: TenantVertical, ordinal: number, 
 export const PORTAL_PLAN_NO_BOOKING = "Todavía sin turno asignado";
 
 /** Tabs del consultorio (`components/portal/portal-tabs.tsx`). `plan` y `checkin` no son tabs: viven en «inicio». */
-export type PortalTab = Extract<PortalSection, "inicio" | "cuenta" | "ejercicios" | "reservar">;
+export type PortalTab = Extract<PortalSection, "inicio" | "documentos" | "cuenta" | "ejercicios" | "reservar">;
 
 /**
  * Rótulo de cada tab. «inicio» se llama como el encabezado de la página: «Tu plan» si el consultorio usa planes, «Tu
@@ -157,6 +157,8 @@ export function portalTabLabel(tab: PortalTab, hasPlan: boolean): string {
   switch (tab) {
     case "inicio":
       return hasPlan ? "Tu plan" : "Tu consultorio";
+    case "documentos":
+      return PORTAL_DOCUMENTS_COPY.title;
     case "cuenta":
       return "Estado de cuenta";
     case "ejercicios":
@@ -165,6 +167,37 @@ export function portalTabLabel(tab: PortalTab, hasPlan: boolean): string {
       return PORTAL_HOME.bookCta;
   }
 }
+
+// ── T4 (FC-4a) · «Documentos» (C-FC8) ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * «17 de oct de 2026», el día ARGENTINO de un ISO: con `getDate()` del host, un compartido a las 23:30 AR saldría al
+ * día siguiente en Vercel (UTC). Intl con zona fija, mismas opciones que `formatDateAR(…, "short")` de `lib/format`,
+ * pero SIN importarlo: este módulo lo carga `check-in-form` (cliente) y un import de `lib/format` acá le sumaba 0,8 kB
+ * a `/portal/c/[slug]` (medido en el build de FC-4a). Una función sin imports el minificador la descarta si no se usa.
+ */
+export function portalDocumentDate(iso: string): string {
+  return new Date(iso).toLocaleString("es-AR", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    timeZone: "America/Argentina/Buenos_Aires",
+  });
+}
+
+export const PORTAL_DOCUMENTS_COPY = {
+  title: "Documentos",
+  lead: (tenantName: string) => `Lo que ${tenantName} compartió con vos. Podés verlo acá o descargarlo en PDF.`,
+  empty: (tenantName: string) => `Todavía no hay documentos compartidos por ${tenantName}.`,
+  listLabel: "Documentos compartidos",
+  sharedOn: (iso: string) => `Compartido el ${portalDocumentDate(iso)}`,
+  dateOf: (iso: string) => `Del ${portalDocumentDate(iso)}`,
+  open: "Ver",
+  download: "Descargar PDF",
+  back: "← Documentos",
+  verificationHint:
+    "El código de verificación es el mismo que figura en el PDF. Si tenés dudas sobre lo que dice, consultalo con tu profesional.",
+} as const;
 
 /** Nombre accesible del `<nav>` de las tabs. */
 export const PORTAL_TABS_LABEL = "Secciones de tu consultorio";

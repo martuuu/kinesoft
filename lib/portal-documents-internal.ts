@@ -30,7 +30,6 @@ import { logger } from "@/lib/logger";
 import { validateHcDoc } from "@/lib/hc-doc";
 import { hcFileBase } from "@/lib/hc-print-model";
 import type { HcPrintableContentV1, HcPrintableV1 } from "@/lib/hc-print-types";
-import { HC_PDF_MAX_BYTES, renderHcPdf } from "@/lib/hc-pdf/render-internal";
 import { portalSectionsFor } from "@/lib/portal-nav";
 import type { PortalPatientRef } from "@/lib/portal-identity-internal";
 import { isStorageConfigured, storageDownload } from "@/lib/storage-internal";
@@ -154,6 +153,10 @@ export async function loadPortalDocumentPdf(
     select: { ...VIEW_SELECT, pdfSha256: true },
   });
   if (!row) return null;
+
+  // `import()` y no estático: las PÁGINAS de «Documentos» importan este módulo para la lista y la vista, y un import
+  // estático del render les arrastraba react-pdf al grafo (`hc-heavy-deps` #8). Solo la ruta del PDF llega acá.
+  const { HC_PDF_MAX_BYTES, renderHcPdf } = await import("@/lib/hc-pdf/render-internal");
 
   let bytes: Uint8Array | null = null;
   if (isStorageConfigured()) {

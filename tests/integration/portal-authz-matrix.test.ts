@@ -885,7 +885,7 @@ describe.skipIf(!RUN)("[ES4-S26p] matriz de autorización del portal", () => {
       expect(await lib.getPortalDocument(ref, dK2)).toBeNull();
     });
 
-    it.fails("[FC-4a] matriz del portal: P ve el suyo en las páginas (centinela SHARED_BODY)", async () => {
+    it("[FC-4a] matriz del portal: P ve el suyo en las páginas (centinela SHARED_BODY)", async () => {
       as(P);
       const [List, View] = [await listPage(), await viewPage()];
       const list = await pageOf(List({ params: { slug: K.slug } }));
@@ -915,7 +915,7 @@ describe.skipIf(!RUN)("[ES4-S26p] matriz de autorización del portal", () => {
       ["sin sesión", () => as(null), () => K.slug, () => dLive],
     ];
     for (const [who, login, slug, id] of DENIED) {
-      it.fails(`[FC-4a] matriz del portal: ${who} no ve documentos (lista, vista ni PDF)`, async () => {
+      it(`[FC-4a] matriz del portal: ${who} no ve documentos (lista, vista ni PDF)`, async () => {
         const [List, View, GET] = [await listPage(), await viewPage(), await pdfRoute()];
         login();
         const auditsBefore = (await downloadAudits(id())).length;

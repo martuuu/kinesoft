@@ -149,7 +149,7 @@ describe("[FC-1e] red del portal: grafo de imports y lectura de documentos", () 
 
   // ── Lo que crea FC-4a (páginas server) ─────────────────────────────────────────────────────────────────────────
 
-  it.fails('[FC-4a] página server sin literales prohibidos y sin "use client" nuevos', () => {
+  it('[FC-4a] página server sin literales prohibidos y sin "use client" nuevos', () => {
     for (const f of DOCUMENTOS_FILES) expect(existsSync(abs(f)), `${f} no existe`).toBe(true);
     for (const f of DOCUMENTOS_FILES) {
       expect(isClient(f), `${f} es "use client"`).toBe(false);

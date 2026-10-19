@@ -11,6 +11,9 @@ import {
   portalPlanProgress,
   portalSessionLabel,
   portalTenantHeader,
+  portalTabLabel,
+  portalDocumentDate,
+  PORTAL_DOCUMENTS_COPY,
 } from "@/lib/portal-copy";
 import { portalSectionsFor } from "@/lib/portal-nav";
 import { modulesFor } from "@/lib/tenant-modules";
@@ -78,13 +81,15 @@ describe("[P4-S24] portal-copy · plan y tabs", () => {
     const kine = portalSectionsFor(modulesFor({ vertical: "KINESIOLOGY", plan: "INDIVIDUAL", publicBookingEnabled: true, moduleGrants: [], moduleRevokes: [] }));
     expect(portalTabItems("consultorio-sur", kine)).toEqual([
       { key: "inicio", href: "/portal/c/consultorio-sur", label: "Tu plan", external: false },
+      { key: "documentos", href: "/portal/c/consultorio-sur/documentos", label: "Documentos", external: false },
       { key: "ejercicios", href: "/portal/c/consultorio-sur/ejercicios", label: "Ejercicios", external: false },
       { key: "cuenta", href: "/portal/c/consultorio-sur/cuenta", label: "Estado de cuenta", external: false },
       { key: "reservar", href: "/c/consultorio-sur/booking", label: "Sacar un turno", external: true },
     ]);
     const general = portalSectionsFor(modulesFor({ vertical: "GENERAL", plan: "LIBRE", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] }));
     const g = portalTabItems("x", general);
-    expect(g.map((t) => t.key)).toEqual(["inicio", "cuenta"]);
+    // [FC-4a] «Documentos» es CORE (C-FC8): también en General sin turnero, segunda después de «inicio».
+    expect(g.map((t) => t.key)).toEqual(["inicio", "documentos", "cuenta"]);
     expect(g[0].label).toBe("Tu consultorio");
     // General nunca ve «ejercicios» ni «plan» en las tabs; tampoco «Sacar un turno» con el turnero cerrado.
     expect(JSON.stringify(g)).not.toMatch(/ejercicio|plan|sesi[oó]n|booking/i);
@@ -100,6 +105,7 @@ describe("[P4-S24] portal-copy · plan y tabs", () => {
           const keys = portalTabItems("s", portalSectionsFor(mods)).map((t) => t.key);
           expect(keys).toContain("inicio");
           expect(keys).toContain("cuenta");
+          expect(keys).toContain("documentos");
           expect(keys.includes("ejercicios")).toBe(mods.has("planes") && mods.has("ejercicios"));
           expect(keys.includes("reservar")).toBe(mods.has("turneroPublico"));
         }
@@ -118,5 +124,32 @@ describe("[P4-S24] portal-copy · plan y tabs", () => {
     expect(c.text).toMatch(/te invite al portal/);
     expect(c.text).not.toMatch(/email exacto/);
     expect(PORTAL_PLAN_NO_BOOKING).toBe("Todavía sin turno asignado");
+  });
+});
+
+/**
+ * [FC-4a] Copy de «Documentos» (C-FC8). Neutral por vertical: lo mismo para Kine y General (no dice «sesión», no
+ * promete planes) y nunca nombra la historia clínica ni las fichas internas: es lo que el profesional compartió.
+ */
+describe("[FC-4a] portal-copy · documentos", () => {
+  it("vacío literal de C-FC8 y tab en el orden inicio, documentos, ejercicios, cuenta, reservar", () => {
+    expect(PORTAL_DOCUMENTS_COPY.empty("Consultorio Sur")).toBe("Todavía no hay documentos compartidos por Consultorio Sur.");
+    expect(portalTabLabel("documentos", true)).toBe("Documentos");
+    expect(portalTabLabel("documentos", false)).toBe("Documentos");
+    const all = portalSectionsFor(modulesFor({ vertical: "KINESIOLOGY", plan: "INDIVIDUAL", publicBookingEnabled: true, moduleGrants: [], moduleRevokes: [] }));
+    expect(portalTabItems("s", all).map((t) => t.key)).toEqual(["inicio", "documentos", "ejercicios", "cuenta", "reservar"]);
+  });
+
+  it("neutral: sin «sesión», planes, evoluciones ni historia clínica; fechas en hora AR", () => {
+    const txt = JSON.stringify({
+      ...PORTAL_DOCUMENTS_COPY,
+      empty: PORTAL_DOCUMENTS_COPY.empty("X"),
+      lead: PORTAL_DOCUMENTS_COPY.lead("X"),
+      sharedOn: PORTAL_DOCUMENTS_COPY.sharedOn("2026-10-18T02:30:00.000Z"),
+    });
+    expect(txt).not.toMatch(/sesi[oó]n|plan|evoluci|historia cl[ií]nica|ficha/i);
+    // 02:30 UTC del 18 = 23:30 AR del 17: el día es el argentino aunque el host corra en UTC (Vercel).
+    expect(PORTAL_DOCUMENTS_COPY.sharedOn("2026-10-18T02:30:00.000Z")).toBe("Compartido el 17 de oct de 2026");
+    expect(portalDocumentDate("2026-10-18T02:30:00.000Z")).toBe("17 de oct de 2026");
   });
 });
