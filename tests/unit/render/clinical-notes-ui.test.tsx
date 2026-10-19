@@ -14,6 +14,11 @@ vi.mock("@/lib/clinical-notes", () => ({
   voidClinicalNote: async () => ({ ok: false, error: "x" }),
 }));
 vi.mock("@/lib/clinical-notes-read", () => ({ getClinicalNoteHistory: async () => null }));
+// [FC-3c] el editor es el shim sobre `FichaForm`, cuyo `DiagnosisField` (FC-3b) importa las actions de diagnósticos (red).
+vi.mock("@/lib/diagnoses", () => ({
+  getDiagnosisPickerHome: async () => ({ ok: false, error: "x" }),
+  searchDiagnoses: async () => ({ ok: false, error: "x" }),
+}));
 
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
@@ -133,69 +138,8 @@ describe("[EV2-2e] editor de evoluciones", () => {
   });
 });
 
-describe("[EV2-2e] tarjeta de evolución y permisos", () => {
-  it("[EV2-2e] autor dentro de 24 h: Editar y Anular (no enmienda); texto, autor, turno y fecha AR", () => {
-    const html = render(<NoteCard note={note()} now={NOW} />);
-    expect(buttons(html)).toEqual(["Editar", "Anular"]);
-    expect(html).toContain("Podés editar hasta mañana 10:00");
-    expect(html).toContain("Control de hombro");
-    expect(html).toContain("Mejoró la movilidad.");
-    expect(html).toContain("Lic. Pérez · Turno del 15/10/26 09:30 · Sesión kinésica");
-    expect(html).toMatch(/jueves, 15 de octubre,? 09:30/);
-    expect(html).toContain('<span class="k-tag k-tag-sky">Evolución</span>');
-  });
-
-  it("[EV2-2e] otro profesional con escritura: solo «Enmendar»", () => {
-    const html = render(<NoteCard note={note({}, { actor: "user-other" })} now={NOW} />);
-    expect(buttons(html)).toEqual(["Enmendar"]);
-    expect(html).not.toContain("Podés editar hasta");
-  });
-
-  it("[EV2-2e] Titular clínico/a (no autor): enmienda y anular", () => {
-    const html = render(<NoteCard note={note({}, { actor: "user-owner", owner: true })} now={NOW} />);
-    expect(buttons(html)).toEqual(["Enmendar", "Anular"]);
-  });
-
-  it("[EV2-2e] lector sin escritura: ningún botón", () => {
-    const html = render(<NoteCard note={note({}, { canWrite: false })} now={NOW} />);
-    expect(buttons(html)).toEqual([]);
-  });
-
-  it("[EV2-2e] editada: «editada» y «Ver versiones anteriores»", () => {
-    const html = render(<NoteCard note={note({ revision: 2 }, { actor: "user-other" })} now={NOW} />);
-    expect(html).toContain("Lic. Pérez · editada");
-    expect(buttons(html)).toEqual(["Enmendar", "Ver versiones anteriores"]);
-  });
-
-  it("[EV2-2e] enmiendas debajo de la raíz, rotuladas", () => {
-    const am = note({ id: "am-1", amendsNoteId: "note-1", title: null, body: "Agrego dato de dolor.", createdAt: "2026-10-15T13:30:00.000Z" });
-    const html = render(<NoteCard note={note()} amendments={[am]} now={NOW} />);
-    expect(html).toContain('data-note-id="am-1"');
-    expect(html).toContain(">Enmienda</strong>");
-    expect(html).toContain("Agrego dato de dolor.");
-    // La enmienda no ofrece «Enmendar» (se enmienda solo la raíz).
-    const amHtml = html.slice(html.indexOf('data-note-id="am-1"'));
-    expect(buttons(amHtml)).not.toContain("Enmendar");
-  });
-
-  it("[EV2-2e] anulada: colapsada (details cerrado) con motivo, quién anuló y autor; sin acciones", () => {
-    const n = note({ voided: { at: "2026-10-15T20:15:00.000Z", byUserId: AUTHOR, reason: "Paciente equivocado" } });
-    const html = render(<NoteCard note={n} now={NOW} />);
-    expect(html).toContain("<details>");
-    expect(html).not.toContain("<details open");
-    expect(html).toContain("data-voided");
-    expect(html).toContain(">Anulada</span>");
-    expect(html).toContain("<strong>Motivo:</strong> Paciente equivocado");
-    expect(html).toContain("Anulada el 15/10/26 17:15 por Lic. Pérez");
-    expect(html).toMatch(/09:30 · Lic\. Pérez/);
-    expect(buttons(html)).toEqual([]);
-  });
-
-  it("[EV2-2e] anulada por el/la Titular: no se inventa un nombre", () => {
-    const n = note({ voided: { at: "2026-10-15T20:15:00.000Z", byUserId: "user-owner", reason: "Duplicada" } });
-    expect(render(<NoteCard note={n} now={NOW} />)).toContain("por el/la Titular");
-  });
-});
+// [FC-3e2] Los tests de la tarjeta (permisos, enmiendas, anulada) pasaron a `tests/unit/render/ficha-card.test.tsx`:
+// «Enmendar / Versiones / Anular» viven ahora en el menú «⋯» (§24.7) y «Editar» queda a la vista.
 
 describe("[EV2-2e] anular en Modal y versiones", () => {
   it("[EV2-2e] el diálogo de anular es un Modal con motivo y contador a 500", () => {
@@ -284,15 +228,12 @@ describe("[EV2-Z] fixes de UI del editor y la tarjeta", () => {
     expect(onGrid.slice(onGrid.indexOf('aria-label="Minutos"'))).not.toContain('value="07"');
   });
 
-  it("[EV2-Z M7] contador: visual aria-hidden + región viva vacía lejos del límite; fecha en fieldset/legend", () => {
+  it("[EV2-Z M7] contador del editor y fecha en fieldset/legend", () => {
+    // [FC-3c] El contador y su región viva pasaron a `HcEditorField` (FC-3a, lo testea su sesión); acá queda que el
+    // formulario lo muestre y que la fecha siga agrupada bajo un nombre.
     const html = render(<NoteEditorForm mode={createMode} onCancel={noop} onSaved={noop} now={NOW} />);
-    expect(html).toMatch(/aria-hidden="true" data-testid="body-counter"/);
-    expect(html).toMatch(/aria-live="polite" data-testid="body-counter-live"[^>]*><\/div>/);
-    expect(html).toMatch(/<fieldset[^>]*><legend[^>]*>Fecha y hora de la atención<\/legend>/);
-    const near = render(
-      <NoteEditorForm mode={{ type: "edit", note: note({ body: "a".repeat(19_000) }) }} onCancel={noop} onSaved={noop} now={NOW} />
-    );
-    expect(near).toMatch(/data-testid="body-counter-live"[^>]*>Te quedan 1\.000 caracteres<\/div>/);
+    expect(html).toMatch(/data-testid="hc-editor-counter"[^>]*>0 \/ 20\.000</);
+    expect(html).toMatch(/<fieldset[^>]*><legend[^>]*>Fecha y hora<\/legend>/);
   });
 
   it("[EV2-Z M7] tipo: radios de 44 px con roving tabindex (solo el elegido es tab stop); ←/→ en ronda", () => {
@@ -329,11 +270,8 @@ describe("[EV2-Z] fixes de UI del editor y la tarjeta", () => {
   it("[PF1-Z] en el drawer del turno (`hideBooking`) se ofrece el historial: el Modal va por portal sobre el Drawer (C-PF6)", () => {
     const voided = note({ revision: 2, voided: { at: "2026-10-15T20:15:00.000Z", byUserId: AUTHOR, reason: "Duplicada" } });
     expect(buttons(render(<NoteCard note={voided} now={NOW} hideBooking />))).toEqual(["Ver versiones anteriores"]);
-    // Viva editada de otro autor (el caso del drawer del turno): enmienda e historial.
-    expect(buttons(render(<NoteCard note={note({ revision: 2 }, { actor: "user-other" })} now={NOW} hideBooking />))).toEqual([
-      "Enmendar",
-      "Ver versiones anteriores",
-    ]);
+    // Viva editada de otro autor (el caso del drawer del turno): enmienda e historial, adentro del menú «⋯» (FC-3e2).
+    expect(buttons(render(<NoteCard note={note({ revision: 2 }, { actor: "user-other" })} now={NOW} hideBooking />))).toEqual(["⋯"]);
   });
 
   it("[EV2-Z] historial: error de red ≠ sin acceso, con reintentar", () => {

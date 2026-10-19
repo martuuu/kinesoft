@@ -5,6 +5,8 @@
  * editar contenido; la app nunca las escribe). Se cargan al abrir con `getClinicalNoteHistory` (C-EV2-5, más nueva
  * primero); null = sin acceso, y no se distingue de «no existe».
  *
+ * FC-3e2: se abre desde «Versiones» del menú «⋯» de la tarjeta; el cuerpo usa `HcBody` (formato si lo hay).
+ *
  * EV2-Z: un rechazo (red, server caído) es `error`, NO `forbidden`: antes decía «No tenés acceso» y el usuario no
  * reintentaba algo que sí podía ver. El `error` ofrece reintentar.
  */
@@ -12,6 +14,7 @@ import { useEffect, useState } from "react";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { KindTag } from "@/components/clinical-notes/kind-tag";
+import { HcBody } from "@/components/hc/hc-doc-view";
 import {
   CLINICAL_NOTES_UI_COPY as COPY,
   noteDateLabel,
@@ -62,7 +65,7 @@ const blockStyle: React.CSSProperties = {
   display: "grid",
   gap: 6,
 };
-const bodyStyle: React.CSSProperties = { margin: 0, fontSize: 13, whiteSpace: "pre-wrap", color: "var(--navy-900)" };
+const bodyStyle: React.CSSProperties = { margin: 0, fontSize: 13, color: "var(--navy-900)" };
 const metaStyle: React.CSSProperties = { fontSize: 11, color: "var(--navy-400)" };
 
 /** Presentacional (lo prueba el render test sin red): versión actual arriba y las anteriores, más nueva primero. */
@@ -107,7 +110,10 @@ export function NoteHistoryContent({
         </div>
         {note.title && <strong style={{ fontSize: 14 }}>{note.title}</strong>}
         <span style={metaStyle}>{noteDateLabel(note.occurredAt)}</span>
-        <p style={bodyStyle}>{note.body}</p>
+        {/* FC-3e2: la versión actual con su formato (bodyDoc); sin doc, el texto plano con pre-wrap como antes. */}
+        <div style={bodyStyle}>
+          <HcBody doc={note.bodyDoc} text={note.body} headingOffset={1} />
+        </div>
       </section>
       {state.revisions.length === 0 ? (
         <p style={{ fontSize: 13, color: "var(--navy-500)" }}>{COPY.historyEmpty}</p>
@@ -121,7 +127,11 @@ export function NoteHistoryContent({
               </div>
               {r.title && <strong style={{ fontSize: 14 }}>{r.title}</strong>}
               <span style={metaStyle}>{noteDateLabel(r.occurredAt)}</span>
-              <p style={bodyStyle}>{r.body}</p>
+              {/* Las revisiones viajan como texto (`ClinicalNoteRevisionDTO.body`): el doc de cada versión queda en la base
+                  y en el export, no en este DTO. */}
+              <div style={bodyStyle}>
+                <HcBody doc={null} text={r.body} />
+              </div>
             </li>
           ))}
         </ol>
