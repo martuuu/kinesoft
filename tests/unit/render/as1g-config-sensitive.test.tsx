@@ -214,7 +214,7 @@ describe("[AS-1g] Secretaria con «Configuración»: lo operativo sí, lo delica
     expect(html).not.toMatch(/<select[^>]*disabled/);
     expect(html).not.toContain("Funciones del consultorio");
     expect(html).not.toContain("Turnos online");
-    expect(html).not.toContain("Vista compartida del consultorio");
+    expect(html).not.toContain("¿Quién ve la historia clínica de cada paciente?");
     expect(html).not.toContain("Datos del consultorio");
     expect(html).not.toContain("Nombre del consultorio");
     expect(text(html)).toContain("Algunas opciones las maneja el titular o el administrador.");
@@ -241,8 +241,9 @@ describe("[AS-1g] Profesional con «Configuración» y Titular: lo delicado sí"
     const html = page("PRACTITIONER", true, "general");
     expect(html).toContain("Funciones del consultorio");
     expect(html).toContain("Turnos online");
-    expect(html).toContain("Vista compartida del consultorio");
-    expect(html).not.toMatch(/aria-label="Vista compartida del consultorio"[^>]*disabled/);
+    // [FC-3i] El switch «Vista compartida» pasó a radio con la pregunta.
+    expect(html).toContain("¿Quién ve la historia clínica de cada paciente?");
+    expect(html).not.toMatch(/<fieldset[^>]*data-hc-visibility[^>]*disabled/);
     expect(html).toContain("Datos del consultorio");
     expect(text(html)).not.toContain("Algunas opciones las maneja el titular o el administrador.");
   });

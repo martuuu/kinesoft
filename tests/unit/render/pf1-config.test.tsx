@@ -177,7 +177,9 @@ describe("[PF1.1-config · C3/C4] General", () => {
     const h = html();
     expect(h).not.toMatch(/OWNER|ADMIN/);
     expect(h).not.toContain("Tweaks");
-    expect(h).toContain("El Titular y los administradores ven todo");
+    // [FC-3i] Hallazgo 13 (§24.2): «ven todo» era falso desde PL-1b; la ven solo si atienden.
+    expect(h).toContain("El Titular y los administradores la ven solo si atienden pacientes.");
+    expect(h).not.toContain("El Titular y los administradores ven todo");
     expect(h).toContain("«Apariencia»");
   });
 

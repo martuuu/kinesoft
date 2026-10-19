@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
@@ -35,6 +36,14 @@ import styles from "../configuracion.module.css";
 import { useAlertPrefs } from "@/components/providers/arrival-alerts";
 import { AlertModeControl } from "@/components/realtime/alert-prefs-controls";
 import { supportContactText } from "@/lib/support-contact";
+import type { PracticeAssetState } from "./practice-asset-field";
+import { HC_VISIBILITY_COPY as VIS_COPY, hcVisibilityChange, hcVisibilityOf, type HcVisibility } from "./fichas-settings-logic";
+
+// [FC-3i] El logo baja del chunk de «Mis fichas» (mismo `import()` que configuracion-client): ver
+// `practice-asset-field.tsx` (sin chunk compartido nuevo). Con SSR (default de `dynamic`): la tarjeta sale pintada.
+const LogoAssetField = dynamic(() => import("./fichas-panel").then((m) => m.LogoAssetField), {
+  loading: () => <div aria-busy="true" style={{ minHeight: 120 }} />,
+});
 
 /**
  * Configuración → General. T3d-1g (C-AS1): por CAPACIDAD, no por rol (antes `role === OWNER || ADMIN`, que le
@@ -48,6 +57,7 @@ export function GeneralPanel({
   admin,
   sensitive,
   support = false,
+  logo = null,
 }: {
   tenant: TenantSettings;
   /** `tenant.admin` («Configuración»): horario y vista de agenda del consultorio. */
@@ -56,6 +66,8 @@ export function GeneralPanel({
   sensitive: boolean;
   /** BO3-F: sesión de soporte. Ve lo de Configuración, pero no puede abrir la HC a otros ni guardar preferencias propias. */
   support?: boolean;
+  /** [FC-3i] Logo del consultorio (`tenant.sensitive`); null = sin la tarjeta (la página no lo leyó). */
+  logo?: PracticeAssetState | null;
 }) {
   const router = useRouter();
   const { agenda, setAgenda } = useTweaks();
@@ -89,14 +101,14 @@ export function GeneralPanel({
     });
   };
 
-  const toggleShared = () => {
+  // [FC-3i] El radio (`HcVisibilityCard`) ya confirmó si amplía; acá solo se aplica, optimista con vuelta atrás.
+  const applyShared = (value: boolean) => {
     setError(null);
-    const next = !shared;
-    setShared(next);
+    setShared(value);
     start(async () => {
-      const r = await setSharedPatientView(next);
+      const r = await setSharedPatientView(value);
       if (!r.ok) {
-        setShared(!next);
+        setShared(!value);
         setError(r.error);
       }
       // [PF1.1-config · C-PF4] Sin `router.refresh()`: la action revalida `/configuracion`.
@@ -206,53 +218,12 @@ export function GeneralPanel({
 
       {sensitive && <FeaturesCard tenant={tenant} />}
 
-      {sensitive && (
-      <Card style={{ padding: 20 }}>
-        <EyebrowLabel>Vista de pacientes</EyebrowLabel>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 14, gap: 16 }}>
-          <div style={{ maxWidth: 560 }}>
-            <div style={{ fontSize: 15, fontWeight: 600, color: "var(--navy-900)" }}>
-              Vista compartida del consultorio
-            </div>
-            <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 4, lineHeight: 1.45 }}>
-              <strong>Activado</strong>: todos los profesionales ven la historia clínica completa
-              de todos los pacientes del consultorio. <strong>Desactivado</strong> (por defecto):
-              cada profesional sólo ve los pacientes que cargó. Para compartir un paciente puntual con
-              otro profesional, usá el botón <strong>Compartir</strong> en el perfil del paciente.
-              El Titular y los administradores ven todo, con cualquiera de los dos modos.
-            </div>
-          </div>
-          <Switch
-            on={shared}
-            onChange={toggleShared}
-            disabled={support}
-            aria-label="Vista compartida del consultorio"
-          />
-        </div>
-        {support && (
-          <div data-support-note style={{ marginTop: 10, fontSize: 12.5, color: "var(--navy-500)", lineHeight: 1.45 }}>
-            Como soporte no podés cambiar quién ve la historia clínica: lo decide el consultorio.
-          </div>
-        )}
-        {shared && (
-          <div
-            style={{
-              marginTop: 14,
-              padding: 12,
-              borderRadius: 10,
-              background: "var(--warn-bg)",
-              border: "1px solid var(--warn-border)",
-              fontSize: 12.5,
-              color: "var(--navy-700)",
-              lineHeight: 1.45,
-            }}
-          >
-            <strong>Atención:</strong> con este modo activado se ignoran los permisos
-            individuales otorgados con el botón <em>Compartir</em>. Todos los profesionales
-            del consultorio ven los datos completos de todos los pacientes.
-          </div>
-        )}
-      </Card>
+      {sensitive && <HcVisibilityCard shared={shared} onApply={applyShared} pending={pending} support={support} />}
+
+      {sensitive && logo && (
+        <Card style={{ padding: 20 }}>
+          <LogoAssetField initial={logo} disabled={support} />
+        </Card>
       )}
 
       <Card style={{ padding: 20 }}>
@@ -764,5 +735,115 @@ function PrefRow({
         <Switch on={on} onChange={() => onChange?.(!on)} disabled={disabled} aria-label={label} />
       )}
     </div>
+  );
+}
+
+/**
+ * [FC-3i] «¿Quién ve la historia clínica de cada paciente?» (antes el switch «Vista compartida del consultorio»).
+ * Hallazgo 13 (§24.2): el copy viejo decía «El Titular y los administradores ven todo, con cualquiera de los dos
+ * modos», falso desde PL-1b: el rol solo ya no abre la HC; la ven si ATIENDEN (`lib/visibility.ts`, regla 1 y nivel
+ * 0). Radio y no switch: las dos opciones se leen enteras antes de elegir, y el default («Cada profesional») queda
+ * nombrado. Ampliar a «Todos» pide confirmación (`useConfirm`): abre la HC de cada paciente a todo el equipo clínico.
+ * Achicar se aplica directo (es lo seguro).
+ */
+function HcVisibilityCard({
+  shared,
+  onApply,
+  pending,
+  support,
+}: {
+  shared: boolean;
+  onApply: (value: boolean) => void;
+  pending: boolean;
+  support: boolean;
+}) {
+  const confirm = useConfirm();
+  const current = hcVisibilityOf(shared);
+  const disabled = support || pending;
+  const choose = async (next: HcVisibility) => {
+    const step = hcVisibilityChange(current, next);
+    if (step === "noop") return;
+    if (step === "confirm") {
+      const ok = await confirm({
+        title: VIS_COPY.widenTitle,
+        message: VIS_COPY.widenMessage,
+        confirmLabel: VIS_COPY.widenConfirm,
+        cancelLabel: VIS_COPY.widenCancel,
+        tone: "danger",
+      });
+      if (!ok) return;
+    }
+    onApply(next === "all");
+  };
+  const options: { value: HcVisibility; label: string; hint: string }[] = [
+    { value: "own", label: VIS_COPY.visibilityOwn, hint: VIS_COPY.visibilityOwnHint },
+    { value: "all", label: VIS_COPY.visibilityAll, hint: VIS_COPY.visibilityAllHint },
+  ];
+  return (
+    <Card style={{ padding: 20 }}>
+      <fieldset data-hc-visibility style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }} disabled={disabled}>
+        <legend style={{ padding: 0, fontSize: 15, fontWeight: 600, color: "var(--navy-900)" }}>
+          {VIS_COPY.visibilityQuestion}
+        </legend>
+        <div role="radiogroup" aria-label={VIS_COPY.visibilityQuestion} style={{ display: "grid", gap: 8, marginTop: 12 }}>
+          {options.map((o) => {
+            const on = current === o.value;
+            return (
+              <label
+                key={o.value}
+                style={{
+                  display: "flex",
+                  gap: 10,
+                  alignItems: "flex-start",
+                  padding: "10px 12px",
+                  minHeight: 44,
+                  borderRadius: 10,
+                  border: `1px solid ${on ? "var(--sky-300)" : "var(--navy-100)"}`,
+                  background: on ? "var(--sky-50)" : "transparent",
+                  cursor: disabled ? "default" : "pointer",
+                }}
+              >
+                <input
+                  type="radio"
+                  name="hc-visibility"
+                  value={o.value}
+                  checked={on}
+                  onChange={() => void choose(o.value)}
+                  style={{ marginTop: 3 }}
+                />
+                <span>
+                  <span style={{ display: "block", fontSize: 14, fontWeight: 600, color: "var(--navy-900)" }}>{o.label}</span>
+                  <span style={{ display: "block", fontSize: 12.5, color: "var(--navy-500)", marginTop: 2, lineHeight: 1.45 }}>
+                    {o.hint}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      </fieldset>
+      <div style={{ fontSize: 12.5, color: "var(--navy-500)", marginTop: 10, lineHeight: 1.45 }}>{VIS_COPY.visibilityRoles}</div>
+      {support && (
+        <div data-support-note style={{ marginTop: 10, fontSize: 12.5, color: "var(--navy-500)", lineHeight: 1.45 }}>
+          {VIS_COPY.supportNote}
+        </div>
+      )}
+      {shared && (
+        <div
+          style={{
+            marginTop: 14,
+            padding: 12,
+            borderRadius: 10,
+            background: "var(--warn-bg)",
+            border: "1px solid var(--warn-border)",
+            fontSize: 12.5,
+            color: "var(--navy-700)",
+            lineHeight: 1.45,
+          }}
+        >
+          <strong>Atención:</strong> {VIS_COPY.visibilityAllWarning}
+        </div>
+      )}
+    </Card>
   );
 }

@@ -317,7 +317,8 @@ function general(support: boolean) {
 describe("[BO3-F] General cuando mira el soporte", () => {
   it("no puede cambiar la vista compartida de la HC y no ve las preferencias personales", () => {
     const html = general(true);
-    expect(html).toMatch(/<button[^>]*role="switch"[^>]*aria-label="Vista compartida del consultorio"[^>]*disabled/);
+    // [FC-3i] El switch pasó a radio («¿Quién ve la historia clínica…?»): el fieldset entero queda deshabilitado.
+    expect(html).toMatch(/<fieldset[^>]*data-hc-visibility[^>]*disabled=""/);
     expect(html).toContain("data-support-note");
     expect(html).not.toContain("Mi vista de agenda");
     // Lo de Configuración sí lo puede tocar (server: allowlist `withSupportWritable`).
@@ -327,7 +328,8 @@ describe("[BO3-F] General cuando mira el soporte", () => {
 
   it("sin soporte, un ADMIN ve todo igual que antes", () => {
     const html = general(false);
-    expect(html).not.toMatch(/aria-label="Vista compartida del consultorio"[^>]*disabled/);
+    expect(html).toContain("data-hc-visibility");
+    expect(html).not.toMatch(/<fieldset[^>]*data-hc-visibility[^>]*disabled/);
     expect(html).not.toContain("data-support-note");
     expect(html).toContain("Mi vista de agenda");
   });

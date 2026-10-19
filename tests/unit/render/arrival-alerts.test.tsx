@@ -26,6 +26,12 @@ vi.mock("@/lib/tenant-settings", () => ({
   setBusinessHours: async () => ({ ok: true }),
   setPublicBookingEnabled: async () => ({ ok: true }),
 }));
+// [FC-3i] general-panel también importa las actions del logo (lib/practice-assets, "use server"): fuera.
+vi.mock("@/lib/practice-assets", () => ({
+  uploadTenantLogo: async () => ({ ok: false, error: "x" }),
+  removeTenantLogo: async () => ({ ok: false, error: "x" }),
+  getPracticeAssetPreviewUrl: async () => ({ ok: true, data: { url: null } }),
+}));
 
 import { ArrivalAlerts, alertsShouldRun, isSalaPath } from "@/components/providers/arrival-alerts";
 import {

@@ -23,6 +23,9 @@ import { TabsBar, initialConfigTab, visibleConfigTabs, type ConfigTabAccess, typ
 import type { SupportDraft } from "./panels/support-messages-panel";
 import type { PlanChoice } from "./panels/plan-change-drawer";
 import type { ExportBlockedTenant } from "./panels/export-panel";
+import type { FichasPanelMe } from "./panels/fichas-panel";
+import type { PracticeAssetState } from "./panels/practice-asset-field";
+import type { FichaBackupScope } from "@/components/fichas/fichas-ui-types";
 
 /**
  * [PF1.1-config · C-PF2] Cada pestaña es un chunk aparte (`next/dynamic`). Antes los 12 paneles viajaban en el JS
@@ -48,6 +51,7 @@ const PANEL_LOADERS = {
   usuarios: () => import("./panels/users-panel"),
   plan: () => import("./panels/plan-tab"),
   facturacion: () => import("./panels/billing-panel"),
+  "mis-fichas": () => import("./panels/fichas-panel"),
   soporte: () => Promise.all([import("./panels/support-messages-panel"), import("./panels/support-access-panel")]),
   exportar: () => import("./panels/export-panel"),
 } satisfies Record<Tab, () => Promise<unknown>>;
@@ -84,6 +88,8 @@ const SupportMessagesPanel = dynamic(() => import("./panels/support-messages-pan
 const SupportAccessPanel = dynamic(() => import("./panels/support-access-panel").then((m) => m.SupportAccessPanel), {
   loading: () => null,
 });
+// FC-3i: «Mis fichas» (firma, matrícula, carpeta de respaldo, diagnósticos propios), su propio chunk.
+const FichasPanel = dynamic(() => import("./panels/fichas-panel").then((m) => m.FichasPanel), { loading: PanelSkeleton });
 const ExportPanel = dynamic(() => import("./panels/export-panel").then((m) => m.ExportPanel), { loading: PanelSkeleton });
 
 type Props = {
@@ -141,6 +147,13 @@ type Props = {
    * «Configuración»: no hay pestaña ni sub-pestaña Especialidades.
    */
   directory?: ConfiguracionDirectoryData | null;
+  /**
+   * FC-3i (FC-UI-D3): «Mis fichas» del que mira. null/ausente = no es miembro clínico (Secretaria, Facturación, un
+   * Titular/Admin que no atiende, soporte): sin pestaña.
+   */
+  fichas?: { me: FichasPanelMe; backupScope: FichaBackupScope } | null;
+  /** FC-3i: logo del consultorio en General (`tenant.sensitive`); null/ausente = sin la tarjeta. */
+  logo?: PracticeAssetState | null;
 };
 
 export function ConfiguracionClient(props: Props) {
@@ -150,7 +163,8 @@ export function ConfiguracionClient(props: Props) {
   const canExport = !props.support && (props.role === "OWNER" || exportBlocked.length > 0);
   const directory = props.directory ?? null;
   const sensitive = !!props.access.sensitive;
-  const access: ConfigTabAccess = { ...props.access, canExport, directory: directory !== null };
+  const fichas = props.fichas ?? null;
+  const access: ConfigTabAccess = { ...props.access, canExport, directory: directory !== null, fichas: fichas !== null };
   const visible = visibleConfigTabs(access, props.modules);
   const [tab, setTabRaw] = useState<Tab>(() => initialConfigTab(props.initialTab, visible));
   // B3.4: Servicios/Coberturas de un profesional se editan en línea (no en
@@ -158,16 +172,19 @@ export function ConfiguracionClient(props: Props) {
   const [practitionerDirty, setPractitionerDirty] = useState(false);
   // DIR-3c: la descripción pública del Directorio también se edita en línea.
   const [directoryDirty, setDirectoryDirty] = useState(false);
+  // FC-3i: honorífico y matrícula de «Mis fichas» también se editan en línea.
+  const [fichasDirty, setFichasDirty] = useState(false);
   // PL-3a: «Consultanos» del plan Libre abre Soporte con un mensaje prellenado.
   const [supportDraft, setSupportDraft] = useState<SupportDraft | null>(null);
   const confirm = useConfirm();
   const setTab = useCallback(
     async (t: Tab) => {
       if (t === tab) return;
-      if (practitionerDirty || directoryDirty) {
+      if (practitionerDirty || directoryDirty || fichasDirty) {
+        const where = practitionerDirty ? "Profesionales" : directoryDirty ? "Directorio" : "Mis fichas";
         const ok = await confirm({
           title: "¿Descartar los cambios sin guardar?",
-          message: `Tenés cambios sin guardar en ${practitionerDirty ? "Profesionales" : "Directorio"}. Si cambiás de pestaña, se pierden.`,
+          message: `Tenés cambios sin guardar en ${where}. Si cambiás de pestaña, se pierden.`,
           tone: "danger",
           confirmLabel: "Descartar",
           cancelLabel: "Seguir editando",
@@ -175,6 +192,7 @@ export function ConfiguracionClient(props: Props) {
         if (!ok) return;
         setPractitionerDirty(false);
         setDirectoryDirty(false);
+        setFichasDirty(false);
       }
       setTabRaw(t);
       // Que la URL siga a la pestaña: un refresh (o el link copiado) vuelve a la misma. `replaceState` y no el router:
@@ -188,7 +206,7 @@ export function ConfiguracionClient(props: Props) {
         /* sin history: la pestaña vale igual */
       }
     },
-    [tab, practitionerDirty, directoryDirty, confirm]
+    [tab, practitionerDirty, directoryDirty, fichasDirty, confirm]
   );
   const can = (t: Tab) => visible.includes(t);
   // «Accesos de soporte»: PL-F1b (decisión de Martin, 16-oct), cualquier miembro, si la página pudo leerlos. Antes
@@ -214,6 +232,7 @@ export function ConfiguracionClient(props: Props) {
           admin={props.access.tenantAdmin}
           sensitive={sensitive}
           support={props.support}
+          logo={sensitive ? props.logo ?? null : null}
         />
       )}
       {tab === "sedes" && can("sedes") && <LocationsPanel locations={props.locations} rooms={props.rooms} />}
@@ -260,6 +279,14 @@ export function ConfiguracionClient(props: Props) {
         />
       )}
       {tab === "facturacion" && can("facturacion") && overview && <BillingPanel initial={overview} />}
+      {tab === "mis-fichas" && can("mis-fichas") && fichas && (
+        <FichasPanel
+          me={fichas.me}
+          backupScope={fichas.backupScope}
+          readOnly={!!props.readOnly}
+          onDirtyChange={setFichasDirty}
+        />
+      )}
       {tab === "soporte" && can("soporte") && (
         // PL-2d (C-PL11): la pestaña «Soporte» junta los Mensajes con el equipo de KineSoft y los Accesos de soporte.
         // PL-F1b: Mensajes y Accesos para cualquier miembro (antes PL-D20: `tenant.admin || account.billing`).

@@ -16,6 +16,7 @@ export type Tab =
   | "usuarios"
   | "plan"
   | "facturacion"
+  | "mis-fichas"
   | "soporte"
   | "exportar";
 
@@ -36,6 +37,8 @@ export const CONFIG_TABS: readonly Tab[] = [
   "plan",
   // PL-3a (PL-D21): `?tab=facturacion` es el link de los mails de cobro (cargo nuevo, vencido, comprobante revisado).
   "facturacion",
+  // FC-3i: `?tab=mis-fichas` (firma, matrícula y carpeta de respaldo de cada profesional).
+  "mis-fichas",
   "soporte",
   // BO5-C: `?tab=exportar` es el link del mail `tenant_export_request` (Plataforma le pide el export al titular).
   "exportar",
@@ -57,6 +60,9 @@ export function parseConfigTab(raw: string | string[] | null | undefined): Tab {
  *  - Soporte (Mensajes + Accesos de soporte): SIEMPRE, cualquier miembro (PL-F1b, decisión de Martin del 16-oct:
  *    «profesionales también, porque pueden necesitar ayuda con algo»; la misma regla que `lib/support-threads.ts` y
  *    `listSupportSessionsForTenant`). Un Profesional sin delegaciones ve solo esta pestaña.
+ *  - `fichas` (FC-3i, FC-UI-D3): «Mis fichas» = todo miembro CLÍNICO (atiende y tiene `Practitioner`: honorífico,
+ *    matrícula, firma, carpeta de respaldo y diagnósticos propios). Es personal: no depende de «Configuración», así
+ *    que un Profesional sin delegaciones la ve (junto con Soporte). Opcional; ausente = no se ve.
  *  - `canExport`: Exportar datos (BO5-C: solo el titular, o el de un consultorio suspendido).
  *  - `directory` (DIR-3c, C-DIR9): Directorio = `tenant.sensitive` con `DIRECTORY_MODE` ≠ off (lo decide el loader: la
  *    pestaña existe si llegaron sus datos). Opcional: sin él (tests viejos, `legacyConfigAccess`) no se ve.
@@ -72,6 +78,7 @@ export type ConfigTabAccess = {
   canExport: boolean;
   directory?: boolean;
   sensitive?: boolean;
+  fichas?: boolean;
 };
 
 /**
@@ -112,6 +119,8 @@ const TAB_DEFS: readonly TabDef[] = [
   { key: "usuarios", label: "Usuarios", visible: (a) => a.team && !!a.sensitive },
   { key: "plan", label: "Plan y uso", visible: (a) => a.billing },
   { key: "facturacion", label: "Facturación", visible: (a) => a.billing },
+  // FC-3i: lo personal de las fichas, antes de Soporte (para un Profesional sin delegaciones es la pestaña inicial).
+  { key: "mis-fichas", label: "Mis fichas", module: "evoluciones", visible: (a) => !!a.fichas },
   // PL-2d: «Soporte» = Mensajes + Accesos de soporte (la key no cambia: los mails ya linkean `?tab=soporte`).
   // PL-F1b: visible para cualquier miembro (antes `tenantAdmin || billing`, PL-D20).
   { key: "soporte", label: "Soporte", visible: () => true },

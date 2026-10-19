@@ -185,15 +185,18 @@ export const BACKUP_COPY = {
   savedToFolder: (path: string) => `Guardada en ${path}`,
   downloaded: "Se descargó el PDF",
   failed: "No pudimos guardar el PDF. Probá de nuevo.",
+  checking: "Revisando la carpeta…",
+  grant: "Dar permiso ahora",
+  permissionDenied:
+    "El navegador no dio permiso para escribir en la carpeta: el PDF no se guardó. Probá de nuevo y elegí «Permitir».",
+  folderMissing: "No encontramos la carpeta de respaldo (¿la moviste o la borraste?). Elegila de nuevo.",
+  chooseFailed: "No pudimos usar esa carpeta. Probá con otra.",
+  soloUserRequired: "Tildá la casilla para elegir la carpeta.",
+  close: "Cerrar",
 } as const;
 
-/** Configuración (FC-3i). */
-export const FICHAS_SETTINGS_COPY = {
-  tab: "Mis fichas",
-  visibilityQuestion: "¿Quién ve la historia clínica de cada paciente?",
-  logo: "Logo del consultorio",
-  honorific: "Cómo firmás",
-  license: "Matrícula",
-  signature: "Firma",
-  ownDiagnoses: "Diagnósticos propios",
-} as const;
+/**
+ * Configuración (FC-3i): `FICHAS_SETTINGS_COPY` vive en `components/configuracion/panels/fichas-settings-copy.ts`.
+ * Mismo motivo que `WORD_IMPORT_COPY` (FC-3i1, §24.9): este archivo viaja en el first load de /pacientes/[id] y
+ * webpack no saca el bloque que esa ruta no usa (medido: +~1,3 kB gz en /pacientes/[id] con el copy acá).
+ */
