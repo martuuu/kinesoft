@@ -311,9 +311,9 @@ describe.skipIf(!RUN)("[P4-S24v] invitación al portal y /portal/vincular", () =
       const before = await snapshot(patientId);
 
       asAnonymous();
-      expect(titleOf((await PortalVincular({ searchParams: { t } })) as El)).toBe("Entrá para vincular tu ficha");
+      expect(titleOf((await PortalVincular({ searchParams: { t } })) as El)).toBe("Entrá para vincular tu cuenta");
       asUser(me.id);
-      expect(titleOf((await PortalVincular({ searchParams: { t } })) as El)).toBe("Vinculá tu ficha");
+      expect(titleOf((await PortalVincular({ searchParams: { t } })) as El)).toBe("Vinculá tu cuenta");
       const other = await account();
       asUser(other.id);
       expect(titleOf((await PortalVincular({ searchParams: { t } })) as El)).toBe(
@@ -324,7 +324,7 @@ describe.skipIf(!RUN)("[P4-S24v] invitación al portal y /portal/vincular", () =
       expect(before.userId).toBeNull();
     });
 
-    it("token vencido → aviso de invitación inválida; ya vinculada → «Tu ficha ya está vinculada»", async () => {
+    it("token vencido → aviso de invitación inválida; ya vinculada → «Tu cuenta ya está vinculada»", async () => {
       const me = await account();
       const patientId = await addPatient(db, A, { email: me.email });
       asUser(me.id);
@@ -334,7 +334,7 @@ describe.skipIf(!RUN)("[P4-S24v] invitación al portal y /portal/vincular", () =
       );
       const t = invite(patientId, A, me.email);
       await linkPortalByInvite(form({ t }));
-      expect(titleOf((await PortalVincular({ searchParams: { t } })) as El)).toBe("Tu ficha ya está vinculada");
+      expect(titleOf((await PortalVincular({ searchParams: { t } })) as El)).toBe("Tu cuenta ya está vinculada");
     });
 
     it("[ES4-Z] ficha ya vinculada a OTRA cuenta → sin form desde el GET; ?e=conflict tampoco ofrece reintentar", async () => {
@@ -344,13 +344,13 @@ describe.skipIf(!RUN)("[P4-S24v] invitación al portal y /portal/vincular", () =
       await db.patient.update({ where: { id: patientId }, data: { userId: other.id } });
       const t = invite(patientId, A, me.email);
       asUser(me.id);
-      expect(titleOf((await PortalVincular({ searchParams: { t } })) as El)).toBe("No pudimos vincular tu ficha");
+      expect(titleOf((await PortalVincular({ searchParams: { t } })) as El)).toBe("No pudimos vincular tu cuenta");
       const free = await addPatient(db, A, { email: me.email.toUpperCase() });
       const t2 = invite(free, A, me.email.toUpperCase());
       expect(titleOf((await PortalVincular({ searchParams: { t: t2, e: "conflict" } })) as El)).toBe(
-        "No pudimos vincular tu ficha"
+        "No pudimos vincular tu cuenta"
       );
-      expect(titleOf((await PortalVincular({ searchParams: { t: t2 } })) as El)).toBe("Vinculá tu ficha");
+      expect(titleOf((await PortalVincular({ searchParams: { t: t2 } })) as El)).toBe("Vinculá tu cuenta");
     });
   });
 

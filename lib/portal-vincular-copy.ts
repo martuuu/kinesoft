@@ -7,14 +7,14 @@
 export const PORTAL_VINCULAR_ERRORS = {
   /** Token vencido (7 días), alterado o mal formado; o la ficha ya no tiene el email al que se mandó. */
   invalid: "La invitación venció o ya no es válida. Pedile a tu consultorio que te mande una nueva.",
-  session: "Entrá con tu cuenta para vincular tu ficha.",
+  session: "Entrá con tu cuenta para vincularla con el consultorio.",
   staff:
     "Entraste con una cuenta del equipo de un consultorio. El portal es para pacientes: entrá con tu email personal.",
   other_email:
     "Esta invitación es para otro email. Cerrá sesión y entrá con el email al que te llegó la invitación.",
-  not_found: "No encontramos la ficha de esta invitación. Pedile a tu consultorio que te mande una nueva.",
-  linked_elsewhere: "Esta ficha ya está vinculada a otra cuenta. Si es tuya, escribile a tu consultorio.",
-  conflict: "Tu cuenta ya tiene otra ficha vinculada en este consultorio. Escribile a tu consultorio para que lo revise.",
+  not_found: "No encontramos el paciente de esta invitación. Pedile a tu consultorio que te mande una nueva.",
+  linked_elsewhere: "Este paciente ya está vinculado a otra cuenta. Si es tuya, escribile a tu consultorio.",
+  conflict: "Tu cuenta ya tiene otro paciente vinculado en este consultorio. Escribile a tu consultorio para que lo revise.",
   rate_limited: "Hiciste muchos intentos seguidos. Esperá un rato y probá de nuevo.",
 } as const;
 

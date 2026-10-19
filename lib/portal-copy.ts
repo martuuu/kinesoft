@@ -23,7 +23,8 @@ export const PORTAL_HOME = {
   title: "Tus turnos y tu tratamiento, en un solo lugar",
   signInLead: "Entrá para ver tus próximos turnos y tu tratamiento.",
   // VX-Z: sin «Nada se publica.» (no decía qué no se publica ni por qué lo preguntaría alguien; sonaba a disclaimer).
-  signInFootnote: "Usá el mismo email que tiene tu ficha en el consultorio.",
+  // T4-Z: «tu ficha» chocaba con la ficha de la historia clínica (FC); al paciente se le habla de su cuenta.
+  signInFootnote: "Usá el mismo email que tiene tu cuenta con el consultorio.",
   upcomingTitle: "Próximos turnos",
   noUpcoming: "No tenés turnos próximos.",
   bookCta: "Sacar un turno",
@@ -31,9 +32,9 @@ export const PORTAL_HOME = {
 
 /** ES4-D2 (ES4-Z b1): «Buscar mis fichas» (form POST de la home; `?buscar=` con el resultado). */
 export const PORTAL_SEARCH = {
-  cta: "¿No ves tu consultorio? Buscar mis fichas",
-  ok: "Listo: encontramos y vinculamos tus fichas nuevas.",
-  nada: "No encontramos fichas nuevas con tu email. Pedile a tu consultorio que te invite desde tu ficha.",
+  cta: "¿No ves tu consultorio? Buscalo con tu email",
+  ok: "Listo: encontramos y vinculamos tus consultorios nuevos.",
+  nada: "No encontramos consultorios nuevos con tu email. Pedile a tu consultorio que te invite al portal.",
   limite: "Ya buscaste varias veces. Probá de nuevo en un rato.",
 } as const;
 export type PortalSearchOutcome = Exclude<keyof typeof PORTAL_SEARCH, "cta">;
@@ -197,7 +198,26 @@ export const PORTAL_DOCUMENTS_COPY = {
   back: "← Documentos",
   verificationHint:
     "El código de verificación es el mismo que figura en el PDF. Si tenés dudas sobre lo que dice, consultalo con tu profesional.",
+  /**
+   * T4-Z (A3): la descarga es un `<a>` común; un 429/503/500 vacío dejaba al paciente en una pestaña en blanco o en
+   * «no se pudo descargar» del navegador, sin saber qué hacer. La ruta `…/pdf` redirige (303) a la página del documento
+   * con `?e=<código>` y la página pinta este texto. Solo códigos, nunca texto libre en la URL.
+   */
+  downloadError: {
+    "429": "Bajaste varios documentos seguidos. Esperá unos minutos y probá de nuevo.",
+    "503": "No pudimos preparar la descarga. Probá de nuevo en un rato.",
+    "500": "No pudimos generar el PDF. Probá de nuevo; si sigue pasando, avisale a tu consultorio.",
+  },
 } as const;
+
+export type PortalDocumentDownloadError = keyof typeof PORTAL_DOCUMENTS_COPY.downloadError;
+
+/** Allow-list de `?e=` (429|503|500): cualquier otra cosa se ignora, así la URL no puede inyectar texto en la página. */
+export function portalDocumentDownloadErrorFrom(raw: string | string[] | null | undefined): PortalDocumentDownloadError | null {
+  return typeof raw === "string" && Object.prototype.hasOwnProperty.call(PORTAL_DOCUMENTS_COPY.downloadError, raw)
+    ? (raw as PortalDocumentDownloadError)
+    : null;
+}
 
 /** Nombre accesible del `<nav>` de las tabs. */
 export const PORTAL_TABS_LABEL = "Secciones de tu consultorio";
@@ -209,10 +229,10 @@ export const PORTAL_TABS_LABEL = "Secciones de tu consultorio";
  */
 export function portalNoLinkCopy(email: string): { tag: string; title: string; text: string } {
   return {
-    tag: "Sin fichas vinculadas",
-    title: `No encontramos una ficha vinculada a ${email}`,
+    tag: "Sin consultorios vinculados",
+    title: `No encontramos un consultorio vinculado a ${email}`,
     text:
-      "Pedile a tu consultorio que te invite al portal desde tu ficha: te llega un email con el link para entrar. " +
-      "Si todavía no sos paciente, sacá tu primer turno y el consultorio crea tu ficha.",
+      "Pedile a tu consultorio que te invite al portal: te llega un email con el link para entrar. " +
+      "Si todavía no sos paciente, sacá tu primer turno y el consultorio te da de alta.",
   };
 }

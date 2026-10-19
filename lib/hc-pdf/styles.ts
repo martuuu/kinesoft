@@ -53,6 +53,9 @@ export const hcPdfStyles = {
   underline: { textDecoration: "underline" as const },
   dxTitle: { fontSize: 9, fontWeight: 700, marginTop: 4 },
   dx: { fontSize: 9 },
+  // T4-Z (B-1): la URI de la entidad CIE-11, chica y en gris debajo del código. Con la URI el diagnóstico se puede
+  // verificar en la OMS sin depender de la versión del título (los títulos cambian entre releases, la entidad no).
+  dxUri: { fontSize: 7, color: MUTED, marginBottom: 1 },
   signature: { marginTop: 8, alignItems: "flex-start" as const },
   signatureImage: { objectFit: "contain" as const, marginBottom: 2 },
   signatureLine: { fontSize: 9, borderTopWidth: 1, borderTopColor: INK, paddingTop: 2 },

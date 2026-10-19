@@ -53,6 +53,8 @@ function Entry({ e, amendment }: { e: HcPrintableEntryV1; amendment: boolean }) 
             {e.diagnoses.map((d, i) => (
               <li key={i} style={{ overflowWrap: "anywhere" }}>
                 {hcDiagnosisLine(d)}
+                {/* T4-Z (B-1): la URI de la OMS, chica, como en el PDF descargado. Texto: el snapshot no da links. */}
+                {d.uri ? <span style={{ display: "block", fontSize: 12, color: "var(--navy-500)" }}>{d.uri}</span> : null}
               </li>
             ))}
           </ul>

@@ -139,7 +139,12 @@ function entry(e: HcPrintableEntryV1, assets: HcRenderAssets, body: DocxBody, in
   body.blocks(e.body, out);
   if (e.diagnoses.length) {
     out.push(new Paragraph({ ...ind, children: [new TextRun({ text: HC_PRINT_COPY.diagnosesTitle, bold: true, size: 18 })] }));
-    for (const d of e.diagnoses) out.push(new Paragraph({ ...ind, children: [new TextRun({ text: hcDiagnosisLine(d), size: 18 })] }));
+    for (const d of e.diagnoses) {
+      // T4-Z (B-1): la URI de la entidad CIE-11, chica y en gris en la línea de abajo (mismo criterio que el PDF).
+      const children = [new TextRun({ text: hcDiagnosisLine(d), size: 18 })];
+      if (d.uri) children.push(new TextRun({ text: d.uri, size: 14, color: MUTED, break: 1 }));
+      out.push(new Paragraph({ ...ind, children }));
+    }
   }
   const sig = e.signature.imageRef ? assets.signatures[e.signature.imageRef] : undefined;
   if (sig) out.push(new Paragraph({ ...ind, spacing: { before: 160 }, children: [image(sig, { width: 160, height: 56 })] }));

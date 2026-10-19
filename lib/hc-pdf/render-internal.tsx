@@ -207,9 +207,11 @@ function Entry({ e, assets }: { e: HcPrintableEntryV1; assets: HcRenderAssets })
         <View>
           <Text style={s.dxTitle}>{HC_PRINT_COPY.diagnosesTitle}</Text>
           {e.diagnoses.map((d, i) => (
-            <Text key={i} style={s.dx}>
-              {hcDiagnosisLine(d)}
-            </Text>
+            <View key={i}>
+              <Text style={s.dx}>{hcDiagnosisLine(d)}</Text>
+              {/* T4-Z (B-1): la URI de la OMS identifica la entidad (ver `dxUri` en styles.ts). Texto, no link. */}
+              {d.uri ? <Text style={s.dxUri}>{d.uri}</Text> : null}
+            </View>
           ))}
         </View>
       ) : null}

@@ -119,7 +119,7 @@ export default async function PortalTenantPage({
       {/* ES4-Z (b): vuelta de /portal/vincular (`submitPortalInvite`). */}
       {searchParams?.vinculado === "1" && (
         <p role="status" className="k-alert k-alert-success" style={{ margin: 0 }}>
-          Listo: vinculaste tu ficha de {me.tenantName}.
+          Listo: vinculaste tu cuenta con {me.tenantName}.
         </p>
       )}
 

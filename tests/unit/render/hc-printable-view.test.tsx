@@ -83,7 +83,9 @@ describe("[FC-4a] HcPrintableView (portal «Documentos»)", () => {
     expect(withIcd).toContain("Principal: FA20.0 Lumbalgia (CIE-11 (OMS))");
     expect(withIcd).toContain("Contractura (Texto libre)");
     expect(withIcd).toContain("CIE-11 © OMS · CC BY-ND 3.0 IGO");
-    // El uri de la OMS no se vuelve link (la vista no pinta href del snapshot).
+    // T4-Z (B-1): la URI de la OMS se imprime chica, como texto (no se vuelve link: la vista no pinta href del snapshot).
+    expect(withIcd).toContain("http://id.who.int/icd/entity/1");
+    expect(withIcd.match(/id\.who\.int/g)?.length).toBe(1); // solo el diagnóstico con URI; el texto libre no
     expect(withIcd).not.toMatch(/href=/);
     const without = html(content());
     expect(without).not.toContain("Diagnósticos");

@@ -236,6 +236,7 @@ describe("[FC-2e] renderHcPdf", () => {
       "3.",
       "Hielo si dolor ≥ 5/10",
       "Principal: FA20.0 Lumbalgia (CIE-11 (OMS))",
+      "http://id.who.int/icd/entity/1", // T4-Z (B-1): la URI de la entidad, chica, debajo del código
       "Lic. Ana Pérez · MN 1234",
       "Dr. Beto Ruiz · MP 55",
       "Corrijo: ROM 120°",
@@ -292,7 +293,8 @@ describe("[FC-2e] renderHcPdf", () => {
     const pdf = await renderHcPdf(doc, assets);
     expect(pdf.byteLength).toBeLessThan(HC_PDF_MAX_BYTES);
     const text = pdfPlainText(pdf);
-    expect(text).toMatch(/Página 1 de [2-9]\d*/);
+    // T4-Z: `[2-9]\d*` no aceptaba «de 10» (con la URI CIE-11 las 30 fichas pasaron de 9 a 10 páginas).
+    expect(text).toMatch(/Página 1 de (?:[2-9]|[1-9]\d+)\b/);
   }, 60_000);
 });
 
@@ -317,7 +319,15 @@ describe("[FC-2e] renderHcDocx", () => {
     expect(numbering).toMatch(/w:start w:val="3"/);
     const mammoth = await import("mammoth");
     const { value } = await mammoth.extractRawText({ buffer: docx });
-    for (const s of ["Consultorio Ñandú", "Paciente: Juan Gómez", "Señor Muñoz: ¿cede?", "Dr. Beto Ruiz · MP 55", "CIE-11 © OMS"]) {
+    for (const s of [
+      "Consultorio Ñandú",
+      "Paciente: Juan Gómez",
+      "Señor Muñoz: ¿cede?",
+      "Dr. Beto Ruiz · MP 55",
+      "CIE-11 © OMS",
+      "Principal: FA20.0 Lumbalgia (CIE-11 (OMS))",
+      "http://id.who.int/icd/entity/1", // T4-Z (B-1)
+    ]) {
       expect(value, s).toContain(s);
     }
   }, 30_000);

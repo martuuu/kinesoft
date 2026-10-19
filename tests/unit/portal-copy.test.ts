@@ -14,7 +14,10 @@ import {
   portalTabLabel,
   portalDocumentDate,
   PORTAL_DOCUMENTS_COPY,
+  PORTAL_SEARCH,
+  portalDocumentDownloadErrorFrom,
 } from "@/lib/portal-copy";
+import { PORTAL_VINCULAR_ERRORS } from "@/lib/portal-vincular-copy";
 import { portalSectionsFor } from "@/lib/portal-nav";
 import { modulesFor } from "@/lib/tenant-modules";
 import { portalTabItems } from "@/components/portal/portal-tabs";
@@ -120,7 +123,7 @@ describe("[P4-S24] portal-copy · plan y tabs", () => {
 
   it("sin fichas vinculadas: la salida es la invitación, no «cargá tu email exacto»", () => {
     const c = portalNoLinkCopy("ana@x.test");
-    expect(c.title).toBe("No encontramos una ficha vinculada a ana@x.test");
+    expect(c.title).toBe("No encontramos un consultorio vinculado a ana@x.test");
     expect(c.text).toMatch(/te invite al portal/);
     expect(c.text).not.toMatch(/email exacto/);
     expect(PORTAL_PLAN_NO_BOOKING).toBe("Todavía sin turno asignado");
@@ -151,5 +154,26 @@ describe("[FC-4a] portal-copy · documentos", () => {
     // 02:30 UTC del 18 = 23:30 AR del 17: el día es el argentino aunque el host corra en UTC (Vercel).
     expect(PORTAL_DOCUMENTS_COPY.sharedOn("2026-10-18T02:30:00.000Z")).toBe("Compartido el 17 de oct de 2026");
     expect(portalDocumentDate("2026-10-18T02:30:00.000Z")).toBe("17 de oct de 2026");
+  });
+});
+
+describe("[T4-Z] portal-copy · errores de descarga y «ficha»", () => {
+  it("allow-list de ?e=: solo 429, 503 y 500; el resto (y los arrays) se ignora", () => {
+    expect(portalDocumentDownloadErrorFrom("429")).toBe("429");
+    expect(portalDocumentDownloadErrorFrom("503")).toBe("503");
+    expect(portalDocumentDownloadErrorFrom("500")).toBe("500");
+    for (const raw of ["404", "", "toString", "__proto__", "<b>x</b>", null, undefined, ["503"]]) {
+      expect(portalDocumentDownloadErrorFrom(raw as string)).toBeNull();
+    }
+    expect(PORTAL_DOCUMENTS_COPY.downloadError["429"]).toBe("Bajaste varios documentos seguidos. Esperá unos minutos y probá de nuevo.");
+    expect(PORTAL_DOCUMENTS_COPY.downloadError["503"]).toBe("No pudimos preparar la descarga. Probá de nuevo en un rato.");
+    expect(PORTAL_DOCUMENTS_COPY.downloadError["500"]).toBe(
+      "No pudimos generar el PDF. Probá de nuevo; si sigue pasando, avisale a tu consultorio."
+    );
+  });
+
+  it("al paciente no se le dice «ficha» (choca con la ficha de la historia clínica): ingreso, búsqueda y vínculo", () => {
+    expect(ALL({ f: PORTAL_HOME.signInFootnote, s: PORTAL_SEARCH, v: PORTAL_VINCULAR_ERRORS })).not.toMatch(/ficha/i);
+    expect(PORTAL_HOME.signInFootnote).toBe("Usá el mismo email que tiene tu cuenta con el consultorio.");
   });
 });

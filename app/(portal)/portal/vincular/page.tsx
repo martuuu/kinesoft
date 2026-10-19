@@ -37,7 +37,7 @@ import { PortalEmailForm } from "../portal-email-form";
  */
 export const dynamic = "force-dynamic";
 // El token viaja en la URL: que no salga en el Referer hacia ningún otro origen.
-export const metadata: Metadata = { title: `Vincular tu ficha · ${BRAND_NAME}`, referrer: "same-origin" };
+export const metadata: Metadata = { title: `Vincular tu cuenta · ${BRAND_NAME}`, referrer: "same-origin" };
 
 function param(raw: string | string[] | undefined): string | null {
   const v = Array.isArray(raw) ? raw[0] : raw;
@@ -65,7 +65,7 @@ export default async function PortalVincular({
   if (!me) {
     const google = (await visibleOAuthProviders()).includes("google");
     return (
-      <Shell tag={tenant.name} title="Entrá para vincular tu ficha">
+      <Shell tag={tenant.name} title="Entrá para vincular tu cuenta">
         <Lead>
           <strong>{tenant.name}</strong> te invitó a tu portal de paciente. Entrá con el email al que te llegó la
           invitación.
@@ -115,7 +115,7 @@ export default async function PortalVincular({
         : null;
   if (dead) {
     return (
-      <Shell tag={tenant.name} title="No pudimos vincular tu ficha">
+      <Shell tag={tenant.name} title="No pudimos vincular tu cuenta">
         <ErrorBox code={dead} />
         <ButtonLink href="/portal" variant="primary" size="lg" block>
           Ir a Mis consultorios
@@ -125,7 +125,7 @@ export default async function PortalVincular({
   }
   if (patient?.userId === me.id) {
     return (
-      <Shell tag={tenant.name} title="Tu ficha ya está vinculada">
+      <Shell tag={tenant.name} title="Tu cuenta ya está vinculada">
         <Lead>
           Ya podés ver tu portal de <strong>{tenant.name}</strong>.
         </Lead>
@@ -137,16 +137,16 @@ export default async function PortalVincular({
   }
 
   return (
-    <Shell tag={tenant.name} title="Vinculá tu ficha">
+    <Shell tag={tenant.name} title="Vinculá tu cuenta">
       <Lead>
-        Vas a vincular tu cuenta <strong>{me.email}</strong> con tu ficha de <strong>{tenant.name}</strong>. Así ves
+        Vas a vincular tu cuenta <strong>{me.email}</strong> con <strong>{tenant.name}</strong>. Así ves
         tus turnos y lo que el consultorio comparte con vos.
       </Lead>
       {error && <ErrorBox code={error} />}
       <form action={submitPortalInvite}>
         <input type="hidden" name="t" value={token} />
         <Button variant="primary" size="lg" block type="submit">
-          Vincular mi ficha de {tenant.name}
+          Vincular mi cuenta con {tenant.name}
         </Button>
       </form>
     </Shell>

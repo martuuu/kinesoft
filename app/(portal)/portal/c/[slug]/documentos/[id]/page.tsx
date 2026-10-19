@@ -3,7 +3,7 @@ import { notFound, permanentRedirect, redirect } from "next/navigation";
 import { getPortalUser, requirePortalPatient } from "@/lib/portal-identity-internal";
 import { getPortalDocument } from "@/lib/portal-documents-internal";
 import { resolveSlugAlias } from "@/lib/public-booking-internal";
-import { PORTAL_DOCUMENTS_COPY as COPY } from "@/lib/portal-copy";
+import { PORTAL_DOCUMENTS_COPY as COPY, portalDocumentDownloadErrorFrom } from "@/lib/portal-copy";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { buttonClassName } from "@/components/ui/button";
@@ -25,7 +25,13 @@ export async function generateMetadata({ params }: { params: { slug: string } })
   return { title: `${COPY.title} · ${params.slug} · ${BRAND_NAME}` };
 }
 
-export default async function PortalDocumentPage({ params }: { params: { slug: string; id: string } }) {
+export default async function PortalDocumentPage({
+  params,
+  searchParams,
+}: {
+  params: { slug: string; id: string };
+  searchParams?: Record<string, string | string[] | undefined>;
+}) {
   const ref = await requirePortalPatient(params.slug);
   if (!ref) {
     // FC-4i: `&n=documentos` → después de entrar vuelve a «Documentos» (allow-list en lib/portal-nav.ts).
@@ -41,6 +47,8 @@ export default async function PortalDocumentPage({ params }: { params: { slug: s
   if (!doc) notFound();
 
   const base = `/portal/c/${encodeURIComponent(ref.tenant.slug)}/documentos`;
+  // T4-Z (A3): `?e=` lo pone la ruta `…/pdf` cuando la descarga falla (303). Allow-list: otro valor no pinta nada.
+  const downloadError = portalDocumentDownloadErrorFrom(searchParams?.e);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -65,6 +73,11 @@ export default async function PortalDocumentPage({ params }: { params: { slug: s
         <a href={`${base}/${encodeURIComponent(doc.id)}/pdf`} className={buttonClassName({ variant: "primary", size: "md" })} style={{ marginTop: 6 }}>
           {COPY.download}
         </a>
+        {downloadError && (
+          <div role="alert" className="k-alert" style={{ marginTop: 6, alignSelf: "stretch" }}>
+            {COPY.downloadError[downloadError]}
+          </div>
+        )}
       </header>
 
       <Card glass style={{ padding: "20px 18px" }}>

@@ -121,7 +121,7 @@ describe("[VX-Z FX-portal] ingreso", () => {
 
   it("copy de la nota al pie, sin «Nada se publica.»", async () => {
     const html = renderToStaticMarkup(await PortalHome({}));
-    expect(html).toContain("Usá el mismo email que tiene tu ficha en el consultorio.");
+    expect(html).toContain("Usá el mismo email que tiene tu cuenta con el consultorio.");
     expect(html).not.toContain("Nada se publica");
   });
 

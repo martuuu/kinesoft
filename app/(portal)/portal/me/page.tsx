@@ -93,7 +93,7 @@ export default async function PortalMe() {
                   >
                     <div>
                       <div style={{ fontSize: 13, fontWeight: 700 }}>{t.name}</div>
-                      <div style={{ fontSize: 12, color: "var(--navy-500)" }}>Ficha: {t.patientName}</div>
+                      <div style={{ fontSize: 12, color: "var(--navy-500)" }}>Paciente: {t.patientName}</div>
                     </div>
                     {t.canBook && (
                       <Link

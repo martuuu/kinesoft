@@ -7,6 +7,7 @@ import {
   PortalDocumentIntegrityError,
 } from "@/lib/portal-documents-internal";
 import { hashKeyPart, rateLimit } from "@/lib/rate-limit";
+import type { PortalDocumentDownloadError } from "@/lib/portal-copy";
 
 /**
  * T4 (C-FC8, FC-D28) · `GET /portal/c/{slug}/documentos/{id}/pdf`: el PDF de un documento compartido, PROXEADO por el
@@ -20,6 +21,12 @@ import { hashKeyPart, rateLimit } from "@/lib/rate-limit";
  *   - 500: sha256 del objeto distinto del guardado, snapshot ilegible o error inesperado.
  *   - 503: el audit no se pudo escribir. Sin rastro no hay bytes.
  *
+ * T4-Z (A3): esos 429/503/500 vacíos, si los pidió un navegador (`Accept` con `text/html`: el `<a>` de la página),
+ * se vuelven un 303 a la página del documento con `?e=<código>`, que pinta el error en castellano. El destino es
+ * SIEMPRE la misma página (slug e id escapados, mismo origen) y el código sale de una allow-list: no hay redirección
+ * abierta ni texto libre en la URL. Un cliente que no pide HTML (fetch, curl) sigue recibiendo el status vacío. El 404
+ * no redirige: la página daría el mismo 404 y redirigir confirmaría que la URL tiene forma de documento.
+ *
  * El portal no tiene contexto de request (`lib/request-context.ts`), así que ip/ua salen de ESTE Request y van
  * explícitos al audit. El user-agent se recorta a 300: es texto del cliente.
  */
@@ -31,6 +38,19 @@ const UA_MAX = 300;
 
 function empty(status: number, headers: Record<string, string> = {}): Response {
   return new Response(null, { status, headers: { "cache-control": "no-store", ...headers } });
+}
+
+/** 303 a `…/documentos/{id}?e=<código>` para un navegador; el status vacío para el resto. */
+function failure(
+  req: Request,
+  params: { slug: string; id: string },
+  code: PortalDocumentDownloadError,
+  headers: Record<string, string> = {}
+): Response {
+  if (!(req.headers.get("accept") ?? "").includes("text/html")) return empty(Number(code), headers);
+  // `location` relativo (mismo origen por construcción) y sin pasar por `new URL`, que normalizaría un id «..».
+  const location = `/portal/c/${encodeURIComponent(params.slug)}/documentos/${encodeURIComponent(params.id)}?e=${code}`;
+  return new Response(null, { status: 303, headers: { "cache-control": "no-store", location } });
 }
 
 /**
@@ -50,7 +70,7 @@ function attachment(filename: string): string {
 export async function GET(req: Request, { params }: { params: { slug: string; id: string } }): Promise<Response> {
   const ip = clientIp(req.headers, null);
   const rl = await rateLimit(`portal-document-pdf:ip:${hashKeyPart(ip ?? "unknown")}`, RATE);
-  if (!rl.ok) return empty(429, { "retry-after": String(Math.ceil(rl.retryAfterMs / 1000)) });
+  if (!rl.ok) return failure(req, params, "429", { "retry-after": String(Math.ceil(rl.retryAfterMs / 1000)) });
 
   const ref = await requirePortalPatient(params.slug);
   if (!ref) return empty(404);
@@ -62,12 +82,12 @@ export async function GET(req: Request, { params }: { params: { slug: string; id
   } catch (e) {
     if (e instanceof PortalDocumentAuditError) {
       logger.error("patientDocument.download_audit_failed", { tenantId: ref.tenantId });
-      return empty(503, { "retry-after": "30" });
+      return failure(req, params, "503", { "retry-after": "30" });
     }
     if (!(e instanceof PortalDocumentIntegrityError)) {
       logger.error("patientDocument.download_failed", { tenantId: ref.tenantId, error: e instanceof Error ? e.name : "unknown" });
     }
-    return empty(500);
+    return failure(req, params, "500");
   }
   if (!file) return empty(404);
 

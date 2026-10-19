@@ -87,6 +87,7 @@ import { requirePortalPatient } from "@/lib/portal-identity-internal";
 import { linkPortalByInvite } from "@/lib/portal-vincular";
 import { makePortalInviteToken } from "@/lib/portal-invite-token";
 import { __rateLimitInternals } from "@/lib/rate-limit";
+import { PORTAL_DOCUMENTS_COPY } from "@/lib/portal-copy";
 import PortalHome from "@/app/(portal)/portal/page";
 import PortalMe from "@/app/(portal)/portal/me/page";
 import PortalTenantPage from "@/app/(portal)/portal/c/[slug]/page";
@@ -815,7 +816,7 @@ describe.skipIf(!RUN)("[ES4-S26p] matriz de autorización del portal", () => {
       listPortalDocuments(ref: Ref): Promise<{ id: string; title: string; occurredAt: string; sharedAt: string }[]>;
       getPortalDocument(ref: Ref, id: string): Promise<{ id: string; title: string; content: unknown } | null>;
     };
-    type Page = (props: { params: Record<string, string> }) => unknown;
+    type Page = (props: { params: Record<string, string>; searchParams?: Record<string, string> }) => unknown;
     type Route = (req: Request, ctx: { params: { slug: string; id: string } }) => Promise<Response>;
     // `import()` con specifier variable: si el módulo no existe, falla la fila (it.fails), no el archivo entero.
     const load = (spec: string) => import(/* @vite-ignore */ spec);
@@ -963,6 +964,61 @@ describe.skipIf(!RUN)("[ES4-S26p] matriz de autorización del portal", () => {
         expect(Buffer.from(body.slice(0, 5)).toString("latin1")).not.toBe("%PDF-");
       } finally {
         auditFault.on = false;
+      }
+    });
+
+    // T4-Z (A3): el `<a>` de la página es una navegación; un status vacío dejaba al paciente en una pestaña en blanco.
+    const browserPdfRequest = (slug: string, id: string) =>
+      new Request(`http://localhost/portal/c/${slug}/documentos/${id}/pdf`, {
+        headers: { "x-forwarded-for": IP, "user-agent": UA, accept: "text/html,application/xhtml+xml,*/*;q=0.8" },
+      });
+
+    it("[T4-Z] descarga desde el navegador: audit caído → 303 a la página con ?e=503, sin bytes", async () => {
+      const GET = await pdfRoute();
+      as(P);
+      auditFault.on = true;
+      try {
+        __rateLimitInternals.reset();
+        const res = await GET(browserPdfRequest(K.slug, dNewer), { params: { slug: K.slug, id: dNewer } });
+        expect(res.status).toBe(303);
+        expect(res.headers.get("location")).toBe(`/portal/c/${encodeURIComponent(K.slug)}/documentos/${encodeURIComponent(dNewer)}?e=503`);
+        expect(res.headers.get("cache-control")).toBe("no-store");
+        expect((await res.arrayBuffer()).byteLength).toBe(0);
+      } finally {
+        auditFault.on = false;
+      }
+    });
+
+    it("[T4-Z] descarga desde el navegador: 429 → 303 con ?e=429; sin Accept HTML sigue el 429 vacío", async () => {
+      const GET = await pdfRoute();
+      as(null); // sin sesión: cada pedido cuenta para el límite por IP y responde 404 sin renderizar nada
+      __rateLimitInternals.reset();
+      for (let i = 0; i < 30; i++) {
+        expect((await GET(pdfRequest(K.slug, dLive), { params: { slug: K.slug, id: dLive } })).status).toBe(404);
+      }
+      const html = await GET(browserPdfRequest(K.slug, dLive), { params: { slug: K.slug, id: dLive } });
+      expect(html.status).toBe(303);
+      expect(html.headers.get("location")).toBe(`/portal/c/${encodeURIComponent(K.slug)}/documentos/${encodeURIComponent(dLive)}?e=429`);
+      const api = await GET(pdfRequest(K.slug, dLive), { params: { slug: K.slug, id: dLive } });
+      expect(api.status).toBe(429);
+      expect(api.headers.get("retry-after")).toBeTruthy();
+      __rateLimitInternals.reset();
+    });
+
+    it("[T4-Z] la página del documento pinta ?e= de la allow-list (role=alert) e ignora cualquier otro valor", async () => {
+      const View = await viewPage();
+      as(P);
+      for (const [e, text] of Object.entries(PORTAL_DOCUMENTS_COPY.downloadError)) {
+        const view = await pageOf(View({ params: { slug: K.slug, id: dLive }, searchParams: { e } }));
+        expect(view.kind).toBe("ok");
+        const json = serialize({ view });
+        expect(json).toContain(text);
+        expect(json).toContain('"role":"alert"');
+      }
+      for (const e of ["404", "<script>", "javascript:alert(1)", ""]) {
+        const json = serialize({ view: await pageOf(View({ params: { slug: K.slug, id: dLive }, searchParams: { e } })) });
+        for (const text of Object.values(PORTAL_DOCUMENTS_COPY.downloadError)) expect(json, e).not.toContain(text);
+        expect(json, e).not.toContain('"role":"alert"');
       }
     });
   });
