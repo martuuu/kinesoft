@@ -187,8 +187,11 @@ export async function loadPortalDocumentPdf(
       action: "patientDocument.download",
       tenantId: ref.tenantId,
       actorId: ref.userId,
-      entity: "PatientDocument",
-      entityId: row.id,
+      // T4 (FC-2i): con `entity: "Patient"` la descarga aparece en la Actividad del paciente (que lee por paciente),
+      // igual que las descargas del equipo (FC-2g); el documento va en el payload.
+      entity: "Patient",
+      entityId: ref.patientId,
+      payload: { documentId: row.id },
       ip: ctx.ip,
       userAgent: ctx.userAgent,
     });

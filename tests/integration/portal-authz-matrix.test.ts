@@ -828,7 +828,7 @@ describe.skipIf(!RUN)("[ES4-S26p] matriz de autorización del portal", () => {
         headers: { "x-forwarded-for": IP, "user-agent": UA },
       });
     const downloadAudits = (id: string) =>
-      db.auditEvent.findMany({ where: { action: "patientDocument.download", entityId: id }, select: { tenantId: true, actorId: true, ip: true, userAgent: true } });
+      db.auditEvent.findMany({ where: { action: "patientDocument.download", payload: { path: ["documentId"], equals: id } }, select: { tenantId: true, actorId: true, ip: true, userAgent: true } });
     const allSentinels = () => [SHARED_BODY, SHARED_BODY_NEWER, SHARED_TITLE, SHARED_TITLE_NEWER, NOTE_SRC_BODY, REVOKED_BODY, FOREIGN_BODY];
     /** Ni el modelo de notas, ni sus columnas propias, ni los ids de las notas de origen, ni las claves internas del doc. */
     const expectNoNoteTrace = (json: string) => {
