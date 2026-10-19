@@ -6,19 +6,45 @@
  * successful mutation (controlled by a `bump` counter so the effect
  * dep array re-fires).
  */
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition, type FormEvent } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { IconFile, IconX } from "@/components/ui/icons";
 import styles from "./archivos-view.module.css";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
+  confirmPatientFileUpload,
   deletePatientFile,
   getDownloadUrl,
   listPatientFiles,
+  requestPatientFileUpload,
   uploadPatientFile,
 } from "@/lib/files";
 import type { PatientFileRow } from "@/lib/files-types";
+import type { PatientFileCategory } from "@prisma/client";
+import {
+  UPLOAD_COPY,
+  putWithXhr,
+  runPatientFileUpload,
+  uploadProgressPercent,
+  validateUploadFile,
+  type UploadDeps,
+  type UploadState,
+} from "@/lib/files-upload-logic";
+
+/*
+ * FC-4b (C-FC10): la subida va directo a Storage con una URL firmada (25 MB reales; antes el body de la action cortaba
+ * en 4,5 MB). La máquina de estados y el PUT viven en `lib/files-upload-logic.ts` (con test); acá solo se pinta.
+ */
+const UPLOAD_DEPS: Omit<UploadDeps, "uploadStub"> = {
+  request: requestPatientFileUpload,
+  put: putWithXhr,
+  confirm: confirmPatientFileUpload,
+};
+
+function formatSize(bytes: number): string {
+  return bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1).replace(".", ",")} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
 
 const FILE_CATEGORIES: { value: string; label: string }[] = [
   { value: "REPORT", label: "Informe / estudio" },
@@ -71,16 +97,76 @@ export function ArchivosView({
 
   const refresh = () => setBump((b) => b + 1);
 
-  const onUpload = (formData: FormData) => {
+  // Subida en curso: `null` = no hay. Va fuera de `useTransition` para que la barra se actualice en cada evento de
+  // progreso (dentro de una transición React difiere los renders y la barra saltaba de 0 a 100).
+  const [upload, setUpload] = useState<UploadState | null>(null);
+  const [chosen, setChosen] = useState<File | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const uploading = upload !== null && upload.phase !== "done";
+
+  // Si se desmonta (cambio de pestaña o de paciente) con un PUT en vuelo, se corta: no queda subiendo en segundo plano
+  // un archivo cuya confirmación nadie va a pedir (lo que quede en `pending/` lo barre el cron).
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const onPick = (file: File | null) => {
     setError(null);
-    start(async () => {
-      const r = await uploadPatientFile(patientId, formData);
-      if (!r.ok) {
-        setError(r.error);
-        return;
-      }
+    setChosen(file);
+    // Validación previa al elegir: más de 25 MB o un tipo no permitido se avisa antes de apretar «Subir».
+    if (file) {
+      const v = validateUploadFile(file);
+      if (!v.ok) setError(v.error);
+    }
+  };
+
+  const onUpload = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (uploading) return;
+    const form = e.currentTarget;
+    const fd = new FormData(form);
+    const file = chosen ?? (fd.get("file") instanceof File ? (fd.get("file") as File) : null);
+    if (!file || file.size === 0) {
+      setError(file ? UPLOAD_COPY.empty : UPLOAD_COPY.noFile);
+      return;
+    }
+    setError(null);
+    const ac = new AbortController();
+    abortRef.current = ac;
+    const outcome = await runPatientFileUpload(
+      {
+        ...UPLOAD_DEPS,
+        // El camino stub necesita el paciente: `uploadPatientFile(patientId, formData)`.
+        uploadStub: (stubFd) => uploadPatientFile(patientId, stubFd),
+      },
+      {
+        patientId,
+        file,
+        category: String(fd.get("category") ?? "OTHER") as PatientFileCategory,
+        description: String(fd.get("description") ?? ""),
+      },
+      setUpload,
+      ac.signal,
+    );
+    if (abortRef.current === ac) abortRef.current = null;
+    if (ac.signal.aborted && outcome.kind !== "done") {
+      // Desmontado o cancelado: no se pinta nada sobre un componente que puede no estar.
+      setUpload(null);
+      return;
+    }
+    if (outcome.kind === "done") {
+      formRef.current?.reset();
+      setChosen(null);
+      setUpload(null);
       refresh();
-    });
+      return;
+    }
+    setUpload(null);
+    if (outcome.kind === "error") setError(outcome.message);
+  };
+
+  const onCancel = () => {
+    abortRef.current?.abort();
+    setError(UPLOAD_COPY.cancelled);
   };
 
   // A2b-S-ui: `useConfirm` en vez del `window.confirm` nativo (AGENTS §5).
@@ -121,7 +207,7 @@ export function ArchivosView({
         <div className="k-display" style={{ fontSize: 14, fontWeight: 700 }}>
           Subir archivo
         </div>
-        <form action={onUpload} style={{ display: "grid", gap: 10 }}>
+        <form ref={formRef} onSubmit={onUpload} style={{ display: "grid", gap: 10 }}>
           <label
             style={{
               padding: "20px 14px",
@@ -133,13 +219,25 @@ export function ArchivosView({
               fontSize: 12.5,
               color: "var(--navy-700)",
               display: "block",
+              position: "relative",
             }}
           >
-            <input type="file" name="file" required style={{ display: "none" }} />
+            <input
+              type="file"
+              name="file"
+              required
+              disabled={uploading}
+              // `display:none` sacaba el input del orden de foco: con teclado no se podía elegir archivo. Oculto a la
+              // vista pero enfocable (el foco se ve en la etiqueta con :focus-within).
+              className={styles.fileInput}
+              onChange={(e) => onPick(e.currentTarget.files?.[0] ?? null)}
+            />
             <IconFile size={20} />
-            <div style={{ marginTop: 6, fontWeight: 600 }}>Elegir archivo</div>
+            <div style={{ marginTop: 6, fontWeight: 600, overflowWrap: "anywhere" }}>
+              {chosen ? chosen.name : "Elegir archivo"}
+            </div>
             <div style={{ fontSize: 10.5, color: "var(--navy-300)", marginTop: 2 }}>
-              Hasta 25 MB · PDF, jpg, png…
+              {chosen ? formatSize(chosen.size) : "Hasta 25 MB · PDF, imágenes, video, Word, Excel…"}
             </div>
           </label>
           <label style={{ fontSize: 11, fontWeight: 600, color: "var(--navy-500)" }}>
@@ -179,8 +277,12 @@ export function ArchivosView({
               }}
             />
           </label>
+          {upload && upload.phase !== "done" && (
+            <UploadProgress state={upload} />
+          )}
           {error && (
             <div
+              role="alert"
               style={{
                 padding: 8,
                 borderRadius: 10,
@@ -192,9 +294,21 @@ export function ArchivosView({
               {error}
             </div>
           )}
-          <Button type="submit" variant="primary" disabled={pending}>
-            {pending ? "Subiendo…" : "Subir"}
-          </Button>
+          {uploading ? (
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={onCancel}
+              // Mientras el server confirma ya no se cancela (ver `runPatientFileUpload`).
+              disabled={upload?.phase === "confirming"}
+            >
+              Cancelar subida
+            </Button>
+          ) : (
+            <Button type="submit" variant="primary" disabled={pending}>
+              Subir
+            </Button>
+          )}
         </form>
       </Card>
       )}
@@ -307,6 +421,41 @@ export function ArchivosView({
         </div>
         </div>
       </Card>
+    </div>
+  );
+}
+
+/** Barra de la subida. Sin total (camino stub) es indeterminada: sin `aria-valuenow`, como pide ARIA. */
+function UploadProgress({ state }: { state: UploadState }) {
+  const known = state.phase === "uploading" && state.total > 0;
+  const pct = known ? uploadProgressPercent(state.loaded, state.total) : state.phase === "confirming" ? 100 : 0;
+  const label =
+    state.phase === "requesting"
+      ? "Preparando la subida…"
+      : state.phase === "confirming"
+        ? "Verificando el archivo…"
+        : known
+          ? `Subiendo… ${pct}%`
+          : "Subiendo…";
+  return (
+    <div style={{ display: "grid", gap: 4 }}>
+      <div
+        role="progressbar"
+        aria-label="Progreso de la subida"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={known || state.phase === "confirming" ? pct : undefined}
+        aria-valuetext={label}
+        className={styles.progress}
+      >
+        <div
+          className={`${styles.progressFill} ${known || state.phase === "confirming" ? "" : styles.progressIndeterminate}`}
+          style={known || state.phase === "confirming" ? { width: `${pct}%` } : undefined}
+        />
+      </div>
+      <div aria-hidden="true" style={{ fontSize: 11, color: "var(--navy-500)" }}>
+        {label}
+      </div>
     </div>
   );
 }

@@ -29,3 +29,56 @@
     min-width: 44px;
   }
 }
+
+/*
+ * FC-4b · subida firmada. El input de archivo era `display:none` y quedaba fuera del orden de foco (con teclado no se
+ * podía elegir archivo): ahora es invisible pero enfocable y el foco se ve en la etiqueta que lo envuelve.
+ */
+.fileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+}
+label:has(> .fileInput:focus-visible) {
+  outline: 2px solid var(--sky-500);
+  outline-offset: 2px;
+}
+
+/* Barra de progreso del PUT a Storage. Sin animación con reduced motion: la indeterminada queda como franja fija. */
+.progress {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(31, 79, 190, 0.12);
+  overflow: hidden;
+  position: relative;
+}
+.progressFill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--sky-600);
+  transition: width 120ms linear;
+}
+.progressIndeterminate {
+  width: 35%;
+  animation: archivosIndeterminate 1.2s ease-in-out infinite;
+}
+@keyframes archivosIndeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .progressFill {
+    transition: none;
+  }
+  .progressIndeterminate {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
+}
