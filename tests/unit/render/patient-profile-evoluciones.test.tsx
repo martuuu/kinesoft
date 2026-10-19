@@ -382,12 +382,22 @@ describe("[EV2-Z] EvolucionesView: imprimir, mobile y deep link", () => {
   it("mobile: búsqueda a 16 px y botones del encabezado de 44 px", () => {
     const html = view({ initialPage: { items: [noteItem(note())], nextCursor: null } });
     expect(html).toMatch(/<input type="search" class="k-evo-search"/);
-    expect(html).toMatch(/<a class="k-btn k-btn-ghost k-evo-head-btn"[^>]*>Imprimir historia clínica</);
+    // T4-Z: las acciones de la HC usan `size="sm"` del design system (40 px; 44 en mobile por `.k-btn-sm`).
+    expect(html).toMatch(/<a class="k-btn k-btn-ghost k-btn-sm"[^>]*>Imprimir historia clínica</);
     expect(html).toMatch(/<button class="k-btn[^"]*k-evo-head-btn"[^>]*>[\s\S]*?Nueva ficha/);
     expect(html).toMatch(/@media \(max-width: 640px\)[\s\S]*\.k-evo-search \{ font-size: 16px !important; min-height: 44px; \}/);
     expect(html).toMatch(/\.k-evo-head-btn \{ min-height: 44px;/);
     // Sin búsqueda en curso, la lista no está ocupada.
     expect(html).not.toContain("aria-busy");
+  });
+
+  it("[T4-Z ZF3] < 640 la barra «Nueva ficha» es sticky sobre la barra inferior; ≥ 1024 tipo/turno/fecha en una fila; región de búsqueda siempre montada", () => {
+    const html = view({ initialPage: { items: [noteItem(note())], nextCursor: null } });
+    expect(html).toContain(
+      "@media (max-width: 639.98px) { .k-hc-composer-bar { position: sticky; bottom: calc(var(--k-bottom-nav-h, 0px) + 8px);"
+    );
+    expect(html).toContain("@media (min-width: 1024px) { .k-hc-composer-inline .k-ficha-meta { grid-template-columns: auto auto minmax(0, 1fr);");
+    expect(html).toContain('<div role="status" class="k-sr-only" data-testid="timeline-search-live"></div>');
   });
 
   it("M4: la nota del deep link se resalta con borde --sky-300 (sin editor abierto)", () => {

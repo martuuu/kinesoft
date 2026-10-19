@@ -24,6 +24,25 @@
   padding: 4px;
   border-bottom: 1px solid rgba(15, 30, 51, 0.1);
 }
+/*
+ * < 640 la barra no hace wrap (revisión b): en dos filas medía 82 px contra los 41 del skeleton estático
+ * (`hc-editor-field.module.css` .bar) y el swap textarea → editor bajaba el texto. Scroll horizontal sin barra visible:
+ * las flechas del roving tabindex igual recorren todo.
+ */
+@media (max-width: 639px) {
+  .toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .toolbar::-webkit-scrollbar {
+    display: none;
+  }
+  .toolbar > *,
+  .btn {
+    flex-shrink: 0;
+  }
+}
 .sep {
   width: 1px;
   align-self: stretch;

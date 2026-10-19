@@ -114,7 +114,7 @@ describe("[FC-3c] FichaForm", () => {
   });
 
   it("[FC-3c] campos: título, fecha (fieldset), editor, diagnósticos y «Guardar ficha» con el atajo", () => {
-    const html = form(create({ patientName: "Gómez, Juana" }));
+    const html = form(create({ patientName: "Gómez, Juana" }), { variant: "drawer" });
     expect(html).toContain("<strong>Paciente: Gómez, Juana</strong>");
     expect(html).toContain("Título (opcional)");
     expect(html).toMatch(/<fieldset[^>]*><legend[^>]*>Fecha y hora<\/legend>/);
@@ -155,6 +155,55 @@ describe("[FC-3c] FichaForm", () => {
 
   it("[FC-3c] inline sin cambios: no ofrece «Descartar»", () => {
     expect(form(create())).not.toContain(">Descartar<");
+  });
+});
+
+describe("[T4-Z ZF3] composer inline compacto (revisión b A1) y a11y del form", () => {
+  it("[T4-Z ZF3] inline: sin «Paciente:», editor de 4 filas, título y diagnósticos plegados detrás de «Agregar título y diagnósticos»", () => {
+    const html = form(create({ patientName: "Gómez, Juana" }));
+    expect(html).not.toContain("Paciente:");
+    expect(html).toMatch(/<textarea[^>]*rows="4"/);
+    expect(html).toContain("min-height:122px");
+    expect(html).toContain('data-testid="ficha-add-extras"');
+    expect(html).toContain("Agregar título y diagnósticos");
+    expect(html).not.toContain("Título (opcional)");
+    expect(html).not.toContain(">Diagnósticos</legend>");
+  });
+
+  it("[T4-Z ZF3] inline: tipo, turno y fecha juntos en `.k-ficha-meta` (una fila desde 1024 por CSS) y el editor después", () => {
+    const html = form(create());
+    const meta = html.indexOf('class="k-ficha-meta"');
+    expect(meta).toBeGreaterThan(-1);
+    expect(meta).toBeLessThan(html.indexOf('role="radiogroup"'));
+    expect(html.indexOf('role="radiogroup"')).toBeLessThan(html.indexOf('data-testid="ficha-booking-chip"'));
+    expect(html.indexOf('data-testid="ficha-booking-chip"')).toBeLessThan(html.indexOf(">Fecha y hora</legend>"));
+    expect(html.indexOf(">Fecha y hora</legend>")).toBeLessThan(html.indexOf("<textarea"));
+  });
+
+  it("[T4-Z ZF3] Drawer, editar y enmendar: título y diagnósticos a la vista, sin pliegue", () => {
+    for (const html of [form(create(), { variant: "drawer" }), form({ type: "edit", note: note() }), form({ type: "amend", note: note() })]) {
+      expect(html).not.toContain("ficha-add-extras");
+      expect(html).toContain("Título (opcional)");
+      expect(html).toContain(">Diagnósticos</legend>");
+    }
+  });
+
+  it("[T4-Z ZF3] «Turno» es un group con nombre; los tipos no elegidos a opacidad 0,75", () => {
+    const html = form(create());
+    expect(html).toMatch(/<div role="group" aria-labelledby="([^"]+)-booking-label"[^>]*><span id="\1-booking-label"[^>]*>Turno<\/span>/);
+    expect(html).toContain("opacity:0.75");
+    expect(html).not.toContain("opacity:0.6");
+  });
+
+  it("[T4-Z ZF3] Drawer: el pie con «Guardar ficha» es sticky y marca `data-drawer-footer`", () => {
+    const html = form(create(), { variant: "drawer" });
+    expect(html).toMatch(/<div data-drawer-footer=""[^>]*position:sticky[^>]*>[\s\S]*Guardar ficha/);
+    expect(form(create())).not.toContain("data-drawer-footer");
+  });
+
+  it("[T4-Z ZF3] enmendar: «Enmienda a la ficha del … de …» por `amendOf`", () => {
+    const html = form({ type: "amend", note: note() }, { variant: "drawer" });
+    expect(html).toMatch(/Enmienda a la ficha del [^<]+ de [^<]+\. La enmienda se agrega debajo/);
   });
 });
 

@@ -44,10 +44,16 @@ export function HcToolbar({
   editor,
   toolbarRef,
   onPlainMode,
+  disabled = false,
 }: {
   editor: Editor;
   toolbarRef: RefObject<HTMLDivElement>;
   onPlainMode: () => void;
+  /**
+   * Guardando: la barra queda inerte (el editor ya no es editable y un «Negrita» a mitad del guardado cambiaría un doc
+   * que ya viajó). `aria-disabled` y no `disabled`, como «Deshacer»: siguen en el recorrido de flechas (APG).
+   */
+  disabled?: boolean;
 }) {
   const [active, setActive] = useState(0);
   const [status, setStatus] = useState("");
@@ -72,8 +78,8 @@ export function HcToolbar({
       { key: "underline", label: HC_EDITOR_COPY.underline, glyph: "U", shortcut: "Control+U Meta+U", pressed: s.underline, run: () => chain().toggleUnderline().run() },
     ],
     [
-      { key: "h2", label: HC_EDITOR_COPY.heading, glyph: "T", pressed: s.h2, run: () => chain().toggleHeading({ level: 2 }).run() },
-      { key: "h3", label: HC_EDITOR_COPY.subheading, glyph: "t", pressed: s.h3, run: () => chain().toggleHeading({ level: 3 }).run() },
+      { key: "h2", label: HC_EDITOR_COPY.heading, glyph: "H2", pressed: s.h2, run: () => chain().toggleHeading({ level: 2 }).run() },
+      { key: "h3", label: HC_EDITOR_COPY.subheading, glyph: "H3", pressed: s.h3, run: () => chain().toggleHeading({ level: 3 }).run() },
       { key: "ul", label: HC_EDITOR_COPY.bulletList, glyph: "•", pressed: s.bullet, run: () => chain().toggleBulletList().run() },
       { key: "ol", label: HC_EDITOR_COPY.orderedList, glyph: "1.", pressed: s.ordered, run: () => chain().toggleOrderedList().run() },
     ],
@@ -130,16 +136,16 @@ export function HcToolbar({
                 aria-label={it.text ? undefined : it.label}
                 title={it.text ? undefined : it.label}
                 aria-pressed={it.pressed === undefined ? undefined : it.pressed}
-                aria-disabled={it.disabled ? true : undefined}
+                aria-disabled={it.disabled || disabled ? true : undefined}
                 aria-keyshortcuts={it.shortcut}
                 data-hc-tool={it.key}
                 onMouseDown={(e) => e.preventDefault()}
                 onFocus={() => setActive(idx)}
                 onClick={() => {
-                  if (it.disabled) return;
+                  if (it.disabled || disabled) return;
                   it.run();
                 }}
-                style={it.key === "bold" ? { fontWeight: 700 } : it.key === "italic" ? { fontStyle: "italic" } : it.key === "underline" ? { textDecoration: "underline" } : it.key === "h3" ? { fontWeight: 700, fontSize: 11 } : it.key === "h2" ? { fontWeight: 700 } : undefined}
+                style={it.key === "bold" ? { fontWeight: 700 } : it.key === "italic" ? { fontStyle: "italic" } : it.key === "underline" ? { textDecoration: "underline" } : it.key === "h2" || it.key === "h3" ? { fontWeight: 700, fontSize: 12 } : undefined}
               >
                 {it.glyph}
               </button>

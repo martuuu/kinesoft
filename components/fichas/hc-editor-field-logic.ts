@@ -69,3 +69,72 @@ export function shouldPreloadOnIdle(matchMedia: MatchMedia | undefined): boolean
     return false;
   }
 }
+
+// ─── Alto y autogrow (T4-Z ZF3, revisión b A1) ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Alto de una línea del campo: 16 px × `line-height` 1,5 (`.k-input` y `.content` del editor). Antes el alto mínimo era
+ * `rows × 22`, que con el padding de 12+12 dejaba ver 2,6 líneas con `rows=4`: el alto ahora sale de las líneas reales.
+ */
+export const HC_EDITOR_LINE_PX = 24;
+/** Padding vertical (12 + 12) + borde (1 + 1) del textarea (`textarea.k-input`, `box-sizing: border-box`). */
+export const HC_EDITOR_CHROME_PX = 26;
+/**
+ * Hasta cuántas líneas crece el campo compacto (composer inline, `rows` < 10). A 1024×768 y 1366×768 el composer con
+ * el editor de 10 filas medía ~800 px y tapaba la primera tarjeta de la HC (revisión b A1): arranca en 4 y crece con
+ * lo que se escribe hasta 10; de ahí en más, scroll adentro del campo.
+ */
+export const HC_EDITOR_GROW_MAX_ROWS = 10;
+
+export function editorHeightPx(rows: number): number {
+  return rows * HC_EDITOR_LINE_PX + HC_EDITOR_CHROME_PX;
+}
+
+/** Tope del autogrow, o null si el campo ya arranca con el alto completo (Drawer: no crece ni se recorta). */
+export function editorGrowMaxPx(rows: number): number | null {
+  return rows < HC_EDITOR_GROW_MAX_ROWS ? editorHeightPx(HC_EDITOR_GROW_MAX_ROWS) : null;
+}
+
+/**
+ * Alto del textarea compacto para su contenido. `scrollHeight` incluye el padding pero no el borde (+2). Nunca baja del
+ * mínimo de `rows` ni pasa el tope (`overflow` = si hace falta scroll adentro).
+ */
+export function textareaGrowHeight(scrollHeight: number, rows: number): { height: number; overflow: boolean } {
+  const min = editorHeightPx(rows);
+  const max = editorGrowMaxPx(rows) ?? min;
+  const want = scrollHeight + 2;
+  return { height: Math.min(Math.max(want, min), max), overflow: want > max };
+}
+
+// ─── Contador (T4-Z ZF3, revisión b «Composer (baja)») ──────────────────────────────────────────────────────────────
+
+/** Desde cuántos caracteres restantes el contador habla y se anuncia (antes del tope de 20.000 no molesta). */
+export const HC_COUNTER_WARN_LEFT = 500;
+/**
+ * Escalones en los que el lector de pantalla escucha cuánto queda. Anunciar en cada tecla taparía lo que se dicta o se
+ * lee; con escalones se avisa al entrar a los 500, y otra vez a los 250, 100, 50 y al llegar al tope.
+ */
+const COUNTER_STEPS = [0, 50, 100, 250, 500] as const;
+
+export type CounterBucket = number | "over" | null;
+
+export function counterBucket(len: number, max: number): CounterBucket {
+  if (len > max) return "over";
+  const left = max - len;
+  if (left > HC_COUNTER_WARN_LEFT) return null;
+  return COUNTER_STEPS.find((s) => left <= s) ?? HC_COUNTER_WARN_LEFT;
+}
+
+export type CounterCopy = {
+  counter: (n: number, max: number) => string;
+  charsLeft: (n: number) => string;
+  overBy: (n: number) => string;
+};
+
+/** Lo que muestra el contador: «n / max» lejos del tope, «Te quedan …» desde 500 y «Te pasaste por …» arriba. */
+export function counterText(len: number, max: number, copy: CounterCopy): { text: string; tone: "muted" | "warn" | "danger" } {
+  if (len > max) return { text: copy.overBy(len - max), tone: "danger" };
+  const left = max - len;
+  if (left <= HC_COUNTER_WARN_LEFT) return { text: copy.charsLeft(left), tone: "warn" };
+  return { text: copy.counter(len, max), tone: "muted" };
+}

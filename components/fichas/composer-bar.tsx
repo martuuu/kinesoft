@@ -12,6 +12,7 @@
  * El turno que se muestra es el mismo default que va a elegir el formulario (`pickDefaultComposerBooking`, FC-3c);
  * mientras esa función no exista (tira) o no haya turno hoy, la barra solo dice «Nueva ficha».
  */
+import { useId } from "react";
 import { Button } from "@/components/ui/button";
 import { IconPlus } from "@/components/ui/icons";
 import { HC_HOME_COPY } from "@/components/fichas/fichas-copy";
@@ -63,6 +64,8 @@ export function ComposerBar({
 }: ComposerBarProps) {
   const booking = composerBarBooking({ candidates, fixedBooking, viewerPractitionerId, now: now ?? new Date() });
   const label = bookingLabel(booking);
+  const hintId = useId();
+  const hint = dirty ? HC_HOME_COPY.draftDot : label;
   return (
     <div
       className={className}
@@ -86,13 +89,15 @@ export function ComposerBar({
         onTouchStart={onPreload}
         onFocus={onPreload}
         aria-haspopup="dialog"
+        // El turno (o «borrador sin guardar») es parte de lo que hace el botón: que el lector lo diga al enfocarlo.
+        aria-describedby={hint ? hintId : undefined}
         style={{ fontSize: 13, padding: "8px 14px", flexShrink: 0 }}
       >
         <IconPlus size={14} /> {HC_HOME_COPY.composerBar}
       </Button>
-      {(label || dirty) && (
-        <span style={{ fontSize: 12, color: "var(--navy-500)", minWidth: 0, overflowWrap: "anywhere" }}>
-          {dirty ? HC_HOME_COPY.draftDot : label}
+      {hint && (
+        <span id={hintId} style={{ fontSize: 12, color: "var(--navy-500)", minWidth: 0, overflowWrap: "anywhere" }}>
+          {hint}
         </span>
       )}
     </div>

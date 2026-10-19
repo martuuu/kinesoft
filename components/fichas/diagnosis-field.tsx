@@ -29,6 +29,9 @@ import { DIAGNOSIS_FIELD_COPY as COPY } from "@/components/fichas/fichas-copy";
 import type { DiagnosisFieldProps } from "@/components/fichas/fichas-ui-types";
 import { addDiagnosis, applyFavorite, diagnosisOptionKey, makePrincipal, removeDiagnosis } from "@/components/fichas/diagnosis-field-logic";
 
+/** handoff ZF4: `DIAGNOSIS_FIELD_COPY.favorite` («Favorito»). El integrador saca el fallback. */
+const FAVORITE_LABEL = (COPY as typeof COPY & { favorite?: string }).favorite ?? "Favorito";
+
 /** Diferido (§24.9): sin SSR y sin fallback propio (el input estático hace de fallback hasta `onReady`). */
 const DiagnosisPicker = dynamic(() => import("@/components/fichas/diagnosis-picker").then((m) => m.DiagnosisPicker), {
   ssr: false,
@@ -45,6 +48,25 @@ export function DiagnosisField({ id, value, onChange, disabled, error, label = C
   const [home, setHome] = useState<DiagnosisPickerHome | null | undefined>(pickerHome);
   const [overrides, setOverrides] = useState<ReadonlyMap<string, boolean>>(() => new Map());
   const full = value.length >= DIAGNOSES_MAX;
+  // Después de «Quitar» / «Hacer principal» el botón tocado se desmonta o se mueve y el foco caía al <body>: se lleva
+  // al chip que quedó en el mismo lugar (mismo botón si lo tiene) o, si no queda ninguno, al input.
+  const pendingFocus = useRef<{ index: number; action: "remove" | "principal" } | null>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  useEffect(() => {
+    const p = pendingFocus.current;
+    if (!p) return;
+    pendingFocus.current = null;
+    const li = listRef.current?.children[Math.min(p.index, value.length - 1)] as HTMLElement | undefined;
+    const target =
+      li?.querySelector<HTMLElement>(`[data-chip-action="${p.action}"]`) ??
+      li?.querySelector<HTMLElement>("button") ??
+      (document.getElementById(id) as HTMLElement | null);
+    target?.focus();
+  }, [value, id]);
+  const changeChips = (next: DiagnosisOption[], index: number, action: "remove" | "principal") => {
+    pendingFocus.current = { index, action };
+    onChange(next);
+  };
 
   useEffect(() => {
     if (pickerHome !== undefined) setHome(pickerHome);
@@ -118,7 +140,7 @@ export function DiagnosisField({ id, value, onChange, disabled, error, label = C
     <fieldset style={{ border: 0, margin: 0, padding: 0, minWidth: 0, display: "grid", gap: 8 }}>
       <legend style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)", padding: 0 }}>{label}</legend>
       {value.length > 0 && (
-        <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 6 }} data-testid="diagnosis-chips">
+        <ul ref={listRef} style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 6 }} data-testid="diagnosis-chips">
           {value.map((o, i) => {
             const fav = isFavorite(o);
             // Sin ★ en texto libre (no hay a qué apuntar) ni para PRENDER un retirado (el server lo rechaza);
@@ -137,8 +159,10 @@ export function DiagnosisField({ id, value, onChange, disabled, error, label = C
                     type="button"
                     variant="ghost"
                     size="sm"
+                    // Nombre fijo + aria-pressed (patrón de botón conmutable): si el nombre también cambiara, el lector
+                    // diría «Sacar de favoritos, presionado», que se contradice.
                     aria-pressed={fav}
-                    aria-label={`${fav ? COPY.favoriteOff : COPY.favoriteOn}: ${o.title}`}
+                    aria-label={`${FAVORITE_LABEL}: ${o.title}`}
                     title={fav ? COPY.favoriteOff : COPY.favoriteOn}
                     onClick={() => void toggleFavorite(o)}
                     disabled={disabled}
@@ -147,11 +171,27 @@ export function DiagnosisField({ id, value, onChange, disabled, error, label = C
                   </Button>
                 )}
                 {i > 0 && (
-                  <Button type="button" variant="ghost" size="sm" onClick={() => onChange(makePrincipal(value, i))} disabled={disabled}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    data-chip-action="principal"
+                    aria-label={`${COPY.makePrincipal}: ${o.title}`}
+                    onClick={() => changeChips(makePrincipal(value, i), i, "principal")}
+                    disabled={disabled}
+                  >
                     {COPY.makePrincipal}
                   </Button>
                 )}
-                <Button type="button" variant="ghost" size="sm" onClick={() => onChange(removeDiagnosis(value, i))} disabled={disabled}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  data-chip-action="remove"
+                  aria-label={`${COPY.remove}: ${o.title}`}
+                  onClick={() => changeChips(removeDiagnosis(value, i), i, "remove")}
+                  disabled={disabled}
+                >
                   {COPY.remove}
                 </Button>
               </li>
@@ -159,8 +199,12 @@ export function DiagnosisField({ id, value, onChange, disabled, error, label = C
           })}
         </ul>
       )}
+      {/* Región siempre montada: una que aparece ya con texto no la anuncian todos los lectores. */}
+      <span role="status" className="k-sr-only">
+        {full ? COPY.max : ""}
+      </span>
       {full ? (
-        <span role="status" style={{ fontSize: 12, color: "var(--navy-500)" }}>
+        <span aria-hidden="true" style={{ fontSize: 12, color: "var(--navy-500)" }}>
           {COPY.max}
         </span>
       ) : (

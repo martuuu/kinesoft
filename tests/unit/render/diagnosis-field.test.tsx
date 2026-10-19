@@ -20,7 +20,7 @@ vi.mock("@/lib/diagnoses", () => ({
 
 import { renderToStaticMarkup } from "react-dom/server";
 import { DiagnosisField } from "@/components/fichas/diagnosis-field";
-import { DiagnosisPicker, type DiagnosisPickerProps } from "@/components/fichas/diagnosis-picker";
+import { DiagnosisPicker, pickerRowStyle, type DiagnosisPickerProps } from "@/components/fichas/diagnosis-picker";
 import { DIAGNOSIS_FIELD_COPY as COPY } from "@/components/fichas/fichas-copy";
 import { DIAGNOSIS_COPY, ICD11_SHORT_ATTRIBUTION, type DiagnosisOption, type DiagnosisSearchResult } from "@/lib/diagnoses-types";
 
@@ -68,8 +68,20 @@ describe("[FC-3b] DiagnosisField (estático)", () => {
     expect(html.match(new RegExp(`>${COPY.remove}<`, "g"))).toHaveLength(3);
     // ★ en CIE-11 (apagada) y en el propio (prendida); el texto libre no tiene.
     expect(html.match(/aria-pressed="(true|false)"/g)).toEqual(['aria-pressed="false"', 'aria-pressed="true"']);
-    expect(html).toContain(esc(`${COPY.favoriteOff}: Lumbalgia mecánica`));
-    expect(html).not.toContain(esc(`${COPY.favoriteOn}: Dolor lumbar`));
+    // [T4-Z ZF3] nombre fijo «Favorito: …» + aria-pressed (antes el nombre cambiaba y contradecía el estado).
+    expect(html).toContain(esc("Favorito: Lumbalgia mecánica"));
+    expect(html).not.toContain(esc("Favorito: Dolor lumbar"));
+    // [T4-Z ZF3] «Quitar» y «Hacer principal» dicen de qué chip son.
+    expect(html).toContain(esc(`${COPY.remove}: Lumbalgia mecánica`));
+    expect(html).toContain(esc(`${COPY.makePrincipal}: Dolor lumbar`));
+  });
+
+  it("[T4-Z ZF3] el tope de 5 se anuncia por una región `status` siempre montada", () => {
+    const empty = renderToStaticMarkup(<DiagnosisField id="dx" value={[]} onChange={noop} />);
+    expect(empty).toContain('<span role="status" class="k-sr-only"></span>');
+    const five = [ICD, opt("tenant", "a", "A1"), opt("tenant", "b", "B1"), opt("kine", "c", "C1"), text("D1")];
+    const html = renderToStaticMarkup(<DiagnosisField id="dx" value={five} onChange={noop} />);
+    expect(html).toContain(`<span role="status" class="k-sr-only">${COPY.max}</span>`);
   });
 
   it("[FC-3b] tope 5: con 5 cargados no hay buscador y se dice el máximo", () => {
@@ -151,6 +163,17 @@ describe("[FC-3b] DiagnosisPicker (diferido)", () => {
     expect(html).toContain('id="dxp-opt-0" role="option"');
     // Los títulos de grupo son de presentación: el lector no los cuenta como opciones.
     expect(html).toMatch(/role="group" aria-labelledby="dxp-grp-favorites"/);
+  });
+
+  it("[T4-Z ZF3] opción activa con fondo --sky-100 y filete; región de estado siempre montada; ★ fuera del árbol accesible", () => {
+    const html = picker();
+    expect(pickerRowStyle(true)).toMatchObject({ background: "var(--sky-100)", boxShadow: "inset 2px 0 0 var(--sky-700)" });
+    expect(pickerRowStyle(false)).toMatchObject({ background: "transparent", boxShadow: undefined });
+    expect(html).toMatch(/id="dxp-opt-0" role="option" aria-selected="false" class="k-dxp-row"[^>]*background:transparent"/);
+    expect(html).toContain('role="status" class="k-sr-only" data-testid="diagnosis-picker-live"');
+    expect(html).toMatch(/<button[^>]*class="k-dxp-star"[^>]*aria-hidden="true"[^>]*aria-label="Favorito: Lumbago"/);
+    expect(html).toContain("@media (pointer: coarse) { .k-dxp-row { min-height: 44px;");
+    expect(html).toMatch(/data-testid="icd-attribution" style="[^"]*color:var\(--navy-500\)/);
   });
 
   it("[FC-3b] orden de grupos en pantalla: Favoritos · Recientes · Del consultorio · Kinesiología · CIE-11 · pie", () => {

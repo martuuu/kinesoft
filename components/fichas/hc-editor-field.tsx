@@ -23,7 +23,19 @@ import { HC_DOC_MAX_CHARS, hcDocToPlainText, plainOffsetToDocPos, plainTextToHcD
 import { HC_EDITOR_COPY } from "@/components/fichas/fichas-copy";
 import type { HcEditorChange, HcEditorFieldProps } from "@/components/fichas/fichas-ui-types";
 import type { HcEditorApi } from "@/components/hc/editor/hc-editor";
-import { docForText, handoffCursor, shouldPreloadOnIdle, swapDecision } from "@/components/fichas/hc-editor-field-logic";
+import {
+  counterBucket,
+  counterText,
+  docForText,
+  editorGrowMaxPx,
+  editorHeightPx,
+  handoffCursor,
+  shouldPreloadOnIdle,
+  swapDecision,
+  textareaGrowHeight,
+  type CounterBucket,
+  type CounterCopy,
+} from "@/components/fichas/hc-editor-field-logic";
 import styles from "./hc-editor-field.module.css";
 
 /** Un solo specifier para la precarga y para `next/dynamic`: webpack arma UN chunk y la segunda carga es instantánea. */
@@ -35,6 +47,16 @@ const HcEditor = dynamic(() => loadEditorModule().then((m) => m.HcEditor), { ssr
  * de trabajo y el guard de FC-3c no quiere nada de la HC en el almacenamiento del navegador.
  */
 let plainPreferred = false;
+
+// handoff ZF4: `HC_EDITOR_COPY.overBy` («Te pasaste por {n} caracteres»). El integrador saca el fallback.
+const COUNTER_COPY: CounterCopy = {
+  counter: HC_EDITOR_COPY.counter,
+  charsLeft: HC_EDITOR_COPY.charsLeft,
+  overBy:
+    (HC_EDITOR_COPY as typeof HC_EDITOR_COPY & { overBy?: (n: number) => string }).overBy ??
+    ((n: number) => `Te pasaste por ${n.toLocaleString("es-AR")} ${n === 1 ? "carácter" : "caracteres"}`),
+};
+const COUNTER_COLOR = { muted: "var(--navy-400)", warn: "var(--navy-700)", danger: "var(--danger-fg)" } as const;
 
 // useLayoutEffect avisa en el SSR; el contador solo se pinta en el cliente.
 const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
@@ -61,6 +83,8 @@ export function HcEditorField({
   const errorId = useId();
   const hintId = useId();
   const counterRef = useRef<HTMLSpanElement>(null);
+  const announceRef = useRef<HTMLSpanElement>(null);
+  const bucketRef = useRef<CounterBucket>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const initialPlain = initialDoc ? hcDocToPlainText(initialDoc) : (initialText ?? "");
 
@@ -86,16 +110,38 @@ export function HcEditorField({
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
+  const minHeight = editorHeightPx(rows);
+  const growMax = editorGrowMaxPx(rows);
+
   // El contador se escribe directo en el DOM: re-renderizar el campo en cada tecla solo por el número obligaría a
-  // volverlo controlado.
+  // volverlo controlado. El anuncio va aparte (región `status` siempre montada) y solo cuando cambia de escalón: si
+  // hablara en cada tecla taparía lo que el lector está leyendo.
   const paintCounter = useCallback(
     (len: number) => {
       const el = counterRef.current;
       if (!el) return;
-      el.textContent = HC_EDITOR_COPY.counter(len, maxChars);
-      el.style.color = len > maxChars ? "var(--danger-fg)" : "var(--navy-400)";
+      const c = counterText(len, maxChars, COUNTER_COPY);
+      el.textContent = c.text;
+      el.style.color = COUNTER_COLOR[c.tone];
+      const bucket = counterBucket(len, maxChars);
+      if (bucket !== bucketRef.current) {
+        bucketRef.current = bucket;
+        if (announceRef.current) announceRef.current.textContent = bucket === null ? "" : c.text;
+      }
     },
     [maxChars],
+  );
+
+  /** Composer compacto (`rows` < 10): el textarea crece con el texto hasta 10 líneas (revisión b A1). */
+  const fitTextarea = useCallback(
+    (ta: HTMLTextAreaElement | null) => {
+      if (!ta || growMax == null) return;
+      ta.style.height = "auto";
+      const g = textareaGrowHeight(ta.scrollHeight, rows);
+      ta.style.height = `${g.height}px`;
+      ta.style.overflowY = g.overflow ? "auto" : "hidden";
+    },
+    [growMax, rows],
   );
 
   const requestEditor = useCallback(() => {
@@ -162,6 +208,7 @@ export function HcEditorField({
   const resetSeen = useRef(resetKey);
   useIsoLayoutEffect(() => {
     paintCounter(initialPlain.length);
+    fitTextarea(textareaRef.current);
     if (resetSeen.current === resetKey) return;
     // resetKey nuevo (guardó o restauró un borrador): el valor inicial vuelve a mandar en los dos modos.
     resetSeen.current = resetKey;
@@ -175,6 +222,12 @@ export function HcEditorField({
     // Lo demás de las props se lee recién con el próximo resetKey (campo NO controlado).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey]);
+
+  // El textarea se re-monta con la key (reset, volver de «Sin formato»): el alto del autogrow se recalcula con el valor nuevo.
+  const textareaKeyNow = `${resetKey ?? "hc-editor"}:${seed?.key ?? 0}`;
+  useIsoLayoutEffect(() => {
+    if (mode === "textarea") fitTextarea(textareaRef.current);
+  }, [textareaKeyNow, mode, fitTextarea]);
 
   const onEditorReady = useCallback(
     (api: HcEditorApi) => {
@@ -214,9 +267,10 @@ export function HcEditorField({
     else requestEditor();
   }, [trySwap, requestEditor]);
 
+  const initialCounter = counterText(initialPlain.length, maxChars, COUNTER_COPY);
   const describedBy = [counterId, error ? errorId : null].filter(Boolean).join(" ");
   const textareaValue = seed?.value ?? initialPlain;
-  const textareaKey = `${resetKey ?? "hc-editor"}:${seed?.key ?? 0}`;
+  const textareaKey = textareaKeyNow;
 
   return (
     <div style={{ display: "grid", gap: 4 }}>
@@ -274,6 +328,7 @@ export function HcEditorField({
               const text = e.currentTarget.value;
               lastInputAtRef.current = Date.now();
               paintCounter(text.length);
+              fitTextarea(e.currentTarget);
               onChange({ doc: plainTextToHcDoc(text), text, rich: false });
               if (apiRef.current) trySwap();
             }}
@@ -286,7 +341,7 @@ export function HcEditorField({
             className="k-input"
             style={{
               width: "100%",
-              minHeight: rows * 22,
+              minHeight,
               resize: "vertical",
               lineHeight: 1.5,
               borderColor: error ? "var(--danger-border)" : undefined,
@@ -304,7 +359,9 @@ export function HcEditorField({
           disabled={disabled}
           invalid={!!error}
           hidden={mode !== "rich"}
-          minHeight={rows * 22}
+          // −2: el borde del editor lo pone su wrap, el del textarea va adentro de su alto (sin salto en el swap).
+          minHeight={minHeight - 2}
+          maxHeight={growMax == null ? undefined : growMax - 2}
           onReady={onEditorReady}
           onChange={onRichChange}
           onSubmitShortcut={onSubmitShortcut}
@@ -317,10 +374,11 @@ export function HcEditorField({
         id={counterId}
         data-testid="hc-editor-counter"
         aria-live="off"
-        style={{ textAlign: "right", fontSize: 11, fontVariantNumeric: "tabular-nums", color: "var(--navy-400)" }}
+        style={{ textAlign: "right", fontSize: 11, fontVariantNumeric: "tabular-nums", color: COUNTER_COLOR[initialCounter.tone] }}
       >
-        {HC_EDITOR_COPY.counter(initialPlain.length, maxChars)}
+        {initialCounter.text}
       </span>
+      <span ref={announceRef} role="status" className="k-sr-only" data-testid="hc-editor-counter-live" />
       {error && (
         <span id={errorId} role="alert" style={{ fontSize: 12, color: "var(--danger-fg)" }}>
           {error}

@@ -226,6 +226,10 @@ export function deepLinkOutcome(
 }
 
 /**
+ * Revisión b (T4-Z): abajo de 640 la barra «Nueva ficha» queda pegada arriba de la barra inferior (`position: sticky`)
+ * porque a 390 caía abajo del pliegue, debajo del hero y del buscador. Desde 1024 el composer inline pone tipo, turno
+ * y fecha en una fila (`.k-ficha-meta` de FichaForm, A1: el composer apilado tapaba la primera tarjeta a 1024×768).
+ *
  * Mobile: búsqueda a 16 px (con menos, iOS Safari hace zoom al enfocar) y botones del encabezado de 44 px (tamaño
  * táctil). Es CSS local porque son media queries y el resto de la vista va con estilos inline.
  */
@@ -236,6 +240,8 @@ const EVOLUCIONES_CSS = `
 }
 @media (max-width: 639.98px) { .k-hc-composer-inline { display: none !important; } }
 @media (min-width: 640px) { .k-hc-composer-bar { display: none !important; } }
+@media (max-width: 639.98px) { .k-hc-composer-bar { position: sticky; bottom: calc(var(--k-bottom-nav-h, 0px) + 8px); z-index: 5; box-shadow: 0 8px 24px rgba(15,30,51,0.12); } }
+@media (min-width: 1024px) { .k-hc-composer-inline .k-ficha-meta { grid-template-columns: auto auto minmax(0, 1fr); column-gap: 20px; align-items: start; } }
 `;
 
 /**
@@ -639,6 +645,11 @@ export function EvolucionesView({
         />
       )}
 
+      {/* Búsqueda sin resultados: región siempre montada (la tarjeta vacía aparece ya con el texto y no se anunciaba). */}
+      <div role="status" className="k-sr-only" data-testid="timeline-search-live">
+        {status === "ready" && items.length === 0 && activeQuery ? EVOLUCIONES_VIEW_COPY.emptySearch(activeQuery) : ""}
+      </div>
+
       {status === "loading" && (
         <div role="status" aria-busy="true" style={{ fontSize: 13, color: "var(--navy-500)", padding: 12 }}>
           {EVOLUCIONES_VIEW_COPY.loading}
@@ -649,8 +660,10 @@ export function EvolucionesView({
       )}
       {status === "error" && (
         <Card style={{ padding: 16, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 13, color: "var(--danger-fg)" }}>{EVOLUCIONES_VIEW_COPY.loadFailed}</span>
-          <Button type="button" variant="ghost" onClick={() => void loadFirst(activeQuery)}>
+          <span role="alert" style={{ fontSize: 13, color: "var(--danger-fg)" }}>
+            {EVOLUCIONES_VIEW_COPY.loadFailed}
+          </span>
+          <Button type="button" variant="ghost" size="sm" className="k-evo-head-btn" onClick={() => void loadFirst(activeQuery)}>
             {EVOLUCIONES_VIEW_COPY.retry}
           </Button>
         </Card>
@@ -704,10 +717,14 @@ export function EvolucionesView({
 
       {status === "ready" && nextCursor && (
         <div style={{ display: "flex", justifyContent: "center", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <Button type="button" variant="ghost" onClick={loadMore} disabled={loadingMore} style={{ fontSize: 12 }}>
+          <Button type="button" variant="ghost" size="sm" className="k-evo-head-btn" onClick={loadMore} disabled={loadingMore}>
             {loadingMore ? EVOLUCIONES_VIEW_COPY.loadingMore : EVOLUCIONES_VIEW_COPY.loadMore}
           </Button>
-          {moreError && <span style={{ fontSize: 12, color: "var(--danger-fg)" }}>{EVOLUCIONES_VIEW_COPY.loadFailed}</span>}
+          {moreError && (
+            <span role="alert" style={{ fontSize: 12, color: "var(--danger-fg)" }}>
+              {EVOLUCIONES_VIEW_COPY.loadFailed}
+            </span>
+          )}
         </div>
       )}
 

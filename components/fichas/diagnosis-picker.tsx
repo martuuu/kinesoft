@@ -45,6 +45,15 @@ import {
 } from "@/components/fichas/diagnosis-picker-logic";
 import { parseDiagnosisQuery } from "@/lib/diagnoses-logic";
 
+/** handoff ZF4: `DIAGNOSIS_FIELD_COPY.favorite` («Favorito»). El integrador saca el fallback. */
+const FAVORITE_LABEL = (COPY as typeof COPY & { favorite?: string }).favorite ?? "Favorito";
+
+/**
+ * Targets táctiles (revisión b): con `pointer: coarse` las filas y la ★ van a 44 px. Es un `<style>` y no un CSS
+ * module porque el picker es un chunk diferido sin CSS propio: un archivo de estilos sumaría otro pedido al abrirlo.
+ */
+const PICKER_CSS = `@media (pointer: coarse) { .k-dxp-row { min-height: 44px; align-items: center !important; } .k-dxp-star { min-width: 44px; min-height: 44px; } }`;
+
 /** Espera entre teclas antes de pedirle al server (mismo valor que `PatientPicker`). */
 const SEARCH_DEBOUNCE_MS = 200;
 
@@ -71,6 +80,23 @@ export type DiagnosisPickerProps = {
   initialOpen?: boolean;
   initialResult?: DiagnosisSearchResult | null;
 };
+
+/** Estilo de una fila del listbox (exportado para el test: la activa no se puede fijar en un render estático). */
+export function pickerRowStyle(isActive: boolean): CSSProperties {
+  return {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: 8,
+    padding: "8px 10px",
+    borderRadius: 8,
+    cursor: "pointer",
+    fontSize: 13,
+    color: "var(--navy-900)",
+    // Activa con fondo y filete (antes un gris al 6 %, que no se distinguía): el foco real sigue en el input.
+    background: isActive ? "var(--sky-100)" : "transparent",
+    boxShadow: isActive ? "inset 2px 0 0 var(--sky-700)" : undefined,
+  };
+}
 
 export function DiagnosisPicker({
   id,
@@ -224,17 +250,7 @@ export function DiagnosisPicker({
   const renderItem = (item: PickerItem) => {
     const i = ++idx;
     const isActive = i === active;
-    const base: CSSProperties = {
-      display: "flex",
-      alignItems: "flex-start",
-      gap: 8,
-      padding: "8px 10px",
-      borderRadius: 8,
-      cursor: "pointer",
-      fontSize: 13,
-      color: "var(--navy-900)",
-      background: isActive ? "rgba(15,30,51,0.06)" : "transparent",
-    };
+    const base = pickerRowStyle(isActive);
     const common = {
       id: optionId(i),
       role: "option" as const,
@@ -248,7 +264,7 @@ export function DiagnosisPicker({
     if (item.type !== "option") {
       const label = item.type === "create" ? COPY.createOwn(item.text) : COPY.asFreeText(item.text);
       return (
-        <div key={item.key} {...common} aria-disabled={item.type === "create" && creating ? true : undefined} data-picker-action={item.type} style={{ ...base, fontWeight: 600, color: "var(--sky-700)" }}>
+        <div key={item.key} {...common} className="k-dxp-row" aria-disabled={item.type === "create" && creating ? true : undefined} data-picker-action={item.type} style={{ ...base, fontWeight: 600, color: "var(--sky-700)" }}>
           <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>{item.type === "create" && creating ? COPY.creating : label}</span>
         </div>
       );
@@ -256,7 +272,7 @@ export function DiagnosisPicker({
     const o = item.option;
     const retired = item.action === "unfavorite";
     return (
-      <div key={item.key} {...common} data-option-key={item.key} style={base}>
+      <div key={item.key} {...common} className="k-dxp-row" data-option-key={item.key} style={base}>
         <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere", lineHeight: 1.35, color: retired ? "var(--navy-500)" : undefined }}>
           {o.code ? <strong className="k-mono" style={{ marginRight: 6 }}>{o.code}</strong> : null}
           {o.title}
@@ -270,7 +286,12 @@ export function DiagnosisPicker({
           <button
             type="button"
             tabIndex={-1}
-            aria-label={o.favorite ? COPY.favoriteOff : COPY.favoriteOn}
+            className="k-dxp-star"
+            // Fuera del árbol accesible: un botón adentro de una opción la vuelve «opción con hijos interactivos» y
+            // el lector la lee rara; con teclado la ★ está en el chip. Nombre fijo + aria-pressed igual, por si un
+            // lector ignora el aria-hidden.
+            aria-hidden="true"
+            aria-label={`${FAVORITE_LABEL}: ${o.title}`}
             aria-pressed={o.favorite}
             title={o.favorite ? COPY.favoriteOff : COPY.favoriteOn}
             onMouseDown={(e) => {
@@ -290,6 +311,11 @@ export function DiagnosisPicker({
 
   return (
     <div ref={wrapRef} style={{ position: "relative", display: "grid", gap: 6 }}>
+      <style dangerouslySetInnerHTML={{ __html: PICKER_CSS }} />
+      {/* Estado de la búsqueda: región siempre montada (la del popup aparecía y desaparecía con él y no se anunciaba). */}
+      <div role="status" className="k-sr-only" data-testid="diagnosis-picker-live">
+        {listOpen ? statusText ?? "" : ""}
+      </div>
       <input
         ref={inputRef}
         id={id}
@@ -362,7 +388,7 @@ export function DiagnosisPicker({
           </div>
           {/* Fuera del listbox a propósito (ver cabecera): estado, error, catálogo vacío y la atribución de la OMS. */}
           {statusText && (
-            <div role="status" style={{ padding: "4px 10px", fontSize: 12, color: "var(--navy-500)" }}>
+            <div aria-hidden="true" style={{ padding: "4px 10px", fontSize: 12, color: "var(--navy-500)" }}>
               {statusText}
             </div>
           )}
@@ -376,7 +402,7 @@ export function DiagnosisPicker({
               {DIAGNOSIS_COPY.catalogEmpty}
             </p>
           ) : (
-            <p data-testid="icd-attribution" style={{ margin: 0, padding: "4px 10px 6px", fontSize: 11, color: "var(--navy-300)" }}>
+            <p data-testid="icd-attribution" style={{ margin: 0, padding: "4px 10px 6px", fontSize: 11, color: "var(--navy-500)" }}>
               {ICD11_SHORT_ATTRIBUTION}
             </p>
           )}

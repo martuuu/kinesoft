@@ -85,6 +85,17 @@ describe("[FC-3a] barra de formato", () => {
     expect(btn("bold")).toContain(`aria-label="${HC_EDITOR_COPY.bold}"`);
   });
 
+  it("[T4-Z ZF3] títulos con íconos «H2»/«H3»; guardando, toda la barra queda aria-disabled (sin salir del recorrido)", () => {
+    const btn = (k: string) => buttons.find((b) => b.includes(`data-hc-tool="${k}"`))!;
+    expect(html).toMatch(/data-hc-tool="h2"[^>]*>H2<\/button>/);
+    expect(html).toMatch(/data-hc-tool="h3"[^>]*>H3<\/button>/);
+    expect(btn("bold")).not.toContain("aria-disabled");
+    const saving = renderToStaticMarkup(<HcToolbar editor={editor} toolbarRef={createRef()} onPlainMode={() => {}} disabled />);
+    const all = [...saving.matchAll(/<button[^>]*>/g)].map((m) => m[0]);
+    expect(all.every((b) => b.includes('aria-disabled="true"'))).toBe(true);
+    expect(all.some((b) => /\sdisabled=""/.test(b))).toBe(false);
+  });
+
   it("«Insertar estructura» y «Sin formato» con su texto visible", () => {
     expect(html).toContain(`>${HC_EDITOR_COPY.insertStructure}</button>`);
     expect(html).toContain(`>${HC_EDITOR_COPY.plainMode}</button>`);

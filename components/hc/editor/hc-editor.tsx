@@ -42,6 +42,8 @@ export type HcEditorProps = {
   invalid?: boolean;
   hidden: boolean;
   minHeight: number;
+  /** Tope del autogrow del composer compacto (scroll adentro de ahí en más); sin tope, crece con el texto. */
+  maxHeight?: number;
   onReady: (api: HcEditorApi) => void;
   onChange: (change: HcEditorChange) => void;
   onSubmitShortcut?: () => void;
@@ -59,10 +61,12 @@ function attributesFor(p: HcEditorProps): Record<string, string> {
     "aria-describedby": p.describedBy || undefined,
     "aria-invalid": p.invalid ? "true" : undefined,
     "aria-placeholder": p.placeholder,
+    // Alt+F10 lleva a la barra de formato (APG «Toolbar»): anunciarlo es la única forma de que se descubra.
+    "aria-keyshortcuts": "Alt+F10",
     "data-placeholder": p.placeholder,
     spellcheck: "true",
     class: styles.content,
-    style: `min-height:${p.minHeight}px`,
+    style: p.maxHeight ? `min-height:${p.minHeight}px;max-height:${p.maxHeight}px;overflow-y:auto` : `min-height:${p.minHeight}px`,
   };
   // ProseMirror pasa los atributos por `String()`: un undefined llegaría como "undefined".
   return Object.fromEntries(Object.entries(a).filter((e): e is [string, string] => e[1] !== undefined));
@@ -142,7 +146,7 @@ export function HcEditor(props: HcEditorProps) {
       hidden={props.hidden}
       data-testid="hc-editor-rich"
     >
-      {editor && <HcToolbar editor={editor} toolbarRef={toolbarRef} onPlainMode={props.onPlainMode} />}
+      {editor && <HcToolbar editor={editor} toolbarRef={toolbarRef} onPlainMode={props.onPlainMode} disabled={props.disabled} />}
       <EditorContent editor={editor} />
     </div>
   );
