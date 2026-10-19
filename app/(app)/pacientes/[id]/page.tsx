@@ -29,7 +29,7 @@ export const metadata = { title: "Paciente · KineSoft" };
  *
  * PF2-b (C-PF8): la página resuelve el actor y hace UNA carga (`loadPatientProfilePage` →
  * `runWithRls(tenantId, tx => loadPatientProfile(actor, tx, …))`, lib/patient-profile-loader.ts): acceso, core y los
- * slices del nivel en una tx; afuera solo obras sociales (cacheadas) y el resumen de evoluciones. Antes: ~12 tx. Los
+ * slices del nivel en una tx; afuera solo obras sociales (cacheadas) y la «clinical home» de la HC (FC-2b). Antes: ~12 tx. Los
  * cortes por nivel son los de siempre: `admin` (Secretaria/Facturación) ve datos y turnos, `basic` la vista básica,
  * HC solo con `=== "full"`.
  */
@@ -43,7 +43,8 @@ export default async function PatientPage({
   const actor = await getActor();
   const modules = modulesFor(actor.entitlements);
   // EV2-3a · deep link `?tab=evoluciones&turno=<bookingId>` (`clinicalNoteDeepLink`): el loader proyecta el turno
-  // solo si es de ESTE paciente y del consultorio. Sin el módulo no se mira.
+  // solo si es de ESTE paciente y del consultorio. Sin el módulo no se mira. FC-3d: también sin `tab` y con `?tab=hc`
+  // (la HC es la pestaña inicial).
   const noteBookingId = profileNoteBookingId(actor, searchParams);
   const data = await loadPatientProfilePage(actor, params.id, noteBookingId);
   if (data.access === "none") notFound();
@@ -137,7 +138,10 @@ export default async function PatientPage({
         initialPlansError={plansRes && !plansRes.ok ? plansRes.error : null}
         initialTab={initialTab}
         planIntent={planIntent}
-        clinicalSummary={data.clinicalSummary}
+        // FC-3d: la «clinical home» entera (resumen + primera página + composer + deep link) en vez de solo el
+        // resumen: la HC es la pestaña inicial y se pinta desde el SSR sin pedir nada al montar.
+        clinicalHome={data.clinicalHome}
+        viewerScope={data.clinicalHome ? { tenantId: actor.tenantId, userId: actor.userId } : null}
         canWriteNotes={canWriteNotes}
         noteBookingId={noteBookingId}
         viewerPractitionerId={actor.practitionerId ?? null}

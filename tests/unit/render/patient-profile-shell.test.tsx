@@ -157,12 +157,13 @@ describe("[S22b] pestañas por módulo y deep-link", () => {
   });
 
   // EV2-3a (EV2-D20): Evoluciones es del núcleo (todas las verticales) pero exige `clinical.read` del miembro.
+  // FC-3d (§24.7): la HC va primera.
   it("[EV2-3a] Evoluciones: con clinical.read en General y Kine; `evol` sigue siendo EVA", () => {
     expect(profileTabsFor(GENERAL, { clinicalRead: true })).toEqual([
-      "resumen", "evoluciones", "turnos", "archivos", "antec", "fact", "actividad",
+      "evoluciones", "resumen", "turnos", "archivos", "antec", "fact", "actividad",
     ]);
     expect(profileTabsFor(KINE, { clinicalRead: true })).toEqual([
-      "resumen", "evoluciones", "turnos", "sesiones", "planes", "archivos", "antec", "evol", "fact", "actividad",
+      "evoluciones", "resumen", "turnos", "sesiones", "planes", "archivos", "antec", "evol", "fact", "actividad",
     ]);
     expect(resolveProfileTab("evoluciones", profileTabsFor(KINE))).toBe("resumen");
     expect(resolveProfileTab("evoluciones", profileTabsFor(KINE, { clinicalRead: true }))).toBe("evoluciones");
@@ -225,10 +226,10 @@ describe("[S22b] shell en un consultorio General", () => {
         </ToastProvider>
       </TenantModulesProvider>,
     );
-    // EV2-3a: con `clinical.read`, Evoluciones (núcleo) está también en General.
-    expect(tabLabels(html)).toEqual(["Resumen", "Historia clínica", "Turnos", "Archivos", "Antecedentes", "Facturación", "Actividad"]);
-    // Cayó a Resumen (la pestaña pedida no existe en General).
-    expect(html).toMatch(/data-profile-tab="resumen" aria-current="true"[^>]*>Resumen/);
+    // EV2-3a: con `clinical.read`, Evoluciones (núcleo) está también en General. FC-3d: primera.
+    expect(tabLabels(html)).toEqual(["Historia clínica", "Resumen", "Turnos", "Archivos", "Antecedentes", "Facturación", "Actividad"]);
+    // FC-3d: cayó a la inicial del viewer (la pestaña pedida no existe en General): con `clinical.read`, la HC.
+    expect(html).toMatch(/data-profile-tab="evoluciones" aria-current="true"[^>]*>Historia clínica/);
     expect(net.getPatientPlans).not.toHaveBeenCalled();
   });
 

@@ -5,8 +5,9 @@ import dynamic from "next/dynamic";
 import { getPatientBookingsAll } from "@/lib/patients";
 import { getPatientPlanBalances, getPatientPlans } from "@/lib/plans-read";
 import { getPatientClinicalSummary } from "@/lib/clinical-notes-read";
-import type { PatientClinicalSummary } from "@/lib/clinical-notes-types";
-import type { DeepLinkBooking } from "@/components/patients/profile/views/evoluciones-view";
+import type { PatientClinicalHome, PatientClinicalSummary } from "@/lib/clinical-notes-types";
+import { EvolucionesView, type DeepLinkBooking } from "@/components/patients/profile/views/evoluciones-view";
+import { HC_HOME_COPY } from "@/components/fichas/fichas-copy";
 import type {
   PatientCore,
   PatientAdminCore,
@@ -18,14 +19,19 @@ import type { Capability } from "@/lib/capabilities";
 import type { Role } from "@prisma/client";
 import { formatARS } from "@/lib/format";
 import { isProfileTabAllowed, type TenantModule } from "@/lib/tenant-modules";
-import { PLANS_TAB, normalizeProfileTab, stripPlanIntentParams } from "@/lib/plans-deeplink-params";
+import {
+  HC_TAB,
+  PLANS_TAB,
+  normalizeProfileTab,
+  profileTabHref,
+  stripPlanIntentParams,
+} from "@/lib/plans-deeplink-params";
 import type { ProfilePlanIntent } from "@/lib/plans-deeplink";
 import type { EvaScore } from "@prisma/client";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { useToast } from "@/components/ui/toast";
 import { PatientHero, PatientAdminHero } from "@/components/patients/profile/hero";
 import { TabsBar } from "@/components/patients/profile/tabs-bar";
-import { ResumenView } from "@/components/patients/profile/views/resumen-view";
 import {
   heroPlanChips,
   planUiPermissions,
@@ -70,16 +76,22 @@ function TabLoading() {
  * `preloadProfileTab` en `pointerenter`/`focus` de la pestaña: el `import()` ya está en vuelo (o resuelto) cuando
  * llega el click, y el skeleton casi no se ve. Turnos pasa a diferida también (antes estática porque la usa la ficha
  * administrativa): sigue con SSR, así un `?tab=turnos` pinta igual en el primer render, pero sale del chunk de la
- * ficha cuando se entra por Resumen (la mayoría de las visitas). Resumen queda estática: es la de entrada.
+ * ficha cuando se entra por Resumen (la mayoría de las visitas).
+ *
+ * FC-3d (§24.2 hallazgo 4, §24.9): se invierte cuál es estática. La HC es la pestaña de entrada con `clinical.read` y
+ * el composer tiene que pintarse desde el SSR sin esperar un chunk (lo tipeado antes de hidratar no se pierde), así
+ * que `EvolucionesView` es import estático; Resumen pasa a diferida CON SSR (es la de entrada sin `clinical.read`:
+ * sigue pintando en el primer render). `check-bundle-budget` no cuenta los chunks de `next/dynamic`: el guard
+ * `tests/unit/hc-first-load-guard.test.ts` fija que Resumen no vuelva al first load.
  */
 const TAB_LOADERS = {
+  resumen: () => import("@/components/patients/profile/views/resumen-view"),
   turnos: () => import("@/components/patients/profile/views/turnos-view"),
   actividad: () => import("@/components/patients/activity-view"),
   archivos: () => import("@/components/patients/archivos-view"),
   sesiones: () => import("@/components/patients/profile/views/sesiones-view"),
   planes: () => import("@/components/patients/profile/views/plan-view"),
   antec: () => import("@/components/patients/profile/views/antecedentes-view"),
-  evoluciones: () => import("@/components/patients/profile/views/evoluciones-view"),
   evol: () => import("@/components/patients/profile/views/evolucion-view"),
   fact: () => import("@/components/patients/profile/views/facturacion-view"),
 } satisfies Partial<Record<Tab, () => Promise<unknown>>>;
@@ -90,13 +102,13 @@ export function preloadProfileTab(t: Tab): void {
   if (load) void load().catch(() => {});
 }
 
+const ResumenView = dynamic(() => TAB_LOADERS.resumen().then((m) => m.ResumenView), { loading: TabLoading });
 const TurnosView = dynamic(() => TAB_LOADERS.turnos().then((m) => m.TurnosView), { loading: TabLoading });
 const ActivityView = dynamic(() => TAB_LOADERS.actividad().then((m) => m.ActivityView), { loading: TabLoading });
 const ArchivosView = dynamic(() => TAB_LOADERS.archivos().then((m) => m.ArchivosView), { loading: TabLoading });
 const SesionesView = dynamic(() => TAB_LOADERS.sesiones().then((m) => m.SesionesView), { loading: TabLoading });
 const PlanView = dynamic(() => TAB_LOADERS.planes().then((m) => m.PlanView), { loading: TabLoading });
 const AntecedentesView = dynamic(() => TAB_LOADERS.antec().then((m) => m.AntecedentesView), { loading: TabLoading });
-const EvolucionesView = dynamic(() => TAB_LOADERS.evoluciones().then((m) => m.EvolucionesView), { loading: TabLoading });
 const EvolucionView = dynamic(() => TAB_LOADERS.evol().then((m) => m.EvolucionView), { loading: TabLoading });
 const FacturacionView = dynamic(() => TAB_LOADERS.fact().then((m) => m.FacturacionView), { loading: TabLoading });
 
@@ -133,13 +145,22 @@ export function profileTabsFor(
 }
 
 /**
- * `?tab=` → pestaña inicial. Normaliza el alias (`plan` → `planes`) y cae a
- * Resumen si la pestaña no existe o el consultorio no la tiene (un link a
- * `?tab=planes` en un consultorio General no abre una pestaña oculta).
+ * Pestaña inicial del viewer (FC-3d, §24.7): la historia clínica si la tiene (módulo + `clinical.read`), si no
+ * Resumen. Es también la que la URL no escribe (`profileTabHref`).
+ */
+export function defaultProfileTab(allowed: readonly Tab[]): Tab {
+  return allowed.includes(HC_TAB) ? HC_TAB : "resumen";
+}
+
+/**
+ * `?tab=` → pestaña inicial. Normaliza el alias (`plan` → `planes`, `hc` → `evoluciones`) y cae a la inicial del
+ * viewer (`defaultProfileTab`) si no hay `?tab=`, si la pestaña no existe o si el consultorio/miembro no la tiene (un
+ * link a `?tab=planes` en un consultorio General no abre una pestaña oculta). Sin `tab`, un `?turno=` abre la HC
+ * porque la HC ya es la inicial (FC-3d: el deep link de la ficha vale sin `tab`, `profileNoteBookingId`).
  */
 export function resolveProfileTab(raw: string | null | undefined, allowed: readonly Tab[]): Tab {
   const t = normalizeProfileTab(raw);
-  return t && (allowed as readonly string[]).includes(t) ? (t as Tab) : "resumen";
+  return t && (allowed as readonly string[]).includes(t) ? (t as Tab) : defaultProfileTab(allowed);
 }
 
 /**
@@ -199,8 +220,17 @@ export type PatientProfileProps = {
   initialTab?: string | null;
   /** Intención de Planes del deep-link (C10). Se consume una vez y se limpia la URL. */
   planIntent?: ProfilePlanIntent;
-  /** EV2-3a: `getPatientClinicalSummary` (null sin módulo o sin `clinical.read`): contador y «Última evolución». */
-  clinicalSummary?: PatientClinicalSummary | null;
+  /**
+   * FC-2b/FC-3d: la «clinical home» de la tx 3 (`getPatientClinicalHome`; null sin módulo o sin `clinical.read`). El
+   * `summary` es el contador de la pestaña y «Última ficha» de Resumen; el resto va a `EvolucionesView` (primera
+   * página, candidatos del composer y deep link: sin fetch al montar).
+   */
+  clinicalHome?: PatientClinicalHome | null;
+  /**
+   * FC-3d: usuario + consultorio del viewer (`actor.tenantId`/`actor.userId`): alcance del borrador en memoria del
+   * composer y de la carpeta de respaldo. Solo con la HC (la página lo manda junto con `clinicalHome`).
+   */
+  viewerScope?: { tenantId: string; userId: string } | null;
   /** EV2-3a: `canWriteClinicalNotes(caps, "full", actor.practitionerId)`; solo esconde «Nueva evolución». */
   canWriteNotes?: boolean;
   /** EV2-3a: `?turno=` del deep link de evoluciones (`clinicalNoteDeepLink`) y el turno si es de este paciente. */
@@ -228,7 +258,8 @@ export function PatientProfile({
   initialPlansError = null,
   initialTab = null,
   planIntent = { kind: "none" },
-  clinicalSummary = null,
+  clinicalHome = null,
+  viewerScope = null,
   canWriteNotes = false,
   noteBookingId = null,
   noteBooking = null,
@@ -247,11 +278,34 @@ export function PatientProfile({
     () => profileTabsFor(modules.list, { clinicalRead }),
     [modules.list, clinicalRead]
   );
-  const [tab, setTab] = useState<Tab>(() => resolveProfileTab(initialTab, allowedTabs));
-  const notesEnabled = allowedTabs.includes("evoluciones");
+  const [tab, setTabState] = useState<Tab>(() => resolveProfileTab(initialTab, allowedTabs));
+  const notesEnabled = allowedTabs.includes(HC_TAB);
+  const defaultTab = defaultProfileTab(allowedTabs);
+
+  // FC-3d (§24.7): la pestaña elegida queda en la URL con `replaceState` (sin navegación ni re-render del server): un
+  // refresh o un link copiado vuelven a la misma pestaña. Va en el handler y no en un efecto sobre `tab`, así el
+  // primer render (que ya vino de la URL) no reescribe nada y el `stripPlanIntentParams` del deep link no compite.
+  const setTab = useCallback(
+    (next: Tab) => {
+      setTabState(next);
+      try {
+        window.history.replaceState(window.history.state, "", profileTabHref(window.location.href, next, defaultTab));
+      } catch {
+        // Sin history (tests, navegadores raros): la pestaña cambia igual, solo no queda en la URL.
+      }
+    },
+    [defaultTab]
+  );
+
+  // FC-3d: punto de «borrador sin guardar» en la pestaña de la HC. Lo prende/apaga el composer (`onDirtyChange`). No
+  // se apaga al salir de la pestaña: el borrador sigue en memoria (FC-3c) y el punto es lo que avisa que está ahí.
+  const [hcDirty, setHcDirty] = useState(false);
+  const onHcDirtyChange = useCallback((dirty: boolean) => setHcDirty(dirty), []);
 
   // ── Evoluciones (EV2-3a): resumen del server; se relee después de cada escritura de la pestaña ─────────────
-  const [summary, setSummary] = useState<PatientClinicalSummary | null>(notesEnabled ? clinicalSummary : null);
+  const [summary, setSummary] = useState<PatientClinicalSummary | null>(
+    notesEnabled ? (clinicalHome?.summary ?? null) : null
+  );
   const summarySeq = useRef(0);
   const reloadSummary = useCallback(async () => {
     if (!notesEnabled) return;
@@ -265,8 +319,8 @@ export function PatientProfile({
     }
   }, [notesEnabled, patientCore.id]);
   const openEvoluciones = useCallback(() => {
-    if (notesEnabled) setTab("evoluciones");
-  }, [notesEnabled]);
+    if (notesEnabled) setTab(HC_TAB);
+  }, [notesEnabled, setTab]);
 
   // ── Permisos de Planes (solo esconden; la barrera es el server) ──────────
   const permissions = useMemo(
@@ -463,7 +517,7 @@ export function PatientProfile({
       setTab(PLANS_TAB);
       onPlansChanged();
     },
-    [onPlansChanged]
+    [onPlansChanged, setTab]
   );
   const openPlan = useCallback(
     (programId: string) => {
@@ -471,7 +525,7 @@ export function PatientProfile({
       setFocusProgramId(programId);
       setTab(PLANS_TAB);
     },
-    [plansEnabled]
+    [plansEnabled, setTab]
   );
 
   // ── Deep-link (C10): se consume UNA vez y se limpia la URL ────────────────
@@ -559,6 +613,7 @@ export function PatientProfile({
         onChange={setTab}
         onPreload={preloadProfileTab}
         only={allowedTabs}
+        marks={notesEnabled && hcDirty ? { evoluciones: HC_HOME_COPY.draftDot } : undefined}
         counts={{
           evoluciones: summary?.liveCount,
           turnos: bookingsAll?.length,
@@ -590,13 +645,21 @@ export function PatientProfile({
               onEditPatient={requestEditPatient}
             />
           )}
-          {tab === "evoluciones" && notesEnabled && (
+          {tab === HC_TAB && notesEnabled && (
             <EvolucionesView
               patientId={patient.id}
               canWrite={canWriteNotes}
               deepLinkBookingId={noteBookingId}
               deepLinkBooking={noteBooking}
               onChanged={reloadSummary}
+              // FC-3d: la tx 3 del perfil (primera página, candidatos del composer y deep link) llega del SSR: la vista
+              // no lee nada al montar (§24.2 hallazgo 3). Con la pestaña montada, `clinicalHome` nunca es undefined
+              // (la página siempre lo manda; null = la lectura negó el acceso → rechazo genérico).
+              clinicalHome={clinicalHome}
+              patientName={`${patient.firstName} ${patient.lastName}`}
+              viewerPractitionerId={viewerPractitionerId}
+              viewerScope={viewerScope}
+              onDirtyChange={onHcDirtyChange}
             />
           )}
           {tab === "turnos" && (

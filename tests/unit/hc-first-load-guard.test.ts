@@ -112,12 +112,13 @@ describe("[FC-3k] first load de /pacientes/[id] (§24.9)", () => {
     expect(closure.files.has("components/patients/patient-profile.tsx")).toBe(true);
   });
 
-  it.fails("[FC-3k] la HC es estática: inicio, composer, editor (textarea), diagnósticos y HcDocView en el first load", () => {
+  it("[FC-3k] la HC es estática: inicio, composer, editor (textarea), diagnósticos y HcDocView en el first load", () => {
     const missing = MUST_BE_STATIC.filter((f) => !closure.files.has(f));
     expect(missing, `no alcanzados estáticamente desde ${ENTRY}:\n${missing.join("\n")}`).toEqual([]);
   });
 
-  it.fails("[FC-3k] Resumen fuera del first load (va segunda y diferida)", () => {
+  // FC-3d lo dio vuelta: Resumen es `next/dynamic` con SSR desde el shell (patient-profile.tsx, TAB_LOADERS.resumen).
+  it("[FC-3k] Resumen fuera del first load (va segunda y diferida)", () => {
     const hits = reached(FORBIDDEN_FILES[0].paths);
     expect(hits, fmt(hits)).toEqual([]);
   });

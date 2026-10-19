@@ -179,18 +179,27 @@ function profile(capabilities: Capability[], over: Partial<Parameters<typeof Pat
   );
 }
 
+/** FC-3d: el shell recibe la «clinical home» entera; acá solo importa el resumen (sin timeline ni composer). */
+const home = (summary: { latest: ClinicalNoteDTO | null; liveCount: number }) => ({
+  summary,
+  firstPage: { items: [], nextCursor: null },
+  composer: null,
+  deepLink: null,
+});
+
 describe("[EV2-3a] pestañas del perfil por acceso", () => {
-  it("profesional con clinical.read: «Evoluciones» segunda, con el contador de vivas; la curva se llama «EVA»", () => {
-    const html = profile(["clinical.read"], { clinicalSummary: { latest: note(), liveCount: 3 } });
+  // FC-3d (§24.7): la HC pasó a primera (antes segunda, después de Resumen).
+  it("profesional con clinical.read: «Historia clínica» primera, con el contador de vivas; la curva se llama «EVA»", () => {
+    const html = profile(["clinical.read"], { clinicalHome: home({ latest: note(), liveCount: 3 }) });
     expect(tabLabels(html)).toEqual([
-      "Resumen", "Historia clínica", "Turnos", "Sesiones", "Planes", "Archivos", "Antecedentes", "EVA", "Facturación", "Actividad",
+      "Historia clínica", "Resumen", "Turnos", "Sesiones", "Planes", "Archivos", "Antecedentes", "EVA", "Facturación", "Actividad",
     ]);
     expect(html).toMatch(/data-profile-tab="evoluciones"[^>]*>Historia clínica<span[^>]*>3</);
   });
 
   it("Titular sin agenda (acceso full, sin clinical.read): no hay Evoluciones aunque llegue un resumen ni ?tab=evoluciones", () => {
     const html = profile(["account.owner", "tenant.admin"] as Capability[], {
-      clinicalSummary: { latest: note(), liveCount: 3 },
+      clinicalHome: home({ latest: note(), liveCount: 3 }),
       initialTab: "evoluciones",
     });
     expect(tabLabels(html)).not.toContain("Historia clínica");
@@ -202,11 +211,12 @@ describe("[EV2-3a] pestañas del perfil por acceso", () => {
 
   it("consultorio General con clinical.read: Evoluciones es del núcleo (sí), EVA no", () => {
     const html = profile(["clinical.read"], {}, GENERAL);
-    expect(tabLabels(html)).toEqual(["Resumen", "Historia clínica", "Turnos", "Archivos", "Antecedentes", "Facturación", "Actividad"]);
+    expect(tabLabels(html)).toEqual(["Historia clínica", "Resumen", "Turnos", "Archivos", "Antecedentes", "Facturación", "Actividad"]);
   });
 
   it("Resumen del perfil: «Última evolución» + «Notas generales» (ya no «Notas clínicas»)", () => {
-    const html = profile(["clinical.read"], { clinicalSummary: { latest: note(), liveCount: 3 } });
+    // FC-3d: Resumen ya no es la inicial con `clinical.read` (se pide con `?tab=resumen`) y es `next/dynamic`.
+    const html = profile(["clinical.read"], { clinicalHome: home({ latest: note(), liveCount: 3 }), initialTab: "resumen" });
     expect(html).toContain("Última ficha");
     expect(html).toContain("Control de hombro");
     expect(html).toContain("Ver las 3 fichas");

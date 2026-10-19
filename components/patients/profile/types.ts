@@ -35,8 +35,9 @@ export type PatientWithRelations = PatientCore & {
 
 /**
  * Pestañas del perfil. EV2-3a (EV2-D10/D20): `evol` sigue siendo la curva EVA (label «EVA»: las URLs viejas
- * `?tab=evol` no se rompen) y `evoluciones` es la historia clínica (módulo `evoluciones` + `clinical.read`), segunda
- * en la barra porque es lo que el profesional abre en cada atención. S22b: `plan` → `planes` (C10: `?tab=planes`, con el
+ * `?tab=evol` no se rompen) y `evoluciones` es la historia clínica (módulo `evoluciones` + `clinical.read`). FC-3d
+ * (§24.7): la HC pasa a PRIMERA e inicial (alias `?tab=hc`): es lo que el profesional abre en cada atención y el
+ * composer tiene que estar a la vista sin un click; Resumen queda segunda (y es la inicial sin `clinical.read`). S22b: `plan` → `planes` (C10: `?tab=planes`, con el
  * alias `plan` resuelto por `normalizeProfileTab` de `lib/plans-deeplink.ts`).
  * Las que dependen de un módulo se filtran con `isProfileTabAllowed`
  * (`lib/tenant-modules.ts`).
@@ -55,8 +56,8 @@ export type Tab =
 
 /** Todas, en el orden de la barra. */
 export const PROFILE_TABS: readonly Tab[] = [
-  "resumen",
   "evoluciones",
+  "resumen",
   "turnos",
   "sesiones",
   "planes",
@@ -66,3 +67,4 @@ export const PROFILE_TABS: readonly Tab[] = [
   "fact",
   "actividad",
 ];
+

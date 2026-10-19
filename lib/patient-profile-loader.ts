@@ -54,7 +54,7 @@ import {
 import type { PatientAdminCore, PatientBasic, PatientCore } from "@/lib/patients-types";
 import { listInsurers } from "@/lib/insurers";
 import { getPatientClinicalHome } from "@/lib/clinical-notes-read";
-import type { PatientClinicalHome, PatientClinicalSummary } from "@/lib/clinical-notes-types";
+import type { PatientClinicalHome } from "@/lib/clinical-notes-types";
 
 /** Turnos del perfil `admin` (mismo tope que pedía la página: 100). */
 export const PROFILE_ADMIN_BOOKINGS = 100;
@@ -231,11 +231,6 @@ export type PatientProfileData =
       insurers: Awaited<ReturnType<typeof listInsurers>>;
       /** La tx 3 (FC-2b). null = sin módulo `evoluciones` o sin `clinical.read` (no se ve la HC). */
       clinicalHome: PatientClinicalHome | null;
-      /**
-       * `clinicalHome.summary` (contador de la pestaña y «Última ficha» de Resumen). Se mantiene mientras la página y
-       * `PatientProfile` lo consumen así (FC-3d pasa a `clinicalHome`); no es otra lectura.
-       */
-      clinicalSummary: PatientClinicalSummary | null;
     });
 
 /**
@@ -258,6 +253,6 @@ export const loadPatientProfilePage = cache(
         ? getPatientClinicalHome(patientId, { noteBookingId, timeline: true })
         : null,
     ]);
-    return { ...base, insurers, clinicalHome, clinicalSummary: clinicalHome?.summary ?? null };
+    return { ...base, insurers, clinicalHome };
   }
 );

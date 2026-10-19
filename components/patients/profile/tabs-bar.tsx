@@ -60,6 +60,11 @@ export function scrollDeltaToReveal(
  * (`layoutId`) llega cuando `LazyMotion` carga las features. `onPreload` se llama en `pointerenter`/`focus` para
  * bajar el chunk de la pestaña antes del click. `whiteSpace: nowrap` + `flexShrink: 0`: a 1024 con el sidebar
  * abierto «Facturación 12» se partía en dos líneas; ahora la barra scrollea (ya tenía `overflowX: auto`).
+ *
+ * FC-3d (§24.7): «Historia clínica» va PRIMERA (antes segunda, después de Resumen); el orden de la barra es el de
+ * `all`, así que el perfil admin (`only` = Datos/Turnos/Facturación) no cambia. `marks` pinta un punto con su texto
+ * para lector de pantalla (el «borrador sin guardar» de la HC): el texto va en `k-sr-only` y no en `title`/`aria-label`
+ * del punto porque así el nombre accesible del botón lo incluye sin depender del soporte de `role="img"`.
  */
 export function TabsBar({
   active,
@@ -68,6 +73,7 @@ export function TabsBar({
   counts,
   only,
   labels,
+  marks,
 }: {
   active: Tab;
   onChange: (t: Tab) => void;
@@ -76,10 +82,12 @@ export function TabsBar({
   counts: { evoluciones?: number; turnos?: number; sesiones?: number; planes?: number; fact?: number };
   only?: readonly Tab[];
   labels?: Partial<Record<Tab, string>>;
+  /** Punto de aviso por pestaña, con su texto para lector de pantalla (FC-3d: «Hay una ficha sin guardar»). */
+  marks?: Partial<Record<Tab, string>>;
 }) {
   const all: { id: Tab; label: string; count?: number }[] = [
-    { id: "resumen", label: "Resumen" },
     { id: "evoluciones", label: "Historia clínica", count: counts.evoluciones || undefined },
+    { id: "resumen", label: "Resumen" },
     { id: "turnos", label: "Turnos", count: counts.turnos || undefined },
     { id: "sesiones", label: "Sesiones", count: counts.sesiones || undefined },
     { id: "planes", label: "Planes", count: counts.planes || undefined },
@@ -177,6 +185,15 @@ export function TabsBar({
                 }}
               >
                 {t.count}
+              </span>
+            )}
+            {marks?.[t.id] && (
+              <span data-tab-mark={t.id} style={{ display: "inline-flex" }}>
+                <span
+                  aria-hidden="true"
+                  style={{ width: 7, height: 7, borderRadius: 999, background: "var(--warn-fg)", flexShrink: 0 }}
+                />
+                <span className="k-sr-only">{marks[t.id]}</span>
               </span>
             )}
             {on && (

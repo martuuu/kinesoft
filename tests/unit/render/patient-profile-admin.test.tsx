@@ -330,7 +330,7 @@ describe("[S22b] página del paciente con acceso full", () => {
     practitioners: [],
     noteBookingRow: null,
     insurers: [],
-    clinicalSummary: null,
+    clinicalHome: null,
     ...over,
   });
 

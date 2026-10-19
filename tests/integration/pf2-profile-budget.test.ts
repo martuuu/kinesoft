@@ -268,11 +268,12 @@ describe.skipIf(!RUN)("PF2-b · perfil del paciente en ≤ 3 tx, misma visibilid
       expect(r.evaScores).toHaveLength(1);
       expect(r.plans).toEqual(await getPatientPlans({ patientId }));
       expect(r.balances).toEqual(await getPatientPlanBalances({ patientId }));
-      expect(r.clinicalSummary).toEqual(await getPatientClinicalSummary(patientId));
-      expect(r.clinicalSummary?.liveCount).toBe(1);
+      // FC-3d: `clinicalSummary` suelto se borró del loader (nadie lo consumía): el resumen es `clinicalHome.summary`.
+      expect(r).not.toHaveProperty("clinicalSummary");
+      expect(r.clinicalHome?.summary).toEqual(await getPatientClinicalSummary(patientId));
+      expect(r.clinicalHome?.summary.liveCount).toBe(1);
       // FC-2b: la tx 3 da lo mismo que los lectores sueltos (resumen, «Cargar más» desde cero, drawer del turno).
       expect(r.clinicalHome).toEqual(await getPatientClinicalHome(patientId, { noteBookingId: bookingId, timeline: true }));
-      expect(r.clinicalHome?.summary).toEqual(r.clinicalSummary);
       const page = await getPatientTimeline({ patientId, limit: 10 });
       expect(r.clinicalHome?.firstPage).toEqual(page);
       expect(r.insurers).toEqual(await listInsurers({ onlyActive: true }));

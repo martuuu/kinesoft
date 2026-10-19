@@ -11,17 +11,12 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { sendPatientPortalInvite, setPatientArchived } from "@/lib/patients";
 import type { PatientAdminCore } from "@/lib/patients-types";
 import { SharePatientButton } from "@/components/patients/share-patient-button";
-import {
-  ArchivePatientDialog,
-  shouldAskArchivePlans,
-  type ArchivePatientResult,
-} from "@/components/patients/archive-patient-dialog";
+import type { ArchivePatientResult } from "@/components/patients/archive-patient-dialog";
 import { DisciplineChip } from "@/components/planes/discipline-chip";
 import type { HeroPlanChip, PatientHeroProps } from "@/components/planes/plan-editor-types";
 import { disciplineLabel } from "@/lib/plan-display";
 import type { PatientArchivePlansAction } from "@/lib/plans-lifecycle-state";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
-import { PortalRequestBanner } from "./portal-request-banner";
 import type { PatientWithRelations, InsurerOption, PractitionerOption } from "./types";
 
 import heroStyles from "./hero.module.css";
@@ -31,6 +26,31 @@ function preloadEditPatient() {
   void loadEditPatient().catch(() => {});
 }
 const EditPatientModal = dynamic(() => loadEditPatient().then((m) => m.EditPatientModal), {
+  ssr: false,
+  loading: () => null,
+});
+
+/**
+ * FC-3d (§24.2 hallazgo 15, §24.9): el diálogo L9 de archivar arrastraba `Modal` al first load del perfil (≈3 kB gz)
+ * para algo que casi nadie abre; ahora baja recién al pedir «Archivar» (se precarga en hover/foco del botón). La
+ * pregunta «¿hay planes vivos?» (`shouldAskArchivePlans`) vive en el mismo módulo y se lee de ahí al hacer click: es
+ * una sola fuente con la fila y el bulk, y el `import()` ya en vuelo deja el diálogo listo para abrirse.
+ */
+/**
+ * FC-3d (§24.9, compensación del tope de 175 kB): el banner del pedido de «Mis datos» del portal se carga solo con una
+ * server action al montar y en el SSR no pinta nada (sin pedido tampoco después), así que bajarlo en un chunk aparte no
+ * cambia lo que se ve: llega en paralelo con su lectura. Vale para los dos heroes (`full` y `admin`).
+ */
+const PortalRequestBanner = dynamic(() => import("./portal-request-banner").then((m) => m.PortalRequestBanner), {
+  ssr: false,
+  loading: () => null,
+});
+
+const loadArchiveDialog = () => import("@/components/patients/archive-patient-dialog");
+function preloadArchiveDialog() {
+  void loadArchiveDialog().catch(() => {});
+}
+const ArchivePatientDialog = dynamic(() => loadArchiveDialog().then((m) => m.ArchivePatientDialog), {
   ssr: false,
   loading: () => null,
 });
@@ -155,13 +175,15 @@ export function PatientHero({
       {/* ES4 S24r: pedido de «Mis datos» del portal (se carga solo; sin pedido no renderiza nada). */}
       <PortalRequestBanner patientId={patient.id} />
 
-      <ArchivePatientDialog
-        open={askPlans}
-        onClose={() => setAskPlans(false)}
-        patientName={`${patient.firstName} ${patient.lastName}`}
-        livePlanCount={livePlanCount}
-        onConfirm={archiveWithPlans}
-      />
+      {askPlans && (
+        <ArchivePatientDialog
+          open
+          onClose={() => setAskPlans(false)}
+          patientName={`${patient.firstName} ${patient.lastName}`}
+          livePlanCount={livePlanCount}
+          onConfirm={archiveWithPlans}
+        />
+      )}
 
       {/* Modals rendered as siblings of the Card, not inside it.
           This avoids backdrop-filter creating a new stacking context
@@ -304,10 +326,21 @@ function PatientHeroActions({
     // L9 (PD-10): con planes vivos, archivar pregunta qué hacer con ellos
     // (pausar por default o cancelar los turnos futuros). Sin planes sigue el
     // confirm de siempre, y el server aplica su default (`pause`, no-op).
-    if (!isArchived && shouldAskArchivePlans({ plansEnabled, livePlanCount })) {
-      setArchiveError(null);
-      onAskArchivePlans();
-      return;
+    if (!isArchived) {
+      let ask: boolean;
+      try {
+        ask = (await loadArchiveDialog()).shouldAskArchivePlans({ plansEnabled, livePlanCount });
+      } catch (e) {
+        // Sin el chunk (red caída) no se archiva a ciegas: con planes vivos el server pausaría sin preguntar.
+        console.error("archive-patient-dialog chunk failed", e);
+        setArchiveError("No pudimos abrir el archivado. Probá de nuevo.");
+        return;
+      }
+      if (ask) {
+        setArchiveError(null);
+        onAskArchivePlans();
+        return;
+      }
     }
     const ok = await confirm(
       isArchived
@@ -386,6 +419,8 @@ function PatientHeroActions({
           variant="ghost"
           onClick={toggleArchive}
           className={heroStyles.action}
+          onPointerEnter={isArchived ? undefined : preloadArchiveDialog}
+          onFocus={isArchived ? undefined : preloadArchiveDialog}
           disabled={archiving}
           title={
             isArchived
