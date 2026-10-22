@@ -16,6 +16,16 @@ import type { TenantOption } from "@/lib/tenant-choice";
 export const PUBLIC_PROFILE_HREF = "/cuenta/perfil-publico";
 
 /**
+ * [TP-3b] (TP-UI-D2, hallazgo 13 de §25.2) «Mi Mercado Pago» es la pestaña `mercado-pago` de Configuración
+ * (`MY_MP_TAB` de `lib/mp-connect-types.ts`), y la ve quien tiene profesional propio aunque no tenga «Configuración» en
+ * el nav: sin este ítem, ese profesional no tenía cómo llegar. El href y el texto van LITERALES y no importados: este
+ * menú está en el layout de todas las rutas staff y `/agenda` no tiene margen (§25.11, 171,4 de 171,6 kB); importar
+ * `mp-connect-types`/`online-payments-copy` acá podía arrastrar esos módulos al first load. El test `[TP-3b]` fija que
+ * sigan iguales a `MY_MP_TAB` y a `MP_CONNECT_COPY.myMpTab`. Lo usa también `ProfileMenu`.
+ */
+export const MY_MP_HREF = "/configuracion?tab=mercado-pago";
+
+/**
  * DIR-3d (C-DIR9): «Mi perfil público» solo para quien atiende (es profesional clínico) en algún consultorio. El
  * perfil es por persona y cruza consultorios, pero el chrome solo conoce el consultorio activo, así que la regla es:
  *  - `attendsHere`: atiende en el activo (topbar: tiene ficha propia, `ownPublicBooking`; drawer: `clinical.read` en
@@ -38,6 +48,7 @@ export function showsPublicProfileEntry(attendsHere: boolean, options: readonly 
  *   - «Seguridad de la cuenta» → `/cuenta/seguridad` (PL-2a, C-PL6);
  *   - «Cambiar de consultorio» → `/elegir-consultorio`, solo con 2+ consultorios (IAM-3b, `useTenantChoice`);
  *   - «Mi perfil público» → `/cuenta/perfil-publico` (DIR-3d), solo para quien atiende (`showsPublicProfileEntry`);
+ *   - «Mi Mercado Pago» → `/configuracion?tab=mercado-pago` (TP-3b), solo con ficha propia (`ownPublicBooking`);
  *   - «Cerrar sesión» → `POST /api/auth/sign-out` (el mismo form del sidebar).
  * `<a>` y no `next/link`: esas pantallas están fuera de `(app)` (navegación dura, como en `ProfileMenu`).
  *
@@ -169,6 +180,13 @@ export function TopbarAccountMenu({
           {showPublicProfile && (
             <a href={PUBLIC_PROFILE_HREF} role="menuitem" style={itemStyle}>
               <IconUsers size={14} /> Mi perfil público
+            </a>
+          )}
+          {/* TP-3b: con ficha propia en el consultorio activo (soporte no tiene: su `practitionerId` es null). Ícono
+              reusado (Configuración) para no sumar uno nuevo al layout de todas las rutas. */}
+          {ownPublicBooking && (
+            <a href={MY_MP_HREF} role="menuitem" style={itemStyle}>
+              <IconSettings size={14} /> Mi Mercado Pago
             </a>
           )}
           <a href="/cuenta/seguridad" role="menuitem" style={itemStyle}>

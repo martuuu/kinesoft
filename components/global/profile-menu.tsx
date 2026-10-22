@@ -53,6 +53,11 @@ export const SettingsModalLazy = dynamic(() => loadSettingsModal().then((m) => m
  * acá: quien no tiene «Configuración» no llega a Configuración → Profesionales. Mismo switch y misma action
  * (`setPractitionerPublicBooking`, que acepta al propio profesional); con el turnero del consultorio apagado queda
  * deshabilitado con «Primero el consultorio tiene que prender el turnero».
+ *
+ * TP-3b (TP-UI-D2): con ficha propia, «Mi Mercado Pago» → la pestaña `mercado-pago` de Configuración (mismo criterio y
+ * mismo href que el menú del topbar). El href va literal y no importado de `topbar-account-menu`: importarlo arrastraría
+ * ese módulo (selector de consultorio, Apariencia) a este menú, lo mismo que PF1.0-a evitó con `shell-links`. El test
+ * `[TP-3b]` fija que los dos sean `/configuracion?tab=${MY_MP_TAB}`.
  */
 export function ProfileMenu({
   name,
@@ -203,6 +208,25 @@ export function ProfileMenu({
           >
             <IconBell size={14} /> Ayuda y soporte
           </a>
+          {ownPublicBooking && (
+            <a
+              href="/configuracion?tab=mercado-pago"
+              role="menuitem"
+              style={{
+                padding: "10px 12px",
+                fontSize: 13,
+                fontWeight: 500,
+                color: "var(--navy-700)",
+                borderRadius: 10,
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                textDecoration: "none",
+              }}
+            >
+              <IconSettings size={14} /> Mi Mercado Pago
+            </a>
+          )}
           {ownPublicBooking && (
             <div
               role="none"
