@@ -23,6 +23,7 @@
 import { REALTIME_DRIVERS } from "@/lib/realtime-constants";
 import { ACCESS_ENFORCEMENTS } from "@/lib/tenant-access";
 import type { RealtimeSecretInfo } from "@/lib/realtime-token-internal";
+import { formatArDateTime } from "@/lib/mp-receipt";
 
 export type SystemCheckState = "ok" | "missing" | "warn" | "value";
 
@@ -175,6 +176,38 @@ export type SystemConfigInput = {
   NEXT_PUBLIC_SUPABASE_ANON_KEY?: string;
   /** HF-1a: lo que se puede decir del secreto de firma sin el valor (`describeRealtimeSecret`). null = no está. */
   realtimeSecret?: RealtimeSecretInfo | null;
+  /**
+   * TP-2h (C-TP13): grupo «Cobros online (Mercado Pago)». Llega ya descripto (modo efectivo, huellas, estado de las
+   * claves del secret box, conteos): el builder nunca recibe un client secret, un secreto de webhook ni una clave.
+   */
+  mpConnect?: MpConnectSystemInfo | null;
+};
+
+/** Lo que el read le pasa al builder del grupo «Cobros online (Mercado Pago)». Nada de esto es un secreto. */
+export type MpConnectSystemInfo = {
+  /** `mpConnectMode()`: el modo que la app APLICA (fake en Vercel ya cae a off). */
+  mode: string;
+  /** `mpConnectSignatureMode()`. */
+  signature: string;
+  clientIdPresent: boolean;
+  /** Huella (`mpSecretFingerprint`, 8 hex) o null si no está cargado. */
+  clientSecretFingerprint: string | null;
+  webhookSecretFingerprint: string | null;
+  /** `secretBoxStatus()` (lib/secret-box.ts): kids y huellas de las claves, nunca la clave. */
+  secretBox: { configured: boolean; devFallback: boolean; primaryKid: string | null; kids: string[]; fingerprints: Record<string, string> };
+  /** `TURNERO_CHECKOUT` crudo: solo se mira si es `platform` (en desuso: se avisa). */
+  turneroCheckout?: string;
+  /** Conteos de la base; `available: false` si no se pudieron leer (la página no se cae). */
+  stats:
+    | {
+        available: true;
+        accounts: { active: number; reauth: number; disconnected: number };
+        /** Último cobro que cambió por un webhook (AUTHORIZED/PAID/REFUNDED: solo el webhook los escribe). */
+        lastWebhookAt: Date | null;
+        /** Último refresh de token exitoso (cron o webhook). */
+        lastRefreshAt: Date | null;
+      }
+    | { available: false };
 };
 
 export type MigrationsInfo = { available: true; applied: number; last: string | null } | { available: false };
@@ -276,6 +309,173 @@ function realtimeChecks(input: SystemConfigInput, driver: string): SystemCheck[]
   return [secret, kid, anonCheck];
 }
 
+// ── TP-2h · Cobros online (Mercado Pago) ─────────────────────────────────────────────────────────────────────────
+
+const MP_MODES = ["off", "fake", "sandbox", "live"] as const;
+const MP_SIGNATURES = ["required", "fetch-only"] as const;
+/** Huella de `mpSecretFingerprint` (8 hex). Otra forma no se muestra: podría ser un secreto mal pasado. */
+const MP_FINGERPRINT = /^[0-9a-f]{8}$/;
+/** kid y huella del secret box (C-TP1: kid `[a-z0-9_-]{1,16}`, huella HMAC truncada a 12 hex). */
+const BOX_KID = /^[a-z0-9_-]{1,16}$/;
+const BOX_FINGERPRINT = /^[0-9a-f]{12}$/;
+
+function mpSecretCheck(
+  key: string,
+  label: string,
+  fingerprint: string | null,
+  needed: boolean,
+  missingDetail: string,
+  okDetail: string
+): SystemCheck {
+  if (fingerprint === null) {
+    return needed
+      ? { key, label, state: "missing", value: null, detail: missingDetail }
+      : { key, label, state: "value", value: "sin cargar", detail: "No hace falta con este modo. " + missingDetail };
+  }
+  return MP_FINGERPRINT.test(fingerprint)
+    ? { key, label, state: "ok", value: `huella ${fingerprint}`, detail: okDetail }
+    : { key, label, state: "warn", value: "huella inválida", detail: "No se puede mostrar la huella." };
+}
+
+function mpConnectChecks(info: MpConnectSystemInfo | null, vercelEnv: string): SystemCheck[] {
+  if (!info) {
+    return [{ key: "MP_CONNECT_MODE", label: "Modo", state: "warn", value: null, detail: "No se pudo leer la configuración de cobros online." }];
+  }
+  const mode = enumValue(info.mode, MP_MODES, "off");
+  const signature = enumValue(info.signature, MP_SIGNATURES, "required");
+  const real = mode === "sandbox" || mode === "live";
+  const onVercel = vercelEnv !== "local";
+  const checks: SystemCheck[] = [
+    {
+      key: "MP_CONNECT_MODE",
+      label: "Modo",
+      state: mode === "inválido" || (mode === "fake" && onVercel) ? "warn" : "value",
+      value: mode,
+      detail:
+        mode === "off"
+          ? "Apagado: el turnero reserva sin cobro online y no se generan links de pago."
+          : mode === "fake"
+            ? "Simulador local: nada toca Mercado Pago real. En Vercel no arranca."
+            : mode === "sandbox"
+              ? "Sandbox: cuentas y pagos de prueba de Mercado Pago."
+              : mode === "live"
+                ? "Producción: los pagos entran a la cuenta de cada profesional."
+                : "Valor no reconocido.",
+    },
+    info.clientIdPresent
+      ? { key: "MP_OAUTH_CLIENT_ID", label: "Client id de la app", state: "ok", value: null, detail: "Cargado." }
+      : real
+        ? { key: "MP_OAUTH_CLIENT_ID", label: "Client id de la app", state: "missing", value: null, detail: "Sin client id nadie puede conectar su Mercado Pago." }
+        : { key: "MP_OAUTH_CLIENT_ID", label: "Client id de la app", state: "value", value: "sin cargar", detail: "No hace falta con este modo. Cargalo antes de pasar a sandbox o live." },
+    mpSecretCheck(
+      "MP_OAUTH_CLIENT_SECRET",
+      "Client secret de la app",
+      info.clientSecretFingerprint,
+      real,
+      "Sin client secret no se canjea la autorización ni se renuevan los tokens.",
+      "Cargado. Compará la huella con la del gestor de contraseñas."
+    ),
+    mpSecretCheck(
+      "MP_CONNECT_WEBHOOK_SECRET",
+      "Secreto del webhook (cobros online)",
+      info.webhookSecretFingerprint,
+      real && signature === "required",
+      "Con la firma exigida y sin secreto, el webhook rechaza todos los avisos de pago (401) y Mercado Pago reintenta.",
+      "Cargado. Compará la huella con la del secreto de la app en Mercado Pago."
+    ),
+    {
+      key: "MP_CONNECT_WEBHOOK_SIGNATURE",
+      label: "Firma del webhook",
+      state: signature === "inválido" ? "warn" : "value",
+      value: signature,
+      detail:
+        signature === "fetch-only"
+          ? "No se exige la firma: cada aviso se verifica volviendo a pedir el pago con el token de la cuenta."
+          : "Se exige la firma y además se vuelve a pedir el pago con el token de la cuenta.",
+    },
+    secretBoxCheck(info.secretBox, real),
+  ];
+
+  const st = info.stats;
+  if (!st.available) {
+    checks.push({ key: "mp_accounts", label: "Cuentas conectadas", state: "warn", value: null, detail: "No se pudieron leer las cuentas con esta conexión." });
+  } else {
+    const n = (v: number) => (Number.isInteger(v) && v >= 0 ? v : 0);
+    const { active, reauth, disconnected } = st.accounts;
+    checks.push(
+      {
+        key: "mp_accounts",
+        label: "Cuentas conectadas",
+        state: n(reauth) > 0 ? "warn" : "value",
+        value: `${n(active)} activas · ${n(reauth)} a reconectar · ${n(disconnected)} desconectadas`,
+        detail:
+          n(reauth) > 0
+            ? "Hay cuentas que necesitan reconectarse: hasta entonces su turnero reserva sin cobro online."
+            : "Cuentas de Mercado Pago de profesionales y consultorios.",
+      },
+      {
+        key: "mp_last_webhook",
+        label: "Último webhook aplicado",
+        state: "value",
+        value: st.lastWebhookAt ? formatArDateTime(st.lastWebhookAt) : "nunca",
+        detail: "Último cobro online que cambió por un aviso de Mercado Pago (hora de Argentina).",
+      },
+      {
+        key: "mp_last_refresh",
+        label: "Última renovación de tokens",
+        state: "value",
+        value: st.lastRefreshAt ? formatArDateTime(st.lastRefreshAt) : "nunca",
+        detail: "La hace el cron diario con los tokens a menos de 30 días de vencer.",
+      }
+    );
+  }
+
+  if ((info.turneroCheckout ?? "").trim().toLowerCase() === "platform") {
+    checks.push({
+      key: "TURNERO_CHECKOUT",
+      label: "TURNERO_CHECKOUT",
+      state: "warn",
+      value: "platform",
+      detail: "Ya no hace nada: el turnero cobra con la cuenta de cada profesional. Sacala de Vercel.",
+    });
+  }
+  return checks;
+}
+
+function secretBoxCheck(box: MpConnectSystemInfo["secretBox"], real: boolean): SystemCheck {
+  const kids = box.kids.filter((k) => BOX_KID.test(k));
+  const prints = kids
+    .map((k) => (BOX_FINGERPRINT.test(box.fingerprints[k] ?? "") ? `${k} ${box.fingerprints[k]}` : `${k} (sin huella)`))
+    .join(" · ");
+  if (box.configured && kids.length > 0) {
+    const primary = box.primaryKid && BOX_KID.test(box.primaryKid) ? box.primaryKid : "?";
+    return {
+      key: "SECRET_BOX_KEYS",
+      label: "Claves de cifrado (SECRET_BOX_KEYS)",
+      state: "ok",
+      value: `${kids.length} ${kids.length === 1 ? "clave" : "claves"} · sella ${primary}`,
+      detail: `Huellas: ${prints}. La primera sella; todas abren.`,
+    };
+  }
+  if (box.devFallback) {
+    const dev = BOX_FINGERPRINT.test(box.fingerprints.dev ?? "") ? ` (huella ${box.fingerprints.dev})` : "";
+    return {
+      key: "SECRET_BOX_KEYS",
+      label: "Claves de cifrado (SECRET_BOX_KEYS)",
+      state: "warn",
+      value: "clave de desarrollo",
+      detail: `Sin SECRET_BOX_KEYS: los tokens se sellan con la clave de desarrollo${dev}. Solo sirve fuera de Vercel.`,
+    };
+  }
+  return {
+    key: "SECRET_BOX_KEYS",
+    label: "Claves de cifrado (SECRET_BOX_KEYS)",
+    state: real ? "missing" : "warn",
+    value: null,
+    detail: "Sin claves (o mal formadas): no se pueden guardar ni abrir los tokens de Mercado Pago.",
+  };
+}
+
 function enumValue(v: string | undefined, allowed: readonly string[], fallback: string): string {
   const t = (v ?? "").trim();
   if (!t) return fallback;
@@ -354,12 +554,25 @@ export function buildSystemStatus(
       id: "mp",
       title: "Mercado Pago",
       checks: [
-        presence("MP_ACCESS_TOKEN", "Access token", input.MP_ACCESS_TOKEN, "Sin token no se pueden generar cobros.", "Cargado."),
+        // TP-2h (§25.10): el token de la plataforma solo sirve al checkout LEGADO (`lib/mercadopago.ts`); el turnero y
+        // los links cobran con la cuenta de cada profesional (grupo «Cobros online»). Que falte no es un problema.
+        presence(
+          "MP_ACCESS_TOKEN",
+          "Token de la plataforma (legado)",
+          input.MP_ACCESS_TOKEN,
+          "Sin token: el checkout legado no cobra. Los cobros online usan la cuenta de cada profesional.",
+          "Cargado. Solo lo usa el checkout legado: los cobros online van a la cuenta de cada profesional."
+        ),
         presence("MP_PUBLIC_KEY", "Public key", input.MP_PUBLIC_KEY, "Sin public key.", "Cargada."),
         mpToken && !mpSecret
           ? { key: "MP_WEBHOOK_SECRET", label: "Secreto del webhook", state: "missing", value: null, detail: "Con token y sin secreto, el webhook rechaza todos los pagos (503)." }
           : presence("MP_WEBHOOK_SECRET", "Secreto del webhook", input.MP_WEBHOOK_SECRET, "Sin secreto del webhook.", "Cargado."),
       ],
+    },
+    {
+      id: "mp-connect",
+      title: "Cobros online (Mercado Pago)",
+      checks: mpConnectChecks(input.mpConnect ?? null, vercelEnv),
     },
     {
       id: "runtime",

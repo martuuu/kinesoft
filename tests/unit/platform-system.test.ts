@@ -29,6 +29,22 @@ const MARKED: Required<SystemConfigInput> = {
   NEXT_PUBLIC_SUPABASE_ANON_KEY: "SECRETO-ANON",
   // Ya descripto (el builder nunca recibe el secreto); `load()` no lo pasa a process.env.
   realtimeSecret: { length: 40, edgeWhitespace: false, fingerprint: "abcd1234" },
+  // TP-2h: el grupo de cobros online llega ya descripto (huellas y conteos); `load()` no lo pasa a process.env.
+  mpConnect: {
+    mode: "live",
+    signature: "required",
+    clientIdPresent: true,
+    clientSecretFingerprint: "0a1b2c3d",
+    webhookSecretFingerprint: "4e5f6a7b",
+    secretBox: { configured: true, devFallback: false, primaryKid: "k2", kids: ["k2", "k1"], fingerprints: { k2: "aaaaaaaaaaaa", k1: "bbbbbbbbbbbb" } },
+    turneroCheckout: "platform",
+    stats: {
+      available: true,
+      accounts: { active: 3, reauth: 1, disconnected: 2 },
+      lastWebhookAt: new Date("2026-10-21T02:30:00.000Z"),
+      lastRefreshAt: null,
+    },
+  },
 };
 
 const allChecks = (s: ReturnType<typeof buildSystemStatus>) => s.groups.flatMap((g) => g.checks);
@@ -105,6 +121,94 @@ describe("[BO3-E] buildSystemStatus · presencia sin valores", () => {
   });
 });
 
+describe("[TP-2k] Sistema · grupo «Cobros online (Mercado Pago)»", () => {
+  const groupOf = (s: ReturnType<typeof buildSystemStatus>, id: string) => s.groups.find((g) => g.id === id);
+
+  it("[TP-2k] Sistema muestra presencias, huellas y conteos, nunca valores", () => {
+    const s = buildSystemStatus(MARKED, { available: false }, { up: true, ms: 1 });
+    const g = groupOf(s, "mp-connect")!;
+    expect(g.title).toBe("Cobros online (Mercado Pago)");
+    const byKey = Object.fromEntries(g.checks.map((c) => [c.key, c]));
+    expect(byKey.MP_CONNECT_MODE).toMatchObject({ state: "value", value: "live" });
+    expect(byKey.MP_OAUTH_CLIENT_ID).toMatchObject({ state: "ok", value: null });
+    expect(byKey.MP_OAUTH_CLIENT_SECRET).toMatchObject({ state: "ok", value: "huella 0a1b2c3d" });
+    expect(byKey.MP_CONNECT_WEBHOOK_SECRET).toMatchObject({ state: "ok", value: "huella 4e5f6a7b" });
+    expect(byKey.MP_CONNECT_WEBHOOK_SIGNATURE).toMatchObject({ state: "value", value: "required" });
+    expect(byKey.SECRET_BOX_KEYS).toMatchObject({ state: "ok", value: "2 claves · sella k2" });
+    expect(byKey.SECRET_BOX_KEYS.detail).toContain("k2 aaaaaaaaaaaa · k1 bbbbbbbbbbbb");
+    expect(byKey.mp_accounts).toMatchObject({ state: "warn", value: "3 activas · 1 a reconectar · 2 desconectadas" });
+    // 02:30 UTC del 21/10 = 23:30 AR del 20/10, también con TZ=UTC.
+    expect(byKey.mp_last_webhook.value).toBe("20/10/2026, 23:30");
+    expect(byKey.mp_last_refresh.value).toBe("nunca");
+    expect(byKey.TURNERO_CHECKOUT).toMatchObject({ state: "warn", value: "platform" });
+    // El token de la plataforma pasa a «legado».
+    expect(allChecks(s).find((c) => c.key === "MP_ACCESS_TOKEN")?.label).toBe("Token de la plataforma (legado)");
+  });
+
+  it("[TP-2k] lo que no tiene la forma esperada no sale tal cual (huellas, kids, modo, firma)", () => {
+    const s = buildSystemStatus(
+      {
+        mpConnect: {
+          mode: "SECRETO-modo",
+          signature: "SECRETO-firma",
+          clientIdPresent: false,
+          clientSecretFingerprint: "SECRETO-no-es-huella",
+          webhookSecretFingerprint: null,
+          secretBox: { configured: true, devFallback: false, primaryKid: "SECRETO", kids: ["SECRETO|x", "k1"], fingerprints: { k1: "SECRETO" } },
+          stats: { available: false },
+        },
+      },
+      { available: false },
+      { up: true, ms: 1 }
+    );
+    expect(JSON.stringify(s)).not.toMatch(/SECRETO/);
+    const byKey = Object.fromEntries(groupOf(s, "mp-connect")!.checks.map((c) => [c.key, c]));
+    expect(byKey.MP_CONNECT_MODE).toMatchObject({ state: "warn", value: "inválido" });
+    expect(byKey.MP_CONNECT_WEBHOOK_SIGNATURE).toMatchObject({ state: "warn", value: "inválido" });
+    expect(byKey.MP_OAUTH_CLIENT_SECRET).toMatchObject({ state: "warn", value: "huella inválida" });
+    expect(byKey.SECRET_BOX_KEYS).toMatchObject({ state: "ok", value: "1 clave · sella ?" });
+    expect(byKey.SECRET_BOX_KEYS.detail).toContain("k1 (sin huella)");
+    expect(byKey.mp_accounts).toMatchObject({ state: "warn", value: null });
+    expect(byKey.TURNERO_CHECKOUT).toBeUndefined();
+  });
+
+  it("[TP-2k] modo off sin nada cargado: nada «falta»; sandbox/live sin credenciales sí", () => {
+    const box = { configured: false, devFallback: true, primaryKid: "dev", kids: [], fingerprints: { dev: "cccccccccccc" } };
+    const stats = { available: true as const, accounts: { active: 0, reauth: 0, disconnected: 0 }, lastWebhookAt: null, lastRefreshAt: null };
+    const off = buildSystemStatus(
+      { mpConnect: { mode: "off", signature: "required", clientIdPresent: false, clientSecretFingerprint: null, webhookSecretFingerprint: null, secretBox: box, stats } },
+      { available: false },
+      { up: true, ms: 1 }
+    );
+    const o = Object.fromEntries(groupOf(off, "mp-connect")!.checks.map((c) => [c.key, c]));
+    expect(o.MP_OAUTH_CLIENT_ID).toMatchObject({ state: "value", value: "sin cargar" });
+    expect(o.MP_OAUTH_CLIENT_SECRET).toMatchObject({ state: "value", value: "sin cargar" });
+    expect(o.SECRET_BOX_KEYS).toMatchObject({ state: "warn", value: "clave de desarrollo" });
+    expect(o.mp_accounts).toMatchObject({ state: "value", value: "0 activas · 0 a reconectar · 0 desconectadas" });
+
+    const live = buildSystemStatus(
+      {
+        VERCEL_ENV: "production",
+        mpConnect: {
+          mode: "live",
+          signature: "required",
+          clientIdPresent: false,
+          clientSecretFingerprint: null,
+          webhookSecretFingerprint: null,
+          secretBox: { configured: false, devFallback: false, primaryKid: null, kids: [], fingerprints: {} },
+          stats,
+        },
+      },
+      { available: false },
+      { up: true, ms: 1 }
+    );
+    const l = Object.fromEntries(groupOf(live, "mp-connect")!.checks.map((c) => [c.key, c]));
+    for (const k of ["MP_OAUTH_CLIENT_ID", "MP_OAUTH_CLIENT_SECRET", "MP_CONNECT_WEBHOOK_SECRET", "SECRET_BOX_KEYS"]) {
+      expect(l[k].state, k).toBe("missing");
+    }
+  });
+});
+
 describe("[BO3-E] getPlatformSystemStatus · el export real con env marcado", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -129,6 +233,12 @@ describe("[BO3-E] getPlatformSystemStatus · el export real con env marcado", ()
     vi.resetModules();
     // VERCEL_ENV no se setea: el fail-fast de Production de `lib/env.ts` no aplica (no es lo que se prueba acá).
     for (const [k, v] of Object.entries(MARKED)) if (k !== "VERCEL_ENV" && typeof v === "string") vi.stubEnv(k, v);
+    // TP-2h: secretos de cobros online marcados; de estos solo puede salir la huella.
+    vi.stubEnv("MP_CONNECT_MODE", "sandbox");
+    vi.stubEnv("MP_OAUTH_CLIENT_ID", "SECRETO-MP-CLIENT-ID");
+    vi.stubEnv("MP_OAUTH_CLIENT_SECRET", "SECRETO-MP-CLIENT-SECRET");
+    vi.stubEnv("MP_CONNECT_WEBHOOK_SECRET", "SECRETO-MP-CONNECT-HOOK");
+    vi.stubEnv("SECRET_BOX_KEYS", `k1:${Buffer.alloc(32, 7).toString("base64")}`);
     const requirePlatformAdmin = vi.fn(requireImpl);
     vi.doMock("@/lib/platform-actor", () => ({ requirePlatformAdmin }));
     vi.doMock("@/lib/db", () => ({
@@ -137,6 +247,10 @@ describe("[BO3-E] getPlatformSystemStatus · el export real con env marcado", ()
         $queryRaw: vi.fn(async () => [{ applied: BigInt(42), last: "20261014000000_identity_access" }]),
         // OPS-1a: la tarjeta de mails que no salieron lee EmailLog por el canal service.
         emailLog: { findMany: emailLogFindMany },
+        // TP-2h: conteos del grupo «Cobros online».
+        mpAccount: { groupBy: vi.fn(async () => [{ status: "ACTIVE", _count: { _all: 2 } }, { status: "REAUTH_REQUIRED", _count: { _all: 1 } }]) },
+        onlineCharge: { aggregate: vi.fn(async () => ({ _max: { updatedAt: new Date("2026-10-21T02:30:00.000Z") } })) },
+        mpCredential: { aggregate: vi.fn(async () => ({ _max: { lastRefreshedAt: null } })) },
       },
     }));
     vi.doMock("@/lib/db-ping", () => ({ pingDb: vi.fn(async () => ({ up: true, ms: 3 })) }));
@@ -155,6 +269,18 @@ describe("[BO3-E] getPlatformSystemStatus · el export real con env marcado", ()
     expect(byKey.REALTIME_DRIVER.value).toBe("supabase");
     expect(byKey.TENANT_ACCESS_ENFORCEMENT.value).toBe("enforce");
     expect(byKey.migrations.value).toBe("42");
+    // [TP-2k] Sistema: presencias, huellas y conteos de cobros online, nunca valores.
+    expect(byKey.MP_CONNECT_MODE).toMatchObject({ state: "value", value: "sandbox" });
+    expect(byKey.MP_OAUTH_CLIENT_ID).toMatchObject({ state: "ok", value: null });
+    expect(byKey.MP_OAUTH_CLIENT_SECRET.value).toMatch(/^huella [0-9a-f]{8}$/);
+    expect(byKey.MP_CONNECT_WEBHOOK_SECRET.value).toMatch(/^huella [0-9a-f]{8}$/);
+    expect(byKey.MP_CONNECT_WEBHOOK_SECRET.value).not.toBe(byKey.MP_OAUTH_CLIENT_SECRET.value);
+    expect(byKey.SECRET_BOX_KEYS).toMatchObject({ state: "ok", value: "1 clave · sella k1" });
+    expect(byKey.SECRET_BOX_KEYS.detail).toMatch(/^Huellas: k1 [0-9a-f]{12}\./);
+    expect(byKey.mp_accounts).toMatchObject({ state: "warn", value: "2 activas · 1 a reconectar · 0 desconectadas" });
+    expect(byKey.mp_last_webhook.value).toBe("20/10/2026, 23:30");
+    expect(byKey.mp_last_refresh.value).toBe("nunca");
+    expect(JSON.stringify(s)).not.toContain(Buffer.alloc(32, 7).toString("base64"));
     // OPS-1a: la tarjeta trae el motivo y el dominio, nunca el usuario enmascarado.
     expect(s.emailFailures).toMatchObject({ available: true, items: [{ kind: "staff_invite", reason: "provider_error:validation_error:403", recipientDomain: "gmail.com" }] });
     expect(JSON.stringify(s)).not.toContain("j***");

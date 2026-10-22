@@ -76,6 +76,18 @@ export type OnlineChargeReceiptView = {
   methodLabel: string;
   statusLabel: string;
   refundedAt: string | null;
+  /**
+   * TP-2h (decisión del orquestador en TP-K4): los datos CRUDOS que necesita `buildMpReceipt` (lib/mp-receipt.ts) para
+   * las 7 filas del comprobante (cuotas, tipo y marca del medio, estado de MP y «Acreditado en»). Los `*Label` de
+   * arriba quedan para las superficies que solo muestran un resumen; el comprobante completo lo arma la UI con
+   * `buildMpReceipt({ mpPaymentId: operationId, approvedAt, paidAmountCents, paymentMethodId, paymentTypeId,
+   * installments, mpStatus, refundedAt, account })`, la misma función que en `/pagar` y el turnero.
+   */
+  paymentMethodId: string | null;
+  paymentTypeId: string | null;
+  installments: number | null;
+  mpStatus: string | null;
+  account: { kind: "PRACTITIONER" | "CLINIC"; practitionerName: string | null };
 };
 
 /** Input de `listOnlineCharges` (C-TP9, `/cobros`): filtros de la URL. `status`/`period` llegan como texto y los valida el server. */

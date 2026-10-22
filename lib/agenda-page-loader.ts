@@ -48,6 +48,8 @@ import { listAgendaBookings } from "@/lib/bookings";
 import { getAgendaAvailability } from "@/lib/availability-actions";
 import { getUserPreferences } from "@/lib/preferences";
 import { capabilitiesForActor } from "@/lib/authz";
+import type { Capability } from "@/lib/capabilities";
+import { mpConnectMode, type MpConnectMode } from "@/lib/env";
 import { roomsEnabled } from "@/lib/tenant-modules";
 import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 import { displayMemberName } from "@/lib/display-name";
@@ -82,6 +84,29 @@ export type AgendaBootstrap = {
   rooms: RoomOption[];
 };
 
+/**
+ * T5 (TP-2h, §25.12 «`onlineMoney` con 0 sentencias»): lo que la agenda necesita saber de cobros online para decidir
+ * si ofrece «Generar link de pago» en el drawer, sin leer nada de la base. `listAgendaBookings` está a un techo de
+ * sentencias (§25.2 #5): la seña y el «pagado online» de cada turno ya viajan en el cable (`od`/`po`, TP-2e); acá va
+ * solo lo que sale del entorno y de las capabilities que el Actor ya trae.
+ *   - `enabled`: el modo de cobros online no está apagado (`MP_CONNECT_MODE ≠ off`). Apagado → no hay links.
+ *   - `canLink`: además, el viewer puede cobrar (`billing.collect`, o `billing.collectOwn` con profesional propio:
+ *     el chequeo fino por turno sigue siendo `canCollectCopago` en la UI y en la action). Soporte nunca.
+ * La cuenta y la delegación NO se miran acá (serían sentencias): las resuelve `getPaymentLinkSuggestions` al abrir el
+ * drawer del link, que devuelve el motivo si falta algo.
+ */
+export type AgendaOnlineMoney = { enabled: boolean; canLink: boolean };
+
+export function agendaOnlineMoneyFor(
+  caps: ReadonlySet<Capability | string>,
+  actor: Pick<Actor, "support" | "practitionerId">,
+  mode: MpConnectMode = mpConnectMode()
+): AgendaOnlineMoney {
+  const enabled = mode !== "off";
+  const collects = caps.has("billing.collect") || (caps.has("billing.collectOwn") && actor.practitionerId != null);
+  return { enabled, canLink: enabled && !actor.support && collects };
+}
+
 export type AgendaPageData = AgendaBootstrap & {
   /** Turnos de la semana en el cable compacto (`lib/agenda-wire.ts`); el cliente los decodifica con el mismo catálogo. */
   bookings: AgendaWireBooking[];
@@ -89,6 +114,7 @@ export type AgendaPageData = AgendaBootstrap & {
   agendaView: AgendaViewPrefs;
   capabilities: string[];
   availability: AgendaAvailability | null;
+  onlineMoney: AgendaOnlineMoney;
 };
 
 /**
@@ -239,5 +265,6 @@ export async function loadAgendaPage(
     agendaView,
     capabilities: [...caps],
     availability,
+    onlineMoney: agendaOnlineMoneyFor(caps, actor),
   };
 }

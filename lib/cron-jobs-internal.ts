@@ -39,6 +39,7 @@ import { checkCronAuth } from "@/lib/cron-auth";
 import { maintenanceMode } from "@/lib/maintenance";
 import { runSaasBilling, type SaasBillingRunResult } from "@/lib/saas-billing-internal";
 import { storageSweepPending } from "@/lib/storage-internal";
+import { runMpConnectMaintenance, type MpConnectCronResult } from "@/lib/mp-connect/cron-internal";
 import {
   healthDigestFindings,
   healthDigestKey,
@@ -133,15 +134,18 @@ async function stage<T>(name: string, fn: () => Promise<T>): Promise<DailyStage<
 
 /**
  * Etapas en orden: cobros (precios con vigencia → suscripciones → cargos del período → vencidos/al día → mails) →
- * invitaciones → recordatorios de prueba → resumen de salud → barrido de `pending/` del Storage. Si los cobros agotan
- * su presupuesto, cortan y siguen mañana (`truncated`); los demás jobs corren igual. El barrido va ÚLTIMO y con lo
- * que quede del presupuesto de 45 s (es mantenimiento: si hoy no entra, entra mañana).
+ * invitaciones → recordatorios de prueba → resumen de salud → Mercado Pago de los consultorios (`mp_connect`, T5
+ * C-TP13: refresh de tokens, vencidos, links de turnos cancelados, purga de credenciales) → barrido de `pending/` del
+ * Storage. Si los cobros agotan su presupuesto, cortan y siguen mañana (`truncated`); los demás jobs corren igual.
+ * `mp_connect` tiene su propio presupuesto (8 s, cada refresh es una llamada a MP) y corta con `truncated`. El barrido
+ * va ÚLTIMO y con lo que quede del presupuesto de 45 s (es mantenimiento: si hoy no entra, entra mañana).
  */
 export async function runDaily(now: Date): Promise<{
   billing: DailyStage<SaasBillingRunResult>;
   invitations: DailyStage<InvitationsExpireResult>;
   trialReminders: DailyStage<TrialRemindersResult>;
   healthDigest: DailyStage<HealthDigestResult>;
+  mpConnect: DailyStage<MpConnectCronResult>;
   storagePending: DailyStage<StoragePendingSweepResult>;
 }> {
   // Reloj real (no `now`): el presupuesto es de la ejecución de la función, no del día lógico del cron.
@@ -150,8 +154,9 @@ export async function runDaily(now: Date): Promise<{
   const invitations = await stage("invitations", () => runInvitationsExpire(now));
   const trialReminders = await stage("trial_reminders", () => runTrialReminders(now));
   const healthDigest = await stage("health_digest", () => runHealthDigest(now));
+  const mpConnect = await stage("mp_connect", () => runMpConnectMaintenance(now));
   const storagePending = await stage("storage_pending", () => runStoragePendingSweep(now, deadlineAtMs));
-  return { billing, invitations, trialReminders, healthDigest, storagePending };
+  return { billing, invitations, trialReminders, healthDigest, mpConnect, storagePending };
 }
 
 // ── 0b. Barrido de subidas firmadas sin confirmar (T4 FC-2i, C-FC10) ──────────────────────────────────────────
