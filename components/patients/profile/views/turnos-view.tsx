@@ -49,6 +49,32 @@ const TURNOS_MIN_WIDTH_ADMIN = 780;
  * plan → la vista de siempre. Los turnos de plan no tienen "Eliminar": se
  * cancelan (el server además rechaza borrar un turno con cobro).
  */
+/**
+ * TP-3k (§25.1 #2, decisión 2 del 19-oct): confirmación de «Cancelar turno» cuando el turno tiene una seña cobrada por
+ * Mercado Pago (`Booking.onlineDepositCents`, escalar que ya trae la fila: 0 sentencias). Los reintegros se hacen
+ * desde Mercado Pago, la app no devuelve plata; después del cancelar el `notice` del server lo repite en el toast.
+ * Texto literal de `depositRefundNotice` (`lib/online-charge-logic.ts`) y no un import: ese módulo arrastra la decisión
+ * del turnero y el saneo del comprobante, y `/pacientes/[id]` tiene techo +0 en T5 (ver `lib/booking-collect.ts`).
+ * El test `[TP-3k]` fija que los textos son iguales. `null` = sin seña: se cancela en un click, como antes.
+ */
+export function turnosDepositCancelConfirm(b: { onlineDepositCents?: number | null }): {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  cancelLabel: string;
+  tone: "danger";
+} | null {
+  const cents = b.onlineDepositCents;
+  if (typeof cents !== "number" || !Number.isInteger(cents) || cents <= 0) return null;
+  return {
+    title: "¿Cancelar este turno?",
+    message: `Este turno tiene una seña de ${formatARS(cents)}: si corresponde, reintegrala desde Mercado Pago.`,
+    confirmLabel: "Cancelar turno",
+    cancelLabel: "Volver",
+    tone: "danger",
+  };
+}
+
 export type TurnosViewProps = {
   patientId: string;
   bookings: PatientBookingFull[] | null;
@@ -156,7 +182,11 @@ export function TurnosView({
   // paciente con `useConfirm` y re-llamada con el flag. Antes se mandaba sin
   // versión (pisaba cambios de otra pestaña) y el conflicto se mostraba como
   // un error genérico sin salida.
-  const setStatus = (b: PatientBookingFull, status: PatientBookingFull["status"]) => {
+  const setStatus = async (b: PatientBookingFull, status: PatientBookingFull["status"]) => {
+    // TP-3k: cancelar un turno con seña pide confirmación con el aviso de reintegro ANTES (sin seña sigue en un
+    // click, como siempre). Va antes del optimismo: si vuelve, la fila no se toca.
+    const depositConfirm = status === "CANCELLED" && b.status !== "CANCELLED" ? turnosDepositCancelConfirm(b) : null;
+    if (depositConfirm && !(await confirm(depositConfirm))) return;
     const prevStatus = b.status;
     const expected = versionOf(b);
     patchBooking(b.id, { status });
@@ -282,7 +312,7 @@ export function TurnosView({
           ) : (
             <TurnoActionsMenu
               booking={b}
-              onStatus={(s) => setStatus(b, s)}
+              onStatus={(s) => void setStatus(b, s)}
               onDelete={canDeleteFromProfile(b) ? () => void remove(b) : undefined}
               disabled={pending}
             />

@@ -4,6 +4,7 @@ import type { BookingStatus } from "@prisma/client";
 import { Button } from "@/components/ui/button";
 import { IconCheck } from "@/components/ui/icons";
 import type { BookingClinicalNoteView } from "@/lib/clinical-notes-types";
+import { formatARS } from "@/lib/format";
 import { menuLabel } from "./styles";
 
 /** Toast de éxito por estado (el resto cae en "Turno actualizado"). */
@@ -211,7 +212,26 @@ export function StatusActions({
  * «Ausente» queda en un click: no se confunde con cerrar y es la marca de todos los días de la recepción (se corrige
  * desde el mismo menú).
  */
-export function cancelBookingConfirm(b: { patientName: string; scheduledFor: string }): {
+/**
+ * TP-3k (§25.1 #2, decisión 2 del 19-oct): los reintegros se hacen DESDE Mercado Pago; la app no devuelve plata. Por
+ * eso la confirmación de cancelar un turno con seña lo avisa ANTES (después lo repite el `notice` del server en el
+ * toast). Literal de `depositRefundNotice` (`lib/online-charge-logic.ts`) y no un import: ese módulo arrastra la
+ * decisión del turnero y el saneo del comprobante (ver `lib/booking-collect.ts`) y `/agenda` tiene 0,2 kB de margen.
+ * El test `[TP-3k]` fija que los dos textos son iguales. `null` = sin seña (0, ausente o no entero).
+ */
+export function depositCancelWarning(onlineDepositCents: number | null | undefined): string | null {
+  if (typeof onlineDepositCents !== "number" || !Number.isInteger(onlineDepositCents) || onlineDepositCents <= 0) {
+    return null;
+  }
+  return `Este turno tiene una seña de ${formatARS(onlineDepositCents)}: si corresponde, reintegrala desde Mercado Pago.`;
+}
+
+export function cancelBookingConfirm(b: {
+  patientName: string;
+  scheduledFor: string;
+  /** TP-3k: Σ de señas PAID del turno (cable `od` de la agenda); se omite si es 0. */
+  onlineDepositCents?: number | null;
+}): {
   title: string;
   message: string;
   confirmLabel: string;
@@ -229,7 +249,12 @@ export function cancelBookingConfirm(b: { patientName: string; scheduledFor: str
   });
   return {
     title: `¿Cancelar el turno de ${b.patientName} del ${when}?`,
-    message: "El horario queda libre en la agenda. Si fue un error, lo podés reactivar desde «Cambiar estado».",
+    message: [
+      "El horario queda libre en la agenda. Si fue un error, lo podés reactivar desde «Cambiar estado».",
+      depositCancelWarning(b.onlineDepositCents),
+    ]
+      .filter(Boolean)
+      .join(" "),
     confirmLabel: "Cancelar turno",
     cancelLabel: "Volver",
     tone: "danger",

@@ -110,7 +110,7 @@ import {
   pickNextPlanSession,
   type PlanRowBooking,
 } from "./plan-row";
-import { planStatusToastDescription } from "./status-actions";
+import { depositCancelWarning, planStatusToastDescription } from "./status-actions";
 import { ReceptionInfo } from "./reception-info";
 import { ReceptionActions, drawerReceptionActions, receptionToastTitle } from "./reception-actions";
 import { NO_ROOM_VALUE, RoomRow, drawerRoomModel, roomChangeOutcome, roomUpdatePayload } from "./room-row";
@@ -491,7 +491,7 @@ export function BookingDrawer({
     const session = planOrdinal != null ? `la sesión ${planOrdinal}` : "la sesión";
     const ok = await confirm({
       title: "¿Cancelar este turno?",
-      message: `Es de un plan: no se elimina. Lo cancelamos y ${session} queda sin turno para reprogramar.`,
+      message: [`Es de un plan: no se elimina. Lo cancelamos y ${session} queda sin turno para reprogramar.`, depositCancelWarning(booking?.onlineDepositCents)].filter(Boolean).join(" "),
       confirmLabel: "Cancelar turno",
       tone: "danger",
     });

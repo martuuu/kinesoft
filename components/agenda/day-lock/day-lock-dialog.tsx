@@ -103,6 +103,22 @@ export function dayLockPlanNote(
 }
 
 /**
+ * TP-3k (§25.10, «aviso de reintegro al cancelar … y candado»): el candado NO cancela un turno con cobro, y una seña
+ * de Mercado Pago cobrada cuenta como cobro (`hasPayment` incluye `onlineDepositCents > 0`, `lib/time-blocks.ts`, y
+ * la escritura usa el mismo criterio, `bookingHasMoney`). Así que el candado nunca deja una seña colgada: el aviso dice
+ * que esos turnos quedan y que, si después se cancelan, el reintegro se hace desde Mercado Pago (decisión 2 del
+ * 19-oct: la app no devuelve plata). Antes decía «devuelvas el pago», que sugería que la app lo hacía. El preview no
+ * trae el monto (solo el booleano, PD-13): el monto lo da el drawer al cancelar uno por uno. `null` = sin cobros.
+ */
+export function dayLockPaymentNote(affected: readonly Pick<DayLockAffected, "hasPayment">[]): string | null {
+  const n = affected.filter((a) => a.hasPayment).length;
+  if (n === 0) return null;
+  return n === 1
+    ? "1 turno tiene un cobro registrado (por ejemplo, una seña de Mercado Pago): no se cancela y queda en la agenda para que lo reprogrames. Si después lo cancelás, la seña se reintegra desde Mercado Pago."
+    : `${n} turnos tienen un cobro registrado (por ejemplo, una seña de Mercado Pago): no se cancelan y quedan en la agenda para que los reprogrames. Si después cancelás alguno, la seña se reintegra desde Mercado Pago.`;
+}
+
+/**
  * Lista del paso «affected»: hora · profesional · paciente, "Con cobro" y, con
  * el módulo `planes`, un chip "Plan" (canal no cromático, AGENTS §5) en los
  * turnos que son sesión de un plan. Nunca el título del plan (PD-13).
@@ -543,8 +559,13 @@ export function DayLockDialog({
       const cancellable = preview.affected.filter((a) => !a.hasPayment).length;
       const ok = await confirm({
         title: cancellable === 1 ? "¿Cancelar 1 turno?" : `¿Cancelar ${cancellable} turnos?`,
-        message:
+        // TP-3k: con cobros en la lista, la confirmación repite que esos no se cancelan (y el reintegro va por MP).
+        message: [
           "Se bloquea el día y se cancelan los turnos de la lista. El paciente no recibe aviso: avisale vos.",
+          dayLockPaymentNote(preview.affected),
+        ]
+          .filter(Boolean)
+          .join(" "),
         confirmLabel: "Cancelar turnos y bloquear",
         cancelLabel: "Volver",
         tone: "danger",
@@ -880,8 +901,10 @@ export function DayLockDialog({
             <div style={noteStyle}>
               {/* PL-F1c: sin «todavía… llega más adelante»: no se promete una función que no está planificada. */}
               Si los cancelás, <strong>el paciente no recibe aviso</strong>: avisale vos.
-              {preview.affected.some((a) => a.hasPayment) &&
-                " Los que tienen un cobro registrado no se cancelan: quedan en la agenda para que los reprogrames o devuelvas el pago."}
+              {(() => {
+                const paymentNote = dayLockPaymentNote(preview.affected);
+                return paymentNote ? <span data-testid="day-lock-payment-note"> {paymentNote}</span> : null;
+              })()}
               {(() => {
                 const planNote = dayLockPlanNote(planesEnabled, preview.affected);
                 return planNote ? <span data-testid="day-lock-plan-note"> {planNote}</span> : null;
