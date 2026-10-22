@@ -34,9 +34,10 @@
 import { vi, describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 
 vi.hoisted(() => {
-  // Turnero y webhook (solo en el bloque post-integración): `client()` de MP
+  // Webhook legado (solo en el bloque post-integración): `client()` de MP
   // exige el token y el webhook verifica la firma con este secreto. Nunca sale
-  // a la red: el SDK está mockeado abajo.
+  // a la red: el SDK está mockeado abajo. T5 (TP-2c): el turnero ya no usa el
+  // SDK (cobra con la cuenta del profesional; sin política, reserva sin cobro).
   process.env.MP_ACCESS_TOKEN = "TEST-access-token";
   process.env.MP_WEBHOOK_SECRET = "test-webhook-secret-sv08";
 });

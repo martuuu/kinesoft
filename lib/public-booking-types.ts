@@ -72,19 +72,13 @@ export type PublicClinic = {
   /** B3.2: coberturas activas del consultorio (sin montos). */
   insurers?: { id: string; name: string; isParticular: boolean }[];
   /**
-   * TP-0 (H-TP0, plan §22.5): ¿el turnero PODRÍA mandar a pagar online? `TURNERO_CHECKOUT=platform` y Mercado Pago
-   * configurado. Aun en true, un servicio de menos de $1 (`MIN_ONLINE_CHARGE_CENTS`, `lib/public-booking-payment.ts`)
-   * se reserva sin cobro: el wizard lo cruza con `priceCents`. Ausente/false = «Confirmar turno» y «Lo pagás en el
-   * consultorio». Lo decide el server en cada submit (`decidePublicCheckout`): esto es solo para el copy.
-   */
-  onlineCheckout?: boolean;
-  /**
    * T5 (C-TP8, literal; TP-K1): cobro online del turnero con la cuenta del vendedor. null/ausente = sin cobro online
    * (política OFF, `MP_CONNECT_MODE=off` o ningún profesional con cuenta usable): «Confirmar turno» como TP-0.
    * `practitionerIds`: profesionales con cuenta usable (la propia ACTIVE, o la del consultorio con `useClinicAccount`);
    * para los demás el wizard no ofrece pagar. El wizard COTIZA con `priceCents` (`quoteOnlineCharge`); si el server
    * cobra otro monto (copago de obra social), el interstitial lo muestra antes de ir a Mercado Pago (TP-UI-D6).
-   * Reemplaza a `onlineCheckout`, que TP-2c deja de llenar.
+   * Reemplaza a `onlineCheckout` (TP-0, `TURNERO_CHECKOUT=platform`), que TP-2c sacó: la cuenta de la plataforma ya no
+   * cobra turnos (H-TP1).
    */
   onlinePayment?: PublicClinicOnlinePayment | null;
 };
@@ -190,12 +184,12 @@ export type PublicBookingStatus = {
   /** Initials only — never the full name, since this endpoint is unauth. */
   patientInitials: string | null;
   /**
-   * H-TP2: con pago online, lo cobrado (PAID) o lo que se espera cobrar (`Payment.expectedAmountCents`); antes mostraba
-   * `Payment.amountCents`, que vale 0 hasta que el webhook acredita («$ 0» con el pago pendiente). Sin pago online, el
-   * precio del servicio (lo que se paga en el consultorio).
+   * Con cobro online de T5 (`onlineCharge`): su monto. Con el checkout legado (H-TP2): lo cobrado (PAID) o lo que se
+   * espera cobrar (`Payment.expectedAmountCents`); antes mostraba `Payment.amountCents`, que vale 0 hasta que el webhook
+   * acredita («$ 0» con el pago pendiente). Sin pago online, el precio del servicio (lo que se paga en el consultorio).
    */
   amountCents: number | null;
-  /** TP-0: true si el turno pasó por el checkout (existe fila `Payment`). false = reservado sin cobro online. */
+  /** true si el turno tiene un cobro online (de T5, o una fila `Payment` del checkout legado). false = reservado sin cobro online. */
   onlinePayment?: boolean;
   /**
    * T5 (C-TP8, literal; TP-K1): el cobro online del turnero de este turno, si hay. `remainingCents` = lo que falta pagar

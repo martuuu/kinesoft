@@ -2,9 +2,12 @@
  * TP-0 (H-TP0 / H-TP2 / H-TP3, plan §22.5): el turnero vuelve a reservar sin cobro. `submitPublicBooking`,
  * `getPublicBookingStatus` y `getPublicClinic` REALES contra Postgres, en el canal de servicio (sin Actor, como en prod).
  *
- * Se mockea solo lo externo: el SDK de Mercado Pago (HTTP; con un interruptor para que la preferencia falle) y el
- * rate-limit. `TURNERO_CHECKOUT` se cambia por test en `process.env`: `turneroCheckout()` (lib/env.ts) lo lee en cada
- * llamada. La regla pura (`decidePublicCheckout`) tiene su tabla en tests/unit/public-booking-payment.test.ts.
+ * Se mockea solo lo externo: el SDK de Mercado Pago de la PLATAFORMA (para contar llamadas) y el rate-limit.
+ *
+ * T5 (TP-2c): el turnero ya no cobra con la cuenta de la plataforma. `TURNERO_CHECKOUT=platform` + `MP_ACCESS_TOKEN`
+ * (lo que antes prendía el checkout) no hace nada: 0 llamadas al SDK. Lo que antes nacía PENDING con ese checkout
+ * (los holds «legados» que siguen en la base al deployar) se siembra a mano para probar la promoción y la pantalla
+ * de estado. El cobro con la cuenta del profesional: tests/integration/tp2t-turnero-cobro.test.ts.
  */
 import { vi, describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 
@@ -12,7 +15,7 @@ vi.hoisted(() => {
   // MP «configurado»: el SDK está mockeado abajo, nunca sale a la red.
   process.env.MP_ACCESS_TOKEN = "TEST-access-token";
 });
-const mp = vi.hoisted(() => ({ fail: false, calls: [] as string[] }));
+const mp = vi.hoisted(() => ({ calls: [] as string[] }));
 vi.mock("mercadopago", () => {
   class MercadoPagoConfig {
     constructor(public opts: unknown) {}
@@ -20,7 +23,6 @@ vi.mock("mercadopago", () => {
   class Preference {
     async create({ body }: { body: { external_reference: string } }) {
       mp.calls.push(body.external_reference);
-      if (mp.fail) throw new Error("MP 401 invalid access token");
       return { id: `pref-${body.external_reference}`, init_point: `https://mp.test/checkout/${body.external_reference}` };
     }
   }
@@ -38,7 +40,6 @@ vi.mock("@/lib/rate-limit", () => ({
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { submitPublicBooking, listPublicSlots, getPublicClinic, getPublicBookingStatus } from "@/lib/public-booking";
-import { logger } from "@/lib/logger";
 import { realtimeFake } from "@/tests/helpers/integration-setup";
 import type { SubmitPublicBookingInput } from "@/lib/public-booking-types";
 import { localToARIso, toARDateKey, toARDow } from "@/lib/datetime-ar";
@@ -46,6 +47,7 @@ import {
   ownerClient,
   createEphemeralTenant,
   addService,
+  addPatient,
   addPractitioner,
   sweepOrphanTestTenants,
   type EphemeralTenant,
@@ -102,6 +104,32 @@ describe.skipIf(!RUN)("TP-0 · turnero sin cobro online", () => {
     if (!s) throw new Error("sin horarios libres en el día de prueba");
     return s.iso;
   }
+  /**
+   * Un hold PENDING del checkout LEGADO (TP-0 con `TURNERO_CHECKOUT=platform`, o anterior a TP-0): el turno que la
+   * reserva dejó en la base antes de T5, con su `Payment` UNPAID anclado al precio. Se siembra con la MISMA key que va a
+   * reintentar el wizard (`pub:<tenant>:<uuid>`).
+   */
+  async function seedLegacyHold(req: SubmitPublicBookingInput, o: { payment?: boolean; createdAt?: Date } = {}) {
+    const patientId = await addPatient(db, T, { documentId: req.patient.documentId });
+    const b = await db.booking.create({
+      data: {
+        tenantId: T.tenantId,
+        practitionerId: req.practitionerId,
+        serviceId: req.serviceId,
+        patientId,
+        scheduledFor: new Date(req.scheduledFor),
+        durationMin: 60,
+        status: "PENDING",
+        paymentStatus: "UNPAID",
+        idempotencyKey: `pub:${T.tenantId}:${req.idempotencyKey}`,
+        ...(o.createdAt ? { createdAt: o.createdAt } : {}),
+      },
+    });
+    if (o.payment) {
+      await db.payment.create({ data: { bookingId: b.id, status: "UNPAID", amountCents: 0, expectedAmountCents: 8000 } });
+    }
+    return b;
+  }
   const rtCallsFor = (bookingId: string) =>
     realtimeFake.calls.filter((c) => c.refs?.some((r) => r.bookingId === bookingId)).length;
 
@@ -119,7 +147,6 @@ describe.skipIf(!RUN)("TP-0 · turnero sin cobro online", () => {
     await db?.$disconnect();
   });
   beforeEach(() => {
-    mp.fail = false;
     mp.calls = [];
     delete process.env.TURNERO_CHECKOUT; // default `off`
   });
@@ -150,7 +177,7 @@ describe.skipIf(!RUN)("TP-0 · turnero sin cobro online", () => {
 
   it("[TP-0] checkout off → reservado; replay mismo turno sin escribir ni avisar", async () => {
     // Default `off`, servicio con precio y MP configurado: igual no se cobra (H-TP1).
-    expect((await getPublicClinic(T.slug))?.onlineCheckout).toBe(false);
+    expect((await getPublicClinic(T.slug))?.onlinePayment ?? null).toBeNull();
     const key = randomUUID();
     const req = input("40222111", { slot: await freeSlot(pricedId), serviceId: pricedId, key });
     const r1 = await submitPublicBooking(req);
@@ -171,61 +198,39 @@ describe.skipIf(!RUN)("TP-0 · turnero sin cobro online", () => {
     expect(rtCallsFor(b1.id)).toBe(rt);
     expect(mp.calls).toEqual([]);
 
-    // Con el switch en `platform` el wizard sabe que podría cobrar (copy).
+    // TP-2c: el switch viejo en `platform` ya no promete cobro online (lo decide la cuenta del profesional).
     process.env.TURNERO_CHECKOUT = "platform";
-    expect((await getPublicClinic(T.slug))?.onlineCheckout).toBe(true);
+    expect((await getPublicClinic(T.slug))?.onlinePayment ?? null).toBeNull();
   });
 
-  it("[TP-0] la preferencia falla → mismo turno CONFIRMED (degradado)", async () => {
+  it("[TP-2c] TURNERO_CHECKOUT=platform + MP_ACCESS_TOKEN → reservado sin llamar al SDK de la plataforma (H-TP1)", async () => {
+    // Antes de T5 esto mandaba a pagar con la cuenta de la plataforma (y con MP caído degradaba a reservado).
     process.env.TURNERO_CHECKOUT = "platform";
-    mp.fail = true;
-    const warn = vi.spyOn(logger, "warn");
-    const key = randomUUID();
-    const req = input("40333111", { slot: await freeSlot(pricedId), serviceId: pricedId, key });
-    const r = await submitPublicBooking(req);
+    const r = await submitPublicBooking(input("40333111", { slot: await freeSlot(pricedId), serviceId: pricedId }));
     expect(r).toEqual({ ok: true, data: { bookingId: expect.any(String), next: "reserved", initPoint: null, amountCents: null } });
     if (!r.ok) return;
-    expect(mp.calls).toEqual([r.data.bookingId]);
-    expect(warn).toHaveBeenCalledWith(
-      "booking.public.checkout_degraded",
-      expect.objectContaining({ bookingId: r.data.bookingId })
-    );
-    const b = await db.booking.findUniqueOrThrow({ where: { id: r.data.bookingId }, include: { payment: true } });
-    // El MISMO turno (no uno nuevo), reservado, sin Payment (la preferencia nunca se creó).
-    expect(await db.booking.count({ where: { idempotencyKey: `pub:${T.tenantId}:${key}` } })).toBe(1);
-    expect([b.status, b.paymentStatus, b.payment]).toEqual(["CONFIRMED", "UNPAID", null]);
-    // Dos commits (alta PENDING + promoción): dos eventos realtime; un solo aviso.
-    expect(rtCallsFor(b.id)).toBe(2);
-    expect(await reservedNotifs(T.userId)).toBeGreaterThanOrEqual(1);
-    const notifs = await reservedNotifs();
-
-    // Replay con MP todavía caído: el mismo turno, sin preferencia nueva ni aviso.
-    mp.calls = [];
-    const r2 = await submitPublicBooking(req);
-    expect(r2).toEqual({ ok: true, data: { bookingId: b.id, next: "reserved", initPoint: null, amountCents: null } });
     expect(mp.calls).toEqual([]);
-    expect(await reservedNotifs()).toBe(notifs);
+    const b = await db.booking.findUniqueOrThrow({ where: { id: r.data.bookingId }, include: { payment: true } });
+    expect([b.status, b.paymentStatus, b.payment]).toEqual(["CONFIRMED", "UNPAID", null]);
+    expect(await db.onlineCharge.count({ where: { bookingId: b.id } })).toBe(0);
+    // Un solo commit (el alta): un evento realtime.
+    expect(rtCallsFor(b.id)).toBe(1);
   });
 
   it("[TP-0] PENDING vigente previo → CONFIRMED una vez; vencido → «Tu reserva venció»", async () => {
-    // Un hold que nació con el checkout prendido (o antes de TP-0, cuando MP fallaba siempre).
-    process.env.TURNERO_CHECKOUT = "platform";
+    // Un hold que nació con el checkout legado (o antes de TP-0, cuando MP fallaba siempre) y sigue en la base.
     const req = input("40444111", { slot: await freeSlot(pricedId), serviceId: pricedId });
-    const r0 = await submitPublicBooking(req);
-    expect(r0.ok && r0.data.next).toBe("checkout");
-    if (!r0.ok) return;
-    expect(r0.data.initPoint).toBe(`https://mp.test/checkout/${r0.data.bookingId}`);
-    expect((await db.booking.findUniqueOrThrow({ where: { id: r0.data.bookingId } })).status).toBe("PENDING");
+    const held = await seedLegacyHold(req, { payment: true });
     const before = await reservedNotifs();
 
-    // Se apaga el checkout y el paciente reintenta con la misma key: se promueve.
-    delete process.env.TURNERO_CHECKOUT;
+    // El paciente reintenta con la misma key: se promueve (sin cobro de T5 que lo retenga).
     const r1 = await submitPublicBooking(req);
-    expect(r1).toEqual({ ok: true, data: { bookingId: r0.data.bookingId, next: "reserved", initPoint: null, amountCents: null } });
-    const b1 = await db.booking.findUniqueOrThrow({ where: { id: r0.data.bookingId } });
+    expect(r1).toEqual({ ok: true, data: { bookingId: held.id, next: "reserved", initPoint: null, amountCents: null } });
+    const b1 = await db.booking.findUniqueOrThrow({ where: { id: held.id } });
     expect([b1.status, b1.paymentStatus]).toEqual(["CONFIRMED", "UNPAID"]);
     const afterPromotion = await reservedNotifs();
     expect(afterPromotion).toBeGreaterThan(before);
+    expect(mp.calls).toEqual([]);
 
     // Una sola vez: el siguiente replay no escribe ni avisa.
     const r2 = await submitPublicBooking(req);
@@ -234,16 +239,8 @@ describe.skipIf(!RUN)("TP-0 · turnero sin cobro online", () => {
     expect(await reservedNotifs()).toBe(afterPromotion);
 
     // Vencido: pasaron los 30 min, el cupo se pudo dar a otro → no se promueve ni se escribe.
-    process.env.TURNERO_CHECKOUT = "platform";
     const reqOld = input("40444222", { slot: await freeSlot(pricedId), serviceId: pricedId });
-    const o0 = await submitPublicBooking(reqOld);
-    expect(o0.ok && o0.data.next).toBe("checkout");
-    if (!o0.ok) return;
-    const aged = await db.booking.update({
-      where: { id: o0.data.bookingId },
-      data: { createdAt: new Date(Date.now() - 40 * 60_000) },
-    });
-    delete process.env.TURNERO_CHECKOUT;
+    const aged = await seedLegacyHold(reqOld, { payment: true, createdAt: new Date(Date.now() - 40 * 60_000) });
     const o1 = await submitPublicBooking(reqOld);
     expect(o1).toEqual({ ok: false, error: "Tu reserva venció. Volvé a elegir el horario." });
     const still = await db.booking.findUniqueOrThrow({ where: { id: aged.id } });
@@ -290,19 +287,16 @@ describe.skipIf(!RUN)("TP-0 · turnero sin cobro online", () => {
   });
 
   it("[TP-0] status pendiente muestra expectedAmountCents, no $0", async () => {
-    process.env.TURNERO_CHECKOUT = "platform";
-    const r = await submitPublicBooking(input("40666111", { slot: await freeSlot(pricedId), serviceId: pricedId }));
-    expect(r.ok && r.data.next).toBe("checkout");
-    if (!r.ok) return;
-    const pay = await db.payment.findUniqueOrThrow({ where: { bookingId: r.data.bookingId } });
+    // Hold del checkout legado con su Payment anclado a $80 (lo que sigue en la base al deployar T5).
+    const held = await seedLegacyHold(input("40666111", { slot: await freeSlot(pricedId), serviceId: pricedId }), { payment: true });
+    const pay = await db.payment.findUniqueOrThrow({ where: { bookingId: held.id } });
     expect([pay.status, pay.amountCents, pay.expectedAmountCents]).toEqual(["UNPAID", 0, 8000]);
     // El ancla manda sobre el precio vivo (si el consultorio cambia el precio, se muestra lo que se va a cobrar).
     await db.payment.update({ where: { id: pay.id }, data: { expectedAmountCents: 7000 } });
-    const st = await getPublicBookingStatus(r.data.bookingId);
-    expect(st).toMatchObject({ status: "PENDING", paymentStatus: "UNPAID", amountCents: 7000, onlinePayment: true });
+    const st = await getPublicBookingStatus(held.id);
+    expect(st).toMatchObject({ status: "PENDING", paymentStatus: "UNPAID", amountCents: 7000, onlinePayment: true, onlineCharge: null });
 
     // Reservado sin cobro: el precio del servicio (se paga en el consultorio) y sin pago online.
-    delete process.env.TURNERO_CHECKOUT;
     const rr = await submitPublicBooking(input("40666222", { slot: await freeSlot(pricedId), serviceId: pricedId }));
     expect(rr.ok && rr.data.next).toBe("reserved");
     if (!rr.ok) return;
@@ -311,6 +305,7 @@ describe.skipIf(!RUN)("TP-0 · turnero sin cobro online", () => {
       paymentStatus: "UNPAID",
       amountCents: 8000,
       onlinePayment: false,
+      onlineCharge: null,
     });
   });
 });

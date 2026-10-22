@@ -26,10 +26,23 @@ import { headers } from "next/headers";
 // No-Actor surface (anonymous turnero) → service channel (BYPASSRLS). See lib/db.ts#prismaService.
 import { NotificationKind, Prisma } from "@prisma/client";
 import { prismaService as prisma } from "@/lib/db";
-import { env, turneroCheckout } from "@/lib/env";
-import { createCheckoutPreference } from "@/lib/mercadopago";
 import { notifyTenantOwners } from "@/lib/notifications-internal";
-import { decidePublicCheckout, isOnlineCheckoutAvailable, publicStatusAmountCents } from "@/lib/public-booking-payment";
+import {
+  publicOnlineChargeView,
+  publicStatusAmountCents,
+  turneroChargeExpiresAt,
+  turneroReplayStep,
+} from "@/lib/public-booking-payment";
+import { decideOnlineCharge, type OnlineChargeDecision } from "@/lib/online-charge-logic";
+import {
+  cancelTurneroChargeWithoutPreference,
+  createTurneroChargeInTx,
+  loadPublicChargeContext,
+  loadPublicOnlinePayment,
+  openTurneroPreference,
+  resolvePublicCopagoCents,
+} from "@/lib/public-booking-charge-internal";
+import { isHoldingCapacity } from "@/lib/booking-capacity";
 import { afterBookingsCommitted, type BookingChangeRef } from "@/lib/booking-events-internal";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rate-limit";
@@ -53,6 +66,7 @@ import {
 } from "@/lib/public-booking-slots";
 import {
   PUBLIC_BOOKING_SWITCH_SELECT,
+  PUBLIC_PARTICULAR_CHARGE_NOTE,
   isPublicTurneroOpen,
   promoteHeldPublicBookingInTx,
   releaseOwnExpiredPublicHold,
@@ -228,6 +242,11 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
     .filter((o) => o.offeredBy.length > 0);
 
   const offering = new Set(offered.flatMap((o) => o.offeredBy));
+  // T5 (C-TP8): cobro online con la cuenta del vendedor. Con `MP_CONNECT_MODE=off` o la política en OFF no lee más.
+  const onlinePayment = await loadPublicOnlinePayment(
+    tenantId,
+    pracIds.filter((id) => offering.has(id))
+  );
   const primary = locations.find((l) => l.isPrimary) ?? null;
   const locationOrder = locations.map((l) => l.id);
   // VX2-d1: el nav del turnero decía «lun-sáb 8 a 19hs» fijo. Ahora sale de las franjas de los profesionales
@@ -282,8 +301,8 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
     })),
     locations,
     insurers,
-    // TP-0: solo el copy del wizard («Confirmar turno» vs pagar); cada submit lo decide `decidePublicCheckout`.
-    onlineCheckout: isOnlineCheckoutAvailable({ mode: turneroCheckout(), mpConfigured: !!env.MP_ACCESS_TOKEN }),
+    // Solo el copy del wizard (cotiza con `quoteOnlineCharge`); cada submit lo decide `decideOnlineCharge` con el copago real.
+    onlinePayment,
   };
 }
 
@@ -479,6 +498,8 @@ const CANCELLED_REPLAY_ERROR = "Ese turno fue cancelado. Recargá la página par
 const HOLD_EXPIRED_ERROR = "Tu reserva venció. Volvé a elegir el horario.";
 /** TP-0: hay un pago AUTHORIZED en curso sobre ese turno; lo resuelve el webhook, no un reintento del wizard. */
 const PAYMENT_IN_FLIGHT_ERROR = "Ya hay un pago en proceso para este turno. Esperá la confirmación de Mercado Pago.";
+/** T5 (§25.5, TP-D29): REQUIRED con MP caído. El turno queda PENDING con su cobro; el reintento usa el mismo cobro. */
+const PAYMENT_UNAVAILABLE_ERROR = "No pudimos abrir Mercado Pago. Probá de nuevo en unos minutos.";
 
 /**
  * TP-0 (H-TP3): una reserva online sin cobro no le avisaba a nadie (el único aviso era el del webhook al acreditar).
@@ -514,8 +535,8 @@ class PublicLocationGoneError extends Error {}
 class PublicSlotGoneError extends Error {}
 
 /**
- * Crea (o reencuentra, si es un reintento) el turno público + la preferencia
- * de Mercado Pago.
+ * Crea (o reencuentra, si es un reintento) el turno público y, si corresponde, su
+ * cobro online con la cuenta de Mercado Pago del profesional.
  *
  *   - Idempotencia: key POR INSTANCIA del wizard (UUID del cliente), con
  *     prefijo `pub:<tenant>:` para que nunca choque con una key de la agenda
@@ -540,16 +561,20 @@ class PublicSlotGoneError extends Error {}
  *   - Ficha: `resolvePublicPatient` (H4): match por DNI normalizado, nunca
  *     parchea una ficha existente; el contacto distinto va al snapshot
  *     `guest*` del turno + nota para el kine.
- *   - Cobro (TP-0, H-TP0): `decidePublicCheckout` (lib/public-booking-payment.ts). Solo con `TURNERO_CHECKOUT=platform`,
- *     MP configurado y precio ≥ $1 el turno nace PENDING y se devuelve el `init_point` de Checkout Pro
- *     (`next: "checkout"`). Si no, nace CONFIRMED/UNPAID sin `Payment` (`next: "reserved"`, se paga en el
- *     consultorio): retiene el cupo siempre, porque `isHoldingCapacity` solo libera PENDING. Antes se mandaba SIEMPRE
- *     a pagar con el precio crudo: con servicios de $0 o sin token MP fallaba y nadie podía terminar una reserva.
- *   - Replay sin checkout: CONFIRMED → `reserved` sin escribir ni avisar. PENDING vigente (nació con el checkout o
- *     antes de TP-0) → se promueve una vez (`promoteHeldPublicBookingInTx`); vencido → «Tu reserva venció».
- *   - Preferencia caída → se degrada a reservado con la misma promoción (`booking.public.checkout_degraded`): el
- *     consultorio nunca eligió el pago obligatorio (eso llega con TP-2), no se le traba la reserva al paciente.
- *   - Aviso `BOOKING_CREATED` (H-TP3) una vez, después del commit que lo dejó CONFIRMED; nunca en replay.
+ *   - Cobro online (T5, C-TP8; antes TP-0 con la cuenta de la plataforma, H-TP1): `decideOnlineCharge`
+ *     (lib/online-charge-logic.ts) con la política del consultorio, `MP_CONNECT_MODE`, la cuenta del profesional (o
+ *     la del consultorio con `useClinicAccount`), el «Pagar ahora» del paciente y el copago resuelto como la agenda.
+ *       · sin cobro (OFF, modo off, sin cuenta, < $1, OPTIONAL sin «Pagar ahora») → CONFIRMED/UNPAID, `reserved`;
+ *       · REQUIRED → PENDING (hold de 30 min) + cobro ACTIVE en la misma tx + preferencia después del commit →
+ *         `checkout`; MP caído → error y el reintento usa el MISMO cobro (TP-D29: no se degrada);
+ *       · OPTIONAL «Pagar ahora» → CONFIRMED + cobro → `checkout`; MP caído → reservado sin cobro +
+ *         `notice: "payment-unavailable"`.
+ *     `TURNERO_CHECKOUT`/`MP_ACCESS_TOKEN` ya no se leen: la cuenta de la plataforma no cobra turnos.
+ *   - Replay (misma key) o gemelo del P2002: `turneroReplayStep` por la fila; el mismo `initPoint` si ya hay
+ *     preferencia; nunca otro turno ni otro cobro. PENDING SIN cobro de T5 (checkout legado o anterior a TP-0) → la
+ *     promoción de TP-0 (`promoteHeldPublicBookingInTx`), que no toca un PENDING con cobro vivo.
+ *   - Aviso `BOOKING_CREATED` (H-TP3) una vez, después del commit que lo dejó CONFIRMED; nunca en replay. Un REQUIRED
+ *     lo avisa el webhook al confirmarse con el pago.
  */
 export async function submitPublicBooking(
   raw: SubmitPublicBookingInput
@@ -610,13 +635,6 @@ export async function submitPublicBooking(
   }
 
   const idempotencyKey = `pub:${tenant.id}:${data.idempotencyKey}`;
-  // TP-0: monto = precio del servicio (TP-2 lo cambia por la política del consultorio y `resolveBookingCopagoCents`).
-  // `TURNERO_CHECKOUT` default `off` (HF-1a): la única cuenta MP de hoy es la de la plataforma (H-TP1).
-  const checkout = decidePublicCheckout({
-    amountCents: service.priceCents,
-    mode: turneroCheckout(),
-    mpConfigured: !!env.MP_ACCESS_TOKEN,
-  });
   const who = `${data.patient.firstName} ${data.patient.lastName}`.trim();
 
   // ── Reintento del MISMO intento (doble click, error de MP) → mismo turno.
@@ -633,10 +651,10 @@ export async function submitPublicBooking(
     },
   });
   let bookingId: string;
-  /** Estado de la fila al salir de este bloque: el alta de esta llamada, el replay o el twin del P2002. */
-  let rowStatus: string;
   /** Esta llamada escribió el turno (no es replay ni twin): es la única que puede avisar del alta. */
   let createdHere = false;
+  /** Lo que decidió el alta de ESTA llamada sobre el cobro online (null en replay/twin: lo dice la fila). */
+  let born: { decision: OnlineChargeDecision; chargeId: string | null } | null = null;
   if (prior) {
     const sameAttempt =
       prior.tenantId === tenant.id &&
@@ -650,7 +668,6 @@ export async function submitPublicBooking(
     // el paciente pagaba un turno que la agenda ya no mostraba como activo).
     if (prior.status === "CANCELLED") return { ok: false, error: CANCELLED_REPLAY_ERROR };
     bookingId = prior.id;
-    rowStatus = prior.status;
   } else {
     // ── Horario: tiene que ser de la grilla y tener cupo (misma función que
     // la lista del wizard). Antes se aceptaba cualquier instante futuro.
@@ -702,9 +719,14 @@ export async function submitPublicBooking(
       return { ok: false, error: GENERIC_SUBMIT_ERROR };
     }
 
-    const notes = [...resolution.reviewNotes, data.patient.notes || ""]
-      .filter((l) => l.trim() !== "")
-      .join("\n");
+    // T5 (C-TP8): política + cuenta del vendedor, FUERA de la tx (son lecturas de configuración; con modo `off` o
+    // política OFF es una sola o ninguna). Nunca la cuenta de la plataforma (H-TP1).
+    const chargeCtx = await loadPublicChargeContext(tenant.id, data.practitionerId);
+    // Sin política activa, sin cuenta o con OPTIONAL sin «Pagar ahora» no puede haber cobro: no se lee la cobertura.
+    const chargeable =
+      chargeCtx.policy !== null &&
+      chargeCtx.account !== null &&
+      (chargeCtx.policy.mode === "REQUIRED" || data.payNow === true);
     try {
       // Una reserva pública VENCIDA del mismo paciente en este instante se
       // cancela en la misma tx (ver `releaseOwnExpiredPublicHold`): si no, el
@@ -796,6 +818,32 @@ export async function submitPublicBooking(
           scheduledFor,
           now: new Date(),
         });
+        // T5 (C-TP8): cuánto se cobra online. COPAGO = el del paciente identificado con la precedencia de la agenda
+        // (AUDIT §5.5), no el precio crudo del servicio (TP-0 cobraba `Service.priceCents` aunque el paciente tuviera
+        // obra social). Contacto distinto → particular (TP-D22). Sin cobro posible, `copagoCents` no se usa.
+        const copagoCents = chargeable
+          ? await resolvePublicCopagoCents(tx, {
+              tenantId: tenant.id,
+              patientId: resolution.patientId,
+              servicePriceCents: service.priceCents,
+              contactMismatch: resolution.contactMismatch,
+            })
+          : service.priceCents;
+        const decision = decideOnlineCharge({
+          connectMode: chargeCtx.connectMode,
+          policy: chargeCtx.policy,
+          account: chargeCtx.account,
+          payNow: data.payNow,
+          copagoCents,
+        });
+        const charging = decision.kind === "charge" && chargeCtx.account !== null;
+        const notes = [
+          ...resolution.reviewNotes,
+          ...(charging && resolution.contactMismatch ? [PUBLIC_PARTICULAR_CHARGE_NOTE] : []),
+          data.patient.notes || "",
+        ]
+          .filter((l) => l.trim() !== "")
+          .join("\n");
         const row = await tx.booking.create({
           data: {
             tenantId: tenant.id,
@@ -815,26 +863,42 @@ export async function submitPublicBooking(
             guestEmail: resolution.contactSnapshot?.guestEmail ?? null,
             guestPhone: resolution.contactSnapshot?.guestPhone ?? null,
             idempotencyKey,
-            // TP-0: sin checkout nace reservado (se paga en el consultorio). PENDING solo si se va a mandar a pagar:
-            // es el único estado que vence a los 30 min (`isHoldingCapacity`).
-            status: checkout.kind === "checkout" ? "PENDING" : "CONFIRMED",
+            // PENDING solo con cobro OBLIGATORIO (REQUIRED): es el único estado que vence a los 30 min
+            // (`isHoldingCapacity`). Sin cobro, o con OPTIONAL «Pagar ahora» (TP-D16), nace reservado.
+            status: decision.kind === "charge" && decision.required ? "PENDING" : "CONFIRMED",
             paymentStatus: "UNPAID",
           },
-          select: { id: true, status: true, practitionerId: true, scheduledFor: true, roomId: true },
+          select: { id: true, status: true, practitionerId: true, scheduledFor: true, roomId: true, createdAt: true },
         });
-        return { ...row, released };
+        // El cobro nace en la MISMA tx que el turno: un turno PENDING sin su cobro sería un hold que nadie puede pagar,
+        // y un cobro sin turno, plata sin imputar. Si el INSERT falla (cuenta desconectada en el medio: guard de M18)
+        // vuelve todo.
+        let chargeId: string | null = null;
+        if (decision.kind === "charge" && chargeCtx.account) {
+          ({ chargeId } = await createTurneroChargeInTx(tx, {
+            tenantId: tenant.id,
+            bookingId: row.id,
+            patientId: resolution.patientId,
+            practitionerId: data.practitionerId,
+            mpAccountId: chargeCtx.account.id,
+            kind: decision.chargeKind,
+            amountCents: decision.amountCents,
+            copagoBasisCents: decision.chargeKind === "FULL" ? copagoCents : null,
+            expiresAt: turneroChargeExpiresAt({ required: decision.required, createdAt: row.createdAt, scheduledFor }),
+          }));
+        }
+        return { ...row, released, decision, chargeId };
       });
       bookingId = created.id;
-      rowStatus = created.status;
       createdHere = true;
+      born = { decision: created.decision, chargeId: created.chargeId };
       // SV06a · Sala de Espera realtime: una sola llamada por commit, JUSTO
-      // después de la tx y ANTES de `createCheckoutPreference`. Por qué ahí:
+      // después de la tx y ANTES de crear la preferencia. Por qué ahí:
       //   - fuera de la tx (contrato del hook): adentro, un rollback dejaba un
       //     evento publicado de un turno que no existe;
       //   - antes de MP: la preferencia puede fallar (red, token) y el turno
       //     igual quedó escrito y reteniendo cupo; si el aviso fuera
-      //     después, la agenda no se enteraba hasta el polling de 60 s. (TP-0:
-      //     si falla, la promoción de abajo es otro commit y avisa aparte.)
+      //     después, la agenda no se enteraba hasta el polling de 60 s.
       // Superficie sin Actor: el tenant sale del slug ya resuelto (`tenant.id`).
       // La reserva vencida que se canceló en la misma tx va como 2.º ref.
       // Los dos caminos de replay (key ya existente arriba y el twin del
@@ -876,9 +940,8 @@ export async function submitPublicBooking(
           select: { id: true, status: true },
         });
         if (twin && twin.status !== "CANCELLED") {
-          // El otro submit escribió y avisa; este solo devuelve su turno (sin checkout, el twin ya nació CONFIRMED).
+          // El otro submit escribió (turno y cobro) y avisa; este sigue como un replay de su fila.
           bookingId = twin.id;
-          rowStatus = twin.status;
         } else {
           return { ok: false, error: SAME_SLOT_ERROR };
         }
@@ -892,7 +955,7 @@ export async function submitPublicBooking(
     }
   }
 
-  const logDone = (next: SubmitPublicBookingResult["next"]) =>
+  const logDone = (next: SubmitPublicBookingResult["next"], extra: Record<string, unknown> = {}) =>
     // VX2-d1 (AUDIT `turnero-revalidatepath-doble`): sin `revalidatePath("/agenda", "/dashboard")`. La invalidación
     // la hace `afterBookingsCommitted` (tags `bookingDays` + `dashboard`) justo después de cada commit; los replays no
     // escribieron nada y no tienen qué invalidar.
@@ -901,52 +964,106 @@ export async function submitPublicBooking(
       tenant: tenant.slug,
       replay: !createdHere,
       next,
-      checkout: checkout.kind === "checkout" ? "checkout" : checkout.reason,
+      charge: born ? (born.decision.kind === "charge" ? (born.decision.required ? "required" : "optional") : born.decision.reason) : "replay",
+      ...extra,
     });
-  const reserved = (): ActionResult<SubmitPublicBookingResult> => {
-    logDone("reserved");
-    return { ok: true, data: { bookingId, next: "reserved", initPoint: null, amountCents: null } };
+  const reserved = (notice?: "payment-unavailable"): ActionResult<SubmitPublicBookingResult> => {
+    logDone("reserved", notice ? { notice } : {});
+    return {
+      ok: true,
+      data: { bookingId, next: "reserved", initPoint: null, amountCents: null, ...(notice ? { notice } : {}) },
+    };
+  };
+  const checkout = (initPoint: string, amountCents: number): ActionResult<SubmitPublicBookingResult> => {
+    logDone("checkout");
+    return { ok: true, data: { bookingId, next: "checkout", initPoint, amountCents } };
+  };
+  /** BOOKING_CREATED (H-TP3) del alta de esta llamada, cuando el turno quedó RESERVADO (nunca en un replay). */
+  const notifyCreated = async () => {
+    if (!createdHere) return;
+    await notifyPublicReservation(tenant.id, {
+      practitionerId: data.practitionerId,
+      scheduledFor,
+      serviceName: service.name,
+      who,
+    });
   };
 
-  // ── Ya reservado (alta CONFIRMED de esta llamada, o replay/twin que ya no está PENDING: lo promovió otro submit, lo
-  // pagó el webhook, lo confirmó la recepción). El replay no escribe ni avisa; tampoco arma una preferencia nueva
-  // sobre un turno que ya no espera pago.
-  if (rowStatus !== "PENDING") {
-    if (createdHere) {
-      await notifyPublicReservation(tenant.id, {
-        practitionerId: data.practitionerId,
-        scheduledFor,
-        serviceName: service.name,
-        who,
-      });
+  // ── Alta de esta llamada.
+  if (born) {
+    if (born.decision.kind !== "charge" || !born.chargeId) {
+      await notifyCreated();
+      return reserved();
     }
-    return reserved();
+    const required = born.decision.required;
+    const pref = await openTurneroPreference({ tenantId: tenant.id, chargeId: born.chargeId, mode: required ? "REQUIRED" : "OPTIONAL" });
+    if (pref.ok) {
+      // OPTIONAL: el turno ya está reservado (CONFIRMED) aunque no pague → se avisa ahora. REQUIRED: lo avisa el
+      // webhook cuando el pago confirma el turno.
+      if (!required) await notifyCreated();
+      return checkout(pref.initPoint, born.decision.amountCents);
+    }
+    // TP-D29: REQUIRED no se degrada. El turno queda PENDING con su cobro vivo (sin preferencia) y el reintento del
+    // paciente (misma key) vuelve a pedir la preferencia con EL MISMO cobro.
+    if (required) return { ok: false, error: PAYMENT_UNAVAILABLE_ERROR };
+    // OPTIONAL: el paciente eligió pagar ahora pero MP no responde → reservado sin cobro y aviso.
+    await cancelTurneroChargeWithoutPreference({ tenantId: tenant.id, chargeId: born.chargeId });
+    await notifyCreated();
+    return reserved("payment-unavailable");
   }
 
-  // ── PENDING con checkout: la preferencia, como antes de TP-0.
-  if (checkout.kind === "checkout") {
-    try {
-      const pref = await createCheckoutPreference({
-        bookingId,
-        title: `${service.name} · ${tenant.name}`,
-        amountCents: checkout.amountCents,
-        currency: tenant.currency,
-        payer: { email: data.patient.email, name: data.patient.firstName },
-      });
-      logDone("checkout");
-      return { ok: true, data: { bookingId, next: "checkout", initPoint: pref.initPoint, amountCents: checkout.amountCents } };
-    } catch (e) {
-      // Antes: el turno quedaba PENDING 30 min y cada reintento volvía a fallar (H-TP0). Ahora se degrada a reservado
-      // (promoción de abajo): el consultorio no eligió el pago obligatorio. warn, no error: es un camino previsto.
-      logger.warn("booking.public.checkout_degraded", {
-        bookingId,
-        tenant: tenant.slug,
-        err: e instanceof Error ? e.message : String(e),
-      });
+  // ── Replay (misma key) o gemelo del P2002: se decide por la fila, sin crear otro turno ni otro cobro.
+  const row = await prisma.booking.findFirst({
+    where: { id: bookingId, tenantId: tenant.id },
+    select: {
+      status: true,
+      paymentStatus: true,
+      createdAt: true,
+      patientId: true,
+      idempotencyKey: true,
+      onlineCharges: {
+        where: { origin: "TURNERO" },
+        select: { id: true, status: true, amountCents: true, checkoutUrl: true, cancelReason: true },
+        take: 1,
+      },
+    },
+  });
+  if (!row) return { ok: false, error: GENERIC_SUBMIT_ERROR };
+  const charge = row.onlineCharges[0] ?? null;
+  const step = turneroReplayStep({
+    bookingStatus: row.status,
+    holdAlive: isHoldingCapacity(row, new Date()),
+    charge: charge && { status: charge.status, hasPreference: !!charge.checkoutUrl, cancelReason: charge.cancelReason },
+  });
+  switch (step) {
+    case "cancelled":
+      return { ok: false, error: CANCELLED_REPLAY_ERROR };
+    case "reserved":
+      return reserved();
+    case "reserved-notice":
+      return reserved("payment-unavailable");
+    case "checkout":
+      // C-TP8: el MISMO `initPoint` (el paciente que vuelve atrás desde MP no genera otra preferencia).
+      return checkout(charge!.checkoutUrl!, charge!.amountCents);
+    case "open-preference": {
+      const required = row.status === "PENDING";
+      const pref = await openTurneroPreference({ tenantId: tenant.id, chargeId: charge!.id, mode: required ? "REQUIRED" : "OPTIONAL" });
+      if (pref.ok) return checkout(pref.initPoint, charge!.amountCents);
+      if (required) return { ok: false, error: PAYMENT_UNAVAILABLE_ERROR };
+      await cancelTurneroChargeWithoutPreference({ tenantId: tenant.id, chargeId: charge!.id });
+      return reserved("payment-unavailable");
     }
+    case "hold-expired":
+      return { ok: false, error: HOLD_EXPIRED_ERROR };
+    case "payment-in-flight":
+      return { ok: false, error: PAYMENT_IN_FLIGHT_ERROR };
+    case "preference-error":
+      return { ok: false, error: PAYMENT_UNAVAILABLE_ERROR };
+    case "promote":
+      break;
   }
 
-  // ── PENDING sin checkout (replay de un hold del checkout, o la preferencia cayó): se promueve una sola vez.
+  // ── PENDING SIN cobro de T5 (nació con el checkout legado o antes de TP-0): se promueve una sola vez.
   let promotion: Awaited<ReturnType<typeof promoteHeldPublicBookingInTx>>;
   try {
     promotion = await prisma.$transaction((tx) => promoteHeldPublicBookingInTx(tx, { tenantId: tenant.id, bookingId }));
@@ -960,7 +1077,7 @@ export async function submitPublicBooking(
   }
   switch (promotion.kind) {
     case "promoted":
-      // Otro commit: su propio evento realtime (el del alta PENDING, si lo hubo, ya salió arriba) y el aviso.
+      // Otro commit: su propio evento realtime y el aviso.
       await afterBookingsCommitted(tenant.id, [
         {
           bookingId: promotion.ref.id,
@@ -1030,9 +1147,60 @@ export async function getPublicBookingStatus(
       patient: { select: { firstName: true, lastName: true } },
       payment: { select: { amountCents: true, expectedAmountCents: true, status: true } },
       guestName: true,
+      // T5 (C-TP8): el cobro online del turnero, con su comprobante. Misma sentencia (relación).
+      tenantId: true,
+      patientId: true,
+      notes: true,
+      copagoCents: true,
+      onlineDepositCents: true,
+      onlineCharges: {
+        where: { origin: "TURNERO" },
+        take: 1,
+        select: {
+          kind: true,
+          status: true,
+          amountCents: true,
+          mpPaymentId: true,
+          approvedAt: true,
+          paidAmountCents: true,
+          paymentMethodId: true,
+          paymentTypeId: true,
+          installments: true,
+          mpStatus: true,
+          refundedAt: true,
+        },
+      },
     },
   });
   if (!b) return null;
+
+  const c = b.onlineCharges[0];
+  let onlineCharge: PublicBookingStatus["onlineCharge"] = null;
+  if (c && (c.kind === "FULL" || c.kind === "DEPOSIT")) {
+    // Lo que falta pagar con una seña = copago − señas pagadas. El copago del turno se resuelve como en el alta
+    // (`copagoCents` propio si ya lo tiene; si no, la precedencia de la agenda, y particular si el cobro se calculó así
+    // por TP-D22: la nota lo marca). Solo con DEPOSIT: un FULL lleva el monto completo y no lee nada más.
+    const copago =
+      c.kind === "DEPOSIT"
+        ? (b.copagoCents ??
+          (b.patientId
+            ? await resolvePublicCopagoCents(prisma, {
+                tenantId: b.tenantId,
+                patientId: b.patientId,
+                servicePriceCents: b.service.priceCents,
+                contactMismatch: (b.notes ?? "").includes(PUBLIC_PARTICULAR_CHARGE_NOTE),
+              })
+            : b.service.priceCents))
+        : 0;
+    onlineCharge = publicOnlineChargeView({
+      kind: c.kind,
+      status: c.status,
+      amountCents: c.amountCents,
+      copagoCents: copago,
+      onlineDepositCents: b.onlineDepositCents,
+      receipt: c,
+    });
+  }
 
   const patientInitials =
     initials(b.patient?.firstName, b.patient?.lastName) ||
@@ -1051,9 +1219,13 @@ export async function getPublicBookingStatus(
     scheduledFor: b.scheduledFor.toISOString(),
     durationMin: b.durationMin,
     patientInitials,
-    // H-TP2: antes `payment?.amountCents ?? price`, y `amountCents` vale 0 hasta que acredita («$ 0» pendiente).
-    amountCents: publicStatusAmountCents({ priceCents: b.service.priceCents, payment: b.payment }),
-    onlinePayment: !!b.payment,
+    // Con cobro de T5, su monto (≥ $1 por CHECK). Legado (H-TP2): antes `payment?.amountCents ?? price`, y
+    // `amountCents` vale 0 hasta que acredita («$ 0» pendiente).
+    amountCents: onlineCharge
+      ? onlineCharge.amountCents
+      : publicStatusAmountCents({ priceCents: b.service.priceCents, payment: b.payment }),
+    onlinePayment: !!b.payment || !!onlineCharge,
+    onlineCharge,
   };
 }
 

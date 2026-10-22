@@ -10,7 +10,8 @@
  * pagó sin ver su turno —, el webhook de MP (AUDIT §5.4) y el middleware (§5.3).
  *
  * Símbolos reales contra Postgres por el canal de servicio (como en prod). Se
- * mockea solo lo externo: el SDK de Mercado Pago y el rate-limit in-memory. El
+ * mockea solo lo externo: la red de Mercado Pago (T5, TP-2c: el MP FALSO con la cuenta del profesional de K y la
+ * política REQUIRED, `tests/helpers/mp-connect-fake.ts`) y el rate-limit in-memory. El
  * switch se mueve con un UPDATE directo de setup (el escritor de la app es
  * `applyTenantEntitlementsInTx`, de EV-C2, y se prueba en su archivo).
  *
@@ -19,31 +20,6 @@
  */
 import { vi, describe, it, expect, beforeAll, afterAll } from "vitest";
 
-vi.hoisted(() => {
-  process.env.MP_ACCESS_TOKEN = "TEST-access-token";
-  // TP-0: el default es `off` (reserva sin cobro, tests/integration/tp0-turnero-sin-cobro.test.ts); este archivo
-  // prueba el checkout.
-  process.env.TURNERO_CHECKOUT = "platform";
-});
-vi.mock("mercadopago", () => {
-  class MercadoPagoConfig {
-    constructor(public opts: unknown) {}
-  }
-  class Preference {
-    async create({ body }: { body: { external_reference: string } }) {
-      return {
-        id: `pref-${body.external_reference}`,
-        init_point: `https://mp.test/checkout/${body.external_reference}`,
-      };
-    }
-  }
-  class Payment {
-    async get() {
-      throw new Error("no usado en este archivo");
-    }
-  }
-  return { MercadoPagoConfig, Preference, Payment };
-});
 vi.mock("@/lib/rate-limit", () => ({
   rateLimit: async () => ({ ok: true, remaining: 99, retryAfterMs: 0 }),
 }));
@@ -68,6 +44,12 @@ import {
   sweepOrphanTestTenants,
   type EphemeralTenant,
 } from "@/tests/helpers/tenant-factory";
+import {
+  connectFakeAccount,
+  installFakeMp,
+  setPaymentPolicy,
+  type InstalledFakeMp,
+} from "@/tests/helpers/mp-connect-fake";
 
 const RUN = process.env.INTEGRATION === "1";
 
@@ -90,6 +72,7 @@ describe.skipIf(!RUN)("EV-T · turnero público con switch", () => {
   let G: EphemeralTenant;
   /** Kine que nace con el turnero apagado (como un alta real, EV-D2). */
   let OFF: EphemeralTenant;
+  let fake: InstalledFakeMp;
   const DAY = futureWeekday();
 
   function input(
@@ -135,8 +118,15 @@ describe.skipIf(!RUN)("EV-T · turnero público con switch", () => {
       where: { id: OFF.tenantId },
       data: { phone: "1140001111", whatsapp: "1150002222", publicEmail: "turnos@consultorio.test", legalName: "Razón SA" },
     });
+    // T5: K cobra el turno online (REQUIRED) con la cuenta de su profesional en el MP falso: el replay con el turnero
+    // apagado tiene que rechazarse ANTES de volver a pedir la preferencia.
+    fake = installFakeMp();
+    await connectFakeAccount(db, K);
+    await setPaymentPolicy(db, K.tenantId, { mode: "REQUIRED", chargeKind: "COPAGO" });
+    await db.insurer.update({ where: { id: K.particularInsurerId }, data: { copagoCents: 5000 } });
   });
   afterAll(async () => {
+    fake?.uninstall();
     asAnonymous();
     await K?.cleanup();
     await G?.cleanup();
@@ -186,10 +176,12 @@ describe.skipIf(!RUN)("EV-T · turnero público con switch", () => {
     try {
       const before = await counts(K);
       // Mismo intento (misma key y slot): con el turnero abierto devolvería el
-      // mismo turno + una preferencia NUEVA de MP; cerrado no se cobra nada.
+      // mismo turno y su link de pago; cerrado no se cobra nada.
+      const calls = fake.calls.length;
       const replay = await submitPublicBooking(input(K, { key, slot: at(DAY, "09:30") }));
       expect(replay).toEqual({ ok: false, error: CLOSED_ERROR });
       expect(await counts(K)).toEqual(before);
+      expect(fake.calls.length).toBe(calls);
       // PL-A: las reservas públicas ya no se auditan; el replay rechazado tampoco escribe nada.
       expect(await db.auditEvent.count({ where: { tenantId: K.tenantId, entityId: first.data.bookingId } })).toBe(0);
 

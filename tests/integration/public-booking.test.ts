@@ -2,46 +2,15 @@
  * Reserva pública (A2b-S-pub): `submitPublicBooking` + `listPublicSlots` REALES
  * contra Postgres, en el canal de servicio (sin Actor, como en prod).
  *
- * Se mockea solo lo externo: el SDK de Mercado Pago (la preferencia de
- * Checkout Pro es una llamada HTTP) y el rate-limit (el bucket in-memory por
- * IP "unknown" cortaría a los 5 submits; se prueba aparte en A3-S-rl).
+ * T5 (TP-2c): el «checkout» que prueba este archivo es el de la cuenta del PROFESIONAL (política REQUIRED + cuenta
+ * conectada al Mercado Pago FALSO, `tests/helpers/mp-connect-fake.ts`), no el de la plataforma
+ * (`TURNERO_CHECKOUT=platform` + SDK mockeado, que TP-2c dejó de leer). Lo único que se reemplaza es la red
+ * (`installFakeMp`) y el rate-limit (el bucket in-memory por IP "unknown" cortaría a los 5 submits; se prueba aparte
+ * en A3-S-rl).
  */
 import { vi, describe, it, expect, beforeAll, afterAll } from "vitest";
 
-vi.hoisted(() => {
-  // `client()` exige el token; nunca sale a la red (SDK mockeado abajo).
-  process.env.MP_ACCESS_TOKEN = "TEST-access-token";
-  // TP-0: el default es `off` (reserva sin cobro, tests/integration/tp0-turnero-sin-cobro.test.ts); este archivo
-  // prueba el checkout.
-  process.env.TURNERO_CHECKOUT = "platform";
-});
-/**
- * SV06a: orden observable de los efectos externos del submit. La preferencia
- * de MP anota `pref:<bookingId>` y el publisher fake (vía `realtimeFake.onCall`)
- * anota `rt:<bookingId>`: así se afirma que el evento sale ANTES de la
- * preferencia (que puede fallar y dejar el turno escrito sin aviso).
- */
-const effects = vi.hoisted(() => ({ order: [] as string[] }));
-vi.mock("mercadopago", () => {
-  class MercadoPagoConfig {
-    constructor(public opts: unknown) {}
-  }
-  class Preference {
-    async create({ body }: { body: { external_reference: string } }) {
-      effects.order.push(`pref:${body.external_reference}`);
-      return {
-        id: `pref-${body.external_reference}`,
-        init_point: `https://mp.test/checkout/${body.external_reference}`,
-      };
-    }
-  }
-  class Payment {
-    async get() {
-      throw new Error("no usado en este archivo");
-    }
-  }
-  return { MercadoPagoConfig, Preference, Payment };
-});
+const effects = { order: [] as string[] };
 vi.mock("@/lib/rate-limit", () => ({
   rateLimit: async () => ({ ok: true, remaining: 99, retryAfterMs: 0 }),
 }));
@@ -56,6 +25,12 @@ import {
   devMarkBookingPaid,
 } from "@/lib/public-booking";
 import { realtimeFake } from "@/tests/helpers/integration-setup";
+import {
+  connectFakeAccount,
+  installFakeMp,
+  setPaymentPolicy,
+  type InstalledFakeMp,
+} from "@/tests/helpers/mp-connect-fake";
 import { createBooking } from "@/lib/bookings";
 import { asUser } from "@/tests/helpers/actor";
 import {
@@ -88,9 +63,22 @@ function futureWeekday(offset = 0): string {
 }
 const at = (day: string, hhmm: string) => new Date(localToARIso(`${day}T${hhmm}:00`)).toISOString();
 
+/**
+ * T5: el consultorio cobra el turno online (REQUIRED, copago) con la cuenta del profesional de la factory, conectada
+ * al MP falso. Particular = $50, el precio del servicio por defecto: el monto del cobro es el de antes de TP-2c.
+ */
+async function chargeOnline(db: PrismaClient, T: EphemeralTenant): Promise<InstalledFakeMp> {
+  const fake = installFakeMp();
+  await connectFakeAccount(db, T);
+  await setPaymentPolicy(db, T.tenantId, { mode: "REQUIRED", chargeKind: "COPAGO" });
+  await db.insurer.update({ where: { id: T.particularInsurerId }, data: { copagoCents: 5000 } });
+  return fake;
+}
+
 describe.skipIf(!RUN)("reserva pública · submitPublicBooking (A2b-S-pub)", () => {
   let db: PrismaClient;
   let T: EphemeralTenant;
+  let fake: InstalledFakeMp;
   /** Servicio de cupo 1 (osteopatía, 60 min). */
   let osteoId: string;
   const DAY = futureWeekday();
@@ -122,8 +110,10 @@ describe.skipIf(!RUN)("reserva pública · submitPublicBooking (A2b-S-pub)", () 
     // PL-2f (C-PL1): salas y Sala de Espera son de Clínica / Libre; sin el plan, el motor ignora las salas.
     T = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
     osteoId = await addService(db, T, { name: "Osteopatía", durationMin: 60, maxConcurrent: 1 });
+    fake = await chargeOnline(db, T);
   });
   afterAll(async () => {
+    fake?.uninstall();
     await T?.cleanup();
     await db?.$disconnect();
   });
@@ -457,14 +447,14 @@ describe.skipIf(!RUN)("reserva pública · submitPublicBooking (A2b-S-pub)", () 
     expect((await db.booking.findUniqueOrThrow({ where: { id: r1.data.bookingId } })).status).toBe("PENDING");
   });
 
-  it("ancla el monto esperado en el Payment al crear la preferencia", async () => {
+  it("[TP-2c] el cobro TURNERO ancla el monto y la preferencia del vendedor (sin fila Payment del checkout legado)", async () => {
     const r = await submitPublicBooking(input({ documentId: "52333444" }, { slot: at(DAY, "15:30") }));
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.data.initPoint).toBe(`https://mp.test/checkout/${r.data.bookingId}`);
-    const pay = await db.payment.findUniqueOrThrow({ where: { bookingId: r.data.bookingId } });
-    expect(pay.expectedAmountCents).toBe(5000);
-    expect(pay.status).toBe("UNPAID");
+    const c = await db.onlineCharge.findFirstOrThrow({ where: { bookingId: r.data.bookingId } });
+    expect([c.origin, c.status, c.amountCents]).toEqual(["TURNERO", "ACTIVE", 5000]);
+    expect(r.data).toMatchObject({ next: "checkout", amountCents: 5000, initPoint: c.checkoutUrl });
+    expect(await db.payment.findUnique({ where: { bookingId: r.data.bookingId } })).toBeNull();
   });
 });
 
@@ -729,6 +719,7 @@ describe.skipIf(!RUN)("SV06a · turnero público → afterBookingsCommitted", ()
   let db: PrismaClient;
   let T: EphemeralTenant;
   let room: { roomId: string; locationId: string };
+  let fake: InstalledFakeMp;
   const MON = futureDow(1);
   const TUE = futureDow(2);
   const WED = futureDow(3);
@@ -766,8 +757,19 @@ describe.skipIf(!RUN)("SV06a · turnero público → afterBookingsCommitted", ()
         endMin: 780,
       })),
     });
+    fake = await chargeOnline(db, T);
+    // SV06a: orden observable de los efectos externos del submit. La preferencia (POST al MP falso) anota `pref` y el
+    // publisher fake (vía `realtimeFake.onCall`) anota `rt:<bookingId>`: el evento sale ANTES de la preferencia (que
+    // puede fallar y dejar el turno escrito sin aviso).
+    const net = globalThis.fetch;
+    globalThis.fetch = (async (i: string | URL | Request, init?: RequestInit) => {
+      const url = typeof i === "string" ? i : i instanceof URL ? i.toString() : i.url;
+      if (url.endsWith("/checkout/preferences")) effects.order.push("pref");
+      return net(i, init);
+    }) as typeof fetch;
   });
   afterAll(async () => {
+    fake?.uninstall();
     await T?.cleanup();
     await db?.$disconnect();
   });
@@ -801,7 +803,7 @@ describe.skipIf(!RUN)("SV06a · turnero público → afterBookingsCommitted", ()
     });
     expect(committedAtPublish).toBe(true);
     // El evento sale ANTES de pedir la preferencia de MP.
-    expect(effects.order).toEqual([`rt:${r.data.bookingId}`, `pref:${r.data.bookingId}`]);
+    expect(effects.order).toEqual([`rt:${r.data.bookingId}`, "pref"]);
 
     // Replay del mismo intento (misma key): mismo turno, sin evento nuevo.
     const again = await submitPublicBooking(req(slot, "71100101", key));

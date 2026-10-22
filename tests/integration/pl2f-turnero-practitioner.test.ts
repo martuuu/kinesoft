@@ -10,33 +10,11 @@
  *   - `setPractitionerPublicBooking`: el Titular (tenant.admin) o el propio profesional; otro profesional → rechazo con copy (PL-Z a3#15);
  *     un id de otro consultorio = inexistente; el cambio se audita en la tx y el mismo valor no escribe.
  *
- * Símbolos reales por el canal de servicio (como en prod). Se mockea solo lo externo: el SDK de Mercado Pago y el
- * rate-limit in-memory. Los flags se mueven con UPDATE directo de setup salvo en el bloque de la action.
+ * Símbolos reales por el canal de servicio (como en prod). Se mockea solo lo externo: el rate-limit in-memory (T5,
+ * TP-2c: el turnero ya no llama al SDK de Mercado Pago de la plataforma; sin política de cobro reserva sin cobro). Los flags se mueven con UPDATE directo de setup salvo en el bloque de la action.
  */
 import { vi, describe, it, expect, beforeAll, afterAll } from "vitest";
 
-vi.hoisted(() => {
-  process.env.MP_ACCESS_TOKEN = "TEST-access-token";
-});
-vi.mock("mercadopago", () => {
-  class MercadoPagoConfig {
-    constructor(public opts: unknown) {}
-  }
-  class Preference {
-    async create({ body }: { body: { external_reference: string } }) {
-      return {
-        id: `pref-${body.external_reference}`,
-        init_point: `https://mp.test/checkout/${body.external_reference}`,
-      };
-    }
-  }
-  class Payment {
-    async get() {
-      throw new Error("no usado en este archivo");
-    }
-  }
-  return { MercadoPagoConfig, Preference, Payment };
-});
 vi.mock("@/lib/rate-limit", () => ({
   rateLimit: async () => ({ ok: true, remaining: 99, retryAfterMs: 0 }),
 }));

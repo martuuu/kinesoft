@@ -13,6 +13,7 @@ import { prismaService as prisma } from "@/lib/db";
 import { Prisma } from "@prisma/client";
 import { PENDING_PUBLIC_HOLD_MS, isHoldingCapacity, isPublicReservation } from "@/lib/booking-capacity";
 import { lockCapacityWindow } from "@/lib/booking-cap-lock";
+import { expireOwnHoldChargeInTx } from "@/lib/public-booking-charge-internal";
 import { isPublicBookingOpen, type TenantEntitlements } from "@/lib/tenant-modules";
 import { tenantAccessEnforcement } from "@/lib/env";
 import {
@@ -271,6 +272,13 @@ export async function findPatientByEmailForPrefill(
 /** Nota que ve el kine en el turno cuando el contacto tipeado no es el de la ficha. */
 export const PUBLIC_CONTACT_MISMATCH_NOTE =
   "Reserva online · datos de contacto distintos a la ficha";
+/**
+ * T5 (TP-D22): el cobro online del turnero se calculó como PARTICULAR porque el contacto tipeado no es el de la ficha
+ * (no se usa la obra social de una ficha ajena: revelaría su copago). Va a la nota del turno para que la recepción
+ * sepa por qué el monto cobrado no es el copago de siempre; `getPublicBookingStatus` la usa para repetir la cuenta.
+ */
+export const PUBLIC_PARTICULAR_CHARGE_NOTE =
+  "Reserva online · el pago online se calculó como particular (datos de contacto distintos a la ficha)";
 /** Nota cuando la ficha nueva no pudo llevar el email/teléfono porque ya es de otra ficha. */
 export const PUBLIC_SHARED_CONTACT_NOTE =
   "Reserva online · email o teléfono ya usado por otra ficha (¿familiar?): el contacto quedó en el turno";
@@ -298,6 +306,12 @@ export type PublicPatientResolution = {
   contactSnapshot: { guestName: string; guestEmail: string; guestPhone: string } | null;
   /** Líneas para la nota del turno (revisión del kine). */
   reviewNotes: string[];
+  /**
+   * T5 (TP-D22): el DNI matcheó una ficha EXISTENTE y el contacto o el nombre tipeados no son los de la ficha. El
+   * cobro online se calcula como particular. Una ficha nueva sin email/teléfono (familia que comparte) NO cuenta: su
+   * cobertura es la que tipeó quien reserva.
+   */
+  contactMismatch: boolean;
 };
 
 function isP2002(e: unknown): boolean {
@@ -380,6 +394,7 @@ export async function resolvePublicPatient(
           created: false,
           contactSnapshot: contactDiffers ? snapshot : null,
           reviewNotes,
+          contactMismatch: contactDiffers,
         };
       }
 
@@ -435,6 +450,7 @@ export async function resolvePublicPatient(
         created: true,
         contactSnapshot: dropped ? snapshot : null,
         reviewNotes: dropped ? [PUBLIC_SHARED_CONTACT_NOTE] : [],
+        contactMismatch: false,
       };
     } catch (e) {
       // Carrera con otro submit (mismo DNI, o el email/teléfono se ocupó entre
@@ -508,17 +524,32 @@ export async function releaseOwnExpiredPublicHold(
       updatedAt: own.updatedAt,
       status: "PENDING",
       paymentStatus: { in: ["UNPAID", "FAILED"] },
+      // T5 (TP-2c): un turno con un pago de MP en curso o acreditado (cobro TURNERO AUTHORIZED/PAID) no se libera,
+      // aunque el webhook todavía no haya movido el turno: lo resuelve el webhook, no una reserva nueva.
+      NOT: { onlineCharges: { some: { origin: "TURNERO", status: { in: ["AUTHORIZED", "PAID"] } } } },
     },
     data: { status: "CANCELLED" },
   });
-  return res.count === 1
-    ? { id: own.id, practitionerId: own.practitionerId, scheduledFor: own.scheduledFor, roomId: own.roomId }
-    : null;
+  if (res.count !== 1) return null;
+  // T5 (C-TP8): su cobro vence en la MISMA tx (si el create de la reserva nueva falla, vuelve todo). Sin esto quedaba
+  // un cobro ACTIVE de un turno cancelado: el cron lo vencía recién a la hora y, mientras, bloqueaba links y cobros.
+  await expireOwnHoldChargeInTx(tx, { tenantId: o.tenantId, bookingId: own.id });
+  return { id: own.id, practitionerId: own.practitionerId, scheduledFor: own.scheduledFor, roomId: own.roomId };
 }
 
 // ──────────────────────────────────────────────────────────────────────
 // Reserva sin cobro online (TP-0, H-TP0, plan §22.5)
 // ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Cobro TURNERO que impide promover un PENDING (C-TP8): ACTIVE (REQUIRED esperando el pago: promoverlo regalaría el
+ * turno sin cobrar), AUTHORIZED (MP retiene el pago) o PAID (el webhook lo confirma en su tx). EXPIRED/CANCELLED/
+ * REFUNDED no retienen nada.
+ */
+const LIVE_TURNERO_CHARGE = {
+  origin: "TURNERO",
+  status: { in: ["ACTIVE", "AUTHORIZED", "PAID"] },
+} satisfies Prisma.OnlineChargeWhereInput;
 
 export type PublicHoldPromotion =
   /** Esta llamada la pasó a CONFIRMED (count 1): el caller avisa (realtime + campana), una sola vez. */
@@ -543,7 +574,7 @@ export type PublicHoldPromotion =
  *     traba la reserva al paciente por una caída de MP.
  *
  * Condiciones (las mismas del `updateMany`, que las repite para no pisar una carrera): de este tenant, key pública
- * (`isPublicReservation`: nunca un PENDING de la agenda), PENDING, UNPAID|FAILED, sin `Payment` AUTHORIZED y DENTRO del
+ * (`isPublicReservation`: nunca un PENDING de la agenda), PENDING, UNPAID|FAILED, sin `Payment` AUTHORIZED, sin cobro TURNERO vivo (T5: `LIVE_TURNERO_CHARGE`) y DENTRO del
  * plazo de 30 min (`createdAt >= now - PENDING_PUBLIC_HOLD_MS`, el complemento exacto de `publicHoldExpired`). Un
  * FAILED promovido pasa a UNPAID: el turno ya no espera pago online, se cobra en el consultorio; la fila `Payment`
  * FAILED queda como historia.
@@ -575,6 +606,8 @@ export async function promoteHeldPublicBookingInTx(
     durationMin: true,
     roomId: true,
     payment: { select: { status: true } },
+    // T5 (C-TP8): un cobro TURNERO vivo o pagado = el turno espera (o ya tiene) un pago de MP: no se promueve.
+    onlineCharges: { where: LIVE_TURNERO_CHARGE, select: { id: true }, take: 1 },
   } satisfies Prisma.BookingSelect;
   type Row = Prisma.BookingGetPayload<{ select: typeof select }>;
   const read = () => tx.booking.findFirst({ where: { id: o.bookingId, tenantId: o.tenantId }, select });
@@ -586,6 +619,7 @@ export async function promoteHeldPublicBookingInTx(
     if (b.status === "CANCELLED") return { kind: "cancelled" };
     if (b.status !== "PENDING") return { kind: "already-confirmed" };
     if (b.paymentStatus === "AUTHORIZED" || b.payment?.status === "AUTHORIZED") return { kind: "payment-in-flight" };
+    if (b.onlineCharges.length > 0) return { kind: "payment-in-flight" };
     // PAID/REFUNDED sobre un PENDING no lo deja el webhook (pasa a CONFIRMED): ante la duda, no se toca.
     if (b.paymentStatus !== "UNPAID" && b.paymentStatus !== "FAILED") return { kind: "payment-in-flight" };
     if (!isHoldingCapacity(b, now)) return { kind: "expired" };
@@ -623,7 +657,7 @@ export async function promoteHeldPublicBookingInTx(
         paymentStatus: { in: ["UNPAID", "FAILED"] },
         idempotencyKey: { startsWith: "pub:" },
         createdAt: { gte: new Date(now.getTime() - PENDING_PUBLIC_HOLD_MS) },
-        NOT: { payment: { is: { status: "AUTHORIZED" } } },
+        NOT: [{ payment: { is: { status: "AUTHORIZED" } } }, { onlineCharges: { some: LIVE_TURNERO_CHARGE } }],
       },
       data: { status: "CONFIRMED", paymentStatus: "UNPAID" },
     });

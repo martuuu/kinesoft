@@ -1,46 +1,122 @@
 import { describe, expect, it } from "vitest";
 import {
   MIN_ONLINE_CHARGE_CENTS,
-  decidePublicCheckout,
-  isOnlineCheckoutAvailable,
+  publicOnlineChargeView,
   publicStatusAmountCents,
+  turneroChargeExpiresAt,
+  turneroReplayStep,
+  type TurneroReplayStep,
 } from "@/lib/public-booking-payment";
+import type { ChargeStatus } from "@/lib/online-charge-logic";
 
-// TP-0 (H-TP0 / H-TP2, plan §22.5): la regla del checkout del turnero y el monto de la pantalla de estado. Lo que pasa
-// con el turno (CONFIRMED/UNPAID, promoción, degradado) se prueba contra Postgres en
-// tests/integration/tp0-turnero-sin-cobro.test.ts.
+// TP-0 (H-TP2) y T5 (TP-2c, C-TP8): reglas puras del cobro del turnero (vencimiento, replay, vista pública) y el monto
+// de la pantalla de estado del checkout legado. Lo que pasa con el turno y el cobro contra Postgres:
+// tests/integration/tp0-turnero-sin-cobro.test.ts y tests/integration/tp2t-turnero-cobro.test.ts.
 
-describe("decidePublicCheckout", () => {
-  it("[TP-0] decidePublicCheckout (tabla)", () => {
+describe("MIN_ONLINE_CHARGE_CENTS", () => {
+  it("[TP-2c] el piso del turnero es el de las reglas de plata ($1)", () => {
+    // `decidePublicCheckout`/`isOnlineCheckoutAvailable` (TP-0, cuenta de la plataforma) se borraron en TP-2c: el piso
+    // lo decide `decideOnlineCharge` (tests/unit/online-charge-logic.test.ts); el wizard sigue importándolo de acá.
     expect(MIN_ONLINE_CHARGE_CENTS).toBe(100);
-    const table: Array<[Parameters<typeof decidePublicCheckout>[0], ReturnType<typeof decidePublicCheckout>]> = [
-      // Las tres condiciones → checkout con el monto.
-      [{ amountCents: 8000, mode: "platform", mpConfigured: true }, { kind: "checkout", amountCents: 8000 }],
-      [{ amountCents: 100, mode: "platform", mpConfigured: true }, { kind: "checkout", amountCents: 100 }],
-      // Monto de menos de $1: los servicios de arranque valen $0 (H-TP0) y MP rechaza un ítem de $0.
-      [{ amountCents: 0, mode: "platform", mpConfigured: true }, { kind: "none", reason: "zero-amount" }],
-      [{ amountCents: 99, mode: "platform", mpConfigured: true }, { kind: "none", reason: "zero-amount" }],
-      [{ amountCents: -500, mode: "platform", mpConfigured: true }, { kind: "none", reason: "zero-amount" }],
-      [{ amountCents: Number.NaN, mode: "platform", mpConfigured: true }, { kind: "none", reason: "zero-amount" }],
-      [{ amountCents: 150.5, mode: "platform", mpConfigured: true }, { kind: "none", reason: "zero-amount" }],
-      // Default `off` (la única cuenta MP de hoy es la de la plataforma, H-TP1): nunca checkout, aunque haya monto y token.
-      [{ amountCents: 8000, mode: "off", mpConfigured: true }, { kind: "none", reason: "checkout-off" }],
-      [{ amountCents: 8000, mode: undefined, mpConfigured: true }, { kind: "none", reason: "checkout-off" }],
-      [{ amountCents: 8000, mode: "PLATFORM", mpConfigured: true }, { kind: "none", reason: "checkout-off" }],
-      // Sin token de MP: la preferencia tiraría siempre.
-      [{ amountCents: 8000, mode: "platform", mpConfigured: false }, { kind: "none", reason: "mp-missing" }],
-      // Precedencia: switch → MP → monto (el motivo más estructural primero, para el log).
-      [{ amountCents: 0, mode: "off", mpConfigured: false }, { kind: "none", reason: "checkout-off" }],
-      [{ amountCents: 0, mode: "platform", mpConfigured: false }, { kind: "none", reason: "mp-missing" }],
-    ];
-    for (const [input, expected] of table) expect(decidePublicCheckout(input), JSON.stringify(input)).toEqual(expected);
   });
+});
 
-  it("[TP-0] isOnlineCheckoutAvailable = switch platform + MP configurado (sin mirar el monto)", () => {
-    expect(isOnlineCheckoutAvailable({ mode: "platform", mpConfigured: true })).toBe(true);
-    expect(isOnlineCheckoutAvailable({ mode: "platform", mpConfigured: false })).toBe(false);
-    expect(isOnlineCheckoutAvailable({ mode: "off", mpConfigured: true })).toBe(false);
-    expect(isOnlineCheckoutAvailable({ mode: undefined, mpConfigured: true })).toBe(false);
+describe("turneroChargeExpiresAt", () => {
+  const createdAt = new Date("2026-10-22T13:00:00.000Z");
+  it("[TP-2c] REQUIRED vence al final del hold (alta + 30 min)", () => {
+    const at = turneroChargeExpiresAt({ required: true, createdAt, scheduledFor: new Date("2026-10-30T13:00:00.000Z") });
+    expect(at.toISOString()).toBe("2026-10-22T13:30:00.000Z");
+  });
+  it("[TP-2c] OPTIONAL vence a las 48 h o al empezar el turno, lo que llegue antes", () => {
+    expect(
+      turneroChargeExpiresAt({ required: false, createdAt, scheduledFor: new Date("2026-10-30T13:00:00.000Z") }).toISOString()
+    ).toBe("2026-10-24T13:00:00.000Z");
+    expect(
+      turneroChargeExpiresAt({ required: false, createdAt, scheduledFor: new Date("2026-10-22T15:00:00.000Z") }).toISOString()
+    ).toBe("2026-10-22T15:00:00.000Z");
+  });
+});
+
+describe("turneroReplayStep", () => {
+  const ch = (status: ChargeStatus, hasPreference = true, cancelReason: string | null = null) => ({
+    status,
+    hasPreference,
+    cancelReason,
+  });
+  it("[TP-2c] tabla del replay (misma key)", () => {
+    const table: Array<[Parameters<typeof turneroReplayStep>[0], TurneroReplayStep]> = [
+      [{ bookingStatus: "CANCELLED", holdAlive: true, charge: ch("ACTIVE") }, "cancelled"],
+      // Sin cobro de T5: TP-0 tal cual.
+      [{ bookingStatus: "CONFIRMED", holdAlive: true, charge: null }, "reserved"],
+      [{ bookingStatus: "PENDING", holdAlive: true, charge: null }, "promote"],
+      // REQUIRED: mismo initPoint; sin preferencia (MP caído) → reintento con el mismo cobro (TP-D29); hold vencido.
+      [{ bookingStatus: "PENDING", holdAlive: true, charge: ch("ACTIVE") }, "checkout"],
+      [{ bookingStatus: "PENDING", holdAlive: true, charge: ch("ACTIVE", false) }, "open-preference"],
+      [{ bookingStatus: "PENDING", holdAlive: false, charge: ch("ACTIVE") }, "hold-expired"],
+      [{ bookingStatus: "PENDING", holdAlive: true, charge: ch("AUTHORIZED") }, "payment-in-flight"],
+      [{ bookingStatus: "PENDING", holdAlive: false, charge: ch("EXPIRED") }, "hold-expired"],
+      [{ bookingStatus: "PENDING", holdAlive: true, charge: ch("CANCELLED", false, "preference_failed") }, "preference-error"],
+      [{ bookingStatus: "PENDING", holdAlive: true, charge: ch("PAID") }, "reserved"],
+      // OPTIONAL: el turno ya está reservado; el link sigue mientras el cobro está vivo.
+      [{ bookingStatus: "CONFIRMED", holdAlive: true, charge: ch("ACTIVE") }, "checkout"],
+      [{ bookingStatus: "CONFIRMED", holdAlive: true, charge: ch("ACTIVE", false) }, "open-preference"],
+      [{ bookingStatus: "CONFIRMED", holdAlive: true, charge: ch("CANCELLED", false, "preference_failed") }, "reserved-notice"],
+      [{ bookingStatus: "CONFIRMED", holdAlive: true, charge: ch("CANCELLED", true, "collected") }, "reserved"],
+      [{ bookingStatus: "CONFIRMED", holdAlive: true, charge: ch("EXPIRED") }, "reserved"],
+      [{ bookingStatus: "CONFIRMED", holdAlive: true, charge: ch("AUTHORIZED") }, "reserved"],
+      [{ bookingStatus: "COMPLETED", holdAlive: true, charge: ch("REFUNDED") }, "reserved"],
+    ];
+    for (const [input, expected] of table) expect(turneroReplayStep(input), JSON.stringify(input)).toBe(expected);
+  });
+});
+
+describe("publicOnlineChargeView", () => {
+  const paid = {
+    mpPaymentId: "1234567890",
+    approvedAt: new Date("2026-10-21T02:30:00.000Z"), // 20/10 23:30 AR
+    paidAmountCents: 8000,
+    paymentMethodId: "visa",
+    paymentTypeId: "credit_card",
+    installments: 1,
+    mpStatus: "approved",
+    refundedAt: null,
+  };
+  it("[TP-2c] FULL pendiente: falta todo el monto (nunca $0) y sin comprobante", () => {
+    expect(
+      publicOnlineChargeView({ kind: "FULL", status: "ACTIVE", amountCents: 8000, copagoCents: 0, onlineDepositCents: 0, receipt: null })
+    ).toEqual({ kind: "FULL", status: "ACTIVE", amountCents: 8000, remainingCents: 8000, receipt: null });
+  });
+  it("[TP-2c] FULL pagado: no falta nada y el comprobante en hora AR", () => {
+    expect(
+      publicOnlineChargeView({ kind: "FULL", status: "PAID", amountCents: 8000, copagoCents: 0, onlineDepositCents: 0, receipt: paid })
+    ).toEqual({
+      kind: "FULL",
+      status: "PAID",
+      amountCents: 8000,
+      remainingCents: 0,
+      receipt: { operationId: "1234567890", approvedAtLabel: "20/10/2026, 23:30", methodLabel: expect.any(String) },
+    });
+  });
+  it("[TP-2c] seña: falta el copago menos lo señado; el comprobante solo con PAID", () => {
+    const pending = publicOnlineChargeView({
+      kind: "DEPOSIT",
+      status: "ACTIVE",
+      amountCents: 2000,
+      copagoCents: 8000,
+      onlineDepositCents: 0,
+      receipt: { ...paid, mpPaymentId: null, approvedAt: null, paidAmountCents: null },
+    });
+    expect([pending.remainingCents, pending.receipt]).toEqual([8000, null]);
+    const done = publicOnlineChargeView({
+      kind: "DEPOSIT",
+      status: "PAID",
+      amountCents: 2000,
+      copagoCents: 8000,
+      onlineDepositCents: 2000,
+      receipt: { ...paid, paidAmountCents: 2000 },
+    });
+    expect(done.remainingCents).toBe(6000);
+    expect(done.receipt?.operationId).toBe("1234567890");
   });
 });
 
