@@ -211,7 +211,18 @@ type BillingRow = {
   status: "PENDING" | "CONFIRMED" | "CANCELLED" | "NO_SHOW" | "COMPLETED";
   paymentStatus: "UNPAID" | "AUTHORIZED" | "PAID" | "REFUNDED" | "FAILED";
   insurerPaidAt: Date | string | null;
+  /**
+   * T5 (M18): Σ de las señas online PAID (`Booking.onlineDepositCents`, escalar del turno: `PatientBookingFull` ya la
+   * trae). Opcional: ausente = 0, lo de antes de M18.
+   */
+  onlineDepositCents?: number | null;
 };
+
+/** Seña online cobrada del turno, saneada (un dato no entero o negativo no es plata: 0). */
+function depositOf(b: Pick<BillingRow, "onlineDepositCents">): number {
+  const d = b.onlineDepositCents ?? 0;
+  return Number.isSafeInteger(d) && d > 0 ? d : 0;
+}
 
 /** Lo de siempre: solo lo que efectivamente factura. */
 export function isBillableBooking(b: BillingRow): boolean {
@@ -225,12 +236,19 @@ export function isBillableBooking(b: BillingRow): boolean {
  * saldo diría "a favor" sin ninguna fila que lo explique. Criterio canónico
  * `bookingHasMoney` (PAID, AUTHORIZED, REFUNDED u OS pagada): el mismo que
  * bloquea su borrado y su reprecio. `PatientBookingFull` no trae el `Payment`
- * de MP; MP escribe `paymentStatus`, así que alcanza.
+ * de MP; MP escribe `paymentStatus`, así que alcanza. T5: la seña online sí
+ * viaja (`onlineDepositCents`): un cancelado con seña cobrada se ve, porque la
+ * plata entró y el reintegro se hace desde Mercado Pago (decisión 2, 19-oct).
  */
 export function isCancelledWithMoney(b: BillingRow): boolean {
   return (
     (b.status === "CANCELLED" || b.status === "NO_SHOW") &&
-    bookingHasMoney({ paymentStatus: b.paymentStatus, insurerPaidAt: b.insurerPaidAt, payment: null })
+    bookingHasMoney({
+      paymentStatus: b.paymentStatus,
+      insurerPaidAt: b.insurerPaidAt,
+      payment: null,
+      onlineDepositCents: b.onlineDepositCents,
+    })
   );
 }
 
@@ -268,6 +286,12 @@ export type BillingSummary = {
  *    copago de un turno de plan no se suma fila por fila: lo que el paciente
  *    debe del plan es el saldo P7 (devengado − cobrado), y con paquete o
  *    cobro previo las dos cuentas no coinciden.
+ *  - T5 (TP-2g, sin doble conteo): con seña online, el copago percibido de un
+ *    turno PAID es el copago (la seña ya es parte: «Pagado» cobró solo lo que
+ *    faltaba, C-TP10); de uno sin cobrar, la seña. Lo pendiente es
+ *    max(0, copago − seña). Misma regla que `copagoRemainingCents`
+ *    (`lib/booking-collect.ts`), repetida acá para no sumar ese módulo al
+ *    bundle del perfil.
  */
 export function billingSummary(
   bookings: readonly (BillingRow & { programId: string | null; copagoCents: number; osAmountCents: number })[],
@@ -276,17 +300,20 @@ export function billingSummary(
   const visible = bookings.filter(isBillingVisible);
   const billable = bookings.filter(isBillableBooking);
   const osPaidCents = visible.reduce((s, b) => s + (b.insurerPaidAt ? b.osAmountCents : 0), 0);
-  const copagoPaidCents = visible.reduce((s, b) => s + (b.paymentStatus === "PAID" ? b.copagoCents : 0), 0);
+  // PAID: el copago entero (si la seña quedó mayor porque el copago bajó, se percibió la seña). Sin cobrar: la seña.
+  const copagoPaidCents = visible.reduce(
+    (s, b) => s + (b.paymentStatus === "PAID" ? Math.max(b.copagoCents, depositOf(b)) : depositOf(b)),
+    0
+  );
+  const copagoDue = (b: BillingRow & { copagoCents: number }) =>
+    b.paymentStatus === "PAID" ? 0 : Math.max(0, b.copagoCents - depositOf(b));
   if (!opts.grouped) {
-    const pendingCents = billable.reduce(
-      (s, b) => s + (b.insurerPaidAt ? 0 : b.osAmountCents) + (b.paymentStatus === "PAID" ? 0 : b.copagoCents),
-      0
-    );
+    const pendingCents = billable.reduce((s, b) => s + (b.insurerPaidAt ? 0 : b.osAmountCents) + copagoDue(b), 0);
     return { osPaidCents, copagoPaidCents, pendingCents, creditCents: 0, billableCount: billable.length };
   }
   const osPending = billable.reduce((s, b) => s + (b.insurerPaidAt ? 0 : b.osAmountCents), 0);
   const loosePending = billable.reduce(
-    (s, b) => s + (b.programId == null && b.paymentStatus !== "PAID" ? b.copagoCents : 0),
+    (s, b) => s + (b.programId == null ? copagoDue(b) : 0),
     0
   );
   const totals = opts.planBalances?.totals;

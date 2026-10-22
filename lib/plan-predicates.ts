@@ -34,7 +34,9 @@ const INACTIVE_FOR_SESSION = ["CANCELLED", "NO_SHOW"] as const;
  * PAID, AUTHORIZED o REFUNDED, en el copago o en el `Payment` de MP, o la OS
  * ya pagada. AUTHORIZED cuenta porque la plata está retenida; REFUNDED porque
  * hubo un movimiento que no se puede pisar. S14 suma el test de paridad de los
- * tres.
+ * tres. T5 (TP-2g): + una seña online cobrada (`onlineDepositCents > 0`, la
+ * escribe solo el trigger de M18): la seña no marca el copago (TP-D7) y sin
+ * este término el turno parecía vacío. Escalar del propio turno: 0 sentencias.
  */
 const MONEY_STATUSES = ["PAID", "AUTHORIZED", "REFUNDED"] as const;
 
@@ -104,6 +106,7 @@ export const bookingHasPaymentWhere = {
     { paymentStatus: { in: [...MONEY_STATUSES] } },
     { insurerPaidAt: { not: null } },
     { payment: { is: { status: { in: [...MONEY_STATUSES] } } } },
+    { onlineDepositCents: { gt: 0 } },
   ],
 } satisfies Prisma.BookingWhereInput;
 

@@ -21,9 +21,10 @@ import type { DbClient } from "@/lib/rls";
  *   - H1 (AUDIT): un turno con COBRO REGISTRADO no se cancela en lote y se
  *     reporta (`has-payment`): copago cobrado a mano (`paymentStatus`
  *     PAID/AUTHORIZED/REFUNDED), pago de la obra social confirmado
- *     (`insurerPaidAt`) o un Payment de MP AUTHORIZED/PAID/REFUNDED — el mismo
- *     criterio que `deleteBooking`. Esos se resuelven a mano (reprogramar o
- *     devolver) desde el drawer;
+ *     (`insurerPaidAt`), un Payment de MP AUTHORIZED/PAID/REFUNDED o (T5,
+ *     TP-2g) una seña online cobrada (`onlineDepositCents > 0`) — el mismo
+ *     criterio que `bookingHasMoney`/`bookingHasPaymentWhere`. Esos se resuelven
+ *     a mano (reprogramar o reintegrar desde Mercado Pago) desde el drawer;
  *   - las filas se lockean (`FOR UPDATE`) ANTES de leer su estado de cobro: un
  *     webhook de MP que marca el pago en paralelo espera a este COMMIT, y el
  *     UPDATE repite las condiciones (cinturón y tiradores);
@@ -90,6 +91,7 @@ export async function cancelBookingsInTx(
       practitionerId: true,
       scheduledFor: true,
       roomId: true,
+      onlineDepositCents: true,
       payment: { select: { status: true } },
     },
   });
@@ -104,7 +106,8 @@ export async function cancelBookingsInTx(
     else if (
       MONEY_SET.has(r.paymentStatus) ||
       r.insurerPaidAt != null ||
-      (r.payment != null && MONEY_SET.has(r.payment.status))
+      (r.payment != null && MONEY_SET.has(r.payment.status)) ||
+      r.onlineDepositCents > 0
     ) {
       skipped.push({ id, reason: "has-payment" });
     } else toCancel.push(r);
@@ -118,6 +121,9 @@ export async function cancelBookingsInTx(
       status: { in: ["PENDING", "CONFIRMED"] },
       paymentStatus: { notIn: [...MONEY] },
       insurerPaidAt: null,
+      // La seña la escribe el trigger de M18 con el turno lockeado: con el FOR UPDATE de arriba no cambia, pero el
+      // UPDATE repite la condición como las demás (cinturón y tiradores).
+      onlineDepositCents: 0,
     },
     data: { status: "CANCELLED" },
   });

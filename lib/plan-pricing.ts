@@ -29,6 +29,12 @@ export type PricingBooking = {
   copagoCents: number | null;
   pricedByPlan: boolean;
   scheduledFor: Date | string;
+  /**
+   * T5 (M18): Σ de las señas online PAID del turno (`Booking.onlineDepositCents`, la escribe SOLO el trigger
+   * `online_charge_sync_booking`). Opcional para no romper a los callers que todavía no la proyectan: ausente = 0,
+   * que es lo que decían antes de M18 (ver handoffs de TP-2g).
+   */
+  onlineDepositCents?: number | null;
 };
 
 /**
@@ -68,14 +74,21 @@ const isCents = (n: unknown): n is number => typeof n === "number" && Number.isS
  * hubo un movimiento que no se puede pisar. Se repite acá (puro) en vez de
  * importar el módulo server-only; `bookingHasPaymentWhere` (S14) es su espejo
  * en Prisma y los tres tienen que decir lo mismo.
+ *
+ * T5 (TP-2g, C-TP11): una seña online cobrada (`onlineDepositCents > 0`) también
+ * es plata. La seña NO marca el copago (TP-D7: el turno sigue UNPAID), así que
+ * sin este término un turno con $ 6.000 de MP adentro se podía repreciar, sacar
+ * del plan o cancelar en lote como si estuviera vacío. Un reintegro que deja la
+ * Σ en 0 lo libera (el trigger resta), igual que antes de cobrar.
  */
 export function bookingHasMoney(
-  b: Pick<PricingBooking, "paymentStatus" | "insurerPaidAt" | "payment">
+  b: Pick<PricingBooking, "paymentStatus" | "insurerPaidAt" | "payment" | "onlineDepositCents">
 ): boolean {
   return (
     MONEY.has(b.paymentStatus) ||
     b.insurerPaidAt != null ||
-    (b.payment != null && MONEY.has(b.payment.status))
+    (b.payment != null && MONEY.has(b.payment.status)) ||
+    (b.onlineDepositCents ?? 0) > 0
   );
 }
 

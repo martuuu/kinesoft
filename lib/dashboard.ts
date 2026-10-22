@@ -717,24 +717,41 @@ async function loadDashboard(
 
 /**
  * Montos crudos de `[start, end)` para el tenant, o solo los turnos de
- * `practitionerId` (SR-D5I, scope `own`; `null` = todo el consultorio). Las
- * tres fuentes filtran por el `Booking.practitionerId` ACTUAL del turno: si un
- * turno cobrado se reasigna, su plata se muda con él (decisión documentada en
- * `revenueScopeFor`). Cada consulta en su propio
- * `runWithRls` (mismo fan-out en paralelo que el resto del dashboard) y con
- * `tenantId` a mano en el WHERE: en prod la conexión tiene BYPASSRLS y es la
- * única barrera.
+ * `practitionerId` (SR-D5I, scope `own`; `null` = todo el consultorio). El
+ * legado, el manual y la OS filtran por el `Booking.practitionerId` ACTUAL del
+ * turno: si un turno cobrado se reasigna, su plata se muda con él (decisión
+ * documentada en `revenueScopeFor`). El cobro online filtra por su profesional
+ * IMPUTADO (`OnlineCharge.practitionerId`, inmutable): un link sin turno no
+ * tiene otro, y la plata entró a la cuenta de MP de ese profesional. Todo en la
+ * tx del caller y con `tenantId` a mano en el WHERE: en prod la conexión tiene
+ * BYPASSRLS y es la única barrera.
  *
- *   - MP: `Payment` PAID por `createdAt` (mismo criterio de fecha que tenía el
- *     widget; el webhook no emite el tag `dashboard`, entra por TTL).
- *   - Copagos a mano: `paymentStatus PAID` con `copagoPaidAt` en el período.
- *     Un turno cuyo `Payment` de MP está PAID ya se contó arriba: se excluye
- *     (el turnero marca `paymentStatus PAID` al acreditarse MP). Los cobros
- *     marcados antes de M3a tienen `copagoPaidAt` NULL y no se cuentan: no hay
- *     una fecha de cobro confiable que inventarles (cabecera de la migración).
- *     El monto es `copagoCents`: al marcar cobrado, `setBookingCopagoPaid`
- *     congela el copago resuelto (Q8), así que en una fila con fecha nunca es
- *     null.
+ *   - MP legado: `Payment` PAID por `createdAt` (mismo criterio de fecha que
+ *     tenía el widget; el webhook no emite el tag `dashboard`, entra por TTL).
+ *   - MP online (T5, C-TP11): `OnlineCharge` PAID por `approvedAt` (la fecha
+ *     en que MP aprobó, no la de alta del link: un link de octubre pagado en
+ *     noviembre es plata de noviembre). Incluye las señas y los links SIN
+ *     turno. Scope por el profesional IMPUTADO del cobro (`practitionerId` de
+ *     la fila), que para un cobro con turno es el del turno al cobrar. REFUNDED
+ *     no suma (la plata volvió).
+ *   - Copagos a mano: `paymentStatus PAID` con `copagoPaidAt` en el período,
+ *     NETOS de las señas que la recepción vio al cobrar (`settledAt <=
+ *     copagoPaidAt`): con seña + resto en efectivo, «Pagado» cobró solo el
+ *     resto (C-TP10) y la seña ya sumó en MP. Antes sumaba el copago entero
+ *     (doble conteo) y con el filtro viejo de `Payment` el resto se perdía
+ *     (hallazgo 4 de §25.2). Una seña acreditada DESPUÉS del cobro a mano no se
+ *     resta: la recepción cobró el copago entero y esa seña es un reintegro
+ *     pendiente en MP. Se excluyen el turno con `Payment` legado PAID (ya contó
+ *     arriba) y el pagado TOTAL online (medio MERCADO_PAGO sin quién cobró: lo
+ *     escribe el webhook, ya contó como online); con `COALESCE` porque un cobro
+ *     de antes de M12 tiene el medio NULL y es manual. Los cobros marcados
+ *     antes de M3a tienen `copagoPaidAt` NULL y no se cuentan: no hay una fecha
+ *     de cobro confiable que inventarles (cabecera de la migración). El monto
+ *     es `copagoCents`: al marcar cobrado, `setBookingCopagoPaid` congela el
+ *     copago resuelto (Q8), así que en una fila con fecha nunca es null.
+ *
+ *   Las tres van en UNA sentencia (C-TP11; antes dos `aggregate`): sumar la
+ *   fuente online no podía costar una sentencia más (`pf2-dashboard-budget`).
  *   - Obra social (aparte): turnos con `insurerPaidAt` en el período × el
  *     arancel (`Insurer.fixedFeeCents`) de la cobertura vigente del paciente
  *     (la última por id, como `resolvePatientBilling` y la tab Facturación).
@@ -760,20 +777,28 @@ async function revenueAmountsInTx(
 ): Promise<RevenueAmounts> {
   // `tenantId` a mano SIEMPRE; el profesional se suma encima, nunca lo reemplaza.
   const own = practitionerId ? { practitionerId } : {};
-  const mp = await tx.payment.aggregate({
-    where: { booking: { tenantId, ...own }, status: "PAID", createdAt: { gte: start, lt: end } },
-    _sum: { amountCents: true },
-  });
-  const manual = await tx.booking.aggregate({
-    where: {
-      tenantId,
-      ...own,
-      paymentStatus: "PAID",
-      copagoPaidAt: { gte: start, lt: end },
-      NOT: { payment: { is: { status: "PAID" } } },
-    },
-    _sum: { copagoCents: true },
-  });
+  // C-TP11 literal. Los bordes viajan como ISO y se convierten a la hora de pared UTC de las columnas `timestamp(3)`
+  // (mismo molde que `lib/booking-rooms-internal.ts`): un `Date` crudo dependería del TimeZone de la sesión.
+  const $t = tenantId;
+  const $prof = practitionerId;
+  const $start = start.toISOString();
+  const $end = end.toISOString();
+  const [money] = await tx.$queryRaw<{ legacyMp: number; onlineMp: number; manualNet: number }[]>`
+    SELECT
+      COALESCE((SELECT sum(p."amountCents") FROM "Payment" p JOIN "Booking" b ON b."id" = p."bookingId"
+         WHERE b."tenantId" = ${$t} AND (${$prof}::text IS NULL OR b."practitionerId" = ${$prof}) AND p."status" = 'PAID'
+           AND p."createdAt" >= (${$start}::timestamptz AT TIME ZONE 'UTC') AND p."createdAt" < (${$end}::timestamptz AT TIME ZONE 'UTC')), 0)::int AS "legacyMp",
+      COALESCE((SELECT sum(c."amountCents") FROM "OnlineCharge" c
+         WHERE c."tenantId" = ${$t} AND (${$prof}::text IS NULL OR c."practitionerId" = ${$prof}) AND c."status" = 'PAID'
+           AND c."approvedAt" >= (${$start}::timestamptz AT TIME ZONE 'UTC') AND c."approvedAt" < (${$end}::timestamptz AT TIME ZONE 'UTC')), 0)::int AS "onlineMp",
+      COALESCE((SELECT sum(GREATEST(0, COALESCE(b."copagoCents", 0) - COALESCE(d."cents", 0))) FROM "Booking" b
+         LEFT JOIN LATERAL (SELECT sum(c."amountCents") AS "cents" FROM "OnlineCharge" c
+            WHERE c."tenantId" = b."tenantId" AND c."bookingId" = b."id" AND c."kind" = 'DEPOSIT' AND c."status" = 'PAID'
+              AND c."settledAt" <= b."copagoPaidAt") d ON true
+         WHERE b."tenantId" = ${$t} AND (${$prof}::text IS NULL OR b."practitionerId" = ${$prof}) AND b."paymentStatus" = 'PAID'
+           AND b."copagoPaidAt" >= (${$start}::timestamptz AT TIME ZONE 'UTC') AND b."copagoPaidAt" < (${$end}::timestamptz AT TIME ZONE 'UTC')
+           AND NOT EXISTS (SELECT 1 FROM "Payment" p WHERE p."bookingId" = b."id" AND p."status" = 'PAID')
+           AND NOT COALESCE(b."copagoPaymentMethod" = 'MERCADO_PAGO' AND b."copagoCollectedById" IS NULL, false)), 0)::int AS "manualNet"`;
   let insurerCents = 0;
   if (withInsurer) {
     const perPatient = await tx.booking.groupBy({
@@ -800,8 +825,8 @@ async function revenueAmountsInTx(
     }
   }
   return {
-    mpCents: mp._sum.amountCents ?? 0,
-    manualCents: manual._sum.copagoCents ?? 0,
+    mpCents: (money?.legacyMp ?? 0) + (money?.onlineMp ?? 0),
+    manualCents: money?.manualNet ?? 0,
     insurerCents,
   };
 }

@@ -46,6 +46,11 @@ export const TENANT_EXPORT_RATE_LIMIT = { limit: 3, windowMs: 60 * 60_000 } as c
  *  - `Booking.idempotencyKey`, `TreatmentProgram.idempotencyKey`, `ClinicalNote.idempotencyKey`: claves internas de
  *    reintento.
  *  - `Payment.rawPayload`: respuesta cruda de Mercado Pago (datos del pagador y del medio de pago de MP).
+ *  - T5 (TP-2g, C-TP11): de `OnlineCharge` no salen `publicToken` (el link sigue sirviendo para pagar: fuera de
+ *    KineSoft sería un link de cobro suelto), `rawPayload` (crudo de MP), `idempotencyKey`, `preferenceId` ni
+ *    `checkoutUrl` (la preferencia viva de MP). De `MpAccount` no sale `webhookRef` (la llave opaca que identifica la
+ *    cuenta en el webhook) ni `publicKey`, y `MpCredential` no se exporta NUNCA (tokens sellados, SERVICE_ONLY). La
+ *    política del turnero (`BookingPaymentPolicy`) es configuración, no datos: queda afuera como el resto de Ajustes.
  *  - `PatientFile.storageKey`: la ruta en el bucket. Los binarios no viajan (ni URLs firmadas): solo metadatos.
  *  - T4 FC-2i (C-FC7): `PatientDocument.pdfStorageKey`, `Tenant.logoStorageKey` y `Practitioner.signatureStorageKey`,
  *    por lo mismo (rutas del bucket). Del documento compartido sale el `snapshot` (el contenido que vio el paciente) y
@@ -112,12 +117,29 @@ export const EXPORT_FIELDS = {
   bookings: [
     "id", "patientId", "practitionerId", "serviceId", "locationId", "roomId", "programId", "sessionId", "seriesId",
     "scheduledFor", "durationMin", "status", "paymentStatus", "copagoCents", "copagoPaidAt", "insurerPaidAt",
+    // T5 (TP-2g): medio y quién cobró (M12) y la seña online (M18): sin ellos el export no distingue lo cobrado en
+    // efectivo de lo que entró por Mercado Pago.
+    "copagoPaymentMethod", "copagoCollectedById", "onlineDepositCents",
     "pricedByPlan", "guestName", "guestEmail", "guestPhone", "title", "description", "notes", "isOverbooked",
     "arrivedAt", "calledAt", "attendingAt", "isTelemedicine", "telemedicineUrl", "createdAt", "updatedAt",
   ],
   payments: [
     "id", "bookingId", "provider", "externalId", "status", "expectedAmountCents", "amountCents", "currency",
     "createdAt", "updatedAt",
+  ],
+  // T5 (C-TP11): cuentas de MP conectadas (sin `webhookRef` ni credenciales) y cobros online con su comprobante (sin
+  // token, crudo ni preferencia). `connectedByUserId`/`createdByUserId`/… son ids opacos del equipo (cruzan con
+  // `team.userId`, como `auditEvents.actorId`).
+  mpAccounts: [
+    "id", "practitionerId", "kind", "mpUserId", "mpNickname", "liveMode", "linksDelegated", "status",
+    "connectedByUserId", "connectedAt", "reauthRequiredAt", "disconnectedAt", "disconnectedByUserId", "createdAt",
+    "updatedAt",
+  ],
+  onlineCharges: [
+    "id", "origin", "kind", "status", "mpAccountId", "practitionerId", "patientId", "bookingId", "amountCents",
+    "currency", "copagoBasisCents", "concept", "expiresAt", "createdByUserId", "mpPaymentId", "mpStatus",
+    "mpStatusDetail", "paymentMethodId", "paymentTypeId", "installments", "paidAmountCents", "approvedAt", "settledAt",
+    "refundedAt", "cancelledAt", "cancelledByUserId", "cancelReason", "createdAt", "updatedAt",
   ],
   clinicalCases: ["id", "authorId", "patientId", "selectedZones", "refinements", "notes", "createdAt"],
   // OJO (hallazgo 10 de T4): `diagnoses` es el resultado del ASISTENTE de diagnóstico (`Diagnosis`); los diagnósticos
@@ -197,6 +219,12 @@ export const EXPORT_FORBIDDEN_FIELDS = [
   "userAgent",
   "statusReason",
   "seatLimitOverride",
+  // T5 (C-TP11): token del link de pago, llave del webhook y los sobres de las credenciales de MP.
+  "publicToken",
+  "webhookRef",
+  "accessTokenBox",
+  "refreshTokenBox",
+  "checkoutUrl",
 ] as const;
 
 /** `{ campo: true }` para el `select` de Prisma, desde la allowlist. */
@@ -283,6 +311,7 @@ export const EXPORT_EXCLUDES_COPY = [
   "Archivos adjuntos (PDF, imágenes): solo sus datos (nombre, tipo, tamaño, fecha). Los archivos se descargan desde la ficha de cada paciente.",
   "Contraseñas, tokens de invitación y datos de las cuentas de acceso.",
   "Respuestas crudas de Mercado Pago (los pagos sí están, con monto y estado).",
+  "Credenciales de las cuentas de Mercado Pago conectadas y los links de pago activos (los cobros sí están, con su comprobante).",
   "Registro de auditoría de más de 12 meses.",
 ];
 

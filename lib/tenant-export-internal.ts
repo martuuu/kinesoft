@@ -104,6 +104,11 @@ const PAGE: Record<ExportEntity, (tx: Tx, tenantId: string, args: PageArgs, sinc
     tx.booking.findMany({ where: { tenantId }, select: selectOf("bookings"), ...a }).then(asRows),
   payments: (tx, tenantId, a) =>
     tx.payment.findMany({ where: { booking: { tenantId } }, select: selectOf("payments"), ...a }).then(asRows),
+  // T5 (C-TP11): `MpAccount` es TENANT_READONLY (el consultorio la lee con su GUC); `MpCredential` no se toca.
+  mpAccounts: (tx, tenantId, a) =>
+    tx.mpAccount.findMany({ where: { tenantId }, select: selectOf("mpAccounts"), ...a }).then(asRows),
+  onlineCharges: (tx, tenantId, a) =>
+    tx.onlineCharge.findMany({ where: { tenantId }, select: selectOf("onlineCharges"), ...a }).then(asRows),
   clinicalCases: (tx, tenantId, a) =>
     tx.clinicalCase.findMany({ where: { tenantId }, select: selectOf("clinicalCases"), ...a }).then(asRows),
   diagnoses: (tx, tenantId, a) =>

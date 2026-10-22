@@ -47,6 +47,8 @@ const LOOSE_VISIBLE: Prisma.BookingWhereInput = {
     { status: { notIn: ["CANCELLED", "NO_SHOW"] } },
     { paymentStatus: { in: ["PAID", "AUTHORIZED"] } },
     { payment: { is: { status: { in: ["PAID", "AUTHORIZED"] } } } },
+    // T5 (TP-2g): un cancelado con seña online cobrada también tiene plata en juego (el reintegro es desde MP).
+    { onlineDepositCents: { gt: 0 } },
   ],
 };
 
@@ -56,6 +58,7 @@ const LOOSE_SELECT = {
   status: true,
   paymentStatus: true,
   copagoCents: true,
+  onlineDepositCents: true,
   service: { select: { name: true } },
   payment: { select: { status: true } },
 } satisfies Prisma.BookingSelect;
@@ -64,6 +67,8 @@ type LooseRow = Prisma.BookingGetPayload<{ select: typeof LOOSE_SELECT }>;
 
 type LooseMoneyRow = Pick<LooseRow, "status" | "paymentStatus" | "copagoCents"> & {
   payment?: { status: LooseRow["paymentStatus"] } | null;
+  /** T5 (M18): Σ de señas online PAID del turno (escalar que mantiene el trigger). Ausente = 0. */
+  onlineDepositCents?: number | null;
 };
 
 /** Cobrado: el estado del turno o el del `Payment` de MP (el webhook puede ir adelante del turno). */
@@ -83,12 +88,16 @@ export function looseInProcess(b: Pick<LooseMoneyRow, "paymentStatus" | "payment
  * ES4-Z (B3, decisión con default): REFUNDED NO reabre la deuda. Un reintegro lo decide el consultorio (devolvió la
  * plata por algo); mostrarle al paciente «Te falta pagar» por un turno que le devolvieron sería falso. Si el
  * consultorio quiere volver a cobrarlo, lo marca impago.
+ *
+ * T5 (TP-2g, C-TP11): la seña online cobrada se descuenta: el paciente debe max(0, copago − seña). Sin esto, quien
+ * pagó $ 6.000 de seña por el turnero veía «Te falta pagar» el copago entero (la seña no marca el copago, TP-D7).
  */
 export function loosePendingCents(b: LooseMoneyRow): number {
   if (b.status !== "COMPLETED" || b.copagoCents == null) return 0;
   if (b.paymentStatus === "PAID" || b.paymentStatus === "AUTHORIZED" || b.paymentStatus === "REFUNDED") return 0;
   if (looseIsPaid(b) || looseInProcess(b)) return 0;
-  return b.copagoCents;
+  const deposit = b.onlineDepositCents ?? 0;
+  return Math.max(0, b.copagoCents - (Number.isSafeInteger(deposit) && deposit > 0 ? deposit : 0));
 }
 
 export async function loadPortalAccount(
