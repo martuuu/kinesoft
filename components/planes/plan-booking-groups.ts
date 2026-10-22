@@ -213,9 +213,9 @@ type BillingRow = {
   insurerPaidAt: Date | string | null;
   /**
    * T5 (M18): Σ de las señas online PAID (`Booking.onlineDepositCents`, escalar del turno: `PatientBookingFull` ya la
-   * trae). Opcional: ausente = 0, lo de antes de M18.
+   * trae). Requerida desde TP-2i (un productor que no la proyecte no compila).
    */
-  onlineDepositCents?: number | null;
+  onlineDepositCents: number;
 };
 
 /** Seña online cobrada del turno, saneada (un dato no entero o negativo no es plata: 0). */

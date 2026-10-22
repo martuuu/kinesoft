@@ -254,13 +254,17 @@ describe("[TP-0] wizard sin cobro: «Confirmar turno», sin «Mercado Pago»", (
         service={{ ...sv, priceCents }}
         slotISO="2026-10-19T12:00:00.000Z"
         location={null}
-        checkout={checkoutCopyFor({ onlineCheckout: cl.onlineCheckout, priceCents })}
+        checkout={checkoutCopyFor({
+          onlineCheckout:
+            cl.onlinePayment?.mode === "REQUIRED" && cl.onlinePayment.practitionerIds.includes(cl.practitioners[0].id),
+          priceCents,
+        })}
       />
     );
   };
 
-  it("wizard completo sin `onlineCheckout` (falso o ausente): ni «Mercado Pago» ni «Pagar»", () => {
-    for (const over of [{}, { onlineCheckout: false }]) {
+  it("wizard completo sin `onlinePayment` (null o ausente): ni «Mercado Pago» ni «Pagar»", () => {
+    for (const over of [{}, { onlinePayment: null }]) {
       const html = renderToStaticMarkup(<PublicBookingWizard clinic={{ ...c, ...over }} session={null} prefill={null} />);
       expect(html).not.toMatch(/Mercado Pago|Pagar y reservar|Total a pagar/);
       expect(html).toContain("Lo pagás en el consultorio.");
@@ -279,7 +283,19 @@ describe("[TP-0] wizard sin cobro: «Confirmar turno», sin «Mercado Pago»", (
   });
 
   it("con cobro online el resumen sigue como antes (Total a pagar + Mercado Pago)", () => {
-    const html = aside({ onlineCheckout: true }, 1_500_000);
+    const html = aside(
+      {
+        onlinePayment: {
+          mode: "REQUIRED",
+          chargeKind: "COPAGO",
+          fixedCents: null,
+          percentBps: null,
+          cancellationNote: null,
+          practitionerIds: [c.practitioners[0].id],
+        },
+      },
+      1_500_000,
+    );
     expect(html).toContain("Total a pagar");
     expect(html).toContain("El pago se hace en Mercado Pago.");
   });

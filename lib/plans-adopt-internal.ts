@@ -652,6 +652,8 @@ export async function removeBookingFromPlanInTx(
       status: true,
       paymentStatus: true,
       insurerPaidAt: true,
+      // T5 (TP-2g/TP-2i): con seña online cobrada no se saca del plan (`bookingHasMoney`). Escalar.
+      onlineDepositCents: true,
       payment: { select: { status: true } },
       pricedByPlan: true,
       updatedAt: true,

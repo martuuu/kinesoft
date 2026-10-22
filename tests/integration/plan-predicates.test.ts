@@ -191,7 +191,7 @@ describe.skipIf(!RUN)("P2-C1 · plan-predicates", () => {
     );
     const full = await db.booking.findMany({
       where: { id: { in: ids } },
-      select: { id: true, paymentStatus: true, insurerPaidAt: true, payment: { select: { status: true } } },
+      select: { id: true, paymentStatus: true, insurerPaidAt: true, onlineDepositCents: true, payment: { select: { status: true } } },
     });
     expect(full).toHaveLength(cases.length);
     for (const b of full) expect([b.id, matched.has(b.id)]).toEqual([b.id, bookingHasMoney(b)]);

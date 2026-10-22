@@ -47,7 +47,7 @@ export const TENANT_EXPORT_RATE_LIMIT = { limit: 3, windowMs: 60 * 60_000 } as c
  *    reintento.
  *  - `Payment.rawPayload`: respuesta cruda de Mercado Pago (datos del pagador y del medio de pago de MP).
  *  - T5 (TP-2g, C-TP11): de `OnlineCharge` no salen `publicToken` (el link sigue sirviendo para pagar: fuera de
- *    KineSoft sería un link de cobro suelto), `rawPayload` (crudo de MP), `idempotencyKey`, `preferenceId` ni
+ *    la app sería un link de cobro suelto), `rawPayload` (crudo de MP), `idempotencyKey`, `preferenceId` ni
  *    `checkoutUrl` (la preferencia viva de MP). De `MpAccount` no sale `webhookRef` (la llave opaca que identifica la
  *    cuenta en el webhook) ni `publicKey`, y `MpCredential` no se exporta NUNCA (tokens sellados, SERVICE_ONLY). La
  *    política del turnero (`BookingPaymentPolicy`) es configuración, no datos: queda afuera como el resto de Ajustes.

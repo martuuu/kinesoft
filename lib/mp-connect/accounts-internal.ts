@@ -371,32 +371,55 @@ export async function resolveChargeAccount(o: {
  * `invalid_grant` al refrescar → REAUTH_REQUIRED. CAS sobre la versión de la credencial: si cambió, otro request
  * refrescó entre la lectura y el canje (el refresh token es rotativo) y el `invalid_grant` es por eso, no por una
  * revocación → `superseded`, no se marca. El aviso «Reconectá tu Mercado Pago» lo manda el cron (TP-2h).
+ *
+ * TP-2i: es la ÚNICA implementación (antes había dos: esta con `updateMany` y la del cron con SQL crudo). Queda la del
+ * cron porque el `status = 'ACTIVE'` y la versión se re-evalúan sobre la fila bloqueada: dos marcadores a la vez no
+ * marcan (ni auditan) dos veces. `markMpAccountReauthRequired` (cron-internal) delega acá; la dirección es esta y no
+ * la inversa porque cron-internal ya importa este módulo por `account-client` (al revés quedaba un ciclo).
+ * `superseded` = la credencial ya no está en `credentialVersion` (leída con `FOR UPDATE`).
  */
 export async function markAccountReauthRequired(o: {
   tenantId: string;
   accountId: string;
   credentialVersion: number;
+  now?: Date;
+  source?: "cron" | "webhook" | "request";
 }): Promise<{ marked: boolean; superseded: boolean }> {
+  const now = o.now ?? new Date();
+  const source = o.source ?? "request";
   return prismaService.$transaction(async (tx) => {
-    const bumped = await tx.mpCredential.updateMany({
-      where: { mpAccountId: o.accountId, tenantId: o.tenantId, version: o.credentialVersion },
+    // 1. La credencial `FOR UPDATE` ANTES de decidir: si otro request está commiteando su refresh (CAS sobre `version`),
+    //    se espera y se lee la versión commiteada (READ COMMITTED re-lee tras el lock). Un EXISTS sin lock leía la
+    //    versión vieja en esa carrera y marcaba REAUTH a una cuenta sana (lo vio tp2o-mp-connect con el rol owner).
+    //    Orden de locks: credencial → cuenta (el mismo que tenía esta función antes de TP-2i).
+    const [cred] = await tx.$queryRaw<{ version: number }[]>`
+      SELECT "version" FROM "MpCredential"
+       WHERE "mpAccountId" = ${o.accountId} AND "tenantId" = ${o.tenantId}
+       FOR UPDATE`;
+    if (!cred) return { marked: false, superseded: false };
+    if (cred.version !== o.credentialVersion) return { marked: false, superseded: true };
+    // 2. SQL crudo y no `updateMany`: el `status = 'ACTIVE'` se re-evalúa sobre la fila bloqueada si dos marcadores
+    //    corren a la vez (el segundo no la marca de nuevo ni audita dos veces). Las columnas son TIMESTAMP sin zona en
+    //    UTC: el parámetro pasa a UTC explícito (molde de lib/dashboard.ts).
+    const n = await tx.$executeRaw`
+      UPDATE "MpAccount" a
+         SET "status" = 'REAUTH_REQUIRED',
+             "reauthRequiredAt" = (${now}::timestamptz AT TIME ZONE 'UTC'),
+             "updatedAt" = (${now}::timestamptz AT TIME ZONE 'UTC')
+       WHERE a."id" = ${o.accountId} AND a."tenantId" = ${o.tenantId} AND a."status" = 'ACTIVE'`;
+    if (n !== 1) return { marked: false, superseded: false };
+    await tx.mpCredential.updateMany({
+      where: { mpAccountId: o.accountId, tenantId: o.tenantId },
       data: { refreshFailures: { increment: 1 } },
     });
-    if (bumped.count === 0) return { marked: false, superseded: true };
-    const now = new Date();
-    const u = await tx.mpAccount.updateMany({
-      where: { id: o.accountId, tenantId: o.tenantId, status: "ACTIVE" },
-      data: { status: "REAUTH_REQUIRED", reauthRequiredAt: now },
-    });
-    if (u.count === 0) return { marked: false, superseded: false };
     await auditInTx(tx, {
       tenantId: o.tenantId,
       action: ONLINE_PAYMENTS_AUDIT.mpAccountReauthRequired,
       entity: "MpAccount",
       entityId: o.accountId,
-      payload: { reason: "invalid_grant" },
+      payload: { accountId: o.accountId, source },
     });
-    logger.warn("mp_connect.reauth_required", { tenantId: o.tenantId, accountId: o.accountId });
+    logger.warn("mp_connect.reauth_required", { tenantId: o.tenantId, accountId: o.accountId, source });
     return { marked: true, superseded: false };
   });
 }

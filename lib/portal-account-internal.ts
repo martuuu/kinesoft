@@ -67,8 +67,8 @@ type LooseRow = Prisma.BookingGetPayload<{ select: typeof LOOSE_SELECT }>;
 
 type LooseMoneyRow = Pick<LooseRow, "status" | "paymentStatus" | "copagoCents"> & {
   payment?: { status: LooseRow["paymentStatus"] } | null;
-  /** T5 (M18): Σ de señas online PAID del turno (escalar que mantiene el trigger). Ausente = 0. */
-  onlineDepositCents?: number | null;
+  /** T5 (M18): Σ de señas online PAID del turno (escalar que mantiene el trigger). Requerida desde TP-2i. */
+  onlineDepositCents: number;
 };
 
 /** Cobrado: el estado del turno o el del `Payment` de MP (el webhook puede ir adelante del turno). */

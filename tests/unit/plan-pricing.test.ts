@@ -32,6 +32,7 @@ function booking(over: Partial<PricingBooking> = {}): PricingBooking {
     copagoCents: null,
     pricedByPlan: false,
     scheduledFor: FUTURE,
+    onlineDepositCents: 0,
     ...over,
   };
 }

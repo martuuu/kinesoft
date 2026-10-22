@@ -36,8 +36,7 @@ describe("[TP-2r] predicados de plata con seña online", () => {
   it("bookingHasMoney: seña > 0 es plata aunque el copago siga UNPAID; 0 o ausente no", () => {
     expect(bookingHasMoney({ paymentStatus: "UNPAID", insurerPaidAt: null, payment: null, onlineDepositCents: 6_000_00 })).toBe(true);
     expect(bookingHasMoney({ paymentStatus: "UNPAID", insurerPaidAt: null, payment: null, onlineDepositCents: 0 })).toBe(false);
-    // Los callers que todavía no proyectan la columna (handoff) siguen diciendo lo de antes.
-    expect(bookingHasMoney({ paymentStatus: "UNPAID", insurerPaidAt: null, payment: null })).toBe(false);
+    // Desde TP-2i la columna es requerida en `PricingBooking`: un caller que no la proyecte no compila.
     expect(bookingHasMoney({ paymentStatus: "FAILED", insurerPaidAt: null, payment: null, onlineDepositCents: 100 })).toBe(true);
   });
 
@@ -69,6 +68,5 @@ describe("[TP-2r] predicados de plata con seña online", () => {
     expect(loosePendingCents({ ...base, onlineDepositCents: 6_000_00 })).toBe(14_000_00);
     expect(loosePendingCents({ ...base, onlineDepositCents: 25_000_00 })).toBe(0);
     expect(loosePendingCents({ ...base, onlineDepositCents: 0 })).toBe(20_000_00);
-    expect(loosePendingCents(base)).toBe(20_000_00);
   });
 });

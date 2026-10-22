@@ -296,7 +296,8 @@ export async function createPaymentLink(raw: CreatePaymentLinkInput): Promise<Ac
         tenantName: actor.tenantName,
         practitionerId: input.practitionerId,
         practitionerName,
-        actorPractitionerId: actor.practitionerId,
+        // null = el actor no atiende: `linkAccountGate` lo resuelve con `isActorPractitioner` (IAM-4a).
+        actorPractitionerId: actor.practitionerId ?? null,
         caps,
       });
       if (!acc.ok) return fail(acc.error);
@@ -602,7 +603,8 @@ export async function getPaymentLinkSuggestions(raw: { bookingId: string }): Pro
         tenantName: actor.tenantName,
         practitionerId: b.practitionerId,
         practitionerName: practitionerDisplayName(practitioner),
-        actorPractitionerId: actor.practitionerId,
+        // null = el actor no atiende: `linkAccountGate` lo resuelve con `isActorPractitioner` (IAM-4a).
+        actorPractitionerId: actor.practitionerId ?? null,
         caps,
       });
       if (acc.ok) accountKind = acc.account.kind;

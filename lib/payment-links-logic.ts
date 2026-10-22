@@ -10,6 +10,7 @@
  * Plata 100 % en centavos `Int`. Copy en voseo y con el vocabulario de §25.10 (link de pago, seña, Mercado Pago).
  */
 import { formatARS } from "@/lib/format";
+import { isActorPractitioner } from "@/lib/practitioner-scope";
 import { MAX_ONLINE_CHARGE_CENTS, MIN_ONLINE_CHARGE_CENTS, remainingOf } from "@/lib/online-charge-logic";
 import { PAYMENT_LINK_COPY } from "@/lib/online-payments-copy";
 import { formatArDateTime } from "@/lib/mp-receipt";
@@ -155,7 +156,7 @@ export function linkAccountGate(
   const owns =
     account.kind === "CLINIC"
       ? actor.isAccountOwner
-      : actor.practitionerId != null && actor.practitionerId === account.practitionerId;
+      : isActorPractitioner(actor, account.practitionerId);
   if (owns || account.linksDelegated) return { ok: true };
   return { ok: false, error: PAYMENT_LINK_COPY.notDelegated(ownerName) };
 }

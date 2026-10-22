@@ -68,8 +68,10 @@ const COPY = {
 async function ownerFor(actor: Actor, target: "own" | "clinic"): Promise<{ practitionerId: string | null } | { error: string }> {
   if (actor.support) return { error: COPY.support };
   if (target === "own") {
-    if (!actor.practitionerId) return { error: COPY.ownOnly };
-    return { practitionerId: actor.practitionerId };
+    // IAM-4a: el alias ya está chequeado no-null (la Secretaria y Facturación no tienen cuenta propia).
+    const own = actor.practitionerId;
+    if (!own) return { error: COPY.ownOnly };
+    return { practitionerId: own };
   }
   const caps = await capabilitiesForActor(actor);
   if (!caps.has("account.owner")) return { error: COPY.clinicOnly };

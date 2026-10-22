@@ -14,6 +14,7 @@
  * [TP-K3] Filas de cobros online (T5, brief §25.4 y §25.7): conectar/desconectar/delegar Mercado Pago, política de cobro,
  * links de pago y la lectura de cobros de un turno. Las celdas ✅ nacen `it.fails("[TP-2b|TP-2d|TP-2h] …")` (las actions
  * son stubs de TP-K2) y las da vuelta TP-2i; las ⛔ ya pasan con el stub y quedan como red cuando llegue la implementación.
+ * [TP-2i] Dadas vuelta (40 celdas) con las actions reales; + BASIC ✅ (propio) y SUPPORT ⛔ en `getBookingOnlineCharges`.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -97,6 +98,42 @@ vi.mock("@/lib/two-factor-step-up", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/two-factor-step-up")>()),
   requireStepUp: async () => {},
 }));
+
+// TP-2i: `startMpConnect` ata el state del OAuth a la sesión (`session_id`) y el de la cuenta del consultorio pide aal2
+// (decisión de TP-2b: sin `session_id` falla cerrado). La frontera es la red de Supabase: se mockea `getSession` con un
+// access token de claims fijos (molde de saas-billing.test.ts / tp2o-mp-connect.test.ts); la barrera bajo test
+// (capabilities, `practitionerId`, soporte) es la real. `getUser` queda como en integration-setup.
+vi.mock("@/lib/supabase/server", async () => {
+  const { currentTestUser } = await import("@/tests/helpers/actor");
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const token = (): string | null => {
+    const u = currentTestUser();
+    if (!u) return null;
+    const payload = {
+      sub: u.id,
+      email: u.email,
+      role: "authenticated",
+      aud: "authenticated",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      session_id: "sess-matrix",
+      aal: "aal2",
+    };
+    return `${b64({ alg: "HS256", typ: "JWT" })}.${b64(payload)}.firma-que-verifica-gotrue`;
+  };
+  return {
+    getSupabaseServerClient: () => ({
+      auth: {
+        getSession: async () => {
+          const t = token();
+          if (!t) throw new Error("sin getSession");
+          return { data: { session: { access_token: t } }, error: null };
+        },
+        getUser: async () => ({ data: { user: currentTestUser() }, error: null }),
+        getClaims: async () => ({ data: null, error: { message: "sin JWKS" } }),
+      },
+    }),
+  };
+});
 
 /** Revisión A2: el export es server-only con firma `(actor, opts)`; la ruta le pasa su actor. */
 const exportPatientsCsv = async (opts?: Parameters<typeof exportPatientsCsvFor>[1]) =>
@@ -1586,14 +1623,14 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
       kind: "write",
       name: "MP · startMpConnect (own)",
       cells: {
-        OWNER: { exp: "ok", fails: "TP-2b" },
-        BASIC: { exp: "ok", fails: "TP-2b", note: "own solo exige practitionerId (C-TP4)" },
+        OWNER: "ok",
+        BASIC: { exp: "ok", note: "own solo exige practitionerId (C-TP4)" },
         ASSISTANT: { exp: "deny", note: "«Solo un profesional conecta su Mercado Pago.»" },
         ASSISTANT_CFG: "deny",
         BILLING: "deny",
         ADMIN: { exp: "deny", note: "no atiende: sin profesional" },
-        PRO_CFG: { exp: "ok", fails: "TP-2b" },
-        GENERAL: { exp: "ok", fails: "TP-2b" },
+        PRO_CFG: "ok",
+        GENERAL: "ok",
         SUPPORT: { exp: "deny", note: "soporte nunca (§25.4)" },
       },
       setup: async () => {
@@ -1611,14 +1648,14 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
       kind: "write",
       name: "MP · startMpConnect (cuenta del consultorio)",
       cells: {
-        OWNER: { exp: "ok", fails: "TP-2b", note: "Titular + step-up" },
+        OWNER: { exp: "ok", note: "Titular + step-up" },
         BASIC: "deny",
         ASSISTANT: "deny",
         ASSISTANT_CFG: "deny",
         BILLING: "deny",
         ADMIN: { exp: "deny", note: "solo el Titular (account.owner), decisión 1" },
         PRO_CFG: { exp: "deny", note: "«Configuración» no es account.owner" },
-        GENERAL: { exp: "ok", fails: "TP-2b" },
+        GENERAL: "ok",
         SUPPORT: { exp: "deny", note: "soporte nunca (§25.4)" },
       },
       setup: async () => {
@@ -1636,11 +1673,11 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
       name: "MP · disconnectMpAccount (own)",
       cells: {
         XT: { exp: "isolated", note: "own no lleva ids: el de otro consultorio no alcanza la cuenta de K" },
-        OWNER: { exp: "ok", fails: "TP-2b" },
-        BASIC: { exp: "ok", fails: "TP-2b" },
+        OWNER: "ok",
+        BASIC: "ok",
         ASSISTANT: { exp: "deny", note: "sin profesional: no tiene cuenta propia" },
-        PRO_CFG: { exp: "ok", fails: "TP-2b" },
-        GENERAL: { exp: "ok", fails: "TP-2b" },
+        PRO_CFG: "ok",
+        GENERAL: "ok",
         SUPPORT: { exp: "deny", note: "soporte nunca (§25.4)" },
       },
       // La cuenta es la del actor de la celda (PRO_CFG: la suya); en las demás, la del profesional de la fixture.
@@ -1653,13 +1690,13 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
       name: "MP · disconnectMpAccount (cuenta del consultorio)",
       cells: {
         XT: "isolated",
-        OWNER: { exp: "ok", fails: "TP-2b", note: "Titular + step-up" },
+        OWNER: { exp: "ok", note: "Titular + step-up" },
         BASIC: "deny",
         ASSISTANT: "deny",
         BILLING: "deny",
         ADMIN: { exp: "deny", note: "solo el Titular" },
         PRO_CFG: "deny",
-        GENERAL: { exp: "ok", fails: "TP-2b" },
+        GENERAL: "ok",
         SUPPORT: { exp: "deny", note: "soporte nunca (§25.4)" },
       },
       setup: (fx) => fxMpAccount(fx, { owner: "clinic" }),
@@ -1671,8 +1708,8 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
       name: "MP · setMpLinksDelegated (own)",
       cells: {
         XT: "isolated",
-        OWNER: { exp: "ok", fails: "TP-2b" },
-        BASIC: { exp: "ok", fails: "TP-2b", note: "el dueño de la cuenta" },
+        OWNER: "ok",
+        BASIC: { exp: "ok", note: "el dueño de la cuenta" },
         ASSISTANT: { exp: "deny", note: "la delegación la cambia solo el dueño de la cuenta" },
         BILLING: "deny",
         ADMIN: "deny",
@@ -1687,7 +1724,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
       name: "MP · setMpLinksDelegated (cuenta del consultorio)",
       cells: {
         XT: "isolated",
-        OWNER: { exp: "ok", fails: "TP-2b" },
+        OWNER: "ok",
         ASSISTANT: "deny",
         BILLING: "deny",
         ADMIN: { exp: "deny", note: "la del consultorio la delega el Titular (§25.4)" },
@@ -1703,14 +1740,14 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
       name: "Cobros online · savePaymentPolicy",
       cells: {
         XT: "isolated",
-        OWNER: { exp: "ok", fails: "TP-2b" },
+        OWNER: "ok",
         BASIC: "deny",
         ASSISTANT: "deny",
         ASSISTANT_CFG: { exp: "deny", note: "tenant.sensitive: la Secretaria con «Configuración» no (§25.13)" },
         BILLING: { exp: "deny", note: "Facturación no (§25.13)" },
-        ADMIN: { exp: "ok", fails: "TP-2b", note: "tenant.sensitive" },
-        PRO_CFG: { exp: "ok", fails: "TP-2b", note: "decisión 4 del 19-oct" },
-        GENERAL: { exp: "ok", fails: "TP-2b" },
+        ADMIN: { exp: "ok", note: "tenant.sensitive" },
+        PRO_CFG: { exp: "ok", note: "decisión 4 del 19-oct" },
+        GENERAL: "ok",
         SUPPORT: { exp: "ro", note: "nada nuevo en SUPPORT_WRITABLE_ACTIONS (C-TP14)" },
       },
       setup: async (fx) => {
@@ -1727,14 +1764,14 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
       kind: "read",
       name: "Cobros online · getOnlinePaymentsSettings",
       cells: {
-        OWNER: { exp: "ok", fails: "TP-2b" },
+        OWNER: "ok",
         BASIC: "deny",
         ASSISTANT: "deny",
         ASSISTANT_CFG: { exp: "deny", note: "tenant.sensitive" },
         BILLING: "deny",
-        ADMIN: { exp: "ok", fails: "TP-2b" },
-        PRO_CFG: { exp: "ok", fails: "TP-2b" },
-        GENERAL: { exp: "ok", fails: "TP-2b" },
+        ADMIN: "ok",
+        PRO_CFG: "ok",
+        GENERAL: "ok",
       },
       seen: async () => (await settleNull(getOnlinePaymentsSettings())) !== null,
     },
@@ -1743,13 +1780,13 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
       name: "Links · createPaymentLink (lo que falta del turno, cuenta delegada)",
       cells: {
         XT: { exp: "deny", note: "paciente, turno y profesional de K" },
-        OWNER: { exp: "ok", fails: "TP-2d" },
-        BASIC: { exp: "ok", fails: "TP-2d", note: "propio: collectOwn y dueño de la cuenta" },
-        ASSISTANT: { exp: "ok", fails: "TP-2d", note: "billing.collect + delegación" },
-        BILLING: { exp: "ok", fails: "TP-2d" },
-        ADMIN: { exp: "ok", fails: "TP-2d" },
+        OWNER: "ok",
+        BASIC: { exp: "ok", note: "propio: collectOwn y dueño de la cuenta" },
+        ASSISTANT: { exp: "ok", note: "billing.collect + delegación" },
+        BILLING: "ok",
+        ADMIN: "ok",
         PRO_CFG: { exp: "deny", note: "turno del Titular: sin billing.collect" },
-        GENERAL: { exp: "ok", fails: "TP-2d" },
+        GENERAL: "ok",
         SUPPORT: { exp: "deny", note: "soporte no crea ni anula (§25.7)" },
       },
       setup: (fx) => fxBookingWithAccount(fx, true),
@@ -1773,7 +1810,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
       name: "Links · createPaymentLink con la cuenta de otro profesional sin delegación",
       cells: {
         OWNER: { exp: "deny", note: "TP-D12: también el Titular necesita la delegación" },
-        BASIC: { exp: "ok", fails: "TP-2d", note: "es el dueño de la cuenta" },
+        BASIC: { exp: "ok", note: "es el dueño de la cuenta" },
         ASSISTANT: "deny",
         BILLING: "deny",
         ADMIN: "deny",
@@ -1803,13 +1840,13 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
       name: "Links · cancelPaymentLink",
       cells: {
         XT: { exp: "deny", note: "cobro de K" },
-        OWNER: { exp: "ok", fails: "TP-2d" },
-        BASIC: { exp: "ok", fails: "TP-2d", note: "propio (collectOwn)" },
-        ASSISTANT: { exp: "ok", fails: "TP-2d" },
-        BILLING: { exp: "ok", fails: "TP-2d" },
-        ADMIN: { exp: "ok", fails: "TP-2d" },
+        OWNER: "ok",
+        BASIC: { exp: "ok", note: "propio (collectOwn)" },
+        ASSISTANT: "ok",
+        BILLING: "ok",
+        ADMIN: "ok",
         PRO_CFG: { exp: "deny", note: "turno del Titular: sin billing.collect" },
-        GENERAL: { exp: "ok", fails: "TP-2d" },
+        GENERAL: "ok",
         SUPPORT: { exp: "deny", note: "soporte no crea ni anula (§25.7)" },
       },
       setup: fxLiveLink,
@@ -1821,10 +1858,12 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
       name: "Cobros online · getBookingOnlineCharges (cobros de un turno)",
       cells: {
         XT: { exp: "deny", note: "turno de K" },
-        OWNER: { exp: "ok", fails: "TP-2h" },
-        ASSISTANT: { exp: "ok", fails: "TP-2h" },
-        BILLING: { exp: "ok", fails: "TP-2h" },
-        ADMIN: { exp: "ok", fails: "TP-2h" },
+        OWNER: "ok",
+        BASIC: { exp: "ok", note: "propio (collectOwn): mismo criterio que crear/anular el link (`canCollectCopago`)" },
+        ASSISTANT: "ok",
+        BILLING: "ok",
+        ADMIN: "ok",
+        SUPPORT: { exp: "deny", note: "soporte no ve cobros online" },
       },
       setup: fxLiveLink,
       seen: async (fx) => {

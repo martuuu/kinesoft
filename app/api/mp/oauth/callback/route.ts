@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { tryGetActor, writableError, type Actor } from "@/lib/session";
 import { capabilitiesForActor } from "@/lib/authz";
+import { isActorPractitioner } from "@/lib/practitioner-scope";
 import { getSessionUser } from "@/lib/session-user";
 import { mpConnectMode } from "@/lib/env";
 import { logger } from "@/lib/logger";
@@ -40,7 +41,8 @@ function tabOf(claims: Pick<MpOAuthStateClaims, "target"> | null): string {
 /** El dueño que firmó el state sigue pudiendo conectar ESA cuenta en ESTE consultorio. */
 async function stillAllowed(actor: Actor, claims: MpOAuthStateClaims): Promise<boolean> {
   if (actor.support) return false;
-  if (claims.target === "own") return !!actor.practitionerId && actor.practitionerId === claims.practitionerId;
+  // IAM-4a: por el helper (nunca `null === null`).
+  if (claims.target === "own") return isActorPractitioner(actor, claims.practitionerId);
   const caps = await capabilitiesForActor(actor);
   return caps.has("account.owner");
 }

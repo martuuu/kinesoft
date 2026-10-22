@@ -166,7 +166,8 @@ export async function loadFutureProgramBookingsInTx(
       status: { in: ["PENDING", "CONFIRMED"] },
       scheduledFor: { gt: o.now },
     },
-    select: { id: true, paymentStatus: true, insurerPaidAt: true, payment: { select: { status: true } } },
+    // T5 (TP-2g/TP-2i): `onlineDepositCents` = seña online cobrada, cuenta como plata (escalar, 0 sentencias).
+    select: { id: true, paymentStatus: true, insurerPaidAt: true, onlineDepositCents: true, payment: { select: { status: true } } },
     orderBy: { id: "asc" },
   });
   return rows.map((r) => ({ id: r.id, hasMoney: bookingHasMoney(r) }));

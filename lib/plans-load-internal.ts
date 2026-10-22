@@ -118,6 +118,8 @@ export type PatientBookingDetail = {
   paymentStatus: PricingBooking["paymentStatus"];
   copagoCents: number | null;
   insurerPaidAt: Date | null;
+  /** T5 (TP-2g/TP-2i): Σ de señas online PAID (escalar). Con seña, el turno tiene plata (`bookingHasMoney`). */
+  onlineDepositCents: number;
   payment: { status: PricingBooking["paymentStatus"] } | null;
   scheduledFor: Date;
 };
@@ -181,6 +183,7 @@ export async function loadPlanAvailabilityInTx(
           copagoCents: true,
           insurerPaidAt: true,
           scheduledFor: true,
+          onlineDepositCents: true,
           payment: { select: { status: true } },
         },
       })
@@ -284,6 +287,8 @@ const PROGRAM_ENGINE_SELECT = {
           pricedByPlan: true,
           scheduledFor: true,
           updatedAt: true,
+          // T5 (TP-2g/TP-2i): la seña online es plata del turno (reprecio, cobro previo, desestampado). Escalar.
+          onlineDepositCents: true,
           payment: { select: { status: true } },
         },
         orderBy: { id: "asc" },

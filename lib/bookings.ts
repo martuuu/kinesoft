@@ -33,10 +33,10 @@ import { ForbiddenError, type Actor } from "@/lib/session";
 import { memberCapabilitiesForActor, requireCapability } from "@/lib/authz";
 import { canCollectCopago, canConfirmInsurer, canOperateBooking, canWriteClinical, type Capability } from "@/lib/capabilities";
 import { COLLECT_COPY, type CopagoMarkInput } from "@/lib/booking-collect";
-import { ONLINE_COLLECT_COPY } from "@/lib/online-payments-copy";
-import { depositRefundNotice } from "@/lib/online-charge-logic";
-import { cancelLiveLinksForBookingInTx } from "@/lib/payment-links-internal";
-import { expirePreferencesBestEffort } from "@/lib/mp-connect/account-client";
+// T5 (TP-2i): `online-payments-copy`, `online-charge-logic`, `payment-links-internal` y `mp-connect/account-client`
+// se cargan con `import()` donde se usan (ramas raras: cancelar con seña, borrar/cobrar con cobro online). Importados
+// estáticos, entraban al grafo de first load de `/agenda` por este archivo (3140 B de T5 contra un techo de 300,
+// `online-payments-first-load-guard.test.ts`). Mismo comportamiento: solo cambia cuándo se carga el módulo.
 import { PAYMENT_METHODS, type PaymentMethod } from "@/lib/payment-method";
 import { z } from "zod";
 import { bookingFieldAccess } from "@/lib/booking-field-access";
@@ -1446,7 +1446,7 @@ async function updateBookingImpl(
   // (la app no devuelve plata). `onlineDepositCents` ya vino en la lectura del core: 0 sentencias.
   const refundNotice =
     patch.status === "CANCELLED" && before.status !== "CANCELLED" && before.onlineDepositCents > 0
-      ? depositRefundNotice(before.onlineDepositCents)
+      ? (await import("@/lib/online-charge-logic")).depositRefundNotice(before.onlineDepositCents)
       : null;
   const notices = [outcome.plan?.sessionKeptDone ? SESSION_KEPT_DONE_NOTICE : null, refundNotice].filter((n): n is string => !!n);
   return {
@@ -1824,7 +1824,10 @@ async function deleteBookingImpl(
   if (outcome.kind === "basic") return { ok: false, error: BASIC_ACCESS_ERROR };
   if (outcome.kind === "plan-delete") return { ok: false, error: PLAN_DELETE_ERROR };
   if (outcome.kind === "has-clinical-note") return { ok: false, error: BOOKING_HAS_CLINICAL_NOTE_ERROR };
-  if (outcome.kind === "has-online-charge") return { ok: false, error: ONLINE_COLLECT_COPY.deleteWithOnlineCharge };
+  if (outcome.kind === "has-online-charge") {
+    const { ONLINE_COLLECT_COPY } = await import("@/lib/online-payments-copy");
+    return { ok: false, error: ONLINE_COLLECT_COPY.deleteWithOnlineCharge };
+  }
   if (outcome.kind === "has-payment") {
     return {
       ok: false,
@@ -1962,11 +1965,13 @@ async function toggleBilling(
           COALESCE((SELECT sum(c."amountCents") FROM "OnlineCharge" c WHERE c."tenantId" = ${actor.tenantId} AND c."bookingId" = ${id} AND c."kind" = 'DEPOSIT' AND c."status" = 'PAID'), 0)::int AS "depositPaidCents",
           COALESCE((SELECT array_agg(c."id" ORDER BY c."id") FROM "OnlineCharge" c WHERE c."tenantId" = ${actor.tenantId} AND c."bookingId" = ${id} AND c."origin" = 'LINK' AND c."status" = 'ACTIVE'), ARRAY[]::text[]) AS "liveLinkIds"`;
       if (mp.legacyStatus === "PAID" || mp.legacyStatus === "AUTHORIZED" || row.paymentStatus === "AUTHORIZED" || mp.paidOnline) {
+        const { ONLINE_COLLECT_COPY } = await import("@/lib/online-payments-copy");
         return { kind: "forbidden" as const, error: ONLINE_COLLECT_COPY.mercadoPagoLocked };
       }
       // En proceso: solo frena MARCAR (cobrar a mano mientras MP retiene un pago es cobrar dos veces si se acredita).
       // Desmarcar un cobro a mano no agrega plata: no se frena.
       if (mp.inFlight && toggle.mark.paid) {
+        const { ONLINE_COLLECT_COPY } = await import("@/lib/online-payments-copy");
         return { kind: "forbidden" as const, error: ONLINE_COLLECT_COPY.mercadoPagoInFlight };
       }
       online = { depositCents: mp.depositPaidCents, liveLinkIds: mp.liveLinkIds };
@@ -2057,6 +2062,7 @@ async function toggleBilling(
     // preferencias se vencen DESPUÉS del commit (best effort: si MP falla, el guard y el consumidor igual rechazan).
     let cancelledLinkIds: string[] = [];
     if (toggle.side === "copago" && toggle.mark.paid && online && online.liveLinkIds.length > 0) {
+      const { cancelLiveLinksForBookingInTx } = await import("@/lib/payment-links-internal");
       const c = await cancelLiveLinksForBookingInTx(tx, {
         tenantId: actor.tenantId,
         bookingId: id,
@@ -2105,12 +2111,16 @@ async function toggleBilling(
   if (outcome.cancelledLinkIds.length > 0) {
     // Best effort y nunca tira: el cobro a mano ya quedó; un link anulado no se acepta aunque MP lo cobre igual (el
     // webhook lo registra y avisa, §25.6).
-    await expirePreferencesBestEffort(actor.tenantId, outcome.cancelledLinkIds).catch((err) =>
-      logger.warn("toggleBilling: no se pudieron vencer las preferencias de los links anulados", {
-        tenantId: actor.tenantId,
-        err: err instanceof Error ? err.message : String(err),
-      })
-    );
+    // El `import()` va dentro de la cadena: si el módulo no carga, cae al mismo `catch` (nunca tira).
+    const cancelledLinkIds = outcome.cancelledLinkIds;
+    await import("@/lib/mp-connect/account-client")
+      .then((m) => m.expirePreferencesBestEffort(actor.tenantId, cancelledLinkIds))
+      .catch((err) =>
+        logger.warn("toggleBilling: no se pudieron vencer las preferencias de los links anulados", {
+          tenantId: actor.tenantId,
+          err: err instanceof Error ? err.message : String(err),
+        })
+      );
   }
   return {
     ok: true,
@@ -2165,6 +2175,8 @@ async function syncPriorPaidReplacementInTx(
           updatedAt: true,
           practitionerId: true,
           roomId: true,
+          // T5 (TP-2g/TP-2i): la seña online cuenta como cobro (`bookingHasMoney`, `priorPaidStamp`). Escalar.
+          onlineDepositCents: true,
           payment: { select: { status: true } },
         },
       },

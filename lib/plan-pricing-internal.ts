@@ -132,6 +132,8 @@ export function repriceRowsOf(program: Pick<ProgramEngineRow, "sessions">): Repr
       copagoCents: b.copagoCents,
       pricedByPlan: b.pricedByPlan,
       scheduledFor: b.scheduledFor,
+      // T5 (TP-2i): sin esto el reprecio veía 0 de seña y repreciaba un turno con seña online cobrada.
+      onlineDepositCents: b.onlineDepositCents,
     })),
   }));
 }

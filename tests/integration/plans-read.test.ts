@@ -566,6 +566,7 @@ describe.skipIf(!RUN)("S14 · lecturas de Planes", () => {
       const pure = bookingHasMoney({
         paymentStatus: c.paymentStatus,
         insurerPaidAt: c.insurerPaid ? new Date() : null,
+        onlineDepositCents: 0,
         payment: c.payment ? { status: c.payment } : null,
       });
       const label = JSON.stringify(c);

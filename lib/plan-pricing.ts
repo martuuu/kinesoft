@@ -31,10 +31,10 @@ export type PricingBooking = {
   scheduledFor: Date | string;
   /**
    * T5 (M18): Σ de las señas online PAID del turno (`Booking.onlineDepositCents`, la escribe SOLO el trigger
-   * `online_charge_sync_booking`). Opcional para no romper a los callers que todavía no la proyectan: ausente = 0,
-   * que es lo que decían antes de M18 (ver handoffs de TP-2g).
+   * `online_charge_sync_booking`). Requerida desde TP-2i: todos los callers la proyectan (un caller que la omitiera
+   * vería 0 y dejaría repreciar o borrar un turno con seña cobrada).
    */
-  onlineDepositCents?: number | null;
+  onlineDepositCents: number;
 };
 
 /**

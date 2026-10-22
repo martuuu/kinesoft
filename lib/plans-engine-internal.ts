@@ -630,6 +630,7 @@ async function programEngineInTx(tx: DbClient, actor: Actor, p: Omit<ProgramPrev
     copagoCents: b.copagoCents,
     pricedByPlan: b.pricedByPlan,
     scheduledFor: b.scheduledFor,
+    onlineDepositCents: b.onlineDepositCents,
   });
   const sessionRow = (sid: string, at: Date, index?: number, title?: string | null): PlanEngineRow => {
     const s = byId.get(sid);

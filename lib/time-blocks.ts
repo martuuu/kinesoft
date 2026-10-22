@@ -356,6 +356,8 @@ async function findAffectedBookings(
       guestName: true,
       // S18b H2 (P3.Z): solo para `inPlan`; no sale al cable.
       programId: true,
+      // T5 (TP-2g/TP-2i): una seña online cobrada también es «con cobro» en el preview del candado. Escalar.
+      onlineDepositCents: true,
       patient: { select: { firstName: true, lastName: true } },
       payment: { select: { status: true } },
     },
@@ -377,7 +379,8 @@ async function findAffectedBookings(
       hasPayment:
         MONEY.has(b.paymentStatus) ||
         b.insurerPaidAt != null ||
-        (b.payment != null && MONEY.has(b.payment.status)),
+        (b.payment != null && MONEY.has(b.payment.status)) ||
+        b.onlineDepositCents > 0,
       inPlan: b.programId != null,
     }));
 }

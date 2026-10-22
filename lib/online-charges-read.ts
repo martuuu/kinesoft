@@ -126,7 +126,9 @@ function appUrl(): string {
  */
 function scopeOf(caps: ReadonlySet<Capability>, actor: Actor): { all: true } | { all: false; practitionerId: string } | null {
   if (caps.has("billing.collect")) return { all: true };
-  if (caps.has("billing.collectOwn") && actor.practitionerId) return { all: false, practitionerId: actor.practitionerId };
+  // IAM-4a: alias chequeado no-null (un actor sin profesional no tiene «lo suyo»).
+  const own = actor.practitionerId;
+  if (caps.has("billing.collectOwn") && own) return { all: false, practitionerId: own };
   return null;
 }
 

@@ -180,7 +180,12 @@ export function PublicBookingWizard({
   const practitioner = clinic.practitioners.find((p) => p.id === practitionerId) ?? null;
   const service = clinic.services.find((s) => s.id === serviceId) ?? null;
   // TP-0: botón y resumen según si este turno se cobra online. Es solo copy: adónde ir lo decide el `next` del server.
-  const checkout = checkoutCopyFor({ onlineCheckout: clinic.onlineCheckout, priceCents: service?.priceCents ?? 0 });
+  // TP-2c: el cobro online sale de `onlinePayment` (C-TP8): solo REQUIRED y si el profesional elegido tiene cuenta.
+  const checkout = checkoutCopyFor({
+    onlineCheckout:
+      clinic.onlinePayment?.mode === "REQUIRED" && clinic.onlinePayment.practitionerIds.includes(practitionerId ?? ""),
+    priceCents: service?.priceCents ?? 0,
+  });
 
   // Servicios del profesional elegido (`practitionerIds`, B3.2). En modo
   // "cualquiera": los que ofrece al menos un profesional que pasa los filtros.

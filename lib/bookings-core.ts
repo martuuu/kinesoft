@@ -990,12 +990,14 @@ export async function planSessionOrdinalInTx(tx: Tx, tenantId: string, sessionId
  */
 async function planBookingHasMoneyInTx(
   tx: Tx,
-  b: { id: string; paymentStatus: PricingBooking["paymentStatus"]; insurerPaidAt: Date | null }
+  b: { id: string; paymentStatus: PricingBooking["paymentStatus"]; insurerPaidAt: Date | null; onlineDepositCents: number }
 ): Promise<boolean> {
-  if (bookingHasMoney({ paymentStatus: b.paymentStatus, insurerPaidAt: b.insurerPaidAt, payment: null })) return true;
+  // T5 (TP-2g/TP-2i): la seña online cobrada cuenta como plata (escalar de `before`, 0 sentencias).
+  const money = { paymentStatus: b.paymentStatus, insurerPaidAt: b.insurerPaidAt, onlineDepositCents: b.onlineDepositCents };
+  if (bookingHasMoney({ ...money, payment: null })) return true;
   // `bookingId` es único y el turno ya se validó contra el tenant (el caller lo leyó con `tenantId`).
   const pay = await tx.payment.findUnique({ where: { bookingId: b.id }, select: { status: true } });
-  return bookingHasMoney({ paymentStatus: b.paymentStatus, insurerPaidAt: b.insurerPaidAt, payment: pay });
+  return bookingHasMoney({ ...money, payment: pay });
 }
 
 /** Re-estampado de la reactivación (`null` = no se toca la plata). */
@@ -1032,9 +1034,16 @@ export async function lockPlanReactivationInTx(
   o: { tenantId: string; bookingId: string; sessionId: string; expectedUpdatedAt: Date; pricedByPlan: boolean }
 ): Promise<PlanReactivationOutcome> {
   const bRows = await tx.$queryRaw<
-    { updatedAt: Date; paymentStatus: PricingBooking["paymentStatus"]; insurerPaidAt: Date | null; payStatus: PricingBooking["paymentStatus"] | null }[]
+    {
+      updatedAt: Date;
+      paymentStatus: PricingBooking["paymentStatus"];
+      insurerPaidAt: Date | null;
+      onlineDepositCents: number;
+      payStatus: PricingBooking["paymentStatus"] | null;
+    }[]
   >`
-    SELECT b."updatedAt", b."paymentStatus"::text AS "paymentStatus", b."insurerPaidAt", p.status::text AS "payStatus"
+    SELECT b."updatedAt", b."paymentStatus"::text AS "paymentStatus", b."insurerPaidAt", b."onlineDepositCents",
+      p.status::text AS "payStatus"
     FROM "Booking" b
     LEFT JOIN "Payment" p ON p."bookingId" = b.id
     WHERE b.id = ${o.bookingId} AND b."tenantId" = ${o.tenantId}
@@ -1067,6 +1076,8 @@ export async function lockPlanReactivationInTx(
     !bookingHasMoney({
       paymentStatus: b.paymentStatus,
       insurerPaidAt: b.insurerPaidAt,
+      // T5 (TP-2i): con seña online cobrada no se re-estampa la cuota (es plata de este turno).
+      onlineDepositCents: b.onlineDepositCents,
       payment: b.payStatus ? { status: b.payStatus } : null,
     });
   if (!unpaid) return { kind: "ok", stamp: null };
@@ -1082,6 +1093,7 @@ export async function lockPlanReactivationInTx(
       copagoCents: true,
       pricedByPlan: true,
       scheduledFor: true,
+      onlineDepositCents: true,
       payment: { select: { status: true } },
     },
   });

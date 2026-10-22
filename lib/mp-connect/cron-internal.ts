@@ -8,6 +8,7 @@ import { notify, notifyTenantOwners } from "@/lib/notifications-internal";
 import { mpCredentialAad, openSecret, sealSecret, sealedKid, SecretBoxError } from "@/lib/secret-box";
 import { refreshTokens } from "@/lib/mp-connect/oauth-client";
 import { expirePreferencesBestEffort } from "@/lib/mp-connect/account-client";
+import { markAccountReauthRequired } from "@/lib/mp-connect/accounts-internal";
 import { MP_CONNECT_COPY } from "@/lib/online-payments-copy";
 import { MY_MP_TAB, ONLINE_PAYMENTS_TAB } from "@/lib/mp-connect-types";
 import { ONLINE_PAYMENTS_AUDIT } from "@/lib/online-payments-types";
@@ -83,32 +84,8 @@ export async function markMpAccountReauthRequired(o: {
   now: Date;
   source: "cron" | "webhook";
 }): Promise<boolean> {
-  return prismaService.$transaction(async (tx) => {
-    // SQL crudo y no `updateMany` con filtro de relación: así el `status = 'ACTIVE'` se vuelve a evaluar sobre la fila
-    // bloqueada si dos marcadores corren a la vez (el segundo no la marca de nuevo ni avisa dos veces). Las columnas
-    // son TIMESTAMP sin zona en UTC: el parámetro pasa a UTC explícito (molde de lib/dashboard.ts).
-    const n = await tx.$executeRaw`
-      UPDATE "MpAccount" a
-         SET "status" = 'REAUTH_REQUIRED',
-             "reauthRequiredAt" = (${o.now}::timestamptz AT TIME ZONE 'UTC'),
-             "updatedAt" = (${o.now}::timestamptz AT TIME ZONE 'UTC')
-       WHERE a."id" = ${o.accountId} AND a."tenantId" = ${o.tenantId} AND a."status" = 'ACTIVE'
-         AND EXISTS (SELECT 1 FROM "MpCredential" c
-                      WHERE c."mpAccountId" = a."id" AND c."tenantId" = a."tenantId" AND c."version" = ${o.credentialVersion})`;
-    if (n !== 1) return false;
-    await tx.mpCredential.updateMany({
-      where: { mpAccountId: o.accountId, tenantId: o.tenantId },
-      data: { refreshFailures: { increment: 1 } },
-    });
-    await auditInTx(tx, {
-      tenantId: o.tenantId,
-      action: ONLINE_PAYMENTS_AUDIT.mpAccountReauthRequired,
-      entity: "MpAccount",
-      entityId: o.accountId,
-      payload: { accountId: o.accountId, source: o.source },
-    });
-    return true;
-  });
+  // TP-2i: una sola implementación (la de accounts-internal, que también usa `withAccountToken`).
+  return (await markAccountReauthRequired(o)).marked;
 }
 
 /** «Reconectá tu Mercado Pago»: al profesional dueño de la cuenta, o al Titular/Admin si es la del consultorio. */
