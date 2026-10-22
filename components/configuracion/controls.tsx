@@ -11,12 +11,14 @@ export type Tab =
   | "profesionales"
   | "servicios"
   | "obras-sociales"
+  | "cobros-online"
   | "diagnosticos"
   | "directorio"
   | "usuarios"
   | "plan"
   | "facturacion"
   | "mis-fichas"
+  | "mercado-pago"
   | "soporte"
   | "exportar";
 
@@ -30,6 +32,9 @@ export const CONFIG_TABS: readonly Tab[] = [
   "profesionales",
   "servicios",
   "obras-sociales",
+  // TP-3a: `?tab=cobros-online` es la vuelta del callback de Mercado Pago (cuenta del consultorio) y el link de la
+  // campana «Reconectá el Mercado Pago del consultorio». Quien no la ve (la Secretaría, Facturación) cae en su primera.
+  "cobros-online",
   "diagnosticos",
   // DIR-3c: `?tab=directorio` (el link «Configurar» de una futura comunicación del directorio).
   "directorio",
@@ -39,6 +44,8 @@ export const CONFIG_TABS: readonly Tab[] = [
   "facturacion",
   // FC-3i: `?tab=mis-fichas` (firma, matrícula y carpeta de respaldo de cada profesional).
   "mis-fichas",
+  // TP-3a: `?tab=mercado-pago` = vuelta del callback (cuenta propia) y link de la campana «Reconectá tu Mercado Pago».
+  "mercado-pago",
   "soporte",
   // BO5-C: `?tab=exportar` es el link del mail `tenant_export_request` (Plataforma le pide el export al titular).
   "exportar",
@@ -66,6 +73,10 @@ export function parseConfigTab(raw: string | string[] | null | undefined): Tab {
  *  - `canExport`: Exportar datos (BO5-C: solo el titular, o el de un consultorio suspendido).
  *  - `directory` (DIR-3c, C-DIR9): Directorio = `tenant.sensitive` con `DIRECTORY_MODE` ≠ off (lo decide el loader: la
  *    pestaña existe si llegaron sus datos). Opcional: sin él (tests viejos, `legacyConfigAccess`) no se ve.
+ *  - `onlinePayments` (TP-3a, §25.10): «Cobros online» = `tenant.sensitive` con los datos de la pestaña (el loader los
+ *    manda en null sin él). La Secretaría y Facturación con «Configuración» no la ven, ni con `?tab=cobros-online`.
+ *  - `myMp` (TP-3a, TP-UI-D2): «Mi Mercado Pago» = quien tiene profesional propio (el loader manda su cuenta; null sin
+ *    profesional o en soporte). Personal como «Mis fichas»: un Profesional sin delegaciones la ve.
  *  - `sensitive` (T3d-1g, C-AS1: `tenant.sensitive`): lo delicado. Usuarios y Directorio lo exigen además de sus datos
  *    (el loader ya los manda en null sin él; la pestaña no depende solo de eso). La Secretaria y Facturación con
  *    «Configuración» no lo tienen (corte de staff): ven lo operativo y no el equipo ni el directorio. Opcional para los
@@ -79,6 +90,8 @@ export type ConfigTabAccess = {
   directory?: boolean;
   sensitive?: boolean;
   fichas?: boolean;
+  onlinePayments?: boolean;
+  myMp?: boolean;
 };
 
 /**
@@ -111,6 +124,8 @@ const TAB_DEFS: readonly TabDef[] = [
   { key: "servicios", label: "Servicios", visible: admin },
   // [PF1.1-config · C5] Sentence case en todas («Obras sociales», como «Plan y uso» y «Exportar datos»).
   { key: "obras-sociales", label: "Obras sociales", visible: admin },
+  // TP-3a: la plata del turnero es lo delicado (decisión 1 de Martin, 19-oct): nunca la Secretaría ni Facturación.
+  { key: "cobros-online", label: "Cobros online", visible: (a) => !!a.sensitive && !!a.onlinePayments },
   { key: "diagnosticos", label: "Diagnósticos", module: "diagnostico", visible: admin },
   // DIR-3c: con el directorio en `off` (default de prod hasta que Martin lo prenda) la pestaña no existe: publicar en
   // algo que el público todavía no ve sería un switch sin efecto.
@@ -121,6 +136,8 @@ const TAB_DEFS: readonly TabDef[] = [
   { key: "facturacion", label: "Facturación", visible: (a) => a.billing },
   // FC-3i: lo personal de las fichas, antes de Soporte (para un Profesional sin delegaciones es la pestaña inicial).
   { key: "mis-fichas", label: "Mis fichas", module: "evoluciones", visible: (a) => !!a.fichas },
+  // TP-3a (TP-UI-D2): la cuenta propia de Mercado Pago, personal como «Mis fichas».
+  { key: "mercado-pago", label: "Mi Mercado Pago", visible: (a) => !!a.myMp },
   // PL-2d: «Soporte» = Mensajes + Accesos de soporte (la key no cambia: los mails ya linkean `?tab=soporte`).
   // PL-F1b: visible para cualquier miembro (antes `tenantAdmin || billing`, PL-D20).
   { key: "soporte", label: "Soporte", visible: () => true },

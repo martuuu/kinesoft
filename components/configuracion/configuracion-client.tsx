@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import type { Role, TenantVertical } from "@prisma/client";
@@ -26,6 +26,7 @@ import type { ExportBlockedTenant } from "./panels/export-panel";
 import type { FichasPanelMe } from "./panels/fichas-panel";
 import type { PracticeAssetState } from "./panels/practice-asset-field";
 import type { FichaBackupScope } from "@/components/fichas/fichas-ui-types";
+import type { MpAccountView, MpConnectReturn, OnlinePaymentsSettingsView } from "@/lib/mp-connect-types";
 
 /**
  * [PF1.1-config · C-PF2] Cada pestaña es un chunk aparte (`next/dynamic`). Antes los 12 paneles viajaban en el JS
@@ -54,6 +55,9 @@ const PANEL_LOADERS = {
   "mis-fichas": () => import("./panels/fichas-panel"),
   soporte: () => Promise.all([import("./panels/support-messages-panel"), import("./panels/support-access-panel")]),
   exportar: () => import("./panels/export-panel"),
+  "cobros-online": () => import("./panels/online-payments-panel"),
+  // TP-3a: el MISMO chunk que «Cobros online» (ver abajo).
+  "mercado-pago": () => import("./panels/online-payments-panel"),
 } satisfies Record<Tab, () => Promise<unknown>>;
 
 /** `import()` sin await (C-PF2): deja el chunk de la pestaña en camino antes del click. */
@@ -91,6 +95,14 @@ const SupportAccessPanel = dynamic(() => import("./panels/support-access-panel")
 // FC-3i: «Mis fichas» (firma, matrícula, carpeta de respaldo, diagnósticos propios), su propio chunk.
 const FichasPanel = dynamic(() => import("./panels/fichas-panel").then((m) => m.FichasPanel), { loading: PanelSkeleton });
 const ExportPanel = dynamic(() => import("./panels/export-panel").then((m) => m.ExportPanel), { loading: PanelSkeleton });
+// TP-3a (§25.11, techo de /configuracion +0,5 kB): «Cobros online» y «Mi Mercado Pago» fuera del JS inicial, en UN
+// solo chunk (`online-payments-panel` re-exporta `MyMpPanel`). Cada chunk diferido nuevo suma ~20 B al runtime de
+// webpack de TODAS las rutas (medido en TP-2i), y /agenda quedó con 0,2 kB de margen: dos pestañas de Mercado Pago no
+// valen dos entradas. El costo es que quien abre «Mi Mercado Pago» baja también el formulario de la política (diferido).
+const OnlinePaymentsPanel = dynamic(() => import("./panels/online-payments-panel").then((m) => m.OnlinePaymentsPanel), {
+  loading: PanelSkeleton,
+});
+const MyMpPanel = dynamic(() => import("./panels/online-payments-panel").then((m) => m.MyMpPanel), { loading: PanelSkeleton });
 
 type Props = {
   role: Role;
@@ -154,6 +166,14 @@ type Props = {
   fichas?: { me: FichasPanelMe; backupScope: FichaBackupScope } | null;
   /** FC-3i: logo del consultorio en General (`tenant.sensitive`); null/ausente = sin la tarjeta. */
   logo?: PracticeAssetState | null;
+  /** TP-3a: «Cobros online» (`tenant.sensitive`). null/ausente = sin pestaña (la Secretaría, Facturación). */
+  onlinePayments?: OnlinePaymentsSettingsView | null;
+  /** TP-3a: precio de referencia de la vista previa del monto online. */
+  previewServicePriceCents?: number | null;
+  /** TP-3a: «Mi Mercado Pago» (profesional propio). null/ausente = sin pestaña. */
+  myMp?: MpAccountView | null;
+  /** TP-3a: `?mp=` con el que volvió el callback de Mercado Pago (solo valores del contrato). */
+  mpReturn?: MpConnectReturn | null;
 };
 
 export function ConfiguracionClient(props: Props) {
@@ -164,7 +184,16 @@ export function ConfiguracionClient(props: Props) {
   const directory = props.directory ?? null;
   const sensitive = !!props.access.sensitive;
   const fichas = props.fichas ?? null;
-  const access: ConfigTabAccess = { ...props.access, canExport, directory: directory !== null, fichas: fichas !== null };
+  const onlinePayments = props.onlinePayments ?? null;
+  const myMp = props.myMp ?? null;
+  const access: ConfigTabAccess = {
+    ...props.access,
+    canExport,
+    directory: directory !== null,
+    fichas: fichas !== null,
+    onlinePayments: onlinePayments !== null,
+    myMp: myMp !== null,
+  };
   const visible = visibleConfigTabs(access, props.modules);
   const [tab, setTabRaw] = useState<Tab>(() => initialConfigTab(props.initialTab, visible));
   // B3.4: Servicios/Coberturas de un profesional se editan en línea (no en
@@ -174,14 +203,35 @@ export function ConfiguracionClient(props: Props) {
   const [directoryDirty, setDirectoryDirty] = useState(false);
   // FC-3i: honorífico y matrícula de «Mis fichas» también se editan en línea.
   const [fichasDirty, setFichasDirty] = useState(false);
+  // TP-3a: la política de «Cobros online» es un formulario en línea (monto, nota).
+  const [paymentsDirty, setPaymentsDirty] = useState(false);
+  // TP-3a: el aviso de `?mp=` es de la vuelta del callback: se ve una vez, en la pestaña a la que volvió. Se saca de la
+  // URL al montar (un refresh no lo repite) y se apaga al cambiar de pestaña (volver no lo vuelve a mostrar).
+  const [mpReturn, setMpReturn] = useState<MpConnectReturn | null>(props.mpReturn ?? null);
+  useEffect(() => {
+    if (!props.mpReturn) return;
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("mp");
+      window.history.replaceState(window.history.state, "", url);
+    } catch {
+      /* sin history: el aviso se ve igual */
+    }
+  }, [props.mpReturn]);
   // PL-3a: «Consultanos» del plan Libre abre Soporte con un mensaje prellenado.
   const [supportDraft, setSupportDraft] = useState<SupportDraft | null>(null);
   const confirm = useConfirm();
   const setTab = useCallback(
     async (t: Tab) => {
       if (t === tab) return;
-      if (practitionerDirty || directoryDirty || fichasDirty) {
-        const where = practitionerDirty ? "Profesionales" : directoryDirty ? "Directorio" : "Mis fichas";
+      if (practitionerDirty || directoryDirty || fichasDirty || paymentsDirty) {
+        const where = practitionerDirty
+          ? "Profesionales"
+          : directoryDirty
+            ? "Directorio"
+            : fichasDirty
+              ? "Mis fichas"
+              : "Cobros online";
         const ok = await confirm({
           title: "¿Descartar los cambios sin guardar?",
           message: `Tenés cambios sin guardar en ${where}. Si cambiás de pestaña, se pierden.`,
@@ -193,20 +243,23 @@ export function ConfiguracionClient(props: Props) {
         setPractitionerDirty(false);
         setDirectoryDirty(false);
         setFichasDirty(false);
+        setPaymentsDirty(false);
       }
       setTabRaw(t);
+      setMpReturn(null);
       // Que la URL siga a la pestaña: un refresh (o el link copiado) vuelve a la misma. `replaceState` y no el router:
       // cambiar de pestaña no tiene que re-renderizar el server ni sumar entradas al historial.
       try {
         const url = new URL(window.location.href);
         if (t === "general") url.searchParams.delete("tab");
         else url.searchParams.set("tab", t);
+        url.searchParams.delete("mp");
         window.history.replaceState(window.history.state, "", url);
       } catch {
         /* sin history: la pestaña vale igual */
       }
     },
-    [tab, practitionerDirty, directoryDirty, fichasDirty, confirm]
+    [tab, practitionerDirty, directoryDirty, fichasDirty, paymentsDirty, confirm]
   );
   const can = (t: Tab) => visible.includes(t);
   // «Accesos de soporte»: PL-F1b (decisión de Martin, 16-oct), cualquier miembro, si la página pudo leerlos. Antes
@@ -286,6 +339,18 @@ export function ConfiguracionClient(props: Props) {
           readOnly={!!props.readOnly}
           onDirtyChange={setFichasDirty}
         />
+      )}
+      {tab === "cobros-online" && can("cobros-online") && onlinePayments && (
+        <OnlinePaymentsPanel
+          settings={onlinePayments}
+          previewServicePriceCents={props.previewServicePriceCents ?? null}
+          mpReturn={mpReturn}
+          support={props.support}
+          onDirtyChange={setPaymentsDirty}
+        />
+      )}
+      {tab === "mercado-pago" && can("mercado-pago") && myMp && (
+        <MyMpPanel account={myMp} mpReturn={mpReturn} support={props.support} />
       )}
       {tab === "soporte" && can("soporte") && (
         // PL-2d (C-PL11): la pestaña «Soporte» junta los Mensajes con el equipo de KineSoft y los Accesos de soporte.

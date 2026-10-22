@@ -115,7 +115,7 @@ const STATUS_TONE: Record<MyMpPanelProps["account"]["status"], React.CSSProperti
   NONE: { color: "var(--navy-500)" },
 };
 
-const muted: React.CSSProperties = { margin: 0, fontSize: 13.5, lineHeight: 1.5, color: "var(--navy-600)" };
+const muted: React.CSSProperties = { margin: 0, fontSize: 13.5, lineHeight: 1.5, color: "var(--navy-500)" };
 
 export function MyMpPanel({ account, mpReturn, support = false }: MyMpPanelProps) {
   const confirm = useConfirm();

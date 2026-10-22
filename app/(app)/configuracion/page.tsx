@@ -7,8 +7,18 @@ import { canWrite, effectiveMode } from "@/lib/tenant-access";
 import { tenantAccessEnforcement } from "@/lib/env";
 import { ConfiguracionClient } from "@/components/configuracion/configuracion-client";
 import type { PlanChoice } from "@/components/configuracion/panels/plan-change-drawer";
+import { MP_CONNECT_RETURNS, type MpConnectReturn } from "@/lib/mp-connect-types";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * TP-3a: `?mp=` con el que vuelve el callback OAuth de Mercado Pago (`/api/mp/oauth/callback`). Solo los valores del
+ * contrato; cualquier otra cosa (un link armado a mano) no muestra aviso.
+ */
+function parseMpReturn(raw: string | string[] | undefined): MpConnectReturn | null {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  return (MP_CONNECT_RETURNS as readonly string[]).includes(v ?? "") ? (v as MpConnectReturn) : null;
+}
 export const metadata = { title: "Configuración · KineSoft" };
 
 /**
@@ -26,7 +36,7 @@ export const metadata = { title: "Configuración · KineSoft" };
 export default async function ConfiguracionPage({
   searchParams,
 }: {
-  searchParams?: { tab?: string | string[]; tenant?: string | string[] };
+  searchParams?: { tab?: string | string[]; tenant?: string | string[]; mp?: string | string[] };
 }) {
   const actor = await getActor();
   // B1.7: rol desde `lib/authz` (cacheado por request) y criterio de `lib/capabilities`.
@@ -59,6 +69,9 @@ export default async function ConfiguracionPage({
     sensitive,
     fichas,
     logo,
+    onlinePayments,
+    myMp,
+    previewServicePriceCents,
   } = loaded;
   // BO3-F: el soporte entra con `getMembershipRole` = ASSISTANT (su nivel de lectura clínica), que en la UI le
   // apagaba horarios, turnero y la pestaña Usuarios aunque el server se los deja (allowlist `withSupportWritable`,
@@ -122,6 +135,11 @@ export default async function ConfiguracionPage({
       // FC-3i: «Mis fichas» y el logo salen de la misma tx del loader (FC-4i).
       fichas={fichas}
       logo={logo}
+      // TP-3a: «Cobros online» y «Mi Mercado Pago» salen de la misma tx del loader (§25.11: sin tx nueva).
+      onlinePayments={onlinePayments}
+      previewServicePriceCents={previewServicePriceCents}
+      myMp={myMp}
+      mpReturn={parseMpReturn(searchParams?.mp)}
     />
   );
 }

@@ -13,6 +13,8 @@
  *      un lector y no la variante en tx (o al revés), esto se pone rojo.
  *   3. Aislamiento: nada de otro consultorio se cuela (en el rol owner BYPASSRLS el `where: { tenantId }` a mano es
  *      la única barrera).
+ *   5. [TP-3a] «Cobros online» y «Mi Mercado Pago» entran en la MISMA tx (sin tx nueva, §25.11) e iguales a sus
+ *      lectores del contrato C-TP4 (`getOnlinePaymentsSettings`, `getMyMpAccount`), sin secretos de la cuenta.
  *   4. [DIR-3c] Con `DIRECTORY_MODE=preview` la pestaña «Directorio» y las especialidades entran en la MISMA tx (el
  *      Titular sigue en ≤ 3) + una lectura del canal service sin tx (estado del perfil, SERVICE_ONLY); estados por
  *      profesional; sin `userId`, email ni datos del perfil personal en lo que viaja; nada del otro consultorio; y con
@@ -54,6 +56,9 @@ import { listLocations } from "@/lib/locations";
 import { listRooms } from "@/lib/rooms";
 import { getPractitionerScheduleSummary } from "@/lib/practitioner-schedule";
 import { listSupportSessionsForTenant } from "@/lib/platform-support";
+import { addStaff } from "@/tests/helpers/tenant-factory";
+import { connectFakeAccount, installFakeMp, setPaymentPolicy, type InstalledFakeMp } from "@/tests/helpers/mp-connect-fake";
+import { getMyMpAccount, getOnlinePaymentsSettings } from "@/lib/mp-connect-actions";
 
 // [DIR-3c] Entrar como soporte pide el step-up de 2FA; se da por hecho (el corte real lo prueba two-factor.test.ts).
 vi.mock("@/lib/two-factor-step-up", async (importOriginal) => ({
@@ -419,5 +424,116 @@ describe.skipIf(!RUN)("[DIR-3c] /configuracion: pestaña «Directorio» dentro d
       await db.supportSession.deleteMany({ where: { superadminId: H.userId } });
       await H.cleanup();
     }
+  });
+});
+
+describe.skipIf(!RUN)("[TP-3a] /configuracion: «Cobros online» y «Mi Mercado Pago» dentro de la tx de PF2", () => {
+  let db: PrismaClient;
+  let T: EphemeralTenant;
+  let U: EphemeralTenant;
+  let pro: { userId: string; practitionerId: string };
+  let gone: { userId: string; practitionerId: string };
+  let secretaryUserId: string;
+  let fake: InstalledFakeMp;
+  const secrets: string[] = [];
+
+  beforeAll(async () => {
+    // MP falso local (regla de T5: nada de MP real). Solo hace falta el modo: el loader no llama a la red.
+    fake = installFakeMp();
+    db = ownerClient();
+    T = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
+    U = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
+    pro = await addPractitioner(db, T, "PRACTITIONER");
+    gone = await addPractitioner(db, T, "PRACTITIONER");
+    secretaryUserId = (await addStaff(db, T, "ASSISTANT", { grantSettings: true })).userId;
+    // Precio de referencia: el servicio con más turnos; sin turnos, el primero por nombre con precio ≥ $1.
+    await db.service.create({ data: { tenantId: T.tenantId, name: "A gratis TP3A", durationMin: 30, priceCents: 0 } });
+    await db.service.create({ data: { tenantId: T.tenantId, name: "B sesión TP3A", durationMin: 45, priceCents: 2_000_000 } });
+    await db.service.create({ data: { tenantId: T.tenantId, name: "C evaluación TP3A", durationMin: 60, priceCents: 3_000_000 } });
+    await setPaymentPolicy(db, T.tenantId, { mode: "OPTIONAL", chargeKind: "PERCENT", percentBps: 3000, cancellationNote: "Cancelá con 24 h" });
+    // Titular (con profesional propio): ACTIVE; consultorio: ACTIVE delegada; `gone`: una DISCONNECTED vieja y una
+    // REAUTH más nueva (gana la viva); `pro`: sin cuenta. Del otro consultorio: una ACTIVE que no se tiene que ver.
+    const own = await connectFakeAccount(db, T, { seller: 1 });
+    const clinic = await connectFakeAccount(db, T, { seller: 2, kind: "CLINIC", linksDelegated: true });
+    const old = await connectFakeAccount(db, T, { seller: 2, practitionerId: gone.practitionerId, status: "DISCONNECTED" });
+    await db.mpAccount.update({ where: { id: old.accountId }, data: { connectedAt: new Date(Date.now() - 86_400_000) } });
+    const reauth = await connectFakeAccount(db, T, { seller: 1, practitionerId: gone.practitionerId, status: "REAUTH_REQUIRED" });
+    const foreign = await connectFakeAccount(db, U, { seller: 1 });
+    for (const a of [own, clinic, old, reauth, foreign]) secrets.push(a.webhookRef, a.mpUserId, a.accessToken, a.refreshToken, a.accountId);
+    secrets.push(U.tenantId, U.practitionerId);
+  }, 60_000);
+
+  afterAll(async () => {
+    fake?.uninstall();
+    if (db) {
+      for (const t of [T, U]) await t?.cleanup();
+      await db.$disconnect();
+    }
+  });
+
+  async function load(userId: string) {
+    asUser(userId);
+    const actor = await getActor();
+    const caps = await capabilitiesForActor(actor);
+    return measure(() => loadConfiguracionPage(actor, caps));
+  }
+
+  it("Titular: sigue en ≤ 3 tx y las dos pestañas salen iguales a sus lectores, sin secretos ni nada de otro consultorio", async () => {
+    const { result: r, m } = await load(T.userId);
+    console.info(`[TP-3a] /configuracion Titular: ${m.transactions} tx · ${m.statements} sentencias`);
+    expect(m.transactions).toBeLessThanOrEqual(3);
+    asUser(T.userId);
+    const [settings, mine] = await Promise.all([getOnlinePaymentsSettings(), getMyMpAccount()]);
+    expect(settings).not.toBeNull();
+    expect(plain(r.onlinePayments)).toEqual(plain(settings));
+    expect(plain(r.myMp)).toEqual(plain(mine));
+
+    // Fixture no trivial: si todo viniera vacío, la igualdad no diría nada.
+    const op = r.onlinePayments!;
+    expect(op.policy).toMatchObject({ mode: "OPTIONAL", chargeKind: "PERCENT", percentBps: 3000 });
+    expect(op.policyUpdatedAt).not.toBeNull();
+    expect(op.connectMode).toBe("fake");
+    expect(op.canManageClinicAccount).toBe(true);
+    expect(op.clinicAccount).toMatchObject({ status: "ACTIVE", linksDelegated: true, badge: "fake" });
+    const by = Object.fromEntries(op.practitioners.map((p) => [p.practitionerId, p.status]));
+    expect(by[T.practitionerId]).toBe("ACTIVE");
+    expect(by[gone.practitionerId]).toBe("REAUTH_REQUIRED");
+    expect(by[pro.practitionerId]).toBe("NONE");
+    expect(op.withoutMpCount).toBe(2);
+    expect(r.myMp?.status).toBe("ACTIVE");
+    expect(r.previewServicePriceCents).toBe(2_000_000);
+
+    const blob = JSON.stringify({ a: r.onlinePayments, b: r.myMp });
+    for (const x of secrets) expect(blob).not.toContain(x);
+  });
+
+  it("ADMIN con «Configuración»: ve el estado de la cuenta del consultorio pero no la maneja (1 tx)", async () => {
+    const admin = await addPractitioner(db, T, "ADMIN");
+    const { result: r, m } = await load(admin.userId);
+    expect(m.transactions).toBeLessThanOrEqual(1);
+    expect(r.onlinePayments?.clinicAccount.status).toBe("ACTIVE");
+    expect(r.onlinePayments?.canManageClinicAccount).toBe(false);
+    asUser(admin.userId);
+    expect(plain(r.onlinePayments)).toEqual(plain(await getOnlinePaymentsSettings()));
+    expect(plain(r.myMp)).toEqual(plain(await getMyMpAccount()));
+  });
+
+  it("Profesional sin delegaciones: «Mi Mercado Pago» sin «Cobros online» (1 tx); la Secretaria con «Configuración», ninguna", async () => {
+    const p = await load(pro.userId);
+    expect(p.m.transactions).toBeLessThanOrEqual(1);
+    expect(p.result.onlinePayments).toBeNull();
+    expect(p.result.previewServicePriceCents).toBeNull();
+    asUser(pro.userId);
+    expect(plain(p.result.myMp)).toEqual(plain(await getMyMpAccount()));
+    expect(p.result.myMp?.status).toBe("NONE");
+
+    const g = await load(gone.userId);
+    expect(g.result.myMp?.status).toBe("REAUTH_REQUIRED");
+
+    const s = await load(secretaryUserId);
+    expect(s.result.onlinePayments).toBeNull();
+    expect(s.result.myMp).toBeNull();
+    asUser(secretaryUserId);
+    expect(await getOnlinePaymentsSettings()).toBeNull();
   });
 });

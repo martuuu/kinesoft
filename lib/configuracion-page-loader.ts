@@ -38,6 +38,15 @@ import "server-only";
  * FC-4i (handoff de FC-3i): «Mis fichas» (honorífico, matrícula, ¿hay firma?) y el logo de General se leen DENTRO de
  * la misma tx (antes la página abría una tx chica aparte en paralelo: 1 tx menos por carga). Solo flags y `updatedAt`
  * (el CAS de C-FC9): las claves de Storage no salen de acá; la vista previa se pide aparte con una URL firmada de 60 s.
+ *
+ * TP-3a (T5, §25.10/§25.11): las pestañas «Cobros online» (`tenant.sensitive`) y «Mi Mercado Pago» (quien tiene
+ * profesional propio) leen DENTRO de la misma tx: la política (1 sentencia) y las cuentas de Mercado Pago del
+ * consultorio (1 sentencia; `MpAccount` es SELECT para `kinesoft_app` con RLS). Antes de esto, montar los lectores
+ * del contrato (`getOnlinePaymentsSettings`, `getMyMpAccount`) sumaba 1 tx + 2 lecturas por el canal service por
+ * carga. Las vistas salen con el MISMO criterio que esos lectores (`mpAccountViewOf`, la cuenta viva o la última
+ * desconectada) y el test de igualdad de `pf2-config-budget` compara contra los símbolos reales. Ni tokens, ni
+ * `webhookRef`, ni `mpUserId`: el select es el de la vista (C-TP4). La vista previa de «¿Cuánto se cobra online?» usa
+ * el precio del servicio más usado de los que ya trae la tx (0 sentencias).
  */
 import { runWithRls, type DbClient } from "@/lib/rls";
 // DIR-3c: solo para `ProfessionalPublicProfile` (SERVICE_ONLY, DIR-D12); ver la cabecera.
@@ -71,6 +80,16 @@ import type { PractitionerScheduleSummaryRow } from "@/lib/practitioner-schedule
 import type { PractitionerBookingCapView } from "@/lib/booking-cap-config";
 import { isClinicalMember } from "@/lib/roles-core";
 import type { Honorific } from "@/lib/directory-constants";
+import { mpConnectMode } from "@/lib/env";
+import { publicPractitionerName } from "@/lib/display-name";
+import { DEFAULT_PAYMENT_POLICY, type PaymentPolicyInput } from "@/lib/booking-payment-policy-types";
+import { MIN_ONLINE_CHARGE_CENTS } from "@/lib/online-charge-logic";
+import {
+  MP_ACCOUNT_NONE,
+  type MpAccountView,
+  type MpConnectMode,
+  type OnlinePaymentsSettingsView,
+} from "@/lib/mp-connect-types";
 
 /** Mismo texto que `READ_MSG` de lib/locations.ts y lib/practitioner-schedule.ts (lo que tiraban sus lectores). */
 const AGENDA_READ_MSG = "No tenés permiso para ver la agenda del consultorio.";
@@ -154,6 +173,12 @@ export type ConfiguracionTxData = {
   fichas: ConfiguracionFichasData | null;
   /** FC-3i: logo del consultorio en General (`tenant.sensitive`); null = sin la tarjeta. */
   logo: PracticeAssetFlag | null;
+  /** TP-3a: pestaña «Cobros online» (= `getOnlinePaymentsSettings()`); null = sin `tenant.sensitive`. */
+  onlinePayments: OnlinePaymentsSettingsView | null;
+  /** TP-3a: pestaña «Mi Mercado Pago» (= `getMyMpAccount()`); null = sin profesional propio, o soporte. */
+  myMp: MpAccountView | null;
+  /** TP-3a: precio de referencia de la vista previa de «¿Cuánto se cobra online?»; null = sin servicio con precio. */
+  previewServicePriceCents: number | null;
 };
 
 type Gates = {
@@ -171,6 +196,14 @@ type Gates = {
   directory: boolean;
   /** FC-3i (FC-UI-D3): «Mis fichas» = miembro clínico con `Practitioner`. El soporte nunca (no es miembro). */
   fichas: boolean;
+  /**
+   * TP-3a: «Cobros online» = `tenant.sensitive` (lo mismo que `getOnlinePaymentsSettings`; soporte la ve en solo
+   * lectura). `tenant.admin` también, porque la lista de profesionales sale de la consulta de Profesionales, que corre
+   * con `tenant.admin` (hoy uno no existe sin el otro, como en `directory`).
+   */
+  onlinePayments: boolean;
+  /** TP-3a: «Mi Mercado Pago» = profesional propio y no soporte (= `getMyMpAccount`). */
+  myMp: boolean;
 };
 
 /**
@@ -197,7 +230,68 @@ function gatesFor(actor: Actor, caps: ReadonlySet<Capability>): Gates {
     // `tenant.sensitive` sin `tenant.admin` no existe (los dos vienen de «Configuración»), pero no se asume.
     directory: tenantAdmin && sensitive && directoryMode() !== "off",
     fichas: !actor.support && !!actor.practitionerId && !!actor.membership && isClinicalMember(actor.membership),
+    onlinePayments: tenantAdmin && sensitive,
+    myMp: !actor.support && !!actor.practitionerId,
   };
+}
+
+type MpAccountViewRow = {
+  practitionerId: string | null;
+  status: "ACTIVE" | "REAUTH_REQUIRED" | "DISCONNECTED";
+  mpNickname: string | null;
+  liveMode: boolean;
+  linksDelegated: boolean;
+  connectedAt: Date;
+  disconnectedAt: Date | null;
+};
+
+/**
+ * Puro (TP-3a): la cuenta que se le muestra a cada dueño, con el criterio de `loadAccountViews`
+ * (lib/mp-connect/accounts-internal.ts): filas por `connectedAt` desc; gana la primera, salvo que sea DISCONNECTED y
+ * aparezca una viva (la viva manda; si no hay, la última desconectada, para el «Desconectada el …»).
+ */
+export function pickMpAccountRows<R extends Pick<MpAccountViewRow, "practitionerId" | "status">>(
+  rows: readonly R[]
+): { clinic: R | null; byPractitioner: Map<string, R> } {
+  let clinic: R | null = null;
+  const byPractitioner = new Map<string, R>();
+  const better = (cur: R | null | undefined, next: R) => !cur || (cur.status === "DISCONNECTED" && next.status !== "DISCONNECTED");
+  for (const r of rows) {
+    if (r.practitionerId === null) {
+      if (better(clinic, r)) clinic = r;
+    } else if (better(byPractitioner.get(r.practitionerId), r)) {
+      byPractitioner.set(r.practitionerId, r);
+    }
+  }
+  return { clinic, byPractitioner };
+}
+
+/** = `mpAccountViewOf` (lib/mp-connect/accounts-internal.ts, server-only con el canal service): la misma vista. */
+function mpViewOf(row: MpAccountViewRow | null, mode: MpConnectMode): MpAccountView {
+  if (!row) return MP_ACCOUNT_NONE;
+  return {
+    status: row.status,
+    nickname: row.mpNickname,
+    connectedAt: row.connectedAt.toISOString(),
+    disconnectedAt: row.disconnectedAt ? row.disconnectedAt.toISOString() : null,
+    linksDelegated: row.linksDelegated,
+    badge: row.liveMode ? null : mode === "fake" ? "fake" : "sandbox",
+  };
+}
+
+/**
+ * Puro (TP-3a): precio de referencia de la vista previa de «¿Cuánto se cobra online?». El servicio con más turnos (el
+ * que el consultorio más cobra, y el que más va a ver el paciente en el turnero); empate → el primero por nombre (el
+ * orden de la lista). Solo precios cobrables online (≥ $1): con un servicio sin precio la vista previa diría «no se
+ * cobra nada», que es verdad pero no ayuda a elegir la seña.
+ */
+export function previewServicePriceOf(services: readonly Pick<ServiceRow, "priceCents" | "bookingsCount">[]): number | null {
+  let best: Pick<ServiceRow, "priceCents" | "bookingsCount"> | null = null;
+  for (const s of services) {
+    if (!Number.isInteger(s.priceCents) || s.priceCents < MIN_ONLINE_CHARGE_CENTS) continue;
+    if (!best || s.bookingsCount > best.bookingsCount) best = s;
+  }
+  return best ? best.priceCents : null;
 }
 
 /**
@@ -216,6 +310,8 @@ export async function loadConfiguracionInTx(
   const today = dayKeyToDbDate(toARDateKey(now));
   // FC-3i: ya chequeado no-null (guard IAM-4a: nunca `actor.practitionerId` crudo como valor de una clave).
   const myPractitionerId: string | null = g.fichas ? actor.practitionerId : null;
+  // TP-3a: ídem (`g.myMp` ya exige `actor.practitionerId`).
+  const myMpPractitionerId: string | null = g.myMp ? actor.practitionerId : null;
 
   // Dentro de una tx interactiva Prisma manda las sentencias en serie por la misma conexión: el `Promise.all` solo
   // las encola sin esperar a que el código de una termine para pedir la siguiente.
@@ -234,6 +330,8 @@ export async function loadConfiguracionInTx(
     specialtyRows,
     logoRow,
     me,
+    policyRow,
+    mpRows,
   ] = await Promise.all([
       // = getTenantSettings (lib/tenant-settings.ts); además da el horario del consultorio para el resumen de
       // horarios (= `tenantHours` de lib/practitioner-schedule.ts): una sentencia menos.
@@ -355,6 +453,39 @@ export async function loadConfiguracionInTx(
             select: { honorific: true, licenseNumber: true, signatureStorageKey: true, signatureUpdatedAt: true },
           })
         : null,
+      // TP-3a: = la lectura de la política de `getOnlinePaymentsSettings` (lib/booking-payment-policy.ts).
+      g.onlinePayments
+        ? tx.bookingPaymentPolicy.findUnique({
+            where: { tenantId },
+            select: {
+              mode: true,
+              chargeKind: true,
+              fixedCents: true,
+              percentBps: true,
+              useClinicAccount: true,
+              cancellationNote: true,
+              updatedAt: true,
+            },
+          })
+        : null,
+      // TP-3a: cuentas de Mercado Pago. Con «Cobros online», todas las del consultorio (la del consultorio y las de
+      // cada profesional; la propia va entre ellas); con solo «Mi Mercado Pago», las del profesional propio. Solo las
+      // columnas de la vista: ni `webhookRef`, ni `mpUserId`, ni nada de `MpCredential` (C-TP4).
+      g.onlinePayments || (g.myMp && myMpPractitionerId)
+        ? tx.mpAccount.findMany({
+            where: g.onlinePayments ? { tenantId } : { tenantId, practitionerId: myMpPractitionerId },
+            orderBy: [{ connectedAt: "desc" }],
+            select: {
+              practitionerId: true,
+              status: true,
+              mpNickname: true,
+              liveMode: true,
+              linksDelegated: true,
+              connectedAt: true,
+              disconnectedAt: true,
+            },
+          })
+        : [],
     ]);
 
   let tenant: TenantSettings | null = null;
@@ -413,6 +544,44 @@ export async function loadConfiguracionInTx(
     });
   }
 
+  // TP-3a: mismas vistas que `getOnlinePaymentsSettings` / `getMyMpAccount` (el test de igualdad lo fija).
+  const connectMode = mpConnectMode();
+  const accounts = pickMpAccountRows(mpRows);
+  let onlinePayments: OnlinePaymentsSettingsView | null = null;
+  if (g.onlinePayments) {
+    const rows = pracs.map((p) => {
+      const v = accounts.byPractitioner.get(p.id) ?? null;
+      return {
+        practitionerId: p.id,
+        name: publicPractitionerName(p.user.fullName),
+        status: v ? v.status : ("NONE" as const),
+        linksDelegated: v ? v.status !== "DISCONNECTED" && v.linksDelegated : false,
+      };
+    });
+    const policy: PaymentPolicyInput = policyRow
+      ? {
+          mode: policyRow.mode,
+          chargeKind: policyRow.chargeKind,
+          fixedCents: policyRow.fixedCents,
+          percentBps: policyRow.percentBps,
+          useClinicAccount: policyRow.useClinicAccount,
+          cancellationNote: policyRow.cancellationNote,
+        }
+      : DEFAULT_PAYMENT_POLICY;
+    onlinePayments = {
+      policy,
+      policyUpdatedAt: policyRow ? policyRow.updatedAt.toISOString() : null,
+      connectMode,
+      publicBookingEnabled: actor.entitlements.publicBookingEnabled,
+      clinicAccount: mpViewOf(accounts.clinic, connectMode),
+      canManageClinicAccount: !actor.support && caps.has("account.owner"),
+      practitioners: rows,
+      withoutMpCount: rows.filter((r) => r.status !== "ACTIVE").length,
+    };
+  }
+  const myMp =
+    g.myMp && myMpPractitionerId ? mpViewOf(accounts.byPractitioner.get(myMpPractitionerId) ?? null, connectMode) : null;
+
   return {
     tenant,
     insurers,
@@ -437,6 +606,9 @@ export async function loadConfiguracionInTx(
           backupScope: { tenantId, userId: actor.userId },
         }
       : null,
+    onlinePayments,
+    myMp,
+    previewServicePriceCents: g.onlinePayments ? previewServicePriceOf(services) : null,
   };
 }
 
@@ -501,7 +673,7 @@ export async function loadConfiguracionPage(
   // todo `tenant.admin` la tiene (lib/capabilities.ts), pero si la matriz cambia, el resultado sigue siendo el mismo.
   if (caps.has("tenant.admin") && !caps.has("agenda.viewAll")) throw new ForbiddenError(AGENDA_READ_MSG);
   const g = gatesFor(actor, caps);
-  const needsTx = g.tenantAdmin || g.rooms || g.support || g.sensitive || g.fichas;
+  const needsTx = g.tenantAdmin || g.rooms || g.support || g.sensitive || g.fichas || g.onlinePayments || g.myMp;
   const empty: ConfiguracionTxData = {
     tenant: null,
     insurers: [],
@@ -517,6 +689,9 @@ export async function loadConfiguracionPage(
     directory: null,
     fichas: null,
     logo: null,
+    onlinePayments: null,
+    myMp: null,
+    previewServicePriceCents: null,
   };
   const [data, planUsage, billingOverview, catalog, snapshot, profileStatuses] = await Promise.all([
     needsTx ? runWithRls(actor.tenantId, (tx) => loadConfiguracionInTx(tx, actor, caps)) : empty,
