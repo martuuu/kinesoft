@@ -4,8 +4,8 @@
  * pagado · $ 6.000» y lo que valida el server salen de la misma función.
  *
  * Decisión 5 del 19-oct: UN cobro por turno con medio de pago; si hubo seña online (T5), «Pagado» cubre el resto.
- * En T3 no hay señas (el caller pasa `deposits: []` y el restante es el copago entero); T5 enchufa los
- * `Payment.kind = DEPOSIT` de Mercado Pago sin cambiar esta firma.
+ * T5 (TP-P3, C-TP10): las señas reales son `Booking.onlineDepositCents` (Σ de las señas PAID de `OnlineCharge`, la
+ * escribe solo el trigger de M18). El caller la pasa como `onlineDepositCents`; `deposits` queda por compatibilidad.
  */
 import type { PaymentStatus } from "@prisma/client";
 import { canCollectCopago, type Capability } from "@/lib/capabilities";
@@ -16,21 +16,30 @@ import { paymentMethodLabel, type PaymentMethod } from "@/lib/payment-method";
 export type CopagoMarkInput = { paid: true; method: PaymentMethod } | { paid: false };
 
 /**
- * Lo que falta cobrar del copago: `resolvedCopagoCents` menos las señas COBRADAS (`status === "PAID"`), nunca < 0.
+ * Lo que falta cobrar del copago: `resolvedCopagoCents` menos las señas COBRADAS, nunca < 0. Misma regla que
+ * `remainingOf` (`lib/online-charge-logic.ts`, la que usan el webhook y el link «lo que falta», C-TP9), fijada con un
+ * test de paridad. No se importa de ahí a propósito: este módulo viaja en el bundle de /agenda (drawer, /sala) con un
+ * techo de +0,3 kB en T5, y `online-charge-logic` arrastra la decisión del turnero y el saneo del comprobante.
  *
- * - Una seña FAILED nunca entró y una REFUNDED se devolvió: restarlas haría que la recepción cobre de menos.
+ * Las señas llegan de una de dos formas (el caller pasa UNA; si pasara las dos, se suman):
+ * - `onlineDepositCents` (T5): `Booking.onlineDepositCents`, ya es la Σ de las señas PAID. Es la fuente real.
+ * - `deposits` (forma de T3): lista con estado; solo resta `status === "PAID"`. Una FAILED nunca entró y una REFUNDED
+ *   se devolvió: restarlas haría que la recepción cobre de menos.
+ *
  * - Piso 0: si el copago bajó después de la seña (cambio de cobertura), no hay saldo a favor que cobrar acá.
  * - Un monto de seña negativo o no entero se ignora: es un dato corrupto, y sumarlo AUMENTARÍA lo que se cobra al
  *   paciente; ignorarlo falla del lado de cobrar lo que dice el copago. Plata en centavos `Int` (AGENTS.md §4).
  */
 export function copagoRemainingCents({
   resolvedCopagoCents,
-  deposits,
+  deposits = [],
+  onlineDepositCents = 0,
 }: {
   resolvedCopagoCents: number;
-  deposits: { amountCents: number; status: string }[];
+  deposits?: { amountCents: number; status: string }[];
+  onlineDepositCents?: number;
 }): number {
-  let paid = 0;
+  let paid = Number.isInteger(onlineDepositCents) && onlineDepositCents > 0 ? onlineDepositCents : 0;
   for (const d of deposits) {
     if (d.status === "PAID" && Number.isInteger(d.amountCents) && d.amountCents > 0) paid += d.amountCents;
   }
@@ -80,9 +89,13 @@ export function UNDO_COLLECT_CONFIRM(amountLabel: string) {
  * - **Quién cobra:** `can` (en el wrapper, `canCollectCopago` con las capabilities del viewer y SU profesional, el
  *   mismo gate que el server). Quien no cobra ve solo el estado.
  * - **Mercado Pago no se toca a mano** (default del 19-oct): AUTHORIZED (MP retiene el pago), REFUNDED y una reserva
- *   pública PAID sin medio manual (el webhook marca PAID sin `copagoPaymentMethod`) quedan sin botones. El server
+ *   pública PAID sin medio manual (el webhook legado marca PAID sin `copagoPaymentMethod`) quedan sin botones. El server
  *   además mira la fila `Payment` y rechaza con `COLLECT_COPY.mercadoPagoLocked`; esto solo evita ofrecer lo que va a
  *   rebotar.
+ * - **Pagado por un cobro online (T5, C-TP10):** el webhook nuevo marca PAID con medio `MERCADO_PAGO` y SIN quién cobró
+ *   (`copagoCollectedById` NULL; un cobro a mano siempre lo lleva desde M12) → «Pagado por Mercado Pago», sin deshacer.
+ *   Solo con `copagoCollectedById === null` explícito: una proyección que no trae la columna (`undefined`) no adivina y
+ *   conserva el comportamiento de T3 (si alguien registró a mano «Mercado Pago» como medio, ese sí se deshace).
  * - **«Cobrar» solo si hay algo que cobrar:** copago > 0 y el turno no está cancelado ni ausente (mismo criterio que
  *   «Cobrar ahora» de /sala). Deshacer el cobro de un cancelado sí se ofrece (cobro previo de un turno de plan, B-M3).
  * - Sin `paymentStatus` (proyección que no lo trae) no se adivina: ni estado ni botones.
@@ -92,6 +105,8 @@ export type CopagoCollectView = { label: string | null; action: "collect" | "und
 export type CopagoCollectBooking = {
   paymentStatus?: PaymentStatus | null;
   copagoPaymentMethod?: PaymentMethod | null;
+  /** T5: quién registró el cobro a mano. `null` + medio MERCADO_PAGO = lo pagó un cobro online (webhook). */
+  copagoCollectedById?: string | null;
   publicReservation?: boolean;
   practitionerId: string;
   copagoCents: number;
@@ -105,6 +120,9 @@ export function copagoCollectViewFor(booking: CopagoCollectBooking, can: boolean
   if (ps === "REFUNDED") return { label: "Reintegrado por Mercado Pago", action: null };
   if (ps === "PAID") {
     if (booking.copagoPaymentMethod == null && booking.publicReservation === true) {
+      return { label: "Pagado por Mercado Pago", action: null };
+    }
+    if (booking.copagoPaymentMethod === "MERCADO_PAGO" && booking.copagoCollectedById === null) {
       return { label: "Pagado por Mercado Pago", action: null };
     }
     return { label: `Pagado · ${paymentMethodLabel(booking.copagoPaymentMethod ?? null)}`, action: can ? "undo" : null };

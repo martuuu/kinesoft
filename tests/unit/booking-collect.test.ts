@@ -154,3 +154,34 @@ describe("[T3-Y] collectImputationLine (a quién se imputa el cobro)", () => {
     expect(collectImputationLine({ practitionerId: "pr_1", practitionerName: " " })).toBe("Se imputa al profesional del turno");
   });
 });
+
+describe("[TP-P3] booking-collect con cobros online (C-TP10)", () => {
+  const b = (over: Partial<Parameters<typeof copagoCollectViewFor>[0]> = {}) => ({
+    paymentStatus: "PAID" as const,
+    copagoPaymentMethod: "MERCADO_PAGO" as const,
+    publicReservation: false,
+    practitionerId: "p1",
+    copagoCents: 600_000,
+    status: "CONFIRMED" as const,
+    ...over,
+  });
+
+  it("[TP-P3] copagoCollectViewFor con MP sin quién cobró → «Pagado por Mercado Pago», sin acciones", () => {
+    expect(copagoCollectViewFor(b({ copagoCollectedById: null }), true)).toEqual({ label: "Pagado por Mercado Pago", action: null });
+    // registrado a mano con medio «Mercado Pago» (lleva quién cobró): se deshace como cualquier medio
+    expect(copagoCollectViewFor(b({ copagoCollectedById: "u1" }), true)).toEqual({ label: "Pagado · Mercado Pago", action: "undo" });
+    // proyección sin la columna: no adivina (comportamiento de T3)
+    expect(copagoCollectViewFor(b(), true)).toEqual({ label: "Pagado · Mercado Pago", action: "undo" });
+    // otro medio sin quién cobró (cobros previos a M12): sigue siendo manual
+    expect(copagoCollectViewFor(b({ copagoPaymentMethod: "CASH", copagoCollectedById: null }), true)).toEqual({ label: "Pagado · Efectivo", action: "undo" });
+  });
+
+  it("[TP-P3] copagoRemainingCents con la seña real (Booking.onlineDepositCents)", () => {
+    expect(copagoRemainingCents({ resolvedCopagoCents: 600_000, onlineDepositCents: 200_000 })).toBe(400_000);
+    expect(copagoRemainingCents({ resolvedCopagoCents: 600_000, onlineDepositCents: 0 })).toBe(600_000);
+    expect(copagoRemainingCents({ resolvedCopagoCents: 150_000, onlineDepositCents: 200_000 })).toBe(0);
+    expect(copagoRemainingCents({ resolvedCopagoCents: 600_000, onlineDepositCents: -1 })).toBe(600_000);
+    // la forma de T3 sigue andando
+    expect(copagoRemainingCents({ resolvedCopagoCents: 600_000, deposits: [] })).toBe(600_000);
+  });
+});
