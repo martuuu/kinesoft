@@ -1266,6 +1266,9 @@ const UPDATE_BEFORE_SELECT = {
   // T3-Z (B2): escalar, sin sentencia. Sin mover el turno de intervalo, el tope solo lo sigue marcando sobreturno si
   // YA lo era (ver `isOverbooked` más abajo).
   isOverbooked: true,
+  // T5 (§25.8): Σ de señas PAID (la escribe solo el trigger de M18). Escalar, 0 sentencias: cancelar con seña devuelve
+  // el aviso de reintegro (`depositRefundNotice`) sin leer `OnlineCharge`.
+  onlineDepositCents: true,
 } satisfies Prisma.BookingSelect;
 
 export type BookingUpdateBefore = Prisma.BookingGetPayload<{ select: typeof UPDATE_BEFORE_SELECT }>;
@@ -1335,6 +1338,9 @@ export type BookingUpdateTxOutcome =
   | { kind: "plan-paid-cancel" }
   | { kind: "plan-patient-change" }
   | { kind: "clinical-note-patient"; clinical: boolean }
+  // T5 (§25.8): el turno tiene cobros online (de su paciente; la FK compuesta lo frenaría con un 23503). Copy:
+  // BOOKING_ONLINE_CHARGE_PATIENT_ERROR. No revela nada clínico: va igual para quien no ve HC.
+  | { kind: "online-charge-patient" }
   // IAM-4b: mover (o reactivar / cambiar de sede) un turno cuyo profesional ya
   // no es reservable (turno viejo de la Secretaria, profesional suspendido).
   // Copy: PRACTITIONER_NOT_BOOKABLE_ERROR. Editar notas o cancelar sigue
@@ -1471,14 +1477,18 @@ export async function applyBookingUpdateInTx(
     // rama (cambio de un paciente a otro): el camino normal de `updateBooking*` no suma sentencias (techo STRICT de
     // tests/perf/compare.ts). Un guest no puede tener evolución (la nota exige paciente): guest → paciente no mira.
     // Cualquier nota cuenta (viva, enmienda o anulada): la FK no distingue.
+    //
+    // T5 (§25.8): lo mismo con un cobro online (`OnlineCharge_booking_tenant_patient_fkey`: el cobro es del paciente de
+    // ESE turno y nunca se borra). Se pliega a la MISMA sentencia (dos EXISTS): +0 sentencias en esta rama. Un guest no
+    // puede tener cobros (exigen paciente).
     if (before.patientId != null) {
-      const note = await tx.clinicalNote.findFirst({
-        where: { tenantId: actor.tenantId, bookingId: id },
-        select: { id: true },
-      });
+      const [links] = await tx.$queryRaw<{ note: boolean; charge: boolean }[]>`
+        SELECT EXISTS (SELECT 1 FROM "ClinicalNote" n WHERE n."tenantId" = ${actor.tenantId} AND n."bookingId" = ${id}) AS "note",
+          EXISTS (SELECT 1 FROM "OnlineCharge" c WHERE c."tenantId" = ${actor.tenantId} AND c."bookingId" = ${id}) AS "charge"`;
       // EV2-Z a1: `clinical` viaja para que el action no le revele a quien no ve HC (Secretaria) que el turno tiene
       // evolución: sin clínico recibe el copy genérico de «datos clínicos» (CLINICAL_RELINK_ERROR).
-      if (note) return { kind: "clinical-note-patient", clinical: gate.clinical };
+      if (links.note) return { kind: "clinical-note-patient", clinical: gate.clinical };
+      if (links.charge) return { kind: "online-charge-patient" };
     }
     const owned = await tx.patient.findFirst({
       where: { id: patch.patientId, tenantId: actor.tenantId },

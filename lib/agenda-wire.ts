@@ -33,6 +33,13 @@
  * Sin `insurers` en el catálogo (un caller viejo), `insurerKey` viaja con su nombre completo y, al decodificar, un
  * `oi` sin catálogo se descarta: la clave queda AUSENTE (= "no sé", el filtro nunca la esconde), nunca inventada.
  *
+ * T5 (C-TP10, §25.8 «Agenda»): la plata online del turno viaja AL FINAL de `FIELDS`, así solo crecen las filas
+ * afectadas y el fixture de volumen (sin cobros online) da el MISMO cable byte a byte:
+ *  - `od` = `onlineDepositCents` (Σ de señas PAID), solo si es > 0;
+ *  - `po` = `paidOnline` (pagado entero por un cobro online), solo si es true.
+ * Compactas como las de C9/SR/SV (sin `dflt`): `agendaRowToDTO` las pone en el DTO SOLO cuando no son neutras, así el
+ * DTO de un turno sin plata online es idéntico al de antes de T5 (y al de `toBookingDTO`). Ausente = 0 / false.
+ *
  * Isomórfico (sin `server-only` ni `"use client"`): lo usan el loader de la página y el borde cliente.
  */
 import { toBookingDTO, type BookingDTO } from "@/components/agenda/agenda-utils";
@@ -63,8 +70,15 @@ type Lookup = {
   insurers: InsurerLookup | undefined;
 };
 
+/**
+ * El DTO con la plata online de T5. `BookingDTO` (components/agenda/agenda-utils.ts) todavía no declara estas claves
+ * (handoff a quien es dueño de ese archivo); mientras tanto el cable las conoce acá y el DTO las lleva igual.
+ */
+export type AgendaOnlineMoneyFields = { onlineDepositCents?: number; paidOnline?: boolean };
+type WireDTO = BookingDTO & AgendaOnlineMoneyFields;
+
 type Field = {
-  key: keyof BookingDTO;
+  key: keyof WireDTO;
   wire: string;
   dflt?: unknown;
   derive?: (dto: Partial<BookingDTO>, l: Lookup) => unknown;
@@ -123,6 +137,10 @@ const FIELDS: ReadonlyArray<Field> = [
   { key: "plan", wire: "pl" },
   { key: "serviceDiscipline", wire: "sd" },
   { key: "patientActiveLinkedPlanDisciplines", wire: "pd" },
+  // T5 (C-TP10): al final y compactas (ausentes cuando son neutras, ver `agendaRowToDTO`): un turno sin plata online
+  // no suma bytes ni claves.
+  { key: "onlineDepositCents", wire: "od" },
+  { key: "paidOnline", wire: "po" },
 ];
 const KNOWN = new Set<string>(FIELDS.map((f) => f.key));
 // `oi` es corta aunque no esté en `FIELDS`: un `oi` que llega sin catálogo de obras sociales se descarta, no se
@@ -189,7 +207,15 @@ function decodeInsurerKey(w: unknown, ins: InsurerLookup): string | null | undef
  * agenda, así las dos listas son intercambiables. Si `toBookingDTO` la sumara al final, este spread no cambia nada.
  */
 export function agendaRowToDTO(row: AgendaBookingRow): BookingDTO {
-  const dto = toBookingDTO(row);
+  // T5: la plata online va DESPUÉS de las claves de `toBookingDTO` y ANTES de `insurerKey`, el mismo orden en que
+  // `decodeOne` las rearma (FIELDS → `oi`): la ida y vuelta conserva el orden de claves (contrato del cable). Solo
+  // cuando no son neutras: una seña ≤ 0 o no entera no es una seña (misma defensa que `bookingMoneyBadge`).
+  const od = row.onlineDepositCents;
+  const dto: WireDTO = {
+    ...toBookingDTO(row),
+    ...(typeof od === "number" && Number.isInteger(od) && od > 0 ? { onlineDepositCents: od } : {}),
+    ...(row.paidOnline === true ? { paidOnline: true } : {}),
+  };
   return row.insurerKey === undefined ? dto : { ...dto, insurerKey: row.insurerKey };
 }
 

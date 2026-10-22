@@ -33,6 +33,10 @@ import { ForbiddenError, type Actor } from "@/lib/session";
 import { memberCapabilitiesForActor, requireCapability } from "@/lib/authz";
 import { canCollectCopago, canConfirmInsurer, canOperateBooking, canWriteClinical, type Capability } from "@/lib/capabilities";
 import { COLLECT_COPY, type CopagoMarkInput } from "@/lib/booking-collect";
+import { ONLINE_COLLECT_COPY } from "@/lib/online-payments-copy";
+import { depositRefundNotice } from "@/lib/online-charge-logic";
+import { cancelLiveLinksForBookingInTx } from "@/lib/payment-links-internal";
+import { expirePreferencesBestEffort } from "@/lib/mp-connect/account-client";
 import { PAYMENT_METHODS, type PaymentMethod } from "@/lib/payment-method";
 import { z } from "zod";
 import { bookingFieldAccess } from "@/lib/booking-field-access";
@@ -123,6 +127,7 @@ import {
 
 import { AgendaBookingsQuery, ReceptionActionInput, type AgendaBookingsQueryInput } from "@/lib/bookings-schemas";
 import {
+  BOOKING_ONLINE_CHARGE_PATIENT_ERROR,
   type AgendaBookingRow,
   type BatchDateOutcome,
   type BookingBlockedPrompt,
@@ -375,6 +380,10 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
         paymentStatus: true,
         // T3 (C-AS2): cómo pagó el copago; escalar en la misma sentencia (cable `pm`, default null).
         copagoPaymentMethod: true,
+        // T5 (C-TP10): seña (Σ PAID, la escribe el trigger de M18) y quién cobró (null + MERCADO_PAGO = pagado por un
+        // cobro online, `paidOnline`). Escalares en la misma sentencia: 0 sentencias (techo +0 de `listAgendaBookings`).
+        onlineDepositCents: true,
+        copagoCollectedById: true,
         createdAt: true,
         idempotencyKey: true,
         isOverbooked: true,
@@ -530,6 +539,11 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
       // La proyección devuelve una entrada por cada fila que recibe.
       ...loaded.c9.get(b.id)!,
       insurerKey,
+      onlineDepositCents: b.onlineDepositCents,
+      // Misma regla que `copagoCollectViewFor` («Pagado por Mercado Pago»): el webhook nuevo marca PAID con medio
+      // MERCADO_PAGO y nunca lleva quién cobró; un cobro a mano lo lleva siempre desde M12 (CHECK), aunque elija el
+      // medio «Mercado Pago». Un FULL reintegrado deja el turno REFUNDED: deja de ser «pagado online».
+      paidOnline: b.paymentStatus === "PAID" && b.copagoPaymentMethod === "MERCADO_PAGO" && b.copagoCollectedById == null,
     };
   });
 }
@@ -1281,11 +1295,21 @@ async function updateBookingImpl(
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025") {
       return { kind: "stale" as const };
     }
+    // T5 (§25.8): carrera chequeo/escritura del cambio de paciente: un cobro online que entra entre el EXISTS del core
+    // y el UPDATE lo frena la FK compuesta de M18 (23503 → P2003). Mismo caso que «tiene cobro online», no un 500.
+    if (
+      e instanceof Prisma.PrismaClientKnownRequestError &&
+      e.code === "P2003" &&
+      String((e.meta as { field_name?: unknown } | undefined)?.field_name ?? e.message).includes("OnlineCharge_")
+    ) {
+      return { kind: "online-charge-patient" as const };
+    }
     throw e;
   });
 
   if (outcome.kind === "notfound") return { ok: false, error: "Turno no encontrado." };
   if (outcome.kind === "basic") return { ok: false, error: BASIC_ACCESS_ERROR };
+  if (outcome.kind === "online-charge-patient") return { ok: false, error: BOOKING_ONLINE_CHARGE_PATIENT_ERROR };
   if (outcome.kind === "clinical-relink") return { ok: false, error: CLINICAL_RELINK_ERROR };
   if (outcome.kind === "patient-slot") {
     return {
@@ -1418,10 +1442,17 @@ async function updateBookingImpl(
   if (outcome.plan?.discharge) {
     await notifyPlanNearingDischarge(actor.tenantId, outcome.plan.discharge, actor.userId ?? null);
   }
+  // T5 (§25.8, decisión 2 del 19-oct): cancelar un turno con seña avisa que el reintegro se hace DESDE Mercado Pago
+  // (la app no devuelve plata). `onlineDepositCents` ya vino en la lectura del core: 0 sentencias.
+  const refundNotice =
+    patch.status === "CANCELLED" && before.status !== "CANCELLED" && before.onlineDepositCents > 0
+      ? depositRefundNotice(before.onlineDepositCents)
+      : null;
+  const notices = [outcome.plan?.sessionKeptDone ? SESSION_KEPT_DONE_NOTICE : null, refundNotice].filter((n): n is string => !!n);
   return {
     ok: true,
     data: { updatedAt: outcome.updatedAt },
-    ...(outcome.plan?.sessionKeptDone ? { notice: SESSION_KEPT_DONE_NOTICE } : {}),
+    ...(notices.length ? { notice: notices.join(" ") } : {}),
     ...(outcome.intervalCapNotice ? { intervalCapNotice: outcome.intervalCapNotice } : {}),
   };
 }
@@ -1710,12 +1741,17 @@ async function deleteBookingImpl(
     // RESTRICT de M9 lo frenaría igual, pero con un P2003 (500). Antes de mirar pagos, después del gate (quien no opera
     // el turno no se entera de que tiene evolución). Cuesta +1 sentencia SOLO en `deleteBooking` (no está en el techo
     // STRICT de tests/perf/compare.ts), y solo si el turno tiene paciente: un guest no puede tener evolución.
+    //
+    // T5 (§25.8, C-TP10): un turno con un cobro online (cualquiera: un link vivo, una seña, uno anulado o vencido) no
+    // se borra: `OnlineCharge` nunca se borra y su FK al turno es RESTRICT (23503 → 500). El chequeo se pliega a la
+    // MISMA sentencia de la evolución (dos EXISTS): +0 sentencias. Solo con paciente: un cobro exige paciente (la FK
+    // compuesta turno-tenant-paciente), así que un guest no puede tener cobros.
     if (row.patientId) {
-      const note = await tx.clinicalNote.findFirst({
-        where: { tenantId: actor.tenantId, bookingId: id },
-        select: { id: true },
-      });
-      if (note) return { kind: "has-clinical-note" as const };
+      const [links] = await tx.$queryRaw<{ note: boolean; charge: boolean }[]>`
+        SELECT EXISTS (SELECT 1 FROM "ClinicalNote" n WHERE n."tenantId" = ${actor.tenantId} AND n."bookingId" = ${id}) AS "note",
+          EXISTS (SELECT 1 FROM "OnlineCharge" c WHERE c."tenantId" = ${actor.tenantId} AND c."bookingId" = ${id}) AS "charge"`;
+      if (links.note) return { kind: "has-clinical-note" as const };
+      if (links.charge) return { kind: "has-online-charge" as const };
     }
     // Payment FK is onDelete: Restrict, so a paid turno can't be silently
     // wiped. Refuse the delete if a real payment is attached; for an
@@ -1773,6 +1809,14 @@ async function deleteBookingImpl(
     ) {
       return { kind: "has-clinical-note" as const };
     }
+    // T5: misma carrera con un cobro online que entra entre el chequeo y el DELETE (la RESTRICT de M18).
+    if (
+      e instanceof Prisma.PrismaClientKnownRequestError &&
+      e.code === "P2003" &&
+      String((e.meta as { field_name?: unknown } | undefined)?.field_name ?? e.message).includes("OnlineCharge_")
+    ) {
+      return { kind: "has-online-charge" as const };
+    }
     throw e;
   });
   if (outcome.kind === "notfound") return { ok: false, error: "Turno no encontrado." };
@@ -1780,6 +1824,7 @@ async function deleteBookingImpl(
   if (outcome.kind === "basic") return { ok: false, error: BASIC_ACCESS_ERROR };
   if (outcome.kind === "plan-delete") return { ok: false, error: PLAN_DELETE_ERROR };
   if (outcome.kind === "has-clinical-note") return { ok: false, error: BOOKING_HAS_CLINICAL_NOTE_ERROR };
+  if (outcome.kind === "has-online-charge") return { ok: false, error: ONLINE_COLLECT_COPY.deleteWithOnlineCharge };
   if (outcome.kind === "has-payment") {
     return {
       ok: false,
@@ -1886,6 +1931,8 @@ async function toggleBilling(
     // sesión. Los turnos activos o sueltos no pagan nada.
     const planPrior = row.sessionId != null && row.patientId != null && (row.status === "CANCELLED" || row.status === "NO_SHOW");
     if (planPrior) await lockPlanPatient(tx, { tenantId: actor.tenantId, patientId: row.patientId! });
+    // T5 (C-TP10): plata online del turno, leída después del lock (solo en el copago).
+    let online: { depositCents: number; liveLinkIds: string[] } | null = null;
     if (toggle.side === "copago") {
       // T3-Z (B3): la fila del turno se toma ANTES de leer el `Payment`, como el webhook de MP (`consumeWebhook`:
       // Booking FOR UPDATE → Payment). Sin esto, con un turno marcado a mano, un webhook «approved» en vuelo escribe
@@ -1898,13 +1945,31 @@ async function toggleBilling(
       await tx.$queryRaw`SELECT "id" FROM "Booking" WHERE "id" = ${id} AND "tenantId" = ${actor.tenantId} FOR UPDATE`;
       // Default del 19-oct: un cobro de Mercado Pago no se desmarca ni se cambia a mano. Desmarcarlo dejaría el turno
       // «por cobrar» con la plata ya acreditada (la recepción cobraría dos veces) y el webhook no lo volvería a
-      // marcar; AUTHORIZED es MP reteniendo el pago, que todavía puede acreditarse. Se mira la fila `Payment`
-      // (PAID aunque el turno se haya desmarcado antes de T3) y el estado del turno. Solo en el copago: confirmar
-      // la obra social no toca lo que pagó el paciente.
-      const payment = await tx.payment.findUnique({ where: { bookingId: row.id }, select: { status: true } });
-      if (payment?.status === "PAID" || payment?.status === "AUTHORIZED" || row.paymentStatus === "AUTHORIZED") {
-        return { kind: "forbidden" as const, error: COLLECT_COPY.mercadoPagoLocked };
+      // marcar; AUTHORIZED es MP reteniendo el pago, que todavía puede acreditarse. Solo en el copago: confirmar la
+      // obra social no toca lo que pagó el paciente.
+      //
+      // T5 (C-TP10, literal): UNA sentencia reemplaza el `payment.findUnique` y trae, además del `Payment` legado
+      // (PAID aunque el turno se haya desmarcado antes de T3), los cobros online del turno (`OnlineCharge`): FULL PAID
+      // (pagado entero online), alguno AUTHORIZED (en proceso), Σ de las señas PAID y los links vivos. Va DESPUÉS del
+      // FOR UPDATE de arriba y en su propia sentencia (snapshot nuevo): el webhook nuevo toma el mismo lock del turno
+      // antes de tocar el cobro (§25.3 «Locks»), así quien esperó ve lo que el webhook commiteó. Las señas reales se
+      // leen acá y no de `row.onlineDepositCents` (leído ANTES del lock); si el trigger de M18 movió la seña, también
+      // movió `updatedAt` y el CAS de abajo da stale igual. Mismo número de sentencias que antes (techo as1c ≤12).
+      const [mp] = await tx.$queryRaw<{ legacyStatus: string | null; paidOnline: boolean; inFlight: boolean; depositPaidCents: number; liveLinkIds: string[] }[]>`
+        SELECT (SELECT p."status"::text FROM "Payment" p WHERE p."bookingId" = ${id}) AS "legacyStatus",
+          EXISTS (SELECT 1 FROM "OnlineCharge" c WHERE c."tenantId" = ${actor.tenantId} AND c."bookingId" = ${id} AND c."kind" = 'FULL' AND c."status" = 'PAID') AS "paidOnline",
+          EXISTS (SELECT 1 FROM "OnlineCharge" c WHERE c."tenantId" = ${actor.tenantId} AND c."bookingId" = ${id} AND c."status" = 'AUTHORIZED') AS "inFlight",
+          COALESCE((SELECT sum(c."amountCents") FROM "OnlineCharge" c WHERE c."tenantId" = ${actor.tenantId} AND c."bookingId" = ${id} AND c."kind" = 'DEPOSIT' AND c."status" = 'PAID'), 0)::int AS "depositPaidCents",
+          COALESCE((SELECT array_agg(c."id" ORDER BY c."id") FROM "OnlineCharge" c WHERE c."tenantId" = ${actor.tenantId} AND c."bookingId" = ${id} AND c."origin" = 'LINK' AND c."status" = 'ACTIVE'), ARRAY[]::text[]) AS "liveLinkIds"`;
+      if (mp.legacyStatus === "PAID" || mp.legacyStatus === "AUTHORIZED" || row.paymentStatus === "AUTHORIZED" || mp.paidOnline) {
+        return { kind: "forbidden" as const, error: ONLINE_COLLECT_COPY.mercadoPagoLocked };
       }
+      // En proceso: solo frena MARCAR (cobrar a mano mientras MP retiene un pago es cobrar dos veces si se acredita).
+      // Desmarcar un cobro a mano no agrega plata: no se frena.
+      if (mp.inFlight && toggle.mark.paid) {
+        return { kind: "forbidden" as const, error: ONLINE_COLLECT_COPY.mercadoPagoInFlight };
+      }
+      online = { depositCents: mp.depositPaidCents, liveLinkIds: mp.liveLinkIds };
     }
     // Q8 (C5, cierra parcialmente AUDIT:940): un turno fuera de plan sin copago
     // propio (`copagoCents` null) se COBRA por el copago resuelto en lectura
@@ -1937,6 +2002,10 @@ async function toggleBilling(
       };
     }
     const now = new Date();
+    // T5 (§25.8): con seña, «Pagado» cobra lo que falta (copago − señas, `copagoRemainingCents`); el copago congelado
+    // sigue siendo el TOTAL (la seña no lo reescribe) y el audit lleva la seña que la recepción vio al cobrar. Solo
+    // con seña: sin ella el payload queda igual que antes de T5 (`method` + `copagoCents`).
+    const depositPayload = online && online.depositCents > 0 ? { depositCents: online.depositCents } : {};
     let write: Prisma.BookingUpdateManyMutationInput;
     let action: string;
     let payload: Record<string, unknown> | undefined;
@@ -1961,7 +2030,7 @@ async function toggleBilling(
         payload = { from: row.copagoPaymentMethod, to: method };
       } else {
         action = "booking.copago_paid";
-        payload = { method, copagoCents: frozen?.copagoCents ?? row.copagoCents };
+        payload = { method, copagoCents: frozen?.copagoCents ?? row.copagoCents, ...depositPayload };
       }
     } else if (toggle.mark.paid) {
       // S14r (M3a) + T3 (M12): PAID, cuándo, cómo y quién, en el MISMO `updateMany` con CAS (o todo o nada; los
@@ -1969,7 +2038,7 @@ async function toggleBilling(
       method = toggle.mark.method;
       action = "booking.copago_paid";
       write = { paymentStatus: "PAID", copagoPaidAt: now, copagoPaymentMethod: method, copagoCollectedById: actor.userId };
-      payload = { method, copagoCents: frozen?.copagoCents ?? row.copagoCents };
+      payload = { method, copagoCents: frozen?.copagoCents ?? row.copagoCents, ...depositPayload };
     } else {
       // Desmarcar limpia todo: el cobro deja de contar en el período y no queda un medio ni un cobrador de un cobro
       // que no existe (los CHECK de M12 tampoco lo admiten con UNPAID).
@@ -1983,6 +2052,19 @@ async function toggleBilling(
       data: { ...write, ...(frozen ?? {}) },
     });
     if (res.count === 0) return { kind: "stale" as const };
+    // T5 (C-TP10): cobrar a mano anula los links vivos del turno (si no, el paciente podía pagar por MP lo que ya pagó
+    // en el mostrador). +1 sentencia SOLO si hay links (techo 11 → 12). Después del CAS: un stale no anula nada. Las
+    // preferencias se vencen DESPUÉS del commit (best effort: si MP falla, el guard y el consumidor igual rechazan).
+    let cancelledLinkIds: string[] = [];
+    if (toggle.side === "copago" && toggle.mark.paid && online && online.liveLinkIds.length > 0) {
+      const c = await cancelLiveLinksForBookingInTx(tx, {
+        tenantId: actor.tenantId,
+        bookingId: id,
+        reason: "collected",
+        byUserId: actor.userId ?? null,
+      });
+      cancelledLinkIds = c.cancelledChargeIds;
+    }
     const after = await tx.booking.findFirst({
       where: { id, tenantId: actor.tenantId },
       select: { updatedAt: true },
@@ -2002,7 +2084,15 @@ async function toggleBilling(
       entityId: id,
       ...(payload ? { payload } : {}),
     });
-    return { kind: "ok" as const, patientId: row.patientId, updatedAt: after!.updatedAt, method, refs, notice: sync?.notice ?? null };
+    return {
+      kind: "ok" as const,
+      patientId: row.patientId,
+      updatedAt: after!.updatedAt,
+      method,
+      refs,
+      notice: sync?.notice ?? null,
+      cancelledLinkIds,
+    };
   }).catch((e) => {
     if (e instanceof BillingReplacementStale) return { kind: "stale" as const };
     throw e;
@@ -2012,6 +2102,16 @@ async function toggleBilling(
   if (outcome.kind === "forbidden") return { ok: false, error: outcome.error };
   if (outcome.patientId) revalidatePath(`/pacientes/${outcome.patientId}`);
   await afterBookingsCommitted(actor.tenantId, outcome.refs);
+  if (outcome.cancelledLinkIds.length > 0) {
+    // Best effort y nunca tira: el cobro a mano ya quedó; un link anulado no se acepta aunque MP lo cobre igual (el
+    // webhook lo registra y avisa, §25.6).
+    await expirePreferencesBestEffort(actor.tenantId, outcome.cancelledLinkIds).catch((err) =>
+      logger.warn("toggleBilling: no se pudieron vencer las preferencias de los links anulados", {
+        tenantId: actor.tenantId,
+        err: err instanceof Error ? err.message : String(err),
+      })
+    );
+  }
   return {
     ok: true,
     data: { updatedAt: outcome.updatedAt, method: outcome.method, ...(outcome.notice ? { notice: outcome.notice } : {}) },

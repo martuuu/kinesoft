@@ -236,3 +236,66 @@ describe("[AS-2o] obra social en el cable (`oi`)", () => {
     expect(agendaRowToDTO(rest as AgendaBookingRow)).toEqual(toBookingDTO(rest as AgendaBookingRow));
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [TP-2e] T5 (C-TP10, §25.8 «Agenda»): la plata online del turno viaja al final de `FIELDS` como `od` (seña, Σ PAID) y
+// `po` (pagado entero online), AUSENTES cuando son neutras: un turno sin plata online da el mismo DTO y el mismo cable
+// que antes de T5 (el fixture de volumen de `pf2-agenda-budget` no tiene cobros online → mismo payload).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("[TP-2e] plata online en el cable (`od`/`po`)", () => {
+  const withInsurers: AgendaWireCatalog = { ...catalog, insurers: [{ id: "ins_osde", name: "OSDE" }] };
+  const MONEY: Record<string, AgendaBookingRow> = {
+    sena: row({ onlineDepositCents: 6_000_00, paidOnline: false }),
+    pagadoOnline: row({ status: "COMPLETED", paymentStatus: "PAID", copagoPaymentMethod: "MERCADO_PAGO", paidOnline: true }),
+    senaYPagado: row({ onlineDepositCents: 2_000_00, paidOnline: true, paymentStatus: "PAID", copagoPaymentMethod: "MERCADO_PAGO" }),
+    conObraSocial: row({ onlineDepositCents: 1_500_00, insurerKey: "ins_osde" }),
+    todoDistinto: { ...ROWS.todoDistinto, onlineDepositCents: 1, paidOnline: true },
+  };
+
+  for (const [name, r] of Object.entries(MONEY)) {
+    it(`[TP-2e] Wire \`od\`/\`po\` ida y vuelta; el fixture de \`pf2-agenda-budget\` no cambia. (${name})`, () => {
+      const dto = agendaRowToDTO(r);
+      // Con el catálogo de obras sociales el DTO tiene que traer `insurerKey` (si no, el decodificador la deriva:
+      // contrato de AS-2o, no de T5): ese catálogo solo para las filas que la traen.
+      for (const cat of r.insurerKey === undefined ? [catalog] : [catalog, withInsurers]) {
+        const [w] = encodeAgendaWire([dto], cat);
+        expect(Object.keys(w)).not.toContain("onlineDepositCents");
+        expect(Object.keys(w)).not.toContain("paidOnline");
+        const [back] = decodeAgendaWire([w], cat);
+        // Mismo JSON y mismo orden de claves, con y sin catálogo de obras sociales (sin él, `insurerKey` viaja con su
+        // nombre completo y vuelve igual: contrato de AS-2o).
+        expect(JSON.stringify(back)).toBe(JSON.stringify(dto));
+        expect((back as { onlineDepositCents?: number }).onlineDepositCents).toBe(r.onlineDepositCents && r.onlineDepositCents > 0 ? r.onlineDepositCents : undefined);
+        expect((back as { paidOnline?: boolean }).paidOnline).toBe(r.paidOnline ? true : undefined);
+      }
+    });
+  }
+
+  it("[TP-2e] `od` y `po` van al final del turno, después de las claves de siempre, y solo en las filas afectadas", () => {
+    const [w] = encodeAgendaWire([agendaRowToDTO(MONEY.senaYPagado)], catalog);
+    expect(Object.keys(w).slice(-2)).toEqual(["od", "po"]);
+    expect(w.od).toBe(2_000_00);
+    expect(w.po).toBe(true);
+    // Con `insurerKey` el orden del DTO es: … od, po, insurerKey (como lo rearma el decodificador).
+    expect(Object.keys(agendaRowToDTO(MONEY.conObraSocial)).slice(-2)).toEqual(["onlineDepositCents", "insurerKey"]);
+  });
+
+  it("[TP-2e] sin plata online (0 / false / ausente) el DTO y el cable son los de antes de T5, byte a byte", () => {
+    for (const r of [ROWS.neutro, row({ onlineDepositCents: 0, paidOnline: false }), ROWS.todoDistinto]) {
+      const dto = agendaRowToDTO(r);
+      expect("onlineDepositCents" in dto).toBe(false);
+      expect("paidOnline" in dto).toBe(false);
+      const { onlineDepositCents: _a, paidOnline: _b, ...before } = r;
+      expect(JSON.stringify(encodeAgendaWire([dto], catalog))).toBe(
+        JSON.stringify(encodeAgendaWire([toBookingDTO(before as AgendaBookingRow)], catalog))
+      );
+    }
+  });
+
+  it("[TP-2e] una seña inválida (negativa o no entera) no viaja: no es una seña", () => {
+    for (const bad of [-100, 1.5, Number.NaN]) {
+      const dto = agendaRowToDTO(row({ onlineDepositCents: bad }));
+      expect("onlineDepositCents" in dto).toBe(false);
+    }
+  });
+});

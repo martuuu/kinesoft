@@ -224,6 +224,18 @@ export type AgendaBookingRow = BookingRow & {
    * cuenta). Ausente = el server no la mandó (nunca se esconde). Opcional hasta T3e-2o.
    */
   insurerKey?: string | null;
+  /**
+   * T5 (C-TP10): Σ de las señas PAID del turno (`Booking.onlineDepositCents`, la escribe SOLO el trigger de M18).
+   * Escalar en la misma sentencia de `listAgendaBookings` (0 sentencias). Cable `od`, omitido si es 0. Opcional para
+   * los productores de filas que no lo proyectan (el cable lo normaliza a 0).
+   */
+  onlineDepositCents?: number;
+  /**
+   * T5 (C-TP10): el turno se pagó entero por un cobro online: PAID con medio `MERCADO_PAGO` y SIN quién cobró (el
+   * webhook nuevo nunca lo lleva; un cobro a mano siempre, desde M12). Derivado de escalares de la misma sentencia.
+   * Cable `po`, omitido si es false.
+   */
+  paidOnline?: boolean;
 } & AgendaPlanFields;
 
 /**
@@ -266,6 +278,13 @@ export type AgendaPlanFields = {
 
 /** Tope del rango de `listAgendaBookings` (una vista de mes + márgenes). */
 export const AGENDA_BOOKINGS_MAX_DAYS = 62;
+
+/**
+ * T5 (§25.8): cambiar el paciente de un turno con cobros online. La FK compuesta `OnlineCharge_booking_tenant_patient_fkey`
+ * (turno, tenant, paciente) lo frenaría con un 23503 (500): el cobro es del paciente de ESE turno y nunca se borra.
+ * Mismo molde que `BOOKING_CLINICAL_NOTE_PATIENT_ERROR`.
+ */
+export const BOOKING_ONLINE_CHARGE_PATIENT_ERROR = "Este turno tiene un cobro online: no se puede cambiar el paciente.";
 /** Tope de profesionales en el filtro (la agenda multi-prof muestra ≤ ~12). */
 export const AGENDA_BOOKINGS_MAX_PRACTITIONERS = 50;
 
