@@ -42,7 +42,7 @@ import { HC_PDF_MAX_BYTES, renderHcPdf } from "@/lib/hc-pdf/render-internal";
 import { finalizeHcPrintable, loadHcPrintSourceInTx } from "@/lib/hc-print-internal";
 import { buildHcPrintableContent, type HcPrintSource } from "@/lib/hc-print-model";
 import type { HcPrintableV1 } from "@/lib/hc-print-types";
-import { deliverPatientDocument } from "@/lib/patient-documents-delivery-internal";
+import { deliverPatientDocument, PATIENT_NOTIFY_RATE_LIMIT, patientNotifyRateKey } from "@/lib/patient-documents-delivery-internal";
 import {
   PATIENT_DOCUMENTS_BUCKET,
   SHARED_DOCUMENT_SELECT,
@@ -136,7 +136,6 @@ export async function getPatientPortalShareInfo(input: {
 /** T4Z-M2: envíos por usuario (cualquier ficha, cualquier paciente). Ver la cabecera. */
 const SHARE_RATE_LIMIT = { limit: 30, windowMs: 10 * 60_000 } as const;
 /** T4Z-M2: avisos por mail por paciente. Pasado el tope se comparte igual, sin mail. */
-const NOTIFY_RATE_LIMIT = { limit: 3, windowMs: 60 * 60_000 } as const;
 
 /** Mismo formato que la clave de `PatientDocument_idempotencyKey_check` (8..100); el cliente manda un UUID. */
 const KEY_RE = /^[A-Za-z0-9_-]{8,100}$/;
@@ -330,7 +329,7 @@ async function shareImpl(input: { noteId: string; idempotencyKey: string; notify
     let delivery: DocumentDeliveryOutcome | null = null;
     // T4Z-M2: el tope de avisos es por PACIENTE (el buzón que se protege), se cuenta solo cuando se pidió avisar y
     // después del commit: el documento ya está compartido y el paciente lo ve en su portal aunque no llegue el mail.
-    const notifyAllowed = notify && (await rateLimit(`patient-document:notify:patient:${result.patientId}`, NOTIFY_RATE_LIMIT)).ok;
+    const notifyAllowed = notify && (await rateLimit(patientNotifyRateKey(result.patientId), PATIENT_NOTIFY_RATE_LIMIT)).ok;
     if (notify && !notifyAllowed) {
       logger.info("patientDocument.notify_capped", { tenantId, documentId: result.data.document.id });
       delivery = { channel: "email", status: "skipped" };

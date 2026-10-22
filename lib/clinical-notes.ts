@@ -70,6 +70,7 @@ import {
   type EditClinicalNoteInput,
   type VoidClinicalNoteInput,
 } from "@/lib/clinical-notes-types";
+import { deliverPatientDocumentRevoked } from "@/lib/patient-documents-delivery-internal";
 import { withReadOnlyResult } from "@/lib/read-only-result";
 import { runWithRls, type DbClient } from "@/lib/rls";
 import { ForbiddenError, getActor, requireActorPractitionerId, type Actor } from "@/lib/session";
@@ -443,8 +444,11 @@ async function voidImpl(input: VoidClinicalNoteInput): Promise<ActionResult<{ no
     const p = parsed.data;
     const tenantId = actor.tenantId;
     const now = new Date();
-    /** ¿Esta anulación sacó un documento del portal del paciente? (para revalidar el portal solo entonces) */
-    let revokedShared = false;
+    /**
+     * Documento que esta anulación sacó del portal del paciente: para revalidar el portal solo entonces y, T4-Y, para
+     * avisarle al paciente después del commit. A lo sumo uno (índice parcial «un vivo por ficha» de M14).
+     */
+    let revokedDocumentId: string | null = null;
 
     const result = await runWithRls(tenantId, async (tx): Promise<Fail | Ok<{ note: ClinicalNoteDTO }>> => {
       const note = await tx.clinicalNote.findFirst({
@@ -489,16 +493,18 @@ async function voidImpl(input: VoidClinicalNoteInput): Promise<ActionResult<{ no
       // revoca en la misma tx con el reloj y el autor de la anulación, como hace el trigger de M14 con una raíz
       // (`revokedAt = voidedAt`). Para volver a mostrarle la ficha, se comparte de nuevo (ya sin la enmienda anulada).
       if (row.amendsNoteId) {
-        const revoked = await tx.patientDocument.updateMany({
+        await tx.patientDocument.updateMany({
           where: { tenantId, noteId: row.amendsNoteId, revokedAt: null },
           data: { revokedAt: now, revokedByUserId: actor.userId, revokeReason: "NOTE_VOIDED" },
         });
-        revokedShared = revoked.count > 0;
-      } else {
-        // Raíz: lo revocó el trigger en el mismo UPDATE, con `revokedAt = voidedAt` (= `now`).
-        revokedShared =
-          (await tx.patientDocument.count({ where: { tenantId, noteId: row.id, revokeReason: "NOTE_VOIDED", revokedAt: now } })) > 0;
       }
+      // Raíz: lo revocó el trigger en el mismo UPDATE, con `revokedAt = voidedAt` (= `now`); enmienda: el updateMany de
+      // arriba, con el mismo `now`. El reloj exacto separa lo que revocó ESTA anulación de un NOTE_VOIDED anterior.
+      const revoked = await tx.patientDocument.findFirst({
+        where: { tenantId, noteId: row.amendsNoteId ?? row.id, revokeReason: "NOTE_VOIDED", revokedAt: now },
+        select: { id: true },
+      });
+      revokedDocumentId = revoked?.id ?? null;
       // Sin el motivo (EV2-D16): puede contener texto clínico.
       await auditInTx(tx, {
         tenantId,
@@ -513,7 +519,12 @@ async function voidImpl(input: VoidClinicalNoteInput): Promise<ActionResult<{ no
     if (result.ok) {
       revalidateNote(result.data.note, { rootLiveChanged: true });
       // Anular (raíz por trigger, enmienda acá) sacó un documento del portal del paciente.
-      if (revokedShared) revalidatePath(`/portal/c/${actor.tenantSlug}/documentos`);
+      if (revokedDocumentId) {
+        revalidatePath(`/portal/c/${actor.tenantSlug}/documentos`);
+        // T4-Y (decisión de Martin 22-oct): sin aviso, el documento desaparecía del portal sin explicación. Mail sin
+        // nada clínico (ni el motivo), ≤5 s y nunca tira: la anulación ya está commiteada y responde ok igual.
+        await deliverPatientDocumentRevoked({ tenantId, documentId: revokedDocumentId, actorUserId: actor.userId });
+      }
     }
     return result;
   } catch (e) {

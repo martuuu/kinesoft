@@ -42,7 +42,11 @@ export type EmailKind =
   | "lead_reply" // al lead: respuesta de Plataforma (sin respuesta automática, PL-D15)
   // FC-2d (T4, §24.5): al paciente con portal vinculado, «tenés un documento nuevo». SIN título ni contenido clínico:
   // el mail lo puede leer cualquiera con acceso al buzón; lo clínico se ve solo dentro del portal, con sesión.
-  | "portal_document";
+  | "portal_document"
+  // T4-Y (T5a, decisión de Martin 22-oct): al mismo paciente, «un documento que te compartieron ya no está porque fue
+  // modificado; pedilo de nuevo». Sale cuando anular una ficha (raíz o enmienda) revoca su documento compartido. Mismas
+  // reglas que `portal_document`: sin título, sin motivo de anulación, sin nada clínico.
+  | "portal_document_revoked";
 
 /**
  * Por dónde salió (o no) un mail:

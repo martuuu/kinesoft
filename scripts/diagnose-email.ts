@@ -47,6 +47,7 @@ import {
   portalInviteEmail,
   portalMagicLinkEmail,
   portalDocumentEmail,
+  portalDocumentRevokedEmail,
   emailVerificationEmail,
   passwordResetEmail,
   adminPasswordResetEmail,
@@ -103,6 +104,8 @@ function samples(base: string): Record<DiagnosableKind, () => RenderedEmail> {
     portal_magic_link: () => portalMagicLinkEmail({ tenantName: TENANT, url: link("/portal") }),
     // T4 FC-2d: aviso de documento compartido (sin datos clínicos en el cuerpo).
     portal_document: () => portalDocumentEmail({ tenantName: TENANT, url: link("/portal"), replaced: false }),
+    // T4-Y: aviso de documento revocado por una anulación (tampoco lleva nada clínico).
+    portal_document_revoked: () => portalDocumentRevokedEmail({ tenantName: TENANT, url: link("/portal") }),
     email_verification: () => emailVerificationEmail({ url: link("/onboarding") }),
     password_reset: () => passwordResetEmail({ url: link("/reset") }),
     admin_password_reset: () => adminPasswordResetEmail({ tenantName: TENANT, url: link("/reset") }),

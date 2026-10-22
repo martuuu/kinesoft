@@ -724,3 +724,33 @@ export function portalDocumentEmail(p: { tenantName: string; url: string; replac
     ],
   });
 }
+
+/**
+ * T4-Y (T5a, decisión de Martin 22-oct: «Estaría bueno que se le avise al paciente que la ficha fue modificada y que
+ * debe solicitarla nuevamente»): anular una ficha compartida (la raíz, o una enmienda que iba en el documento de su
+ * raíz, T4Z-M1) revoca el documento y el paciente deja de verlo en el portal sin explicación. Este aviso se lo dice.
+ *
+ * Mismas reglas que `portalDocumentEmail`: la firma recibe solo consultorio y URL. Ni el título, ni la fecha, ni el
+ * profesional y sobre todo **ni el motivo de anulación**, que es texto libre del profesional y puede ser clínico
+ * («paciente equivocado», «diagnóstico erróneo»). «Fue modificado» es deliberadamente vago: no dice «anulada».
+ * El CTA va a Documentos: si el consultorio lo vuelve a compartir, aparece ahí.
+ */
+export function portalDocumentRevokedEmail(p: { tenantName: string; url: string }): RenderedEmail {
+  const tenant = plain(p.tenantName);
+  const lead = `Un documento que ${tenant} había compartido con vos ya no está disponible porque fue modificado.`;
+  const leadHtml = `Un documento que ${strong(tenant)} había compartido con vos ya no está disponible porque fue modificado.`;
+  const second = "Si lo necesitás, pedíselo nuevamente al consultorio.";
+  return compose({
+    subject: `${tenant} actualizó un documento de tu portal`,
+    preheader: "Un documento de tu portal ya no está disponible.",
+    context: tenant,
+    title: "Documento no disponible",
+    paragraphs: [lead, second],
+    htmlParagraphs: [leadHtml, escapeHtml(second)],
+    ctas: [{ label: "Ir a mis documentos", url: p.url }],
+    footer: [
+      "Por tu privacidad, este mail no incluye el contenido del documento.",
+      `Te llegó este mail porque tenés un portal de paciente en ${tenant}.`,
+    ],
+  });
+}

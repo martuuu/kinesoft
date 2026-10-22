@@ -11,6 +11,7 @@
  *   - M-1: anular (una raíz por trigger, una enmienda en la action) revoca lo compartido con el paciente. Si la ficha
  *     está compartida, el diálogo lo dice ANTES de confirmar. Una enmienda no trae `sharedDocument` (solo las raíces):
  *     quien abre el diálogo pasa `sharedWithPatient` con el estado de la raíz.
+ *   - T4-Y: el aviso también dice que al paciente le llega un mail (sin contenido ni motivo) para pedirla de nuevo.
  *   - Mientras guarda, Esc y la X no cierran: cerrar en el medio dejaba la anulación corriendo sin que nadie viera el
  *     resultado (ni el `stale` ni el error).
  */
@@ -28,11 +29,16 @@ import {
 import { voidClinicalNote } from "@/lib/clinical-notes";
 import { CLINICAL_NOTE_KIND_LABEL, type ClinicalNoteDTO } from "@/lib/clinical-notes-types";
 
-/** T4Z-M1: aviso de revocación (copy local: el de la UI de notas es de otra sesión). */
+/**
+ * T4Z-M1: aviso de revocación (copy local: el de la UI de notas es de otra sesión). T4-Y: suma que al paciente le llega
+ * un mail (`portal_document_revoked`). «Si tiene el portal vinculado» porque el diálogo no sabe si lo tiene y el mail va
+ * solo a esa cuenta; «sin el contenido ni el motivo» para que quien anula sepa que lo que escribe abajo no le llega.
+ */
 export const VOID_SHARED_NOTICE = {
   root: "Esta ficha está compartida con el paciente: al anularla, deja de verla en su portal.",
   amendment:
     "Esta enmienda va en el documento compartido con el paciente: al anularla, deja de verlo en su portal. Para que vea la ficha sin la enmienda, compartila de nuevo.",
+  mail: "Si tiene el portal vinculado, le avisamos por mail (sin el contenido ni el motivo) que el documento ya no está y que lo puede pedir de nuevo.",
 } as const;
 
 export function VoidNoteDialog({
@@ -128,7 +134,7 @@ export function VoidNoteForm({
             color: "var(--navy-700)",
           }}
         >
-          {isAmendment ? VOID_SHARED_NOTICE.amendment : VOID_SHARED_NOTICE.root}
+          {isAmendment ? VOID_SHARED_NOTICE.amendment : VOID_SHARED_NOTICE.root} {VOID_SHARED_NOTICE.mail}
         </p>
       )}
       <div>

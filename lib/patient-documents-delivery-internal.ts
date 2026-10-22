@@ -11,12 +11,13 @@ import "server-only";
  */
 import "@/lib/email/log";
 import { sendEmail } from "@/lib/email";
-import { portalDocumentEmail } from "@/lib/email/templates";
+import { portalDocumentEmail, portalDocumentRevokedEmail } from "@/lib/email/templates";
 import { env } from "@/lib/env";
 import { HC_PDF_MAX_BYTES } from "@/lib/hc-pdf/render-internal";
 import { logger } from "@/lib/logger";
 import { PATIENT_DOCUMENTS_BUCKET, patientDocumentPdfKey, sha256OfBytes } from "@/lib/patient-documents-internal";
 import type { DocumentDeliveryChannel, DocumentDeliveryOutcome } from "@/lib/patient-documents-types";
+import { rateLimit } from "@/lib/rate-limit";
 import { runWithRls } from "@/lib/rls";
 import { isStorageConfigured, storageDownload } from "@/lib/storage-internal";
 
@@ -98,6 +99,94 @@ async function deliverEmail(input: {
   });
   if (r.ok) return { channel, status: "sent" };
   // `skipped` = el ENTORNO no manda (Preview, dev, Production sin key): no es una falla del proveedor.
+  return { channel, status: !r.ok && r.skipped ? "skipped" : "failed" };
+}
+
+// ── T4-Y: aviso de documento revocado por una anulación ──────────────────────────────────────────────────────
+
+/**
+ * Tope de avisos por PACIENTE (T4Z-M2): el buzón que se protege es el del paciente, así que el aviso de revocado
+ * consume el MISMO cupo que el de compartir (`lib/patient-documents.ts`, 3 / h). Clave y tope tienen que coincidir con
+ * los de compartir: si divergen, un profesional que comparte y anula en loop le manda 6 mails por hora en vez de 3.
+ */
+export const PATIENT_NOTIFY_RATE_LIMIT = { limit: 3, windowMs: 60 * 60_000 } as const;
+export const patientNotifyRateKey = (patientId: string) => `patient-document:notify:patient:${patientId}`;
+
+/**
+ * T4-Y (T5a, decisión de Martin 22-oct: «Estaría bueno que se le avise al paciente que la ficha fue modificada y que
+ * debe solicitarla nuevamente»). Lo llama `voidClinicalNote` DESPUÉS del commit, solo si la anulación revocó un
+ * documento (`NOTE_VOIDED`: la raíz por el trigger de M14, o la raíz al anular una enmienda, T4Z-M1).
+ *
+ * Mismo contrato que `deliverPatientDocument`: nunca tira, ≤ `DELIVERY_TIMEOUT_MS`, solo al email de la cuenta del
+ * portal vinculada (nunca `Patient.email`), y respeta el tope por paciente. La anulación ya está commiteada: un Resend
+ * caído no la puede convertir en error.
+ */
+export async function deliverPatientDocumentRevoked(input: {
+  tenantId: string;
+  documentId: string;
+  actorUserId: string;
+}): Promise<DocumentDeliveryOutcome> {
+  const channel = "email" as const;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<DocumentDeliveryOutcome>((resolve) => {
+    timer = setTimeout(() => {
+      logger.warn("patientDocument.revoked_notice_timeout", { tenantId: input.tenantId, documentId: input.documentId });
+      resolve({ channel, status: "failed" });
+    }, DELIVERY_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([deliverRevokedEmail(input), timeout]);
+  } catch (e) {
+    logger.warn("patientDocument.revoked_notice_failed", {
+      tenantId: input.tenantId,
+      documentId: input.documentId,
+      error: e instanceof Error ? e.name : "unknown",
+    });
+    return { channel, status: "failed" };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function deliverRevokedEmail(input: { tenantId: string; documentId: string; actorUserId: string }): Promise<DocumentDeliveryOutcome> {
+  const channel = "email" as const;
+  const doc = await runWithRls(input.tenantId, (tx) =>
+    tx.patientDocument.findFirst({
+      where: { id: input.documentId, tenantId: input.tenantId },
+      select: {
+        patientId: true,
+        revokedAt: true,
+        revokeReason: true,
+        patient: { select: { userId: true, user: { select: { email: true, disabledAt: true } } } },
+        tenant: { select: { name: true, slug: true, publicEmail: true } },
+      },
+    }),
+  );
+  // Solo lo que sacó una anulación: un `REPLACED` ya lo avisa el mail de «actualizó» y un `MANUAL` es una decisión del
+  // profesional de dejar de compartir, no «fue modificado».
+  if (!doc || !doc.revokedAt || doc.revokeReason !== "NOTE_VOIDED") return { channel, status: "skipped" };
+  if (!doc.patient.userId || !doc.patient.user) return { channel, status: "no-portal-user" };
+  if (doc.patient.user.disabledAt) return { channel, status: "skipped" };
+  // El cupo se cuenta recién acá, cuando de verdad se va a mandar: sin portal no gasta el de un compartir posterior.
+  if (!(await rateLimit(patientNotifyRateKey(doc.patientId), PATIENT_NOTIFY_RATE_LIMIT)).ok) {
+    logger.info("patientDocument.revoked_notice_capped", { tenantId: input.tenantId, documentId: input.documentId });
+    return { channel, status: "skipped" };
+  }
+
+  const appUrl = env.NEXT_PUBLIC_APP_URL.replace(/\/+$/, "");
+  const url = `${appUrl}/portal/c/${encodeURIComponent(doc.tenant.slug)}/documentos`;
+  const r = await sendEmail({
+    ...portalDocumentRevokedEmail({ tenantName: doc.tenant.name, url }),
+    kind: "portal_document_revoked",
+    to: doc.patient.user.email,
+    tenantId: input.tenantId,
+    entity: "PatientDocument",
+    entityId: input.documentId,
+    fromName: doc.tenant.name,
+    replyTo: doc.tenant.publicEmail || null,
+    actorId: input.actorUserId,
+  });
+  if (r.ok) return { channel, status: "sent" };
   return { channel, status: !r.ok && r.skipped ? "skipped" : "failed" };
 }
 
