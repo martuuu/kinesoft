@@ -144,7 +144,7 @@ describe.skipIf(!RUN)("TP-1 · listPublicSlotWindow (turnero real)", () => {
         dateOfBirth: "1990-05-10",
       },
     });
-    expect(res).toMatchObject({ ok: true, data: { next: "reserved", initPoint: null } });
+    expect(res).toMatchObject({ ok: true, data: { next: "reserved", initPoint: null, amountCents: null } });
     const after = await call({ from: W2 });
     expect(after.days[0].slots.map((s) => s.iso)).not.toContain(slot.iso);
     expect(after.days[0].slots).toHaveLength(SLOT_TIMES.length - 1);

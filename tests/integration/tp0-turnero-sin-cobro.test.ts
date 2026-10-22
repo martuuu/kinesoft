@@ -130,7 +130,7 @@ describe.skipIf(!RUN)("TP-0 · turnero sin cobro online", () => {
     process.env.TURNERO_CHECKOUT = "platform";
     const slot = await freeSlot(freeId);
     const r = await submitPublicBooking(input("40111222", { slot, serviceId: freeId }));
-    expect(r).toEqual({ ok: true, data: { bookingId: expect.any(String), next: "reserved", initPoint: null } });
+    expect(r).toEqual({ ok: true, data: { bookingId: expect.any(String), next: "reserved", initPoint: null, amountCents: null } });
     if (!r.ok) return;
     const b = await db.booking.findUniqueOrThrow({ where: { id: r.data.bookingId }, include: { payment: true } });
     expect(b.status).toBe("CONFIRMED");
@@ -154,7 +154,7 @@ describe.skipIf(!RUN)("TP-0 · turnero sin cobro online", () => {
     const key = randomUUID();
     const req = input("40222111", { slot: await freeSlot(pricedId), serviceId: pricedId, key });
     const r1 = await submitPublicBooking(req);
-    expect(r1).toEqual({ ok: true, data: { bookingId: expect.any(String), next: "reserved", initPoint: null } });
+    expect(r1).toEqual({ ok: true, data: { bookingId: expect.any(String), next: "reserved", initPoint: null, amountCents: null } });
     if (!r1.ok) return;
     const b1 = await db.booking.findUniqueOrThrow({ where: { id: r1.data.bookingId }, include: { payment: true } });
     expect([b1.status, b1.paymentStatus, b1.payment]).toEqual(["CONFIRMED", "UNPAID", null]);
@@ -164,7 +164,7 @@ describe.skipIf(!RUN)("TP-0 · turnero sin cobro online", () => {
     expect(rt).toBe(1);
 
     const r2 = await submitPublicBooking(req);
-    expect(r2).toEqual({ ok: true, data: { bookingId: b1.id, next: "reserved", initPoint: null } });
+    expect(r2).toEqual({ ok: true, data: { bookingId: b1.id, next: "reserved", initPoint: null, amountCents: null } });
     const b2 = await db.booking.findUniqueOrThrow({ where: { id: b1.id } });
     expect(b2.updatedAt.getTime()).toBe(b1.updatedAt.getTime());
     expect(await reservedNotifs()).toBe(notifs);
@@ -183,7 +183,7 @@ describe.skipIf(!RUN)("TP-0 · turnero sin cobro online", () => {
     const key = randomUUID();
     const req = input("40333111", { slot: await freeSlot(pricedId), serviceId: pricedId, key });
     const r = await submitPublicBooking(req);
-    expect(r).toEqual({ ok: true, data: { bookingId: expect.any(String), next: "reserved", initPoint: null } });
+    expect(r).toEqual({ ok: true, data: { bookingId: expect.any(String), next: "reserved", initPoint: null, amountCents: null } });
     if (!r.ok) return;
     expect(mp.calls).toEqual([r.data.bookingId]);
     expect(warn).toHaveBeenCalledWith(
@@ -202,7 +202,7 @@ describe.skipIf(!RUN)("TP-0 · turnero sin cobro online", () => {
     // Replay con MP todavía caído: el mismo turno, sin preferencia nueva ni aviso.
     mp.calls = [];
     const r2 = await submitPublicBooking(req);
-    expect(r2).toEqual({ ok: true, data: { bookingId: b.id, next: "reserved", initPoint: null } });
+    expect(r2).toEqual({ ok: true, data: { bookingId: b.id, next: "reserved", initPoint: null, amountCents: null } });
     expect(mp.calls).toEqual([]);
     expect(await reservedNotifs()).toBe(notifs);
   });
@@ -221,7 +221,7 @@ describe.skipIf(!RUN)("TP-0 · turnero sin cobro online", () => {
     // Se apaga el checkout y el paciente reintenta con la misma key: se promueve.
     delete process.env.TURNERO_CHECKOUT;
     const r1 = await submitPublicBooking(req);
-    expect(r1).toEqual({ ok: true, data: { bookingId: r0.data.bookingId, next: "reserved", initPoint: null } });
+    expect(r1).toEqual({ ok: true, data: { bookingId: r0.data.bookingId, next: "reserved", initPoint: null, amountCents: null } });
     const b1 = await db.booking.findUniqueOrThrow({ where: { id: r0.data.bookingId } });
     expect([b1.status, b1.paymentStatus]).toEqual(["CONFIRMED", "UNPAID"]);
     const afterPromotion = await reservedNotifs();
@@ -229,7 +229,7 @@ describe.skipIf(!RUN)("TP-0 · turnero sin cobro online", () => {
 
     // Una sola vez: el siguiente replay no escribe ni avisa.
     const r2 = await submitPublicBooking(req);
-    expect(r2).toEqual({ ok: true, data: { bookingId: b1.id, next: "reserved", initPoint: null } });
+    expect(r2).toEqual({ ok: true, data: { bookingId: b1.id, next: "reserved", initPoint: null, amountCents: null } });
     expect((await db.booking.findUniqueOrThrow({ where: { id: b1.id } })).updatedAt.getTime()).toBe(b1.updatedAt.getTime());
     expect(await reservedNotifs()).toBe(afterPromotion);
 

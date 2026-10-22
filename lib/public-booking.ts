@@ -905,7 +905,7 @@ export async function submitPublicBooking(
     });
   const reserved = (): ActionResult<SubmitPublicBookingResult> => {
     logDone("reserved");
-    return { ok: true, data: { bookingId, next: "reserved", initPoint: null } };
+    return { ok: true, data: { bookingId, next: "reserved", initPoint: null, amountCents: null } };
   };
 
   // ── Ya reservado (alta CONFIRMED de esta llamada, o replay/twin que ya no está PENDING: lo promovió otro submit, lo
@@ -934,7 +934,7 @@ export async function submitPublicBooking(
         payer: { email: data.patient.email, name: data.patient.firstName },
       });
       logDone("checkout");
-      return { ok: true, data: { bookingId, next: "checkout", initPoint: pref.initPoint } };
+      return { ok: true, data: { bookingId, next: "checkout", initPoint: pref.initPoint, amountCents: checkout.amountCents } };
     } catch (e) {
       // Antes: el turno quedaba PENDING 30 min y cada reintento volvía a fallar (H-TP0). Ahora se degrada a reservado
       // (promoción de abajo): el consultorio no eligió el pago obligatorio. warn, no error: es un camino previsto.

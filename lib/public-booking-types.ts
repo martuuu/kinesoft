@@ -5,6 +5,8 @@
  */
 import { z } from "zod";
 import type { TenantVertical } from "@prisma/client";
+import type { ChargeStatus } from "@/lib/online-charge-logic";
+import type { PaymentPolicyInput } from "@/lib/booking-payment-policy-types";
 
 /**
  * Lo que ve el wizard público (`getPublicClinic`). Desde B3.2 (motor de
@@ -76,6 +78,25 @@ export type PublicClinic = {
    * consultorio». Lo decide el server en cada submit (`decidePublicCheckout`): esto es solo para el copy.
    */
   onlineCheckout?: boolean;
+  /**
+   * T5 (C-TP8, literal; TP-K1): cobro online del turnero con la cuenta del vendedor. null/ausente = sin cobro online
+   * (política OFF, `MP_CONNECT_MODE=off` o ningún profesional con cuenta usable): «Confirmar turno» como TP-0.
+   * `practitionerIds`: profesionales con cuenta usable (la propia ACTIVE, o la del consultorio con `useClinicAccount`);
+   * para los demás el wizard no ofrece pagar. El wizard COTIZA con `priceCents` (`quoteOnlineCharge`); si el server
+   * cobra otro monto (copago de obra social), el interstitial lo muestra antes de ir a Mercado Pago (TP-UI-D6).
+   * Reemplaza a `onlineCheckout`, que TP-2c deja de llenar.
+   */
+  onlinePayment?: PublicClinicOnlinePayment | null;
+};
+
+/** C-TP8: `PublicClinic.onlinePayment`. Nunca trae montos de copago ni nada de la cuenta (es público). */
+export type PublicClinicOnlinePayment = {
+  mode: "OPTIONAL" | "REQUIRED";
+  chargeKind: PaymentPolicyInput["chargeKind"];
+  fixedCents: PaymentPolicyInput["fixedCents"];
+  percentBps: PaymentPolicyInput["percentBps"];
+  cancellationNote: PaymentPolicyInput["cancellationNote"];
+  practitionerIds: string[];
 };
 
 export type PublicLocation = {
@@ -176,17 +197,39 @@ export type PublicBookingStatus = {
   amountCents: number | null;
   /** TP-0: true si el turno pasó por el checkout (existe fila `Payment`). false = reservado sin cobro online. */
   onlinePayment?: boolean;
+  /**
+   * T5 (C-TP8, literal; TP-K1): el cobro online del turnero de este turno, si hay. `remainingCents` = lo que falta pagar
+   * en el consultorio (copago − seña; 0 con FULL pagado). Nunca «$ 0» pendiente: sin cobro, null/ausente.
+   * `receipt` solo con el cobro PAID/REFUNDED (`approvedAtLabel` en hora AR).
+   */
+  onlineCharge?: PublicBookingOnlineCharge | null;
+};
+
+/** C-TP8: `PublicBookingStatus.onlineCharge`. Endpoint sin auth: sin token, sin cuenta, sin datos del paciente. */
+export type PublicBookingOnlineCharge = {
+  kind: "FULL" | "DEPOSIT";
+  status: ChargeStatus;
+  amountCents: number;
+  remainingCents: number;
+  receipt: { operationId: string; approvedAtLabel: string; methodLabel: string } | null;
 };
 
 /**
- * Resultado de `submitPublicBooking` (contrato TP-0a ↔ TP-0b, plan §22.5, literal):
- *   - `next: "checkout"` → `initPoint` es el link de Checkout Pro; el wizard redirige.
- *   - `next: "reserved"` → turno CONFIRMED/UNPAID sin cobro online (`initPoint` null): «¡Turno reservado!».
+ * Resultado de `submitPublicBooking` (contrato TP-0a ↔ TP-0b, plan §22.5; ampliado por C-TP8 de T5, literal):
+ *   - `next: "checkout"` → `initPoint` es el link de Checkout Pro de la cuenta del vendedor; el wizard redirige
+ *     (con el interstitial si `amountCents` difiere de lo cotizado, TP-UI-D6).
+ *   - `next: "reserved"` → turno sin cobro online (`initPoint` null): «¡Turno reservado!».
+ *   - `amountCents`: lo que se cobra online (null sin cobro).
+ *   - `notice: "payment-unavailable"`: OPTIONAL con «Pagar ahora» y Mercado Pago caído → quedó reservado sin cobro
+ *     («No pudimos abrir Mercado Pago: lo pagás en el consultorio.»). REQUIRED con MP caído NO llega acá: es un error
+ *     y el reintento usa el mismo cobro (TP-D29).
  */
 export type SubmitPublicBookingResult = {
   bookingId: string;
   next: "checkout" | "reserved";
   initPoint: string | null;
+  amountCents: number | null;
+  notice?: "payment-unavailable";
 };
 
 export type PrefillPatient = {
@@ -242,6 +285,10 @@ export const SubmitSchema = z.object({
   serviceId: z.string().min(1).max(40),
   scheduledFor: z.string().min(1),
   patient: PatientHCSchema,
+  // T5 (C-TP8): elección del paciente en OPTIONAL («Pagar ahora con Mercado Pago» = true, «Reservar y pagar en el
+  // consultorio» = false). Sin preselección (TP-UI-D5): ausente con OPTIONAL = no eligió, y el server no cobra. Con
+  // REQUIRED se ignora (siempre cobra); con OFF también (nunca cobra).
+  payNow: z.boolean().optional(),
 });
 
 export type SubmitPublicBookingInput = z.infer<typeof SubmitSchema>;
