@@ -552,6 +552,37 @@ marca framer-motion / zod / @supabase / react-dom; `npm run perf:bundle:baseline
 y workspace ≤ 180 desde PF1-Z (16-oct, D-PF-B)**, cuando todas sus rutas entraron. Baseline regrabado en PF1-Z y en el
 cierre DIR-Z/MB-Z (16-oct, con el build de producción del gate).
 
+### T5 · cobros online (22-oct-2026, TP-2i / TP-3z / T5-Z)
+
+Medido con `next build` + `check-bundle-budget.mjs` en el gate de T5 (árbol sin `.env*`, regla de FC-4i). Techos de §25.11.
+
+| Ruta | Antes (cierre T4) | T5 | Tope de T5 |
+|---|---|---|---|
+| `/agenda` | 171,3 | **171,9** | ≤ 171,6 (cierre T4 + 0,3) — **excede 0,3** |
+| `/configuracion` | ~141,1 (TP-3a midió +0,4) | 141,6 | ≤ +0,5 |
+| `/sala` | 155,0 (T5d) | **155,4** | +0 — **excede 0,4** |
+| `/c/[slug]/booking` (turnero) | — (T5d: 115,4) | 114,1 | ≤ 115 (techo 135) |
+| `/pagar/[token]` (nueva, grupo public) | — | 98,7 | ≤ 120 |
+| `/cobros` (nueva) | — | 150,1 | ≤ 165 (techo 180) |
+| `/pacientes/[id]` | ~173 | 173,7 | ≤ 175 |
+
+- **El exceso de `/agenda` y `/sala`** viene de T5e aprobado (badge «Seña» / «Pagado MP» en la card, Lista y Semana;
+  sección de plata del drawer diferida; la Sala con la seña real). En T5d la agenda estaba en 171,4 con 0,2 de margen y
+  cada chunk diferido nuevo suma ~20 B al runtime de todas las rutas. **Recomendación:** subir el tope a lo medido
+  (decide Martin, AUDIT `t5-bundle-agenda-sala`). Pendiente de PF: `tenant-modules-context` duplicado en 3 chunks de
+  `/agenda`; `components/ui/button.tsx` importa `next/link` por `ButtonLink` (moverlo a su módulo ahorraría ~8 kB en las
+  rutas que usan `Button`).
+- **Fuera del first load:** drawer del link, comprobante, sección de plata del turno, paneles de Configuración y el
+  simulador (HTML en `/api/mp/fake/*`, 0 kB). `lib/bookings.ts` dejó de arrastrar `payment-links-internal`,
+  `online-charge-logic` y `account-client` al first load de `/agenda` (guard `online-payments-first-load-guard`: ≤ 300 B).
+
+**Sentencias.** `listAgendaBookings` +0 (la seña llega por `Booking.onlineDepositCents`, mantenida por trigger, y el cable
+suma `od`/`po` solo en las filas con plata online). `toggleBilling` ≤ 12 (11 sin cobros vivos, 12 con link; T5-Z suma 1
+solo al cancelar o marcar ausente un turno con cobros vivos). Altas de turnos sin cambio (el cobro del turnero va dentro de
+la tx del alta: +1 solo con cobro online). **Dashboard: 31 sentencias en 2 tx** (baseline viejo 45/15): Ingresos pasó de
+2 a 1 sentencia con legado + online por `approvedAt` + manual neto de señas (`pf2-dashboard-budget` ≤ 2 tx).
+`getPatientTimeline` y el perfil sin cambio.
+
 ### T4 · fichas clínicas (19-oct-2026, FC-3i1 / FC-4i / T4-Z)
 
 Medido con `next build` + `check-bundle-budget.mjs` en los integradores (árbol aislado). El número final de cada ruta y

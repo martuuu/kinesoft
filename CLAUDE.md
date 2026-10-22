@@ -99,7 +99,17 @@
       **«Archivos»** del perfil (`PatientFile`, adjuntos del equipo). **«Compartir con el paciente»** (una ficha al portal)
       no es **«Compartir con un profesional»** (dar acceso al paciente a otro kine). «Ficha» es la ficha clínica: los
       datos del paciente son «datos del paciente», no «ficha».
-    - ADR-025 = fichas. El ADR de MPS toma el siguiente libre (ADR-026).
+    - ADR-025 = fichas. ADR-026 = T5 (cobros online) y ADR-027 = MPS.
+    - «T4-Y» (22-oct) = el aviso por mail al paciente cuando se anula una ficha compartida; no es una tanda de T4.
+  - **§25 del plan (19/22-oct; T5 = TP, cobros online con Mercado Pago):** «T5a..T5f» sus tandas y «T5-Z» el cierre.
+    Sesiones «TP-P1..P5» (piezas puras), «TP-M» (= **M18** `turnero_cobros_mp`), «TP-K1..K4» (contratos y stubs),
+    «TP-2a..2i» (server), «TP-3a..3k» + «TP-3z» (UI e integrador), «TP-E» (E2E); en el cierre «TP-ZA/ZB» (revisores),
+    «TP-ZF1..3» (fixers: no son F1/F2 de P3.Z ni los ZF1..ZF5 de T4), «TP-ZG» (gate) y «TP-ZD» (docs). Los `[TP-0]`/`[TP-1]`
+    de los tests son de la Tanda A, no de T5. «C-TP1..C-TP14» son sus contratos (no los C1-C14 de Planes); «TP-D22..D30» y
+    «TP-UI-D1..D12» sus defaults. «M1..M3», «B1..B6» y «A1» de T5-Z son hallazgos de los revisores (AUDIT «Ronda T5»), no
+    migraciones ni olas. «S1..S11» de T5 son los supuestos de `scripts/diagnose-mp-connect.ts`, no los del fake de GoTrue.
+    Vocabulario: «seña», «link de pago» (nunca «preferencia» ni «cupón»), «reintegro» (nunca «reembolso»), «Mercado Pago»
+    completo, «Secretaría» con tilde en la UI.
   - «Plan» choca en tres sentidos: plan de tratamiento, plan SaaS del tenant y plan de la obra social.
   - «Vertical» (`Tenant.vertical`: General / Kinesiología) es el tipo de consultorio: no es la «disciplina» de un
     servicio o plan (Kine / Osteo) ni el plan SaaS (`Tenant.plan`). «Kine PRO» = vertical Kinesiología + plan PRO.

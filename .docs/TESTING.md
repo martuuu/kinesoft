@@ -465,7 +465,8 @@ E2E_KEEP_DATA=1 npm run test:e2e    # no borra el tenant al final (para mirar un
   `SUPABASE_JWT_SECRET`: el camino es el de prod (form de /login → cookie `sb-127-auth-token` → middleware →
   `getSessionUser`). El actor demo **no sirve** (solo con `NODE_ENV !== "production"`, y cae en el seed). Se niega a
   arrancar si la DB no es localhost, y pisa con vacío / `log` / `off` todas las claves con efecto externo (MP, Resend,
-  Sentry, Upstash, realtime) porque `next start` carga el `.env`, que puede ser de prod. `TURNERO_CHECKOUT=off`.
+  Sentry, Upstash, realtime) porque `next start` carga el `.env`, que puede ser de prod. Mercado Pago va con el **falso** (`MP_CONNECT_MODE=fake`, firma
+  `required` con un secreto literal de prueba; sin `VERCEL*`, que frenaría el boot).
 - **Datos** (`tests/e2e/global-setup.ts`): un tenant efímero con `tests/helpers/tenant-factory.ts` (**nunca seeds**):
   OWNER, sede, franjas 08-19 los 7 días, un servicio con cupo 1 (el de la factory es ilimitado: sin conflicto), un
   paciente por familia de specs, turnos de hoy / mañana / ayer en hora AR, una evolución de hace 3 días (enmienda) y una
@@ -487,9 +488,11 @@ E2E_KEEP_DATA=1 npm run test:e2e    # no borra el tenant al final (para mirar un
 | `plan` | plan de 2 sesiones los lunes desde la ficha → 1 programa con 2 turnos |
 | `portal` | pantalla de entrada sin sesión; con sesión, «Hola, Ana» y el turno de mañana |
 | `turnero` | ventana de 5 días («Siguientes ›» / «‹ Anteriores»), reserva sin cobro → «¡Turno reservado!» + turno UNPAID |
+| `mp-connect` | (T5) el profesional conecta la cuenta del MP falso → «Conectada · Simulador local» → delegación |
+| `turnero-cobro` | (T5) REQUIRED total → aprobado → comprobante → drawer «Pagado por Mercado Pago»; OPTIONAL con seña → cobrar el resto en efectivo → Ingresos = seña + resto; a 390 |
+| `payment-link` | (T5) perfil → «Nuevo link de pago» → `/pagar` anónimo a 390 → «¡Pago recibido!» → /cobros «Pagado» → reintegro → «Reintegrado» |
 
-Fuera por ahora: «informar pago» y el turnero **con** MP fake (§21.3.7) — con `TURNERO_CHECKOUT=off` (TP-0) no hay
-checkout que probar; y la vista Recepción / `/sala` (módulo `salaEspera`, solo Clínica/Libre). El rate limit del
+Fuera por ahora: «informar pago»; y la vista Recepción / `/sala` (módulo `salaEspera`, solo Clínica/Libre). El rate limit del
 turnero es 5 reservas cada 5' por IP: un spec nuevo que reserve tiene que contar con eso.
 
 **CI:** job `e2e` en `ci.yml`, después de `verify`, con Postgres efímero (owner) y **`continue-on-error: true`**

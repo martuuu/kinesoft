@@ -230,6 +230,8 @@ environments. The new model (`lib/mercadopago.ts` +
   and notifies, without re-checking capacity.
 - `rawPayload` is redacted to a known-safe subset before persistence —
   no cardholder name, document, or device fingerprint.
+- **T5 (22-oct):** con `?acct=` la ruta va a la rama de cobros con la cuenta del vendedor (§24); sin `acct`, todo lo de
+  arriba sigue igual (AUDIT §5.4 enmendado). El checkout legado con la cuenta de la plataforma ya no lo usa nadie.
 
 ## 5. Auth callback (`/auth/callback`)
 
@@ -1167,3 +1169,56 @@ portal 30/10 min por IP.
 
 - 🔴 **Abierto (baja, a medir):** la cola serial de render de react-pdf (un render por proceso) puede encolar descargas
   bajo carga; se mide en Vercel al final (AUDIT B-5).
+
+## 24. Cobros online con la cuenta del vendedor (T5, 22-oct-2026; local, sin push)
+
+Diseño en [ARCHITECTURE.md ADR-026](ARCHITECTURE.md); «preservar» en AUDIT §5.62-68 (+ §5.4 enmendado); hallazgos en
+[AUDIT «Ronda T5»](AUDIT.md); M18 en [RUNBOOK «M18 en prod»](MIGRACIONES-RUNBOOK.md); consola en
+[EXTERNAL-CONFIG §0.12](EXTERNAL-CONFIG.md). Todo se probó contra el Mercado Pago **falso**.
+
+**Tokens sellados.** Access y refresh token de cada cuenta van en `MpCredential` (SERVICE_ONLY: RLS ENABLE + FORCE **sin
+policy**, invisible para `kinesoft_app` con cualquier GUC) sellados con `lib/secret-box.ts`: AES-256-GCM, IV de 96 bits,
+claves versionadas en `SECRET_BOX_KEYS` (la primera sella, todas abren) y **AAD** `kinesoft:secret-box:v1|<propósito>|<recordId>|<campo>`:
+un sobre copiado a otra fila, a otro campo o a otro propósito no abre. Los errores nunca incluyen la clave. En
+Production, `MP_CONNECT_MODE=sandbox|live` sin `SECRET_BOX_KEYS` frena el boot; en Vercel sin claves el sellado falla
+(`no_keys`) y nunca usa la clave dev determinista, que solo existe sin `VERCEL_ENV`.
+Refresh rotativo con CAS sobre `version`; desconectar programa la purga a 7 días. Rotación con
+`scripts/secret-box-rotate.ts` (dry-run → `--apply`), la corre Martin.
+
+**Nada de tokens afuera.** Ni en logs, ni en `AuditEvent` (`mpAccount.connect` y compañía auditan sin tokens), ni en
+respuestas de actions, DTOs (`MpAccountView` no los trae), redirects del callback, export del consultorio (`mpAccounts`
+sin `webhookRef` ni credenciales; `onlineCharges` sin `publicToken` ni `rawPayload`) ni Plataforma → Sistema (solo kids
+y huellas). `rawPayload` del cobro va redactado (sin payer, tarjeta ni identificación; ≤ 20 intentos). `diagnose-mp-connect`
+imprime ✓/✗, nunca tokens ni códigos.
+
+**Webhook `?acct=`.** La autenticidad no depende de la firma: siempre se vuelve a pedir el pago a MP con el token de la
+cuenta y se verifica `collector_id`, `live_mode`, ARS, `oc:<id>` de esa cuenta y ese consultorio, y el monto (AUDIT
+§5.63). La firma se exige según `MP_CONNECT_WEBHOOK_SIGNATURE` (`required` por default: inválida, vieja o ausente → 401
+sin llamar a MP; `fetch-only` solo si S3 demuestra que MP no firma esos avisos). `webhookRef` (128 bits) solo elige la
+cuenta; uno desconocido da 200 ignorado.
+
+**OAuth.** State en la cookie `kine_mp_oauth` (HMAC `kinesoft:mp-oauth-state:v1`, httpOnly, `SameSite=Lax`, path
+`/api/mp/oauth`, 10 min) atado a **usuario + sesión + consultorio + target + nonce**; el callback re-chequea que sea el
+mismo actor en el mismo consultorio activo, canjea con PKCE S256 (verifier derivado del nonce) y rechaza un `live_mode`
+que no coincide con el modo. Un code reusado, un state alterado o vencido, o la cookie de otra sesión → 0 canjes. Sin
+`session_id` en el token, conectar falla cerrado. La cuenta del consultorio: solo el Titular, con step-up
+(`lib/mp-connect-actions.ts:94,129`). Soporte nunca conecta ni crea links. La plataforma nunca cobra con su cuenta.
+
+**Simulador bloqueado en Vercel.** `MP_CONNECT_MODE=fake` frena el boot si existe `VERCEL_ENV` **o** `VERCEL` (cualquier
+scope) y el getter cae a `off` (`lib/env.ts:250-260`); `app/api/mp/fake/[...path]` da 404 fuera de fake; se guarda por
+Vercel y no por `NODE_ENV` porque el E2E corre `next start`. `npm run dev:mpfake` nunca lee `.env*` y pisa todo lo que
+tiene efecto externo con literales de prueba. ⚠️ Un `npm run dev` **pelado** toma Supabase de `.env` (puede ser prod):
+AUDIT `tp3j dev-pelado-supabase-env`, decide Martin.
+
+**`/pagar/[token]` sin PHI y GET sin escrituras.** Página server en `app/(booking)/pagar/[token]`: `force-dynamic`,
+`no-store`, `noindex` + `Disallow: /pagar/` en robots, `referrer: same-origin` (el token viaja en la URL). Nunca muestra
+nombre ni datos del paciente; el **GET no escribe** (los antivirus de mail abren links): el vencimiento por reloj se
+calcula y pasarlo a EXPIRED es del cron. Token validado `^[A-Za-z0-9_-]{22}$` antes de tocar la base; rate limit 60/min
+por IP que responde igual que un token inexistente; consultorio suspendido → «no disponible». El mail del link
+(`payment_link`) no lleva el concepto ni datos clínicos; el concepto (3..120) avisa «No pongas datos clínicos en el
+concepto: lo ven el paciente y Mercado Pago.».
+
+**Permisos.** Política de cobro y «Cobros online»: `tenant.sensitive` (la Secretaría y Facturación no la ven, ni con
+`?tab=`). Links: `billing.collect`, o `collectOwn` para lo propio, más **delegación** del dueño de la cuenta salvo que el
+actor sea su dueño (también para el Titular). Lecturas de cobros con el mismo criterio; matriz en `authz-matrix`.
+

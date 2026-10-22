@@ -1141,8 +1141,8 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] 🔴 Mover un turno «en sala» o «llamado» a **otro día** → en el día nuevo aparece «por llegar» (sin llegada,
   llamado ni atención). Moverlo de hora dentro de hoy no le cambia el estado.
 - [ ] Batch de 20 turnos → **una** actualización en la otra pestaña (fade único, sin 20 parpadeos).
-- [ ] Turnero público (`/c/<slug>/booking`) reserva → aparece en la agenda de la Secretaria; `devMarkBookingPaid` →
-  pasa a confirmado en vivo; candado del día con «cancelar» → los turnos desaparecen y el día queda bloqueado en la
+- [ ] Turnero público (`/c/<slug>/booking`) reserva → aparece en la agenda de la Secretaria; con cobro REQUIRED, aprobar
+  en el simulador de MP (`npm run dev:mpfake`, QA «T5») → pasa a confirmado en vivo; candado del día con «cancelar» → los turnos desaparecen y el día queda bloqueado en la
   otra pestaña; un bloqueo de varios días se refleja de una vez.
 
 ### `/sala`
@@ -2132,3 +2132,74 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 ### Archivos y accesibilidad
 - [ ] **QA 12.** Archivos: uno de **20 MB** con barra de progreso y «Archivo subido»; cancelar a mitad no deja nada; un **.exe renombrado a .pdf** se rechaza («El contenido del archivo no coincide con su tipo…»). Error de la lista ≠ lista vacía («No pudimos cargar los archivos» + «Reintentar»).
 - [ ] **QA 13.** Solo teclado + VoiceOver/NVDA: toolbar (Alt+F10, roving), combobox de diagnósticos (opción activa visible, live region), chips («Quitar: …», «Favorito: …»), menú «⋯» (el foco vuelve al botón), contador de caracteres («Te pasaste por {n} caracteres»); `prefers-reduced-motion`.
+
+## T5 · Cobros online con Mercado Pago (22-oct-2026)
+
+> T4-Y (`6f56c03`) + T5a..T5f + TP-ZF de T5-Z (`a31337c`..`92c600c`). **Con migración M18** (`turnero_cobros_mp`, solo en
+> local: probar contra el Docker local). **Siempre con `npm run dev:mpfake`** (MP falso, `TZ=UTC`, nunca lee `.env*`;
+> panel del simulador en `/api/mp/fake/panel`, linkeado desde Plataforma → Sistema), **nunca** `npm run dev` pelado (toma
+> Supabase de `.env`, que puede ser prod: AUDIT `tp3j dev-pelado-supabase-env`). A **390**, **1024×768** y **1366×768**.
+> Plan §25.14 (Anexo C) + revisores de T5-Z; hallazgos en [AUDIT «Ronda T5»](AUDIT.md). `dev:mpfake` entra con el actor
+> demo: los puntos multi-rol (2, 10, 13) se cubren en el E2E con el GoTrue falso; a mano, con un login real local si lo
+> tenés. **🔴 P0** = plata o secretos: no se pasa a prod con uno en ❌.
+
+### 🔴 P0 · Plata
+- [ ] 🔴 P0 **QA 1.** El profesional conecta la cuenta fake desde «Mi Mercado Pago» (Configuración o menú de cuenta) →
+  «Conectada» + badge «Simulador local» → prende «Permitir que la Secretaría y los administradores generen links de pago
+  a mi cuenta».
+- [ ] 🔴 P0 **QA 2.** El Titular prende «Cobros online» en REQUIRED + valor del turno (pide confirmación al pasar a
+  REQUIRED). La Secretaría con «Configuración» no ve la pestaña, ni con `?tab=cobros-online`.
+- [ ] 🔴 P0 **QA 3.** Turnero → simulador → «Simular pago aprobado» → «¡Turno confirmado!» + comprobante. «Pagado MP» en
+  Día, Semana, Lista y Por profesional **sin cambio de fondo**. El comprobante del drawer tiene la fecha AR. Otra pestaña
+  con la agenda se actualiza sola.
+- [ ] 🔴 P0 **QA 4.** REQUIRED rechazado → `/failed`. El hold muestra «Pendiente de pago». Aprobar una preferencia vencida →
+  aviso «reserva vencida».
+- [ ] 🔴 P0 **QA 5.** OPTIONAL con seña del 30 %: dos opciones sin preselección y la seña en el resumen → «Pagar ahora» →
+  aprobado → «Seña pagada / Por cobrar». En /sala la Secretaría cobra el resto en efectivo. **Ingresos = seña + resto.**
+  Facturación sin doble conteo.
+- [ ] 🔴 P0 **Cobro a mano anula lo vivo (T5-Z M2/M3).** OPTIONAL «Pagar ahora» sin pagar → la Secretaría marca «Pagado» en
+  el drawer → el checkout del turnero ya no deja pagar. Cancelar (o «Ausente») un turno con link activo → `/pagar` dice
+  «ya no está disponible».
+- [ ] 🔴 P0 **Seña reintegrada después del cobro a mano (T5-Z M1):** seña aprobada → cobrar el resto en efectivo →
+  «Simular reintegro» de la seña → Ingresos sigue en seña − reintegro + resto (no suma el copago entero). Facturación del
+  paciente todavía muestra percibido de más en este caso (pendiente, AUDIT).
+- [ ] 🔴 P0 **QA 8.** Link desde el drawer por lo que falta → pago → «Pagado por Mercado Pago», sin «Deshacer» ni
+  «Cobrar».
+- [ ] 🔴 P0 Simulador «Simular con otro monto» → el cobro **no** pasa a PAID y llega el aviso «Pago con monto distinto».
+  Reenviar el mismo pago (panel) → nada cambia (replay).
+
+### Links de pago y `/pagar`
+- [ ] **QA 7.** Link desde la ficha, sin turno → WhatsApp, email (sin concepto ni datos clínicos) y Copiar → ventana
+  privada a **390** → `/pagar` sin datos del paciente (ver el HTML: el nombre no aparece) → aprobado → «¡Pago recibido!»
+  → Facturación y /cobros.
+- [ ] **QA 12.** Desconectar la cuenta → los links activos quedan anulados → `/pagar` dice «ya no está disponible».
+- [ ] `/cobros`: filtros en la URL (tipo, estado, período, profesional), tabla desde 768 y cards a 390; copiar, reenviar,
+  anular y comprobante. Con `MP_CONNECT_MODE=off` (lo cubre `tp3g-cobros`; a mano, en prod después del deploy con `off`) `/cobros` redirige
+  y no aparece en el nav, ni «Mi Mercado Pago» ni «Cobros online».
+
+### Reintegros, cuentas y avisos
+- [ ] **QA 6.** OPTIONAL «Reservar y pagar en el consultorio» → «¡Turno reservado!». «Pagar ahora» rechazado → «tu turno
+  quedó reservado».
+- [ ] **QA 9.** «Simular reintegro» → «Reintegrado por Mercado Pago». Cancelar un turno con seña → la confirmación (drawer,
+  Turnos y candado) muestra el aviso de reintegro.
+- [ ] 🔴 P0 **QA 10.** El Titular conecta la cuenta del consultorio con 2FA (app y email) → el Admin ve el estado sin
+  botones → «Usar la cuenta del consultorio» → un profesional sin cuenta cobra con la del consultorio.
+- [ ] **QA 11.** «Forzar reconexión» (panel del simulador) → campana «Reconectá tu Mercado Pago» y estado del panel → el
+  turnero de ese profesional reserva sin cobro.
+- [ ] **QA 13.** Un profesional sin delegaciones ve «Mi Mercado Pago» y nada de «Cobros online».
+- [ ] **Particular en $ 0 (T5-Z A1):** con el copago de Particular en $ 0, Configuración → «Cobros online» avisa; el turnero
+  cotiza el precio del servicio pero el resultado avisa que no se cobró online (decisión pendiente, AUDIT).
+
+### Accesibilidad y guardas
+- [ ] **QA 14.** Teclado + lector de pantalla: radios del turnero, foco del drawer del link, regiones en vivo de `/pagar`
+  («procesando» → «pagado»); `prefers-reduced-motion`.
+- [ ] 🔴 P0 **QA 15.** `next build && next start` con `MP_CONNECT_MODE=fake` y `VERCEL_ENV=production` → el boot falla. Sin
+  fake → `/api/mp/fake/*` da 404. (En una copia **sin** `.env*`: regla de FC-4i.)
+
+### T4-Y · aviso al paciente de una ficha anulada
+- [ ] 🔴 P0 Anular una ficha compartida (y, aparte, una **enmienda** de una ficha compartida) con el paciente con portal
+  vinculado → el documento se revoca (desaparece de «Documentos») y en Mailpit llega «{Consultorio} actualizó un documento
+  de tu portal»: «…ya no está disponible porque fue modificado. Si lo necesitás, pedíselo nuevamente al consultorio.»
+  **Sin** título, fecha ni motivo de anulación. Pasado el tope de 3 avisos por hora por paciente (compartido con
+  compartir) se anula igual, sin mail.
+

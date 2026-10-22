@@ -1,10 +1,15 @@
 # Decisiones con default para firmar (18-oct)
 
+> **Actualizado 22-oct (T5):** decididas #30 y #33-#37 (19-oct, §25.1 del plan; T5 las implementó). Decididas por Martin
+> el 22-oct las de T4-Z (no tenían número acá): **M-1** anular una enmienda revoca lo compartido y además **se le avisa al
+> paciente** por mail que el documento fue modificado y que lo pida de nuevo (T4-Y `6f56c03`); **M-3** email enmascarado
+> en el diálogo de compartir; **composer diferido con SSR**. Nuevas: **#66-#71** (defaults de T5, §13).
+>
 > **Actualizado 19-oct (T3):** decididas #1-#8, #24-#28 y #32 (§23.1 del plan; la decisión va en la columna «Recomiendo»).
 > Antes (18-oct, noche): #59 (marca: logo A) y #60 («Mantenerme conectado», implementado en la tanda B). El resto sigue
 > con su default; en cada planning siguiente se consultan las del bloque.
 
-**65 entradas** (algunas agrupan varias decisiones chicas del mismo tema). **Ninguna bloquea las tandas A y B; mientras no firmes, rige el default.**
+**71 entradas** (algunas agrupan varias decisiones chicas del mismo tema). **Ninguna bloquea las tandas A y B; mientras no firmes, rige el default.**
 
 Cómo leerlo: «Hoy» = el default que rige o va a regir. «Para» = la tanda que lo usa (A, B, T3 = AS/M12, T4 = FC/M14,
 T5 = TP/M18, T6 = WA + MPS, T7 = TV) o «ya rige» (está en el código, solo confirmar). Para firmar alcanza con
@@ -70,14 +75,14 @@ cierra `turnero-mp-cuenta-plataforma`), 2FA de Plataforma apagada (supera BO-D6 
 
 | # | ID | Hoy (default) | Alternativa | Recomiendo | Para |
 |---|---|---|---|---|---|
-| 30 | TP-D1 | Cobro online del turnero apagado (`TURNERO_CHECKOUT` vacío) hasta TP-2 | Dejarlo como está hoy (cuenta MP de la plataforma) | Apagado | A |
+| 30 | TP-D1 | Cobro online del turnero apagado (`TURNERO_CHECKOUT` vacío) hasta TP-2 | Dejarlo como está hoy (cuenta MP de la plataforma) | ✅ **Decidido 19-oct** (§25.1): apagado hasta T5; desde T5 cobra con la cuenta de cada profesional y `TURNERO_CHECKOUT` no lo lee nadie | hecho en T5 |
 | 31 | TP-D3 ventana | 5 días con turnos, búsqueda de 6 semanas, tope de 90 días | 7 días visibles | Así | A (TP-1) |
 | 32 | AS-D9 paso del turnero | `clamp(ceil15(duración), 15, 60)`; hoy fijo 45 (`lib/availability/types.ts:74`) | Paso fijo configurable | ✅ **Decidido 19-oct** (default de §23.8, AS-D9): `clamp(ceil15(duración), 15, 60)`. Hecho en T3c-2l. | T3 |
-| 33 | TP-D7 seña | Pagar la seña no marca el copago como cobrado | Descontar la seña del copago | Así en v1 | T5 |
-| 34 | TP-D8/D9 sin cuenta MP | Se reserva sin cobro + aviso; cuenta MP del consultorio opcional | Exigir cuenta para activar cobro | Así | T5 |
-| 35 | TP-D10/D11 conexión | OAuth de MP; comisión de la plataforma 0 | Comisión % | 0 al principio | T5 |
-| 36 | TP-D12/D13 links de cobro | Requieren delegación del profesional (también el Titular); vencen a los 7 días (máx. 30); $1 a $1.000.000 | — | Así | T5 |
-| 37 | TP-D14/D15/D16 reglas | Sin cancelación online (reintegros desde MP); cobro obligatorio con `binary_mode` y sin efectivo; «Pagar ahora» opcional confirma igual | Cancelación con reintegro automático | Así en v1 | T5 |
+| 33 | TP-D7 seña | Pagar la seña no marca el copago como cobrado | Descontar la seña del copago | ✅ **Decidido 19-oct** (§25.1, defaults #33-#37 confirmados) | hecho en T5 |
+| 34 | TP-D8/D9 sin cuenta MP | Se reserva sin cobro + aviso; cuenta MP del consultorio opcional | Exigir cuenta para activar cobro | ✅ **Decidido 19-oct** (§25.1, defaults #33-#37 confirmados) | hecho en T5 |
+| 35 | TP-D10/D11 conexión | OAuth de MP; comisión de la plataforma 0 | Comisión % | ✅ **Decidido 19-oct** (§25.1, defaults #33-#37 confirmados) | hecho en T5 |
+| 36 | TP-D12/D13 links de cobro | Requieren delegación del profesional (también el Titular); vencen a los 7 días (máx. 30); $1 a $1.000.000 | — | ✅ **Decidido 19-oct** (§25.1, defaults #33-#37 confirmados) | hecho en T5 |
+| 37 | TP-D14/D15/D16 reglas | Sin cancelación online (reintegros desde MP); cobro obligatorio con `binary_mode` y sin efectivo; «Pagar ahora» opcional confirma igual | Cancelación con reintegro automático | ✅ **Decidido 19-oct** (§25.1, defaults #33-#37 confirmados) | hecho en T5 |
 
 ## 6. Portal del paciente
 
@@ -144,9 +149,22 @@ cierra `turnero-mp-cuenta-plataforma`), 2FA de Plataforma apagada (supera BO-D6 
 
 ---
 
+## 13. Cobros online (T5, defaults del 22-oct)
+
+| # | ID | Hoy (default) | Alternativa | Recomiendo | Para |
+|---|---|---|---|---|---|
+| 66 | Modo `off` esconde | Con `MP_CONNECT_MODE=off` se esconden «Cobros» del nav, la pestaña «Mi Mercado Pago» y su ítem del menú de cuenta, y «Cobros online» (regla «lo que no tiene funcionalidad se quita») | Mostrarlas con «Próximamente» | Así | ya rige (T5) |
+| 67 | BASIC ve sus cobros | El profesional BASIC ve los cobros online de **su** turno (mismo criterio que crear o anular su link) | Que solo los vea quien tiene `billing.collect` | Así | ya rige (T5) |
+| 68 | Delegar la cuenta del consultorio | Prender «Permitir links» sobre la cuenta del consultorio no pide 2FA (conectar y desconectar sí; queda en el audit) | Pedir step-up también al delegar | Así (no mueve plata ni cambia de cuenta) | ya rige (T5) |
+| 69 | «Cobros» en el nav | Solo con `billing.collect` (la página deja entrar con `collectOwn` por link directo) | También a quien tiene `collectOwn` | Así | ya rige (T5) |
+| 70 | Tope de bundle | `/agenda` midió 171,9 (tope 171,6) y `/sala` 155,4 (+0,4): el exceso es de T5e aprobado | Una sesión de PF para recuperar 0,3-0,4 kB (`ButtonLink` aparte, `tenant-modules-context` en un chunk) | Subir el tope a lo medido y dejar la sesión de PF en C | antes del push de T5 |
+| 71 | Particular en $ 0 | El turnero cotiza con el precio del servicio aunque Particular esté en $ 0; el resultado avisa que no se cobró online y Configuración avisa «Particular en $ 0» (T5-Z A1) | Exponer el copago de Particular en `PublicClinicOnlinePayment` (enmienda de C-TP8) para cotizar bien | La alternativa (es chica: un campo más en el DTO del turnero) | T5 (fix chico) |
+
 ## Las que conviene mirar ahora
 
 > 19-oct: #24, #28, #3-#7, #59/#60 y #1 ya están decididas (arriba). #11, #17 y #20-#23 se decidieron al arrancar T4
 > (§24.1; #20 sin mail a la OMS, enmienda de Martin del 19-oct) y T4 las implementó.
 
-1. **#33-#37 (TP-D7..D16)**: en el planning de T5 (con la seña = `copagoRemainingCents` de T3).
+1. **#70 y #71** (tope de bundle y Particular en $ 0): antes del push de T5. **#66-#69**: confirmar en bloque.
+2. Copy de T5 para confirmar (estados de «Mi Mercado Pago», avisos `?mp=`, resultados del turnero, `/pagar`, `/cobros`):
+   AUDIT «Ronda T5» y `lib/online-payments-copy.ts`.

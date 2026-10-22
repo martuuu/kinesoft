@@ -14,7 +14,7 @@
 > 3. **Etapa 3 — Productiva final.** Guía de diagnóstico completa, planes, IA local, módulo
 >    contable, features Pro.
 
-## ⭐ Plan vigente (18-oct): §22.13 (T3 detallado en §23 y T4 en §24, 19-oct)
+## ⭐ Plan vigente (18-oct): §22.13 (T3 detallado en §23, T4 en §24 y T5 en §25)
 
 > **Manda sobre §20 y §21 donde choque.** Feedback del 17-oct del cliente principal (turnero que no dejaba terminar,
 > agenda que nunca entraba en vivo, «Llegó», 2FA, ventana de 5 días, cobro de turnos por profesional, video en la TV).
@@ -28,20 +28,24 @@
 | 2 | **B** | OPS-1 (Resend, pooler, guard de Preview, guard de marca) · AS-0 (bug del modal, campana, Recepción) · WA-0 (`wa.me` al celular) · prototipo de logo y marca → Martin elige → OPS-4 · «Mantenerme conectado» (tildado = sesión persistente) · pulido mobile (AS-3a..d) · E2E Playwright (OPS-6, no bloqueante 2 semanas) | — | ✅ commiteada (`7e71aa7`..`b1272b8`, [AUDIT Ronda 31](AUDIT.md)); **falta el logo elegido por Martin → renombrado (OPS-4)**. QA en [QA «Tanda B»](QA.md), consola en [EXTERNAL-CONFIG §0.9](EXTERNAL-CONFIG.md) |
 | 3 | **T3** | AS (§23): cobros con medio de pago (Secretaria, Admin, Facturación; profesional sus turnos), lo delicado de Configuración con `tenant.sensitive`, Secretaria edita contacto y cobertura y da de alta pacientes, tope «N turnos cada X min», filas y servicios de 15', paso del turnero por duración, filtro por obra social, Ocupación, módulos y precio por consultorio desde Plataforma, terminar soporte desde el consultorio, bundle de `/agenda` | **M12** `agenda_secretaria_config` | ✅ **local, sin push** (`fd5e6af`..`d25c5a7` + T3-Z); **M12 solo en el Docker local**, a prod al final del planning ([RUNBOOK «M12 en prod»](MIGRACIONES-RUNBOOK.md)). Hallazgos en [AUDIT «Ronda T3»](AUDIT.md), QA en [QA «T3»](QA.md) |
 | 4 | **T4** | FC fichas clínicas (§24): texto con formato, diagnósticos CIE-11 + propios + kine, PDF/Word con membrete, logo y firma, compartir con el paciente (portal «Documentos» + mail sin datos clínicos), importar Word, carpeta de respaldo, «Historia clínica» como primera pestaña, archivos de 25 MB con subida firmada. Antes, T3-Y (`59b6181`: la Secretaria cambia emails, el cobro dice a quién se imputa) | **M14** `fichas_clinicas` | ✅ **local, sin push** (`5d07636`..`a2d1dcd`, T4a → T4-Z); **M14 solo en el Docker local**, a prod al final del planning ([RUNBOOK «M14 en prod»](MIGRACIONES-RUNBOOK.md); buckets y CIE-11 en [EXTERNAL-CONFIG §0.11](EXTERNAL-CONFIG.md), sin mail a la OMS). Hallazgos en [AUDIT «Ronda T4»](AUDIT.md), QA en [QA «T4»](QA.md), diseño en ARCHITECTURE ADR-025 |
-| 5 | **T5** | TP-M / TP-2 / TP-3: cobro online por profesional (OAuth MP), política por consultorio, links de cobro; el sandbox S3 sin staging se resuelve en su planning | **M18** `turnero_cobros_mp` | ⏭ **siguiente**: planificar (TP-D5..D16 se firman en su planning) |
-| 6 | **T7** | TV (pantalla de sala + video de YouTube) + CSP enforce | **M17** `reception_displays` | planificar al llegar |
-| 7 | **T6** + infra (las últimas dos) | WA (M15) + MPS (M16, cobro el día 4, MPS-D7) · staging, Google OAuth, Upstash, Sentry, roles RLS en prod | **M15**, **M16** | planificar al llegar |
+| 5 | **T5** | TP (§25): el turnero cobra online con la cuenta de Mercado Pago **de cada profesional** (OAuth + PKCE; la del consultorio solo el Titular con 2FA), política OFF/OPTIONAL/REQUIRED con valor del turno, seña fija o %, links de pago a nombre de un paciente (WhatsApp/email, página pública `/pagar`), seña descontada del cobro a mano y de Ingresos, comprobante, `/cobros`, reintegros desde MP, Mercado Pago falso local (`npm run dev:mpfake`). Antes, T4-Y (`6f56c03`: aviso al paciente al anular una ficha compartida) | **M18** `turnero_cobros_mp` | ✅ **local, sin push** (`a31337c`..`92c600c` + el commit de docs TP-ZD, T5a → T5-Z); **M18 solo en el Docker local**, a prod al final del planning ([RUNBOOK «M18 en prod»](MIGRACIONES-RUNBOOK.md); consola de MP, sandbox S1-S11 y `live` en [EXTERNAL-CONFIG §0.12](EXTERNAL-CONFIG.md)). Hallazgos en [AUDIT «Ronda T5»](AUDIT.md), QA en [QA «T5»](QA.md), diseño en ARCHITECTURE ADR-026 |
+| 6 | **T7** | TV (pantalla de sala + video de YouTube) + CSP enforce (incluye `*.mercadopago.com.ar`, AUDIT `t5-csp-com-ar`) | **M17** `reception_displays` | ⏭ **siguiente**: planificar |
+| 7 | **T6** + infra (las últimas dos) | WA (M15, reusa `lib/secret-box.ts`) + MPS (M16, cobro el día 4, MPS-D7; ADR-027) · staging, Google OAuth, Upstash, Sentry, roles RLS en prod | **M15**, **M16** | planificar al llegar |
 
-- **Prod:** las Tandas A y B no tenían migración (pusheadas por Martin el 19-oct). **M12** y **M14** van al final de todo
-  el planning (§22.14: consolas, push y migraciones juntos), cada una con precheck → backup → `db:prod:deploy` **antes**
-  del push de su tanda (M14 además con los 3 buckets antes). **Orden real** (lo da el timestamp): **M12 → M14 → M18 →
-  M17 → M15/M16** (el viejo «M18 antes que M14..M17» quedó sin efecto: T4 fue antes que T5).
-- **T4, para Martin:** confirmar los dos defaults ★ de T4-Z (M-1: anular una enmienda revoca lo compartido de su raíz;
-  M-3: el diálogo de compartir muestra el email enmascarado) y hacer el QA manual de [QA «T4»](QA.md). La CIE-11 se
-  importa en prod al final, sin mail a la OMS ([EXTERNAL-CONFIG §0.11](EXTERNAL-CONFIG.md)).
-- **Decisiones con default** de la Tanda A (D-HF1..7, D-LL1, TP-D1..3) en §22.10; las de T5 (TP-D5..D16) se firman en su
-  planning. En paralelo a la Tanda A quedó el documento de decisiones pendientes (EV2-D*, RX-D2, C0, §21.11, §22.10)
-  para que Martin las firme.
+- **Prod:** las Tandas A y B no tenían migración (pusheadas por Martin el 19-oct). ⚠️ **M12**, **M14** y **M18** van al
+  final de todo el planning (§22.14: consolas, push y migraciones juntos), cada una con precheck → backup →
+  `db:prod:deploy` **antes** del push de su tanda (M14 además con los 3 buckets antes; M18 con `SECRET_BOX_KEYS`,
+  `MP_CONNECT_MODE=off` y `MP_CONNECT_WEBHOOK_SIGNATURE=required` cargadas antes). **Orden real** (lo da el timestamp):
+  **M12 → M14 → M18 → M17 → M15/M16**. Consolas (MP, sandbox S1-S11), push y migraciones: todo al final.
+- **T4:** Martin confirmó el 22-oct M-1 (anular una enmienda revoca lo compartido; T4-Y suma el aviso al paciente), M-3
+  (email enmascarado) y el composer diferido con SSR. Falta el QA manual de [QA «T4»](QA.md) y la CIE-11 en prod al final
+  ([EXTERNAL-CONFIG §0.11](EXTERNAL-CONFIG.md)).
+- **T5, para Martin:** QA manual de [QA «T5»](QA.md) con `npm run dev:mpfake`; decidir el tope de bundle de `/agenda`
+  (171,9) y `/sala` (155,4), Particular en $ 0 (enmienda de C-TP8) y `npm run dev` pelado contra `.env`
+  ([AUDIT «Ronda T5»](AUDIT.md)); confirmar los defaults de T5 del
+  [documento de decisiones](plannings-claude/decisiones-pendientes-18-oct.md) §13.
+- **Decisiones con default** de la Tanda A (D-HF1..7, D-LL1, TP-D1..3) en §22.10; las de T5 en §25.16 del plan y en el
+  documento de decisiones pendientes (EV2-D*, RX-D2, C0, §21.11, §22.10, T5) para que Martin las firme.
 
 ## Plan del 15-oct: §20 ✅ (historia; el orden vigente es §22.13, arriba)
 

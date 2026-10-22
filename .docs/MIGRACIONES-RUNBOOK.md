@@ -58,6 +58,11 @@ antes que M18**, también al final del planning: precheck → buckets → backup
 Detalle en «M14 en prod». **Orden real de las pendientes** (lo da el timestamp, no el número; enmienda el viejo «M18 antes
 que M14..M17»): **M12 → M14 → M18 → M17 → M15/M16**, cada una antes del push de su tanda.
 
+**T5 (22-oct) suma M18** (`turnero_cobros_mp`, commit `0a8e551`, sin push): ⚠️ **migración nueva**, va **después de M14**,
+también al final del planning (§22.14): precheck → backup → variables (`SECRET_BOX_KEYS`, `MP_CONNECT_MODE=off`,
+`MP_CONNECT_WEBHOOK_SIGNATURE=required`) → `db:prod:deploy` **M12 → M14 → M18** **antes** del push. Detalle en «M18 en
+prod»; consola de MP en [EXTERNAL-CONFIG §0.12](EXTERNAL-CONFIG.md).
+
 | Migración | Corrida | Estado |
 |---|---|---|
 | … todas las anteriores (tabla de §2, #1-#12) | A, B-pre | commiteadas |
@@ -76,6 +81,7 @@ que M14..M17»): **M12 → M14 → M18 → M17 → M15/M16**, cada una antes del
 | `20261019120000_public_directory` (**M11**) | DIR-1 (sola) | **commiteada (`b45be05`), aplicada solo en el Docker local (16-oct); re-verificada en DIR-Z/MB-Z (hash igual, `migrate status` al día: 40)**. sha256 `a35fdd6b3f5fe8a9b4b9bbf8fcebb0cff8a82031a9721ddfca171c6af067177d`. Aditiva: 6 columnas en `Tenant` (`directoryListed` default false, `directoryListedAt`, `directoryHiddenAt/Reason/ById`, `publicDescription`), `Location.provinceCode` y la tabla `ProfessionalPublicProfile` (por persona, `userId` único, FK CASCADE). 11 CHECK (los de matrícula/ocultamiento con `COALESCE`), trigger que des-verifica la matrícula, RLS **SERVICE_ONLY** (ENABLE + FORCE, 0 policies). Drift aceptado: CHECK, función, trigger, ENABLE/FORCE. Verificada objeto por objeto; `migrate status` al día (40); integración completa en los 2 roles. Orden: «M11 en prod» |
 | `20261020120000_agenda_secretaria_config` (**M12**) | T3b-1m (sola) | **commiteada (`12bb08b`, sin push), aplicada solo en el Docker local (18-oct); hash re-verificado en T3-Z (igual)**. sha256 de `migration.sql` = `a0849c4d28c7154acb3b9a0cf47075bbbde608161d32d126d7ae9d85f9fd7485`. Aditiva, una tx, `lock_timeout` 5 s, sin tablas nuevas (`guard:isolation` sin cambios), con backfill de datos en la misma tx. Objetos: `Tenant.moduleGrants`/`moduleRevokes` (`TEXT[] NOT NULL DEFAULT '{}'`, CHECK `Tenant_moduleOverrides_check`: sin intersección, ≤ 32 cada uno) y `bookingCapCount`/`bookingCapIntervalMin` (INT NULL, CHECK `Tenant_bookingCap_check`: los dos o ninguno, 1..60, 15/30/60); enum `BookingCapMode` (INHERIT/NONE/CUSTOM) + `Practitioner.bookingCapMode` (NOT NULL default INHERIT), `bookingCapCount`, `bookingCapIntervalMin` (CHECK `Practitioner_bookingCap_check`: CUSTOM ⇔ los dos presentes); enum `BookingPaymentMethod` (CASH/TRANSFER/CARD/WALLET/MERCADO_PAGO/OTHER) + `Booking.copagoPaymentMethod` y `Booking.copagoCollectedById TEXT` (**sin FK ni índice**: tabla caliente), CHECKs `Booking_copago_method_check` (medio ⇒ PAID/REFUNDED) y `Booking_copago_collector_check` (quién cobró ⇒ medio y PAID/REFUNDED). Los dos CHECK de tope van con `COALESCE(…, false)` (desvío del SQL del brief, precedente M11: sin eso entraba un tope sin intervalo). Datos: ADMIN con `grantBilling = false` → true, salvo los que tienen un audit `membership.grants.change` / `platform.membership.grants.change` con `from.grantBilling = true` y `to.grantBilling = false` (verificado contra `setMemberGrantsInTx`; desvío del brief: el brief no exigía `from = true`). Sin policy nueva en `SupportSession` (§23.10). Drift aceptado: los 5 CHECK (`migrate diff` no propone nada de M12). Verificada objeto por objeto (psql + `tests/integration/as-m12.test.ts`, 2 roles); `migrate status` al día (41). Orden: «M12 en prod» |
 | `20261021120000_fichas_clinicas` (**M14**) | FC-0 (T4b, sola) | **commiteada (`fc97be9`, sin push), aplicada solo en el Docker local (19-oct)**. sha256 de `migration.sql` = `f7b12bab45002308751095ee12deb717c4f375ad39e9a3e8470f16afbe4967c9`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill (FC-D24), requiere PostgreSQL ≥ 13. Objetos: enums `DiagnosisSystem` (ICD11_MMS), `PatientDocumentKind` (FICHA), `PatientDocumentRevokeReason` (REPLACED/NOTE_VOIDED/MANUAL); `ClinicalNote.bodyDoc/diagnoses/authorLicense/importSource` + `ClinicalNoteRevision.bodyDoc/diagnoses`; tablas `DiagnosisCode` (**GLOBAL_READONLY**, policy `DiagnosisCode_read` FOR SELECT, único `(system, code)`, URI obligatoria con CHECK), `TenantDiagnosis` (parcial `TenantDiagnosis_tenantId_title_active_key`), `DiagnosisFavorite` (un destino exacto, 3 únicos + 4 índices) y `PatientDocument` (parcial `PatientDocument_noteId_live_key`, FKs compuestas RESTRICT a paciente, ficha y profesional); `Practitioner.honorific/signatureStorageKey/signatureUpdatedAt` y `Tenant.logoStorageKey/logoUpdatedAt` (al final); 26 CHECK; funciones `patient_document_guard()` (nueva) y `clinical_note_guard()` (**reemplazada línea por línea** sobre M9: suma las columnas nuevas y al anular una raíz revoca sus documentos) con triggers `PatientDocument_guard`/`_no_truncate`; RLS ENABLE + FORCE + `<T>_tenant_isolation` en las 3 tablas por tenant; sin GRANT (DEFAULT PRIVILEGES). md5 local: `clinical_note_guard` M9 `0a87f3688a5002c59a7b5238e2ae8a44` → M14 `d0164760670b55036a575042e945adcf`; `patient_document_guard` `677758023a72e44e21c8af18aa2c952b`. Drift aceptado («FC M14: DRIFT ACEPTADO» en el SQL y en `schema.prisma`: parciales, CHECKs, funciones, triggers, policies). Verificada objeto por objeto (`tests/integration/fichas-m14.test.ts` + `clinical-notes-m9.test.ts`, 2 roles); `guard:isolation` OK (`DiagnosisCode` en GLOBAL_READONLY). Orden: «M14 en prod» |
+| `20261022120000_turnero_cobros_mp` (**M18**) | TP-M (T5b, sola) | **commiteada (`0a8e551`, sin push), aplicada solo en el Docker local (22-oct)**. sha256 de `migration.sql` = `0ffc0c9157d5d9df71770f6d62019a6c916f673db7529eceaa00768d5c88006e`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill, requiere PostgreSQL ≥ 13. Objetos: 7 enums (`BookingPaymentMode`, `BookingChargeKind`, `MpAccountKind`, `MpAccountStatus`, `OnlineChargeOrigin`, `OnlineChargeKind`, `OnlineChargeStatus`); tablas `BookingPaymentPolicy` (RLS normal), `MpAccount` (TENANT_READONLY: policy `MpAccount_tenant_read` FOR SELECT), `MpCredential` (SERVICE_ONLY: RLS ENABLE + FORCE **sin policy**) y `OnlineCharge` (RLS normal); 6 parciales, 6 FKs compuestas, 25 CHECKs (24 en las tablas nuevas + `Booking_onlineDepositCents_check`); funciones `online_charge_guard()` y `online_charge_sync_booking()` con 3 triggers; `Booking.onlineDepositCents INT NOT NULL DEFAULT 0` al final (sin reescritura: `atthasmissing = t`, `relfilenode` igual). Parciales, CHECKs, triggers y RLS no están en Prisma: drift aceptado. Verificada objeto por objeto (`tests/integration/tpm-m18.test.ts` y bloque `[TP-M]` de `rls-isolation.test.ts`, 2 roles); `guard:isolation` OK. Orden para prod abajo («M18 en prod») |
 
 **M3a en prod (ES3).** Prod se resetea antes del go-live (plan §15.6), así que M3a **no se aplica sola**: va dentro de la
 cadena completa del deploy único de B (`migrate deploy` desde vacío, paso 4 de abajo). Solo si Martin decidiera
@@ -680,6 +686,79 @@ tranquila.
    revocar documentos: es solo un puente hasta corregir con una migración nueva. Sacar M14 = migración nueva con DROP, y
    se pierden documentos, diagnósticos y logos/firmas cargados (backup del paso 3). `PatientDocument` no se puede vaciar
    con DELETE ni TRUNCATE ni como owner (trigger), por diseño.
+
+**M18 en prod (TP-M, T5).** ⚠️ **Migración nueva** (`20261022120000_turnero_cobros_mp`, commit `0a8e551`, sin push).
+Aditiva, una tx, `lock_timeout` 5 s, sin backfill, sin staging separado (AGENTS). Va **al final de todo el planning**
+(§22.14), **después de M14** (orden por timestamp **M12 → M14 → M18**, después M17 → M15/M16) y **antes** del push de T5:
+el build de Production migra (`scripts/vercel-build.mjs`). Compatible con el código anterior: el código viejo no conoce
+las tablas nuevas y `Booking.onlineDepositCents` nace en 0 sin reescribir la tabla. sha256 de `migration.sql` =
+`0ffc0c9157d5d9df71770f6d62019a6c916f673db7529eceaa00768d5c88006e`. **Locks:** el `ADD COLUMN` + CHECK de `Booking`
+toman ACCESS EXCLUSIVE hasta el COMMIT (van al final para que dure lo menos posible: frena la agenda mientras dure la tx).
+Ventana tranquila.
+1. Precheck de solo lectura (Anexo A del brief de T5):
+   ```sql
+   SELECT version();                                                                   -- ≥ 13
+   SELECT migration_name, finished_at FROM _prisma_migrations ORDER BY started_at DESC LIMIT 4;  -- M12 y M14 aplicadas (o en esta tanda, antes)
+   SELECT to_regclass('public."OnlineCharge"'), to_regclass('public."MpAccount"'),
+          to_regclass('public."MpCredential"'), to_regclass('public."BookingPaymentPolicy"');   -- todos NULL
+   SELECT typname FROM pg_type WHERE typname IN ('BookingPaymentMode','BookingChargeKind','MpAccountKind','MpAccountStatus',
+     'OnlineChargeOrigin','OnlineChargeKind','OnlineChargeStatus');                    -- 0 filas
+   SELECT column_name FROM information_schema.columns WHERE table_name = 'Booking' AND column_name = 'onlineDepositCents'; -- 0
+   SELECT proname FROM pg_proc WHERE proname IN ('online_charge_guard','online_charge_sync_booking');   -- 0
+   SELECT count(*) FROM "Booking";
+   SELECT status, count(*) FROM "Payment" GROUP BY status;                             -- checkout legado (~0 en prod demo)
+   SELECT count(*) FROM "Booking" WHERE status = 'PENDING' AND "idempotencyKey" LIKE 'pub:%';   -- holds en vuelo
+   SELECT relfilenode FROM pg_class WHERE relname = 'Booking';                         -- ANOTARLO: tiene que ser igual después
+   SELECT pid, now()-xact_start AS age, left(query,80) FROM pg_stat_activity
+    WHERE xact_start IS NOT NULL AND now()-xact_start > interval '30 seconds';         -- ninguna
+   ```
+2. Backup: `npm run db:prod:backup`.
+3. **Variables en Vercel → Production antes del deploy** ([EXTERNAL-CONFIG §0.12](EXTERNAL-CONFIG.md)):
+   `SECRET_BOX_KEYS` (generada en tu terminal, guardada en el gestor de contraseñas; distinta en Preview),
+   `MP_CONNECT_MODE=off`, `MP_CONNECT_WEBHOOK_SIGNATURE=required`; `TURNERO_CHECKOUT` sin setear. Con `off` nada cambia
+   para el usuario: las pantallas de cobros online quedan escondidas hasta pasar a `sandbox`/`live`.
+4. `npm run db:prod:status` → `npm run db:prod:deploy` (**M12 → M14 → M18**, las que falten) → `npm run db:prod:status`
+   («Database schema is up to date!»). Si da P3009 por `lock_timeout` (una tx larga sobre `Booking`), ver §2.4 y
+   reintentar sin uso.
+5. Postcheck de solo lectura, objeto por objeto:
+   ```sql
+   SELECT md5(prosrc) FROM pg_proc WHERE proname = 'online_charge_guard';         -- 202110977dac927eb5957aa67f3de345
+   SELECT md5(prosrc) FROM pg_proc WHERE proname = 'online_charge_sync_booking';  -- f98cc831211d6d5aa559900d3b82bccc
+   SELECT proname, prosecdef, proconfig FROM pg_proc
+    WHERE proname IN ('online_charge_guard','online_charge_sync_booking');        -- prosecdef f, {search_path=pg_catalog, public}
+   SELECT tgname FROM pg_trigger WHERE tgrelid = '"OnlineCharge"'::regclass AND NOT tgisinternal;
+     -- OnlineCharge_guard, OnlineCharge_no_truncate, OnlineCharge_sync_booking
+   SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
+    WHERE relname IN ('BookingPaymentPolicy','MpAccount','MpCredential','OnlineCharge');   -- 4 filas t, t
+   SELECT tablename, policyname, cmd FROM pg_policies
+    WHERE tablename IN ('BookingPaymentPolicy','MpAccount','MpCredential','OnlineCharge') ORDER BY 1;
+     -- BookingPaymentPolicy_tenant_isolation ALL, MpAccount_tenant_read SELECT, OnlineCharge_tenant_isolation ALL;
+     -- NINGUNA en MpCredential (3 filas)
+   SELECT indexname FROM pg_indexes WHERE indexname IN ('MpAccount_tenant_practitioner_live_key','MpAccount_tenant_clinic_live_key',
+     'MpCredential_purgeAfter_idx','OnlineCharge_bookingId_turnero_key','OnlineCharge_bookingId_live_link_key',
+     'OnlineCharge_tenantId_approvedAt_paid_idx') AND indexdef LIKE '%WHERE%';      -- 6 (parciales: drift aceptado, no se borran)
+   SELECT count(*) FROM pg_constraint WHERE contype = 'f' AND conname IN ('MpAccount_practitioner_tenant_fkey',
+     'MpCredential_account_tenant_fkey','OnlineCharge_account_tenant_fkey','OnlineCharge_practitioner_tenant_fkey',
+     'OnlineCharge_patient_tenant_fkey','OnlineCharge_booking_tenant_patient_fkey');   -- 6 (FKs compuestas)
+   SELECT count(*) FROM pg_constraint WHERE contype = 'c' AND convalidated AND conrelid IN
+     ('"BookingPaymentPolicy"'::regclass,'"MpAccount"'::regclass,'"MpCredential"'::regclass,'"OnlineCharge"'::regclass);  -- 24
+   SELECT conname FROM pg_constraint WHERE conname = 'Booking_onlineDepositCents_check';   -- 1 fila
+   SELECT column_default, is_nullable FROM information_schema.columns
+    WHERE table_name = 'Booking' AND column_name = 'onlineDepositCents';           -- 0, NO
+   SELECT atthasmissing FROM pg_attribute WHERE attrelid = '"Booking"'::regclass AND attname = 'onlineDepositCents';  -- t
+   SELECT relfilenode FROM pg_class WHERE relname = 'Booking';                     -- = el del precheck (sin reescritura)
+   SELECT count(*) FROM "Booking";                                                 -- = el del precheck
+   SELECT has_table_privilege('kinesoft_app', '"OnlineCharge"', 'SELECT,INSERT,UPDATE');   -- t (DEFAULT PRIVILEGES)
+   SELECT checksum FROM _prisma_migrations WHERE migration_name = '20261022120000_turnero_cobros_mp';  -- el sha256 de arriba
+   ```
+6. Push/deploy de T5 (después de M18), con `MP_CONNECT_MODE=off`.
+7. Después, la consola de MP, el sandbox S1-S11 por túnel (`scripts/diagnose-mp-connect.ts`, lo corrés vos) y el paso a
+   `live` con un pago real de $ 1 y su reintegro: [EXTERNAL-CONFIG §0.12](EXTERNAL-CONFIG.md).
+8. **Rollback.** Del código: revertir el deploy sin tocar M18 (tablas sin lector y columna en 0 son inocuas). Con cobros
+   ya registrados, **no** se borra nada: `OnlineCharge` no se puede vaciar ni como owner (trigger, AUDIT §5.62). Si el
+   trigger de la seña rompiera la agenda, la palanca de emergencia es `DROP TRIGGER "OnlineCharge_sync_booking" ON
+   "OnlineCharge"` (decide Martin; la seña deja de reflejarse hasta recrearlo con el cuerpo literal de M18). Sacar M18 =
+   migración nueva con DROP, y se pierden cuentas, credenciales y cobros (backup del paso 2).
 
 **Deploy de BO** (código de `0d058bb`..`c60014f`, después de M7). Las variables nuevas nacen en su default seguro, así
 que el deploy no cambia el comportamiento de nadie salvo lo que se describe abajo.

@@ -1678,7 +1678,7 @@ cerrado por los fixers de P2.Z (motor, Seguimiento, plata) y verificado en el ar
 | search-assignment-archivados | baja | B | lib/diagnosis.ts:484 | 🟢 | S17d — `searchPatientsForAssignment` devolvía pacientes archivados; ahora `archivedAt: null` |
 | tenant-factory-planes-ajenos | baja | B (tests) | tests/helpers/tenant-factory.ts (`deleteTenantDeep`) | 🟢 | S12b/orquestador — el sweep fallaba con planes de otro tenant que apuntaban a sede/servicio/profesional del tenant (FKs simples); ahora los borra antes |
 | retry-p2034-agenda | media | C0/C1 | lib/time-blocks.ts (`applyDayLock`, `createTimeBlock`) · lib/bookings.ts (`createBooking`) | 🔴 | **C0/C1** — no reintentan P2034/40P01 (C2 lo pide) y tapan la excepción con un error genérico ("No pudimos …"). Los tests de carrera de S11x pasan, pero un deadlock real llega al usuario como error opaco |
-| after-commit-fuera-de-planes | media | B (SV) | lib/time-blocks.ts · lib/public-booking*.ts · lib/mercadopago.ts | 🟢 | **SV06a/SV06b + FX1a/FX1b** (Ronda 20) — turnero (alta y hold reemplazado), webhook de MP (todo write de `Booking`, incluido `amount_mismatch` impago), `devMarkBookingPaid`, candado y bloqueos llaman al hook; `guard-realtime` (c) y `realtime-emission.test.ts` lo fijan |
+| after-commit-fuera-de-planes | media | B (SV) | lib/time-blocks.ts · lib/public-booking*.ts · lib/mercadopago.ts | 🟢 | **SV06a/SV06b + FX1a/FX1b** (Ronda 20) — turnero (alta y hold reemplazado), webhook de MP (todo write de `Booking`, incluido `amount_mismatch` impago; desde T5 también la rama `?acct=`), candado y bloqueos llaman al hook; `guard-realtime` (c) y `realtime-emission.test.ts` lo fijan |
 | gates-reimplementados-legacy | baja | B | lib/sessions.ts:649 (`rescheduleSession`) | 🟢 | P3-S27a/S27b (Ronda 18) — `createProgram` y `applyPlanTemplate` retirados; `rescheduleSession` → `assertPlanScheduleInTx` + full |
 | onCreateTag-sin-error | baja | C1 | components/biblioteca/biblioteca-client.tsx:969 | 🔴 | **C1** — no atrapa el Error de `ensureTag`; en prod Next enmascara el mensaje y el usuario no ve por qué no se creó |
 | autorizacion-por-vencer-dashboard | baja | C1 | lib/dashboard.ts | 🔴 | **C1** — S14 no sumó el aviso "autorización por vencer" (era opcional) |
@@ -2097,7 +2097,7 @@ diff real — (a) a11y/responsive/copy-claims; (b) seguridad y contratos: 0 alto
 | Slug | Sev | Bloque | Ubicación | Estado | Cierre / destino |
 |---|---|---|---|---|---|
 | a-landing-mp-turnero | alta | VX (copy) | components/landing/features.tsx · components/landing/faq.tsx | 🟢 VX-Z | La landing decía «pagan el turno con Mercado Pago al reservar»; el cobro entra a la cuenta MP **de la plataforma**, no del consultorio (ver `turnero-mp-cuenta-plataforma`). Copy sin MP + caso en `public-claims.test.ts` |
-| turnero-mp-cuenta-plataforma | alta | **T5** (TP-2, M18) | lib/mercadopago.ts · lib/public-booking.ts · `MP_ACCESS_TOKEN` | 🟡 mitigado (TP-0, 18-oct) | Pre-existente: el turnero cobra con el token MP de la plataforma; la plata del paciente no llega al consultorio. **TP-0:** `TURNERO_CHECKOUT` default `off` = no se cobra online (se paga en el consultorio). Decidido (§22.1 #5): MP **por profesional** por OAuth → TP-2 en T5 (H-TP1). Hasta entonces no se promete en la cara pública |
+| turnero-mp-cuenta-plataforma | alta | **T5** (TP-2, M18) | lib/mercadopago.ts · lib/public-booking.ts · lib/public-booking-charge-internal.ts · lib/mp-connect/* | 🟢 T5 (`a0c3104` TP-2c + `d6463f4` TP-2b, 22-oct) | El turnero cobra con la cuenta MP **del profesional imputado** (o la del consultorio con `useClinicAccount`) por OAuth; nunca con `MP_ACCESS_TOKEN` (test «Plataforma: `MP_ACCESS_TOKEN` + `TURNERO_CHECKOUT=platform` → 0 llamadas al SDK»). ADR-026, §5.62-68 |
 | a-pricing-precio-null | media | VX | components/landing/pricing.tsx | 🟢 VX-Z | Con `priceCents` null el precio grande decía «Consultá»: ahora «Pedinos el precio» como link a `#contacto`, sin estilo de monto. **Martin:** cargar los precios en Plataforma → Precios (recomendado antes de mostrar la landing) |
 | a-turnero-iniciar-sesion | media | VX | components/booking/public-booking-wizard.tsx · public-booking.module.css | 🟢 VX-Z | «Iniciar sesión» siempre a `/portal`; `.pillButton` 44 px; Google oculto si está apagado (D-VX16, `visibleOAuthProviders`) |
 | a-forms-sin-js | media | VX | signup/forgot/reset · app/(portal)/portal/portal-email-form.tsx | 🟢 VX-Z | `useFormState` con server action directa (`components/auth/auth-form-actions.ts`, `app/(portal)/portal/portal-link-action.ts`): funcionan antes de hidratar. Test `auth-form-actions.test.ts` |
@@ -2288,7 +2288,7 @@ cerrado se verificó en el diff de cada commit. Decisiones con default en §22.1
 | Slug | Sev | Bloque | Ubicación | Estado | Cierre / destino |
 |---|---|---|---|---|---|
 | H-TP0 turnero-no-deja-terminar | alta | **A** | lib/public-booking.ts · lib/public-booking-payment.ts · lib/public-booking-internal.ts | 🟢 TP-0a `acb8792` + TP-0b `0469f10` | `decidePublicCheckout`: solo cobra con `TURNERO_CHECKOUT=platform` + MP configurado + monto ≥ $1 (`MIN_ONLINE_CHARGE_CENTS = 100`). Si no, el turno nace **CONFIRMED/UNPAID sin `Payment`** (retiene el cupo; no vence a los 30 min); replay sin escribir; PENDING vigente se promueve una vez, vencido → «Tu reserva venció…»; preferencia caída → degradado con `booking.public.checkout_degraded`. Wizard: «Confirmar turno», resultado «¡Turno reservado!». `tests/integration/tp0-turnero-sin-cobro.test.ts`, `public-booking-payment.test.ts` |
-| H-TP1 turnero-cuenta-plataforma | alta | **A** → T5 | lib/env.ts (`TURNERO_CHECKOUT`) | 🟡 mitigado | Default `off`: el turnero ya no cobra con la cuenta MP de la plataforma. El cobro a la cuenta de cada profesional (OAuth, M18) es TP-2 (T5). Misma causa que `turnero-mp-cuenta-plataforma` |
+| H-TP1 turnero-cuenta-plataforma | alta | **A** → T5 | lib/env.ts (`TURNERO_CHECKOUT`) | 🟢 T5 (22-oct) | Cerrado con `turnero-mp-cuenta-plataforma`: `TURNERO_CHECKOUT` ya no lo lee nadie (`platform` solo loguea un aviso al boot) |
 | H-TP2 estado-muestra-cero | media | B | lib/public-booking-payment.ts (`publicStatusAmountCents`) | 🟢 TP-0a | Con el pago pendiente muestra el monto esperado (`expectedAmountCents`), no `Payment.amountCents` (0 hasta el webhook); sin pago, el precio del servicio |
 | H-TP3 reserva-sin-aviso | media | B | lib/public-booking.ts:499 · lib/notifications-internal.ts:70 | 🟢 TP-0a | `BOOKING_CREATED` una vez después del commit que deja el turno CONFIRMED (alta o promoción), con `alsoAgendaOperators: true` (la Secretaria); nunca en replay |
 | H-RT1 realtime-nunca-suscribe | alta | **A** | lib/env.ts · lib/realtime-token{,-internal}.ts · lib/realtime-client-*.ts · components/realtime/* | 🟢 HF-1a `d1f08df` + HF-1b `fb65ad8` (falta el QA de prod) | Causa: `SUPABASE_JWT_SECRET` con `\n` final en Vercel (Martin lo re-pegó). `lib/env.ts` recorta secreto, `kid` y anon key; huella sha256 → 8 hex en `/plataforma/sistema` y en `scripts/realtime-verify.ts`; «Probar desde el servidor»; `realtime.mint_denied` con motivo (1 por usuario/motivo/10 min); tipo `realtime` en el reporte de errores del cliente. Cliente: `diag` por paso, 3 rechazos de auth → estacionado con un intento cada 5 min (+ «Reconectar»), `importWithRetry` (`lib/chunk-retry.ts`) → «Hay una versión nueva · Recargá», «Ver detalle» |
@@ -2298,7 +2298,7 @@ cerrado se verificó en el diff de cada commit. Decisiones con default en §22.1
 | H-LL2 reflejo-recepcion | baja | C | lib/agenda-client-state.ts · lib/agenda-slot-helpers.ts · components/agenda/grid/* · views/* · app/globals.css | 🟢 HF-2a `5921d62` | `waitingPulse` (solo en-sala y hoy AR; `long` ≥ 15′); punto lima `--rc-insala-dot` (≥ 3:1) sobre `.k-live-dot`, o «Borde que late» en Apariencia (D-LL1, `data-waiting-cue`); `now` hasta `SlotCell`; `denseOverflow` promueve a los que esperan; tope 12 puntos animados (D-HF5); «En sala» solo hoy; Semana y lista mobile con punto de 6 px; reduced motion = punto fijo |
 | H-2FA bypass-superadmin | — | HF | lib/two-factor-bypass{,-logic}.ts · lib/session.ts · lib/two-factor-step-up.ts · lib/platform-mfa-actions.ts | 🟢 HF-3 `eead8fc` | `SUPERADMIN_2FA_BYPASS="<userId>@AAAA-MM-DD"`, falla cerrado (superadmin activo, id exacto, fecha AR vigente a ≤ 30 días, nunca con `enforce`, una entrada mal formada invalida todas). Foto de acceso → `satisfied`; `requireStepUp` sale con `2fa.stepup_bypassed`; **no** aplica a sumar un factor (`allowBypass: false`) ni a `resolveTwoFactorSession`. Banda en Plataforma y `/cuenta/seguridad`. Ver SECURITY §20.1 |
 | H-YT youtube-tv | — | **TV (T7)** | lib/exercise-media-internal.ts:33-47 · next.config.mjs | 🔴 abierto | `youtubeId` server-only, sin vivos ni listas; CSP solo `youtube-nocookie`. Se resuelve con `lib/youtube.ts` en TV-1 (§22.7) |
-| webhook-pago-sin-operadores | baja | **T5** | lib/mercadopago.ts:460-467 | 🔴 abierto | El aviso `PAYMENT_RECEIVED` del webhook va a titulares y al profesional, sin `alsoAgendaOperators`: la Secretaria no se entera de un pago online (el alta sin cobro sí le avisa, H-TP3). Hoy no ocurre (`TURNERO_CHECKOUT=off`); sumarlo en TP-2 sin tocar §5.4 |
+| webhook-pago-sin-operadores | baja | **T5** | lib/mercadopago.ts:467 · lib/mp-connect/consume.ts | 🟢 TP-2a `ba640c3` | La rama legada suma `alsoAgendaOperators: true` (única línea tocada, §5.4 intacto; `mp-webhook.test.ts` sin cambios) y la rama `?acct=` avisa a titulares, profesional, Secretaría y creador del link |
 | slot-window-seq-scan-booking | baja | PF | lib/public-booking-slots.ts (`PUBLIC_WINDOW_SCAN_DAYS = 42`) · loader del turnero | 🔴 abierto | La ventana carga 6 semanas en una sola lectura (≤ 14 sentencias, `turnero.slotWindow` en `loaders.perf.test.ts`), pero el reporte de TP-1s vio un Seq Scan de `Booking` sobre el rango de 42 días. Con pocos datos puede ser lo más barato; revisar con volumen de prod (PF) |
 | realtime-probe-node22 | baja | OPS | lib/platform-realtime-probe-internal.ts:21,117 | 🟡 consola | «Probar desde el servidor» usa el `WebSocket` global: en Node 20 (runtime de hoy en Vercel) dice «no disponible en este runtime». Se habilita con Node 22 en Vercel (EXTERNAL-CONFIG §0.8); no se agrega `ws` a prod |
 | anon-key-navegador-sin-recorte | baja | OPS | lib/env.ts · bundle del cliente | 🟡 aceptado | El recorte de `NEXT_PUBLIC_SUPABASE_ANON_KEY` es del lado server; la copia que inlinea el build en el bundle no pasa por `lib/env.ts`. Un `\n` ahí rompería el `apikey` del socket: re-pegarla limpia en Vercel (EXTERNAL-CONFIG §0.8) |
@@ -2415,12 +2415,12 @@ Revisores de T4-Z de solo lectura: (a) seguridad/PHI/RLS/audit/portal/respaldo (
 
 | Slug | Sev | Bloque | Ubicación | Estado | Detalle / destino |
 |---|---|---|---|---|---|
-| t4z-a M-1 ★ anular-enmienda-revoca | media | B | lib/clinical-notes.ts:460-496 | 🟢 fix ZF1 `e0f9ecb` · **confirma Martin** | Anular una ENMIENDA dejaba vivo el documento de la raíz (el paciente seguía viendo la enmienda anulada). Default: revocar también (`NOTE_VOIDED`, `FOR NO KEY UPDATE` sobre la raíz) y avisarlo en el diálogo de anular. Enmienda el Anexo C del brief (ADR-020 enmienda T4). Si Martin prefiere que no, se saca el bloque y vuelve la línea del contrato |
-| t4z-a M-3 ★ email-enmascarado | media | B | lib/patient-documents.ts:109-127 · components/fichas/share-ficha-dialog.tsx:65 | 🟢 fix ZF4 `a0cf925` · **confirma Martin** | El diálogo de compartir muestra el email **enmascarado** de la cuenta del portal vinculada (`j***@gmail.com`, `maskEmail`) antes de confirmar; el email completo nunca viaja al cliente |
+| t4z-a M-1 ★ anular-enmienda-revoca | media | B | lib/clinical-notes.ts:460-496 | 🟢 fix ZF1 `e0f9ecb` · **confirmado por Martin 22-oct** (+ aviso al paciente, T4-Y `6f56c03`) | Anular una ENMIENDA dejaba vivo el documento de la raíz (el paciente seguía viendo la enmienda anulada). Default: revocar también (`NOTE_VOIDED`, `FOR NO KEY UPDATE` sobre la raíz) y avisarlo en el diálogo de anular. Enmienda el Anexo C del brief (ADR-020 enmienda T4). Si Martin prefiere que no, se saca el bloque y vuelve la línea del contrato |
+| t4z-a M-3 ★ email-enmascarado | media | B | lib/patient-documents.ts:109-127 · components/fichas/share-ficha-dialog.tsx:65 | 🟢 fix ZF4 `a0cf925` · **confirmado por Martin 22-oct** | El diálogo de compartir muestra el email **enmascarado** de la cuenta del portal vinculada (`j***@gmail.com`, `maskEmail`) antes de confirmar; el email completo nunca viaja al cliente |
 | t4z-rate-limits-nuevos | baja | B | lib/patient-documents.ts:137-139 · lib/files.ts:351 · rutas de descarga | 🟡 defaults | Compartir 30/10 min por usuario; aviso 3/h por paciente (pasado el tope comparte sin mail, `skipped`); pedir subida 60/10 min; ficha 60/10 min; HC completa 5/10 min; PDF del portal 30/10 min por IP. Revisar con uso real |
 | t4z-a B-5 cola-de-render | baja | PF | lib/hc-pdf/render-internal.tsx (renders serializados por proceso + `freshFonts()`) | 🔴 a medir | Sin código: medir en Vercel (`gru1`, frío y en caliente, HC de 300 fichas: 6-7 s local) en el checklist final (EXTERNAL-CONFIG §0.11) |
 | t4z-fallbacks-zf4 | baja | B | components/fichas/diagnosis-field.tsx:32 · diagnosis-picker.tsx:48 · hc-editor-field.tsx:51 · ficha-form.tsx:69 | 🔴 limpieza | Copy con fallback `// handoff ZF4` (`favorite`, `overBy`, `amendOf`, `addExtras`): pasarlos a `fichas-copy.ts` y borrar los fallbacks en la próxima tanda que toque esos archivos |
-| t4-composer-diferido-ssr | — | PF | components/patients/profile/views/hc-ssr-parts.ts | 🟡 para Martin | El composer también quedó diferido con SSR + precarga (más allá del fallback de §24.9, que era solo la timeline). El budget no lo cuenta: JS total antes de interactuar ~190 kB en `/pacientes/[id]` |
+| t4-composer-diferido-ssr | — | PF | components/patients/profile/views/hc-ssr-parts.ts | 🟢 confirmado por Martin 22-oct | El composer también quedó diferido con SSR + precarga (más allá del fallback de §24.9, que era solo la timeline). El budget no lo cuenta: JS total antes de interactuar ~190 kB en `/pacientes/[id]` |
 | t4-agenda-171 | — | PF | /agenda | 🟢 FC-4i `966463b` | `/agenda` 171,3 (tope ≤ cierre de T3, +0), con el shim `note-editor-drawer` borrado; el número final es el del gate FC-ZG |
 | fc3c enmienda-con-cie11-retirado | baja | C1 | lib/clinical-notes.ts (enmendar) · components/fichas/ficha-form.tsx | 🔴 abierto | `DiagnosisSnapshot` no dice si el código se retiró después: una enmienda que precarga un CIE-11 retirado se rechaza con `DIAGNOSIS_COPY.retired` y hay que quitar el chip a mano. Recomendado: `retired` por diagnóstico en el DTO de lectura. Solo pasa después de un re-import que retire códigos |
 | fc2h pdf-respaldo-sin-logo | baja | B | lib/portal-documents-internal.ts | 🟡 default para Martin | Si falta el PDF guardado, el portal re-renderiza desde la foto, sin logo ni firma escaneada |
@@ -2433,6 +2433,69 @@ datos, sin cuentas creadas. Regla nueva en las reglas de sesión (`wip-20/t4-com
 **nunca** `next build`/`next start`/E2E en una copia del árbol que tenga `.env` o `.env.prod.local`. Las copias
 aisladas se hacen con `rsync --exclude '.env*'` y los builds de medición, con las variables del E2E/fake. El gate
 oficial usa los scripts npm.
+
+### Ronda T5 (22-oct): cobros online (TP, M18) · Hallazgos de T5-Z
+
+Ronda 34. T5 = TP (§25 del plan, brief `wip-20/brief-t5.md`; contratos C-TP1..C-TP14), con T4-Y antes (`6f56c03`) y los
+commits `a31337c`..`92c600c` (T5a → T5b → T5c → T5d → T5e → T5f → T5-Z), **local, sin push**. M18
+`20261022120000_turnero_cobros_mp` (`0a8e551`) aplicada solo en el Docker local (orden para prod en RUNBOOK «M18 en
+prod»). Diseño en ARCHITECTURE ADR-026; «preservar» nuevos §5.62-68 y enmienda de §5.4. Revisores de T5-Z de solo
+lectura: TP-ZA (plata, secretos, webhook, RLS, concurrencia, fuga del simulador) y TP-ZB (UX, a11y, mobile, bundle, copy;
+capturas a 390/1024/1366). Sus fixes van en TP-ZF (`92c600c`). Todo se probó contra el **Mercado Pago falso**: nada
+contra Mercado Pago real ni contra prod.
+
+**Cerrado por T5:** `turnero-mp-cuenta-plataforma` / H-TP1 y `webhook-pago-sin-operadores` (filas de arriba); T4-Y
+(`6f56c03`: anular una ficha compartida, raíz o enmienda, le avisa al paciente por mail sin título ni motivo y comparte el
+tope de 3/h por paciente con compartir, `PATIENT_NOTIFY_RATE_LIMIT`).
+
+**Arreglado en T5-Z (TP-ZF `92c600c`)**
+
+| Slug | Sev | Ubicación | Estado | Cierre |
+|---|---|---|---|---|
+| t5z M1 ingresos-sena-reintegrada | media | lib/dashboard.ts:803 · tests/integration/tp2r-revenue-online.test.ts | 🟢 TP-ZF | Una seña reintegrada después del cobro a mano dejaba de restarse y el manual sumaba el copago entero. Enmienda de C-TP11 (abajo) |
+| t5z M2 cobrar-a-mano-anula-turnero | media | lib/bookings.ts:2012-2033 · lib/payment-links-internal.ts:52 | 🟢 TP-ZF | Marcar «Pagado» anulaba los links pero dejaba vivo el cobro del TURNERO (OPTIONAL «Pagar ahora») → el paciente podía pagar dos veces. Enmienda de C-TP10 |
+| t5z M3 cancelar-anula-cobros | media | lib/bookings.ts · lib/mp-connect/cron-internal.ts | 🟢 TP-ZF | Cancelar / Ausente (drawer y Sala) anula en la misma tx los ACTIVE LINK y TURNERO (`booking_cancelled`); el cron anula también los TURNERO de turnos CANCELLED/NO_SHOW |
+| t5z B1 duplicado-tras-reintegro | baja | lib/online-charge-logic.ts · lib/mp-connect/consume.ts | 🟢 TP-ZF | Un pago nuevo después de un reintegro se trata como «Pago duplicado», no revive el cobro |
+| t5z B2 cas-link-exige-active | baja | lib/payment-links-internal.ts | 🟢 TP-ZF | El CAS de anular / reenviar el link exige `status = ACTIVE` |
+| t5z B3 sena-authorized-sostiene-hold | baja | lib/public-booking-charge-internal.ts · lib/online-charge-logic.ts | 🟢 TP-ZF | Una seña AUTHORIZED sostiene el hold del turnero (no se libera el horario con un pago en proceso) |
+| t5z B5 carrera-refresh-reauth | baja | lib/mp-connect/accounts-internal.ts:381,441 · cron-internal.ts:82 | 🟢 TP-ZF | Un refresh que ganó otro no marca REAUTH; `restoreActiveAfterRefresh` |
+| t5z B6 idempotency-key-100 | baja | lib/payment-links-types.ts | 🟢 TP-ZF | `idempotencyKey` ≤ 100 caracteres en el schema |
+| t5z A1 turnero-avisa-sin-cobro | alta | components/booking/public-booking-wizard.tsx · wizard/payment-choice.tsx · lib/public-wizard-state.ts · components/configuracion/panels/online-payments-panel.tsx | 🟢 TP-ZF | El turnero prometía un cobro que el server no hacía (monto cotizado ≠ cobrado, p. ej. Particular en $ 0): ahora avisa en el resultado; Configuración avisa «Particular en $ 0» |
+| t5z UI cobros-off / red / a11y / copy | media/baja | app/(app)/cobros/page.tsx · cobros-client.tsx · my-mp-panel.tsx · clinic-mp-account-card.tsx · profile-menu.tsx · desk-actions.tsx · payment-link-share.tsx | 🟢 TP-ZF | `/cobros` con `MP_CONNECT_MODE=off` redirige; errores de red con aviso y «Reintentar»; foco, nombres accesibles y regiones en vivo; copy |
+
+**Pendiente (para Martin o Bloque C)**
+
+| Slug | Sev | Bloque | Ubicación | Estado | Detalle / destino |
+|---|---|---|---|---|---|
+| t5z B4 authorized-sin-vencimiento | baja | C | lib/mp-connect/cron-internal.ts | 🔴 abierto | Un cobro AUTHORIZED que MP nunca resuelve no vence solo y bloquea el cobro a mano («en proceso»). Propuesta: aviso en Plataforma → Sistema con los AUTHORIZED de más de N días |
+| t5z facturacion-percibido-de-mas | media | C | components/planes/plan-booking-groups.ts:304-307 · BillingRow | 🔴 abierto | Facturación del paciente muestra percibido de más si la seña se reintegra **después** del cobro a mano: `BillingRow` no trae las señas reintegradas (Ingresos sí, M1). Mismo criterio que C-TP11 |
+| t5z cancelled-authorized-aprobado | baja | C | lib/booking-copago-internal.ts · lib/mercadopago.ts | 🔴 abierto (preexistente) | Un turno CANCELLED con copago AUTHORIZED que después se aprueba queda AUTHORIZED. Pasaba con el legado; ahora también con seña |
+| t5z particular-en-cero-cotiza | media | T5 (enmienda C-TP8) | lib/public-booking-charge-internal.ts:90 · public-booking-wizard.tsx | 🟡 **decide Martin** | El wizard sigue cotizando con el precio del servicio cuando Particular está en $ 0 (A1 solo avisa). Recomendado: exponer el copago de Particular en `PublicClinicOnlinePayment` (= enmienda de C-TP8) |
+| t5z tenant-modules-3-chunks | baja | C (PF) | `/agenda` | 🔴 abierto | `tenant-modules-context` queda duplicado en 3 chunks de `/agenda` |
+| t5z copy-no-la-cierres | baja | C | components/booking/booking-result.tsx:95 | 🔴 abierto | Frase «No la cierres.» en el resultado del turnero: suena a orden; revisar copy |
+| tp3j dev-pelado-supabase-env | **alta** | OPS | package.json (`dev`) · `.env.local` | 🟡 **decide Martin** | Hallazgo A de TP-3j: un `npm run dev` pelado toma Supabase de `.env` (puede ser **prod**) porque `.env.local` solo trae la DB. Contradice «local sí, prod nunca». Usar `npm run dev:mpfake` (pisa Supabase a loopback) o `.env.local` completo. Recomendado: que `dev` pise Supabase como `dev:mpfake` |
+| t5-bundle-agenda-sala | — | PF | /agenda · /sala | 🟡 **decide Martin** | `/agenda` **171,9** (tope 171,6) y `/sala` **155,4** (+0,4 sobre T5d): el exceso viene de T5e aprobado (badges, drawer y sala con seña). Recomendado: subir el tope a lo medido ([PERF «T5»](PERF.md)) |
+| t5-s3-s5 sandbox | — | T5 (final) | lib/mp-connect/consume.ts · scripts/diagnose-mp-connect.ts | 🔴 al final | S3 (¿el pago con token de vendedor llega firmado con nuestro secreto?) decide `MP_CONNECT_WEBHOOK_SIGNATURE`; S5 (¿MP también notifica la URL del panel sin `acct`?) decide un pre-despacho por `user_id`. Sandbox con túnel, lo corre Martin ([EXTERNAL-CONFIG §0.12](EXTERNAL-CONFIG.md)) |
+| t5-csp-com-ar | baja | **T7** | next.config.mjs:43,108,121 | 🔴 abierto | `*.mercadopago.com` no matchea `auth.mercadopago.com.ar` ni `www.mercadopago.com.ar`. Hoy no hace falta (OAuth y checkout por navegación); entra con el CSP enforce de T7 |
+| t5-secret-box-rotate-cabecera | — | docs | lib/secret-box-rotate-internal.ts (cabecera) | 🔴 limpieza | Dice «el cliente Prisma de T5a no la conoce»: ya la conoce (M18 generada). Corregir en la próxima sesión que toque el archivo |
+| t5-bajos-c | baja | C | varios | 🔴 abierto | `notifyTenantOwners` no filtra `disabledAt` en OWNER/ADMIN (`lib/notifications-internal.ts:~92`, previo a T5); `deleteTenantDeep` rama `foreignPrograms` no limpia `OnlineCharge`; `casUpdate` usa `CURRENT_TIMESTAMP` en columna sin zona; saldo P7 de planes y `patientBillableCountInTx` no cuentan la seña; Esc cierra los dos drawers a la vez (`components/ui/drawer.tsx:257`); Semana mobile sin badge; `actorCapsInTx` duplicado en `lib/payment-links.ts` (mover a un módulo de capabilities); `X-Robots-Tag`/`Cache-Control` explícitos para `/pagar`; `data.id` alfanumérico en minúsculas en el manifiesto de firma (hoy ids numéricos); `setBookingCopagoPaid` no devuelve `copagoCollectedById`; REFUNDED legado ofrece «Comprobante» vacío |
+
+**Enmiendas de contrato (T5-Z, texto literal; mandan sobre el Anexo B del brief)**
+
+- **C-TP10**: «`liveLinkIds` = cobros ACTIVE del turno con `origin = 'LINK'`, más `origin = 'TURNERO'` cuando el turno
+  (leído sobre la fila ya bloqueada) no está PENDING; misma sentencia (CTE `k."turneroToo"`). Marcar →
+  `cancelLiveLinksForBookingInTx(..., includeTurnero)` → CANCELLED(`collected`). Cancelar / Ausente (drawer y Sala) → los
+  ACTIVE LINK y TURNERO → CANCELLED(`booking_cancelled`) en la misma tx (+1 sentencia solo en esa transición);
+  `expirePreferencesBestEffort` después del commit. El cron anula también los TURNERO ACTIVE de turnos
+  CANCELLED/NO_SHOW.»
+- **C-TP11**: en el LATERAL de `manualNet`,
+  `AND (c."status" = 'PAID' OR (c."status" = 'REFUNDED' AND c."refundedAt" > b."copagoPaidAt")) AND c."settledAt" <= b."copagoPaidAt"`
+  — «una seña reintegrada después del cobro a mano se sigue restando del manual: la recepción cobró solo el resto».
+
+**Decisiones con default de T5 que siguen abiertas** (las lista [decisiones pendientes](plannings-claude/decisiones-pendientes-18-oct.md) §13): con `MP_CONNECT_MODE=off` se esconden «Cobros»,
+«Mi Mercado Pago» y «Cobros online»; el profesional BASIC ve los cobros online de su propio turno; delegar la cuenta del
+consultorio no pide step-up (desconectar sí); «Cobros» en el nav solo con `billing.collect`; tope de bundle de `/agenda`
+y `/sala`; Particular en $ 0.
 
 ### Resumen del checklist (al 2026-09-29)
 
@@ -2516,6 +2579,11 @@ era intencional.
    `rawPayload.attempts` (redactado, últimos 20); todo corre en una tx con `SELECT … FOR UPDATE` sobre el turno
    (`:283`) + reintento como update ante P2002; solo PENDING pasa a CONFIRMED y **nunca se reactiva** un turno
    CANCELLED/NO_SHOW/COMPLETED (se registra el pago y se avisa "revisá el reembolso").
+   **Enmienda T5 (22-oct, ADR-026):** la ruta suma una rama **aditiva**: con `?acct=` va a `handleConnectWebhook`
+   (`app/api/webhooks/mercadopago/route.ts:45-47`); sin `acct`, la rama legada es **byte a byte igual** (firma, replay,
+   `consumeWebhook`, texto «revisá el reembolso»; `tests/integration/mp-webhook.test.ts` intacto y en verde). Lo único
+   que cambió en `lib/mercadopago.ts` es `alsoAgendaOperators: true` en el aviso (`:467`). La rama nueva no relaja nada
+   de esto: ver §5.63.
 5. **`lib/copago.ts`** (re-exportado por `lib/billing-internal.ts`) — `resolveBookingCopagoCents` con precedencia estricta nullable
    (`Booking.copagoCents` → `Coverage.copagoCents` → insurer → Particular → service); 0 es
    intencional. Fuente única de copago. No duplicar el cálculo.
@@ -2848,6 +2916,44 @@ era intencional.
     PNG/JPEG con magic bytes y tope de dimensiones; logo con `tenant.sensitive`, firma solo la propia. El PDF lleva la
     firma del **autor** de la ficha. Los buckets `patient-documents`, `practice-assets` y `patient-files` son privados y
     sin policies: todo pasa por la service role del server.
+62. **`OnlineCharge` nunca se borra y sus reglas viven en la base (M18, ADR-026).** `online_charge_guard()` rechaza
+    DELETE y TRUNCATE (también al owner), solo deja nacer cobros ACTIVE sobre una cuenta ACTIVE del profesional imputado
+    o del consultorio y con turno de ese profesional, congela identidad y monto, fija las transiciones y deja escribir
+    comprobante y anulación una sola vez. Un pago aprobado **siempre** se registra (un link anulado o vencido puede pasar
+    a PAID: la app avisa). Los parciales `OnlineCharge_bookingId_turnero_key`, `OnlineCharge_bookingId_live_link_key`,
+    `OnlineCharge_tenantId_approvedAt_paid_idx`, `MpAccount_tenant_practitioner_live_key`, `MpAccount_tenant_clinic_live_key`
+    y `MpCredential_purgeAfter_idx` no están en Prisma: no se borran si `migrate dev` lo propone. No mover estas reglas a
+    la app ni «limpiar» cobros con DELETE.
+63. **La rama connect siempre vuelve a pedir el pago (C-TP6/C-TP7).** `consumeConnectWebhook`
+    (`lib/mp-connect/consume.ts:157`) nunca confía en el cuerpo del aviso ni solo en la firma: busca la cuenta por
+    `webhookRef`, hace GET del pago con **el token del vendedor** y exige `collector_id` de esa cuenta, `live_mode` según el
+    modo, ARS, `external_reference` `oc:<id>` de un cobro de esa cuenta y ese consultorio, y monto ±5 centavos. Nunca
+    escribe `Payment`. No agregar atajos («si viene firmado, aplicar»), no resolver el cobro por `metadata` y no relajar
+    `MP_CONNECT_WEBHOOK_SIGNATURE=required` sin el resultado de S3.
+64. **Tokens de Mercado Pago solo sellados (C-TP1).** Access y refresh van en `MpCredential` (SERVICE_ONLY, sin policy)
+    sellados con `lib/secret-box.ts` y AAD por cuenta y campo (`mpCredentialAad`); el refresh es CAS sobre `version`; al
+    desconectar se purgan a los 7 días. Nunca en logs, audit, respuestas, DTOs, redirects, export ni Sistema (que muestra
+    kids y huellas). No guardar un token en claro «para debug» ni derivar la clave de otra cosa que `SECRET_BOX_KEYS`.
+65. **La plata online no se pisa a mano y la seña la escribe solo la base (C-TP10).** Un copago pagado por Mercado Pago
+    (método MP sin quién cobró) no se marca, desmarca ni cambia de medio a mano; un AUTHORIZED bloquea («en proceso»). La
+    seña **no** marca el copago (TP-D7): «Pagado» cobra lo que falta. `Booking.onlineDepositCents` lo escribe **solo** el
+    trigger `online_charge_sync_booking()` (que además mueve `updatedAt`). Orden de locks **Booking → OnlineCharge** en el
+    webhook (`consume.ts:211-213`) y en el cobro a mano (`lib/bookings.ts:2012-2033`, una sola sentencia que también
+    trae los cobros vivos a anular). No escribir la columna desde la app ni invertir el orden.
+66. **Ingresos netos de señas, lo online por `approvedAt` (C-TP11).** `lib/dashboard.ts` suma en **una** sentencia el
+    legado (`Payment.createdAt`), lo online (`OnlineCharge` PAID por `approvedAt`) y lo manual neto
+    (Σ max(0, copago − señas que la recepción vio al cobrar), `:803`), excluyendo lo pagado por MP con `COALESCE` para
+    medios previos a M12. Una seña reintegrada **después** del cobro a mano se sigue restando (la recepción cobró solo el
+    resto). No volver a dos sentencias ni sacar el filtro del manual (duplica).
+67. **State OAuth ligado y cuenta del consultorio con 2FA (C-TP4).** La cookie `kine_mp_oauth` (HMAC
+    `kinesoft:mp-oauth-state:v1`, 10 min, `SameSite=Lax`, path `/api/mp/oauth`) ata usuario, sesión, consultorio, target y
+    nonce; el callback re-chequea al actor y canjea con PKCE S256. Sin `session_id` conectar falla cerrado. La cuenta del
+    consultorio la conecta y desconecta **solo el Titular con step-up**; soporte nunca; la plataforma nunca cobra con su
+    cuenta. No aflojar la ligadura ni ofrecer «conectar» desde un form POST (la CSP no cubre `.com.ar`).
+68. **La realidad de Mercado Pago nunca rompe una constraint.** Sin único sobre PAID, sin tope superior en
+    `onlineDepositCents`, sin CHECK que un pago real (duplicado, monto distinto, tardío, sobre un turno cancelado) pueda
+    violar: un CHECK violado sería un webhook en 500 reintentado durante días. Lo anómalo se registra y se avisa
+    («Pago duplicado», «Pago con monto distinto», «si corresponde, reintegralo desde Mercado Pago»).
 
 ---
 

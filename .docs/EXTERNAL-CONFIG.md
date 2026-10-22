@@ -227,7 +227,7 @@ Tanda A»](AUDIT.md), [SECURITY §17 y §20.1](SECURITY.md); QA en [QA «Tanda A
 
 | Qué | Dónde | Cuándo / cómo |
 |---|---|---|
-| `TURNERO_CHECKOUT` | Vercel → Production | **Dejarla sin setear** (= `off`, TP-D1): el turnero reserva sin cobro y se paga en el consultorio. `platform` cobraría con la cuenta MP **de la plataforma** (H-TP1): solo para probar o con acuerdo explícito. Otro valor frena el boot. El cobro a la cuenta de cada profesional llega con TP-2 (T5) |
+| `TURNERO_CHECKOUT` | Vercel → Production | **Dejarla sin setear.** Desde T5 nadie la lee (el turnero cobra con la cuenta de cada profesional, §0.12); `platform` solo loguea un aviso al boot y otro valor lo frena |
 | Holds trabados del turnero | SQL Editor de prod, **solo lectura** | Reservas que quedaron PENDING por el bug de H-TP0 (cada reintento fallaba). Correr la query de abajo y avisar a esos pacientes (el horario ya se liberó a los 30 min). No escribir nada: el agente no toca prod |
 | `SUPERADMIN_2FA_BYPASS` | Vercel → Production | Formato `<tu userId>@AAAA-MM-DD` (fecha de vencimiento, inclusive, hora AR; **≤ 30 días**, recomendado 14). El userId es el de Supabase → Authentication → Users. Una entrada mal escrita o a más de 30 días se ignora (log `2fa.bypass_ignored`) y la 2FA sigue pidiéndose. No aplica con `PLATFORM_MFA_ENFORCEMENT=enforce`. Mientras dure, **con tu contraseña sola se opera Plataforma entera**: contraseña única. Cambiar o apagar la 2FA y sumar un factor siguen pidiendo el código. Al terminar, borrarla y redeploy (o dejar que venza: la banda desaparece sola) |
 | `SUPABASE_JWT_SECRET` | Vercel → Production | Ya re-pegado por Martin el 18-oct sin Enter al final (H-RT1). Verificar: `/plataforma/sistema` → huella del secreto = la que imprime `scripts/realtime-verify.ts` en local, y «espacios o saltos de línea al borde: no» |
@@ -309,6 +309,65 @@ planning** (§22.14: consolas, push y migraciones juntos). Orden en [RUNBOOK «M
   - un `.exe` renombrado a `.pdf` se rechaza y no queda nada en el bucket.
 - [ ] Compartir una ficha con un paciente de prueba → el PDF aparece en `patient-documents` y el mail llega sin datos
   clínicos → el portal lo baja → anular la ficha → desaparece del portal.
+
+### 0.12 T5 — Cobros online con Mercado Pago (22-oct-2026) 🔴
+
+**Con migración M18** (`turnero_cobros_mp`) y variables nuevas. ⚠️ Todo esto va **al final de todo el planning**
+(§22.14: consolas, push y migraciones juntos), **antes del push**. Orden de la migración en
+[RUNBOOK «M18 en prod»](MIGRACIONES-RUNBOOK.md); diseño en [ARCHITECTURE ADR-026](ARCHITECTURE.md); seguridad en
+[SECURITY §24](SECURITY.md); QA en [QA «T5»](QA.md). En T5 nada tocó Mercado Pago real: todo corrió contra el MP falso.
+
+**Progresión:** `MP_CONNECT_MODE=off` en el deploy (nada cambia para el usuario: se esconden «Cobros», «Mi Mercado Pago» y
+«Cobros online») → consola de MP → **sandbox** S1-S11 en local por túnel → `live` + redeploy → un pago real de $ 1 y su
+reintegro desde MP. En local, para QA: `npm run dev:mpfake` (MP falso, nunca lee `.env*`).
+
+**Variables (Vercel → Production; Preview con valores propios o sin setear):**
+
+| Variable | Valor | Cuándo / cómo |
+|---|---|---|
+| `SECRET_BOX_KEYS` | `k1:<base64 de 32 bytes>` | **Antes del deploy.** Generarla en tu terminal: `node -e "console.log('k1:'+require('crypto').randomBytes(32).toString('base64'))"`. Guardarla en el gestor de contraseñas (perderla = todas las cuentas reconectan). **Distinta** para Production y Preview. Para rotar: sumar `k2:<nueva>,k1:<vieja>` → redeploy → `scripts/secret-box-rotate.ts` (dry-run → `--apply`, lo corrés vos) → sacar `k1` |
+| `MP_CONNECT_MODE` | `off` → `sandbox` → `live` | **`off` en el primer deploy.** `fake` en Vercel frena el boot (y el getter cae a `off`). `sandbox`/`live` en Production exigen `MP_OAUTH_CLIENT_ID/SECRET`, `SECRET_BOX_KEYS` y, con firma `required`, `MP_CONNECT_WEBHOOK_SECRET`; si falta una, el boot falla. Un typo también |
+| `MP_CONNECT_WEBHOOK_SIGNATURE` | `required` | **Antes del deploy.** Pasar a `fetch-only` **solo** si el sandbox demuestra (S3) que los avisos de pagos cobrados con el token del vendedor no llegan firmados con el secreto de nuestra app. Con `required`, MP reintenta por días: no se pierde nada mientras se decide |
+| `MP_OAUTH_CLIENT_ID` / `MP_OAUTH_CLIENT_SECRET` | de la app de MP | Al crear la app (abajo). Primero las de la app de **prueba** (sandbox), después las de producción |
+| `MP_CONNECT_WEBHOOK_SECRET` | secreto de «Webhooks» de la app | De la sección Webhooks de la app de MP (abajo). No es `MP_WEBHOOK_SECRET` (ese es del checkout legado y queda como está) |
+| `TURNERO_CHECKOUT` | sin setear | Ya no la lee nadie (§0.8) |
+
+**Consola de Mercado Pago** (Tus integraciones → Crear aplicación; gratis):
+
+| Qué | Cómo |
+|---|---|
+| App con OAuth | Tipo «Pagos online», con **OAuth** activado, **PKCE** (S256) activado y el scope `offline_access` (refresh token de 180 días). Términos para profesionales: la plataforma no retiene fondos ni cobra comisión (TP-D11) |
+| Redirect URIs (exactas) | `https://<dominio de prod>/api/mp/oauth/callback`; la de staging/Preview si hay una URL fija (`https://<staging>/api/mp/oauth/callback`); y una URL de túnel **reservada** para el sandbox local (`https://<túnel>/api/mp/oauth/callback`). Tiene que coincidir carácter por carácter con `APP_URL` + `/api/mp/oauth/callback` |
+| Webhooks | Evento **«Pagos»**, URL `https://<dominio>/api/webhooks/mercadopago` (la `notification_url` de cada preferencia agrega `?acct=…` y tiene prioridad). Generar el **secreto** → `MP_CONNECT_WEBHOOK_SECRET` |
+| Usuarios de prueba | Crear **3**: 2 vendedores (para probar dos profesionales y la cuenta del consultorio) y 1 comprador. Guardar usuario y contraseña en el gestor de contraseñas |
+
+**Sandbox S1-S11** (lo corrés vos, en local, con `MP_CONNECT_MODE=sandbox`, la app de prueba y un túnel; nunca un
+agente): `scripts/diagnose-mp-connect.ts` verifica los supuestos que el MP falso hace sobre MP real. Sin flags corre
+contra el fake (lo mismo que CI: `npm run diagnose:mp-connect`). Imprime ✓/✗, nunca tokens.
+
+1. `MP_CONNECT_MODE=sandbox … npx tsx --conditions=react-server scripts/diagnose-mp-connect.ts --sandbox` → imprime la URL
+   de autorización [S1]; autorizar con el vendedor de prueba 1.
+2. `… --sandbox --code <code de la vuelta> --verifier-file <archivo del paso 1>` → S2, S4, S6, S8, S9.
+3. Pagar la preferencia de [S6] con el comprador de prueba y mirar el log del webhook → S3, S5, S10, S11 (manuales).
+
+| Supuesto | Qué verifica | Qué decide |
+|---|---|---|
+| S1 | La autorización exige PKCE S256 y la `redirect_uri` exacta, y vuelve con `code` + `state` | — |
+| S2 | El canje da access + refresh + `user_id` + `expires_in`; el código es de un uso | — |
+| S3 | El aviso de un pago cobrado con el token del vendedor llega firmado con el secreto de **nuestra** app | `MP_CONNECT_WEBHOOK_SIGNATURE` (`required` / `fetch-only`) |
+| S4 | `/users/me` con el token del vendedor da su nickname; token inválido → 401 | — |
+| S5 | MP notifica la `notification_url` de la preferencia (con `?acct=`) con `data.id` y `type=payment` | Si MP también notifica la URL del panel sin `acct`: pre-despacho por `user_id` (aditivo) |
+| S6 | Crear preferencia con el token del vendedor da `id` + `init_point`; `expires`/`expiration_date_to` se respetan | — |
+| S7 | `GET /v1/payments/:id` con el token de **otro** vendedor no devuelve el pago | — |
+| S8 | El refresh es rotativo: el refresh usado deja de servir (`invalid_grant`) | — |
+| S9 | `PUT /checkout/preferences/:id` con `expires` en el pasado vence la preferencia | — |
+| S10 | El pago trae `collector_id` del vendedor, `external_reference` `oc:<id>`, ARS y el monto | — |
+| S11 | Un reintegro deja el pago `refunded` con `transaction_amount_refunded` | — |
+
+**Pasar a `live`:** credenciales de producción de la app → `MP_CONNECT_MODE=live` → redeploy → conectar tu cuenta real
+desde «Mi Mercado Pago» → un turno o link de $ 1 → pagar → ver «Pagado por Mercado Pago» → reintegrarlo **desde Mercado
+Pago** → ver «Reintegrado». Plataforma → Sistema → «Cobros online (Mercado Pago)» muestra modo, presencias, huellas de
+las claves, firma, cuentas por estado, último webhook y última renovación.
 
 ### 1. Hosting / plataforma de despliegue — Vercel
 - **Qué configura:** proyecto en Vercel (región `gru1` ya fijada en `vercel.json`); env vars de prod;
@@ -478,17 +537,17 @@ prod `supabase` + redeploy. Volver atrás = `REALTIME_DRIVER=off` + redeploy.
 
 ### 6. Pagos — Mercado Pago
 - **Qué configura:**
-  1. **Checkout de turnos (existente):** credenciales de prod + `MP_WEBHOOK_SECRET` verificado en
-     Vercel (la ruta ya da 503 sin él); credenciales **sandbox** para el QA de `payment-amount-anclado`.
-     **Desde TP-0 (18-oct) está apagado por default** (`TURNERO_CHECKOUT` sin setear, §0.8): la única cuenta es la de
-     la plataforma. El cobro a la cuenta de cada profesional (OAuth con PKCE, app MP, usuarios de prueba, sandbox S3)
-     es TP-2 en la tanda T5 (plan §22.5 «Consola de Martin»).
-  2. **Preapproval / suscripción:** **no por ahora** (decisión de Martin 16-oct). La suscripción se cobra por
-     transferencia con comprobante (PL-2b, §0.6); el webhook de MP queda solo para los turnos.
+  1. **Checkout de turnos (legado):** `MP_WEBHOOK_SECRET` verificado en Vercel (la ruta da 503 sin él).
+     Legado: era con la cuenta de la plataforma y desde T5 no lo usa nadie (`TURNERO_CHECKOUT` sin setear). El webhook
+     sigue igual (AUDIT §5.4).
+  1b. **Cobros online con la cuenta del vendedor (T5, ADR-026):** app de MP con OAuth + PKCE, webhook «Pagos» con
+     secreto, usuarios de prueba, sandbox S1-S11 y progresión off → sandbox → live: **§0.12**.
+  2. **Suscripción:** hoy por transferencia con comprobante (PL-2b, §0.6, ADR-016). Con MP llega en T6 (MPS, cobro el
+     día 4, MPS-D7; su ADR será el **ADR-027**).
 - **Bloquea:** checkout de turnos (corte E1 #2). Ya no bloquea el cobro del plan: es manual (PL-2b, §0.6; la Ola 2.4 quedó superada por PL).
 - **Responsable:** dueño.
-- **Estado:** 🟡 (checkout de turnos funcional; secret/credenciales prod y sandbox por verificar).
-- **Gate de activación:** `MP_WEBHOOK_SECRET` + credenciales prod; sandbox para QA.
+- **Estado:** 🔴 cobros online (T5) en código y probados con el MP falso; app de MP, sandbox y `live` pendientes (§0.12).
+- **Gate de activación:** cobros online: `MP_CONNECT_MODE` + `SECRET_BOX_KEYS` + `MP_OAUTH_CLIENT_ID/SECRET` + `MP_CONNECT_WEBHOOK_SECRET` (§0.12). Legado: `MP_WEBHOOK_SECRET`.
 
 ### 7. Email transaccional
 - **Qué configura:** Resend con dominio propio (subdominio `mail.<dominio>`, SPF/DKIM/DMARC) para invitaciones,

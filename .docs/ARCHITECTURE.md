@@ -14,7 +14,7 @@ diagnosis guide → local AI).
 | ORM / DB | Prisma 5.22 · PostgreSQL |
 | Hosting | Vercel (region `gru1`) · Supabase (Postgres + Auth + Storage) |
 | Auth | Supabase Auth (email/password + Google OAuth) |
-| Payments | Mercado Pago (checkout + webhook) |
+| Payments | Mercado Pago: cobros online con la cuenta de cada profesional o del consultorio (OAuth, ADR-026) + checkout legado (`Payment`, apagado) |
 | Styling | Tailwind + CSS variables · framer-motion |
 | Rate limit | Upstash Redis (prod) / in-memory (dev and fallback) — `lib/rate-limit.ts` |
 | Errors | Sentry `@sentry/nextjs` 11.1.0 — server/edge only, no-op without `SENTRY_DSN` (ADR-002) |
@@ -282,7 +282,7 @@ action → runWithRls (commit) → afterBookingsCommitted(tenantId, refs)
   dispara el evento no puede leer cache viejo).
 - **Write-paths cableados en SV** (antes no pasaban por el hook): turnero (alta y hold vencido reemplazado), webhook de
   MP (emite **siempre que escribió `Booking`**, incluido `amount_mismatch` sobre un turno impago que pasa a FAILED;
-  replay no), `devMarkBookingPaid`, candado del día (`applyDayLock` devuelve refs; `afterAvailabilityCommitted` para el
+  replay no; desde T5 también la rama `?acct=`, ADR-026), candado del día (`applyDayLock` devuelve refs; `afterAvailabilityCommitted` para el
   bloqueo) y alta/baja de bloqueos. Un bloqueo de varios días = 1 aviso con `day:null` + 1 invalidación.
   `guard-realtime` (c) impide un write-path nuevo sin emitir.
 - **Mover un turno a otro día AR** limpia `arrivedAt/calledAt/attendingAt` (`lib/bookings-core.ts:1732`): el estado de
@@ -1434,7 +1434,10 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
     `FOR SHARE` de la tx2 de compartir y evita que un documento nuevo nazca con la enmienda anulada adentro; no choca con
     el `FOR KEY SHARE` de crear otra enmienda. Orden: raíz → enmienda → documentos (sin ciclo con compartir, que hace
     raíz → documentos). El trigger de M14 no cambió. Esto enmienda el contrato del Anexo C del brief de T4 («anular una
-    enmienda no revoca»). Lo confirma Martin (AUDIT «Ronda T4», M-1 ★).
+    enmienda no revoca»). Confirmado por Martin el 22-oct (AUDIT «Ronda T4», M-1). **T4-Y** (`6f56c03`): al revocarse
+    el documento por anular la raíz o una enmienda, el paciente con portal recibe `portalDocumentRevokedEmail` (sin título,
+    fecha ni motivo: «ya no está disponible porque fue modificado… pedíselo nuevamente al consultorio»), con el mismo
+    tope de 3/h por paciente que compartir.
 
 ### ADR-021 — Cimientos visuales y superficies públicas livianas (status: ACCEPTED, VX, 15/16-oct-2026)
 
@@ -1625,6 +1628,106 @@ local ([RUNBOOK «M14 en prod»](MIGRACIONES-RUNBOOK.md)). Extiende ADR-020 (ver
   en prod; hasta entonces el grupo dice «El catálogo CIE-11 todavía no está cargado» y funcionan propios, kine y texto
   libre. El borrador vive solo en memoria (TTL 12 h, LRU 20, nunca disco: PCs compartidas): un cierre del SO lo pierde.
   La cola serial de render y la subida firmada se miden recién con Vercel/Supabase reales.
+
+### ADR-026 — Cobros online con la cuenta del vendedor (status: ACCEPTED, T5, 22-oct-2026)
+
+Plan §25 (brief `wip-20/brief-t5.md`, contratos C-TP1..C-TP14, defaults TP-D22..D30 y TP-UI-D1..D12, enmiendas de Martin
+del 22-oct); commits `a31337c`..`92c600c` (TP-M = `0a8e551`), **local, sin push**. M18 `20261022120000_turnero_cobros_mp`
+solo en el Docker local ([RUNBOOK «M18 en prod»](MIGRACIONES-RUNBOOK.md)). «Preservar»: AUDIT §5.62-68 y §5.4 enmendado.
+La suscripción del consultorio con Mercado Pago (MPS, T6) va en **ADR-027** cuando se haga; hasta entonces rige ADR-016.
+
+- **Contexto.** El único checkout del turnero cobraba con `MP_ACCESS_TOKEN`, la cuenta **de la plataforma**: la plata del
+  paciente no llegaba al consultorio (H-TP1, apagado desde TP-0). Martin decidió (§22.1 #4/#5, 19-oct #1-#4): cada
+  profesional cobra en **su** cuenta de Mercado Pago, la del consultorio solo la conecta el Titular con 2FA, los
+  reintegros se hacen desde Mercado Pago, los links de pago siempre van a nombre de un paciente y todo se construye contra
+  un Mercado Pago falso local (sandbox real al final).
+- **Decisión.**
+  - **OAuth con PKCE por profesional o consultorio, nunca la cuenta de la plataforma.** `startMpConnect({target})`
+    (`lib/mp-connect-actions.ts`): `own` exige `actor.practitionerId`; `clinic` exige `account.owner` + `requireStepUp`;
+    soporte nunca. El state es una cookie `kine_mp_oauth` firmada (HMAC `kinesoft:mp-oauth-state:v1`,
+    `lib/mp-connect/oauth-state.ts:66,144,156`) ligada a usuario + sesión + consultorio + target + nonce, 10 min,
+    `SameSite=Lax`, path `/api/mp/oauth`; el `code_verifier` se deriva del nonce (`pkceVerifierFrom`, `:206`). El
+    callback `GET /api/mp/oauth/callback` re-chequea el actor, canjea con el verifier, lee `/users/me`, exige que
+    `live_mode` coincida con el modo y guarda por el canal service con `tenantId` a mano (precedente ADR-024,
+    `saveConnectedAccount`, `lib/mp-connect/accounts-internal.ts:77`). Reconectar la misma cuenta MP conserva
+    `webhookRef`; otra cuenta deja la vieja DISCONNECTED con purga a 7 días. La cuenta usada por un cobro sale de
+    `resolveChargeAccount` (`:355`): la del profesional imputado ACTIVE → la del consultorio si la política tiene
+    `useClinicAccount` → ninguna (se reserva sin cobro, TP-D8). El arranque es por navegación (`location.assign`), sin
+    tocar `form-action` de la CSP (TP-UI-D3).
+  - **Datos (M18).** `BookingPaymentPolicy` (1:1 con el tenant: OFF/OPTIONAL/REQUIRED, COPAGO/FIXED/PERCENT,
+    `useClinicAccount`, nota de cancelación; la escribe `tenant.sensitive`). `MpAccount` (TENANT_READONLY: el consultorio
+    la lee, la escriben solo callback, desconectar, delegación y cron por service; `webhookRef` opaco de 128 bits; una
+    viva por profesional y una del consultorio, parciales). `MpCredential` (SERVICE_ONLY, sin policy: invisible con
+    cualquier GUC) con los tokens **sellados**, `version` para el CAS del refresh rotativo y `purgeAfter`.
+    `OnlineCharge` = un cobro = una preferencia de MP con el token del vendedor: `origin TURNERO|LINK`,
+    `kind FULL|DEPOSIT|FREE`, `status ACTIVE|AUTHORIZED|PAID|REFUNDED|EXPIRED|CANCELLED`, siempre con paciente y
+    profesional imputado, turno opcional (FREE = link sin turno), `publicToken` de 22 caracteres y el comprobante
+    (TP-D20). `Payment` **no se tocó**: queda como checkout legado 1:1 con el turno.
+  - **Secret box** (`lib/secret-box.ts`, C-TP1): AES-256-GCM con IV de 96 bits, `SECRET_BOX_KEYS="k2:<b64>,k1:<b64>"`
+    (la primera sella, todas abren), sobre `v1.<kid>.<iv>.<ct>.<tag>` y AAD
+    `kinesoft:secret-box:v1|<propósito>|<recordId>|<campo>` (`:166`; `mpCredentialAad(mpAccountId, campo)`, `:291`): un
+    sobre movido de fila, campo o propósito no abre. Clave dev determinista solo sin `VERCEL_ENV`. Rotación con
+    `scripts/secret-box-rotate.ts` (dry-run → `--apply`, CAS; la corre Martin). Sistema muestra kids y huellas, nunca la
+    clave. Lo reusa WhatsApp (enmienda WA-D2).
+  - **Webhook `?acct=`** (C-TP6/C-TP7). Tres líneas aditivas en `app/api/webhooks/mercadopago/route.ts:45-47`: con
+    `?acct=` → `handleConnectWebhook` (`lib/mp-connect/webhook-route.ts:52`); sin él, la rama legada igual que antes (§5.4,
+    `mp-webhook.test.ts` intacto). `consumeConnectWebhook` (`lib/mp-connect/consume.ts:157`): firma según
+    `MP_CONNECT_WEBHOOK_SIGNATURE` (`required` → 401 sin llamar a MP; `fetch-only` hasta resolver S3) → cuenta por
+    `webhookRef` (desconocida → 200 ignorado) → **vuelve a pedir el pago con el token del vendedor** (refresca si hace
+    falta; `invalid_grant` → REAUTH + 503) → verifica `collector_id`, `live_mode`, ARS y `oc:<chargeId>` de esa cuenta y
+    ese consultorio → tx con idempotencia por (id, estado, reintegrado), monto ±5 centavos (distinto → no PAID + aviso),
+    `nextChargeStatus` (nunca baja un PAID salvo reintegro o contracargo) y el efecto sobre el turno por un **escritor
+    único** (`applyOnlineChargeToBookingInTx`, `lib/booking-copago-internal.ts:28`): REQUIRED PENDING → CONFIRMED; FULL →
+    copago PAID + MERCADO_PAGO sin quién cobró y `copagoPaidAt` NULL (TP-D28); DEPOSIT no toca el copago (TP-D7);
+    reintegro de FULL → REFUNDED; turno cancelado o ausente → se registra y se avisa. Después del commit:
+    `afterBookingsCommitted`, aviso `PAYMENT_RECEIVED` a titulares, profesional, Secretaría y creador del link, y se vence
+    la preferencia. La rama legada solo sumó `alsoAgendaOperators: true` (`lib/mercadopago.ts:467`).
+  - **Orden de locks Booking → OnlineCharge.** El webhook toma `Booking FOR UPDATE` y después el cobro
+    (`lib/mp-connect/consume.ts:211-213`); el cobro a mano (`toggleBilling`) también bloquea el turno
+    primero y lee en **una** sentencia estado legado, `paidOnline`, `inFlight`, Σ de señas y los cobros vivos a anular
+    (`lib/bookings.ts:2012-2033`, C-TP10 enmendado en T5-Z). Mismo orden en los dos caminos: sin deadlock (test de
+    carrera en `tp2c-collect-deposits`). Las preferencias se crean y vencen **fuera** de la tx.
+  - **`Booking.onlineDepositCents` solo por trigger.** `INT NOT NULL DEFAULT 0` (sin reescritura de la tabla) = Σ de señas
+    PAID del turno. La escribe **únicamente** `online_charge_sync_booking()` (AFTER UPDATE OF status), que además mueve
+    `updatedAt`: quien cobra con la versión vieja recibe «stale» y ve la seña. La agenda, la sala, el drawer, el portal y
+    los predicados de plata la leen con 0 sentencias nuevas (`listAgendaBookings` estaba a +10 % de su techo). El cable
+    de la agenda suma `od` (seña) y `po` (pagado online) al final de `FIELDS`, omitidos en cero.
+  - **`online_charge_guard()`** (BEFORE INSERT/UPDATE/DELETE + TRUNCATE): nunca borra; nace ACTIVE sobre una cuenta ACTIVE
+    del profesional imputado o del consultorio y con turno de ese profesional; identidad y monto inmutables; transiciones
+    fijas (un pago aprobado **siempre** entra, aun sobre un link anulado o vencido: la app avisa); comprobante y anulación
+    se escriben una vez. Ninguna constraint que la realidad de MP pueda romper (sin único sobre PAID): un CHECK violado
+    sería un webhook en 500 reintentado por días.
+  - **Ingresos** (`lib/dashboard.ts`, C-TP11): una sentencia con el legado por `Payment.createdAt`, lo online por
+    `approvedAt` y lo manual **neto** de las señas que la recepción vio al cobrar (`:803`, enmienda T5-Z para señas
+    reintegradas después del cobro a mano).
+  - **Turnero y links.** `decideOnlineCharge` (puro, `lib/online-charge-logic.ts`) decide cobro y monto con el **mismo
+    resolver de copago** que la agenda (§5.5). REQUIRED = hold de 30 min + preferencia con `binary_mode` que vence con el
+    hold; OPTIONAL deja elegir. Los links (`lib/payment-links*.ts`) exigen `billing.collect` (o `collectOwn` para lo
+    propio) y **delegación** del dueño de la cuenta salvo que el actor sea su dueño; uno vivo por turno; página pública
+    `app/(booking)/pagar/[token]` server, sin datos del paciente y con un GET que nunca escribe.
+  - **Modos y Mercado Pago falso** (C-TP2/C-TP12): `MP_CONNECT_MODE=off|fake|sandbox|live` (default `off`, leído en cada
+    llamada). `fake` frena el boot si hay `VERCEL_ENV` o `VERCEL` y el getter cae a `off` (`lib/env.ts:250-260`);
+    `app/api/mp/fake/[...path]` da 404 fuera de fake. El fake (`lib/mp-connect/fake-mp.ts`) emula autorización, token con
+    PKCE y refresh rotativo, `/users/me`, preferencias, pagos y checkout, y **POSTea firmado a la ruta real** del webhook
+    con su `?acct=`. Lo usan los tests (`tests/helpers/mp-connect-fake.ts`), el E2E y `npm run dev:mpfake` (que nunca
+    lee `.env*`). `scripts/diagnose-mp-connect.ts` verifica los supuestos S1-S11 contra el fake (CI) y contra el sandbox
+    (Martin, al final). Con `off` se esconden «Cobros», «Mi Mercado Pago» y «Cobros online» (regla «lo que no funciona se
+    quita»). `TURNERO_CHECKOUT` queda en el enum pero nadie lo lee; el atajo de desarrollo que marcaba un turno pagado salteando el webhook se borró (TP-3z): lo reemplaza el simulador.
+  - **Cron diario, etapa `mp_connect`** (`runMpConnectMaintenance`, `lib/mp-connect/cron-internal.ts:202`): refresca
+    tokens a < 30 días con CAS sobre `version`, marca REAUTH ante `invalid_grant` (aviso «Reconectá tu Mercado Pago»),
+    purga credenciales vencidas sin cobros vivos, vence cobros ACTIVE pasados y anula los de turnos cancelados o
+    ausentes; con presupuesto e idempotente.
+- **Descartado.** Sumar `kind` a `Payment` (1:1 con el turno por `bookingId @unique`: seña + link del resto no entran y
+  sacar el único rompía el upsert del código viejo durante el deploy); cobrar con la cuenta de la plataforma y repartir
+  (`marketplace_fee`; comisión 0, TP-D11); confiar en la firma del webhook como única autenticidad (S3 sin resolver);
+  escribir `onlineDepositCents` desde la app (dos escritores = deriva); sandbox real durante el desarrollo (regla de
+  Martin: nada contra servicios reales salvo pedido expreso).
+- **Consecuencias.** Perder `SECRET_BOX_KEYS` obliga a reconectar todas las cuentas (backup en el gestor de contraseñas,
+  claves distintas por entorno). Hay una escritura de `Booking` por trigger: el consumidor emite el realtime explícito y
+  la palanca de emergencia es `DROP TRIGGER` (decide Martin). S3 (firma de pagos con token de vendedor) y S5 (si MP
+  notifica también la URL del panel sin `acct`) se resuelven recién con el sandbox; mientras tanto el flag `required`
+  hace que MP reintente sin perder nada. Un AUTHORIZED que MP nunca resuelve no vence solo (AUDIT «Hallazgos de T5-Z»,
+  B4).
 
 ## Cache & cookies (what is implemented — updated 30-sep-2026)
 
