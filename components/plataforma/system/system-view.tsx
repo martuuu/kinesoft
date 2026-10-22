@@ -10,11 +10,21 @@
  * OPS-1a: la Card «Últimos mails que no salieron» (EmailLog fallidos, `EmailFailuresInfo`): fecha, tipo, motivo en
  * castellano con el código crudo al lado (`provider_error:validation_error:403`, lo que se busca en Resend) y el
  * dominio del destinatario. Nunca la dirección ni el cuerpo: el DTO no los trae.
+ *
+ * TP-3j (T5, brief §25.10 / C-TP13): el grupo «Cobros online (Mercado Pago)» (modo, presencias, huellas, firma, claves
+ * del secret box, cuentas por estado, último webhook y última renovación) y el renombre del token de la plataforma a
+ * «Token de la plataforma (legado)» los arma `buildSystemStatus` (TP-2h); acá se pintan como cualquier otro grupo, así
+ * que la regla «presencia y huella, nunca el valor» la sigue garantizando el builder. Lo único propio del grupo es el
+ * link al panel del simulador (`/api/mp/fake/panel`, «Forzar reconexión» y los últimos pagos) cuando el modo
+ * APLICADO es `fake`: sale del valor ya validado del check (no de `process.env`), así que en Vercel, donde
+ * `mpConnectMode()` baja `fake` a `off`, nunca aparece. Es un `<a>` y no un `next/link`: es un route handler, sin
+ * prefetch ni navegación cliente.
  */
 import { Card } from "@/components/ui/card";
+import { buttonClassName } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { formatDateAR } from "@/lib/format";
-import type { EmailFailuresInfo, PlatformSystemStatus, SystemCheck } from "@/lib/platform-system-logic";
+import type { EmailFailuresInfo, PlatformSystemStatus, SystemCheck, SystemGroup } from "@/lib/platform-system-logic";
 import { RealtimeProbe } from "@/components/plataforma/system/realtime-probe";
 
 function StateBadge({ c }: { c: SystemCheck }) {
@@ -32,6 +42,13 @@ function StateBadge({ c }: { c: SystemCheck }) {
       {warn ? (c.value ? `Revisar · ${c.value}` : "Revisar") : c.value ? `Falta · ${c.value}` : "Falta"}
     </span>
   );
+}
+
+/** El panel del simulador (lib/mp-connect/fake-mp.ts). Solo con el modo aplicado `fake` (ver la cabecera). */
+const MP_FAKE_PANEL_HREF = "/api/mp/fake/panel";
+
+function isFakeMpGroup(g: SystemGroup): boolean {
+  return g.id === "mp-connect" && g.checks.some((c) => c.key === "MP_CONNECT_MODE" && c.state === "value" && c.value === "fake");
 }
 
 function EmailFailuresCard({ info }: { info: EmailFailuresInfo }) {
@@ -91,6 +108,11 @@ export function SystemView({ status }: { status: PlatformSystemStatus }) {
               ))}
             </ul>
             {g.id === "realtime" ? <RealtimeProbe /> : null}
+            {isFakeMpGroup(g) ? (
+              <a href={MP_FAKE_PANEL_HREF} target="_blank" rel="noopener noreferrer" className={buttonClassName({ variant: "ghost", size: "sm" })} style={{ justifySelf: "start" }}>
+                Abrir el simulador
+              </a>
+            ) : null}
           </Card>
         ))}
       </div>

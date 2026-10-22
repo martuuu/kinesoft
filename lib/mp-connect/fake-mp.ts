@@ -26,7 +26,11 @@ import { signMpNotification } from "@/lib/mp-connect/signature";
  * Estado en `globalThis` (un solo proceso: `next dev`, vitest o `next start`). Reiniciar el server lo vacía; por eso
  * los ids de pago llevan la hora (no chocan con los que ya quedaron en la base local).
  *
- * El HTML es deliberadamente simple (0 kB de bundle, TP-UI-D10); el pulido del copy y del estilo es de TP-3j.
+ * El HTML es deliberadamente simple (0 kB de bundle, TP-UI-D10). TP-3j pulió el copy y el estilo: el copy de §25.9 va
+ * literal (banner, botones, autorización, «Forzar reconexión», «Webhook enviado · respuesta {n} · {resultado}») y lo que
+ * lee quien prueba sigue el vocabulario de §25.10: la cosa que se paga es un «link de pago» (nunca «cobro» ni
+ * «preferencia», aunque por dentro sea una preferencia de MP) y los estados del pago salen en castellano. Lo fija
+ * `tests/unit/tp3j-fake-mp-html.test.ts`; el ratchet de `online-payments-copy.test.ts` cubre este archivo entero.
  */
 
 export { fakeMpAllowed };
@@ -193,15 +197,31 @@ const BANNER =
   '<div class="banner"><strong>Simulador de Mercado Pago (solo desarrollo)</strong>' +
   "<p>Nada de esto toca Mercado Pago real. El pago pasa por el webhook de verdad, firmado con el secreto de prueba.</p></div>";
 
-function page(title: string, body: string, status = 200): Response {
-  const html = `<!doctype html><html lang="es-AR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${esc(title)}</title><style>
-body{font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;padding:16px;color:#0f1f33;background:#f6f8fb}
+/*
+ * Estilo inline (TP-UI-D10: nada de bundle ni de tokens de la app; esta página la sirve un route handler). Lo que importa
+ * para QA: botones de 44 px (se prueba a 390 px), foco visible con teclado (QA manual #14), el banner amarillo arriba de
+ * todo para que nadie confunda el simulador con Mercado Pago real, y `<main>` como landmark para el lector de pantalla.
+ */
+const STYLE = `
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;max-width:560px;margin:0 auto;padding:16px;color:#0f1f33;background:#f6f8fb;line-height:1.4}
 .banner{background:#fff4d6;border:1px solid #e8c766;border-radius:8px;padding:12px;margin-bottom:16px}.banner p{margin:4px 0 0;font-size:14px}
-h1{font-size:20px}form{margin:8px 0}button{min-height:44px;padding:0 16px;font-size:15px;border-radius:8px;border:1px solid #9fb3c8;background:#fff;cursor:pointer}
+h1{font-size:20px;margin:8px 0 12px;overflow-wrap:anywhere}h2{font-size:16px;margin:20px 0 8px}
+form{margin:8px 0}p{margin:8px 0}
+button{min-height:44px;padding:0 16px;font-size:15px;border-radius:8px;border:1px solid #9fb3c8;background:#fff;color:#0f1f33;cursor:pointer;max-width:100%}
 button.primary{background:#009ee3;border-color:#009ee3;color:#fff}button:disabled{opacity:.5;cursor:not-allowed}
+:focus-visible{outline:3px solid #0f1f33;outline-offset:2px}
+a{color:#00639a}
 .card{background:#fff;border:1px solid #dde4ec;border-radius:8px;padding:12px;margin:12px 0}.muted{color:#5b6b7d;font-size:14px}
-input{min-height:40px;font-size:15px;padding:0 8px;border:1px solid #9fb3c8;border-radius:6px}
-</style></head><body>${BANNER}${body}</body></html>`;
+.amount{font-size:24px;font-weight:700;margin:4px 0}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:end}
+label{display:grid;gap:4px;font-size:14px}
+input{min-height:44px;font-size:15px;padding:0 8px;border:1px solid #9fb3c8;border-radius:6px;width:10em;max-width:100%}
+@media (prefers-reduced-motion:no-preference){button{transition:background-color .15s}}
+`;
+
+function page(title: string, body: string, status = 200): Response {
+  const html = `<!doctype html><html lang="es-AR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${esc(title)}</title><style>${STYLE}</style></head><body><header>${BANNER}</header><main>${body}</main></body></html>`;
   return new Response(html, { status, headers: { "content-type": "text/html; charset=utf-8", ...NO_STORE } });
 }
 
@@ -297,7 +317,7 @@ function authorizationPage(url: URL): Response {
   ).join("");
   return page(
     `Autorizar ${BRAND_NAME}`,
-    `<h1>${esc(BRAND_NAME)} quiere cobrar con tu cuenta</h1><form method="post" action="${MP_FAKE_PATH}/authorization">${hidden}${buttons}<p><button type="submit" name="seller" value="cancel">Cancelar</button></p></form>`
+    `<h1>${esc(BRAND_NAME)} quiere cobrar con tu cuenta</h1><p class="muted">Elegí con qué cuenta de prueba conectar. «Cancelar» vuelve a la app como si no dieras el permiso.</p><form method="post" action="${MP_FAKE_PATH}/authorization">${hidden}${buttons}<p><button type="submit" name="seller" value="cancel">Cancelar</button></p></form>`
   );
 }
 
@@ -579,27 +599,30 @@ async function postWebhook(pref: PrefRec, pay: PaymentRec, action: string): Prom
 function checkoutPage(prefId: string): Response {
   const s = store();
   const p = s.prefs.get(prefId);
-  if (!p) return page("Pago inexistente", "<h1>No encontramos este pago</h1>", 404);
+  if (!p) return page("Link de pago inexistente · Simulador", "<h1>No encontramos este link de pago</h1>", 404);
   const expired = prefExpired(p);
   const hasApproved = [...s.payments.values()].some((x) => x.preferenceId === p.id && x.status === "approved");
   const title = String((p.body.items as { title?: string }[] | undefined)?.[0]?.title ?? "Pago");
   const action = `${MP_FAKE_PATH}/checkout/${encodeURIComponent(p.id)}/simulate`;
   const dis = (off: boolean) => (off ? " disabled" : "");
   const back = p.backUrls.failure ?? p.backUrls.success ?? null;
+  const seller = sellerBy(p.collectorId);
   return page(
     "Pagar · Simulador",
     `<h1>${esc(title)}</h1>
-<div class="card"><p><strong>${esc(formatARS(p.amountCents))}</strong></p>
-${expired ? "<p><strong>Este cobro venció: Mercado Pago no deja pagarlo.</strong></p>" : ""}
+<div class="card"><p class="amount">${esc(formatARS(p.amountCents))}</p>
+<p class="muted">Cobra: ${esc(seller?.label ?? p.collectorId)}${seller ? ` (${esc(seller.nickname)})` : ""}</p>
+${expired ? '<p role="alert"><strong>Este link de pago venció: Mercado Pago no deja pagarlo.</strong></p>' : ""}
 <form method="post" action="${esc(action)}">
 <p><button class="primary" type="submit" name="outcome" value="approved"${dis(expired)}>Simular pago aprobado</button></p>
 <p><button type="submit" name="outcome" value="rejected"${dis(expired)}>Simular pago rechazado</button></p>
-<p><button type="submit" name="outcome" value="pending"${dis(expired || p.binary)}>Simular pago pendiente</button>${p.binary ? ' <span class="muted">(este cobro no admite pagos pendientes)</span>' : ""}</p>
-<p><button type="submit" name="outcome" value="refunded"${dis(!hasApproved)}>Simular reintegro</button></p>
+<p><button type="submit" name="outcome" value="pending"${dis(expired || p.binary)}>Simular pago pendiente</button>${p.binary ? ' <span class="muted">(este link de pago no admite pagos pendientes)</span>' : ""}</p>
+<p><button type="submit" name="outcome" value="refunded"${dis(!hasApproved)}>Simular reintegro</button>${hasApproved ? "" : ' <span class="muted">(primero tiene que haber un pago aprobado)</span>'}</p>
 </form>
 <form method="post" action="${esc(action)}"><input type="hidden" name="outcome" value="approved">
-<p><label>Monto <input name="amount" inputmode="decimal" required aria-label="Otro monto en pesos"></label>
-<button type="submit"${dis(expired)}>Simular con otro monto</button></p></form></div>
+<div class="row"><label>Otro monto (en pesos)<input name="amount" inputmode="decimal" autocomplete="off" required></label>
+<button type="submit"${dis(expired)}>Simular con otro monto</button></div>
+<p class="muted">Sirve para probar el control de monto: el webhook tiene que responder «monto distinto».</p></form></div>
 ${back ? `<p><a href="${esc(back)}">Volver al sitio</a></p>` : ""}`,
     expired ? 410 : 200
   );
@@ -623,7 +646,7 @@ async function checkoutSimulate(req: Request, prefId: string): Promise<Response>
     const code = e instanceof FakeMpError ? e.code : "error";
     const msg =
       code === "preference_expired"
-        ? "Este cobro venció: Mercado Pago no deja pagarlo."
+        ? "Este link de pago venció: Mercado Pago no deja pagarlo."
         : code === "nothing_to_refund"
           ? "No hay un pago aprobado para reintegrar."
           : `No se pudo simular (${code}).`;
@@ -650,9 +673,17 @@ async function checkoutSimulate(req: Request, prefId: string): Promise<Response>
   const backAny = pref?.backUrls.success ?? pref?.backUrls.failure ?? null;
   return page(
     "Resultado · Simulador",
-    `<h1>${esc(resultLine)}</h1><p class="muted">Pago ${esc(r.paymentId)} · ${esc(status)}</p>${backAny ? `<p><a href="${esc(backAny)}">Volver al sitio</a></p>` : ""}`
+    `<h1>${esc(resultLine)}</h1><p class="muted">Pago ${esc(r.paymentId)} · ${esc(PAYMENT_STATUS_ES[status] ?? status)}</p>${backAny ? `<p><a href="${esc(backAny)}">Volver al sitio</a></p>` : ""}`
   );
 }
+
+/** Estado del pago simulado en castellano (lo lee quien prueba; el valor crudo de MP queda en el JSON del fake). */
+const PAYMENT_STATUS_ES: Record<string, string> = {
+  approved: "aprobado",
+  rejected: "rechazado",
+  pending: "pendiente",
+  refunded: "reintegrado",
+};
 
 function resultLabel(result: string | undefined): string {
   if (result === "applied") return "aplicado";
@@ -668,15 +699,18 @@ function panelPage(): Response {
     const live = [...s.tokens.values()].filter((t) => t.sellerUserId === sel.userId && t.expMs > Date.now()).length;
     const prefs = [...s.prefs.values()].filter((p) => p.collectorId === sel.userId).length;
     return `<div class="card"><strong>${esc(sel.label)}</strong> <span class="muted">(${esc(sel.nickname)} · ${sel.userId})</span>
-<p class="muted">${live} tokens vivos · ${prefs} cobros${s.reauth.has(sel.userId) ? " · reconexión forzada" : ""}</p>
+<p class="muted">${live} ${live === 1 ? "token vivo" : "tokens vivos"} · ${prefs} ${prefs === 1 ? "link de pago" : "links de pago"}${s.reauth.has(sel.userId) ? " · reconexión forzada" : ""}</p>
 <form method="post" action="${MP_FAKE_PATH}/panel/reconectar"><input type="hidden" name="seller" value="${sel.userId}"><button type="submit">Forzar reconexión</button></form></div>`;
   }).join("");
   const pays = [...s.payments.values()]
     .slice(-10)
     .reverse()
-    .map((p) => `<li>${esc(p.id)} · ${esc(p.status)} · ${esc(formatARS(p.amountCents))}</li>`)
+    .map((p) => `<li>${esc(p.id)} · ${esc(PAYMENT_STATUS_ES[p.status] ?? p.status)} · ${esc(formatARS(p.amountCents))}</li>`)
     .join("");
-  return page("Simulador de Mercado Pago", `<h1>Cuentas de prueba</h1>${rows}<h2>Últimos pagos</h2><ul>${pays || "<li>Sin pagos todavía</li>"}</ul>`);
+  return page(
+    "Simulador de Mercado Pago",
+    `<h1>Cuentas de prueba</h1><p class="muted">«Forzar reconexión» hace que la próxima renovación del token falle (invalid_grant): la cuenta pasa a «a reconectar» y su turnero reserva sin cobro online.</p>${rows}<h2>Últimos pagos</h2><ul>${pays || "<li>Sin pagos todavía</li>"}</ul>`
+  );
 }
 
 async function panelReauth(req: Request): Promise<Response> {
