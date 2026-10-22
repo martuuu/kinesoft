@@ -157,7 +157,40 @@ const schema = z.object({
     z.enum(["off", "preview", "public"]).default("off")
   ),
 
+  // TP-P4 (C-TP2, plan §25.4 «Modos»): cobros online con la cuenta de Mercado Pago DEL VENDEDOR (OAuth).
+  //   off     = DEFAULT: nadie conecta cuentas ni se crea ningún cobro; no se habla con MP.
+  //   fake    = simulador local (`lib/mp-connect/fake-mp.ts`, `/api/mp/fake/*`): `next dev`, vitest y el `next start`
+  //             del E2E. NUNCA en Vercel: el boot lo rechaza con `VERCEL_ENV` o `VERCEL` (cualquier scope) y
+  //             `mpConnectMode()` lo baja a `off`. Se guarda por Vercel y no por NODE_ENV porque el E2E corre
+  //             `next start` con NODE_ENV=production (§25.2 #11).
+  //   sandbox = app de MP con cuentas de prueba (`test_token=true`); live = cobros reales.
+  // Lo lee `mpConnectMode()` (process.env en cada llamada), no este objeto congelado. Un typo frena el deploy.
+  MP_CONNECT_MODE: z.preprocess(
+    (v) => (typeof v === "string" ? emptyAsUndefined(v.trim().toLowerCase()) : v),
+    z.enum(["off", "fake", "sandbox", "live"]).default("off")
+  ),
+  // Credenciales de la APLICACIÓN de MP (no de un vendedor). SERVER-ONLY. Recortadas por lo de HF-1a.
+  MP_OAUTH_CLIENT_ID: z.preprocess(trimmedOrUndefined, z.string().optional()),
+  MP_OAUTH_CLIENT_SECRET: z.preprocess(trimmedOrUndefined, z.string().optional()),
+  // Secreto de «Webhooks» de la app de MP con el que se verifica la rama `?acct=` (el legado sigue con
+  // MP_WEBHOOK_SECRET, AUDIT §5.4). El fake firma con este mismo.
+  MP_CONNECT_WEBHOOK_SECRET: z.preprocess(trimmedOrUndefined, z.string().optional()),
+  // §25.2 #8 (S3): la doc no dice si los pagos con token de vendedor llegan firmados con el secreto de la app.
+  //   required   = DEFAULT: sin firma válida → 401.
+  //   fetch-only = se acepta sin firma; igual se vuelve a pedir el pago con el token de la cuenta y se chequean
+  //                collector, referencia, monto y moneda (la rama es segura con o sin firma). Lo ajusta Martin tras S3.
+  MP_CONNECT_WEBHOOK_SIGNATURE: z.preprocess(
+    (v) => (typeof v === "string" ? emptyAsUndefined(v.trim().toLowerCase()) : v),
+    z.enum(["required", "fetch-only"]).default("required")
+  ),
+  // C-TP1: claves del cifrado en reposo (`lib/secret-box.ts`), `k2:<b64 32 B>,k1:<b64 32 B>` (la primera sella).
+  // Opcional (sin ella, en local, secret-box usa una clave dev determinista). Acá solo se valida la FORMA
+  // (`secretBoxKeysShapeError`); el mensaje de error nunca trae la clave.
+  SECRET_BOX_KEYS: z.preprocess(trimmedOrUndefined, z.string().optional()),
+
   // TP-0 (H-TP0/H-TP1, plan §22.5): ¿el turnero público cobra online al reservar?
+  // TP-P4 (C-TP2): DEPRECADO. Queda en el enum para no romper un deploy con el valor ya cargado, pero el turnero de
+  // T5 cobra con la cuenta del vendedor (MP_CONNECT_MODE) y ya no lo lee nadie; `platform` loguea un aviso al boot.
   //   off      = DEFAULT: el turno nace reservado sin pago y se paga en el consultorio. Hoy la ÚNICA cuenta de Mercado
   //              Pago es la de la plataforma (`MP_ACCESS_TOKEN`, AUDIT `turnero-mp-cuenta-plataforma`): cobrar online
   //              mandaría la plata del paciente a KineSoft y no al profesional. Además el checkout siempre exigía
@@ -181,7 +214,72 @@ const schema = z.object({
 
   // Set by Vercel: "production" | "preview" | "development". Unset locally/CI.
   VERCEL_ENV: z.enum(["production", "preview", "development"]).optional(),
+  // TP-P4: Vercel también setea `VERCEL=1` (build y runtime). Solo se mira para negar el simulador de MP: si por algún
+  // camino faltara VERCEL_ENV, esta sola alcanza para que `fake` no arranque.
+  VERCEL: z.string().optional(),
 });
+
+/**
+ * TP-P4 (C-TP2): forma de `SECRET_BOX_KEYS` (`kid:<base64 de 32 bytes>`, separadas por coma, kids únicos). Se valida
+ * acá con una copia mínima de la regla y no importando `parseSecretBoxKeys` de `lib/secret-box.ts`: ese módulo es
+ * server-only (crypto) y `lib/env.ts` lo importan también módulos que terminan en bundles de cliente. El mensaje
+ * nunca incluye la clave: el log del build de Vercel lo lee cualquiera con acceso al proyecto.
+ */
+export function secretBoxKeysShapeError(raw: string): string | null {
+  const parts = raw.split(",").map((p) => p.trim());
+  const seen = new Set<string>();
+  for (const [i, part] of parts.entries()) {
+    const idx = part.indexOf(":");
+    const kid = idx > 0 ? part.slice(0, idx) : "";
+    const b64 = idx > 0 ? part.slice(idx + 1).trim() : "";
+    // Misma regla que `parseSecretBoxKeys` (TP-P1) y el CHECK de M18: kid `[a-z0-9_-]{1,16}`, `dev` reservado para la
+    // clave de desarrollo. Si acá fuera más laxa, el boot pasaría y cada sello tiraría `bad_keys` en runtime.
+    if (!/^[a-z0-9_-]{1,16}$/.test(kid)) return `entrada ${i + 1}: kid inválido (formato kid:<base64 de 32 bytes>, kid [a-z0-9_-]{1,16})`;
+    if (kid === "dev") return "el kid «dev» está reservado para la clave de desarrollo";
+    if (seen.has(kid)) return `kid «${kid}» repetido`;
+    seen.add(kid);
+    // base64 o base64url, exactamente 32 bytes.
+    if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(b64) || Buffer.from(b64.replace(/-/g, "+").replace(/_/g, "/"), "base64").length !== 32) {
+      return `la clave del kid «${kid}» no es base64 de 32 bytes`;
+    }
+  }
+  return null;
+}
+
+/** TP-P4: «¿estamos en Vercel?» para el simulador. Cualquier valor (aun vacío) cuenta: ante la duda, sin fake. */
+function onVercel(e: { VERCEL_ENV?: string; VERCEL?: string }): boolean {
+  return e.VERCEL_ENV !== undefined || e.VERCEL !== undefined;
+}
+
+/** TP-P4 (C-TP2): reglas del modo de MP que valen en cualquier entorno y las de Production. */
+function mpConnectRules(e: z.infer<typeof schema>, ctx: z.RefinementCtx): void {
+  if (e.SECRET_BOX_KEYS) {
+    const err = secretBoxKeysShapeError(e.SECRET_BOX_KEYS);
+    if (err) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["SECRET_BOX_KEYS"], message: err });
+  }
+  if (e.MP_CONNECT_MODE === "fake" && onVercel(e)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["MP_CONNECT_MODE"],
+      message: "\"fake\" (simulador local) no se permite en Vercel: usá \"off\", \"sandbox\" o \"live\"",
+    });
+  }
+  if (e.VERCEL_ENV !== "production") return;
+  if (e.MP_CONNECT_MODE !== "sandbox" && e.MP_CONNECT_MODE !== "live") return;
+  // Sin client id/secret el callback no canjea ningún código; sin SECRET_BOX_KEYS secret-box se niega a sellar en
+  // Vercel (no hay clave dev); sin el secreto con firma `required` el webhook nuevo daría 401 a todos los pagos.
+  const required: (keyof z.infer<typeof schema>)[] = ["MP_OAUTH_CLIENT_ID", "MP_OAUTH_CLIENT_SECRET", "SECRET_BOX_KEYS"];
+  if (e.MP_CONNECT_WEBHOOK_SIGNATURE === "required") required.push("MP_CONNECT_WEBHOOK_SECRET");
+  for (const key of required) {
+    if (!e[key]) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key],
+        message: `obligatoria en Production con MP_CONNECT_MODE=${e.MP_CONNECT_MODE}`,
+      });
+    }
+  }
+}
 
 /**
  * OPS-1c · guard de Preview (OPS-D1). Por qué: hasta A0b los Preview compartían la base de prod y migraban (AUDIT
@@ -269,6 +367,7 @@ const RECOMMENDED_IN_PRODUCTION = [
 
 const productionSchema = schema.superRefine((e, ctx) => {
   previewTargetsProd(e, ctx);
+  mpConnectRules(e, ctx);
   if (e.VERCEL_ENV !== "production") return;
   for (const key of REQUIRED_IN_PRODUCTION) {
     if (!e[key]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: "obligatoria en Production" });
@@ -331,6 +430,13 @@ export function parseEnv(raw: Record<string, string | undefined>): Env {
     const detail = r.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
     throw new Error(`[env] configuración inválida — ${detail}`);
   }
+  // TP-P4 (C-TP2): el valor sigue aceptado para no frenar un deploy, pero ya no cobra nada. Es `console.warn` y no
+  // `logger.warn` porque `lib/logger.ts` importa este módulo (ciclo); la línea lleva el mismo nombre de evento.
+  if (r.data.TURNERO_CHECKOUT === "platform" && typeof window === "undefined") {
+    console.warn(
+      "[env] turnero_checkout.platform_ignored: TURNERO_CHECKOUT=platform ya no hace nada; el turnero cobra con la cuenta del profesional (MP_CONNECT_MODE)."
+    );
+  }
   // OPS-1c: sin el ref el guard no puede mirar nada. Aviso y no error: hasta que Martin lo cargue (OPS-0) un Preview
   // no puede caerse por eso.
   if (r.data.VERCEL_ENV === "preview" && !r.data.PROD_SUPABASE_REF && typeof window === "undefined") {
@@ -387,6 +493,13 @@ export const env = parseEnv({
   PLATFORM_INBOX_EMAIL: process.env.PLATFORM_INBOX_EMAIL,
   DIRECTORY_MODE: process.env.DIRECTORY_MODE,
   TURNERO_CHECKOUT: process.env.TURNERO_CHECKOUT,
+  MP_CONNECT_MODE: process.env.MP_CONNECT_MODE,
+  MP_OAUTH_CLIENT_ID: process.env.MP_OAUTH_CLIENT_ID,
+  MP_OAUTH_CLIENT_SECRET: process.env.MP_OAUTH_CLIENT_SECRET,
+  MP_CONNECT_WEBHOOK_SECRET: process.env.MP_CONNECT_WEBHOOK_SECRET,
+  MP_CONNECT_WEBHOOK_SIGNATURE: process.env.MP_CONNECT_WEBHOOK_SIGNATURE,
+  SECRET_BOX_KEYS: process.env.SECRET_BOX_KEYS,
+  VERCEL: process.env.VERCEL,
   PROD_SUPABASE_REF: process.env.PROD_SUPABASE_REF,
 });
 
@@ -438,12 +551,42 @@ export function saasBillingTransferInfo(): string | null {
 }
 
 /**
+ * DEPRECADO (TP-P4, C-TP2): lo deja de leer TP-2c (el turnero de T5 decide con `mpConnectMode()` + la cuenta del
+ * profesional) y se borra al cerrar T5; no sumar lectores nuevos.
  * `TURNERO_CHECKOUT` vigente (TP-0), leído en cada llamada: los tests de `public-booking*` lo prenden en el hoisted y
  * `env` se congela al importar. Cualquier valor que no sea `platform` → `off` (el boot ya rechazó uno inválido; ante
  * la duda no se cobra con la cuenta de la plataforma).
  */
 export function turneroCheckout(): "off" | "platform" {
   return process.env.TURNERO_CHECKOUT?.trim().toLowerCase() === "platform" ? "platform" : "off";
+}
+
+export type MpConnectMode = "off" | "fake" | "sandbox" | "live";
+
+/**
+ * TP-P4 (C-TP2): `MP_CONNECT_MODE` vigente, leído en cada llamada (los tests lo cambian en caliente). Inválido o vacío
+ * → `off`. `fake` con `VERCEL_ENV` o `VERCEL` → `off`: el boot ya lo rechazó, pero esto es la segunda barrera por si
+ * el proceso arrancó por otro camino; ante la duda no se habla con ningún MP.
+ */
+export function mpConnectMode(): MpConnectMode {
+  const v = process.env.MP_CONNECT_MODE?.trim().toLowerCase();
+  if (v === "sandbox" || v === "live") return v;
+  if (v === "fake") return fakeMpAllowed() ? "fake" : "off";
+  return "off";
+}
+
+/** TP-P4 (C-TP2): `MP_CONNECT_WEBHOOK_SIGNATURE` vigente. Solo `fetch-only` explícito relaja; cualquier otro → `required`. */
+export function mpConnectSignatureMode(): "required" | "fetch-only" {
+  return process.env.MP_CONNECT_WEBHOOK_SIGNATURE?.trim().toLowerCase() === "fetch-only" ? "fetch-only" : "required";
+}
+
+/**
+ * TP-P4 (C-TP2/C-TP12): ¿puede responder el simulador de MP? Solo `MP_CONNECT_MODE=fake` y fuera de Vercel (ni
+ * `VERCEL_ENV` ni `VERCEL`, aun vacías). NO se mira NODE_ENV: el E2E corre `next start` (production) con el fake.
+ */
+export function fakeMpAllowed(): boolean {
+  if (process.env.VERCEL_ENV !== undefined || process.env.VERCEL !== undefined) return false;
+  return process.env.MP_CONNECT_MODE?.trim().toLowerCase() === "fake";
 }
 
 /** `PLATFORM_INBOX_EMAIL` vigente (C-PL11), leído en cada llamada. Vacío → null (no sale el aviso por mail). */
