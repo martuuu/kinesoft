@@ -70,6 +70,8 @@ const PHI_MODELS = [
   "clinicalNoteRevision",
   // FC-0 (M14): la ficha compartida con el paciente (foto + PDF) también es HC.
   "patientDocument",
+  // TP-M (M18): el cobro online es del paciente (imputación, comprobante, concepto): Plataforma no lo baja.
+  "onlineCharge",
 ];
 const PHI_TABLES = PHI_MODELS.map((m) => m[0].toUpperCase() + m.slice(1));
 

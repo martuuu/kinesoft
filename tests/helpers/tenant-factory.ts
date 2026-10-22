@@ -86,8 +86,12 @@ export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Prom
   // FC-0 (M14 fichas_clinicas): PatientDocument tampoco se borra nunca (trigger patient_document_guard) y es RESTRICT
   // hacia ClinicalNote, Patient, Practitioner y Tenant: va PRIMERO, en la misma tx de réplica. TenantDiagnosis y
   // DiagnosisFavorite cascadean de Tenant (no son HC).
+  // TP-M (M18 turnero_cobros_mp): OnlineCharge tampoco se borra nunca (trigger online_charge_guard: la plata se anula
+  // o vence) y es RESTRICT hacia Booking, Patient, Practitioner, MpAccount y Tenant: va PRIMERO de todo, en la misma
+  // tx de réplica (en réplica tampoco dispara online_charge_sync_booking, que igual no aplica a un DELETE).
   await db.$transaction([
     db.$executeRawUnsafe(`SET LOCAL session_replication_role = replica`),
+    db.$executeRaw`DELETE FROM "OnlineCharge" WHERE "tenantId" = ${tenantId}`,
     db.$executeRaw`DELETE FROM "PatientDocument" WHERE "tenantId" = ${tenantId}`,
     db.$executeRaw`DELETE FROM "ClinicalNoteRevision" WHERE "tenantId" = ${tenantId}`,
     db.$executeRaw`DELETE FROM "ClinicalNote" WHERE "tenantId" = ${tenantId}`,
@@ -96,6 +100,11 @@ export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Prom
   // Planes M1: Booking → TreatmentProgram/Session es RESTRICT; los turnos se
   // borran antes que los planes (ya era así).
   await db.booking.deleteMany({ where: { tenantId } });
+  // TP-M (M18): MpAccount es RESTRICT hacia Tenant y Practitioner (que cascadea de Tenant) y MpCredential es RESTRICT
+  // hacia Tenant: se borran a mano, credenciales antes que cuentas (CASCADE igual, explícito para que un fallo tire).
+  // Los cobros que las referencian ya se fueron arriba. BookingPaymentPolicy cascadea de Tenant.
+  await db.mpCredential.deleteMany({ where: { tenantId } });
+  await db.mpAccount.deleteMany({ where: { tenantId } });
   // Planes M1: ProgramAuthorization → TreatmentProgram es RESTRICT (FK
   // compuesta): va antes que los planes o el deleteMany de abajo falla con 23503.
   await db.programAuthorization.deleteMany({ where: { tenantId } });

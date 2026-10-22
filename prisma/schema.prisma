@@ -156,6 +156,12 @@ model Tenant {
   tenantDiagnoses         TenantDiagnosis[]
   diagnosisFavorites      DiagnosisFavorite[]
   patientDocuments        PatientDocument[]
+  // TP M18 (turnero_cobros_mp): política de cobro del turnero (1:1, CASCADE), cuentas de Mercado Pago, tokens
+  // sellados y cobros online (RESTRICT: la plata no se borra en cascada).
+  bookingPaymentPolicy    BookingPaymentPolicy?
+  mpAccounts              MpAccount[]
+  mpCredentials           MpCredential[]
+  onlineCharges           OnlineCharge[]
 
   @@index([slug])
 }
@@ -373,6 +379,9 @@ model Practitioner {
   clinicalNotes        ClinicalNote[]
   // FC M14: quién compartió cada documento con el paciente. RESTRICT.
   sharedDocuments      PatientDocument[]
+  // TP M18: su cuenta de Mercado Pago (a lo sumo una viva: único PARCIAL) y los cobros que se le imputan. RESTRICT.
+  mpAccounts           MpAccount[]
+  onlineCharges        OnlineCharge[]
 
   @@unique([tenantId, userId])
   @@unique([id, tenantId], map: "Practitioner_id_tenantId_key") // EV2 M9: destino de FK compuesta
@@ -427,6 +436,8 @@ model Patient {
   clinicalNotes  ClinicalNote[]
   // FC M14: fichas compartidas con el paciente (lo único de la HC que lee el portal). RESTRICT.
   documents      PatientDocument[]
+  // TP M18: cobros online (turnero y links), siempre de un paciente. RESTRICT.
+  onlineCharges  OnlineCharge[]
 
   // Uniqueness within a tenant. On PostgreSQL a composite UNIQUE treats
   // NULLs as distinct, so these enforce "no duplicate VALUE" while still
@@ -1959,6 +1970,10 @@ model Booking {
   // este tenant (FKs compuestas, ver "SR M4: DRIFT ACEPTADO" al final). Quien
   // cambia la sede recalcula o limpia la sala en el mismo UPDATE (si no, 23503).
   roomId          String?
+  // TP M18: Σ de las señas (OnlineCharge DEPOSIT) PAID del turno, en la MISMA fila que lee la agenda (0 sentencias
+  // nuevas en /agenda, /sala, drawer, Facturación y portal). Lo escribe SOLO el trigger online_charge_sync_booking
+  // (que además mueve updatedAt: quien cobra con la versión vieja recibe «stale»). La app NUNCA lo escribe.
+  onlineDepositCents Int        @default(0)
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
@@ -1974,6 +1989,8 @@ model Booking {
   room         Room?             @relation(fields: [roomId], references: [id], onDelete: Restrict, map: "Booking_roomId_fkey")
   // EV2 (M9): evolución del turno (a lo sumo una raíz viva: único PARCIAL). RESTRICT.
   clinicalNotes ClinicalNote[]
+  // TP M18: cobros online del turno (a lo sumo uno del turnero y un link vivo: únicos PARCIALES). RESTRICT.
+  onlineCharges OnlineCharge[]
 
   @@unique([id, tenantId, patientId], map: "Booking_id_tenantId_patientId_key") // EV2 M9: destino de FK compuesta (la evolución es del paciente de ESE turno)
   @@index([tenantId, scheduledFor])
@@ -2051,6 +2068,187 @@ model Payment {
   booking Booking @relation(fields: [bookingId], references: [id], onDelete: Restrict)
 
   @@index([externalId])
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// TP M18 (turnero_cobros_mp, ADR-026): cobros online con la cuenta de Mercado Pago del VENDEDOR (cada profesional,
+// o el consultorio). Payment (arriba) queda como el checkout legado de la plataforma y no se toca (AUDIT §5.4).
+// El porqué completo está en la cabecera de prisma/migrations/20261022120000_turnero_cobros_mp/migration.sql.
+// ═════════════════════════════════════════════════════════════════════
+
+enum BookingPaymentMode {
+  OFF
+  OPTIONAL
+  REQUIRED
+}
+
+enum BookingChargeKind {
+  COPAGO
+  FIXED
+  PERCENT
+}
+
+enum MpAccountKind {
+  PRACTITIONER
+  CLINIC
+}
+
+enum MpAccountStatus {
+  ACTIVE
+  REAUTH_REQUIRED
+  DISCONNECTED
+}
+
+enum OnlineChargeOrigin {
+  TURNERO
+  LINK
+}
+
+enum OnlineChargeKind {
+  FULL
+  DEPOSIT
+  FREE
+}
+
+enum OnlineChargeStatus {
+  ACTIVE
+  AUTHORIZED
+  PAID
+  REFUNDED
+  EXPIRED
+  CANCELLED
+}
+
+/// Política de cobro del turnero (1:1 con el consultorio; la escribe `tenant.sensitive` por runWithRls).
+/// CHECKs en SQL: FIXED con fixedCents 100..100.000.000, PERCENT con percentBps 1..10.000, COPAGO sin ninguno;
+/// cancellationNote 1..280 sin espacios sueltos.
+model BookingPaymentPolicy {
+  tenantId         String             @id
+  mode             BookingPaymentMode @default(OFF)
+  chargeKind       BookingChargeKind  @default(COPAGO)
+  fixedCents       Int?
+  percentBps       Int?
+  useClinicAccount Boolean            @default(false)
+  cancellationNote String?
+  updatedByUserId  String? // sin FK: rastro (como Booking.copagoCollectedById)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+/// Cuenta de Mercado Pago conectada por OAuth (TENANT_READONLY: el consultorio la LEE; la escriben solo el callback,
+/// desconectar, la delegación y el cron por el canal service con tenantId a mano). practitionerId NULL = la del
+/// consultorio (kind CLINIC). Desconectar no borra: la fila sigue siendo la cuenta de los cobros viejos.
+model MpAccount {
+  id                   String          @id @default(cuid())
+  tenantId             String
+  practitionerId       String?
+  kind                 MpAccountKind
+  mpUserId             String
+  mpNickname           String? // de /users/me: el Titular ve A QUÉ cuenta entra la plata
+  liveMode             Boolean
+  publicKey            String? // no es secreto
+  webhookRef           String          @unique // 128 bits opacos en la notification_url (?acct=)
+  linksDelegated       Boolean         @default(false)
+  status               MpAccountStatus @default(ACTIVE)
+  connectedByUserId    String // sin FK: rastro
+  connectedAt          DateTime
+  reauthRequiredAt     DateTime?
+  disconnectedAt       DateTime?
+  disconnectedByUserId String?
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  tenant       Tenant         @relation(fields: [tenantId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  practitioner Practitioner?  @relation(fields: [practitionerId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  credential   MpCredential?
+  charges      OnlineCharge[]
+
+  @@unique([id, tenantId], map: "MpAccount_id_tenantId_key") // destino de FK compuesta
+  @@index([tenantId, status])
+  @@index([practitionerId])
+}
+
+/// Tokens de la cuenta (SERVICE_ONLY: RLS sin policies; la app no la ve con ningún GUC). Siempre SELLADOS con
+/// lib/secret-box.ts (AAD por cuenta y campo, mpCredentialAad); el CHECK de la base rechaza un token en claro.
+/// `version` es el CAS del refresh rotativo; `purgeAfter` = desconexión + 7 días.
+model MpCredential {
+  id              String    @id @default(cuid())
+  tenantId        String
+  mpAccountId     String    @unique
+  accessTokenBox  String
+  refreshTokenBox String
+  keyId           String
+  accessExpiresAt DateTime
+  version         Int       @default(1)
+  lastRefreshedAt DateTime?
+  refreshFailures Int       @default(0)
+  purgeAfter      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  mpAccount MpAccount @relation(fields: [mpAccountId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([tenantId])
+  @@index([accessExpiresAt])
+}
+
+/// Un cobro online = UNA preferencia de MP con el token del vendedor (turnero o link de pago), siempre de un
+/// paciente. Nunca se borra (trigger online_charge_guard): se anula o vence. Identidad y monto inmutables;
+/// transiciones = CHARGE_TRANSITIONS de lib/online-charge-logic.ts; comprobante y anulación una vez.
+model OnlineCharge {
+  id                String             @id @default(cuid())
+  tenantId          String
+  origin            OnlineChargeOrigin
+  kind              OnlineChargeKind
+  status            OnlineChargeStatus @default(ACTIVE)
+  mpAccountId       String
+  practitionerId    String // a quién se imputa
+  patientId         String
+  bookingId         String?
+  amountCents       Int
+  currency          String             @default("ARS")
+  copagoBasisCents  Int? // FULL con turno: el copago con el que se calculó
+  concept           String?
+  publicToken       String?            @unique // LINK: /pagar/<token>
+  expiresAt         DateTime
+  preferenceId      String?
+  checkoutUrl       String?
+  idempotencyKey    String // turnero:<bookingId> · link:<uuid del drawer>
+  createdByUserId   String? // LINK: quién lo generó (sin FK)
+  // Comprobante (TP-D20): se escribe al pasar a PAID (o REFUNDED directo) y no cambia.
+  mpPaymentId       String?
+  mpStatus          String?
+  mpStatusDetail    String?
+  paymentMethodId   String?
+  paymentTypeId     String?
+  installments      Int?
+  paidAmountCents   Int?
+  approvedAt        DateTime? // date_approved de MP (bucket de ingresos)
+  settledAt         DateTime? // reloj NUESTRO al registrar el PAID
+  refundedAt        DateTime?
+  cancelledAt       DateTime?
+  cancelledByUserId String?
+  cancelReason      String?
+  rawPayload        Json? // allow-list redactada + attempts (≤ 20) + flags
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  mpAccount    MpAccount    @relation(fields: [mpAccountId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  practitioner Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  patient      Patient      @relation(fields: [patientId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  booking      Booking?     @relation(fields: [bookingId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([status, expiresAt])
+  @@index([bookingId])
+  @@index([patientId])
+  @@index([practitionerId])
+  @@index([mpAccountId])
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -2673,3 +2871,29 @@ model PatientChangeRequest {
 //       ("PatientDocument_guard", "PatientDocument_no_truncate").
 //   • Policies RLS: DiagnosisCode_read (FOR SELECT USING true), TenantDiagnosis_tenant_isolation,
 //       DiagnosisFavorite_tenant_isolation, PatientDocument_tenant_isolation.
+
+// ── TP M18: DRIFT ACEPTADO ───────────────────────────────────────────────
+// Estos objetos viven SOLO en prisma/migrations/20261022120000_turnero_cobros_mp y
+// Prisma no los expresa. Si `migrate dev` / `migrate diff` propone borrarlos, NO
+// se borran (y `migrate dev` está prohibido en este repo):
+//   • PARCIALES:
+//       MpAccount_tenant_practitioner_live_key     ON MpAccount(tenantId, practitionerId) WHERE practitionerId IS NOT NULL AND status <> 'DISCONNECTED'
+//       MpAccount_tenant_clinic_live_key           ON MpAccount(tenantId) WHERE practitionerId IS NULL AND status <> 'DISCONNECTED'
+//       MpCredential_purgeAfter_idx                ON MpCredential(purgeAfter) WHERE purgeAfter IS NOT NULL
+//       OnlineCharge_bookingId_turnero_key         ON OnlineCharge(bookingId) WHERE origin = 'TURNERO'
+//       OnlineCharge_bookingId_live_link_key       ON OnlineCharge(bookingId) WHERE origin = 'LINK' AND bookingId IS NOT NULL AND status IN ('ACTIVE','AUTHORIZED')
+//       OnlineCharge_tenantId_approvedAt_paid_idx  ON OnlineCharge(tenantId, approvedAt) WHERE status = 'PAID'
+//   • FKs COMPUESTAS (las FK saltean RLS y prod es BYPASSRLS):
+//       MpAccount_practitioner_tenant_fkey        (practitionerId, tenantId)            → Practitioner(id, tenantId)          ON DELETE RESTRICT
+//       MpCredential_account_tenant_fkey          (mpAccountId, tenantId)               → MpAccount(id, tenantId)             ON DELETE CASCADE
+//       OnlineCharge_account_tenant_fkey          (mpAccountId, tenantId)               → MpAccount(id, tenantId)             ON DELETE RESTRICT
+//       OnlineCharge_practitioner_tenant_fkey     (practitionerId, tenantId)            → Practitioner(id, tenantId)          ON DELETE RESTRICT
+//       OnlineCharge_patient_tenant_fkey          (patientId, tenantId)                 → Patient(id, tenantId)               ON DELETE RESTRICT
+//       OnlineCharge_booking_tenant_patient_fkey  (bookingId, tenantId, patientId)      → Booking(id, tenantId, patientId)    ON DELETE RESTRICT
+//   • CHECKs: BookingPaymentPolicy_{amount,note}_check, MpAccount_{kind,mpUserId,text,webhookRef,status}_check,
+//       MpCredential_{box,keyId,counters}_check, OnlineCharge_{amount,shape,basis,concept,token,expires,preference,
+//       idempotencyKey,receipt,refund,cancel,mpStatus,mpText,rawPayload}_check, Booking_onlineDepositCents_check.
+//   • Funciones online_charge_guard() y online_charge_sync_booking() con sus triggers ("OnlineCharge_guard",
+//       "OnlineCharge_no_truncate", "OnlineCharge_sync_booking").
+//   • Policies RLS: BookingPaymentPolicy_tenant_isolation, OnlineCharge_tenant_isolation, MpAccount_tenant_read (FOR
+//       SELECT); MpCredential con RLS FORCE y CERO policies.

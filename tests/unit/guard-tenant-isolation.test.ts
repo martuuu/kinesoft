@@ -15,6 +15,7 @@
  * PL-0 (M8 pl_accounts_billing) suma modelos a las tres categorías (el guard exige que cada uno exista en el
  * schema, así que el repo de juguete los declara con su RLS): GLOBAL_READONLY `SaasPlanConfig`; SERVICE_ONLY
  * `SaasPlanPriceChange` y las de 2FA (sin tenantId); TENANT_READONLY `SaasSubscription`/`SaasCharge`/`SaasPayment`.
+ * TP-M (M18 turnero_cobros_mp) suma SERVICE_ONLY `MpCredential` (tokens sellados) y TENANT_READONLY `MpAccount`.
  */
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -71,6 +72,14 @@ model SaasPayment {
 model ProfessionalPublicProfile {
   id     String @id
   userId String @unique
+}
+model MpAccount {
+  id       String @id
+  tenantId String
+}
+model MpCredential {
+  id       String @id
+  tenantId String
 }
 ${extra}
 `;
@@ -132,13 +141,29 @@ ALTER TABLE "${m}" FORCE ROW LEVEL SECURITY;
 CREATE POLICY "${m}_read" ON "${m}" FOR SELECT USING (true);`
 ).join("\n");
 
+// TP-M (M18 turnero_cobros_mp): la cuenta de Mercado Pago la LEE el consultorio (TENANT_READONLY: la escriben solo el
+// callback OAuth, desconectar, la delegación y el cron por el canal service) y los tokens sellados no los ve nadie más
+// que el canal service (SERVICE_ONLY, cero policies).
+const M18_SERVICE_ONLY = ["MpCredential"];
+const M18_TENANT_READONLY = ["MpAccount"];
+const M18 = [
+  ...M18_SERVICE_ONLY.map(
+    (m) => `ALTER TABLE "${m}" ENABLE ROW LEVEL SECURITY;\nALTER TABLE "${m}" FORCE ROW LEVEL SECURITY;`
+  ),
+  ...M18_TENANT_READONLY.map(
+    (m) => `ALTER TABLE "${m}" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "${m}" FORCE ROW LEVEL SECURITY;
+CREATE POLICY "${m}_tenant_read" ON "${m}" FOR SELECT USING ("tenantId" = app_current_tenant_id());`
+  ),
+].join("\n");
+
 let dirs: string[] = [];
 afterEach(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
   dirs = [];
 });
 
-function runGuard(p: { schemaExtra?: string; m7?: string; extraMigration?: string }) {
+function runGuard(p: { schemaExtra?: string; m7?: string; m18?: string; extraMigration?: string }) {
   const root = mkdtempSync(join(tmpdir(), "guard-iso-"));
   dirs.push(root);
   mkdirSync(join(root, "lib"));
@@ -153,6 +178,7 @@ function runGuard(p: { schemaExtra?: string; m7?: string; extraMigration?: strin
   mig("20261015120000_platform_backoffice", p.m7 ?? M7);
   mig("20261015180000_pl_accounts_billing", M8);
   mig("20261019120000_public_directory", M11);
+  mig("20261022120000_turnero_cobros_mp", p.m18 ?? M18);
   if (p.extraMigration) mig("20261016000000_extra", p.extraMigration);
   const r = spawnSync(process.execPath, [SCRIPT], {
     env: { ...process.env, GUARD_ISOLATION_ROOT: root, NO_COLOR: "1" },
@@ -165,8 +191,30 @@ describe("guard de aislamiento · SERVICE_ONLY / TENANT_READONLY (BO0)", () => {
   it("control: el repo de juguete con M7 tal cual pasa", () => {
     const r = runGuard({});
     expect(r.out).toContain("GLOBAL_READONLY (7): ENABLE + FORCE, SELECT-only policies");
-    expect(r.out).toContain("SERVICE_ONLY (7): ENABLE + FORCE, zero policies. TENANT_READONLY (4)");
+    expect(r.out).toContain("SERVICE_ONLY (8): ENABLE + FORCE, zero policies. TENANT_READONLY (5)");
     expect(r.code).toBe(0);
+  });
+
+  it("[TP-M] MpAccount TENANT_READONLY y MpCredential SERVICE_ONLY en el guard", () => {
+    const ok = runGuard({});
+    expect(ok.out).toContain("SERVICE_ONLY (8): ENABLE + FORCE, zero policies. TENANT_READONLY (5)");
+    expect(ok.code).toBe(0);
+    // La app no escribe cuentas: una policy de escritura en MpAccount rompe el contrato.
+    const w = runGuard({
+      extraMigration: `CREATE POLICY "MpAccount_w" ON "MpAccount" FOR UPDATE USING ("tenantId" = app_current_tenant_id());`,
+    });
+    expect(w.code).toBe(1);
+    expect(w.out).toMatch(/MpAccount: write policy "MpAccount_w" \(FOR UPDATE\)/);
+    // Los tokens no los ve la app con ningún GUC: cualquier policy en MpCredential rompe el contrato.
+    const r = runGuard({
+      extraMigration: `CREATE POLICY "MpCredential_read" ON "MpCredential" FOR SELECT USING ("tenantId" = app_current_tenant_id());`,
+    });
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/MpCredential: policy "MpCredential_read" \(FOR SELECT\)/);
+    // Sin FORCE, el owner de la tabla la leería salteando RLS.
+    const f = runGuard({ m18: M18.replace(`ALTER TABLE "MpCredential" FORCE ROW LEVEL SECURITY;`, "") });
+    expect(f.code).toBe(1);
+    expect(f.out).toMatch(/MpCredential: RLS not FORCEd/);
   });
 
   it("[PL-0] falla si una tabla de cobro gana una policy de escritura (la app no puede marcar un pago)", () => {

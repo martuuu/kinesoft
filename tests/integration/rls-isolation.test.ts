@@ -18,7 +18,7 @@
  * seed/tear-down cross-tenant fixtures the app role could never create.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
 import {
@@ -1368,5 +1368,221 @@ describe.skipIf(!RUN || BYPASS)("[FC-0] RLS fichas (M14 PatientDocument / Tenant
     expect(created.revoked).toBe(1);
     expect(await runWithRls(B.tenantId, (tx) => tx.patientDocument.count({ where: { id: created.doc } }))).toBe(0);
     expect(await prismaOwner.patientDocument.count({ where: { noteId: ids.A.note, revokedAt: null } })).toBe(1);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// [TP-M] M18 turnero_cobros_mp: cobros online, cuentas y credenciales de Mercado Pago (app role, por runWithRls)
+// ═════════════════════════════════════════════════════════════════════
+describe.skipIf(!RUN || BYPASS)("[TP-M] RLS cobros online (M18 OnlineCharge / BookingPaymentPolicy / MpAccount / MpCredential, app role)", () => {
+  const prismaOwner = new PrismaClient({
+    datasources: { db: { url: process.env.DIRECT_URL ?? process.env.DATABASE_URL } },
+  });
+  const box = () =>
+    ["v1", "k1", randomBytes(12).toString("base64url"), randomBytes(24).toString("base64url"), randomBytes(16).toString("base64url")].join(".");
+
+  let A: EphemeralTenant;
+  let B: EphemeralTenant;
+  const ids: Record<"A" | "B", { pat: string; booking: string; acc: string; cred: string; oc: string }> = {} as never;
+
+  /** Paciente + turno + cuenta ACTIVE + credencial + seña del turnero + política. Todo con el owner (canal service). */
+  async function seed(t: EphemeralTenant, label: "A" | "B") {
+    const pat = await prismaOwner.patient.create({
+      data: { tenantId: t.tenantId, firstName: "TPM", lastName: label, assignedPractitionerId: t.practitionerId },
+    });
+    const booking = await prismaOwner.booking.create({
+      data: {
+        tenantId: t.tenantId,
+        patientId: pat.id,
+        practitionerId: t.practitionerId,
+        serviceId: t.serviceId,
+        scheduledFor: new Date(Date.now() + 2 * 86_400_000),
+        durationMin: 45,
+        idempotencyKey: `tpm-rls-${randomUUID()}`,
+      },
+    });
+    const acc = await prismaOwner.mpAccount.create({
+      data: {
+        tenantId: t.tenantId,
+        practitionerId: t.practitionerId,
+        kind: "PRACTITIONER",
+        mpUserId: "123456",
+        liveMode: false,
+        webhookRef: randomBytes(16).toString("base64url"),
+        connectedByUserId: t.userId,
+        connectedAt: new Date(),
+      },
+    });
+    const cred = await prismaOwner.mpCredential.create({
+      data: { tenantId: t.tenantId, mpAccountId: acc.id, accessTokenBox: box(), refreshTokenBox: box(), keyId: "k1", accessExpiresAt: new Date(Date.now() + 86_400_000) },
+    });
+    const oc = await prismaOwner.onlineCharge.create({
+      data: {
+        tenantId: t.tenantId,
+        origin: "TURNERO",
+        kind: "DEPOSIT",
+        mpAccountId: acc.id,
+        practitionerId: t.practitionerId,
+        patientId: pat.id,
+        bookingId: booking.id,
+        amountCents: 2500,
+        expiresAt: new Date(Date.now() + 3_600_000),
+        idempotencyKey: `turnero:${booking.id}`,
+      },
+    });
+    await prismaOwner.bookingPaymentPolicy.create({ data: { tenantId: t.tenantId, mode: "OPTIONAL" } });
+    ids[label] = { pat: pat.id, booking: booking.id, acc: acc.id, cred: cred.id, oc: oc.id };
+  }
+
+  beforeAll(async () => {
+    A = await createEphemeralTenant(prismaOwner);
+    B = await createEphemeralTenant(prismaOwner);
+    await seed(A, "A");
+    await seed(B, "B");
+  });
+
+  afterAll(async () => {
+    // deleteTenantDeep borra OnlineCharge en modo réplica (el trigger rechaza DELETE incluso al owner).
+    await A?.cleanup();
+    await B?.cleanup();
+    await prismaOwner.$disconnect();
+  });
+
+  it("[TP-M] lectura: A ve su cobro, su política y su cuenta; no los de B (ni por id); MpCredential invisible con cualquier GUC", async () => {
+    const seen = await runWithRls(A.tenantId, async (tx) => [
+      (await tx.onlineCharge.findMany({ where: { id: { in: [ids.A.oc, ids.B.oc] } }, select: { id: true } })).map((r) => r.id),
+      (await tx.mpAccount.findMany({ where: { id: { in: [ids.A.acc, ids.B.acc] } }, select: { id: true } })).map((r) => r.id),
+      (await tx.bookingPaymentPolicy.findMany({ where: { tenantId: { in: [A.tenantId, B.tenantId] } }, select: { tenantId: true } })).map((r) => r.tenantId),
+      await tx.mpCredential.count(),
+    ]);
+    expect(seen).toEqual([[ids.A.oc], [ids.A.acc], [A.tenantId], 0]);
+    const fromB = await runWithRls(B.tenantId, async (tx) => [
+      await tx.onlineCharge.count({ where: { tenantId: A.tenantId } }),
+      await tx.mpAccount.count({ where: { tenantId: A.tenantId } }),
+      await tx.mpCredential.count({ where: { id: { in: [ids.A.cred, ids.B.cred] } } }),
+    ]);
+    expect(fromB).toEqual([0, 0, 0]);
+  });
+
+  it("[TP-M] MpAccount es solo lectura para la app: INSERT rechazado; UPDATE/DELETE de la propia afectan 0 filas", async () => {
+    await expect(
+      runWithRls(A.tenantId, (tx) =>
+        tx.mpAccount.create({
+          data: {
+            tenantId: A.tenantId,
+            practitionerId: null,
+            kind: "CLINIC",
+            mpUserId: "999",
+            liveMode: false,
+            webhookRef: randomBytes(16).toString("base64url"),
+            connectedByUserId: A.userId,
+            connectedAt: new Date(),
+          },
+        })
+      )
+    ).rejects.toThrow(/row-level security/i);
+    const counts = await runWithRls(A.tenantId, async (tx) => [
+      (await tx.mpAccount.updateMany({ where: { id: ids.A.acc }, data: { linksDelegated: true } })).count,
+      (await tx.mpAccount.deleteMany({ where: { id: ids.A.acc } })).count,
+    ]);
+    expect(counts).toEqual([0, 0]);
+    expect((await prismaOwner.mpAccount.findUniqueOrThrow({ where: { id: ids.A.acc } })).linksDelegated).toBe(false);
+  });
+
+  it("[TP-M] MpCredential (SERVICE_ONLY): la app no la lee, no la escribe y no la borra, ni con el GUC propio", async () => {
+    await expect(
+      runWithRls(A.tenantId, (tx) =>
+        tx.mpCredential.create({
+          data: { tenantId: A.tenantId, mpAccountId: ids.A.acc, accessTokenBox: box(), refreshTokenBox: box(), keyId: "k1", accessExpiresAt: new Date() },
+        })
+      )
+    ).rejects.toThrow(/row-level security/i);
+    const counts = await runWithRls(A.tenantId, async (tx) => [
+      (await tx.mpCredential.updateMany({ where: { id: ids.A.cred }, data: { version: { increment: 1 } } })).count,
+      (await tx.mpCredential.deleteMany({ where: { id: ids.A.cred } })).count,
+      await tx.mpCredential.count({ where: { id: ids.A.cred } }),
+    ]);
+    expect(counts).toEqual([0, 0, 0]);
+    expect((await prismaOwner.mpCredential.findUniqueOrThrow({ where: { id: ids.A.cred } })).version).toBe(1);
+  });
+
+  it("[TP-M] B no toca el cobro ni la política de A (0 filas) y no crea un cobro en A (el guard no ve la cuenta ajena)", async () => {
+    const counts = await runWithRls(B.tenantId, async (tx) => [
+      (await tx.onlineCharge.updateMany({ where: { id: ids.A.oc }, data: { rawPayload: { pisado: true } } })).count,
+      (await tx.bookingPaymentPolicy.updateMany({ where: { tenantId: A.tenantId }, data: { mode: "OFF" } })).count,
+    ]);
+    expect(counts).toEqual([0, 0]);
+    // El BEFORE INSERT de online_charge_guard corre ANTES del WITH CHECK y lee MpAccount por RLS (no es SECURITY
+    // DEFINER): con el GUC de B la cuenta de A no existe → P0001.
+    await expect(
+      runWithRls(B.tenantId, (tx) =>
+        tx.onlineCharge.create({
+          data: {
+            tenantId: A.tenantId,
+            origin: "LINK",
+            kind: "FREE",
+            mpAccountId: ids.A.acc,
+            practitionerId: A.practitionerId,
+            patientId: ids.A.pat,
+            amountCents: 1000,
+            concept: "Colado",
+            publicToken: randomBytes(16).toString("base64url"),
+            createdByUserId: B.userId,
+            expiresAt: new Date(Date.now() + 3_600_000),
+            idempotencyKey: `link:${randomUUID()}`,
+          },
+        })
+      )
+    ).rejects.toThrow(/no está activa o no es del profesional/);
+    await expect(
+      runWithRls(B.tenantId, (tx) => tx.bookingPaymentPolicy.update({ where: { tenantId: B.tenantId }, data: { tenantId: A.tenantId } }))
+    ).rejects.toThrow();
+    expect(await prismaOwner.onlineCharge.count({ where: { tenantId: A.tenantId } })).toBe(1);
+    expect((await prismaOwner.bookingPaymentPolicy.findUniqueOrThrow({ where: { tenantId: A.tenantId } })).mode).toBe("OPTIONAL");
+  });
+
+  it("[TP-M] sin GUC (fuera de runWithRls): 0 filas en las 4 tablas", async () => {
+    const app = new PrismaClient();
+    try {
+      expect(await app.onlineCharge.count({ where: { id: { in: [ids.A.oc, ids.B.oc] } } })).toBe(0);
+      expect(await app.mpAccount.count({ where: { id: { in: [ids.A.acc, ids.B.acc] } } })).toBe(0);
+      expect(await app.mpCredential.count()).toBe(0);
+      expect(await app.bookingPaymentPolicy.count({ where: { tenantId: { in: [A.tenantId, B.tenantId] } } })).toBe(0);
+    } finally {
+      await app.$disconnect();
+    }
+  });
+
+  it("[TP-M] intra-tenant: A crea un link, lo anula y cobra la seña; la política se edita; la seña llega al turno por el trigger", async () => {
+    const out = await runWithRls(A.tenantId, async (tx) => {
+      const link = await tx.onlineCharge.create({
+        data: {
+          tenantId: A.tenantId,
+          origin: "LINK",
+          kind: "FREE",
+          mpAccountId: ids.A.acc,
+          practitionerId: A.practitionerId,
+          patientId: ids.A.pat,
+          amountCents: 1000,
+          concept: "Sesión suelta",
+          publicToken: randomBytes(16).toString("base64url"),
+          createdByUserId: A.userId,
+          expiresAt: new Date(Date.now() + 3_600_000),
+          idempotencyKey: `link:${randomUUID()}`,
+        },
+      });
+      await tx.onlineCharge.update({
+        where: { id: link.id },
+        data: { status: "CANCELLED", cancelledAt: new Date(), cancelledByUserId: A.userId, cancelReason: "manual" },
+      });
+      await tx.onlineCharge.update({
+        where: { id: ids.A.oc },
+        data: { status: "PAID", mpPaymentId: "123", mpStatus: "approved", paidAmountCents: 2500, approvedAt: new Date(), settledAt: new Date() },
+      });
+      await tx.bookingPaymentPolicy.update({ where: { tenantId: A.tenantId }, data: { chargeKind: "PERCENT", percentBps: 3000 } });
+      return (await tx.booking.findUniqueOrThrow({ where: { id: ids.A.booking }, select: { onlineDepositCents: true } })).onlineDepositCents;
+    });
+    expect(out).toBe(2500);
+    expect(await runWithRls(B.tenantId, (tx) => tx.onlineCharge.count({ where: { tenantId: A.tenantId } }))).toBe(0);
   });
 });

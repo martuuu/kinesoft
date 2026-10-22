@@ -99,6 +99,10 @@ const SERVICE_ONLY = new Set([
   // de usuario para filtrarlo: lo escribe el server por el canal service con el
   // userId de la sesión verificada (lib/public-profile.ts) y lo lee el snapshot.
   "ProfessionalPublicProfile",
+  // TP-M (M18 turnero_cobros_mp): tokens de Mercado Pago SELLADOS (lib/secret-box.ts). Solo el
+  // canal service los lee (callback OAuth, refresh, webhook, cron de purga); la app no los ve con
+  // ningún GUC, ni los del propio consultorio.
+  "MpCredential",
 ]);
 
 // BO0 (M7): tablas con tenantId que el consultorio LEE pero que solo escribe la
@@ -109,7 +113,11 @@ const SERVICE_ONLY = new Set([
 // «Facturación»; los escribe solo el canal service (cron, webhook, Plataforma), así
 // la app no puede marcar un cargo como pagado. (SupportThread/SupportMessage NO van
 // acá: tienen policy de INSERT acotada y pasan por el chequeo normal de tenant.)
-const TENANT_READONLY = new Set(["SupportSession", "SaasSubscription", "SaasCharge", "SaasPayment"]);
+// TP-M (M18 turnero_cobros_mp, ADR-026): la cuenta de Mercado Pago conectada. El consultorio la LEE
+// (a qué cuenta entra la plata, estado, delegación) y el guard de OnlineCharge la consulta sin lock;
+// la escriben solo el callback OAuth, desconectar, la delegación y el cron por el canal service con
+// tenantId e id a mano (precedente ADR-024). Así la app no puede redirigir cobros a otra cuenta.
+const TENANT_READONLY = new Set(["SupportSession", "SaasSubscription", "SaasCharge", "SaasPayment", "MpAccount"]);
 
 const RED = (s) => `\x1b[31m${s}\x1b[0m`;
 const GREEN = (s) => `\x1b[32m${s}\x1b[0m`;
