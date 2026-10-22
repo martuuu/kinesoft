@@ -9,7 +9,7 @@ import { receptionCardBadge, waitingPulse } from "@/lib/agenda-client-state";
 import { highlightState, type AgendaHighlight } from "@/lib/agenda-highlight";
 import { fmtHour, fmtMoney, osLabel, roomNameOf, type BookingDTO } from "../agenda-utils";
 import { PractitionerBadge } from "../grid/practitioner-badge";
-import { PlanMarks } from "../grid/booking-card";
+import { MoneyBadge, PlanMarks } from "../grid/booking-card";
 import { isPastUnclosed } from "@/lib/agenda-slot-helpers";
 import styles from "./views.module.css";
 
@@ -181,6 +181,8 @@ export function ListView({
             </div>
             <div className={styles.cellStatus} style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
               <StatusTag s={b.status} hold={paymentHoldState(b, clock)} />
+              {/* [TP-3e] «Seña» / «Pagado MP» junto al estado: el mismo badge con borde de la card (no pinta la fila). */}
+              <MoneyBadge b={b} />
               {isPastUnclosed(b, clock) && (
                 <span
                   data-badge="sin-cerrar"

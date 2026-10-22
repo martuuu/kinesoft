@@ -98,3 +98,32 @@ describe("[AS-0z] 0z3: UI de la agenda que no se ve al cargar va diferida", () =
     expect(read("components/realtime/live-indicator.tsx")).not.toContain("El servidor rechazó la conexión");
   });
 });
+
+/**
+ * [TP-3e] La card de la agenda, la Lista y la Semana pintan «Seña» / «Pagado MP» con el badge mínimo
+ * (`lib/booking-money-badge`), que es lo único de T5 en el first load (techo +0,3 kB, §25.11). Las líneas del drawer
+ * (`lib/booking-money-view`), las reglas de cobro, el comprobante y la UI de pagos bajan con el drawer del turno.
+ * El peso del badge lo mide `online-payments-first-load-guard.test.ts`; acá se frena el import «cómodo».
+ */
+describe("[TP-3e] card, Lista y Semana: solo el badge mínimo de T5", () => {
+  const CARD_FILES = [
+    "components/agenda/grid/booking-card.tsx",
+    "components/agenda/views/list-view.tsx",
+    "components/agenda/views/week-grid-view.tsx",
+  ];
+  const T5_HEAVY = /(?:^|\/)(?:lib\/(?:booking-money-view|online-charge-logic|mp-receipt|payment-links[^/]*|payment-link-form|online-payments-copy|mp-connect[^/]*)|components\/payments\/.*|components\/cobros\/.*)$/;
+
+  for (const file of CARD_FILES) {
+    it(`${file} no importa estáticamente módulos pesados de T5`, () => {
+      const specs = staticValueSpecifiers(read(file));
+      expect(specs.filter((s) => T5_HEAVY.test(s)), file).toEqual([]);
+    });
+  }
+
+  it("la card usa el badge mínimo (anti-false-green: el guard mira un import que existe)", () => {
+    expect(staticValueSpecifiers(read("components/agenda/grid/booking-card.tsx"))).toContain("@/lib/booking-money-badge");
+    expect(T5_HEAVY.test("@/lib/booking-money-view")).toBe(true);
+    expect(T5_HEAVY.test("@/components/payments/booking-money-section")).toBe(true);
+    expect(T5_HEAVY.test("@/lib/booking-money-badge")).toBe(false);
+  });
+});

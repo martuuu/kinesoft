@@ -21,7 +21,7 @@
  * `it.fails` (se dan vuelta en T5e):
  *  - [TP-3c] el drawer del turno monta la sección de plata por `import()` → sección, comprobante y link quedan
  *    alcanzables desde `/agenda` solo diferidos;
- *  - [TP-3e] los badges entran al first load y lo de T5 estático sigue ≤ 0,3 kB.
+ *  - [TP-3e] los badges entran al first load y lo de T5 estático sigue ≤ 0,3 kB (dado vuelta en TP-3e).
  * Los `it` ya pasan y quedan de ratchet.
  */
 import { describe, expect, it } from "vitest";
@@ -35,7 +35,12 @@ const BOOKING_DRAWER = "components/agenda/booking-drawer/index.tsx";
 const SECTION = "components/payments/booking-money-section.tsx";
 const LINK_DRAWER = "components/payments/payment-link-drawer.tsx";
 const RECEIPT_VIEW = "components/payments/mp-receipt-view.tsx";
-const BADGES = "lib/booking-money-view.ts";
+/**
+ * [TP-3e] El badge de la card vive en un módulo mínimo propio: `bookingMoneyBadge` de `lib/booking-money-view.ts` medía
+ * 315 B (> 300); `cardMoneyBadge` es la versión mínima con la misma regla y el mismo texto (paridad en
+ * `booking-money-badge.test.ts`; números de `next build` en la cabecera del módulo).
+ */
+const BADGES = "lib/booking-money-badge.ts";
 /** Techo de §25.11: +0,3 kB gz sobre el cierre de T4. */
 const T5_AGENDA_BUDGET_BYTES = 300;
 
@@ -78,6 +83,7 @@ const T5_PREFIXES = ["components/payments/", "components/cobros/", "lib/mp-conne
 const T5_FILES = new Set([
   "lib/online-payments-copy.ts",
   "lib/booking-money-view.ts",
+  "lib/booking-money-badge.ts",
   "lib/mp-receipt.ts",
   "lib/online-charge-logic.ts",
   "lib/online-payments-types.ts",
@@ -103,6 +109,8 @@ const NEVER_STATIC = [
   "lib/payment-links-types.ts",
   "lib/payment-link-form.ts",
   "lib/mp-connect/",
+  // [TP-3e] La card usa el badge mínimo; `booking-money-view` (líneas del drawer) baja con la sección de plata.
+  "lib/booking-money-view.ts",
 ];
 const hits = (set: Set<string>, paths: string[]) =>
   [...set].filter((f) => paths.some((p) => (p.endsWith("/") ? f.startsWith(p) : f === p)));
@@ -205,14 +213,14 @@ describe("[TP-K4] /agenda: lo de T5 va diferido (§25.11)", () => {
     expect(hits(fromDrawer, [LINK_DRAWER, RECEIPT_VIEW, "lib/mp-receipt.ts", "lib/payment-links-types.ts"])).toEqual([]);
   });
 
-  it.fails("[TP-3c] el drawer del turno monta la sección de plata por import() (alcanzable desde /agenda, solo diferida)", () => {
+  it("[TP-3c] el drawer del turno monta la sección de plata por import() (alcanzable desde /agenda, solo diferida)", () => {
     expect(full.has(SECTION), `${SECTION} no se alcanza desde ${ENTRY}`).toBe(true);
     expect(statics.has(SECTION)).toBe(false);
     expect(closure(BOOKING_DRAWER, false).has(SECTION), `${BOOKING_DRAWER} la importa estática`).toBe(false);
     expect(closure(BOOKING_DRAWER, true).has(SECTION)).toBe(true);
   });
 
-  it.fails("[TP-3c] comprobante y PaymentLinkDrawer alcanzables desde /agenda solo diferidos", () => {
+  it("[TP-3c] comprobante y PaymentLinkDrawer alcanzables desde /agenda solo diferidos", () => {
     for (const f of [LINK_DRAWER, RECEIPT_VIEW]) {
       expect(full.has(f), `${f} no se alcanza desde ${ENTRY}`).toBe(true);
       expect(statics.has(f), `${f} entró al first load`).toBe(false);
@@ -223,7 +231,7 @@ describe("[TP-K4] /agenda: lo de T5 va diferido (§25.11)", () => {
 describe("[TP-K4] /agenda: T5 suma ≤ 0,3 kB al first load (§25.11)", () => {
   it("el medidor ve el código de T5 importado y descarta lo que no se usa (sanidad del tree-shaking)", async () => {
     expect(await measureT5("")).toBe(0);
-    const badge = await measureT5(`export { bookingMoneyBadge } from ${JSON.stringify(abs(BADGES))};`);
+    const badge = await measureT5(`export { cardMoneyBadge } from ${JSON.stringify(abs(BADGES))};`);
     const wholeCopy = await measureT5(`export * from ${JSON.stringify(abs("lib/online-payments-copy.ts"))};`);
     expect(badge).toBeGreaterThan(0);
     // El badge solo trae su pedazo del copy, no el módulo entero (si no, el techo no mediría nada real).
@@ -237,7 +245,7 @@ describe("[TP-K4] /agenda: T5 suma ≤ 0,3 kB al first load (§25.11)", () => {
     expect(bytes, `T5 estático en /agenda: ${bytes} B gz (techo ${T5_AGENDA_BUDGET_BYTES})`).toBeLessThanOrEqual(T5_AGENDA_BUDGET_BYTES);
   });
 
-  it.fails("[TP-3e] los badges «Seña» / «Pagado MP» entran al first load de /agenda y T5 sigue ≤ 0,3 kB gz", async () => {
+  it("[TP-3e] los badges «Seña» / «Pagado MP» entran al first load de /agenda y T5 sigue ≤ 0,3 kB gz", async () => {
     expect(statics.has(BADGES), `${BADGES} no está en el first load (la card todavía no muestra el badge)`).toBe(true);
     const bytes = await t5StaticBytes(statics);
     expect(bytes, `T5 estático en /agenda: ${bytes} B gz`).toBeLessThanOrEqual(T5_AGENDA_BUDGET_BYTES);

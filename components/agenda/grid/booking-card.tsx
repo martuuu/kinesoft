@@ -6,6 +6,8 @@ import { PAYMENT_HOLD_LABEL, paymentHoldState } from "@/lib/agenda-filters";
 import { receptionCardBadge, waitingPulse, type WaitingPulse } from "@/lib/agenda-client-state";
 import { highlightState, type AgendaHighlight } from "@/lib/agenda-highlight";
 import { isOutOfPlan, planChip } from "@/lib/plan-display";
+import { cardMoneyBadge } from "@/lib/booking-money-badge";
+import type { AgendaOnlineMoneyFields } from "@/lib/agenda-wire";
 import type { Discipline } from "@/lib/plans-constants";
 import { DisciplineChip } from "@/components/planes/discipline-chip";
 import { fmtHour, type BookingDTO } from "../agenda-utils";
@@ -99,6 +101,32 @@ const outOfPlanStyle: CSSProperties = {
   border: "1px dashed rgba(15,30,51,0.4)",
   lineHeight: "12px",
 };
+
+/**
+ * [TP-3e] Plata online del turno en la card (§25.10 «Agenda», TP-UI-D4): solo «Seña» o «Pagado MP». Mini-badge con
+ * BORDE y sin relleno: el fondo de la card sigue siendo el estado (AGENTS §5; un relleno verde se leería «Atendido»).
+ * El texto visible es corto (entra en la línea de 22 px de la Semana) y el nombre accesible es el completo («Seña
+ * pagada por Mercado Pago: $ 6.000»), como el punto de espera (`WaitingDot`): `role="img"` para que el `aria-label`
+ * cuente en el nombre del botón que lo contiene.
+ *
+ * La regla vive en `cardMoneyBadge` (`lib/booking-money-badge.ts`, pura y testeada): acá solo se pinta. Es lo único
+ * de T5 que entra estático al first load de `/agenda` (techo +0,3 kB, `online-payments-first-load-guard.test.ts`), así
+ * que va escrito al mínimo, medido con `next build` (TP-3e): un solo export (Card, Lista y Semana lo usan igual), sin
+ * `title` ni color propio (el borde toma `currentColor`, el gris de la segunda línea) y el texto completo no se repite
+ * en el tooltip de la card. Sin `od`/`po` en el cable da `null` y la card queda con los mismos nodos que antes de T5.
+ */
+export function MoneyBadge({ b }: { b: BookingDTO }) {
+  // `onlineDepositCents`/`paidOnline` llegan por el cable (`od`/`po`, C-TP10); el cast cubre hasta que `BookingDTO`
+  // los declare (TP-3c, `agenda-utils.ts`).
+  const m = cardMoneyBadge(b as BookingDTO & AgendaOnlineMoneyFields);
+  return (
+    m && (
+      <span role="img" data-badge={m[0]} aria-label={m[2]} style={{ ...miniBadge, border: "1px solid", lineHeight: "12px" }}>
+        {m[1]}
+      </span>
+    )
+  );
+}
 
 /** Chip + aviso juntos (Lista, modal de Semana, Recepción). `null` si no hay nada. */
 export function PlanMarks({ b, size = "xs" }: { b: BookingDTO; size?: "xs" | "sm" }) {
@@ -421,6 +449,7 @@ export function BookingCard({
             </span>
           )}
           {marks.outOfPlan && <OutOfPlanTag />}
+          <MoneyBadge b={b} />
           {reception && (
             <span
               data-badge={reception.kind}

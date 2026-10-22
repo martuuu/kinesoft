@@ -13,7 +13,7 @@ import { StatusTag } from "@/components/ui/status-tag";
 import { paymentHoldState } from "@/lib/agenda-filters";
 import { anyHighlightMatch, type AgendaHighlight } from "@/lib/agenda-highlight";
 import { PractitionerBadge } from "../grid/practitioner-badge";
-import { PlanMarks, WaitingDot, bookingStatusTone, planLooseSplit, planLooseSplitText, waitingHostProps } from "../grid/booking-card";
+import { MoneyBadge, PlanMarks, WaitingDot, bookingStatusTone, planLooseSplit, planLooseSplitText, waitingHostProps } from "../grid/booking-card";
 import { BLOCKED_STRIPES } from "../grid/unavailable-overlay";
 import { normalizeSlotMinutes, type AgendaSlotMinutes } from "@/lib/tenant-settings-constants";
 import styles from "./views.module.css";
@@ -88,6 +88,7 @@ function WeekSlotModal({
                     </span>
                   )}
                   <PlanMarks b={b} />
+                  <MoneyBadge b={b} />
                 </div>
                 <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
                   {fmtHour(date)} · {b.serviceName} · {b.durationMin} min
@@ -196,6 +197,8 @@ function WeekBookingLine({
       <span style={{ fontSize: 11, fontWeight: 600, minWidth: 0, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {b.patientName}
       </span>
+      {/* [TP-3e] La Semana muestra la seña: el badge corto entra en la línea de 22 px (cede el nombre, con elipsis). */}
+      <MoneyBadge b={b} />
       {pulse && <WaitingDot pulse={pulse} animated={pulseAnimated} size="sm" />}
       {practitioner && (
         <span className="k-mono" aria-hidden="true" style={{ fontSize: 9, fontWeight: 700, color: "var(--navy-500)", flexShrink: 0 }}>
