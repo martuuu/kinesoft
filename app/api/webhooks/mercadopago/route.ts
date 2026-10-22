@@ -5,6 +5,7 @@ import { rateLimit } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
 import { logger } from "@/lib/logger";
 import { env } from "@/lib/env";
+import { handleConnectWebhook } from "@/lib/mp-connect/webhook-route";
 
 export const runtime = "nodejs";
 
@@ -40,6 +41,10 @@ export async function POST(req: Request) {
     url.searchParams.get("type") ??
     url.searchParams.get("topic") ??
     (await req.clone().json().then((b) => b?.type ?? null).catch(() => null));
+
+  // T5 (C-TP6): cobros con la cuenta del vendedor → rama nueva; sin `?acct=` todo sigue igual (AUDIT §5.4).
+  const acct = url.searchParams.get("acct");
+  if (acct !== null) return handleConnectWebhook(req, { acct, dataId: dataId == null ? null : String(dataId), type, ip });
 
   if (type && type !== "payment") {
     return NextResponse.json({ ok: true, ignored: type });

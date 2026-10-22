@@ -464,6 +464,7 @@ export async function consumeWebhook(paymentId: string) {
       body,
       link: `/pacientes/${booking.patientId ?? ""}`,
       alsoPractitionerId: booking.practitionerId,
+      alsoAgendaOperators: true,
     });
   }
 

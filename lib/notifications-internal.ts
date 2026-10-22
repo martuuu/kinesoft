@@ -68,6 +68,12 @@ export async function notifyTenantOwners(p: {
    * activas (las suspendidas no entran).
    */
   alsoAgendaOperators?: boolean;
+  /**
+   * T5 (C-TP7): avisar también a ESTE usuario (el que generó el link de pago: un profesional sin rol de titular que
+   * mandó el link quiere saber que se pagó). Solo si sigue siendo miembro activo del consultorio: el id viene de
+   * `OnlineCharge.createdByUserId`, que no tiene FK y puede ser de alguien que ya se fue.
+   */
+  alsoUserId?: string;
 }) {
   try {
     const recipients = new Set<string>();
@@ -89,6 +95,13 @@ export async function notifyTenantOwners(p: {
         select: { userId: true, ...MEMBER_ACCESS_SELECT },
       }));
       for (const m of operators) if (capabilitiesForMember(m).has("agenda.operateAll")) recipients.add(m.userId);
+    }
+    if (p.alsoUserId && !recipients.has(p.alsoUserId)) {
+      const member = await runWithRls(p.tenantId, (tx) => tx.membership.findFirst({
+        where: { tenantId: p.tenantId, userId: p.alsoUserId, disabledAt: null },
+        select: { userId: true },
+      }));
+      if (member) recipients.add(member.userId);
     }
 
     if (recipients.size === 0) return;
