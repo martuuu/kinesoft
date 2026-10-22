@@ -15,7 +15,7 @@ import { checkoutCopyFor, wizardOnlinePaymentFor, type WizardOnlinePayment } fro
 import { PAY_COPY, PaymentChoice, PaymentInterstitial } from "@/components/booking/wizard/payment-choice";
 import { TURNERO_PAYMENT_COPY } from "@/lib/online-payments-copy";
 import { PractitionerStep } from "@/components/booking/wizard/practitioner-step";
-import { STEP_HEADING_SELECTOR, focusStepHeading } from "@/components/booking/wizard/shared";
+import { STEP_HEADING_SELECTOR, focusStepHeading, focusStepHeadingWhenReady } from "@/components/booking/wizard/shared";
 import type { PublicClinic } from "@/lib/public-booking-types";
 
 
@@ -218,9 +218,42 @@ describe("VX-Z · turnero", () => {
     expect(focusStepHeading({ querySelector: () => null })).toBe(false);
   });
 
+  it("[TP-E] focusStepHeadingWhenReady: si el título todavía no está (paso `dynamic` suspendido), lo enfoca cuando aparece", () => {
+    // Fake de MutationObserver: el entorno unit es node. Se dispara a mano como haría el navegador al montar el chunk.
+    let fire: (() => void) | null = null;
+    const disconnect = vi.fn();
+    vi.stubGlobal("MutationObserver", class {
+      constructor(cb: () => void) { fire = cb; }
+      observe() {}
+      disconnect() { disconnect(); }
+    });
+    try {
+      const focus = vi.fn();
+      let heading: { focus: typeof focus } | null = null;
+      const root = { querySelector: () => heading } as unknown as Parameters<typeof focusStepHeadingWhenReady>[0];
+      const stop = focusStepHeadingWhenReady(root);
+      expect(focus).not.toHaveBeenCalled();
+      fire!(); // muta sin título (fallback «Cargando…»): sigue esperando
+      expect(focus).not.toHaveBeenCalled();
+      expect(disconnect).not.toHaveBeenCalled();
+      heading = { focus };
+      fire!();
+      expect(focus).toHaveBeenCalledTimes(1);
+      expect(disconnect).toHaveBeenCalled();
+      stop();
+      // Con el título ya montado enfoca en el acto y no observa.
+      fire = null;
+      focusStepHeadingWhenReady(root);
+      expect(focus).toHaveBeenCalledTimes(2);
+      expect(fire).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("el wizard mueve el foco al cambiar de paso, no en el primer render", () => {
     const src = readFileSync("components/booking/public-booking-wizard.tsx", "utf8");
-    expect(src).toMatch(/if \(prevStep\.current === step\) return;[\s\S]*focusStepHeading\(cardRef\.current\);[\s\S]*\}, \[step\]\);/);
+    expect(src).toMatch(/if \(prevStep\.current === step\) return;[\s\S]*return focusStepHeadingWhenReady\(cardRef\.current\);[\s\S]*\}, \[step\]\);/);
     expect(src).toContain("<div ref={cardRef}");
   });
 });
@@ -420,7 +453,7 @@ describe("[TP-3h] PaymentInterstitial", () => {
     const html = renderToStaticMarkup(<PaymentInterstitial kind="amount" amountCents={900_000} onContinue={() => {}} />);
     expect(html).toMatch(/<h2[^>]*data-step-heading[^>]*>Antes de ir a Mercado Pago<\/h2>/);
     const src = readFileSync("components/booking/public-booking-wizard.tsx", "utf8");
-    expect(src).toMatch(/if \(interstitial\)[^\n]*focusStepHeading\(cardRef\.current\)/);
+    expect(src).toMatch(/if \(!interstitial\) return;[\s\S]*?return focusStepHeadingWhenReady\(cardRef\.current\);[\s\S]*?\}, \[interstitial\]\);/);
   });
 
   it("el wizard cablea notice, interstitial y payNow", () => {

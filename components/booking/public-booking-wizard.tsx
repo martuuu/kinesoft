@@ -68,7 +68,7 @@ import {
 import { PractitionerStep } from "./wizard/practitioner-step";
 import { FirstSlotStep } from "./wizard/first-slot-step";
 import { SlotWindowStep } from "./wizard/slot-window-step";
-import { EmptyBox, StepHeader, focusStepHeading, formatWhenAR } from "./wizard/shared";
+import { EmptyBox, StepHeader, focusStepHeadingWhenReady, formatWhenAR } from "./wizard/shared";
 import s from "./public-booking.module.css";
 
 // TP-3h: «Tus datos» + cobro online en un chunk diferido (ver cabecera de `wizard/data-step.tsx`). Un solo loader para
@@ -285,11 +285,16 @@ export function PublicBookingWizard({
   useEffect(() => {
     if (prevStep.current === step) return;
     prevStep.current = step;
-    focusStepHeading(cardRef.current);
+    return focusStepHeadingWhenReady(cardRef.current);
   }, [step]);
   // ZB-2: el interstitial desmonta el paso «Tus datos» y el foco caía al body; va a su título (con scroll arriba: en
-  // 390 px el botón que lo abrió quedaba al pie).
-  useEffect(() => { if (interstitial) { window.scrollTo({ top: 0 }); focusStepHeading(cardRef.current); } }, [interstitial]);
+  // 390 px el botón que lo abrió quedaba al pie). `WhenReady`: el interstitial es `dynamic` y su primer render suspende,
+  // así que el título no está todavía cuando corre este efecto (hallazgo de TP-E, ver `wizard/shared.tsx`).
+  useEffect(() => {
+    if (!interstitial) return;
+    window.scrollTo({ top: 0 });
+    return focusStepHeadingWhenReady(cardRef.current);
+  }, [interstitial]);
 
   const submit = () => {
     setError(null);

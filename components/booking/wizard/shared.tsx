@@ -26,6 +26,28 @@ export function focusStepHeading(root: HeadingRoot | null): boolean {
   return true;
 }
 
+/**
+ * Hallazgo de TP-E (22-oct): «Tus datos» y el interstitial de cobro son `next/dynamic` (chunk diferido, TP-3h), o sea
+ * `React.lazy`: el primer render del componente suspende aunque el chunk ya esté precargado (cada `dynamic` tiene su
+ * propia promesa). El efecto del wizard corre con el fallback en la card, `focusStepHeading` no encuentra el título y
+ * el foco queda en `<body>` (el botón que lo tenía se desmontó). Si el título todavía no está, se espera a que aparezca
+ * en `root` (MutationObserver) y se enfoca una sola vez; se corta a los `timeoutMs` o con la limpieza del efecto (paso
+ * nuevo antes de que cargue), para no robar el foco tarde. Devuelve la limpieza.
+ */
+export function focusStepHeadingWhenReady(root: (HeadingRoot & Node) | null, timeoutMs = 5000): () => void {
+  if (!root || focusStepHeading(root) || typeof MutationObserver === "undefined") return () => {};
+  const obs = new MutationObserver(() => {
+    if (focusStepHeading(root)) stop();
+  });
+  const timer = setTimeout(stop, timeoutMs);
+  function stop() {
+    obs.disconnect();
+    clearTimeout(timer);
+  }
+  obs.observe(root, { childList: true, subtree: true });
+  return stop;
+}
+
 export function StepHeader({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <header>
