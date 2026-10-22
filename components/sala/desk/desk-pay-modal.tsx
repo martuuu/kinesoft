@@ -2,17 +2,17 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Modal } from "@/components/ui/modal";
-import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import type { BookingDTO } from "@/components/agenda/agenda-utils";
 import { setBookingCopagoPaid } from "@/lib/bookings";
-import { COLLECT_COPY, collectImputationLine, collectModalDescription, copagoRemainingCents } from "@/lib/booking-collect";
+import { COLLECT_COPY, collectImputationLine, collectModalDescription } from "@/lib/booking-collect";
 import { formatARS } from "@/lib/format";
 import { PAYMENT_METHOD_LABEL, type PaymentMethod } from "@/lib/payment-method";
 import { isStaleError } from "@/lib/reception-view-state";
 import { SALA_COPY, shortPatientName } from "@/lib/sala-board-state";
 import { canCollectRow, type DeskViewer } from "@/lib/reception-desk-state";
-import { PaymentMethodPicker, rememberPaymentMethod } from "@/components/billing/payment-method-picker";
+import { rememberPaymentMethod } from "@/components/billing/payment-method-picker";
+import { CollectForm, collectAmountFor } from "@/components/agenda/booking-drawer/collect-modal";
 
 /** Estados de cobro que ya no deben nada (mismo criterio que `owesCopago`). */
 const SETTLED: ReadonlySet<string> = new Set(["PAID", "AUTHORIZED", "REFUNDED"]);
@@ -33,8 +33,15 @@ export function applyCopagoPaid(row: BookingDTO, updatedAt: Date | string, metho
  * 19-oct) y «Marcar pagado · $ X» llama a `setBookingCopagoPaid(id, { paid: true, method }, updatedAt)`; si sale,
  * `onSaved(fila)` → `live.replaceRow` y el medio queda como «último» del dispositivo.
  *
- * - **El monto es `copagoRemainingCents`** (copago − señas cobradas). En T3 no hay señas (`deposits: []`) y es el
- *   copago entero; T5 enchufa las señas de MP sin tocar este modal (decisión 5: «Pagado» cubre el resto).
+ * - **El monto es lo que FALTA** (TP-3f, C-TP10): `collectAmountFor` = copago − seña pagada por Mercado Pago
+ *   (`row.onlineDepositCents`, la Σ que mantiene el trigger de M18 y viaja en la fila de la sala), la misma cuenta que
+ *   valida `setBookingCopagoPaid`. Hasta T5 iba `deposits: []`: con seña, el modal ofrecía el copago entero y la
+ *   Secretaría cobraba la seña dos veces. Con seña, el cuerpo lo dice («Seña pagada por Mercado Pago · $ X. Se cobra lo
+ *   que falta.»): sin esa línea, «Importe $ 14.000» de un turno de $ 20.000 parecía un error de copago.
+ * - **El cuerpo es `CollectForm`** (TP-3f), el mismo del drawer y de Facturación (T3-Z M1 los había unificado y la sala
+ *   había quedado con su copia): la línea de la seña, el picker y los botones de 44 px no pueden divergir entre los tres
+ *   modales. Este módulo ya es diferido (`ssr: false` desde `reception-desk.tsx`), así que `collect-modal` no entra al
+ *   first load de /sala.
  * - **Quién cobra ESTA fila:** `canCollectRow` (el mismo `canCollectCopago` del server). Desde T3 la Secretaria y
  *   Facturación cobran cualquier turno y el profesional solo los suyos; el modal se niega a llamar al server si el
  *   viewer no cobra esta fila, por si alguna cara lo abre por error. Antes miraba `billing.manage` y el server
@@ -78,7 +85,7 @@ export function DeskPayModal({
     if (!saving) onClose();
   }, [saving, onClose]);
 
-  const amountCents = row ? copagoRemainingCents({ resolvedCopagoCents: row.copagoCents, deposits: [] }) : 0;
+  const { amountCents, depositCents } = row ? collectAmountFor(row) : { amountCents: 0, depositCents: 0 };
 
   async function confirm() {
     if (!row || saving || !canCollectRow(viewer, row)) return;
@@ -124,33 +131,20 @@ export function DeskPayModal({
   return (
     <Modal open={row != null} onClose={close} title="Registrar cobro" description={description} width={460}>
       {row && (
-        <div className="desk-pay">
-          <div className="desk-pay-amt">
-            <span>Importe</span>
-            <b>{formatARS(amountCents)}</b>
-          </div>
-          <p className="desk-pay-imp" data-testid="collect-imputation">
-            {collectImputationLine({ practitionerId: row.practitionerId, practitionerName })}
-          </p>
-          <PaymentMethodPicker
-            value={method}
-            onChange={(m) => {
-              setMethod(m);
-              setMethodError(null);
-            }}
-            disabled={saving}
-            error={methodError}
-          />
-          <p className="desk-pay-note">Queda registrado como pagado en el turno, con el medio que elegiste.</p>
-          <div className="desk-pay-f">
-            <Button type="button" variant="ghost" onClick={close} disabled={saving}>
-              Cancelar
-            </Button>
-            <Button type="button" variant="primary" onClick={() => void confirm()} disabled={saving} aria-busy={saving || undefined}>
-              {saving ? "Registrando…" : `Marcar pagado · ${formatARS(amountCents)}`}
-            </Button>
-          </div>
-        </div>
+        <CollectForm
+          amountCents={amountCents}
+          depositCents={depositCents}
+          imputation={collectImputationLine({ practitionerId: row.practitionerId, practitionerName })}
+          method={method}
+          onMethod={(m) => {
+            setMethod(m);
+            setMethodError(null);
+          }}
+          error={methodError}
+          saving={saving}
+          onCancel={close}
+          onConfirm={() => void confirm()}
+        />
       )}
     </Modal>
   );

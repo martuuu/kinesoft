@@ -71,10 +71,14 @@ export const DESK_DELAY_BAD_MIN = 15;
  * - `canCollect`: cobra ALGO (`billing.collect || billing.collectOwn`): habilita «Por cobrar», la card de cobros y el
  *   modal. Qué filas, lo decide `canCollectRow`.
  * - `canCollectAll`: `billing.collect` (cualquier fila). Sin esto y con `canCollect`, solo las del profesional.
+ * - `onlineLinks` (T5, TP-3f): los cobros online están prendidos (`mpConnectMode() !== "off"`, lo decide la page).
+ *   Sin esto no hay «Enviar link de pago» en el menú ⋯: con `MP_CONNECT_MODE=off` el link no se puede generar y la regla
+ *   de Martin es «lo que no tiene funcionalidad se quita» (la misma que esconde las pestañas de Mercado Pago, TP-3a).
+ *   Opcional en el tipo para que un viewer armado antes de T5 (tests, Tablero) siga siendo un `DeskViewer` válido.
  */
-export type DeskViewer = SalaViewer & { canCollect: boolean; canCollectAll: boolean };
+export type DeskViewer = SalaViewer & { canCollect: boolean; canCollectAll: boolean; onlineLinks?: boolean };
 
-export function deskViewer(practitionerId: string | null, caps: Iterable<string>): DeskViewer {
+export function deskViewer(practitionerId: string | null, caps: Iterable<string>, onlineLinks = false): DeskViewer {
   // Se materializa una vez: `caps` puede ser un iterador de un solo uso.
   const list = Array.from(caps);
   const all = list.includes("billing.collect");
@@ -82,6 +86,7 @@ export function deskViewer(practitionerId: string | null, caps: Iterable<string>
     ...salaViewer(practitionerId, list),
     canCollect: all || list.includes("billing.collectOwn"),
     canCollectAll: all,
+    onlineLinks,
   };
 }
 
@@ -128,9 +133,29 @@ export function chronological<E extends { row: BookingDTO }>(es: ReadonlyArray<E
 /** Estados de cobro que ya no deben nada (AUTHORIZED = MP lo autorizó; REFUNDED = se devolvió, no se re-cobra). */
 const SETTLED: ReadonlySet<string> = new Set(["PAID", "AUTHORIZED", "REFUNDED"]);
 
-/** Debe copago: atendido, con copago > 0 y sin cobro registrado. */
+/**
+ * Lo que FALTA cobrar en el mostrador (T5, §25.8 «Predicados de plata»): copago − seña pagada por Mercado Pago
+ * (`onlineDepositCents`, Σ de las señas PAID que mantiene el trigger de M18 y viaja en la fila), con piso 0. Antes la
+ * sala sumaba y cobraba el copago entero: con una seña de $ 6.000 en un turno de $ 20.000, «Por cobrar» decía
+ * $ 20.000 y la recepción cobraba la seña dos veces.
+ *
+ * Es la regla de `copagoRemainingCents` (`lib/booking-collect.ts`, la que valida `setBookingCopagoPaid`), fijada con un
+ * test de paridad ([TP-3f]). No se importa de ahí a propósito: este módulo viaja en el first load de /sala
+ * (`use-sala-live.ts`), con techo +0 en T5, y `booking-collect` arrastra el formateo de fechas del modal. Una seña
+ * negativa o no entera es un dato corrupto: se ignora (sumarla AUMENTARÍA lo que se le cobra al paciente).
+ */
+export function deskOwedCents(row: Pick<BookingDTO, "copagoCents" | "onlineDepositCents">): number {
+  const od = row.onlineDepositCents;
+  const deposit = typeof od === "number" && Number.isInteger(od) && od > 0 ? od : 0;
+  return Math.max(0, row.copagoCents - deposit);
+}
+
+/**
+ * Debe copago: atendido, con algo que falte cobrar (`deskOwedCents` > 0: una seña que cubre el copago no deja deuda) y
+ * sin cobro registrado. Lo pagado entero online llega PAID (`paidOnline`) y cae en `SETTLED`: no se cobra.
+ */
 export function owesCopago(e: Pick<ReceptionEntry<BookingDTO>, "state" | "row">): boolean {
-  return e.state === "atendido" && e.row.copagoCents > 0 && !SETTLED.has(e.row.paymentStatus ?? "UNPAID");
+  return e.state === "atendido" && deskOwedCents(e.row) > 0 && !SETTLED.has(e.row.paymentStatus ?? "UNPAID");
 }
 
 /**
@@ -140,7 +165,24 @@ export function owesCopago(e: Pick<ReceptionEntry<BookingDTO>, "state" | "row">)
  */
 function canCollectEarly(e: Pick<ReceptionEntry<BookingDTO>, "state" | "row">): boolean {
   if (e.state === "atendido" || e.state === "ausente" || e.state === "cancelado") return false;
-  return e.row.copagoCents > 0 && !SETTLED.has(e.row.paymentStatus ?? "UNPAID");
+  return deskOwedCents(e.row) > 0 && !SETTLED.has(e.row.paymentStatus ?? "UNPAID");
+}
+
+/**
+ * «Enviar link de pago» (T5, §25.10 «Sala»): el paciente paga lo que falta desde su celular (se va sin pagar, o lo
+ * paga antes de llegar). Mismas condiciones que cobrar, más:
+ *   - `viewer.onlineLinks` (los cobros online prendidos);
+ *   - la fila tiene paciente (el link es del paciente);
+ *   - también para un atendido (el caso típico: se fue sin pagar), pero no para ausente ni cancelado (no se cobra un
+ *     turno que no ocurrió, igual que «Cobrar ahora»).
+ * Quién: `canCollectRow`, que es el `canCollectCopago` que aplica `createPaymentLink` en el server. Sin cuenta de
+ * Mercado Pago o sin delegación, el drawer del link lo dice (`getPaymentLinkSuggestions`): esa pista cuesta una
+ * lectura y no se paga por cada fila del día.
+ */
+function canSendPaymentLink(e: Pick<ReceptionEntry<BookingDTO>, "state" | "row">, viewer: DeskViewer): boolean {
+  if (viewer.onlineLinks !== true || !e.row.patientId) return false;
+  if (e.state === "ausente" || e.state === "cancelado") return false;
+  return canCollectRow(viewer, e.row) && deskOwedCents(e.row) > 0 && !SETTLED.has(e.row.paymentStatus ?? "UNPAID");
 }
 
 // ── Filtros (chips de A) ─────────────────────────────────────────────────────
@@ -255,13 +297,14 @@ export function attendingEntries<E extends ReceptionEntry<BookingDTO>>(es: Reado
  * Por cobrar: atendidos que deben copago (cronológico) y el total pendiente, en centavos. Con `viewer` (T3), solo las
  * filas que ese viewer cobra (`canCollectRow`): al profesional con `billing.collectOwn` no se le listan ni se le
  * suman los copagos de turnos ajenos que no puede registrar. Sin `viewer`, todo lo que se debe (como antes).
+ * T5: el total es lo que FALTA (`deskOwedCents`), no el copago: la seña ya entró por Mercado Pago.
  */
 export function cashEntries<E extends ReceptionEntry<BookingDTO>>(
   es: ReadonlyArray<E>,
   viewer?: DeskViewer
 ): { entries: E[]; totalCents: number } {
   const entries = chronological(es.filter((e) => owesCopago(e) && (!viewer || canCollectRow(viewer, e.row))));
-  return { entries, totalCents: entries.reduce((s, e) => s + e.row.copagoCents, 0) };
+  return { entries, totalCents: entries.reduce((s, e) => s + deskOwedCents(e.row), 0) };
 }
 
 /** Espera en minutos → llenado de la barra (0..1), lleno a los `DESK_WAIT_FULL_MIN`. null/negativo = 0. */
@@ -401,11 +444,15 @@ export function deskPrimary(e: Pick<DeskEntry, "row" | "state" | "salaActions">,
 export type DeskMenuItem =
   | { kind: "action"; action: ReceptionAction; label: string }
   | { kind: "collect"; label: string } // «Cobrar ahora ($ 6.000)», solo si cobra la fila y no atendido
+  // T5: el rótulo («Enviar link de pago», `BOOKING_MONEY_COPY.sendLink`) lo pone la cara: este módulo va en el first
+  // load de /sala y el objeto de copy de cobros online no tiene por qué viajar ahí.
+  | { kind: "payment-link" }
   | { kind: "agenda"; href: string; label: "Ver turno en la agenda" };
 
 /**
  * Menú ⋯ de la fila: las acciones del viewer menos la primaria (saltear pasos: En atención o Atendido desde la sala,
- * Ausente, Deshacer), «Cobrar ahora» para quien cobra y el turno todavía no terminó, y el link a la agenda en ese
+ * Ausente, Deshacer), «Cobrar ahora» para quien cobra y el turno todavía no terminó, «Enviar link de pago» (T5,
+ * `canSendPaymentLink`) y el link a la agenda en ese
  * día filtrada por el profesional (`view=timeline`: la vista Día de siempre; `view=day` no existe y caía al default).
  * Acepta un `SalaEntry` del Tablero o un `DeskEntry`.
  */
@@ -419,8 +466,9 @@ export function deskMenuItems(
     .filter((a) => a !== primary)
     .map((action) => ({ kind: "action", action, label: RECEPTION_ACTION_LABEL[action] }));
   if (canCollectRow(viewer, e.row) && canCollectEarly(e)) {
-    items.push({ kind: "collect", label: `Cobrar ahora (${formatARS(e.row.copagoCents)})` });
+    items.push({ kind: "collect", label: `Cobrar ahora (${formatARS(deskOwedCents(e.row))})` });
   }
+  if (canSendPaymentLink(e, viewer)) items.push({ kind: "payment-link" });
   const q = new URLSearchParams({ date: dayKey, view: "timeline", pros: e.row.practitionerId });
   items.push({ kind: "agenda", href: `/agenda?${q.toString()}`, label: "Ver turno en la agenda" });
   return items;

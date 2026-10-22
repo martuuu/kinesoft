@@ -1,15 +1,36 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { IconArrow, IconBell, IconCheck } from "@/components/ui/icons";
 import { fmtHour, type BookingDTO } from "@/components/agenda/agenda-utils";
 import { formatARS } from "@/lib/format";
 import { copagoCollectViewFor } from "@/lib/booking-collect";
+import { BOOKING_MONEY_COPY } from "@/lib/online-payments-copy";
+import type { PaymentLinkDrawerProps } from "@/components/payments/payments-ui-types";
 import { RECEPTION_STATE_LABEL, type ReceptionAction } from "@/lib/reception-state";
 import { stateTagText, undoHint } from "@/lib/reception-view-state";
-import { canCollectRow, deskMenuItems, deskPrimary, type DeskEntry, type DeskViewer } from "@/lib/reception-desk-state";
+import {
+  canCollectRow,
+  deskMenuItems,
+  deskOwedCents,
+  deskPrimary,
+  type DeskEntry,
+  type DeskViewer,
+} from "@/lib/reception-desk-state";
+
+/**
+ * TP-3f: «Enviar link de pago» abre el `PaymentLinkDrawer` compartido (§25.10). Diferido y del MISMO módulo que importa
+ * la sección de plata del drawer del turno (`booking-money-section.tsx`): el bundler arma un solo chunk para los dos, y
+ * cada chunk diferido nuevo suma ~20 B al runtime de TODAS las rutas (TP-2i). `/sala` +0 de entrada (§25.11): se precarga
+ * al abrir un menú ⋯ que tiene el ítem y se monta al elegirlo.
+ *
+ * Un `import()` a mano y no `next/dynamic`: el drawer nunca va en el primer pintado (no hay SSR que ganar) y los render
+ * tests de las caras resuelven cada `next/dynamic` al importarse; con `dynamic` todos esos tests arrastraban las server
+ * actions de links (`lib/payment-links`) sin pedirlas.
+ */
+const loadPaymentLinkDrawer = () => import("@/components/payments/payment-link-drawer").then((m) => m.PaymentLinkDrawer);
 
 /**
  * Piezas por fila del escritorio de Recepción (RX-1b, brief RX §1.1): el tag de estado, el botón primario y el menú
@@ -78,6 +99,27 @@ export function stableDeskActions(
 
 const DeskStableContext = createContext<DeskActionsStable | null>(null);
 const DeskPendingContext = createContext<ReadonlySet<string>>(new Set());
+/** TP-3f: abre el drawer del link de pago para la fila. Contexto aparte: su identidad no cambia nunca. */
+const DeskPaymentLinkContext = createContext<((row: BookingDTO) => void) | null>(null);
+
+/**
+ * Lo que el `PaymentLinkDrawer` necesita de una fila de la sala (TP-3f). El turno va con su profesional: «¿Cuánto?»
+ * (lo que falta / el total / otro monto) y la cuenta los resuelve el server (`getPaymentLinkSuggestions`), así que la
+ * lista de profesionales queda vacía (solo sirve para un link sin turno). Sin paciente no hay link: null. Puro, para el
+ * test.
+ */
+export function paymentLinkTargetOf(
+  row: Pick<BookingDTO, "id" | "patientId" | "patientName" | "scheduledFor" | "practitionerId">,
+  practitionerName: string
+): Pick<PaymentLinkDrawerProps, "surface" | "patient" | "booking" | "practitioners"> | null {
+  if (!row.patientId) return null;
+  return {
+    surface: "sala",
+    patient: { id: row.patientId, name: row.patientName },
+    booking: { id: row.id, startsAt: row.scheduledFor, practitionerId: row.practitionerId, practitionerName },
+    practitioners: [],
+  };
+}
 
 /**
  * Recibe el `DeskActionsApi` plano (el shell y los tests de las caras lo arman igual que antes) y lo reparte en los
@@ -90,9 +132,39 @@ export function DeskActionsProvider({ value, children }: { value: DeskActionsApi
   const stableRef = useRef<DeskActionsStable | null>(null);
   const stable = stableDeskActions(stableRef.current, value, getNow);
   stableRef.current = stable;
+
+  // TP-3f: el drawer del link vive ACÁ y no en la fila. Las filas se remontan cuando cambian de lista o de carril
+  // (Flujo) o cuando el realtime las reordena; con el drawer adentro de la fila, un «Llegó» de otra sesión cerraba el
+  // link a medio cargar. Se guarda una FOTO de la fila al abrir (paciente, turno, profesional): lo que cambie después
+  // no mueve el link que se está armando. `key` nueva por apertura: la idempotencia de `createPaymentLink` es por
+  // instancia (TP-3d), y reabrir sobre la misma instancia reusaría la clave del link anterior.
+  const practitionerNameRef = useRef(value.practitionerName);
+  practitionerNameRef.current = value.practitionerName;
+  const seq = useRef(0);
+  const [link, setLink] = useState<{ key: number; target: NonNullable<ReturnType<typeof paymentLinkTargetOf>> } | null>(null);
+  // El componente cargado se guarda como estado (`() => C`: un componente es una función y `setState(C)` lo llamaría).
+  const [PaymentLinkDrawer, setPaymentLinkDrawer] = useState<ComponentType<PaymentLinkDrawerProps> | null>(null);
+  const openPaymentLink = useCallback((row: BookingDTO) => {
+    const target = paymentLinkTargetOf(row, practitionerNameRef.current(row.practitionerId));
+    if (!target) return;
+    seq.current += 1;
+    setLink({ key: seq.current, target });
+    loadPaymentLinkDrawer().then(
+      (C) => setPaymentLinkDrawer(() => C),
+      // Chunk que no bajó (sin red): se cierra en vez de quedar «abierto» sin nada; el ítem sigue en el menú para
+      // reintentar. Sin toast: el provider también se monta en tests y caras sin `ToastProvider`.
+      () => setLink(null)
+    );
+  }, []);
+  const closePaymentLink = useCallback(() => setLink(null), []);
+
   return (
     <DeskStableContext.Provider value={stable}>
-      <DeskPendingContext.Provider value={value.pendingIds}>{children}</DeskPendingContext.Provider>
+      <DeskPendingContext.Provider value={value.pendingIds}>
+        <DeskPaymentLinkContext.Provider value={openPaymentLink}>{children}</DeskPaymentLinkContext.Provider>
+      </DeskPendingContext.Provider>
+      {/* El Drawer hace portal a document.body (OverlayPortal): montarlo dentro de `.desk` no lo ancla al contenedor. */}
+      {link && PaymentLinkDrawer && <PaymentLinkDrawer key={link.key} open onClose={closePaymentLink} {...link.target} />}
     </DeskStableContext.Provider>
   );
 }
@@ -169,6 +241,11 @@ function ActionIcon({ kind }: { kind: "arrive" | "call" | "attend" | "done" | "p
  * quien cobra). Un atendido ya cobrado muestra «Pagado · {medio}» a quien cobra (T3-Z M1: el mismo rótulo que el
  * drawer y Facturación, de `copagoCollectViewFor`; antes decía «Cobrado» sin medio). Sin
  * primaria, nada: el menú ⋯ tiene el resto.
+ *
+ * TP-3f: pagado entero por un cobro online (`paidOnline`, del cable `po`) → «Pagado por Mercado Pago», sin deshacer.
+ * `copagoCollectViewFor` lo reconoce por `copagoCollectedById === null` (el webhook nunca lleva quién cobró); la fila de
+ * la sala no trae esa columna, así que se traduce desde `paidOnline`: true → null, si no → undefined (no se adivina, y
+ * un «Mercado Pago» registrado a mano sigue diciendo «Pagado · Mercado Pago»). «Cobrar» nombra lo que FALTA.
  */
 export function DeskPrimaryAction({ entry, block = false }: { entry: DeskEntry; block?: boolean }) {
   const api = useDeskActions();
@@ -180,7 +257,7 @@ export function DeskPrimaryAction({ entry, block = false }: { entry: DeskEntry; 
     // T3: el «Pagado» solo a quien cobra ESTA fila (`canCollectRow`, la regla del server): al profesional no le
     // informa el cobro de un turno ajeno que no puede tocar.
     if (entry.state === "atendido" && canCollectRow(api.viewer, b) && b.copagoCents > 0 && settled) {
-      const paidLabel = copagoCollectViewFor(b, false).label ?? "Pagado";
+      const paidLabel = copagoCollectViewFor({ ...b, copagoCollectedById: b.paidOnline ? null : undefined }, false).label ?? "Pagado";
       return (
         <span className="desk-paid" title={paidLabel}>
           <span className="desk-act-ico" aria-hidden="true">
@@ -199,7 +276,7 @@ export function DeskPrimaryAction({ entry, block = false }: { entry: DeskEntry; 
         className="desk-act"
         data-kind="pay"
         data-block={block || undefined}
-        aria-label={`Cobrar a ${b.patientName}, ${formatARS(b.copagoCents)}`}
+        aria-label={`Cobrar a ${b.patientName}, ${formatARS(deskOwedCents(b))}`}
         disabled={pending}
         onClick={() => api.collect(entry)}
       >
@@ -239,7 +316,8 @@ function DotsIcon() {
 
 /**
  * Menú ⋯ de la fila (prototipo `openMenu()`): saltear pasos (En atención o Atendido desde la sala), Ausente,
- * Deshacer, «Cobrar ahora» (quien cobra, antes de terminar) y «Ver turno en la agenda».
+ * Deshacer, «Cobrar ahora» (quien cobra, antes de terminar), «Enviar link de pago» (TP-3f: abre el drawer del link en
+ * el provider) y «Ver turno en la agenda».
  *
  * Va en un portal al body: `.desk` es contenedor de container queries, y la contención de layout ancla un `fixed`
  * al contenedor y lo recorta con su overflow. Se posiciona contra el botón (abajo, o arriba si no entra), se cierra
@@ -248,6 +326,7 @@ function DotsIcon() {
  */
 export function DeskMenu({ entry }: { entry: DeskEntry }) {
   const api = useDeskActions();
+  const openPaymentLink = useContext(DeskPaymentLinkContext);
   const b = entry.row;
   const items = deskMenuItems(entry, api.viewer, api.dayKey);
   const [open, setOpen] = useState(false);
@@ -353,6 +432,23 @@ export function DeskMenu({ entry }: { entry: DeskEntry }) {
             </button>
           );
         }
+        if (it.kind === "payment-link") {
+          if (!openPaymentLink) return null;
+          return (
+            <button
+              key="payment-link"
+              type="button"
+              role="menuitem"
+              className="desk-menu-item"
+              onClick={() => {
+                close(false);
+                openPaymentLink(b);
+              }}
+            >
+              {BOOKING_MONEY_COPY.sendLink}
+            </button>
+          );
+        }
         const label = it.action === "deshacer" && hint ? `${it.label} (${hint})` : it.label;
         return (
           <button
@@ -391,6 +487,8 @@ export function DeskMenu({ entry }: { entry: DeskEntry }) {
           }
           setOpenedAt(api.getNow());
           setOpen(true);
+          // TP-3f: si el menú ofrece el link, el chunk del drawer baja mientras la Secretaría lee el menú.
+          if (items.some((i) => i.kind === "payment-link")) void loadPaymentLinkDrawer().catch(() => {});
         }}
       >
         <DotsIcon />

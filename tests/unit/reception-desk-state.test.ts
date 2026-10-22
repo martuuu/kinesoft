@@ -101,9 +101,9 @@ const entryOf = (es: DeskEntry[], id: string) => es.find((e) => e.row.id === id)
 
 describe("[RX-0] deskViewer", () => {
   it("[AS-1k1] canCollect = billing.collect || billing.collectOwn; el resto es el viewer del Tablero", () => {
-    expect(OWNER).toEqual({ practitionerId: "p1", canReception: true, canOperateAll: true, canCollect: true, canCollectAll: true });
+    expect(OWNER).toEqual({ practitionerId: "p1", canReception: true, canOperateAll: true, canCollect: true, canCollectAll: true, onlineLinks: false });
     expect(SECRETARIA.canCollect).toBe(false);
-    expect(KINE).toEqual({ practitionerId: "p1", canReception: true, canOperateAll: false, canCollect: false, canCollectAll: false });
+    expect(KINE).toEqual({ practitionerId: "p1", canReception: true, canOperateAll: false, canCollect: false, canCollectAll: false, onlineLinks: false });
     expect(SECRETARIA_COBRA).toMatchObject({ canCollect: true, canCollectAll: true });
     expect(KINE_COBRA).toMatchObject({ canCollect: true, canCollectAll: false });
   });
