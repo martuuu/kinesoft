@@ -345,6 +345,11 @@ export type Props = {
   viewer?: { userId: string; practitionerId: string | null } | null;
   /** Capabilities del actor (`getCapabilities()` como ARRAY: cruza server→client). */
   capabilities?: string[] | null;
+  /**
+   * [TP-3c] El consultorio cobra online (lo calcula la página en el server, sin sentencias: `mpConnectMode() !==
+   * "off"`). Solo se le pasa al drawer del turno para ofrecer «Generar link de pago»; ausente = no.
+   */
+  onlineMoney?: boolean;
 } & Partial<AgendaBootstrapProps>;
 
 type AgendaHours = { start: number; end: number; slotMinutes: number };
@@ -1588,6 +1593,7 @@ export function AgendaClient(props: Props) {
         practitionerName={editingBooking ? props.practitioners.find((p) => p.id === editingBooking.practitionerId)?.name ?? null : null}
         capabilities={props.capabilities ?? null}
         viewerPractitionerId={ownPractitionerId}
+        onlineMoney={props.onlineMoney}
         rooms={rooms}
         primaryLocationId={primaryLocationId}
         onClose={() => setEditing(null)}

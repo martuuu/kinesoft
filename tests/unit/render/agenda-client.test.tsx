@@ -60,6 +60,10 @@ vi.mock("@/lib/clinical-notes-read", () => proxy());
 // compartir de la tarjeta → `lib/patient-documents` ("use server" → `lib/authz` → React `cache`): sin este mock las 5
 // suites que renderizan la agenda no cargaban («cache is not a function», 37 skipped).
 vi.mock("@/lib/patient-documents", () => proxy());
+// TP-3c: lo mismo con la sección de plata online del drawer del turno (diferida): sus actions de lectura y de links
+// pasan por `lib/authz` (React `cache`).
+vi.mock("@/lib/online-charges-read", () => proxy());
+vi.mock("@/lib/payment-links", () => proxy());
 
 import { AgendaClient, type Props } from "@/components/agenda/agenda-client";
 import type { BookingDTO } from "@/components/agenda/agenda-utils";

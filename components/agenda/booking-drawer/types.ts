@@ -77,6 +77,15 @@ export type DrawerBooking = {
    * sin medio manual es un cobro de Mercado Pago, que no se deshace a mano (C-AS2).
    */
   publicReservation?: boolean;
+  /**
+   * [TP-3c] Plata online del turno (C-TP10; cable `od`/`po` de la agenda, que los omite cuando son 0/false). Ausentes =
+   * sin plata online: el drawer se ve como antes de T5 y la sección de plata no consulta al server.
+   * - `onlineDepositCents`: Σ de las señas PAID (`Booking.onlineDepositCents`, la escribe solo el trigger de M18). El
+   *   modal de cobro cobra lo que falta (copago − seña).
+   * - `paidOnline`: un cobro FULL PAID: «Pagado por Mercado Pago», sin deshacer.
+   */
+  onlineDepositCents?: number;
+  paidOnline?: boolean;
 } & Partial<AgendaPlanFields>;
 /*
  * C9 (Planes) opcional en el drawer (P3-C): `programId`, `sessionId`,

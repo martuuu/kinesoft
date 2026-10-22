@@ -105,6 +105,13 @@ export type BookingDTO = {
    * `undefined` = no se sabe (nunca se esconde). En el cable, `oi` = índice en el catálogo (T3e-2o).
    */
   insurerKey?: string | null;
+  /**
+   * T5 (C-TP10): plata online del turno. En el cable `od` (Σ de señas PAID, solo si es > 0) y `po` (pagado entero por
+   * un cobro online, solo si es true), `lib/agenda-wire.ts`: ausentes = sin plata online, así las filas de siempre no
+   * suman bytes. Los leen el mini-badge de la card y el drawer del turno (TP-3c).
+   */
+  onlineDepositCents?: number;
+  paidOnline?: boolean;
 } & Partial<AgendaPlanFields>;
 /*
  * C9 (Planes, PLANES.md §4) en el DTO: `programId`, `sessionId`,

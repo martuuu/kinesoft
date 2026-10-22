@@ -95,6 +95,7 @@ import {
   withForce,
 } from "@/lib/booking-force-flags";
 import { capabilitySet } from "@/lib/agenda-client-state";
+import { canCollectCopago } from "@/lib/capabilities";
 import { PLAN_PATIENT_CHANGE_ERROR } from "@/lib/bookings-constants";
 import { listSchedulablePlanSessions } from "@/lib/plans-read";
 import { removeBookingFromPlan } from "@/lib/plans-adopt";
@@ -160,6 +161,31 @@ const FichaDrawer = dynamic<FichaDrawerProps>(
   () => import("@/components/fichas/ficha-drawer").then((m) => m.FichaDrawer),
   { ssr: false }
 );
+// [TP-3c] Plata online del turno (seña, comprobante, link de pago): chunk aparte (§25.11 «drawer, sección,
+// comprobante y link diferidos»). Solo se monta con algo que mostrar (`moneySectionWanted`): un turno sin plata online
+// de un consultorio sin cobros online no la baja. El comprobante y el `PaymentLinkDrawer` son a su vez diferidos
+// desde la sección (`tests/unit/online-payments-first-load-guard.test.ts`).
+const BookingMoneySection = dynamic(
+  () => import("@/components/payments/booking-money-section").then((m) => m.BookingMoneySection),
+  { ssr: false }
+);
+
+/**
+ * [TP-3c] ¿Se monta la sección de plata online? Con plata online en el cable (la misma cuenta que `onlineMoneyHint`
+ * de la sección, repetida acá porque importarla haría estático el módulo de T5 en el chunk del drawer) o, si el
+ * consultorio cobra online (`onlineMoney`), para ofrecer «Generar link de pago» a quien cobra un turno por cobrar con
+ * paciente. Puro, para el test.
+ */
+export function moneySectionWanted(
+  b: Pick<DrawerBooking, "onlineDepositCents" | "paidOnline" | "paymentStatus" | "patientId" | "status">,
+  o: { canCollect: boolean; onlineMoney: boolean }
+): boolean {
+  const hinted =
+    (b.onlineDepositCents ?? 0) > 0 || b.paidOnline === true || b.paymentStatus === "AUTHORIZED" || b.paymentStatus === "REFUNDED";
+  if (hinted) return true;
+  return o.onlineMoney && o.canCollect && !!b.patientId && (b.paymentStatus === "UNPAID" || b.paymentStatus === "FAILED") && b.status !== "CANCELLED";
+}
+
 const readBookingClinicalNote = (bookingId: string) =>
   import("@/lib/clinical-notes-read").then((m) => m.getBookingClinicalNote(bookingId));
 
@@ -180,6 +206,7 @@ export function BookingDrawer({
   practitionerName = null,
   rooms,
   primaryLocationId,
+  onlineMoney = false,
 }: {
   booking: DrawerBooking | null;
   onClose: () => void;
@@ -204,6 +231,12 @@ export function BookingDrawer({
    * resuelve la agenda con su lista de profesionales; null = no está en la lista.
    */
   practitionerName?: string | null;
+  /**
+   * [TP-3c] El consultorio cobra online (Mercado Pago conectable): habilita «Generar link de pago» en el turno. Sin él
+   * (false, el default) la sección solo aparece si el turno ya tiene plata online: con `MP_CONNECT_MODE=off` (prod al
+   * arrancar T5) nadie ve un botón que rebota con «no disponible».
+   */
+  onlineMoney?: boolean;
 }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -277,6 +310,8 @@ export function BookingDrawer({
 
   const caps = useMemo(() => capabilitySet(capabilities), [capabilities]);
   const access = booking ? bookingDrawerAccess(booking, caps) : CLOSED;
+  // [TP-3c] Mismo gate que «Cobrar» de la fila Copago y que `createPaymentLink` en el server (`canCollectCopago`).
+  const collectsThis = booking ? canCollectCopago(caps, viewerPractitionerId ?? null, booking.practitionerId) : false;
 
   // S19c · fila Plan. Permisos = espejo de UI de `plan-authz-internal` (la
   // barrera es el server); sin el módulo `planes` (General) todo en false y la
@@ -810,6 +845,28 @@ export function BookingDrawer({
               viewerPractitionerId={viewerPractitionerId ?? null}
               practitionerName={practitionerName}
               onCopagoChanged={setCopagoResult}
+              money={
+                moneySectionWanted(booking, { canCollect: collectsThis, onlineMoney }) ? (
+                  <BookingMoneySection
+                    // Otro turno = otra sección: lo leído (cobros, pista, link) no vale para el siguiente.
+                    key={booking.id}
+                    booking={{
+                      id: booking.id,
+                      patientId: booking.patientId,
+                      patientName: booking.patientName,
+                      practitionerId: booking.practitionerId,
+                      practitionerName: practitionerName ?? "",
+                      startsAt: booking.scheduledFor,
+                      status: booking.status,
+                      paymentStatus: booking.paymentStatus ?? "",
+                      copagoCents: booking.copagoCents,
+                      onlineDepositCents: booking.onlineDepositCents ?? 0,
+                      paidOnline: booking.paidOnline === true,
+                    }}
+                    canCollect={collectsThis && onlineMoney}
+                  />
+                ) : null
+              }
             />
             <ReceptionInfo
               booking={booking}

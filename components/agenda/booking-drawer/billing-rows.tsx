@@ -63,6 +63,7 @@ export function BillingRows({
   viewerPractitionerId = null,
   practitionerName = null,
   onCopagoChanged,
+  money = null,
 }: {
   booking: DrawerBooking;
   /** Capabilities del actor (las del drawer). Sin ellas, solo el estado del cobro. */
@@ -76,6 +77,12 @@ export function BillingRows({
    * drawer la propague a sus otras acciones (si no, salen con la versión vieja y rebotan por stale).
    */
   onCopagoChanged?: (c: CopagoChange) => void;
+  /**
+   * [TP-3c] La sección de plata online (seña, comprobante, link de pago), justo debajo de la fila Copago: es la misma
+   * plata y separada de ella se leía como otro cobro. La arma `index.tsx` (diferida por `import()`); esta fila no la
+   * importa para que el chunk del drawer no arrastre nada de T5 (§25.11).
+   */
+  money?: React.ReactNode;
 }) {
   // EV1-C1: en Clínica general el título del turno es el motivo de consulta.
   const diagnostico = useTenantModules().has("diagnostico");
@@ -96,7 +103,15 @@ export function BillingRows({
     override && override.id === bookingProp.id && new Date(bookingProp.updatedAt).getTime() < new Date(override.updatedAt).getTime()
       ? { ...bookingProp, ...override }
       : bookingProp;
-  const view = copagoCollectView(booking, caps, viewerPractitionerId);
+  // [TP-3c] «Pagado por Mercado Pago» sin «Deshacer cobro» (C-TP10): el webhook marca PAID con medio MERCADO_PAGO y
+  // SIN quién cobró, pero el cable de la agenda no trae `copagoCollectedById` (sumarlo costaba bytes en cada fila). Lo
+  // que sí trae es `po` (`paidOnline`: hay un cobro FULL PAID del turno), que es exactamente ese caso → `null`
+  // explícito. Sin `po` queda `undefined` («no sé»): un «Mercado Pago» registrado A MANO sigue deshaciéndose (T3).
+  const view = copagoCollectView(
+    { ...booking, copagoCollectedById: booking.paidOnline ? null : undefined },
+    caps,
+    viewerPractitionerId
+  );
 
   const applyChange = (c: CopagoOverride) => {
     setOverride(c);
@@ -193,6 +208,7 @@ export function BillingRows({
           </span>
         )}
       </Row>
+      {money}
       {/* Se monta al primer «Cobrar» (recién ahí baja el chunk) y queda montado para la animación de salida. */}
       {modalMounted && (
         <CollectModal booking={collecting ? booking : null} practitionerName={practitionerName} onClose={() => setCollecting(false)} onSaved={onCollected} />

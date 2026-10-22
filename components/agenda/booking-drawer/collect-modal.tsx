@@ -23,6 +23,22 @@ export function validateCollect(
 }
 
 /**
+ * [TP-3c] Lo que cobra el modal del drawer: lo que FALTA = copago − seña pagada por Mercado Pago (`onlineDepositCents`,
+ * C-TP10). Es la misma cuenta que valida `setBookingCopagoPaid` en el server; antes iba `deposits: []` y con seña el
+ * modal ofrecía el copago entero (la seña se cobraba dos veces). Puro, para el test.
+ */
+export function collectAmountFor(booking: Pick<DrawerBooking, "copagoCents" | "onlineDepositCents">): {
+  amountCents: number;
+  depositCents: number;
+} {
+  const depositCents = booking.onlineDepositCents ?? 0;
+  return {
+    amountCents: copagoRemainingCents({ resolvedCopagoCents: booking.copagoCents, onlineDepositCents: depositCents }),
+    depositCents,
+  };
+}
+
+/**
  * Cuerpo del modal (exportado para el render test: el `Modal` monta por portal recién hidratado y en el render de
  * servidor no pinta nada). Mismo layout que «Registrar cobro» de /sala (`desk-pay-modal.tsx`), con `ModalActions`
  * para que bajo 640 px los botones se apilen a 44 px (los chips del picker ya miden 44).
@@ -32,6 +48,7 @@ export function validateCollect(
  */
 export function CollectForm({
   amountCents,
+  depositCents = 0,
   imputation,
   method,
   onMethod,
@@ -41,6 +58,12 @@ export function CollectForm({
   onConfirm,
 }: {
   amountCents: number;
+  /**
+   * [TP-3c] Seña ya pagada por Mercado Pago (`onlineDepositCents`). Con seña, `amountCents` es lo que FALTA y el modal
+   * lo dice: sin la línea, «Importe $ 14.000» de un turno de $ 20.000 parecía un error de copago. Opcional: Facturación
+   * y /sala lo pasan cuando lo tengan (TP-3f1/3f2).
+   */
+  depositCents?: number;
   imputation: string;
   method: PaymentMethod | null;
   onMethod: (m: PaymentMethod) => void;
@@ -69,6 +92,13 @@ export function CollectForm({
           {formatARS(amountCents)}
         </b>
       </div>
+      {depositCents > 0 && (
+        // Literal acá y no `BOOKING_MONEY_COPY` (lib/online-payments-copy.ts): `CollectForm` viaja estático en
+        // Facturación (`/pacientes/[id]`, techo +0 en T5) y el objeto de copy entero pesaba más que esta línea.
+        <p data-testid="collect-deposit" style={{ margin: 0, fontSize: 13, color: "var(--navy-500)" }}>
+          Seña pagada por Mercado Pago · {formatARS(depositCents)}. Se cobra lo que falta.
+        </p>
+      )}
       <p data-testid="collect-imputation" style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "var(--navy-900)" }}>
         {imputation}
       </p>
@@ -93,8 +123,8 @@ export function CollectForm({
  * desde `billing-rows.tsx`): el picker y este modal solo bajan cuando alguien toca «Cobrar», así el first-load de
  * /agenda no crece (estaba en 172,2 de 180 kB).
  *
- * - El monto es `copagoRemainingCents` (copago − señas cobradas; en T3 sin señas = el copago entero), el mismo que
- *   valida el server.
+ * - El monto es `collectAmountFor` (copago − seña pagada por Mercado Pago, `onlineDepositCents`; sin seña = el copago
+ *   entero), el mismo que valida el server.
  * - Medio OBLIGATORIO y sin preselección (`PaymentMethodPicker`); cada apertura arranca vacía: el medio del turno
  *   anterior no se arrastra a otro paciente.
  * - Lock optimista: manda el `updatedAt` que tiene la fila. Stale → toast y cierra (el turno cambió en otra sesión);
@@ -132,7 +162,7 @@ export function CollectModal({
     if (!saving) onClose();
   }, [saving, onClose]);
 
-  const amountCents = booking ? copagoRemainingCents({ resolvedCopagoCents: booking.copagoCents, deposits: [] }) : 0;
+  const { amountCents, depositCents } = booking ? collectAmountFor(booking) : { amountCents: 0, depositCents: 0 };
 
   async function confirm() {
     if (!booking || saving) return;
@@ -178,6 +208,7 @@ export function CollectModal({
       {booking && (
         <CollectForm
           amountCents={amountCents}
+          depositCents={depositCents}
           imputation={collectImputationLine({ practitionerId: booking.practitionerId, practitionerName })}
           method={method}
           onMethod={(m) => {
