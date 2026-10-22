@@ -11,9 +11,12 @@
  * [FC-1e] Fila «FC · portal «Documentos»» (T4, C-FC8): ninguna columna de staff baja el PDF compartido por el portal
  * (→ 404). Nació `it.fails("[FC-2h] …")`; FC-2i la dio vuelta (la ruta existe).
  * [FC-2i] Filas de fichas (T4): compartir/revocar, diagnósticos propios, logo/firma y las descargas del equipo.
+ * [TP-K3] Filas de cobros online (T5, brief §25.4 y §25.7): conectar/desconectar/delegar Mercado Pago, política de cobro,
+ * links de pago y la lectura de cobros de un turno. Las celdas ✅ nacen `it.fails("[TP-2b|TP-2d|TP-2h] …")` (las actions
+ * son stubs de TP-K2) y las da vuelta TP-2i; las ⛔ ya pasan con el stub y quedan como red cuando llegue la implementación.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import {
   createBooking,
@@ -81,6 +84,12 @@ import { uniqueSuffix } from "@/tests/helpers/tenant-factory";
 import { createPlan as insertPlan, addPlanBooking } from "@/tests/helpers/plan-factory";
 import { endSupportAccessForTenant } from "@/lib/support-session-tenant";
 import { createInvitation } from "@/lib/invitations";
+import { startMpConnect, disconnectMpAccount, setMpLinksDelegated, getOnlinePaymentsSettings } from "@/lib/mp-connect-actions";
+import { savePaymentPolicy } from "@/lib/booking-payment-policy";
+import { createPaymentLink, cancelPaymentLink } from "@/lib/payment-links";
+import { getBookingOnlineCharges } from "@/lib/online-charges-read";
+import { MP_OAUTH_COOKIE } from "@/lib/mp-connect/oauth-state";
+import { connectFakeAccount, installFakeMp } from "@/tests/helpers/mp-connect-fake";
 
 // ES4-S26b: abrir la sesión de soporte y cambiar el plan SaaS piden step-up de 2FA (frontera externa: TOTP/cookie).
 // Se mockea SOLO eso, como patient-portal-requests.test.ts; la barrera bajo test (capabilities, solo lectura) es real.
@@ -793,6 +802,81 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
 
   const tenantRow = (id: string) => db.tenant.findUniqueOrThrow({ where: { id } });
 
+  // ── [TP-K3] Fixtures de cobros online (T5). Todo contra el MP FALSO local: nunca MP real ni sandbox (regla de T5).
+
+  /** La red de MP es el fake SOLO alrededor de la action, sin vaciar los tokens que emitió `connectFakeAccount`. */
+  async function withFakeMp<T>(fn: () => Promise<T>): Promise<T> {
+    const fake = installFakeMp({ reset: false });
+    try {
+      return await fn();
+    } finally {
+      fake.uninstall();
+    }
+  }
+
+  /** Lo que tira una action de T5 al rechazar (en vez de devolver `ok:false`) cuenta como ⛔/∅. */
+  async function settleNull<T>(p: Promise<T | null>): Promise<T | null> {
+    try {
+      return await p;
+    } catch (e) {
+      if (e instanceof ForbiddenError || e instanceof ReadOnlyModeError) return null;
+      throw e;
+    }
+  }
+
+  /**
+   * Cuenta MP de la fixture (owner/service, como el callback). Antes desconecta la viva del mismo dueño: M18 admite una
+   * sola viva por profesional y una por consultorio (índices parciales), y las celdas reusan al Titular de K.
+   */
+  async function fxMpAccount(fx: Fx, o: { owner: "practitioner" | "clinic"; practitionerId?: string; linksDelegated?: boolean }) {
+    const practitionerId = o.owner === "clinic" ? null : (o.practitionerId ?? fx.practitionerId);
+    await db.mpAccount.updateMany({
+      where: { tenantId: fx.host.tenantId, practitionerId, status: { not: "DISCONNECTED" } },
+      data: { status: "DISCONNECTED", disconnectedAt: new Date(), disconnectedByUserId: "test-k3", linksDelegated: false },
+    });
+    const acc = await connectFakeAccount(db, fx.host, {
+      kind: o.owner === "clinic" ? "CLINIC" : "PRACTITIONER",
+      practitionerId: practitionerId ?? undefined,
+      linksDelegated: o.linksDelegated ?? false,
+    });
+    fx.mpAccountId = acc.accountId;
+  }
+
+  /** Turno con copago de $ 20.000 y la cuenta de su profesional conectada (delegada salvo que se diga). */
+  async function fxBookingWithAccount(fx: Fx, linksDelegated = true) {
+    await fxBooking(fx);
+    await db.booking.update({ where: { id: fx.bookingId as string }, data: { copagoCents: 2_000_000 } });
+    await fxMpAccount(fx, { owner: "practitioner", linksDelegated });
+  }
+
+  /** Link de pago ACTIVE de una seña del turno (insert directo: acá se mide la puerta de anular/leer, no la de crear). */
+  async function fxLiveLink(fx: Fx) {
+    await fxBookingWithAccount(fx);
+    const c = await db.onlineCharge.create({
+      data: {
+        tenantId: fx.host.tenantId,
+        origin: "LINK",
+        kind: "DEPOSIT",
+        mpAccountId: fx.mpAccountId as string,
+        practitionerId: fx.practitionerId,
+        patientId: fx.patientId,
+        bookingId: fx.bookingId as string,
+        amountCents: 500_000,
+        concept: "Seña de la sesión",
+        publicToken: randomBytes(16).toString("base64url"),
+        createdByUserId: fx.host.userId,
+        expiresAt: new Date(Date.now() + 7 * 86_400_000),
+        idempotencyKey: `link:${randomUUID()}`,
+      },
+      select: { id: true },
+    });
+    fx.chargeId = c.id;
+  }
+
+  const mpAccountRow = (fx: Fx) => db.mpAccount.findUniqueOrThrow({ where: { id: fx.mpAccountId as string } });
+  /** Política de prueba: OPTIONAL con el copago (no necesita cuenta del consultorio). */
+  const POLICY_K3 = { mode: "OPTIONAL", chargeKind: "COPAGO", fixedCents: null, percentBps: null, useClinicAccount: false, cancellationNote: null } as const;
+
   const ROWS_S26B: MatrixRow[] = [
     // ─────────────────────────────────────────── Turnos ───────────────────────────────────────────
     {
@@ -1492,6 +1576,261 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
       setup: fxPlan,
       act: (fx) => addSessionExercise({ sessionId: (fx.sessionIds as string[])[0], exerciseId: globalExerciseId }),
       effect: async (fx, db) => (await db.sessionExercise.count({ where: { sessionId: (fx.sessionIds as string[])[0] } })) > 0,
+    },
+    // ─────────────────────────────────────────── Cobros online (T5, TP-K3) ───────────────────────────────────────────
+    // §25.4: `own` exige `actor.practitionerId` (la Secretaria y Facturación no atienden: sin profesional); `clinic` solo el
+    // Titular (`account.owner` + step-up, decisión 1; el step-up está mockeado arriba); soporte nunca; la delegación la
+    // cambia solo el dueño de la cuenta. §25.7: links con `canCollectCopago` + delegación de la cuenta salvo su dueño
+    // (también para el Titular, TP-D12). Nada nuevo en SUPPORT_WRITABLE_ACTIONS (C-TP14).
+    {
+      kind: "write",
+      name: "MP · startMpConnect (own)",
+      cells: {
+        OWNER: { exp: "ok", fails: "TP-2b" },
+        BASIC: { exp: "ok", fails: "TP-2b", note: "own solo exige practitionerId (C-TP4)" },
+        ASSISTANT: { exp: "deny", note: "«Solo un profesional conecta su Mercado Pago.»" },
+        ASSISTANT_CFG: "deny",
+        BILLING: "deny",
+        ADMIN: { exp: "deny", note: "no atiende: sin profesional" },
+        PRO_CFG: { exp: "ok", fails: "TP-2b" },
+        GENERAL: { exp: "ok", fails: "TP-2b" },
+        SUPPORT: { exp: "deny", note: "soporte nunca (§25.4)" },
+      },
+      setup: async () => {
+        cookies().delete(MP_OAUTH_COOKIE);
+      },
+      act: () => withFakeMp(() => settle(startMpConnect({ target: "own" }))),
+      // El efecto de «conectar» es la cookie de state firmada (la cuenta se escribe recién en el callback).
+      effect: async () => {
+        const set = Boolean(cookies().get(MP_OAUTH_COOKIE)?.value);
+        cookies().delete(MP_OAUTH_COOKIE);
+        return set;
+      },
+    },
+    {
+      kind: "write",
+      name: "MP · startMpConnect (cuenta del consultorio)",
+      cells: {
+        OWNER: { exp: "ok", fails: "TP-2b", note: "Titular + step-up" },
+        BASIC: "deny",
+        ASSISTANT: "deny",
+        ASSISTANT_CFG: "deny",
+        BILLING: "deny",
+        ADMIN: { exp: "deny", note: "solo el Titular (account.owner), decisión 1" },
+        PRO_CFG: { exp: "deny", note: "«Configuración» no es account.owner" },
+        GENERAL: { exp: "ok", fails: "TP-2b" },
+        SUPPORT: { exp: "deny", note: "soporte nunca (§25.4)" },
+      },
+      setup: async () => {
+        cookies().delete(MP_OAUTH_COOKIE);
+      },
+      act: () => withFakeMp(() => settle(startMpConnect({ target: "clinic" }))),
+      effect: async () => {
+        const set = Boolean(cookies().get(MP_OAUTH_COOKIE)?.value);
+        cookies().delete(MP_OAUTH_COOKIE);
+        return set;
+      },
+    },
+    {
+      kind: "write",
+      name: "MP · disconnectMpAccount (own)",
+      cells: {
+        XT: { exp: "isolated", note: "own no lleva ids: el de otro consultorio no alcanza la cuenta de K" },
+        OWNER: { exp: "ok", fails: "TP-2b" },
+        BASIC: { exp: "ok", fails: "TP-2b" },
+        ASSISTANT: { exp: "deny", note: "sin profesional: no tiene cuenta propia" },
+        PRO_CFG: { exp: "ok", fails: "TP-2b" },
+        GENERAL: { exp: "ok", fails: "TP-2b" },
+        SUPPORT: { exp: "deny", note: "soporte nunca (§25.4)" },
+      },
+      // La cuenta es la del actor de la celda (PRO_CFG: la suya); en las demás, la del profesional de la fixture.
+      setup: (fx) => fxMpAccount(fx, { owner: "practitioner", practitionerId: fx.col === "PRO_CFG" ? proCfg.practitionerId : undefined }),
+      act: () => withFakeMp(() => settle(disconnectMpAccount({ target: "own" }))),
+      effect: async (fx) => (await mpAccountRow(fx)).status === "DISCONNECTED",
+    },
+    {
+      kind: "write",
+      name: "MP · disconnectMpAccount (cuenta del consultorio)",
+      cells: {
+        XT: "isolated",
+        OWNER: { exp: "ok", fails: "TP-2b", note: "Titular + step-up" },
+        BASIC: "deny",
+        ASSISTANT: "deny",
+        BILLING: "deny",
+        ADMIN: { exp: "deny", note: "solo el Titular" },
+        PRO_CFG: "deny",
+        GENERAL: { exp: "ok", fails: "TP-2b" },
+        SUPPORT: { exp: "deny", note: "soporte nunca (§25.4)" },
+      },
+      setup: (fx) => fxMpAccount(fx, { owner: "clinic" }),
+      act: () => withFakeMp(() => settle(disconnectMpAccount({ target: "clinic" }))),
+      effect: async (fx) => (await mpAccountRow(fx)).status === "DISCONNECTED",
+    },
+    {
+      kind: "write",
+      name: "MP · setMpLinksDelegated (own)",
+      cells: {
+        XT: "isolated",
+        OWNER: { exp: "ok", fails: "TP-2b" },
+        BASIC: { exp: "ok", fails: "TP-2b", note: "el dueño de la cuenta" },
+        ASSISTANT: { exp: "deny", note: "la delegación la cambia solo el dueño de la cuenta" },
+        BILLING: "deny",
+        ADMIN: "deny",
+        SUPPORT: { exp: "deny", note: "soporte nunca" },
+      },
+      setup: (fx) => fxMpAccount(fx, { owner: "practitioner", linksDelegated: false }),
+      act: () => settle(setMpLinksDelegated({ target: "own", delegated: true })),
+      effect: async (fx) => (await mpAccountRow(fx)).linksDelegated,
+    },
+    {
+      kind: "write",
+      name: "MP · setMpLinksDelegated (cuenta del consultorio)",
+      cells: {
+        XT: "isolated",
+        OWNER: { exp: "ok", fails: "TP-2b" },
+        ASSISTANT: "deny",
+        BILLING: "deny",
+        ADMIN: { exp: "deny", note: "la del consultorio la delega el Titular (§25.4)" },
+        PRO_CFG: "deny",
+        SUPPORT: { exp: "deny", note: "soporte nunca" },
+      },
+      setup: (fx) => fxMpAccount(fx, { owner: "clinic", linksDelegated: false }),
+      act: () => settle(setMpLinksDelegated({ target: "clinic", delegated: true })),
+      effect: async (fx) => (await mpAccountRow(fx)).linksDelegated,
+    },
+    {
+      kind: "write",
+      name: "Cobros online · savePaymentPolicy",
+      cells: {
+        XT: "isolated",
+        OWNER: { exp: "ok", fails: "TP-2b" },
+        BASIC: "deny",
+        ASSISTANT: "deny",
+        ASSISTANT_CFG: { exp: "deny", note: "tenant.sensitive: la Secretaria con «Configuración» no (§25.13)" },
+        BILLING: { exp: "deny", note: "Facturación no (§25.13)" },
+        ADMIN: { exp: "ok", fails: "TP-2b", note: "tenant.sensitive" },
+        PRO_CFG: { exp: "ok", fails: "TP-2b", note: "decisión 4 del 19-oct" },
+        GENERAL: { exp: "ok", fails: "TP-2b" },
+        SUPPORT: { exp: "ro", note: "nada nuevo en SUPPORT_WRITABLE_ACTIONS (C-TP14)" },
+      },
+      setup: async (fx) => {
+        await db.bookingPaymentPolicy.deleteMany({ where: { tenantId: { in: [fx.host.tenantId, Other.tenantId] } } });
+      },
+      act: () => settle(savePaymentPolicy({ ...POLICY_K3 }, null)),
+      effect: async (fx, db) => {
+        const row = await db.bookingPaymentPolicy.findUnique({ where: { tenantId: fx.host.tenantId } });
+        await db.bookingPaymentPolicy.deleteMany({ where: { tenantId: { in: [fx.host.tenantId, Other.tenantId] } } });
+        return row?.mode === "OPTIONAL";
+      },
+    },
+    {
+      kind: "read",
+      name: "Cobros online · getOnlinePaymentsSettings",
+      cells: {
+        OWNER: { exp: "ok", fails: "TP-2b" },
+        BASIC: "deny",
+        ASSISTANT: "deny",
+        ASSISTANT_CFG: { exp: "deny", note: "tenant.sensitive" },
+        BILLING: "deny",
+        ADMIN: { exp: "ok", fails: "TP-2b" },
+        PRO_CFG: { exp: "ok", fails: "TP-2b" },
+        GENERAL: { exp: "ok", fails: "TP-2b" },
+      },
+      seen: async () => (await settleNull(getOnlinePaymentsSettings())) !== null,
+    },
+    {
+      kind: "write",
+      name: "Links · createPaymentLink (lo que falta del turno, cuenta delegada)",
+      cells: {
+        XT: { exp: "deny", note: "paciente, turno y profesional de K" },
+        OWNER: { exp: "ok", fails: "TP-2d" },
+        BASIC: { exp: "ok", fails: "TP-2d", note: "propio: collectOwn y dueño de la cuenta" },
+        ASSISTANT: { exp: "ok", fails: "TP-2d", note: "billing.collect + delegación" },
+        BILLING: { exp: "ok", fails: "TP-2d" },
+        ADMIN: { exp: "ok", fails: "TP-2d" },
+        PRO_CFG: { exp: "deny", note: "turno del Titular: sin billing.collect" },
+        GENERAL: { exp: "ok", fails: "TP-2d" },
+        SUPPORT: { exp: "deny", note: "soporte no crea ni anula (§25.7)" },
+      },
+      setup: (fx) => fxBookingWithAccount(fx, true),
+      act: (fx) =>
+        withFakeMp(() =>
+          settle(
+            createPaymentLink({
+              patientId: fx.patientId,
+              bookingId: fx.bookingId as string,
+              practitionerId: fx.practitionerId,
+              purpose: "REST",
+              concept: "Sesión de la semana",
+              idempotencyKey: randomUUID(),
+            })
+          )
+        ),
+      effect: async (fx, db) => (await db.onlineCharge.count({ where: { bookingId: fx.bookingId as string, origin: "LINK" } })) > 0,
+    },
+    {
+      kind: "write",
+      name: "Links · createPaymentLink con la cuenta de otro profesional sin delegación",
+      cells: {
+        OWNER: { exp: "deny", note: "TP-D12: también el Titular necesita la delegación" },
+        BASIC: { exp: "ok", fails: "TP-2d", note: "es el dueño de la cuenta" },
+        ASSISTANT: "deny",
+        BILLING: "deny",
+        ADMIN: "deny",
+      },
+      setup: async (fx) => {
+        // El turno y la cuenta son del profesional básico en todas las columnas (en BASIC ya lo son por `baseFx`).
+        fx.practitionerId = basic.practitionerId;
+        await fxBookingWithAccount(fx, false);
+      },
+      act: (fx) =>
+        withFakeMp(() =>
+          settle(
+            createPaymentLink({
+              patientId: fx.patientId,
+              bookingId: fx.bookingId as string,
+              practitionerId: fx.practitionerId,
+              purpose: "REST",
+              concept: "Sesión de la semana",
+              idempotencyKey: randomUUID(),
+            })
+          )
+        ),
+      effect: async (fx, db) => (await db.onlineCharge.count({ where: { bookingId: fx.bookingId as string, origin: "LINK" } })) > 0,
+    },
+    {
+      kind: "write",
+      name: "Links · cancelPaymentLink",
+      cells: {
+        XT: { exp: "deny", note: "cobro de K" },
+        OWNER: { exp: "ok", fails: "TP-2d" },
+        BASIC: { exp: "ok", fails: "TP-2d", note: "propio (collectOwn)" },
+        ASSISTANT: { exp: "ok", fails: "TP-2d" },
+        BILLING: { exp: "ok", fails: "TP-2d" },
+        ADMIN: { exp: "ok", fails: "TP-2d" },
+        PRO_CFG: { exp: "deny", note: "turno del Titular: sin billing.collect" },
+        GENERAL: { exp: "ok", fails: "TP-2d" },
+        SUPPORT: { exp: "deny", note: "soporte no crea ni anula (§25.7)" },
+      },
+      setup: fxLiveLink,
+      act: (fx) => withFakeMp(() => settle(cancelPaymentLink({ chargeId: fx.chargeId as string }))),
+      effect: async (fx, db) => (await db.onlineCharge.findUniqueOrThrow({ where: { id: fx.chargeId as string } })).status === "CANCELLED",
+    },
+    {
+      kind: "read",
+      name: "Cobros online · getBookingOnlineCharges (cobros de un turno)",
+      cells: {
+        XT: { exp: "deny", note: "turno de K" },
+        OWNER: { exp: "ok", fails: "TP-2h" },
+        ASSISTANT: { exp: "ok", fails: "TP-2h" },
+        BILLING: { exp: "ok", fails: "TP-2h" },
+        ADMIN: { exp: "ok", fails: "TP-2h" },
+      },
+      setup: fxLiveLink,
+      seen: async (fx) => {
+        const r = await settle(getBookingOnlineCharges({ bookingId: fx.bookingId as string }));
+        return r.ok && "data" in r && Array.isArray(r.data) && r.data.some((c: { id: string }) => c.id === fx.chargeId);
+      },
     },
     // ─────────────────────────────────────────── ICS ───────────────────────────────────────────
     {
