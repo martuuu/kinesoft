@@ -580,6 +580,8 @@ export async function loadConfiguracionInTx(
       canManageClinicAccount: !actor.support && caps.has("account.owner"),
       practitioners: rows,
       withoutMpCount: rows.filter((r) => r.status !== "ACTIVE").length,
+      // TP-ZF3 (A1): sale de `insurers` (ya leídos: `onlinePayments` exige `tenant.admin`), sin sentencia extra.
+      particularCopagoCents: insurers.find((i) => i.isParticular)?.copagoCents ?? null,
     };
   }
   const myMp =

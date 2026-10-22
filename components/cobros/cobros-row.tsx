@@ -30,6 +30,9 @@ export function CobrosRow({ row, busy, handlers }: { row: CobroRowView; busy: bo
   const t = TONE[row.statusTone];
   const a = row.actions;
   const any = a.receipt || a.copyUrl || a.resend || a.cancel;
+  // TP-ZF3 (a11y): en la tabla hay un «Copiar»/«Anular» por fila; el lector de pantalla los leía todos iguales. El
+  // nombre accesible suma de qué cobro es (el texto visible no cambia: sigue empezando igual, WCAG 2.5.3).
+  const named = (action: string) => `${action} · ${row.title}`;
   return (
     <tr data-charge={row.id} data-status-tone={row.statusTone}>
       <td className={styles.cellConcept} data-label={C.colConcept}>
@@ -67,22 +70,22 @@ export function CobrosRow({ row, busy, handlers }: { row: CobroRowView; busy: bo
         {any ? (
           <span className={styles.actions}>
             {a.receipt && (
-              <Button type="button" variant="ghost" size="sm" onClick={() => handlers.onReceipt(row.id)}>
+              <Button type="button" variant="ghost" size="sm" aria-label={named(C.receipt)} onClick={() => handlers.onReceipt(row.id)}>
                 {C.receipt}
               </Button>
             )}
             {a.copyUrl && (
-              <Button type="button" variant="ghost" size="sm" onClick={() => handlers.onCopy(a.copyUrl as string)}>
+              <Button type="button" variant="ghost" size="sm" aria-label={named(C.copy)} onClick={() => handlers.onCopy(a.copyUrl as string)}>
                 {C.copy}
               </Button>
             )}
             {a.resend && (
-              <Button type="button" variant="ghost" size="sm" onClick={() => handlers.onResend(row.id)}>
+              <Button type="button" variant="ghost" size="sm" aria-label={named(C.resend)} onClick={() => handlers.onResend(row.id)}>
                 {C.resend}
               </Button>
             )}
             {a.cancel && (
-              <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => handlers.onCancel(row.id)}>
+              <Button type="button" variant="ghost" size="sm" disabled={busy} aria-label={named(C.cancel)} onClick={() => handlers.onCancel(row.id)}>
                 {C.cancel}
               </Button>
             )}

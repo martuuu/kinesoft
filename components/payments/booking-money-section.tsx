@@ -166,7 +166,7 @@ export function BookingMoneyBody({ lines, charges, canGenerate, hint, busy, waUr
                 {BOOKING_MONEY_COPY.copy}
               </Button>
               {live.link.canResend && waUrl && (
-                <a href={waUrl} target="_blank" rel="noopener" className="k-btn k-btn-ghost k-btn-sm">
+                <a href={waUrl} target="_blank" rel="noopener noreferrer" className="k-btn k-btn-ghost k-btn-sm">
                   {BOOKING_MONEY_COPY.whatsapp}
                 </a>
               )}

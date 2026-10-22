@@ -432,8 +432,14 @@ describe("[TP-3h] amountDiffers (interstitial, TP-UI-D6)", () => {
     expect(amountDiffers({ next: "checkout", amountCents: 1_500_000 }, 1_500_000)).toBe(false);
     expect(amountDiffers({ next: "checkout", amountCents: 900_000 }, 1_500_000)).toBe(true);
     expect(amountDiffers({ next: "checkout", amountCents: 900_000 }, null)).toBe(true);
-    expect(amountDiffers({ next: "reserved", amountCents: null }, 1_500_000)).toBe(false);
     expect(amountDiffers({ next: "checkout", amountCents: null }, 1_500_000)).toBe(false);
+    // Sin cotización (OPTIONAL «en el consultorio», o sin cobro): reservar sin cobrar es lo esperado.
+    expect(amountDiffers({ next: "reserved", amountCents: null }, null)).toBe(false);
+  });
+
+  it("[TP-ZF2] cotizó un cobro y el server reservó sin cobrar (Particular u OS con copago $ 0): hay interstitial", () => {
+    expect(amountDiffers({ next: "reserved", amountCents: null }, 1_500_000)).toBe(true);
+    expect(amountDiffers({ next: "reserved", amountCents: 0 }, 500_000)).toBe(true);
   });
 });
 

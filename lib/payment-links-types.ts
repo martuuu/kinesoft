@@ -42,7 +42,9 @@ export type CreatePaymentLinkInput = {
 /**
  * Validación de forma de `CreatePaymentLinkInput` (la de negocio — permisos, cuenta, delegación, lo que falta — es del
  * server). Espeja los CHECK de M18: monto $1..$1.000.000 (`OnlineCharge_amount_check`), concepto 3..120 recortado e
- * `idempotencyKey` 8..120 (la UI manda un UUID por instancia del drawer).
+ * `idempotencyKey` 8..100 (la UI manda un UUID por instancia del drawer). TP-ZF1 (B6): el server la guarda como
+ * `link:<key>` (+5) y el CHECK `OnlineCharge_idempotencyKey_check` es 8..120: con el tope en 120 una key de 116..120
+ * pasaba acá y rompía el INSERT. 100 deja margen para el prefijo.
  */
 export const CreatePaymentLinkSchema = z
   .object({
@@ -55,7 +57,7 @@ export const CreatePaymentLinkSchema = z
     expiresInDays: z
       .union([z.literal(1), z.literal(3), z.literal(7), z.literal(15), z.literal(30)])
       .optional(),
-    idempotencyKey: z.string().min(8).max(120),
+    idempotencyKey: z.string().min(8).max(100),
   })
   .superRefine((v, ctx) => {
     if (v.purpose === "FREE" && v.bookingId !== undefined) {

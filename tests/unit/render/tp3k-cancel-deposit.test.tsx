@@ -66,10 +66,12 @@ describe("[TP-3k] candado: los turnos con cobro (seña incluida) no se cancelan 
     const one = dayLockPaymentNote([{ hasPayment: true }, { hasPayment: false }]);
     expect(one).toMatch(/^1 turno tiene un cobro registrado/);
     expect(one).toContain("seña de Mercado Pago");
-    expect(one).toContain("se reintegra desde Mercado Pago");
+    // TP-ZF3: el reintegro lo hace quien cancela (desde Mercado Pago), no pasa solo: imperativo, no impersonal.
+    expect(one).toContain("Si después lo cancelás, reintegrá la seña desde Mercado Pago.");
     const two = dayLockPaymentNote([{ hasPayment: true }, { hasPayment: true }, { hasPayment: false }]);
     expect(two).toMatch(/^2 turnos tienen un cobro registrado/);
     expect(two).toContain("no se cancelan");
+    expect(two).toContain("Si después cancelás alguno, reintegrá la seña desde Mercado Pago.");
     for (const t of [one, two]) {
       expect(t).not.toMatch(/reembols|devuelvas/i);
     }

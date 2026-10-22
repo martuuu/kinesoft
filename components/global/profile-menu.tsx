@@ -26,6 +26,22 @@ import { SUPPORT_HELP_HREF } from "@/components/layout/shell-links";
  * está abierto en el primer render. Lo usan este menú y el botón «Ajustes» del tablero con barra superior.
  */
 const loadSettingsModal = () => import("./settings-modal");
+
+/**
+ * TP-ZF3: estilo de los ítems `<a>` del menú (cambiar de consultorio, seguridad, ayuda, Mi Mercado Pago). Era el mismo
+ * objeto literal copiado en cada uno: uno compartido no cambia nada visible y un ítem nuevo no puede quedar distinto.
+ */
+const menuLinkStyle = {
+  padding: "10px 12px",
+  fontSize: 13,
+  fontWeight: 500,
+  color: "var(--navy-700)",
+  borderRadius: 10,
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  textDecoration: "none",
+} as const;
 export const preloadSettingsModal = (): void => void loadSettingsModal();
 export const SettingsModalLazy = dynamic(() => loadSettingsModal().then((m) => m.SettingsModal), {
   ssr: false,
@@ -162,17 +178,7 @@ export function ProfileMenu({
             <a
               href={CHOOSE_TENANT_HREF}
               role="menuitem"
-              style={{
-                padding: "10px 12px",
-                fontSize: 13,
-                fontWeight: 500,
-                color: "var(--navy-700)",
-                borderRadius: 10,
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                textDecoration: "none",
-              }}
+              style={menuLinkStyle}
             >
               <IconHome size={14} /> Cambiar de consultorio
             </a>
@@ -180,34 +186,14 @@ export function ProfileMenu({
           <a
             href="/cuenta/seguridad"
             role="menuitem"
-            style={{
-              padding: "10px 12px",
-              fontSize: 13,
-              fontWeight: 500,
-              color: "var(--navy-700)",
-              borderRadius: 10,
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-              textDecoration: "none",
-            }}
+            style={menuLinkStyle}
           >
             <IconShield size={14} /> Seguridad de la cuenta
           </a>
           <a
             href={SUPPORT_HELP_HREF}
             role="menuitem"
-            style={{
-              padding: "10px 12px",
-              fontSize: 13,
-              fontWeight: 500,
-              color: "var(--navy-700)",
-              borderRadius: 10,
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-              textDecoration: "none",
-            }}
+            style={menuLinkStyle}
           >
             <IconBell size={14} /> Ayuda y soporte
           </a>
@@ -215,17 +201,7 @@ export function ProfileMenu({
             <a
               href="/configuracion?tab=mercado-pago"
               role="menuitem"
-              style={{
-                padding: "10px 12px",
-                fontSize: 13,
-                fontWeight: 500,
-                color: "var(--navy-700)",
-                borderRadius: 10,
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                textDecoration: "none",
-              }}
+              style={menuLinkStyle}
             >
               <IconSettings size={14} /> Mi Mercado Pago
             </a>

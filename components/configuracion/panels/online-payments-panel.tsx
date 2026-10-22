@@ -48,9 +48,10 @@ import {
   type PaymentPolicyInput,
 } from "@/lib/booking-payment-policy-types";
 import { savePaymentPolicy } from "@/lib/booking-payment-policy";
-import type { OnlinePaymentsPanelProps } from "@/components/payments/payments-ui-types";
+import type { MyMpPanelProps, OnlinePaymentsPanelProps } from "@/components/payments/payments-ui-types";
 import type { OnlinePaymentsPractitionerRow } from "@/lib/mp-connect-types";
 import { ClinicMpAccountCard } from "./clinic-mp-account-card";
+import { MyMpPanel, useDropMpReturnParam } from "./my-mp-panel";
 import { ErrorBox, Switch } from "../controls";
 
 // TP-3a: «Mi Mercado Pago» (TP-3b) viaja en este mismo chunk (ver `configuracion-client.tsx`: un chunk diferido menos).
@@ -61,7 +62,6 @@ export { MyMpPanel } from "./my-mp-panel";
 export const ONLINE_PAYMENTS_COPY = {
   intro:
     "El paciente paga con Mercado Pago al sacar turno en el turnero online. La plata entra a la cuenta de cada profesional (o a la del consultorio, si lo elegís abajo).",
-  offline: "Los cobros online todavía no están habilitados.",
   support: "Estás en una sesión de soporte: ves los cobros online en solo lectura.",
   allowHint: "Prendido, el paciente elige pagar ahora o en el consultorio. Apagado, el turno se confirma solo si paga.",
   kindCopago: "El valor del turno",
@@ -93,6 +93,8 @@ export const ONLINE_PAYMENTS_COPY = {
   unsaved: "Tenés cambios sin guardar.",
   practitionersEmpty: "Todavía no hay profesionales que atiendan.",
   linksAllowed: "Autorizó links de pago",
+  particularZero:
+    "Particular está en $ 0: el turnero no les cobra online a los pacientes particulares. Cargá su precio en Obras sociales.",
 } as const;
 
 /** Lo que edita el formulario. El porcentaje va como texto (lo que tipeó); la plata, en centavos. */
@@ -237,6 +239,16 @@ export function previewLine(policy: PaymentPolicyInput, priceCents: number | nul
   return `Con un turno de ${price}, el paciente paga ${formatARS(q.amountCents)} de seña online y ${formatARS(priceCents - q.amountCents)} en el consultorio.`;
 }
 
+/**
+ * TP-ZF3 (hallazgo A1): con los cobros prendidos y Particular en $ 0 (o sin la fila), el valor del turno de un
+ * particular es 0 y el turnero no tiene qué cobrarle: lo reserva sin cobro. Sin este aviso el consultorio prendía los
+ * cobros, veía la vista previa con el precio del servicio y no entendía por qué los particulares no pagaban.
+ */
+export function particularZeroNotice(on: boolean, particularCopagoCents: number | null): string | null {
+  if (!on) return null;
+  return particularCopagoCents == null || particularCopagoCents <= 0 ? ONLINE_PAYMENTS_COPY.particularZero : null;
+}
+
 /** Aviso de profesionales sin cuenta, con lo que pasa con su turnero. */
 export function withoutMpNotice(n: number, usesClinic: boolean): string | null {
   if (n <= 0) return null;
@@ -256,6 +268,20 @@ const infoBox = { ...noteBox, background: "var(--sky-50)", border: "1px solid va
 const rowLabel = { fontSize: 14, fontWeight: 700, color: "var(--navy-900)" } as const;
 const hint = { fontSize: 12, color: "var(--navy-500)", margin: "2px 0 0", lineHeight: 1.45 } as const;
 
+/**
+ * TP-ZF3: la ÚNICA entrada diferida de las dos pestañas de Mercado Pago (`configuracion-client.tsx` hace un solo
+ * `dynamic()` sobre esto). Con dos `dynamic()` del mismo módulo, el JS inicial de /configuracion llevaba dos wrappers
+ * de carga para el mismo chunk. La pestaña sigue siendo el estado del shell (`?tab=`): los deep links no cambian.
+ */
+export function MercadoPagoTab(p: ({ tab: "cobros-online" } & OnlinePaymentsPanelProps) | ({ tab: "mercado-pago" } & MyMpPanelProps)) {
+  if (p.tab === "mercado-pago") {
+    const { tab: _tab, ...rest } = p;
+    return <MyMpPanel {...rest} />;
+  }
+  const { tab: _tab, ...rest } = p;
+  return <OnlinePaymentsPanel {...rest} />;
+}
+
 export function OnlinePaymentsPanel(props: OnlinePaymentsPanelProps) {
   // Conectar y desconectar la cuenta del consultorio piden la verificación en dos pasos (decisión 1).
   return (
@@ -265,15 +291,12 @@ export function OnlinePaymentsPanel(props: OnlinePaymentsPanelProps) {
   );
 }
 
+// TP-ZF3: sin rama «modo apagado»: con `MP_CONNECT_MODE=off` esta pestaña no existe (`configuracion-page-loader.ts`,
+// gate `onlinePayments`), así que ese aviso y los controles deshabilitados eran código muerto.
 function OnlinePaymentsPanelBody({ settings, previewServicePriceCents, mpReturn, support = false, onDirtyChange }: OnlinePaymentsPanelProps) {
-  const off = settings.connectMode === "off";
+  useDropMpReturnParam(mpReturn);
   return (
     <div style={{ display: "grid", gap: 14 }} data-online-payments-panel="">
-      {off && (
-        <div role="status" style={infoBox}>
-          {ONLINE_PAYMENTS_COPY.offline}
-        </div>
-      )}
       {support && (
         <div role="note" style={warnBox}>
           {ONLINE_PAYMENTS_COPY.support}
@@ -282,13 +305,12 @@ function OnlinePaymentsPanelBody({ settings, previewServicePriceCents, mpReturn,
       <PolicyCard
         settings={settings}
         previewServicePriceCents={previewServicePriceCents}
-        readOnly={support || off}
+        readOnly={support}
         onDirtyChange={onDirtyChange}
       />
       <ClinicMpAccountCard
         account={settings.clinicAccount}
         canManage={settings.canManageClinicAccount}
-        connectMode={settings.connectMode}
         mpReturn={mpReturn}
         support={support}
       />
@@ -399,6 +421,7 @@ function PolicyCard({
   const clinicActive = settings.clinicAccount.status === "ACTIVE";
   const usesClinic = draft.useClinicAccount && clinicActive;
   const missing = withoutMpNotice(settings.withoutMpCount, usesClinic);
+  const particularZero = particularZeroNotice(draft.on, settings.particularCopagoCents);
   const noteLen = noteLength(draft.note);
   const kinds: { value: BookingChargeKind; label: string }[] = [
     { value: "COPAGO", label: ONLINE_PAYMENTS_COPY.kindCopago },
@@ -430,6 +453,11 @@ function PolicyCard({
               {ONLINE_PAYMENTS_COPY.turneroOff}
             </div>
           )}
+          {particularZero && (
+            <div role="note" style={warnBox} data-particular-zero="">
+              {particularZero}
+            </div>
+          )}
           {missing && (
             <div role="note" style={warnBox} data-without-mp={settings.withoutMpCount}>
               {missing}
@@ -453,7 +481,7 @@ function PolicyCard({
             <legend style={{ ...rowLabel, padding: 0, marginBottom: 6 }}>{MP_CONNECT_COPY.howMuch}</legend>
             {kinds.map((k) => (
               <div key={k.value} style={{ display: "grid", gap: 6 }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 32, fontSize: 14, color: "var(--navy-900)" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 44, fontSize: 14, color: "var(--navy-900)" }}>
                   <input
                     type="radio"
                     name={`${ids}-kind`}

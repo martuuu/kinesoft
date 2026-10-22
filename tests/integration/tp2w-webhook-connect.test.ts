@@ -512,6 +512,25 @@ describe.skipIf(!RUN)("[TP-2w] webhook de cobros online (rama ?acct=)", () => {
     expect((await db.onlineCharge.findUniqueOrThrow({ where: { id: c.chargeId } })).status).toBe("PAID");
   });
 
+  // [TP-ZF1] B1 (revisor T5-Z): con el cobro ya REFUNDED, un aprobado de OTRO pago (segundo checkout) no movía nada ni
+  // avisaba (`otherPayment && from === "PAID"` era falso): plata que entraba en MP sin que nadie se enterara.
+  it("[TP-ZF1] cobro reintegrado + aprobado de otro checkout → aviso «Pago duplicado» (no mudo)", async () => {
+    await setup();
+    const c = await makeCharge({ origin: "LINK" });
+    const ok = await payFake(c.prefId, "approved");
+    expect(ok.webhookResult).toBe("applied");
+    await payFake(c.prefId, "refunded");
+    expect((await db.onlineCharge.findUniqueOrThrow({ where: { id: c.chargeId } })).status).toBe("REFUNDED");
+    const pref2 = await makePreference(c.chargeId, 5000, acc, "LINK", false);
+    const before = (await notifs()).length;
+    await payFake(pref2, "approved");
+    const row = await db.onlineCharge.findUniqueOrThrow({ where: { id: c.chargeId } });
+    expect(row).toMatchObject({ status: "REFUNDED", mpPaymentId: ok.paymentId });
+    const n = await notifs();
+    expect(n.length).toBeGreaterThan(before);
+    expect(n.map((x) => x.title)).toContain(`Pago duplicado · ${formatARS(5000)}`);
+  });
+
   it("[TP-2w] al pasar a PAID vence la preferencia (evita un segundo pago)", async () => {
     await setup();
     const c = await makeCharge({ origin: "LINK" });

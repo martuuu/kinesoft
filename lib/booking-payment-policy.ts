@@ -166,14 +166,21 @@ export async function getOnlinePaymentsSettings(): Promise<OnlinePaymentsSetting
   const caps = await capabilitiesForActor(actor);
   const mode = mpConnectMode();
 
-  const { row, practitioners } = await runWithRls(tenantId, async (tx) => {
+  const { row, practitioners, particular } = await runWithRls(tenantId, async (tx) => {
     const row = await tx.bookingPaymentPolicy.findUnique({ where: { tenantId }, select: POLICY_SELECT });
     const practitioners = await tx.practitioner.findMany({
       where: bookablePractitionerWhere(tenantId, { includeDisabledFilter: true }),
       orderBy: { createdAt: "asc" },
       select: { id: true, user: { select: { fullName: true } } },
     });
-    return { row, practitioners };
+    // TP-ZF3 (A1): el precio de Particular para el aviso «Particular está en $ 0». Mismo orden que `listInsurersInTx`
+    // (lo que usa la página): si hubiera dos filas Particular, las dos lecturas eligen la misma.
+    const particular = await tx.insurer.findFirst({
+      where: { tenantId, isParticular: true },
+      orderBy: [{ active: "desc" }, { name: "asc" }],
+      select: { copagoCents: true },
+    });
+    return { row, practitioners, particular };
   });
   const views = await loadAccountViews({ tenantId, practitionerIds: practitioners.map((p) => p.id), includeClinic: true });
 
@@ -196,5 +203,6 @@ export async function getOnlinePaymentsSettings(): Promise<OnlinePaymentsSetting
     canManageClinicAccount: !actor.support && caps.has("account.owner"),
     practitioners: rows,
     withoutMpCount: rows.filter((r) => r.status !== "ACTIVE").length,
+    particularCopagoCents: particular ? particular.copagoCents : null,
   };
 }

@@ -40,6 +40,7 @@ vi.mock("@/components/ui/toast", () => ({
 
 import type { BookingDTO } from "@/components/agenda/agenda-utils";
 import {
+  DESK_SEND_LINK_LABEL,
   DeskActionsProvider,
   DeskPrimaryAction,
   paymentLinkTargetOf,
@@ -47,6 +48,7 @@ import {
 } from "@/components/sala/desk/desk-actions";
 import { DeskPayModal } from "@/components/sala/desk/desk-pay-modal";
 import { formatARS } from "@/lib/format";
+import { BOOKING_MONEY_COPY } from "@/lib/online-payments-copy";
 import { deskEntries, deskViewer, type DeskViewer } from "@/lib/reception-desk-state";
 
 const DAY = "2026-10-15";
@@ -142,6 +144,12 @@ describe("[TP-3f] «Enviar link de pago» abre el PaymentLinkDrawer compartido",
     expect(src).not.toMatch(/^import[^;]*from\s+"@\/components\/payments\/payment-link-drawer"/m);
     expect(src).toContain('import("@/components/payments/payment-link-drawer")');
     expect(src).toMatch(/<PaymentLinkDrawer\s[^>]*key=\{/);
-    expect(src).toContain("BOOKING_MONEY_COPY.sendLink");
+    expect(src).toContain("{DESK_SEND_LINK_LABEL}");
+  });
+
+  it("[TP-ZF3] el ítem «Enviar link de pago» va literal (sin importar la copy a /sala) e igual a la copy compartida", () => {
+    const src = readFileSync(join(process.cwd(), "components/sala/desk/desk-actions.tsx"), "utf8");
+    expect(src).not.toMatch(/from\s+"@\/lib\/online-payments-copy"/);
+    expect(DESK_SEND_LINK_LABEL).toBe(BOOKING_MONEY_COPY.sendLink);
   });
 });

@@ -114,8 +114,8 @@ export function dayLockPaymentNote(affected: readonly Pick<DayLockAffected, "has
   const n = affected.filter((a) => a.hasPayment).length;
   if (n === 0) return null;
   return n === 1
-    ? "1 turno tiene un cobro registrado (por ejemplo, una seña de Mercado Pago): no se cancela y queda en la agenda para que lo reprogrames. Si después lo cancelás, la seña se reintegra desde Mercado Pago."
-    : `${n} turnos tienen un cobro registrado (por ejemplo, una seña de Mercado Pago): no se cancelan y quedan en la agenda para que los reprogrames. Si después cancelás alguno, la seña se reintegra desde Mercado Pago.`;
+    ? "1 turno tiene un cobro registrado (por ejemplo, una seña de Mercado Pago): no se cancela y queda en la agenda para que lo reprogrames. Si después lo cancelás, reintegrá la seña desde Mercado Pago."
+    : `${n} turnos tienen un cobro registrado (por ejemplo, una seña de Mercado Pago): no se cancelan y quedan en la agenda para que los reprogrames. Si después cancelás alguno, reintegrá la seña desde Mercado Pago.`;
 }
 
 /**

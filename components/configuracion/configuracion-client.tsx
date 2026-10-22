@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import dynamic from "next/dynamic";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import type { Role, TenantVertical } from "@prisma/client";
@@ -99,10 +99,11 @@ const ExportPanel = dynamic(() => import("./panels/export-panel").then((m) => m.
 // solo chunk (`online-payments-panel` re-exporta `MyMpPanel`). Cada chunk diferido nuevo suma ~20 B al runtime de
 // webpack de TODAS las rutas (medido en TP-2i), y /agenda quedó con 0,2 kB de margen: dos pestañas de Mercado Pago no
 // valen dos entradas. El costo es que quien abre «Mi Mercado Pago» baja también el formulario de la política (diferido).
-const OnlinePaymentsPanel = dynamic(() => import("./panels/online-payments-panel").then((m) => m.OnlinePaymentsPanel), {
+// TP-ZF3: y un solo `dynamic()` (`MercadoPagoTab` elige el panel por `tab`): dos sobre el mismo módulo eran dos
+// wrappers de carga en el JS inicial para el mismo chunk.
+const MercadoPagoTab = dynamic(() => import("./panels/online-payments-panel").then((m) => m.MercadoPagoTab), {
   loading: PanelSkeleton,
 });
-const MyMpPanel = dynamic(() => import("./panels/online-payments-panel").then((m) => m.MyMpPanel), { loading: PanelSkeleton });
 
 type Props = {
   role: Role;
@@ -205,19 +206,10 @@ export function ConfiguracionClient(props: Props) {
   const [fichasDirty, setFichasDirty] = useState(false);
   // TP-3a: la política de «Cobros online» es un formulario en línea (monto, nota).
   const [paymentsDirty, setPaymentsDirty] = useState(false);
-  // TP-3a: el aviso de `?mp=` es de la vuelta del callback: se ve una vez, en la pestaña a la que volvió. Se saca de la
-  // URL al montar (un refresh no lo repite) y se apaga al cambiar de pestaña (volver no lo vuelve a mostrar).
+  // TP-3a: el aviso de `?mp=` es de la vuelta del callback: se ve una vez, en la pestaña a la que volvió, y se apaga al
+  // cambiar de pestaña (volver no lo vuelve a mostrar). Sacarlo de la URL (que un refresh no lo repita) lo hacen las
+  // dos pestañas de Mercado Pago al montar (`useDropMpReturnParam`, TP-ZF3): acá era una copia en el JS inicial.
   const [mpReturn, setMpReturn] = useState<MpConnectReturn | null>(props.mpReturn ?? null);
-  useEffect(() => {
-    if (!props.mpReturn) return;
-    try {
-      const url = new URL(window.location.href);
-      url.searchParams.delete("mp");
-      window.history.replaceState(window.history.state, "", url);
-    } catch {
-      /* sin history: el aviso se ve igual */
-    }
-  }, [props.mpReturn]);
   // PL-3a: «Consultanos» del plan Libre abre Soporte con un mensaje prellenado.
   const [supportDraft, setSupportDraft] = useState<SupportDraft | null>(null);
   const confirm = useConfirm();
@@ -341,7 +333,8 @@ export function ConfiguracionClient(props: Props) {
         />
       )}
       {tab === "cobros-online" && can("cobros-online") && onlinePayments && (
-        <OnlinePaymentsPanel
+        <MercadoPagoTab
+          tab="cobros-online"
           settings={onlinePayments}
           previewServicePriceCents={props.previewServicePriceCents ?? null}
           mpReturn={mpReturn}
@@ -350,7 +343,7 @@ export function ConfiguracionClient(props: Props) {
         />
       )}
       {tab === "mercado-pago" && can("mercado-pago") && myMp && (
-        <MyMpPanel account={myMp} mpReturn={mpReturn} support={props.support} />
+        <MercadoPagoTab tab="mercado-pago" account={myMp} mpReturn={mpReturn} support={props.support} />
       )}
       {tab === "soporte" && can("soporte") && (
         // PL-2d (C-PL11): la pestaña «Soporte» junta los Mensajes con el equipo de KineSoft y los Accesos de soporte.

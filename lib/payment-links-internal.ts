@@ -4,7 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { resolveBookingCopagoCents } from "@/lib/copago";
 import { getParticularCopagoCents } from "@/lib/billing-internal";
 import { logger } from "@/lib/logger";
-import { mpCreatePreference, type MpAccountRef } from "@/lib/mp-connect/account-client";
+import { mpCreatePreference, mpExpirePreference, type MpAccountRef } from "@/lib/mp-connect/account-client";
 import { mpAppUrl } from "@/lib/mp-connect/http";
 import { buildChargePreference, connectNotificationUrl } from "@/lib/mp-connect/preference";
 import type { ChargeCancelReason } from "@/lib/online-payments-types";
@@ -35,9 +35,15 @@ export function paymentLinkUrl(token: string): string {
 }
 
 /**
- * Anula los links ACTIVE de un turno en la tx del caller (cobro a mano → `collected`, cron con turno cancelado →
+ * Anula los cobros ACTIVE de un turno en la tx del caller (cobro a mano → `collected`, cancelar / ausente →
  * `booking_cancelled`). Una sola sentencia con RETURNING: el caller necesita los ids para vencer las preferencias
  * después del commit, y el techo de `toggleBilling` (as1c-cobros ≤ 12) no admite un SELECT + UPDATE.
+ *
+ * TP-ZF1 (M2/M3 del revisor de T5-Z): con `includeTurnero` también anula el cobro TURNERO vivo. Antes solo LINK: un
+ * «Pagar ahora» OPTIONAL (checkout de 48 h) de un turno cobrado a mano o cancelado seguía pagable → doble cobro o pago de
+ * un turno cancelado. El caller decide cuándo: al cobrar a mano, solo si el turno NO está PENDING (con REQUIRED el cobro
+ * ES la reserva y su hold lo resuelve el turnero); al cancelar / ausente, siempre. El caller ya tiene el turno
+ * bloqueado (orden de locks Booking → OnlineCharge, §25.3).
  *
  * Solo ACTIVE: un AUTHORIZED es Mercado Pago reteniendo un pago (el guard de M18 no deja anularlo, y el caller ya lo
  * rechazó con «hay un pago en proceso»). `tenantId` a mano: en prod la conexión es BYPASSRLS. Fechas en UTC explícito
@@ -45,8 +51,9 @@ export function paymentLinkUrl(token: string): string {
  */
 export async function cancelLiveLinksForBookingInTx(
   tx: Prisma.TransactionClient,
-  o: { tenantId: string; bookingId: string; reason: ChargeCancelReason; byUserId: string | null }
+  o: { tenantId: string; bookingId: string; reason: ChargeCancelReason; byUserId: string | null; includeTurnero?: boolean }
 ): Promise<{ cancelledChargeIds: string[] }> {
+  const withTurnero = o.includeTurnero === true;
   const nowIso = new Date().toISOString();
   const rows = await tx.$queryRaw<{ id: string }[]>`
     UPDATE "OnlineCharge"
@@ -56,9 +63,9 @@ export async function cancelLiveLinksForBookingInTx(
            "cancelReason" = ${o.reason},
            "updatedAt" = (${nowIso}::timestamptz AT TIME ZONE 'UTC')
      WHERE "tenantId" = ${o.tenantId} AND "bookingId" = ${o.bookingId}
-       AND "origin" = 'LINK' AND "status" = 'ACTIVE'
+       AND ("origin" = 'LINK' OR (${withTurnero} AND "origin" = 'TURNERO')) AND "status" = 'ACTIVE'
     RETURNING "id"`;
-  return { cancelledChargeIds: rows.map((r) => r.id) };
+  return { cancelledChargeIds: rows.map((r) => r.id).sort() };
 }
 
 /**
@@ -162,13 +169,24 @@ export async function openPaymentLinkPreference(o: {
   }
 
   if (created) {
+    // TP-ZF1 (B2 del revisor de T5-Z): el CAS exige ACTIVE. Antes solo `preferenceId` NULL: si en el medio (la llamada a
+    // MP tarda) el link se anuló (cobro a mano, cancelar el turno, «Anular»), se guardaba la preferencia en un cobro
+    // CANCELLED y se devolvía su checkout: el paciente podía pagar un link anulado.
     const saved = await runWithRls(o.tenantId, (tx) =>
       tx.onlineCharge.updateMany({
-        where: { id: c.id, tenantId: o.tenantId, preferenceId: null },
+        where: { id: c.id, tenantId: o.tenantId, status: "ACTIVE", preferenceId: null },
         data: { preferenceId: created.preferenceId, checkoutUrl: created.initPoint },
       })
     );
     if (saved.count === 1) return { ok: true, checkoutUrl: created.initPoint };
+    // Perdimos el CAS: NUESTRA preferencia quedó huérfana en MP (nadie la guarda ni la vence después). Se vence ya,
+    // best effort, como `openTurneroPreference`; si falla, el consumidor igual rechaza un pago de un cobro anulado.
+    try {
+      const expired = await mpExpirePreference(account, created.preferenceId);
+      if (!expired.ok) logger.warn("payment_link.orphan_preference", { tenantId: o.tenantId, chargeId: c.id, error: expired.error });
+    } catch (e) {
+      logger.warn("payment_link.orphan_preference", { tenantId: o.tenantId, chargeId: c.id, error: e instanceof Error ? e.name : "unknown" });
+    }
     // Otro request (doble click del drawer con la misma key) ya guardó la suya: se devuelve esa.
     const again = await runWithRls(o.tenantId, (tx) =>
       tx.onlineCharge.findFirst({ where: { id: c.id, tenantId: o.tenantId }, select: { checkoutUrl: true, status: true } })

@@ -90,6 +90,34 @@ export async function toggleOwnDelegation(delegated: boolean): Promise<string | 
   return res.ok ? null : res.error;
 }
 
+/**
+ * TP-ZF3: un error de red (la action tira en vez de devolver `{ ok: false }`) dejaba el botón trabado en «pendiente» y
+ * el switch en el valor optimista. Mismo texto que el resto de los paneles para «no llegó al server».
+ */
+export const MP_NETWORK_ERROR = "Revisá la conexión y reintentá.";
+
+/**
+ * El aviso `?mp=` se muestra una vez: se saca de la URL (sin navegar) para que recargar o compartir el link no lo
+ * repita. `replaceState` y no el router: no hace falta otro render del server.
+ *
+ * TP-ZF3: lo usan las DOS pestañas de Mercado Pago (este panel y `OnlinePaymentsPanelBody`), que son las únicas a las
+ * que vuelve el callback. Antes había una copia en `configuracion-client.tsx`, que viaja en el JS inicial de
+ * /configuracion para todas las pestañas; acá va en el chunk diferido de Mercado Pago.
+ */
+export function useDropMpReturnParam(mpReturn: MpConnectReturn | null): void {
+  useEffect(() => {
+    if (!mpReturn) return;
+    try {
+      const url = new URL(window.location.href);
+      if (!url.searchParams.has("mp")) return;
+      url.searchParams.delete("mp");
+      window.history.replaceState(window.history.state, "", url.toString());
+    } catch {
+      /* sin History API: el aviso vuelve a salir al recargar, nada más */
+    }
+  }, [mpReturn]);
+}
+
 const NOTICE_STYLE: Record<NoticeTone, React.CSSProperties> = {
   success: { background: "var(--success-bg)", border: "1px solid var(--success-border)", color: "var(--success-fg)" },
   warn: { background: "var(--warn-bg)", border: "1px solid var(--warn-border)", color: "var(--warn-fg)" },
@@ -130,25 +158,18 @@ export function MyMpPanel({ account, mpReturn, support = false }: MyMpPanelProps
   // Desconectar/reconectar revalida `/configuracion` y llegan props nuevas: el switch sigue a la fila, no al estado viejo.
   useEffect(() => setDelegated(account.linksDelegated), [account.linksDelegated]);
 
-  // El aviso `?mp=` se muestra una vez: se saca de la URL (sin navegar) para que recargar o compartir el link no lo
-  // repita. `replaceState` y no el router: no hace falta otro render del server.
-  useEffect(() => {
-    if (!mpReturn) return;
-    try {
-      const url = new URL(window.location.href);
-      if (!url.searchParams.has("mp")) return;
-      url.searchParams.delete("mp");
-      window.history.replaceState(window.history.state, "", url.toString());
-    } catch {
-      /* sin History API: el aviso vuelve a salir al recargar, nada más */
-    }
-  }, [mpReturn]);
+  useDropMpReturnParam(mpReturn);
 
   async function connect() {
     setPending(true);
     setError(null);
     setDone(null);
-    const err = await connectOwnMp((url) => window.location.assign(url));
+    let err: string | null;
+    try {
+      err = await connectOwnMp((url) => window.location.assign(url));
+    } catch {
+      err = MP_NETWORK_ERROR;
+    }
     // Con éxito queda `pending`: el navegador ya se está yendo a Mercado Pago (evita el doble click).
     if (err) {
       setError(err);
@@ -160,15 +181,20 @@ export function MyMpPanel({ account, mpReturn, support = false }: MyMpPanelProps
     setError(null);
     setDone(null);
     setPending(true);
-    const r = await disconnectOwnMp(confirm);
-    setPending(false);
-    if (r.kind === "error") setError(r.error);
-    if (r.kind === "done") {
-      setDone(
-        r.cancelledLinks > 0
-          ? `Desconectaste tu Mercado Pago. Se ${r.cancelledLinks === 1 ? "anuló 1 link de pago activo" : `anularon ${r.cancelledLinks} links de pago activos`}.`
-          : "Desconectaste tu Mercado Pago.",
-      );
+    try {
+      const r = await disconnectOwnMp(confirm);
+      if (r.kind === "error") setError(r.error);
+      if (r.kind === "done") {
+        setDone(
+          r.cancelledLinks > 0
+            ? `Desconectaste tu Mercado Pago. Se ${r.cancelledLinks === 1 ? "anuló 1 link de pago activo" : `anularon ${r.cancelledLinks} links de pago activos`}.`
+            : "Desconectaste tu Mercado Pago.",
+        );
+      }
+    } catch {
+      setError(MP_NETWORK_ERROR);
+    } finally {
+      setPending(false);
     }
   }
 
@@ -178,8 +204,14 @@ export function MyMpPanel({ account, mpReturn, support = false }: MyMpPanelProps
     setDelegated(next);
     setDelegating(true);
     setError(null);
-    const err = await toggleOwnDelegation(next);
-    setDelegating(false);
+    let err: string | null;
+    try {
+      err = await toggleOwnDelegation(next);
+    } catch {
+      err = MP_NETWORK_ERROR;
+    } finally {
+      setDelegating(false);
+    }
     if (err) {
       setDelegated(!next);
       setError(err);

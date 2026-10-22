@@ -7,6 +7,7 @@ import { listPractitioners } from "@/lib/bookings";
 import { listOnlineCharges } from "@/lib/online-charges-read";
 import { COBROS_COPY, cobrosActionInput, cobrosHref, cobrosPeriodOptions, parseCobrosFilters } from "@/lib/cobros-view";
 import { logger } from "@/lib/logger";
+import { mpConnectMode } from "@/lib/env";
 import { PageHeader } from "@/components/ui/page-header";
 import { CobrosClient } from "@/components/cobros/cobros-client";
 
@@ -24,9 +25,12 @@ type SP = Record<string, string | string[] | undefined>;
  *   (soporte, un Profesional sin profesional) → /dashboard. La barrera real sigue siendo la action: esto es UX.
  * - En el nav está SOLO con `billing.collect` (TP-UI-D7, Anexo C 3g): el Profesional llega por URL o desde el turno.
  * - Sin cobros: estado vacío (TP-UI-D7), no una tabla vacía.
+ * - Con `MP_CONNECT_MODE=off` la página no existe (TP-ZF3): el nav ya la esconde (TP-3z), pero por URL abría la tabla
+ *   vacía de una función apagada. Se corta antes de leer la sesión: no hay nada que mostrar a nadie.
  * - Una lectura de cobros (página + resumen en la misma tx, 2 sentencias) y la lista de profesionales cacheada.
  */
 export default async function CobrosPage({ searchParams }: { searchParams?: SP }) {
+  if (mpConnectMode() === "off") redirect("/dashboard");
   const [actor, caps] = await Promise.all([getActor(), getCapabilities()]);
   const all = caps.has("billing.collect");
   const own = caps.has("billing.collectOwn") && actor.practitionerId != null;

@@ -89,6 +89,7 @@ import {
   policyOfDraft,
   previewLine,
   needsRequiredConfirm,
+  particularZeroNotice,
   ONLINE_PAYMENTS_COPY,
 } from "@/components/configuracion/panels/online-payments-panel";
 import {
@@ -154,6 +155,7 @@ function settings(over: Partial<OnlinePaymentsSettingsView> = {}, policy: Partia
       { practitionerId: "p2", name: "Bruno Díaz", status: "NONE", linksDelegated: false },
     ],
     withoutMpCount: 1,
+    particularCopagoCents: 1_500_000,
     ...over,
   };
 }
@@ -326,11 +328,29 @@ describe("[TP-3a] formulario de la política", () => {
     );
     expect(text(panel(settings({ withoutMpCount: 0 }, { mode: "OPTIONAL" })))).not.toContain("sin Mercado Pago conectado");
     expect(text(panel(settings({ publicBookingEnabled: false }, { mode: "OPTIONAL" })))).toContain(ONLINE_PAYMENTS_COPY.turneroOff);
-    // Modo de conexión apagado: aviso y todo deshabilitado (sin «Guardar cambios»).
-    const off = panel(settings({ connectMode: "off" }, { mode: "OPTIONAL" }));
-    expect(text(off)).toContain("Los cobros online todavía no están habilitados.");
-    expect(text(off)).not.toContain(ONLINE_PAYMENTS_COPY.save);
-    expect(off).toMatch(/aria-label="¿Cobrás el turno online\?" disabled=""/);
+    // TP-ZF3: con `MP_CONNECT_MODE=off` la pestaña no existe (gate del loader), así que el panel ya no tiene rama «off».
+    expect(text(panel(settings({ connectMode: "off" }, { mode: "OPTIONAL" })))).not.toContain("todavía no están habilitados");
+  });
+
+  it("[TP-ZF3] aviso «Particular está en $ 0» con los cobros prendidos y Particular en 0 o sin fila", () => {
+    const msg =
+      "Particular está en $ 0: el turnero no les cobra online a los pacientes particulares. Cargá su precio en Obras sociales.";
+    expect(ONLINE_PAYMENTS_COPY.particularZero).toBe(msg);
+    expect(text(panel(settings({ particularCopagoCents: 0 }, { mode: "OPTIONAL" })))).toContain(msg);
+    expect(text(panel(settings({ particularCopagoCents: null }, { mode: "REQUIRED" })))).toContain(msg);
+    expect(text(panel(settings({ particularCopagoCents: 1_500_000 }, { mode: "OPTIONAL" })))).not.toContain(msg);
+    // Política OFF: el aviso no aplica (no se cobra nada online).
+    expect(text(panel(settings({ particularCopagoCents: 0 }, { mode: "OFF" })))).not.toContain(msg);
+    expect(particularZeroNotice(true, 0)).toBe(msg);
+    expect(particularZeroNotice(true, null)).toBe(msg);
+    expect(particularZeroNotice(true, 1)).toBeNull();
+    expect(particularZeroNotice(false, 0)).toBeNull();
+  });
+
+  it("[TP-ZF3] radios de «¿Cuánto se cobra online?» con 44 px de alto táctil", () => {
+    const html = panel(settings({}, { mode: "OPTIONAL" }));
+    expect(html).toMatch(/min-height:44px[^"]*"><input type="radio"/);
+    expect(html).not.toMatch(/min-height:32px[^"]*"><input type="radio"/);
   });
 
   it("confirmación a REQUIRED", async () => {
@@ -357,7 +377,7 @@ describe("[TP-3a] formulario de la política", () => {
 
 describe("[TP-3a] cuenta del consultorio", () => {
   const card = (account: MpAccountView, canManage: boolean, o: { support?: boolean; mpReturn?: (typeof MP_CONNECT_RETURNS)[number] } = {}) =>
-    wrap(<ClinicMpAccountCard account={account} canManage={canManage} connectMode="fake" mpReturn={o.mpReturn ?? null} support={o.support} />);
+    wrap(<ClinicMpAccountCard account={account} canManage={canManage} mpReturn={o.mpReturn ?? null} support={o.support} />);
 
   it("acciones de la cuenta del consultorio solo el Titular con `runStepUp` + `location.assign`", async () => {
     // Estado para todos; sin botones para quien no es el Titular (ni para soporte).
@@ -415,6 +435,40 @@ describe("[TP-3a] cuenta del consultorio", () => {
     // El panel monta el provider del desafío.
     const panelSrc = readFileSync(join(__dirname, "..", "..", "..", "components/configuracion/panels/online-payments-panel.tsx"), "utf8");
     expect(panelSrc).toContain("<StepUpProvider>");
+  });
+
+  it("[TP-ZF3] errores de red: los botones de las dos cards de Mercado Pago no quedan trabados y el switch vuelve", () => {
+    // Sin DOM no hay click: se fija la forma de los handlers en la fuente (sin comentarios). Cada uno atrapa el rechazo
+    // de la action con el texto de red y libera el «pendiente» en un `finally` (o en el catch, si con éxito navega).
+    const strip = (f: string) =>
+      readFileSync(join(__dirname, "..", "..", "..", f), "utf8")
+        .split("\n")
+        .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+        .join("\n");
+    const card = strip("components/configuracion/panels/clinic-mp-account-card.tsx");
+    const mine = strip("components/configuracion/panels/my-mp-panel.tsx");
+    for (const [src, fns] of [
+      [card, ["onConnect", "onDisconnect", "onToggleDelegation"]],
+      [mine, ["connect", "disconnect", "toggleDelegation"]],
+    ] as const) {
+      for (const fn of fns) {
+        const body = src.slice(src.indexOf(`async function ${fn}()`), src.indexOf("\n  }\n", src.indexOf(`async function ${fn}()`)));
+        expect(body, fn).toMatch(/catch \{\s*(err = MP_NETWORK_ERROR|setError\(MP_NETWORK_ERROR\))/);
+      }
+    }
+    expect(card).toMatch(/err = MP_NETWORK_ERROR;\s*\} finally \{\s*setPending\(false\);/);
+    expect(mine).toMatch(/err = MP_NETWORK_ERROR;\s*\} finally \{\s*setDelegating\(false\);/);
+    expect(CLINIC_MP_RETURN_NOTICE.in_use.text).toBe(
+      "Esa cuenta de Mercado Pago ya está conectada como cuenta de un profesional del consultorio."
+    );
+  });
+
+  it("[TP-ZF3] `?mp=` se saca de la URL en el chunk de Mercado Pago, no en el JS inicial de /configuracion", () => {
+    const read = (f: string) => readFileSync(join(__dirname, "..", "..", "..", f), "utf8");
+    expect(read("components/configuracion/configuracion-client.tsx")).not.toMatch(/searchParams\.delete\("mp"\);\s*window\.history\.replaceState\(window\.history\.state, "", url\);\s*\} catch \{\s*\/\* sin history: el aviso/);
+    expect(read("components/configuracion/configuracion-client.tsx")).not.toContain("useEffect");
+    expect(read("components/configuracion/panels/online-payments-panel.tsx")).toContain("useDropMpReturnParam(mpReturn);");
+    expect(read("components/configuracion/panels/my-mp-panel.tsx")).toContain("useDropMpReturnParam(mpReturn);");
   });
 
   it("avisos `?mp=` de la vuelta del callback", () => {

@@ -283,6 +283,22 @@ describe("[TP-P3] bookingEffectFor (matriz)", () => {
     expect(bookingEffectFor(c({ bookingPaymentStatus: "AUTHORIZED" }), "AUTHORIZED", "REFUNDED")).toEqual(["revert-authorized"]);
   });
 
+  // [TP-ZF1] B3 (revisor T5-Z): la seña REQUIRED en proceso (AUTHORIZED: efectivo, en mediación) no tocaba el turno, que
+  // seguía PENDING/UNPAID: el hold vencía y el turno se liberaba mientras MP retenía la plata. Ahora `mark-authorized`
+  // también para la seña del turnero con el turno PENDING (PENDING + AUTHORIZED sostiene el cupo), y al resolverse
+  // (PAID / ACTIVE / REFUNDED) se revierte (la seña no marca el copago: TP-D7).
+  it("[TP-ZF1] seña del turnero en proceso con el turno PENDING → mark-authorized; al resolverse, revert", () => {
+    const dep = (over: Partial<C> = {}) => c({ kind: "DEPOSIT", bookingStatus: "PENDING", ...over });
+    expect(bookingEffectFor(dep(), "ACTIVE", "AUTHORIZED")).toEqual(["mark-authorized"]);
+    expect(bookingEffectFor(dep({ bookingPaymentStatus: "AUTHORIZED" }), "AUTHORIZED", "PAID")).toEqual(["confirm", "revert-authorized"]);
+    expect(bookingEffectFor(dep({ bookingPaymentStatus: "AUTHORIZED" }), "AUTHORIZED", "ACTIVE")).toEqual(["revert-authorized"]);
+    expect(bookingEffectFor(dep({ bookingPaymentStatus: "AUTHORIZED" }), "AUTHORIZED", "REFUNDED")).toEqual(["revert-authorized"]);
+    // Sin cambios: seña de un turno ya confirmado, o de un link (el hold es del turnero).
+    expect(bookingEffectFor(c({ kind: "DEPOSIT" }), "ACTIVE", "AUTHORIZED")).toEqual(["none"]);
+    expect(bookingEffectFor(dep({ origin: "LINK" }), "ACTIVE", "AUTHORIZED")).toEqual(["none"]);
+    expect(bookingEffectFor(dep(), "ACTIVE", "PAID")).toEqual(["confirm"]);
+  });
+
   it("[TP-P3] reintegro: mark-refunded solo si el copago lo pagó MP; manual o seña → nada", () => {
     expect(bookingEffectFor(c({ bookingPaymentStatus: "PAID", paidByMp: true }), "PAID", "REFUNDED")).toEqual(["mark-refunded"]);
     expect(bookingEffectFor(c({ bookingPaymentStatus: "PAID", paidByMp: false }), "PAID", "REFUNDED")).toEqual(["none"]);

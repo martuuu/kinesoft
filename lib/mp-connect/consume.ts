@@ -336,8 +336,11 @@ export async function consumeConnectWebhook(o: {
     const who = `${c.patient.firstName} ${c.patient.lastName}`.trim();
     const base = bk ? `${bk.service.name} · ${who}` : `Link de pago · ${who}`;
     const dead = bk?.status === "CANCELLED" || bk?.status === "NO_SHOW";
+    // TP-ZF1 (B1 del revisor de T5-Z): un aprobado de OTRO pago es duplicado sea cual sea el estado del cobro. Antes
+    // exigía `from === "PAID"`: con el cobro ya REFUNDED (o con otro monto), el segundo checkout no movía nada ni avisaba
+    // y la plata quedaba en MP sin que nadie se enterara. `otherPayment` implica comprobante (PAID o REFUNDED).
     const duplicate =
-      incoming === "approved" && !amountMismatch && ((otherPayment && from === "PAID") || (to === "PAID" && from !== "PAID" && bookingWasPaid));
+      incoming === "approved" && (otherPayment || (!amountMismatch && to === "PAID" && from !== "PAID" && bookingWasPaid));
     let notice: Notice | null = null;
     if (incoming === "approved" && amountMismatch && !otherPayment) {
       notice = { title: `Pago con monto distinto · ${amount}`, body: `${base}. Esperábamos ${formatARS(c.amountCents)}. Revisalo en Mercado Pago.` };

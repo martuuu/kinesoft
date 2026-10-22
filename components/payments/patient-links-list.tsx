@@ -295,13 +295,14 @@ export function PatientLinksBody({ rows, loading, error, canCreate, busyId, onNe
                   </span>
                 </div>
                 <div style={actionsRow}>
+                  {/* TP-ZF3 (a11y): un «Copiar»/«Anular» por link; el nombre accesible dice de cuál (monto). */}
                   {live && (
-                    <Button type="button" variant="ghost" size="sm" className="k-tap-m" onClick={() => onCopy(live.url)}>
+                    <Button type="button" variant="ghost" size="sm" className="k-tap-m" aria-label={`${BOOKING_MONEY_COPY.copy} · ${formatARS(c.amountCents)}`} onClick={() => onCopy(live.url)}>
                       {BOOKING_MONEY_COPY.copy}
                     </Button>
                   )}
                   {live?.canResend && (
-                    <Button type="button" variant="ghost" size="sm" className="k-tap-m" onClick={() => onResend(c)}>
+                    <Button type="button" variant="ghost" size="sm" className="k-tap-m" aria-label={`${PATIENT_LINKS_COPY.resend} · ${formatARS(c.amountCents)}`} onClick={() => onResend(c)}>
                       {PATIENT_LINKS_COPY.resend}
                     </Button>
                   )}
@@ -313,13 +314,14 @@ export function PatientLinksBody({ rows, loading, error, canCreate, busyId, onNe
                       className="k-tap-m"
                       disabled={busy}
                       aria-busy={busy || undefined}
+                      aria-label={`${BOOKING_MONEY_COPY.cancelLink} · ${formatARS(c.amountCents)}`}
                       onClick={() => onCancel(c.id)}
                     >
                       {BOOKING_MONEY_COPY.cancelLink}
                     </Button>
                   )}
                   {c.receipt && (
-                    <Button type="button" variant="ghost" size="sm" className="k-tap-m" onClick={() => onReceipt(c)}>
+                    <Button type="button" variant="ghost" size="sm" className="k-tap-m" aria-label={`${BOOKING_MONEY_COPY.receipt} · ${formatARS(c.amountCents)}`} onClick={() => onReceipt(c)}>
                       {BOOKING_MONEY_COPY.receipt}
                     </Button>
                   )}

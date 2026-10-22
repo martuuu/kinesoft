@@ -1259,8 +1259,8 @@ async function updateBookingImpl(
   // one transaction (S07c: el cuerpo es `applyBookingUpdateInTx`, con el gate
   // de la Secretaria y `bookingFieldAccess` ADENTRO). The prac-name +
   // next-free suggestion (read-only, advisory) are fetched outside on conflict.
-  const outcome = await runWithRls(actor.tenantId, (tx) =>
-    applyBookingUpdateInTx(
+  const outcome = await runWithRls(actor.tenantId, async (tx) => {
+    const r = await applyBookingUpdateInTx(
       tx,
       actor,
       {
@@ -1276,8 +1276,11 @@ async function updateBookingImpl(
         },
       },
       { now }
-    )
-  ).catch(async (e) => {
+    );
+    if (r.kind !== "ok") return r;
+    const cancelledChargeIds = await cancelLiveChargesOnCloseInTx(tx, actor, r.before.id, r.before.status, r.written.status);
+    return { ...r, cancelledChargeIds };
+  }).catch(async (e) => {
     // A reschedule that lands the turno on a slot the SAME patient already
     // occupies trips the partial unique index (patient+slot, non-cancelled).
     // S12: desde M1 hay un segundo único que una edición puede pisar,
@@ -1438,6 +1441,7 @@ async function updateBookingImpl(
     revalidatePath(`/pacientes/${patch.patientId}`);
   }
   await afterBookingsCommitted(actor.tenantId, outcome.refs);
+  await expireCancelledChargePreferences(actor.tenantId, outcome.cancelledChargeIds, "updateBooking");
   // S12 (C4): alta próxima, post-commit (la notificación nunca tira).
   if (outcome.plan?.discharge) {
     await notifyPlanNearingDischarge(actor.tenantId, outcome.plan.discharge, actor.userId ?? null);
@@ -1455,6 +1459,48 @@ async function updateBookingImpl(
     ...(notices.length ? { notice: notices.join(" ") } : {}),
     ...(outcome.intervalCapNotice ? { intervalCapNotice: outcome.intervalCapNotice } : {}),
   };
+}
+
+/**
+ * TP-ZF1 (M3 del revisor de T5-Z): cancelar o marcar ausente un turno anula sus cobros online ACTIVE (LINK y TURNERO)
+ * con `booking_cancelled`, en la MISMA tx y con el turno ya bloqueado (el UPDATE del caller tomó la fila: orden de locks
+ * Booking → OnlineCharge, §25.3, el mismo del webhook). Antes quedaban vivos: el paciente podía pagar por MP un turno
+ * cancelado, y el cron solo anulaba LINK y recién en su próxima vuelta. +1 sentencia SOLO en la transición a
+ * CANCELLED / NO_SHOW (el resto de las ediciones cuesta lo de siempre). Un AUTHORIZED no se toca (MP lo retiene; el
+ * guard de M18 no deja anularlo): si se acredita, el webhook lo registra como pago tardío y avisa.
+ */
+async function cancelLiveChargesOnCloseInTx(
+  tx: Prisma.TransactionClient,
+  actor: Actor,
+  bookingId: string,
+  beforeStatus: BookingStatus,
+  nextStatus: BookingStatus | undefined
+): Promise<string[]> {
+  const closing = (s: BookingStatus | undefined) => s === "CANCELLED" || s === "NO_SHOW";
+  if (!closing(nextStatus) || closing(beforeStatus)) return [];
+  const { cancelLiveLinksForBookingInTx } = await import("@/lib/payment-links-internal");
+  const r = await cancelLiveLinksForBookingInTx(tx, {
+    tenantId: actor.tenantId,
+    bookingId,
+    reason: "booking_cancelled",
+    byUserId: actor.userId ?? null,
+    includeTurnero: true,
+  });
+  return r.cancelledChargeIds;
+}
+
+/** Vence en MP las preferencias de los cobros anulados, DESPUÉS del commit. Best effort: nunca tira. */
+async function expireCancelledChargePreferences(tenantId: string, chargeIds: string[], where: string): Promise<void> {
+  if (chargeIds.length === 0) return;
+  // El `import()` va dentro de la cadena: si el módulo no carga, cae al mismo `catch`.
+  await import("@/lib/mp-connect/account-client")
+    .then((m) => m.expirePreferencesBestEffort(tenantId, chargeIds))
+    .catch((err) =>
+      logger.warn(`${where}: no se pudieron vencer las preferencias de los cobros anulados`, {
+        tenantId,
+        err: err instanceof Error ? err.message : String(err),
+      })
+    );
 }
 
 /**
@@ -1613,7 +1659,8 @@ async function markReceptionActionImpl(
           now,
         })
       : null;
-    return { kind: "ok" as const, row, transition: t, after, plan };
+    const cancelledChargeIds = await cancelLiveChargesOnCloseInTx(tx, actor, row.id, row.status, t.patch.status);
+    return { kind: "ok" as const, row, transition: t, after, plan, cancelledChargeIds };
   }).catch(async (e) => {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025") {
       return { kind: "stale" as const };
@@ -1679,6 +1726,7 @@ async function markReceptionActionImpl(
     ],
     { invalidateCaches: !!transition.patch.status }
   );
+  await expireCancelledChargePreferences(actor.tenantId, outcome.cancelledChargeIds, "markReceptionAction");
   if (plan?.discharge) await notifyPlanNearingDischarge(actor.tenantId, plan.discharge, actor.userId ?? null);
   return {
     ok: true,
@@ -1935,7 +1983,7 @@ async function toggleBilling(
     const planPrior = row.sessionId != null && row.patientId != null && (row.status === "CANCELLED" || row.status === "NO_SHOW");
     if (planPrior) await lockPlanPatient(tx, { tenantId: actor.tenantId, patientId: row.patientId! });
     // T5 (C-TP10): plata online del turno, leída después del lock (solo en el copago).
-    let online: { depositCents: number; liveLinkIds: string[] } | null = null;
+    let online: { depositCents: number; liveLinkIds: string[]; withTurnero: boolean } | null = null;
     if (toggle.side === "copago") {
       // T3-Z (B3): la fila del turno se toma ANTES de leer el `Payment`, como el webhook de MP (`consumeWebhook`:
       // Booking FOR UPDATE → Payment). Sin esto, con un turno marcado a mano, un webhook «approved» en vuelo escribe
@@ -1958,12 +2006,20 @@ async function toggleBilling(
       // antes de tocar el cobro (§25.3 «Locks»), así quien esperó ve lo que el webhook commiteó. Las señas reales se
       // leen acá y no de `row.onlineDepositCents` (leído ANTES del lock); si el trigger de M18 movió la seña, también
       // movió `updatedAt` y el CAS de abajo da stale igual. Mismo número de sentencias que antes (techo as1c ≤12).
-      const [mp] = await tx.$queryRaw<{ legacyStatus: string | null; paidOnline: boolean; inFlight: boolean; depositPaidCents: number; liveLinkIds: string[] }[]>`
+      //
+      // TP-ZF1 (M2, enmienda de C-TP10): `liveLinkIds` incluye el cobro TURNERO ACTIVE si el turno NO está PENDING (un
+      // «Pagar ahora» OPTIONAL con checkout de 48 h: cobrarlo a mano y dejarlo vivo era un doble cobro). Con el turno
+      // PENDING (REQUIRED) el cobro ES la reserva: no se toca. El estado sale de la fila YA bloqueada (`turneroToo`), no
+      // de `row` (leído antes del lock). Misma sentencia: +0.
+      const [mp] = await tx.$queryRaw<{ legacyStatus: string | null; paidOnline: boolean; inFlight: boolean; depositPaidCents: number; liveLinkIds: string[]; turneroToo: boolean }[]>`
+        WITH k AS (SELECT NOT EXISTS (SELECT 1 FROM "Booking" b WHERE b."id" = ${id} AND b."tenantId" = ${actor.tenantId} AND b."status" = 'PENDING') AS "turneroToo")
         SELECT (SELECT p."status"::text FROM "Payment" p WHERE p."bookingId" = ${id}) AS "legacyStatus",
           EXISTS (SELECT 1 FROM "OnlineCharge" c WHERE c."tenantId" = ${actor.tenantId} AND c."bookingId" = ${id} AND c."kind" = 'FULL' AND c."status" = 'PAID') AS "paidOnline",
           EXISTS (SELECT 1 FROM "OnlineCharge" c WHERE c."tenantId" = ${actor.tenantId} AND c."bookingId" = ${id} AND c."status" = 'AUTHORIZED') AS "inFlight",
           COALESCE((SELECT sum(c."amountCents") FROM "OnlineCharge" c WHERE c."tenantId" = ${actor.tenantId} AND c."bookingId" = ${id} AND c."kind" = 'DEPOSIT' AND c."status" = 'PAID'), 0)::int AS "depositPaidCents",
-          COALESCE((SELECT array_agg(c."id" ORDER BY c."id") FROM "OnlineCharge" c WHERE c."tenantId" = ${actor.tenantId} AND c."bookingId" = ${id} AND c."origin" = 'LINK' AND c."status" = 'ACTIVE'), ARRAY[]::text[]) AS "liveLinkIds"`;
+          COALESCE((SELECT array_agg(c."id" ORDER BY c."id") FROM "OnlineCharge" c WHERE c."tenantId" = ${actor.tenantId} AND c."bookingId" = ${id} AND (c."origin" = 'LINK' OR (k."turneroToo" AND c."origin" = 'TURNERO')) AND c."status" = 'ACTIVE'), ARRAY[]::text[]) AS "liveLinkIds",
+          k."turneroToo"
+        FROM k`;
       if (mp.legacyStatus === "PAID" || mp.legacyStatus === "AUTHORIZED" || row.paymentStatus === "AUTHORIZED" || mp.paidOnline) {
         const { ONLINE_COLLECT_COPY } = await import("@/lib/online-payments-copy");
         return { kind: "forbidden" as const, error: ONLINE_COLLECT_COPY.mercadoPagoLocked };
@@ -1974,7 +2030,7 @@ async function toggleBilling(
         const { ONLINE_COLLECT_COPY } = await import("@/lib/online-payments-copy");
         return { kind: "forbidden" as const, error: ONLINE_COLLECT_COPY.mercadoPagoInFlight };
       }
-      online = { depositCents: mp.depositPaidCents, liveLinkIds: mp.liveLinkIds };
+      online = { depositCents: mp.depositPaidCents, liveLinkIds: mp.liveLinkIds, withTurnero: mp.turneroToo };
     }
     // Q8 (C5, cierra parcialmente AUDIT:940): un turno fuera de plan sin copago
     // propio (`copagoCents` null) se COBRA por el copago resuelto en lectura
@@ -2068,6 +2124,7 @@ async function toggleBilling(
         bookingId: id,
         reason: "collected",
         byUserId: actor.userId ?? null,
+        includeTurnero: online.withTurnero,
       });
       cancelledLinkIds = c.cancelledChargeIds;
     }

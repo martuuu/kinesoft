@@ -502,6 +502,9 @@ describe.skipIf(!RUN)("[TP-3a] /configuracion: «Cobros online» y «Mi Mercado 
     expect(op.withoutMpCount).toBe(2);
     expect(r.myMp?.status).toBe("ACTIVE");
     expect(r.previewServicePriceCents).toBe(2_000_000);
+    // TP-ZF3 (A1): el precio de Particular viaja para el aviso «Particular está en $ 0» (null = sin la fila).
+    const particular = await db.insurer.findFirst({ where: { tenantId: T.tenantId, isParticular: true }, select: { copagoCents: true } });
+    expect(op.particularCopagoCents).toBe(particular ? particular.copagoCents : null);
 
     const blob = JSON.stringify({ a: r.onlinePayments, b: r.myMp });
     for (const x of secrets) expect(blob).not.toContain(x);

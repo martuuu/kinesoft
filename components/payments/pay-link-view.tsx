@@ -48,7 +48,7 @@ export const PAY_LINK_COPY = {
   },
   processing: {
     title: "Procesando tu pago…",
-    lead: "Apenas Mercado Pago lo confirme, esta pantalla se actualiza sola. No la cierres.",
+    lead: "Apenas Mercado Pago lo confirme, esta pantalla se actualiza sola.",
     leadLater: "Mercado Pago todavía está procesando el pago. Volvé a abrir este link en unos minutos para ver cómo sigue.",
   },
   paid: {

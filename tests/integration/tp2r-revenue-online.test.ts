@@ -175,10 +175,11 @@ describe.skipIf(!RUN)("[TP-2r] Ingresos con cobros online y predicados de plata 
       WHERE id = ${id}`;
   }
 
-  async function refund(id: string) {
+  async function refund(id: string, at?: Date) {
     await db.$executeRaw`
       UPDATE "OnlineCharge" SET status = 'REFUNDED'::"OnlineChargeStatus", "mpStatus" = 'refunded',
-        "refundedAt" = now() AT TIME ZONE 'UTC', "updatedAt" = now() AT TIME ZONE 'UTC'
+        "refundedAt" = COALESCE((${at?.toISOString() ?? null}::timestamptz AT TIME ZONE 'UTC'), now() AT TIME ZONE 'UTC'),
+        "updatedAt" = now() AT TIME ZONE 'UTC'
       WHERE id = ${id}`;
   }
 
@@ -266,6 +267,31 @@ describe.skipIf(!RUN)("[TP-2r] Ingresos con cobros online y predicados de plata 
     asUser(T.userId);
     octoberClock();
     expect(await revenue()).toMatchObject({ mpCents: $(6_000), manualCents: $(20_000), totalCents: $(26_000) });
+  });
+
+  // [TP-ZF1] M1 (revisor T5-Z): la seña PAID se resta del manual porque la recepción cobró solo el resto. Si después
+  // se reintegra, sale de MP (REFUNDED no suma) pero el LATERAL ya no la restaba: el manual volvía al copago entero y
+  // Ingresos contaba $10.000 cuando quedaron $7.000. Una seña reintegrada DESPUÉS del cobro a mano se sigue restando.
+  it("[TP-ZF1] seña reintegrada después del cobro a mano: Ingresos = el resto cobrado ($10.000 / seña $3.000 → $7.000)", async () => {
+    const T = await tenant();
+    const acc = await account(T, T.practitionerId);
+    const patientId = await addPatient(db, T);
+    const b = await booking(T, { patientId, copagoCents: $(10_000) });
+    const dep = await charge({ t: T, accountId: acc, patientId, bookingId: b, kind: "DEPOSIT", amountCents: $(3_000) });
+    await pay(dep, ar("2026-10-10T09:00:00"));
+    await markManual(b, ar("2026-10-10T18:00:00"));
+    await refund(dep, ar("2026-10-11T10:00:00"));
+
+    // Control: seña reintegrada ANTES del cobro a mano → la recepción cobró el copago entero ($5.000).
+    const c = await booking(T, { patientId, copagoCents: $(5_000) });
+    const dep2 = await charge({ t: T, accountId: acc, patientId, bookingId: c, kind: "DEPOSIT", amountCents: $(2_000) });
+    await pay(dep2, ar("2026-10-09T09:00:00"));
+    await refund(dep2, ar("2026-10-09T12:00:00"));
+    await markManual(c, ar("2026-10-09T18:00:00"));
+
+    asUser(T.userId);
+    octoberClock();
+    expect(await revenue()).toMatchObject({ mpCents: 0, manualCents: $(12_000), totalCents: $(12_000) });
   });
 
   it("borde (TZ=UTC): aprobado a las 23:30 AR del 31 cuenta en octubre; 00:10 AR del 1 en noviembre", async () => {

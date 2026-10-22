@@ -429,6 +429,53 @@ describe.skipIf(!RUN)("[TP-2l] links de pago", () => {
     expect((await createPaymentLink(linkInput(b))).ok).toBe(true);
   });
 
+  // [TP-ZF1] B2 (revisor T5-Z): el link se anula MIENTRAS MP crea la preferencia (cobro a mano, «Anular»). Antes el CAS
+  // no exigía ACTIVE: guardaba la preferencia en el cobro CANCELLED y devolvía su checkout (pagable).
+  it("[TP-ZF1] link anulado mientras se crea la preferencia → error, sin checkout guardado y la preferencia vencida en MP", async () => {
+    const b = await seedBooking();
+    asUser(assistant.userId);
+    const realFetch = globalThis.fetch;
+    let prefId: string | null = null;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("/checkout/preferences") && (init?.method ?? "GET") === "POST" && prefId === null) {
+        // La recepción cobra a mano en el medio: el link pasa a CANCELLED(collected).
+        await db.onlineCharge.updateMany({
+          where: { bookingId: b.id, origin: "LINK", status: "ACTIVE" },
+          data: { status: "CANCELLED", cancelledAt: new Date(), cancelReason: "collected" },
+        });
+        const res = await realFetch(input, init);
+        prefId = ((await res.clone().json()) as { id: string }).id;
+        return res;
+      }
+      return realFetch(input, init);
+    }) as typeof fetch;
+    let r;
+    try {
+      r = await createPaymentLink(linkInput(b));
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(r).toEqual({ ok: false, error: PAYMENT_LINK_COPY.preferenceFailed });
+    const row = await db.onlineCharge.findFirstOrThrow({ where: { bookingId: b.id, origin: "LINK" } });
+    expect(row).toMatchObject({ status: "CANCELLED", cancelReason: "collected", preferenceId: null, checkoutUrl: null });
+    expect(prefId).not.toBeNull();
+    expect(fakeMpGetPreference(prefId!)!.expired).toBe(true);
+  });
+
+  // [TP-ZF1] B6 (revisor T5-Z): la key llega con el prefijo `link:` (5) y el CHECK de M18 es ≤ 120: una key de 116..120
+  // pasaba zod y rompía el INSERT. Ahora el tope de entrada es 100.
+  it("[TP-ZF1] idempotencyKey: > 100 → datos inválidos (sin escribir); 100 → ok", async () => {
+    const b = await seedBooking();
+    asUser(assistant.userId);
+    const long = await createPaymentLink(linkInput(b, { idempotencyKey: "k".repeat(116) }));
+    expect(long.ok).toBe(false);
+    expect(await linkCount(b.id)).toBe(0);
+    const edge = await createPaymentLink(linkInput(b, { idempotencyKey: "k".repeat(101) }));
+    expect(edge.ok).toBe(false);
+    expect((await createPaymentLink(linkInput(b, { idempotencyKey: "k".repeat(100) }))).ok).toBe(true);
+  });
+
   // ── Anular ───────────────────────────────────────────────────────────────────────────────────────────────────
 
   it("[TP-2l] Anular: ACTIVE (vence la preferencia); AUTHORIZED → rechazo.", async () => {

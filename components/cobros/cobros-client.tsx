@@ -10,7 +10,7 @@
  *   abajo. El cursor no va a la URL: una URL con cursor abriría «la página 3» sin las dos primeras.
  * - **Acciones**: copiar el link, reenviarlo (`PaymentLinkShare`: copiar / WhatsApp / email), anularlo (con
  *   `useConfirm`, nunca `window.confirm`) y ver el comprobante en un Modal (`MpReceiptView` plain, TP-UI-D11).
- *   Después de anular se relee la primera página: el resumen («Por cobrar») también cambia.
+ *   Después de anular se parchea la fila en el lugar (`afterCancel`, TP-ZF3) y se descuenta del «Por cobrar».
  * - Comprobante y compartir bajan por `next/dynamic` recién al abrirlos (techo de /cobros ≤165 kB, §25.11).
  *
  * `CobrosView` (sin estado ni red) está exportado para el render test: este componente usa `useConfirm`/`useToast`,
@@ -38,10 +38,13 @@ import {
 import { formatARS } from "@/lib/format";
 import { buildMpReceipt } from "@/lib/mp-receipt";
 import { listOnlineCharges } from "@/lib/online-charges-read";
+import { CHARGE_STATUS_LABEL } from "@/lib/online-payments-copy";
 import type { ListOnlineChargesResult, OnlineChargeView } from "@/lib/online-payments-types";
 import { cancelPaymentLink } from "@/lib/payment-links";
 import { CobrosRow, type CobrosRowHandlers } from "./cobros-row";
 import styles from "./cobros.module.css";
+
+type OnlineChargeSummary = ListOnlineChargesResult["summary"];
 
 const MpReceiptView = dynamic(() => import("@/components/payments/mp-receipt-view").then((m) => m.MpReceiptView), {
   ssr: false,
@@ -198,6 +201,32 @@ export function CobrosView(p: CobrosViewProps) {
   );
 }
 
+/**
+ * TP-ZF3: después de anular, la fila queda «Anulado» y sin link EN SU LUGAR, y si estaba viva sale del «Por cobrar».
+ * Antes se releía solo la primera página: quien había cargado más páginas con «Ver más» las perdía (y el scroll), y
+ * con un filtro de estado la fila anulada desaparecía sin que se viera qué pasó. El server ya la anuló: esto es lo
+ * mismo que devolvería una relectura para esa fila (`link` solo viaja para cobros vivos, C-TP9).
+ */
+export function afterCancel(
+  rows: readonly OnlineChargeView[],
+  summary: OnlineChargeSummary,
+  id: string
+): { rows: OnlineChargeView[]; summary: OnlineChargeSummary } {
+  const hit = rows.find((r) => r.id === id);
+  if (!hit) return { rows: [...rows], summary };
+  const wasLive = hit.status === "ACTIVE" || hit.status === "AUTHORIZED";
+  return {
+    rows: rows.map((r) => (r.id === id ? { ...r, status: "CANCELLED", statusLabel: CHARGE_STATUS_LABEL.CANCELLED, link: null } : r)),
+    summary: wasLive
+      ? {
+          ...summary,
+          liveCount: Math.max(0, summary.liveCount - 1),
+          liveCents: Math.max(0, summary.liveCents - hit.amountCents),
+        }
+      : summary,
+  };
+}
+
 export type CobrosClientProps = {
   filters: CobrosFilters;
   initial: ListOnlineChargesResult | null;
@@ -251,14 +280,6 @@ export function CobrosClient({ filters, initial, initialError, practitioners, pe
     }
   }
 
-  async function reloadFirstPage() {
-    const res = await listOnlineCharges(cobrosActionInput(filters));
-    if (!res.ok) return;
-    setRows(res.data.rows);
-    setSummary(res.data.summary);
-    setCursor(res.data.nextCursor);
-  }
-
   async function onCopy(url: string) {
     try {
       await navigator.clipboard.writeText(url);
@@ -280,7 +301,9 @@ export function CobrosClient({ filters, initial, initialError, practitioners, pe
         return;
       }
       toast.success(C.cancelled);
-      await reloadFirstPage();
+      const next = afterCancel(rows, summary, id);
+      setRows(next.rows);
+      setSummary(next.summary);
     } catch {
       toast.error(C.cancelFailed, { description: C.networkError });
     } finally {

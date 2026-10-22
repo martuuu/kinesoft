@@ -8,7 +8,7 @@ import { notify, notifyTenantOwners } from "@/lib/notifications-internal";
 import { mpCredentialAad, openSecret, sealSecret, sealedKid, SecretBoxError } from "@/lib/secret-box";
 import { refreshTokens } from "@/lib/mp-connect/oauth-client";
 import { expirePreferencesBestEffort } from "@/lib/mp-connect/account-client";
-import { markAccountReauthRequired } from "@/lib/mp-connect/accounts-internal";
+import { markAccountReauthRequired, restoreActiveAfterRefresh } from "@/lib/mp-connect/accounts-internal";
 import { MP_CONNECT_COPY } from "@/lib/online-payments-copy";
 import { MY_MP_TAB, ONLINE_PAYMENTS_TAB } from "@/lib/mp-connect-types";
 import { ONLINE_PAYMENTS_AUDIT } from "@/lib/online-payments-types";
@@ -27,8 +27,10 @@ import { ONLINE_PAYMENTS_AUDIT } from "@/lib/online-payments-types";
  *      `version` que se leyó; si otro refrescó primero (su refresh nos dejó el nuestro inválido), no se marca.
  *   2. **Vencidos**: cobros ACTIVE con `expiresAt` hace más de 5 min → EXPIRED (los 5 min cubren un pago aprobado en
  *      el último segundo cuyo webhook todavía no llegó: igual entraría, el guard deja pasar EXPIRED → PAID, pero así el
- *      staff no ve «Vencido» y enseguida «Pagado»). Y links ACTIVE de turnos CANCELLED/NO_SHOW → CANCELLED
- *      (`booking_cancelled`) + vencer su preferencia en MP (best effort, después del commit).
+ *      staff no ve «Vencido» y enseguida «Pagado»). Y cobros ACTIVE (links y, desde TP-ZF1, también TURNERO) de turnos
+ *      CANCELLED/NO_SHOW → CANCELLED (`booking_cancelled`) + vencer su preferencia en MP (best effort, después del
+ *      commit). Red de seguridad: cancelar / ausente desde la agenda y la Sala ya los anula en su tx (TP-ZF1 M3); esto
+ *      cubre los caminos que no (cancelación masiva de un plan, `cancelBookingsInTx`).
  *   3. **Purga**: credenciales con `purgeAfter` pasado (desconectar = +7 días), de cuentas no ACTIVE y sin cobros
  *      vivos (ACTIVE/AUTHORIZED: un pago en proceso todavía necesita el token para volver a pedirlo). Va DESPUÉS de los
  *      vencidos a propósito (el contrato los lista al revés): así un cobro vencido hoy no deja la credencial para
@@ -155,14 +157,25 @@ async function refreshOne(c: DueCredential, now: Date): Promise<RefreshOutcome> 
   };
 
   let version = c.version;
-  // Dos intentos: el segundo solo si la fila cambió por un RE-SELLADO (rotación de claves, `resealMpCredentials`, que
-  // también sube `version` pero conserva el mismo refresh). Si cambió porque otro refrescó, sus tokens son los buenos.
+  // Dos intentos: el segundo solo si `version` cambió pero el refresh guardado sigue siendo el mismo que usamos (algún
+  // escritor que sube `version` sin rotar el refresh). Si cambió porque otro refrescó, sus tokens son los buenos.
+  // TP-ZF1 (B5, corrige el comentario anterior): el RE-SELLADO de la rotación de claves (`resealMpCredentials`) NO sube
+  // `version` (CAS por version + cajas; ver lib/secret-box-rotate-internal.ts), así que no hace fallar este CAS: si el
+  // re-sellado entró antes, este UPDATE lo pisa con cajas selladas con la clave VIGENTE (lo mismo que buscaba el
+  // re-sellado); si entra después, su CAS por cajas da conflicto y lo reintenta la próxima corrida.
   for (let attempt = 0; attempt < 2; attempt++) {
     const n = await prismaService.mpCredential.updateMany({
       where: { id: c.id, tenantId: c.tenantId, version, purgeAfter: null },
       data: { ...data, version: version + 1 },
     });
-    if (n.count === 1) return "refreshed";
+    if (n.count === 1) {
+      // TP-ZF1 (B5): un REAUTH marcado por un `invalid_grant` de NUESTRA rotación (carrera) se deshace acá.
+      // Best effort: los tokens ya quedaron guardados; si esto falla, la cuenta sigue en REAUTH como antes del fix.
+      await restoreActiveAfterRefresh({ tenantId: c.tenantId, accountId: c.mpAccountId, credentialVersion: version + 1 }).catch(
+        (err) => logger.warn("cron.mp_connect.reauth_restore_failed", { accountId: c.mpAccountId, error: errCode(err) })
+      );
+      return "refreshed";
+    }
     const cur = await prismaService.mpCredential.findFirst({
       where: { id: c.id, tenantId: c.tenantId },
       select: { version: true, refreshTokenBox: true, purgeAfter: true },
@@ -264,7 +277,7 @@ export async function runMpConnectMaintenance(
   if (!overBudget()) {
     try {
       const orphan = await prismaService.onlineCharge.findMany({
-        where: { ...scope, origin: "LINK", status: "ACTIVE", booking: { status: { in: ["CANCELLED", "NO_SHOW"] } } },
+        where: { ...scope, origin: { in: ["LINK", "TURNERO"] }, status: "ACTIVE", booking: { status: { in: ["CANCELLED", "NO_SHOW"] } } },
         orderBy: { id: "asc" },
         take: EXPIRE_TAKE,
         select: { id: true, tenantId: true },
@@ -277,7 +290,7 @@ export async function runMpConnectMaintenance(
           where: {
             id: { in: chargeIds },
             tenantId,
-            origin: "LINK",
+            origin: { in: ["LINK", "TURNERO"] },
             status: "ACTIVE",
             booking: { status: { in: ["CANCELLED", "NO_SHOW"] } },
           },

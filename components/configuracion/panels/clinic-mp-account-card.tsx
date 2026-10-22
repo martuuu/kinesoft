@@ -27,9 +27,10 @@ import { useStepUpAction, type RunStepUpAction, type StepUpFailure } from "@/com
 import { disconnectMpAccount, setMpLinksDelegated, startMpConnect } from "@/lib/mp-connect-actions";
 import { formatDateAR } from "@/lib/format";
 import { MP_ACCOUNT_STATUS_LABEL, MP_CONNECT_COPY } from "@/lib/online-payments-copy";
-import type { MpAccountView, MpConnectMode, MpConnectReturn } from "@/lib/mp-connect-types";
+import type { MpAccountView, MpConnectReturn } from "@/lib/mp-connect-types";
 import type { ActionResult } from "@/lib/validation";
 import { ErrorBox, Switch } from "../controls";
+import { MP_NETWORK_ERROR } from "./my-mp-panel";
 
 /** Copy de la card (vocabulario de §25.10: «Mercado Pago» completo, «link de pago», «Secretaría» con tilde). */
 export const CLINIC_MP_COPY = {
@@ -52,7 +53,6 @@ export const CLINIC_MP_COPY = {
   delegation: "Permitir que la Secretaría y los administradores generen links de pago a la cuenta del consultorio",
   connectedSince: (date: string) => `Conectada desde el ${date}`,
   disconnectedOn: (date: string) => `Desconectada el ${date}`,
-  offline: "Los cobros online todavía no están habilitados.",
 } as const;
 
 /**
@@ -63,7 +63,7 @@ export const CLINIC_MP_RETURN_NOTICE: Readonly<Record<MpConnectReturn, { tone: "
   ok: { tone: "ok", text: "Listo: conectamos el Mercado Pago del consultorio." },
   denied: { tone: "error", text: "Cancelaste la conexión en Mercado Pago: no se cambió nada." },
   expired: { tone: "error", text: "La conexión se venció antes de terminar. Probá de nuevo." },
-  in_use: { tone: "error", text: "Esa cuenta de Mercado Pago ya está conectada por otro profesional del consultorio." },
+  in_use: { tone: "error", text: "Esa cuenta de Mercado Pago ya está conectada como cuenta de un profesional del consultorio." },
   error: { tone: "error", text: "No pudimos conectar Mercado Pago. Probá de nuevo en unos minutos." },
 };
 
@@ -132,14 +132,12 @@ const STATUS_TONE: Record<MpAccountView["status"], "lime" | "sky" | "soft"> = {
 export function ClinicMpAccountCard({
   account,
   canManage,
-  connectMode,
   mpReturn,
   support = false,
 }: {
   account: MpAccountView;
   /** `canManageClinicAccount` (Titular, nunca soporte). */
   canManage: boolean;
-  connectMode: MpConnectMode;
   /** `?mp=` de la vuelta del callback (la cuenta del consultorio vuelve a esta pestaña). */
   mpReturn: MpConnectReturn | null;
   support?: boolean;
@@ -157,7 +155,7 @@ export function ClinicMpAccountCard({
     setDelegated(account.linksDelegated);
   }
 
-  const off = connectMode === "off";
+  // TP-ZF3: sin rama «modo apagado» (`connectMode`): con `MP_CONNECT_MODE=off` la pestaña que monta esta card no existe.
   const actions = canManage && !support;
   const live = account.status === "ACTIVE" || account.status === "REAUTH_REQUIRED";
   const notice = mpReturn ? CLINIC_MP_RETURN_NOTICE[mpReturn] : null;
@@ -165,7 +163,12 @@ export function ClinicMpAccountCard({
   async function onConnect() {
     setPending(true);
     setError(null);
-    const err = await connectClinicAccount({ runStepUp, start: startMpConnect, assign: (url) => window.location.assign(url) });
+    let err: string | null;
+    try {
+      err = await connectClinicAccount({ runStepUp, start: startMpConnect, assign: (url) => window.location.assign(url) });
+    } catch {
+      err = MP_NETWORK_ERROR;
+    }
     // Si navegó, la página se va: el botón queda en «pendiente» a propósito (sin doble click).
     if (err) {
       setError(err);
@@ -184,6 +187,8 @@ export function ClinicMpAccountCard({
         return;
       }
       toast.success(CLINIC_MP_COPY.disconnected("data" in r ? r.data.cancelledLinks : 0));
+    } catch {
+      setError(MP_NETWORK_ERROR);
     } finally {
       setPending(false);
     }
@@ -195,11 +200,18 @@ export function ClinicMpAccountCard({
     setDelegated(next);
     setError(null);
     setPending(true);
-    const r = await setMpLinksDelegated({ target: "clinic", delegated: next });
-    setPending(false);
-    if (!r.ok) {
+    let err: string | null;
+    try {
+      const r = await setMpLinksDelegated({ target: "clinic", delegated: next });
+      err = r.ok ? null : r.error;
+    } catch {
+      err = MP_NETWORK_ERROR;
+    } finally {
+      setPending(false);
+    }
+    if (err) {
       setDelegated(!next);
-      setError(r.error);
+      setError(err);
     }
   }
 
@@ -229,10 +241,10 @@ export function ClinicMpAccountCard({
 
       {actions ? (
         <>
-          {!live && !off && <p style={{ margin: 0, fontSize: 12.5, color: "var(--navy-500)" }}>{CLINIC_MP_COPY.connectHint}</p>}
+          {!live && <p style={{ margin: 0, fontSize: 12.5, color: "var(--navy-500)" }}>{CLINIC_MP_COPY.connectHint}</p>}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {account.status !== "ACTIVE" && (
-              <Button type="button" size="sm" disabled={pending || off} onClick={() => void onConnect()}>
+              <Button type="button" size="sm" disabled={pending} onClick={() => void onConnect()}>
                 {account.status === "REAUTH_REQUIRED" ? CLINIC_MP_COPY.reconnect : CLINIC_MP_COPY.connect}
               </Button>
             )}

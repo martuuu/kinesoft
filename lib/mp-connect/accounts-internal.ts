@@ -424,6 +424,38 @@ export async function markAccountReauthRequired(o: {
   });
 }
 
+/**
+ * TP-ZF1 (B5 del revisor de T5-Z): carrera refresh vs. REAUTH. El refresh token de MP es de un solo uso: si A y B
+ * refrescan a la vez con el mismo token, A gana en MP y B recibe `invalid_grant`. B llama a `markAccountReauthRequired`
+ * con la versión v, que todavía es la guardada (A no commiteó su CAS): la marca REAUTH. Después A commitea su CAS
+ * (version v → v+1) con tokens VÁLIDOS y la cuenta quedaba en REAUTH_REQUIRED para siempre (el cron no refresca cuentas
+ * no ACTIVE y la app pedía «Reconectá» sin motivo).
+ *
+ * Quien GANÓ el CAS llama a esto inmediatamente después: si la cuenta está en REAUTH y la credencial sigue en la
+ * versión que escribió (nadie la movió después), vuelve a ACTIVE. Es correcto sin mirar fechas: un REAUTH marcado con
+ * la versión v contra un refresh que canjeó con éxito el refresh token de v es, por construcción, la rotación del
+ * ganador (si MP hubiera revocado la autorización, el canje del ganador también habría fallado; y si se revoca después,
+ * el próximo uso vuelve a marcar). DISCONNECTED nunca se toca (lo decidió una persona). +1 sentencia SOLO tras un
+ * refresh ganado (raro: los tokens duran 180 días).
+ */
+export async function restoreActiveAfterRefresh(o: {
+  tenantId: string;
+  accountId: string;
+  /** La versión que dejó el CAS ganador (la anterior + 1). */
+  credentialVersion: number;
+}): Promise<boolean> {
+  const nowIso = new Date().toISOString();
+  const n = await prismaService.$executeRaw`
+    UPDATE "MpAccount" a
+       SET "status" = 'ACTIVE', "reauthRequiredAt" = NULL, "updatedAt" = (${nowIso}::timestamptz AT TIME ZONE 'UTC')
+     WHERE a."id" = ${o.accountId} AND a."tenantId" = ${o.tenantId} AND a."status" = 'REAUTH_REQUIRED'
+       AND EXISTS (SELECT 1 FROM "MpCredential" c
+                    WHERE c."mpAccountId" = a."id" AND c."tenantId" = a."tenantId" AND c."version" = ${o.credentialVersion}
+                      AND c."purgeAfter" IS NULL)`;
+  if (n === 1) logger.info("mp_connect.reauth_cleared_by_refresh", { tenantId: o.tenantId, accountId: o.accountId });
+  return n === 1;
+}
+
 // ── Vistas (sin tokens, sin `webhookRef`, sin `mpUserId`: C-TP4) ────────────────────────────────────────────────────
 
 type AccountViewRow = {

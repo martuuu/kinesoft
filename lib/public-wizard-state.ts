@@ -395,9 +395,16 @@ export function checkoutCopyFor(args: {
 /**
  * TP-UI-D6: el server cobró otro monto que el cotizado (copago de la obra social del paciente, o particular por
  * TP-D22) → antes de ir a Mercado Pago se muestra el monto real. Sin cotización (no esperábamos cobro) también.
+ *
+ * TP-ZF2 (hallazgo A1 de T5-Z): el wizard cotiza con el PRECIO del servicio, pero el server cobra sobre el copago
+ * resuelto (lib/copago.ts); con Particular u obra social en $ 0 `decideOnlineCharge` no cobra y responde `reserved`.
+ * Antes el wizard iba directo a `/ok` después de prometer «Pagar $ 5.000» en el botón: ahora, si hubo cotización y el
+ * server no cobró, también hay interstitial (el wizard lo muestra como «Tu turno quedó reservado»). Un `checkout` sin
+ * monto no debería pasar y no se trata como diferencia (mostraría «$ 0» antes de Mercado Pago).
  */
 export function amountDiffers(r: { next: "checkout" | "reserved"; amountCents: number | null }, quotedCents: number | null): boolean {
-  return r.next === "checkout" && r.amountCents != null && r.amountCents !== quotedCents;
+  if (r.next !== "checkout") return quotedCents != null;
+  return r.amountCents != null && r.amountCents !== quotedCents;
 }
 
 /**

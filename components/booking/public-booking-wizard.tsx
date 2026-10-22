@@ -198,7 +198,7 @@ export function PublicBookingWizard({
   const [payChoice, setPayChoice] = useState<PayChoice>(null);
   const checkout = checkoutCopyFor({ payment, choice: payChoice, priceCents: service?.priceCents ?? 0 });
   // Interstitial antes de navegar (TP-UI-D6 monto distinto; MP caído en OPTIONAL). `href` = adónde sigue.
-  const [interstitial, setInterstitial] = useState<{ kind: "amount" | "unavailable"; amountCents: number | null; href: string } | null>(null);
+  const [interstitial, setInterstitial] = useState<{ kind: "amount" | "unavailable" | "reserved"; amountCents: number | null; href: string } | null>(null);
 
   // Servicios del profesional elegido (`practitionerIds`, B3.2). En modo
   // "cualquiera": los que ofrece al menos un profesional que pasa los filtros.
@@ -287,6 +287,9 @@ export function PublicBookingWizard({
     prevStep.current = step;
     focusStepHeading(cardRef.current);
   }, [step]);
+  // ZB-2: el interstitial desmonta el paso «Tus datos» y el foco caía al body; va a su título (con scroll arriba: en
+  // 390 px el botón que lo abrió quedaba al pie).
+  useEffect(() => { if (interstitial) { window.scrollTo({ top: 0 }); focusStepHeading(cardRef.current); } }, [interstitial]);
 
   const submit = () => {
     setError(null);
@@ -327,7 +330,13 @@ export function PublicBookingWizard({
       if (r.data.notice === "payment-unavailable") {
         setInterstitial({ kind: "unavailable", amountCents: null, href: destinationAfterSubmit(r.data) });
       } else if (amountDiffers(r.data, checkout.online && payment ? payment.quote.amountCents : null)) {
-        setInterstitial({ kind: "amount", amountCents: r.data.amountCents, href: destinationAfterSubmit(r.data) });
+        // TP-ZF2: `reserved` acá = el wizard cotizó un cobro y el server no cobró (copago $ 0): se avisa en vez de ir
+        // directo a `/ok` después de prometer «Pagar y reservar».
+        setInterstitial({
+          kind: r.data.next === "reserved" ? "reserved" : "amount",
+          amountCents: r.data.amountCents,
+          href: destinationAfterSubmit(r.data),
+        });
       } else {
         window.location.assign(destinationAfterSubmit(r.data));
       }

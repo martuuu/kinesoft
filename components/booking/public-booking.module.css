@@ -615,6 +615,7 @@
 .payChoice .choice:has(:checked) {
   border-color: var(--sky-700);
   background: rgba(31, 79, 190, 0.08);
+  box-shadow: inset 0 0 0 1px var(--sky-700);
 }
 .payNote {
   margin: var(--space-4) 0 0;

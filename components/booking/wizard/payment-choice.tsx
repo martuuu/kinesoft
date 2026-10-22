@@ -8,7 +8,8 @@
  *   consultorio declaró opcional). Radios nativos en un fieldset: teclado y lector de pantalla sin código extra.
  * - REQUIRED: solo el aviso (el paciente no elige).
  * - `PaymentInterstitial`: el monto real antes de ir a Mercado Pago cuando difiere del cotizado (TP-UI-D6: copago de la
- *   obra social, o particular por TP-D22), y el aviso de Mercado Pago caído en OPTIONAL (el turno quedó reservado).
+ *   obra social, o particular por TP-D22), el aviso de Mercado Pago caído en OPTIONAL (el turno quedó reservado) y,
+ *   desde TP-ZF2, el turno que el server reservó sin cobrar aunque el wizard había cotizado (copago $ 0).
  *
  * Markup mínimo y sin dependencias nuevas: entra al first load del turnero (techo ≤115 kB gz, §25.11).
  */
@@ -17,6 +18,7 @@ import { IconAlert, IconArrow } from "@/components/ui/icons";
 import { formatARS } from "@/lib/format";
 import type { PayChoice, WizardOnlinePayment } from "@/lib/public-wizard-state";
 import s from "../public-booking.module.css";
+import { StepHeader } from "./shared";
 
 /**
  * Literales de `TURNERO_PAYMENT_COPY` (`lib/online-payments-copy.ts`, TP-P5), copiados con paridad fijada por
@@ -62,33 +64,46 @@ export function PaymentChoice({
   return (
     <fieldset className={s.payChoice}>
       <legend className={s.sectionLabel}>¿Cómo querés pagar?</legend>
+      {/* ZB-11: sin preselección (TP-UI-D5) el botón queda deshabilitado; sin esta línea no se entiende por qué. */}
+      {choice === null && <p className={s.choiceSub}>Elegí una opción para confirmar el turno.</p>}
       {opt("later", PAY_COPY.payLater, "Tu turno queda reservado.")}
       {opt("now", PAY_COPY.payNow, amountText(payment))}
     </fieldset>
   );
 }
 
+/** Título por caso: el interstitial reemplaza al paso «Tus datos», y el foco va a este título (ZB-2). */
+const INTERSTITIAL_COPY = {
+  amount: { title: "Antes de ir a Mercado Pago", subtitle: "El monto cambió con tus datos.", cta: "Continuar a Mercado Pago" },
+  unavailable: { title: "Tu turno quedó reservado", subtitle: "Ya está agendado.", cta: "Ver mi turno" },
+  reserved: { title: "Tu turno quedó reservado", subtitle: "Con tus datos, este turno no se cobra online.", cta: "Ver mi turno" },
+} as const;
+
 export function PaymentInterstitial({
   kind,
   amountCents,
   onContinue,
 }: {
-  kind: "amount" | "unavailable";
+  kind: "amount" | "unavailable" | "reserved";
   amountCents: number | null;
   onContinue: () => void;
 }) {
+  const copy = INTERSTITIAL_COPY[kind];
   return (
     <>
+      <StepHeader title={copy.title} subtitle={copy.subtitle} />
       <div className="k-alert" role="alert">
         <IconAlert size={18} />
         <span>
           {kind === "unavailable"
             ? PAY_COPY.optionalUnavailable
-            : `Con tus datos, el monto a pagar es ${formatARS(amountCents ?? 0)}. Lo vas a ver así en Mercado Pago.`}
+            : kind === "reserved"
+              ? "No hace falta pagar online: lo arreglás en el consultorio."
+              : `Con tus datos, el monto a pagar es ${formatARS(amountCents ?? 0)}. Lo vas a ver así en Mercado Pago.`}
         </span>
       </div>
       <Button variant="primary" size="md" onClick={onContinue}>
-        {kind === "unavailable" ? "Ver mi turno" : "Continuar a Mercado Pago"} <IconArrow size={14} />
+        {copy.cta} <IconArrow size={14} />
       </Button>
     </>
   );

@@ -265,7 +265,7 @@ function MoneyRows({ status, variant }: { status: PublicBookingStatus; variant: 
     return (
       <>
         <DetailRow label={RESULT_MONEY_COPY.depositPaid} value={formatARS(c.amountCents)} />
-        {c.remainingCents > 0 && <DetailRow label={RESULT_MONEY_COPY.restAtClinic} value={formatARS(c.remainingCents)} />}
+        {c.remainingCents != null && c.remainingCents > 0 && <DetailRow label={RESULT_MONEY_COPY.restAtClinic} value={formatARS(c.remainingCents)} />}
       </>
     );
   }

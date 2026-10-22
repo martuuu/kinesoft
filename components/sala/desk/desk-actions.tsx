@@ -7,7 +7,6 @@ import { IconArrow, IconBell, IconCheck } from "@/components/ui/icons";
 import { fmtHour, type BookingDTO } from "@/components/agenda/agenda-utils";
 import { formatARS } from "@/lib/format";
 import { copagoCollectViewFor } from "@/lib/booking-collect";
-import { BOOKING_MONEY_COPY } from "@/lib/online-payments-copy";
 import type { PaymentLinkDrawerProps } from "@/components/payments/payments-ui-types";
 import { RECEPTION_STATE_LABEL, type ReceptionAction } from "@/lib/reception-state";
 import { stateTagText, undoHint } from "@/lib/reception-view-state";
@@ -19,6 +18,13 @@ import {
   type DeskEntry,
   type DeskViewer,
 } from "@/lib/reception-desk-state";
+
+/**
+ * TP-ZF3: el texto del ítem va LITERAL y no como `BOOKING_MONEY_COPY.sendLink`: el import estático de
+ * `lib/online-payments-copy.ts` metía todo ese módulo de copy (estados, comprobante, Configuración) en el first load de
+ * `/sala`, que tiene que quedar +0 (§25.11). El test `[TP-ZF3]` fija que siga igual a la copy compartida.
+ */
+export const DESK_SEND_LINK_LABEL = "Enviar link de pago";
 
 /**
  * TP-3f: «Enviar link de pago» abre el `PaymentLinkDrawer` compartido (§25.10). Diferido y del MISMO módulo que importa
@@ -445,7 +451,7 @@ export function DeskMenu({ entry }: { entry: DeskEntry }) {
                 openPaymentLink(b);
               }}
             >
-              {BOOKING_MONEY_COPY.sendLink}
+              {DESK_SEND_LINK_LABEL}
             </button>
           );
         }

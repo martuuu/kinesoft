@@ -21,6 +21,9 @@ import { whatsAppShareUrl, shareNotice, type ShareContact } from "@/lib/booking-
 import { getPaymentLinkShare, sendPaymentLinkEmail } from "@/lib/payment-links";
 import { emailButtonState, isNoEmailError, PAYMENT_LINK_SHARE_COPY as C } from "@/lib/payment-link-form";
 
+/** Mismo texto que el resto de las superficies de cobro para «no llegó al server» (`patient-links-list.tsx`). */
+const EMAIL_NETWORK_ERROR = "Revisá la conexión y reintentá.";
+
 export type PaymentLinkShareProps = {
   chargeId: string;
   /** El link público (ya lo devolvió `createPaymentLink`): se puede copiar aunque el texto todavía no llegó. */
@@ -82,6 +85,9 @@ export function PaymentLinkShare({ chargeId, url, patientName, initialShare = nu
       if (r.ok) setSentTo(r.data.sentToMasked);
       else if (isNoEmailError(r.error, patientName)) setEmailDisabledReason(r.error);
       else setEmailError(r.error);
+    } catch {
+      // TP-ZF3: sin red la action tira; antes el rechazo quedaba sin manejar y el botón volvía sin decir nada.
+      setEmailError(EMAIL_NETWORK_ERROR);
     } finally {
       setSending(false);
     }

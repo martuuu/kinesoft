@@ -222,6 +222,25 @@ describe.skipIf(!RUN)("[TP-2k] cron diario · etapa mp_connect", () => {
     ).toBe(false);
   });
 
+  // [TP-ZF1] B5 (revisor T5-Z): el otro escritor recibió `invalid_grant` por NUESTRA rotación y marcó REAUTH con la
+  // versión vieja ANTES de que el cron commiteara su CAS. El cron gana el CAS con tokens válidos: la cuenta vuelve a ACTIVE.
+  it("[TP-ZF1] carrera refresh vs. REAUTH: el refresh que gana el CAS deja la cuenta ACTIVE", async () => {
+    await freshTenant();
+    fake = installFakeMp();
+    const acc = await connectFakeAccount(db, T, { seller: 1, accessExpiresAt: new Date(Date.now() + 5 * DAY) });
+    const v0 = (await cred(acc.accountId)).version;
+    beforeTokenOnce(async () => {
+      expect(
+        await markMpAccountReauthRequired({ tenantId: T.tenantId, accountId: acc.accountId, credentialVersion: v0, now: new Date(), source: "webhook" })
+      ).toBe(true);
+    });
+    const r = await runMpConnectMaintenance(new Date(), 8_000, scope());
+    expect(r).toMatchObject({ refreshed: 1, reauth: 0, errors: 0 });
+    expect((await cred(acc.accountId)).version).toBe(v0 + 1);
+    const a = await db.mpAccount.findUniqueOrThrow({ where: { id: acc.accountId } });
+    expect([a.status, a.reauthRequiredAt]).toEqual(["ACTIVE", null]);
+  });
+
   it("[TP-2k] la cuenta del consultorio en REAUTH avisa al Titular con el link a «Cobros online»", async () => {
     await freshTenant();
     fake = installFakeMp();
@@ -304,6 +323,29 @@ describe.skipIf(!RUN)("[TP-2k] cron diario · etapa mp_connect", () => {
     expect((await by(fresh)).status).toBe("ACTIVE");
     expect(await by(orphan)).toMatchObject({ status: "CANCELLED", cancelReason: "booking_cancelled", cancelledByUserId: null });
     expect((await by(orphan)).cancelledAt?.getTime()).toBe(now.getTime());
+
+    // [TP-ZF1] Red de seguridad de M3: el cobro TURNERO vivo de un turno cancelado por un camino que no lo anuló en su
+    // tx (cancelación masiva de un plan) también se anula.
+    const b2 = await db.booking.create({
+      data: {
+        tenantId: T.tenantId, patientId: pat, practitionerId: T.practitionerId, serviceId: T.serviceId,
+        scheduledFor: new Date(now.getTime() + 2 * DAY), durationMin: 45, status: "CONFIRMED", paymentStatus: "UNPAID",
+        idempotencyKey: randomUUID(),
+      },
+      select: { id: true },
+    });
+    const tur = await db.onlineCharge.create({
+      data: {
+        tenantId: T.tenantId, origin: "TURNERO", kind: "FULL", mpAccountId: acc.accountId, practitionerId: T.practitionerId,
+        patientId: pat, bookingId: b2.id, amountCents: 5_000_00, copagoBasisCents: 5_000_00,
+        expiresAt: new Date(now.getTime() + DAY), idempotencyKey: `turnero:${b2.id}`,
+      },
+      select: { id: true },
+    });
+    await db.booking.update({ where: { id: b2.id }, data: { status: "NO_SHOW" } });
+    const r2 = await runMpConnectMaintenance(now, 8_000, scope());
+    expect(r2).toMatchObject({ linksCancelled: 1, errors: 0 });
+    expect(await by(tur.id)).toMatchObject({ status: "CANCELLED", cancelReason: "booking_cancelled" });
   });
 
   it("[TP-2k] Presupuesto → `truncated`; dos corridas = una; modo off no llama a MP pero purga", async () => {

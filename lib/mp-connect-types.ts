@@ -68,6 +68,9 @@ export const MY_MP_TAB = "mercado-pago";
  *   action al actuar, no esto.
  * - `practitioners`: card «Profesionales»; `withoutMpCount` = cuántos no tienen cuenta ACTIVE («{n} profesionales sin
  *   Mercado Pago conectado»).
+ * - `particularCopagoCents` (TP-ZF3, hallazgo A1): el precio de «Particular» (`Insurer.isParticular`), null = sin esa
+ *   fila. En 0 o null el turnero no les cobra online a los particulares (no hay valor del turno que cotizar) y el
+ *   panel lo avisa: sin el aviso, el consultorio prendía los cobros y no entendía por qué nadie pagaba.
  */
 export type OnlinePaymentsSettingsView = {
   policy: PaymentPolicyInput;
@@ -78,6 +81,7 @@ export type OnlinePaymentsSettingsView = {
   canManageClinicAccount: boolean;
   practitioners: OnlinePaymentsPractitionerRow[];
   withoutMpCount: number;
+  particularCopagoCents: number | null;
 };
 
 export type OnlinePaymentsPractitionerRow = {

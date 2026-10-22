@@ -781,7 +781,9 @@ async function revenueAmountsInTx(
 ): Promise<RevenueAmounts> {
   // `tenantId` a mano SIEMPRE; el profesional se suma encima, nunca lo reemplaza.
   const own = practitionerId ? { practitionerId } : {};
-  // C-TP11 literal. Los bordes viajan como ISO y se convierten a la hora de pared UTC de las columnas `timestamp(3)`
+  // C-TP11 literal (enmienda TP-ZF1 M1: una seña reintegrada DESPUÉS del cobro a mano se sigue restando del manual —
+  // la recepción cobró solo el resto y la seña ya salió de MP al reintegrarse; antes el manual volvía al copago entero y
+  // Ingresos contaba de más). Los bordes viajan como ISO y se convierten a la hora de pared UTC de las columnas `timestamp(3)`
   // (mismo molde que `lib/booking-rooms-internal.ts`): un `Date` crudo dependería del TimeZone de la sesión.
   const $t = tenantId;
   const $prof = practitionerId;
@@ -797,7 +799,8 @@ async function revenueAmountsInTx(
            AND c."approvedAt" >= (${$start}::timestamptz AT TIME ZONE 'UTC') AND c."approvedAt" < (${$end}::timestamptz AT TIME ZONE 'UTC')), 0)::int AS "onlineMp",
       COALESCE((SELECT sum(GREATEST(0, COALESCE(b."copagoCents", 0) - COALESCE(d."cents", 0))) FROM "Booking" b
          LEFT JOIN LATERAL (SELECT sum(c."amountCents") AS "cents" FROM "OnlineCharge" c
-            WHERE c."tenantId" = b."tenantId" AND c."bookingId" = b."id" AND c."kind" = 'DEPOSIT' AND c."status" = 'PAID'
+            WHERE c."tenantId" = b."tenantId" AND c."bookingId" = b."id" AND c."kind" = 'DEPOSIT'
+              AND (c."status" = 'PAID' OR (c."status" = 'REFUNDED' AND c."refundedAt" > b."copagoPaidAt"))
               AND c."settledAt" <= b."copagoPaidAt") d ON true
          WHERE b."tenantId" = ${$t} AND (${$prof}::text IS NULL OR b."practitionerId" = ${$prof}) AND b."paymentStatus" = 'PAID'
            AND b."copagoPaidAt" >= (${$start}::timestamptz AT TIME ZONE 'UTC') AND b."copagoPaidAt" < (${$end}::timestamptz AT TIME ZONE 'UTC')

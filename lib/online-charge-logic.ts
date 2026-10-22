@@ -223,7 +223,9 @@ type BookingPaymentStatusLike = "UNPAID" | "AUTHORIZED" | "PAID" | "REFUNDED" | 
  *     o por otro cobro) no se pisa: es un duplicado y lo avisa el consumidor;
  *   - DEPOSIT: nada en el copago (TP-D7; la seña la suma el trigger `online_charge_sync_booking`).
  * - ACTIVE → AUTHORIZED de un FULL con el copago sin cobrar → `mark-authorized` («Pago retenido», bloquea el cobro a mano).
+ *   TP-ZF1 (B3): también la seña del turnero con el turno PENDING (sostiene el hold mientras MP retiene la seña).
  * - AUTHORIZED → ACTIVE / REFUNDED de un FULL con el copago AUTHORIZED → `revert-authorized` (vuelve a «Por cobrar»).
+ *   TP-ZF1 (B3): la seña del turnero también, y además al pasar a PAID (confirm + revert: la seña no marca el copago).
  * - → REFUNDED de un FULL que pagó el copago por MP → `mark-refunded` (el CHECK de M12 admite REFUNDED con medio).
  */
 export function bookingEffectFor(
@@ -241,6 +243,11 @@ export function bookingEffectFor(
   if (from === to || !canTransitionCharge(from, to) || c.kind === "FREE" || c.bookingStatus == null) return ["none"];
   const dead = c.bookingStatus === "CANCELLED" || c.bookingStatus === "NO_SHOW";
   const full = c.kind === "FULL";
+  // TP-ZF1 (B3 del revisor de T5-Z): la seña del turnero (REQUIRED con seña) también marca «en proceso» mientras el
+  // turno espera en PENDING. Si no, con la seña AUTHORIZED (efectivo, mediación) el turno seguía PENDING/UNPAID, el hold
+  // vencía y el horario se liberaba mientras MP retenía la plata. PENDING + AUTHORIZED sostiene el cupo
+  // (`isHoldingCapacity`). Al resolverse se revierte: la seña nunca marca el copago (TP-D7).
+  const turneroDeposit = c.kind === "DEPOSIT" && c.origin === "TURNERO";
   const ps = c.bookingPaymentStatus;
   const effects: BookingEffect[] = [];
 
@@ -248,13 +255,15 @@ export function bookingEffectFor(
     if (dead) return ["none"];
     if (c.origin === "TURNERO" && c.bookingStatus === "PENDING") effects.push("confirm");
     if (full && ps !== "PAID") effects.push("mark-paid");
+    else if (turneroDeposit && ps === "AUTHORIZED") effects.push("revert-authorized");
   } else if (to === "AUTHORIZED") {
-    if (!dead && full && ps !== "PAID" && ps !== "AUTHORIZED" && ps !== "REFUNDED") effects.push("mark-authorized");
+    const holds = full || (turneroDeposit && c.bookingStatus === "PENDING");
+    if (!dead && holds && ps !== "PAID" && ps !== "AUTHORIZED" && ps !== "REFUNDED") effects.push("mark-authorized");
   } else if (to === "ACTIVE") {
-    if (full && ps === "AUTHORIZED") effects.push("revert-authorized");
+    if ((full || turneroDeposit) && ps === "AUTHORIZED") effects.push("revert-authorized");
   } else if (to === "REFUNDED") {
     if (full && ps === "PAID" && c.paidByMp) effects.push("mark-refunded");
-    else if (full && ps === "AUTHORIZED") effects.push("revert-authorized");
+    else if ((full || turneroDeposit) && ps === "AUTHORIZED") effects.push("revert-authorized");
   }
   return effects.length > 0 ? effects : ["none"];
 }

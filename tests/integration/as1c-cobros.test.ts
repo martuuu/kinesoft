@@ -33,6 +33,7 @@ import type { PrismaClient } from "@prisma/client";
 import {
   deleteBooking,
   listAgendaBookings,
+  markReceptionAction,
   setBookingCopagoPaid,
   setBookingInsurerPaid,
   setBookingStatus,
@@ -429,6 +430,62 @@ describe.skipIf(!RUN)("[TP-2e] cobro a mano con señas", () => {
     const b2 = await seed();
     expect(await setBookingCopagoPaid(b2.id, CASH, v(b2.updatedAt))).toMatchObject({ ok: true });
     expect(vi.mocked(expirePreferencesBestEffort)).not.toHaveBeenCalled();
+  });
+
+  // [TP-ZF1] M2 (revisor T5-Z): cobrar a mano solo anulaba LINK. Un TURNERO ACTIVE de un turno ya confirmado (OPTIONAL
+  // «Pagar ahora», checkout de 48 h) quedaba vivo y el paciente podía pagar por MP lo que ya pagó en el mostrador.
+  // Con el turno PENDING (REQUIRED: el cobro ES la reserva) no se anula: el hold del turnero lo sigue resolviendo.
+  it("[TP-ZF1] Marcar anula también el cobro TURNERO vivo de un turno no PENDING (no el de uno PENDING).", async () => {
+    const b = await seed();
+    const tur = await charge(b.id, { kind: "FULL", amountCents: 6_000_00 });
+    vi.mocked(expirePreferencesBestEffort).mockClear();
+    asUser(assistant.userId);
+    expect(await setBookingCopagoPaid(b.id, CASH, v((await fresh(b.id)).updatedAt))).toMatchObject({ ok: true });
+    expect(await chargeStatus(tur)).toEqual({ status: "CANCELLED", cancelReason: "collected" });
+    expect(vi.mocked(expirePreferencesBestEffort)).toHaveBeenCalledWith(T.tenantId, [tur]);
+
+    const pending = await seed({ future: true });
+    const hold = await charge(pending.id, { kind: "FULL", amountCents: 6_000_00 });
+    expect(await setBookingCopagoPaid(pending.id, CASH, v((await fresh(pending.id)).updatedAt))).toMatchObject({ ok: true });
+    expect(await chargeStatus(hold)).toEqual({ status: "ACTIVE", cancelReason: null });
+  });
+
+  // [TP-ZF1] M3 (revisor T5-Z): cancelar o marcar ausente dejaba vivos los cobros ACTIVE del turno (el cron solo
+  // anulaba LINK, y tarde): el paciente podía pagar un turno cancelado. Ahora se anulan en la misma tx
+  // (`booking_cancelled`) y se vencen sus preferencias después del commit.
+  it("[TP-ZF1] Cancelar / Ausente anula los cobros ACTIVE (LINK y TURNERO) con `booking_cancelled`.", async () => {
+    asUser(assistant.userId);
+    const c = await seed({ future: true });
+    const tur = await charge(c.id, { kind: "DEPOSIT", amountCents: 2_000_00 });
+    const link = await charge(c.id, { kind: "FULL", origin: "LINK", amountCents: 6_000_00 });
+    const paid = await seed({ future: true });
+    vi.mocked(expirePreferencesBestEffort).mockClear();
+    expect(await setBookingStatus(c.id, "CANCELLED", v((await fresh(c.id)).updatedAt))).toMatchObject({ ok: true });
+    expect(await chargeStatus(tur)).toEqual({ status: "CANCELLED", cancelReason: "booking_cancelled" });
+    expect(await chargeStatus(link)).toEqual({ status: "CANCELLED", cancelReason: "booking_cancelled" });
+    expect(vi.mocked(expirePreferencesBestEffort)).toHaveBeenCalledWith(T.tenantId, [tur, link].sort());
+    // Sin cobros vivos no se llama a MP.
+    vi.mocked(expirePreferencesBestEffort).mockClear();
+    expect(await setBookingStatus(paid.id, "CANCELLED", v(paid.updatedAt))).toMatchObject({ ok: true });
+    expect(vi.mocked(expirePreferencesBestEffort)).not.toHaveBeenCalled();
+
+    // Ausente desde el drawer.
+    const ns = await seed();
+    const nsLink = await charge(ns.id, { kind: "FULL", origin: "LINK", amountCents: 6_000_00 });
+    await db.booking.update({ where: { id: ns.id }, data: { status: "CONFIRMED" } });
+    expect(await setBookingStatus(ns.id, "NO_SHOW", v((await fresh(ns.id)).updatedAt))).toMatchObject({ ok: true });
+    expect(await chargeStatus(nsLink)).toEqual({ status: "CANCELLED", cancelReason: "booking_cancelled" });
+
+    // Ausente desde la recepción (Sala de espera): turno de hace 20 minutos, sin llegar.
+    const rx = await db.booking.create({
+      data: {
+        tenantId: T.tenantId, patientId: pat, practitionerId: T.practitionerId, serviceId: T.serviceId,
+        scheduledFor: new Date(Date.now() - 20 * 60_000), durationMin: 45, status: "CONFIRMED", idempotencyKey: randomUUID(),
+      },
+    });
+    const rxTur = await charge(rx.id, { kind: "FULL", amountCents: 6_000_00 });
+    expect(await markReceptionAction(rx.id, "ausente", v((await fresh(rx.id)).updatedAt))).toMatchObject({ ok: true });
+    expect(await chargeStatus(rxTur)).toEqual({ status: "CANCELLED", cancelReason: "booking_cancelled" });
   });
 
   it("[TP-2e] Perf: 11 sentencias sin links, 12 con link, 1 tx.", async () => {

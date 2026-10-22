@@ -17,9 +17,9 @@ import { connectFakeMpViaUi, setParticularCopago, setPaymentPolicy, simulateOnFa
  * Datos: la cuenta del profesional se conecta por el OAuth del simulador (support/mp.ts) y la política se escribe en la
  * base local; al terminar vuelve a OFF para que `turnero.spec.ts` (reserva sin cobro, corre después) no cambie. El
  * copago de «Particular» se pone en $ 50 (= el precio de «Consulta») mientras corre: con el $ 0 de fábrica el server
- * resuelve copago $ 0 y no cobra (ver el `test.fixme` del final).
+ * resuelve copago $ 0 y no cobra (lo cubre el último test: el wizard avisa con el interstitial).
  *
- * `pub:submit` limita a 5 reservas cada 5' por IP (lib/public-booking.ts): este spec hace DOS y `turnero.spec.ts` una.
+ * `pub:submit` limita a 5 reservas cada 5' por IP (lib/public-booking.ts): este spec hace TRES y `turnero.spec.ts` una.
  * Por eso el 390 va por `test.use` y no por el proyecto `mobile-390` (que repetiría las reservas).
  */
 test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 390, height: 844 }, hasTouch: true });
@@ -240,16 +240,21 @@ test("[TP-E] OPTIONAL con seña: «Pagar ahora» → «Seña pagada» → el res
  * (`resolvePublicCopagoCents` → lib/copago.ts:30 → Particular = $ 0), `decideOnlineCharge` no cobra
  * (lib/online-charge-logic.ts:97) y el wizard va directo a `/ok` (el interstitial de monto distinto,
  * components/booking/public-booking-wizard.tsx:329, solo salta cuando SÍ hay cobro): un turno REQUIRED queda «¡Turno
- * reservado!» sin pago. Decide
- * Martin (cotizar con el copago de Particular, o tratar Particular $ 0 como «sin precio» → precio del servicio). Cuando se
- * arregle, sacar el `fixme`: no gasta reservas del rate limit mientras está marcado.
+ * reservado!» sin pago. La cotización la decide Martin (cotizar con el copago de Particular, o tratar Particular $ 0 como
+ * «sin precio» → precio del servicio). Mientras tanto, TP-ZF2 (A1 de T5-Z): si el wizard cotizó y el server reservó sin
+ * cobrar, el wizard ya no va callado a `/ok`: muestra el interstitial «Tu turno quedó reservado» (`amountDiffers`).
  */
-test.fixme("[TP-E] REQUIRED con «Particular» en $ 0: lo que cotiza el wizard es lo que cobra el server", async ({ page }) => {
+test("[TP-E] REQUIRED con «Particular» en $ 0: si el server no cobra lo cotizado, el wizard avisa antes del resultado", async ({ page }) => {
   await setParticularCopago(0);
   await setPaymentPolicy({ mode: "REQUIRED", chargeKind: "COPAGO" });
   await fillWizard(page, { firstName: "Ines", lastName: "Particular Cero E2E" });
-  const promised = await page.getByText(/Para confirmar el turno se paga con Mercado Pago/).count();
-  await page.getByRole("button", { name: promised ? "Pagar y reservar" : "Confirmar turno" }).click();
-  if (promised) await page.waitForURL(/\/api\/mp\/fake\/checkout\//);
-  else await page.waitForURL(/\/booking\/[^/]+\/ok/);
+  await expect(page.getByText(/Para confirmar el turno se paga con Mercado Pago/)).toBeVisible();
+  await page.getByRole("button", { name: "Pagar y reservar" }).click();
+  const heading = page.getByRole("heading", { level: 2, name: "Tu turno quedó reservado" });
+  await expect(heading).toBeVisible();
+  await expect(heading).toBeFocused();
+  await expect(page.getByText("No hace falta pagar online: lo arreglás en el consultorio.")).toBeVisible();
+  await expect(page).not.toHaveURL(/\/api\/mp\/fake\/checkout\//);
+  await page.getByRole("button", { name: /Ver mi turno/ }).click();
+  await page.waitForURL(/\/booking\/[^/]+\/ok/);
 });

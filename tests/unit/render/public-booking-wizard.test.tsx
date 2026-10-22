@@ -408,6 +408,21 @@ describe("[TP-3h] PaymentInterstitial", () => {
     expect(html).toContain("Ver mi turno");
   });
 
+  it("[TP-ZF2] cotizó y el server no cobró: «Tu turno quedó reservado», sin Mercado Pago, y sigue al resultado", () => {
+    const html = renderToStaticMarkup(<PaymentInterstitial kind="reserved" amountCents={null} onContinue={() => {}} />);
+    expect(html).toMatch(/<h2[^>]*data-step-heading[^>]*>Tu turno quedó reservado<\/h2>/);
+    expect(html).toContain("No hace falta pagar online: lo arreglás en el consultorio.");
+    expect(html).toMatch(/<button[^>]*>[^<]*Ver mi turno/);
+    expect(html).not.toContain("Continuar a Mercado Pago");
+  });
+
+  it("[TP-ZF2] el interstitial trae su título enfocable (ZB-2: el foco no cae al body)", () => {
+    const html = renderToStaticMarkup(<PaymentInterstitial kind="amount" amountCents={900_000} onContinue={() => {}} />);
+    expect(html).toMatch(/<h2[^>]*data-step-heading[^>]*>Antes de ir a Mercado Pago<\/h2>/);
+    const src = readFileSync("components/booking/public-booking-wizard.tsx", "utf8");
+    expect(src).toMatch(/if \(interstitial\)[^\n]*focusStepHeading\(cardRef\.current\)/);
+  });
+
   it("el wizard cablea notice, interstitial y payNow", () => {
     const src = readFileSync("components/booking/public-booking-wizard.tsx", "utf8");
     expect(src).toContain('r.data.notice === "payment-unavailable"');

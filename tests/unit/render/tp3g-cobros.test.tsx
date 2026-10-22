@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
@@ -39,7 +39,7 @@ vi.mock("@/lib/bookings", () => ({
 }));
 vi.mock("@/lib/payment-links", () => ({ cancelPaymentLink: async () => ({ ok: true, data: { status: "CANCELLED" } }) }));
 
-import { CobrosClient, CobrosView, type CobrosViewProps } from "@/components/cobros/cobros-client";
+import { CobrosClient, CobrosView, afterCancel, type CobrosViewProps } from "@/components/cobros/cobros-client";
 import CobrosPage from "@/app/(app)/cobros/page";
 import { cobrosPeriodOptions, parseCobrosFilters } from "@/lib/cobros-view";
 import type { OnlineChargeView } from "@/lib/online-payments-types";
@@ -91,7 +91,11 @@ function render(p: Partial<CobrosViewProps> = {}) {
   );
 }
 
+afterEach(() => vi.unstubAllEnvs());
+
 beforeEach(() => {
+  // La página exige MP prendido (TP-ZF3); `sandbox` no depende de VERCEL_ENV como `fake`.
+  vi.stubEnv("MP_CONNECT_MODE", "sandbox");
   h.actor = { tenantId: "t1", userId: "u1", practitionerId: null, support: false };
   h.caps = new Set();
   h.listCalls = [];
@@ -230,5 +234,47 @@ describe("[TP-3g] la página: gate como la lectura", () => {
     h.caps = new Set(["agenda.viewAll"]);
     await expect(CobrosPage({})).rejects.toThrow("NEXT_REDIRECT");
     expect(h.listCalls).toEqual([]);
+  });
+});
+
+describe("[TP-ZF3] /cobros con MP_CONNECT_MODE=off", () => {
+  it("redirige a /dashboard sin leer, aun con `billing.collect`", async () => {
+    vi.stubEnv("MP_CONNECT_MODE", "off");
+    h.caps = new Set(["billing.collect"]);
+    await expect(CobrosPage({ searchParams: {} })).rejects.toThrow("NEXT_REDIRECT");
+    expect(h.redirected).toBe("/dashboard");
+    expect(h.listCalls).toEqual([]);
+  });
+
+  it("sin la variable (default `off`) también", async () => {
+    vi.stubEnv("MP_CONNECT_MODE", "");
+    h.caps = new Set(["billing.collect"]);
+    await expect(CobrosPage({})).rejects.toThrow("NEXT_REDIRECT");
+    expect(h.listCalls).toEqual([]);
+  });
+});
+
+describe("[TP-ZF3] anular parchea la fila en el lugar y a11y de las acciones", () => {
+  it("afterCancel: la fila queda «Anulado» sin link, el resto igual, y sale del «Por cobrar» si estaba viva", () => {
+    const rows = [charge({ id: "a" }), charge({ id: "b", amountCents: 600_000 }), charge({ id: "c", status: "PAID", statusLabel: "Pagado", link: null })];
+    const r = afterCancel(rows, { paidCents: 1_500_000, liveCount: 2, liveCents: 2_100_000 }, "b");
+    expect(r.rows.map((x) => x.id)).toEqual(["a", "b", "c"]);
+    expect(r.rows[1]).toMatchObject({ status: "CANCELLED", statusLabel: "Anulado", link: null });
+    expect(r.rows[0]).toBe(rows[0]);
+    expect(r.summary).toEqual({ paidCents: 1_500_000, liveCount: 1, liveCents: 1_500_000 });
+    // Una fila que no estaba viva no toca el resumen; un id que no está no cambia nada.
+    expect(afterCancel(rows, { paidCents: 0, liveCount: 2, liveCents: 2_100_000 }, "c").summary.liveCount).toBe(2);
+    expect(afterCancel(rows, { paidCents: 0, liveCount: 0, liveCents: 0 }, "zz").rows).toEqual(rows);
+  });
+
+  it("la fuente ya no relee solo la primera página después de anular", () => {
+    const src = readFileSync(join(process.cwd(), "components/cobros/cobros-client.tsx"), "utf8");
+    expect(src).not.toContain("reloadFirstPage");
+    expect(src).toMatch(/afterCancel\(rows, summary, id\)/);
+  });
+
+  it("cada acción de la fila dice de qué cobro es (aria-label con el concepto)", () => {
+    const html = render({ rows: [charge()] });
+    for (const a of ["Copiar", "Reenviar", "Anular"]) expect(html).toContain(`aria-label="${a} · Sesión de octubre"`);
   });
 });

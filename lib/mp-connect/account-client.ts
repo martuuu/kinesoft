@@ -4,7 +4,7 @@ import { mpConnectMode } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { mpFetch } from "@/lib/mp-connect/http";
 import { refreshTokens } from "@/lib/mp-connect/oauth-client";
-import { markAccountReauthRequired } from "@/lib/mp-connect/accounts-internal";
+import { markAccountReauthRequired, restoreActiveAfterRefresh } from "@/lib/mp-connect/accounts-internal";
 import { SecretBoxError, mpCredentialAad, openSecret, sealSecret, sealedKid, type MpCredentialField } from "@/lib/secret-box";
 import type { MpAccountKind, MpAccountStatus } from "@/lib/online-payments-types";
 
@@ -152,6 +152,8 @@ async function ensureAccessToken(
   // Perder el CAS no es un error: el token que nos dio MP es válido igual (lo que se pierde es nuestro refresh token,
   // y el que quedó guardado es el del ganador, que es el vigente para la próxima rotación).
   if (won.count === 0) logger.info("mp_connect.refresh.cas_lost", { accountId: account.id });
+  // TP-ZF1 (B5): si otro request marcó REAUTH mientras este refrescaba, el CAS ganador deja la cuenta sana.
+  else await restoreActiveAfterRefresh({ tenantId: account.tenantId, accountId: account.id, credentialVersion: cred.version + 1 }).catch(() => {});
   return { accessToken: r.accessToken, refreshed: true };
 }
 
