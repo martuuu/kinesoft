@@ -40,6 +40,8 @@ import {
   E2E_REPO_ROOT,
   E2E_USERS_FILE,
 } from "./e2e-constants.mjs";
+// TP-E (T5): los MISMOS literales del MP falso que `npm run dev:mpfake` y `tests/helpers/mp-connect-fake.ts`. Nunca de `.env*`.
+import { DEV_MPFAKE_LITERALS } from "../../../scripts/lib/dev-mp-fake-env.mjs";
 
 const APP_DIR = process.env.E2E_APP_DIR ?? E2E_REPO_ROOT;
 
@@ -53,6 +55,12 @@ function isLocalDb(u) {
 }
 if (!isLocalDb(process.env.DATABASE_URL) || !isLocalDb(process.env.DIRECT_URL ?? process.env.DATABASE_URL)) {
   console.error("e2e: DATABASE_URL/DIRECT_URL no son locales. Corré la suite con `npm run test:e2e` (usa .env.local).");
+  process.exit(2);
+}
+// TP-E: el canal service (`prismaService`, lib/db.ts) lee DATABASE_URL_SERVICE primero. El webhook de MP y el turnero
+// escriben por ahí: si viniera de otro lado que no sea localhost, no se arranca.
+if (process.env.DATABASE_URL_SERVICE !== undefined && !isLocalDb(process.env.DATABASE_URL_SERVICE)) {
+  console.error("e2e: DATABASE_URL_SERVICE no es local.");
   process.exit(2);
 }
 
@@ -249,9 +257,30 @@ const childEnv = {
   MAINTENANCE_MODE: "off",
   // TP-0: el turnero reserva sin cobro (el default; explícito para que un `.env` con `platform` no cambie la suite).
   TURNERO_CHECKOUT: "off",
+  // TP-E (T5): Mercado Pago FALSO para TODA la suite (un solo server). Las specs de cobro (mp-connect, turnero-cobro,
+  // payment-link) conectan la cuenta de prueba por el OAuth del simulador (`/api/mp/fake/*`, que vive en ESTE proceso)
+  // y pagan en su checkout; el webhook entra por la ruta real, firmado con este secreto de prueba (`required`, el
+  // default de prod). Para las specs de antes no cambia nada: sin `BookingPaymentPolicy` (OFF) el turnero reserva sin
+  // cobro y sin cuenta conectada no hay links. NUNCA sandbox ni live: el host de `mpFetch` sale de `NEXT_PUBLIC_APP_URL`
+  // (localhost) en modo fake.
+  MP_CONNECT_MODE: "fake",
+  MP_OAUTH_CLIENT_ID: DEV_MPFAKE_LITERALS.MP_OAUTH_CLIENT_ID,
+  MP_OAUTH_CLIENT_SECRET: DEV_MPFAKE_LITERALS.MP_OAUTH_CLIENT_SECRET,
+  MP_CONNECT_WEBHOOK_SECRET: DEV_MPFAKE_LITERALS.MP_CONNECT_WEBHOOK_SECRET,
+  MP_CONNECT_WEBHOOK_SIGNATURE: "required",
+  // Sin claves: secret-box usa la clave dev (solo fuera de Vercel), derivada del `SUPABASE_SERVICE_ROLE_KEY` de arriba.
+  SECRET_BOX_KEYS: "",
+  // Resto de lo que tiene efecto externo o apunta a prod, tapado igual que en `scripts/lib/dev-mp-fake-env.mjs`.
+  PROD_SUPABASE_REF: "",
+  PLATFORM_INBOX_EMAIL: "",
+  SAAS_BILLING_MODE: "off",
+  SENTRY_ORG: "",
+  SENTRY_PROJECT: "",
 };
-// `VERCEL_ENV` es un enum en lib/env.ts ("" no valida): se borra, que es lo que ve un build local.
-delete childEnv.VERCEL_ENV;
+// `VERCEL_ENV` es un enum en lib/env.ts ("" no valida): se borra, que es lo que ve un build local. TP-E: también
+// `VERCEL` y cualquier `VERCEL_*`: con cualquiera presente el boot rechaza `MP_CONNECT_MODE=fake` (es la barrera que se
+// quiere en Vercel, no acá).
+for (const k of Object.keys(childEnv)) if (k === "VERCEL" || k.startsWith("VERCEL_")) delete childEnv[k];
 // Las claves con efecto externo van en "" (no borradas): process.env gana sobre los `.env*` que carga Next, así que un
 // valor vacío acá tapa uno real del `.env` (que puede ser de PRODUCCIÓN).
 
