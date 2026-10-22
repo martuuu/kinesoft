@@ -14,6 +14,7 @@ import { deskViewer } from "@/lib/reception-desk-state";
 import { SalaClient } from "@/components/sala/sala-client";
 import { logger } from "@/lib/logger";
 import { moduleWall } from "@/lib/module-wall";
+import { mpConnectMode } from "@/lib/env";
 
 export const metadata = { title: "Sala de espera · KineSoft" };
 export const dynamic = "force-dynamic";
@@ -79,7 +80,8 @@ export default async function SalaPage() {
         return { id: p.id, name, initials: practitionerInitials(name) };
       })}
       rooms={rooms.map((r) => ({ id: r.id, name: r.name, capacity: r.capacity }))}
-      viewer={deskViewer(actor.practitionerId ?? null, caps)}
+      // T5 (TP-3f1): «Enviar link de pago» solo con los cobros online prendidos (0 sentencias).
+      viewer={deskViewer(actor.practitionerId ?? null, caps, mpConnectMode() !== "off")}
       initialGroupBy={prefs.salaGroupBy}
       initialLayout={prefs.receptionLayout}
       canReadClinical={caps.has("clinical.read")}

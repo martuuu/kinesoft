@@ -30,7 +30,7 @@ export function MobileBar({
 }: {
   /** Nombre visible del usuario (ya sin email, `displayUserName`). Sin nombre (tests), sin avatar. */
   userName?: string;
-  ownPublicBooking?: { practitionerId: string; enabled: boolean } | null;
+  ownPublicBooking?: { practitionerId: string; enabled: boolean; myMp?: boolean } | null;
   onOpenAppearance?: () => void;
 }) {
   return (

@@ -219,6 +219,7 @@ type Gates = {
 function gatesFor(actor: Actor, caps: ReadonlySet<Capability>): Gates {
   const tenantAdmin = caps.has("tenant.admin");
   const sensitive = caps.has("tenant.sensitive");
+  const onlineOn = mpConnectMode() !== "off";
   return {
     tenantAdmin,
     sensitive,
@@ -230,8 +231,10 @@ function gatesFor(actor: Actor, caps: ReadonlySet<Capability>): Gates {
     // `tenant.sensitive` sin `tenant.admin` no existe (los dos vienen de «Configuración»), pero no se asume.
     directory: tenantAdmin && sensitive && directoryMode() !== "off",
     fichas: !actor.support && !!actor.practitionerId && !!actor.membership && isClinicalMember(actor.membership),
-    onlinePayments: tenantAdmin && sensitive,
-    myMp: !actor.support && !!actor.practitionerId,
+    // TP-3z (decisión del orquestador, regla de Martin «lo que no tiene funcionalidad se quita»): con
+    // `MP_CONNECT_MODE=off` las dos pestañas no existen (ni sus lecturas: las cuentas no se piden).
+    onlinePayments: tenantAdmin && sensitive && onlineOn,
+    myMp: !actor.support && !!actor.practitionerId && onlineOn,
   };
 }
 

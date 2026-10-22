@@ -10,7 +10,7 @@ import {
   type CobrosFilters,
 } from "@/lib/cobros-view";
 import { isChargePeriod } from "@/lib/online-charges-view";
-import { navFor } from "@/lib/nav";
+import { bottomNavFor, NAV_ITEMS, navFor, shellNavCaps } from "@/lib/nav";
 import { capabilitiesFor } from "@/lib/capabilities";
 import { modulesFor } from "@/lib/tenant-modules";
 import type { OnlineChargeView } from "@/lib/online-payments-types";
@@ -184,5 +184,18 @@ describe("[TP-3g] nav con billing.collect (PRACTITIONER no)", () => {
     const it = navFor(kine, capabilitiesFor("OWNER")).find((i) => i.href === "/cobros");
     expect(it?.label).toBe("Cobros");
     expect(it?.capability).toBe("billing.collect");
+    expect(it?.icon).toBe("tag");
+  });
+
+  it("[TP-3z] con MP_CONNECT_MODE=off el shell no ve `billing.collect` (`shellNavCaps`): «Cobros» no está en ningún nav", () => {
+    const owner = [...capabilitiesFor("OWNER")];
+    const off = new Set(shellNavCaps(owner, false));
+    expect(navFor(kine, off).map((i) => i.href)).not.toContain("/cobros");
+    expect(bottomNavFor(kine, off).some((e) => e.kind === "link" && e.href === "/cobros")).toBe(false);
+    // Es lo ÚNICO que cambia: si otra entrada del shell empezara a depender de `billing.collect`, esto lo frena.
+    expect(navFor(kine, off).map((i) => i.href)).toEqual(navFor(kine, new Set(owner)).map((i) => i.href).filter((h) => h !== "/cobros"));
+    expect(NAV_ITEMS.filter((i) => i.capability === "billing.collect").map((i) => i.href)).toEqual(["/cobros"]);
+    // Con el modo prendido, las mismas caps.
+    expect(shellNavCaps(owner, true)).toEqual(owner);
   });
 });

@@ -65,8 +65,11 @@ export function TopbarAccountMenu({
   ownPublicBooking = null,
 }: {
   name: string;
-  /** Ficha propia del usuario y su `publicBookingEnabled`. null = no atiende (sin switch). */
-  ownPublicBooking?: { practitionerId: string; enabled: boolean } | null;
+  /**
+   * Ficha propia del usuario y su `publicBookingEnabled`. null = no atiende (sin switch). `myMp` (TP-3z): existe la
+   * pestaña «Mi Mercado Pago» (cobros online prendidos, lo decide el layout); sin él no hay ítem.
+   */
+  ownPublicBooking?: { practitionerId: string; enabled: boolean; myMp?: boolean } | null;
   /** Abre el panel «Apariencia» (sin el sidebar, es la única forma de llegar). */
   onOpenAppearance?: () => void;
   /** Solo para el test de render (sin jsdom no hay click). */
@@ -184,7 +187,7 @@ export function TopbarAccountMenu({
           )}
           {/* TP-3b: con ficha propia en el consultorio activo (soporte no tiene: su `practitionerId` es null). Ícono
               reusado (Configuración) para no sumar uno nuevo al layout de todas las rutas. */}
-          {ownPublicBooking && (
+          {ownPublicBooking?.myMp && (
             <a href={MY_MP_HREF} role="menuitem" style={itemStyle}>
               <IconSettings size={14} /> Mi Mercado Pago
             </a>

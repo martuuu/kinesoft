@@ -10,6 +10,7 @@ import { parseProfilePlanParams, type SearchParamsLike } from "@/lib/plans-deepl
 import { loadPatientProfilePage, profileNoteBookingId } from "@/lib/patient-profile-loader";
 import { PatientProfile, PatientAdminProfile } from "@/components/patients/patient-profile";
 import { PatientBasicView } from "@/components/patients/patient-basic-view";
+import { mpConnectMode } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 
@@ -77,6 +78,7 @@ export default async function PatientPage({
           insurers={insurers
             .filter((i) => !i.isParticular)
             .map((i) => ({ id: i.id, name: i.name, payerId: i.payerId }))}
+          onlinePayments={mpConnectMode() !== "off"}
         />
       </div>
     );
@@ -145,6 +147,8 @@ export default async function PatientPage({
         canWriteNotes={canWriteNotes}
         noteBookingId={noteBookingId}
         viewerPractitionerId={actor.practitionerId ?? null}
+        // TP-3f2/TP-3z: la card «Links de pago» de Facturación, solo con los cobros online prendidos (0 sentencias).
+        onlinePayments={mpConnectMode() !== "off"}
         noteBooking={
           noteBookingRow
             ? {

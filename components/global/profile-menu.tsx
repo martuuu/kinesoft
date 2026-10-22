@@ -69,8 +69,11 @@ export function ProfileMenu({
   name: string;
   preferences: Preferences;
   revenueScope?: KpiRevenueScope;
-  /** Ficha propia del usuario y su `publicBookingEnabled`. null = no atiende (sin switch). */
-  ownPublicBooking?: { practitionerId: string; enabled: boolean } | null;
+  /**
+   * Ficha propia del usuario y su `publicBookingEnabled`. null = no atiende (sin switch). `myMp` (TP-3z): existe
+   * «Mi Mercado Pago» (cobros online prendidos); sin él no hay ítem.
+   */
+  ownPublicBooking?: { practitionerId: string; enabled: boolean; myMp?: boolean } | null;
   /** Solo para el test de render (sin jsdom no hay click). */
   defaultOpen?: boolean;
 }) {
@@ -208,7 +211,7 @@ export function ProfileMenu({
           >
             <IconBell size={14} /> Ayuda y soporte
           </a>
-          {ownPublicBooking && (
+          {ownPublicBooking?.myMp && (
             <a
               href="/configuracion?tab=mercado-pago"
               role="menuitem"

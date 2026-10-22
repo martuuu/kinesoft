@@ -20,6 +20,7 @@ import {
   IconBookmark,
   IconPalette,
   IconPlans,
+  IconTag,
 } from "@/components/ui/icons";
 import { useCallback, useEffect, useMemo, useState, type ComponentType, type FocusEvent, type PointerEvent, type ReactNode } from "react";
 import { navFor, type NavIconKey, type NavItem } from "@/lib/nav";
@@ -48,6 +49,7 @@ export const NAV_ICONS: Record<NavIconKey, ComponentType<{ size?: number }>> = {
   settings: IconSettings,
   plans: IconPlans,
   bookmark: IconBookmark,
+  tag: IconTag,
 };
 
 export const CONFIG_HREF = "/configuracion";

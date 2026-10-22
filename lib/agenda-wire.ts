@@ -70,12 +70,8 @@ type Lookup = {
   insurers: InsurerLookup | undefined;
 };
 
-/**
- * El DTO con la plata online de T5. `BookingDTO` (components/agenda/agenda-utils.ts) todavía no declara estas claves
- * (handoff a quien es dueño de ese archivo); mientras tanto el cable las conoce acá y el DTO las lleva igual.
- */
-export type AgendaOnlineMoneyFields = { onlineDepositCents?: number; paidOnline?: boolean };
-type WireDTO = BookingDTO & AgendaOnlineMoneyFields;
+/** `BookingDTO` declara la plata online de T5 (`onlineDepositCents`/`paidOnline`, C-TP10) desde TP-3c. */
+type WireDTO = BookingDTO;
 
 type Field = {
   key: keyof WireDTO;

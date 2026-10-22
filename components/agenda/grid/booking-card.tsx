@@ -7,7 +7,6 @@ import { receptionCardBadge, waitingPulse, type WaitingPulse } from "@/lib/agend
 import { highlightState, type AgendaHighlight } from "@/lib/agenda-highlight";
 import { isOutOfPlan, planChip } from "@/lib/plan-display";
 import { cardMoneyBadge } from "@/lib/booking-money-badge";
-import type { AgendaOnlineMoneyFields } from "@/lib/agenda-wire";
 import type { Discipline } from "@/lib/plans-constants";
 import { DisciplineChip } from "@/components/planes/discipline-chip";
 import { fmtHour, type BookingDTO } from "../agenda-utils";
@@ -116,9 +115,8 @@ const outOfPlanStyle: CSSProperties = {
  * en el tooltip de la card. Sin `od`/`po` en el cable da `null` y la card queda con los mismos nodos que antes de T5.
  */
 export function MoneyBadge({ b }: { b: BookingDTO }) {
-  // `onlineDepositCents`/`paidOnline` llegan por el cable (`od`/`po`, C-TP10); el cast cubre hasta que `BookingDTO`
-  // los declare (TP-3c, `agenda-utils.ts`).
-  const m = cardMoneyBadge(b as BookingDTO & AgendaOnlineMoneyFields);
+  // `onlineDepositCents`/`paidOnline` llegan por el cable (`od`/`po`, C-TP10).
+  const m = cardMoneyBadge(b);
   return (
     m && (
       <span role="img" data-badge={m[0]} aria-label={m[2]} style={{ ...miniBadge, border: "1px solid", lineHeight: "12px" }}>

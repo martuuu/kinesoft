@@ -117,6 +117,23 @@ describe.skipIf(!RUN)("FX2a · listSalaBookings (PD-13 proyectado en el server)"
     expect(rows.map((r) => r.id)).toEqual(expect.arrayContaining([ids.owner, ids.kine]));
   });
 
+  it("[TP-3z] la sala ve la seña real del turno (`onlineDepositCents` del cable, como la agenda)", async () => {
+    // Lo escribe el trigger de M18 (`online_charge_sync_booking`) en prod; acá se pone directo en la columna: lo que
+    // se fija es la proyección (`agendaRowToDTO`), no el trigger (lo cubre `tpm-m18`). Antes `toBookingDTO` la
+    // perdía y el escritorio no descontaba la seña.
+    await db.booking.update({ where: { id: ids.owner }, data: { onlineDepositCents: 1_500_00 } });
+    try {
+      asUser(A.userId);
+      const rows = await listSalaBookings({ from: window.start, to: window.end });
+      expect(rows.find((r) => r.id === ids.owner)?.onlineDepositCents).toBe(1_500_00);
+      // Sin seña no viaja la clave (cable sin neutros).
+      expect(Object.keys(rows.find((r) => r.id === ids.kine)!)).not.toContain("onlineDepositCents");
+      expectNoClinical(rows);
+    } finally {
+      await db.booking.update({ where: { id: ids.owner }, data: { onlineDepositCents: 0 } });
+    }
+  });
+
   it("BILLING: no entra a la sala (error)", async () => {
     asUser(billing.userId);
     await expect(listSalaBookings({ from: window.start, to: window.end })).rejects.toThrow(/sala de espera/i);

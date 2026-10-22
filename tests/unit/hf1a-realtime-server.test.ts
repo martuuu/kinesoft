@@ -65,16 +65,13 @@ describe("[HF-1a] lib/env.ts recorta los secretos de realtime", () => {
     expect(e.NEXT_PUBLIC_SUPABASE_ANON_KEY).toBe("eyJ.a.b");
   });
 
-  it("[TP-0] TURNERO_CHECKOUT: default off, acepta platform (mayúsculas/espacios), typo frena; turneroCheckout() lee en caliente", async () => {
+  it("[TP-0] TURNERO_CHECKOUT: default off, acepta platform (mayúsculas/espacios), typo frena", () => {
+    // TP-3z: `turneroCheckout()` se borró (T5 cobra con la cuenta del profesional); el enum queda para no romper un
+    // deploy con el valor ya cargado (C-TP2).
     expect(parseEnv({}).TURNERO_CHECKOUT).toBe("off");
     expect(parseEnv({ TURNERO_CHECKOUT: "" }).TURNERO_CHECKOUT).toBe("off");
     expect(parseEnv({ TURNERO_CHECKOUT: " Platform\n" }).TURNERO_CHECKOUT).toBe("platform");
     expect(() => parseEnv({ TURNERO_CHECKOUT: "on" })).toThrow(/TURNERO_CHECKOUT/);
-    const { turneroCheckout } = await import("@/lib/env");
-    vi.stubEnv("TURNERO_CHECKOUT", "platform");
-    expect(turneroCheckout()).toBe("platform");
-    vi.stubEnv("TURNERO_CHECKOUT", "cualquiera");
-    expect(turneroCheckout()).toBe("off");
   });
 });
 

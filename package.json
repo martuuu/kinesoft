@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:mpfake": "dotenv -e .env.local -- node scripts/dev-mp-fake.mjs",
     "build": "prisma generate && next build",
     "start": "next start",
     "lint": "next lint",

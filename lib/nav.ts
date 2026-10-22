@@ -37,7 +37,8 @@ export type NavIconKey =
   | "chart" // IconChart (Seguimiento)
   | "settings" // IconSettings
   | "plans" // IconPlans (Planes)
-  | "bookmark"; // IconBookmark (Plataforma)
+  | "bookmark" // IconBookmark (Plataforma)
+  | "tag"; // IconTag (Cobros)
 
 export type NavItem = {
   href: string;
@@ -106,8 +107,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
   // muestra el estado vacío). Sin módulo: cobrar no depende del plan. El Profesional NO la ve en el nav (Anexo C 3g):
   // con `billing.collectOwn` puede abrir /cobros y ve solo lo suyo, pero sus cobros los encuentra en el turno y en
   // Facturación del paciente. Tiene capability → no es atajo del ⌘K (el ⌘K no conoce el rol).
-  // Ícono provisorio `bookmark` hasta que TP-3z sume uno propio de plata a `components/ui/icons.tsx` (handoff de TP-3g).
-  { href: "/cobros", label: "Cobros", icon: "bookmark", capability: "billing.collect" },
+  // TP-3z: ícono propio (`tag`). Sin cobros online (`MP_CONNECT_MODE=off`) no aparece: lo saca `shellNavCaps`.
+  { href: "/cobros", label: "Cobros", icon: "tag", capability: "billing.collect" },
   // PL-F1b: «Reportes» salió del nav y del ⌘K (regla de Martin: lo que no tiene funcionalidad se saca). La página era
   // un placeholder («Pendiente para una iteración posterior»); la ruta la redirige a /dashboard. El módulo `reportes`
   // queda en la matriz; su ícono `chart` lo usa Seguimiento desde PF1.0-a.
@@ -126,6 +127,18 @@ function allowed(
   // Falla cerrado: sin caps conocidas, una entrada que exige capability no se muestra.
   if (it.capability && !caps?.has(it.capability)) return false;
   return true;
+}
+
+/**
+ * TP-3z (decisión del orquestador, regla de Martin «lo que no tiene funcionalidad se quita»): las capabilities que el
+ * layout `(app)` le pasa al shell. Con `MP_CONNECT_MODE=off` se saca `billing.collect`, cuyo ÚNICO uso en el shell es
+ * la entrada «Cobros» del nav (sidebar, barra superior, barra inferior y su Drawer). Se resuelve en el server para no
+ * sumar un flag al contexto ni props al chrome: /agenda no tiene margen (§25.11) y cada byte del layout va a todas las
+ * rutas staff. Solo esconde UI: las actions chequean su capability con el actor real, no con esta lista. Si el shell
+ * empezara a usar `billing.collect` para otra cosa, esto hay que cambiarlo (lo fija `tp3g-cobros-view.test.ts`).
+ */
+export function shellNavCaps<C extends string>(caps: readonly C[], onlinePayments: boolean): C[] {
+  return onlinePayments ? [...caps] : caps.filter((c) => c !== "billing.collect");
 }
 
 /** Entradas visibles para los módulos del tenant (y las capabilities del rol). */

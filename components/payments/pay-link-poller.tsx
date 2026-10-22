@@ -43,6 +43,8 @@ export function PayLinkPoller({ active, resetHref }: { active: boolean; resetHre
   useEffect(() => {
     if (step !== "wait") return;
     const t = setTimeout(() => {
+      // refresh-ok: polling del estado que escribe el webhook de Mercado Pago (no hay action que revalide: la página
+      // es pública y el GET nunca escribe); cada vuelta re-renderiza el server component con el estado nuevo.
       router.refresh();
       setAttempts((a) => a + 1);
     }, PAY_LINK_POLL.intervalMs);

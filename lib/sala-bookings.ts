@@ -18,7 +18,7 @@
 import { z } from "zod";
 import { assertModule, requireCapability } from "@/lib/authz";
 import { listAgendaBookings } from "@/lib/bookings";
-import { toBookingDTO } from "@/components/agenda/agenda-utils";
+import { agendaRowToDTO } from "@/lib/agenda-wire";
 import { toSalaWire, type SalaWireRow } from "@/lib/sala-board-state";
 
 /**
@@ -37,5 +37,7 @@ export async function listSalaBookings(raw: { from: Date | string; to: Date | st
   assertModule(actor, "salaEspera");
   const q = SalaBookingsQuery.parse(raw);
   const rows = await listAgendaBookings({ from: q.from, to: q.to, includeCancelled: false });
-  return rows.map((r) => toSalaWire(toBookingDTO(r)));
+  // TP-3z: `agendaRowToDTO` (no `toBookingDTO` pelado) para que viajen la seña (`onlineDepositCents`) y `paidOnline`
+  // como en la agenda: sin esto el escritorio cobraba el copago entero de un turno con seña pagada.
+  return rows.map((r) => toSalaWire(agendaRowToDTO(r)));
 }

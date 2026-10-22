@@ -536,4 +536,17 @@ describe.skipIf(!RUN)("[TP-3a] /configuracion: «Cobros online» y «Mi Mercado 
     asUser(secretaryUserId);
     expect(await getOnlinePaymentsSettings()).toBeNull();
   });
+
+  it("[TP-3z] con MP_CONNECT_MODE=off no existen «Cobros online» ni «Mi Mercado Pago» (ni sus lecturas)", async () => {
+    const prev = process.env.MP_CONNECT_MODE;
+    process.env.MP_CONNECT_MODE = "off";
+    try {
+      const { result: r } = await load(T.userId);
+      expect(r.onlinePayments).toBeNull();
+      expect(r.myMp).toBeNull();
+      expect(r.previewServicePriceCents).toBeNull();
+    } finally {
+      process.env.MP_CONNECT_MODE = prev;
+    }
+  });
 });

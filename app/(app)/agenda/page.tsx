@@ -52,6 +52,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
     agendaView: rawPrefs,
     capabilities,
     availability,
+    onlineMoney,
   } = await loadAgendaPage(actor, { monday, patientId: searchParams.patient ?? null });
 
   // Preferencias contra lo que existe hoy: un favorito dado de baja o una sede
@@ -116,6 +117,9 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
       rooms={rooms}
       initialAvailability={availability}
       capabilities={capabilities}
+      // T5 (TP-3z): `mpConnectMode() !== "off"` resuelto en el loader sin sentencias (`agendaOnlineMoneyFor`); el
+      // drawer ofrece «Generar link de pago» solo si el consultorio cobra online.
+      onlineMoney={onlineMoney.enabled}
     />
   );
 }

@@ -254,9 +254,10 @@ describe.skipIf(!RUN)("[IAM-4a] Actor sin profesional para roles no clínicos", 
   it("[PL-Z FX4] el dashboard trae la ficha propia y su `publicBookingEnabled` (fuera del cache, al día)", async () => {
     asUser(kine.userId);
     await db.practitioner.update({ where: { id: kine.practitionerId }, data: { publicBookingEnabled: false } });
-    expect((await getDashboardData()).ownPublicBooking).toEqual({ practitionerId: kine.practitionerId, enabled: false });
+    // TP-3z: `myMp` false = sin MP_CONNECT_MODE (off) no existe «Mi Mercado Pago».
+    expect((await getDashboardData()).ownPublicBooking).toEqual({ practitionerId: kine.practitionerId, enabled: false, myMp: false });
     await db.practitioner.update({ where: { id: kine.practitionerId }, data: { publicBookingEnabled: true } });
-    expect((await getDashboardData()).ownPublicBooking).toEqual({ practitionerId: kine.practitionerId, enabled: true });
+    expect((await getDashboardData()).ownPublicBooking).toEqual({ practitionerId: kine.practitionerId, enabled: true, myMp: false });
   });
 
   it("[IAM-4a] Secretaria sin Practitioner abre el dashboard sin tirar y sin ingresos", async () => {

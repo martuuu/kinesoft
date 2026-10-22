@@ -39,9 +39,10 @@ import type { MyMpPanelProps } from "@/components/payments/payments-ui-types";
 type NoticeTone = "success" | "warn" | "danger";
 
 /**
- * Avisos de la vuelta del callback (`?mp=`, C-TP4). Viven acá y no en `lib/online-payments-copy.ts` porque ese archivo
- * no es de esta sesión (handoff a TP-3z: moverlos allá para que «Cobros online» de TP-3a use los mismos con la cuenta
- * del consultorio). `denied` es «warn» y no error: el usuario eligió no autorizar.
+ * Avisos de la vuelta del callback (`?mp=`, C-TP4). Viven acá y no en `lib/online-payments-copy.ts`: TP-3z midió que
+ * ese módulo no se recorta por export y todo lo que se le suma viaja a cada ruta cliente que lo importa (/cobros, el
+ * perfil, los drawers). La cuenta del consultorio tiene los suyos (`CLINIC_MP_RETURN_NOTICE`, otro texto y otro tono).
+ * `denied` es «warn» y no error: el usuario eligió no autorizar.
  */
 const MP_RETURN_NOTICE: Readonly<Record<MpConnectReturn, { tone: NoticeTone; text: string }>> = {
   ok: { tone: "success", text: "Listo: tu Mercado Pago quedó conectado." },

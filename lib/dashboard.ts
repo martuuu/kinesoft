@@ -5,6 +5,7 @@
  */
 "use server";
 
+import { mpConnectMode } from "@/lib/env";
 import { greetingFirstName } from "@/lib/display-name";
 import { unstable_cache } from "next/cache";
 import { runWithRls, type DbClient } from "@/lib/rls";
@@ -56,7 +57,7 @@ export type DashboardData = {
    * Profesional no tiene Configuración). `null` = el actor no tiene ficha de profesional (Secretaria, Admin que no
    * atiende). Se lee FUERA del `unstable_cache` de los counts: es por usuario y cambia con su propio toggle.
    */
-  ownPublicBooking: { practitionerId: string; enabled: boolean } | null;
+  ownPublicBooking: { practitionerId: string; enabled: boolean; myMp?: boolean } | null;
   todayCount: number;
   weeklyBars: { d: string; c: number; a: number }[];
   pinned: {
@@ -655,7 +656,10 @@ async function loadDashboard(
     return {
       accessMap,
       reminderDismissed: !!dismissed && dismissed.dismissedUntil > new Date(),
-      ownPublicBooking: own ? { practitionerId: own.id, enabled: own.publicBookingEnabled } : null,
+      // TP-3z: `myMp` = existe «Mi Mercado Pago» (cobros online prendidos): el menú de perfil ofrece el ítem solo así.
+      ownPublicBooking: own
+        ? { practitionerId: own.id, enabled: own.publicBookingEnabled, myMp: mpConnectMode() !== "off" }
+        : null,
       monthRevenue,
       revenue,
       bookingDays,

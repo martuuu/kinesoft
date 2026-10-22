@@ -7,7 +7,8 @@ import { UIProviders } from "@/components/providers/ui-providers";
 import type { Palette } from "@/lib/preferences-constants";
 import { AppShell } from "@/components/layout/app-shell";
 import { getAccessSnapshot, getSessionBlock, tryGetActor } from "@/lib/session";
-import { tenantAccessEnforcement } from "@/lib/env";
+import { mpConnectMode, tenantAccessEnforcement } from "@/lib/env";
+import { shellNavCaps } from "@/lib/nav";
 import { AccessBanner, bannerAudienceFor } from "@/components/layout/access-banner";
 import { ReadOnlyWriteGuard } from "@/components/layout/read-only-write-guard";
 import { canWrite, effectiveMode } from "@/lib/tenant-access";
@@ -137,6 +138,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // el actor tiene ficha (misma query que `lib/dashboard.ts`); el soporte no tiene ficha propia en el destino.
   // PF-Z (`layout-app-tx-en-serie`): arranca en paralelo con las preferencias; antes esperaba a que terminaran y
   // sumaba una ida y vuelta a la base al primer byte de TODAS las páginas.
+  // TP-3z: cobros online prendidos (0 sentencias). Con el modo `off` no hay «Cobros» ni «Mi Mercado Pago».
+  const onlinePayments = mpConnectMode() !== "off";
   let practitionerId: string | null = null;
   if (!actor.support) practitionerId = actor.practitionerId;
   const ownPublicBookingP = practitionerId
@@ -145,7 +148,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           where: { id: practitionerId, tenantId: actor.tenantId },
           select: { id: true, publicBookingEnabled: true },
         })
-      ).then((p) => (p ? { practitionerId: p.id, enabled: p.publicBookingEnabled } : null))
+      ).then((p) =>
+        // TP-3z: `myMp` = existe la pestaña «Mi Mercado Pago» (cobros online prendidos); sin él el menú de cuenta no
+        // ofrece el ítem. Viaja en el mismo objeto para no sumar props al chrome (bytes de todas las rutas staff).
+        p ? { practitionerId: p.id, enabled: p.publicBookingEnabled, myMp: onlinePayments } : null
+      )
     : Promise.resolve(null);
   // Seed the Tweaks context with the user's persisted agenda preferences so
   // the week view + the Tweaks panel render the right state on first paint.
@@ -162,6 +169,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // Secretaria con «Configuración» no lo veía. Es la misma función que usan las actions.
   const capSet = await capabilitiesForActor(actor);
   const caps = Array.from(capSet);
+  // TP-3z: sin cobros online, el shell no ve `billing.collect` → no hay «Cobros» en el nav (`shellNavCaps`).
+  const navCaps = shellNavCaps(caps, onlinePayments);
   // SV07b: qué driver realtime usa este actor (off/local/supabase) y, con
   // supabase, la URL y la anon key públicas. Se le pasan las caps ya calculadas
   // para no releer la membresía; el token del canal lo pide el cliente aparte.
@@ -208,7 +217,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           ownPublicBooking={ownPublicBooking}
           modules={modules}
           vertical={actor.entitlements.vertical}
-          caps={caps}
+          caps={navCaps}
           realtime={realtime}
           alertViewer={alertViewer}
           initialAlertPrefs={initialAlertPrefs}

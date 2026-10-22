@@ -36,7 +36,7 @@ export function TopBar({
   ownPublicBooking = null,
 }: {
   /** PL-F: switch del turnero propio en el menú de cuenta (null = no atiende). */
-  ownPublicBooking?: { practitionerId: string; enabled: boolean } | null;
+  ownPublicBooking?: { practitionerId: string; enabled: boolean; myMp?: boolean } | null;
   caps?: readonly Capability[];
   isPlatformAdmin?: boolean;
   /** `actor.practitionerName` (pasa por `displayUserName`: nunca el email, decisión 19). */

@@ -103,7 +103,7 @@ export function AppShell({
   /** PL-F1c: nombre visible del usuario (ya sin email, `displayUserName`). */
   userName?: string;
   /** PL-F: ficha propia y su `publicBookingEnabled` para el switch del menú de cuenta del topbar. null = no atiende. */
-  ownPublicBooking?: { practitionerId: string; enabled: boolean } | null;
+  ownPublicBooking?: { practitionerId: string; enabled: boolean; myMp?: boolean } | null;
   children: ReactNode;
   /** BO3-F: banda de soporte (null fuera de soporte). */
   banner?: ReactNode;

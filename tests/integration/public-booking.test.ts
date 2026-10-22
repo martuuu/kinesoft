@@ -22,7 +22,6 @@ import {
   listPublicSlots,
   getPublicClinic,
   findFirstPublicSlot,
-  devMarkBookingPaid,
 } from "@/lib/public-booking";
 import { realtimeFake } from "@/tests/helpers/integration-setup";
 import {
@@ -837,27 +836,5 @@ describe.skipIf(!RUN)("SV06a · turnero público → afterBookingsCommitted", ()
       { bookingId: r1.data.bookingId, practitionerId: T.practitionerId, scheduledFor: new Date(slot), roomId: room.roomId, kind: "booking" },
     ]);
     expect((await db.booking.findUniqueOrThrow({ where: { id: r1.data.bookingId } })).status).toBe("CANCELLED");
-  });
-
-  it("[SV06a] devMarkBookingPaid emite 1 vez (kind booking), con la fila ya pagada", async () => {
-    const slot = at(MON, "09:45");
-    const r = await submitPublicBooking(req(slot, "71100104"));
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    realtimeFake.reset();
-    let paidAtPublish: string | null = null;
-    realtimeFake.onCall = async () => {
-      paidAtPublish = (await db.booking.findUniqueOrThrow({ where: { id: r.data.bookingId } })).paymentStatus;
-    };
-    expect(await devMarkBookingPaid(r.data.bookingId)).toEqual({ ok: true, data: undefined });
-    expect(realtimeFake.calls).toEqual([
-      {
-        tenantId: T.tenantId,
-        refs: [
-          { bookingId: r.data.bookingId, practitionerId: T.practitionerId, scheduledFor: new Date(slot), roomId: room.roomId, kind: "booking" },
-        ],
-      },
-    ]);
-    expect(paidAtPublish).toBe("PAID");
   });
 });

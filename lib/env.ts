@@ -197,7 +197,7 @@ const schema = z.object({
   //              pagar y fallaba con precio $0, así que el turnero no dejaba terminar ninguna reserva.
   //   platform = se cobra con la cuenta de la plataforma (solo para probar o con acuerdo explícito), si además el monto
   //              llega al mínimo y MP está configurado (`decidePublicCheckout`).
-  // Lo lee `turneroCheckout()` (process.env en cada llamada), no este objeto congelado. Un typo frena el deploy.
+  // TP-3z: `turneroCheckout()` se borró (nadie lo leía); solo queda el aviso de boot de abajo. Un typo frena el deploy.
   TURNERO_CHECKOUT: z.preprocess(
     (v) => (typeof v === "string" ? emptyAsUndefined(v.trim().toLowerCase()) : v),
     z.enum(["off", "platform"]).default("off")
@@ -548,17 +548,6 @@ export function saasBillingMode(): SaasBillingMode {
 export function saasBillingTransferInfo(): string | null {
   const v = process.env.SAAS_BILLING_TRANSFER_INFO?.trim();
   return v ? v.slice(0, 500) : null;
-}
-
-/**
- * DEPRECADO (TP-P4, C-TP2): lo deja de leer TP-2c (el turnero de T5 decide con `mpConnectMode()` + la cuenta del
- * profesional) y se borra al cerrar T5; no sumar lectores nuevos.
- * `TURNERO_CHECKOUT` vigente (TP-0), leído en cada llamada: los tests de `public-booking*` lo prenden en el hoisted y
- * `env` se congela al importar. Cualquier valor que no sea `platform` → `off` (el boot ya rechazó uno inválido; ante
- * la duda no se cobra con la cuenta de la plataforma).
- */
-export function turneroCheckout(): "off" | "platform" {
-  return process.env.TURNERO_CHECKOUT?.trim().toLowerCase() === "platform" ? "platform" : "off";
 }
 
 export type MpConnectMode = "off" | "fake" | "sandbox" | "live";

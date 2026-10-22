@@ -173,7 +173,7 @@ describe("[TP-3b] flujos de los botones (la action real está mockeada: es la re
 });
 
 describe("[TP-3b] ítem «Mi Mercado Pago» del menú de cuenta (solo con profesional propio)", () => {
-  const OWN = { practitionerId: "pr-1", enabled: true };
+  const OWN = { practitionerId: "pr-1", enabled: true, myMp: true };
   const inTenant = (ui: ReactElement) =>
     renderToStaticMarkup(
       <TenantModulesProvider
@@ -204,5 +204,14 @@ describe("[TP-3b] ítem «Mi Mercado Pago» del menú de cuenta (solo con profes
     expect(text(own)).toContain(MP_CONNECT_COPY.myMpTab);
     const none = inTenant(<ProfileMenu name="Ana Pérez" preferences={DEFAULT_PREFERENCES} ownPublicBooking={null} defaultOpen />);
     expect(none).not.toContain("Mi Mercado Pago");
+  });
+
+  it("[TP-3z] con MP_CONNECT_MODE=off (el layout y el tablero mandan la ficha sin `myMp`) no aparece en ningún menú", () => {
+    const off = { practitionerId: "pr-1", enabled: true, myMp: false };
+    const top = inTenant(<TopbarAccountMenu name="Ana Pérez" ownPublicBooking={off} defaultOpen />);
+    expect(top).not.toContain("tab=mercado-pago");
+    expect(top).toContain("Mi perfil público"); // el resto del menú sigue
+    const prof = inTenant(<ProfileMenu name="Ana Pérez" preferences={DEFAULT_PREFERENCES} ownPublicBooking={off} defaultOpen />);
+    expect(prof).not.toContain("tab=mercado-pago");
   });
 });

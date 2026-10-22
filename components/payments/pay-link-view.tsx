@@ -16,7 +16,7 @@
  *     server dice un estado final, ese es el que se ve. `?r=failed` solo suma un aviso arriba del botón.
  *
  * Marco y estilos: `BookingFrame` + `booking-result.module.css`, los del resultado del turnero (VX2-d2). El paciente
- * llega desde el consultorio: arriba va la marca del consultorio y KineSoft queda chico en el pie.
+ * llega desde el consultorio: arriba va la marca del consultorio y la de la app (`BRAND_NAME`) queda chica en el pie.
  */
 import type { ReactNode } from "react";
 import { BookingFrame } from "@/components/booking/booking-unavailable";
@@ -38,7 +38,8 @@ export type PayLinkReturn = "ok" | "failed" | "pending";
 
 /**
  * Copy de `/pagar`. Default de TP-3i (el brief fija solo «¡Pago recibido!» y «ya no está disponible»): para que Martin
- * lo confirme. Handoff: mudarlo a `lib/online-payments-copy.ts` (TP-3z/TP-ZD), que no es de esta sesión.
+ * lo confirme. Queda acá y no en `lib/online-payments-copy.ts` (TP-3z lo midió): ese módulo no se recorta por export y
+ * cada ruta cliente que lo importa (/cobros, el perfil, los drawers) arrastraría este copy entero (+~0,4 kB en /cobros).
  */
 export const PAY_LINK_COPY = {
   payable: {

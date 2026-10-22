@@ -241,6 +241,11 @@ export type PatientProfileProps = {
    * toggle de copago solo donde el server lo acepta (`canCollectCopago`: un profesional cobra sus turnos).
    */
   viewerPractitionerId?: string | null;
+  /**
+   * TP-3f2/TP-3z: el consultorio cobra online (`mpConnectMode() !== "off"`, lo decide la página sin sentencias). Sin
+   * esto Facturación no monta la card «Links de pago».
+   */
+  onlinePayments?: boolean;
 };
 
 export function PatientProfile({
@@ -264,6 +269,7 @@ export function PatientProfile({
   noteBookingId = null,
   noteBooking = null,
   viewerPractitionerId = null,
+  onlinePayments = false,
 }: PatientProfileProps) {
   const modules = useTenantModules();
   const toast = useToast();
@@ -722,6 +728,9 @@ export function PatientProfile({
               showPlanTitles={showPlanTitles}
               onBillingChanged={reloadBalances}
               billingAccess={billingAccess}
+              patientId={patient.id}
+              onlinePayments={onlinePayments}
+              linkPractitioners={practitioners}
             />
           )}
           {tab === "actividad" && <ActivityView patientId={patient.id} />}
@@ -825,6 +834,7 @@ export function PatientAdminProfile({
   capabilities = [],
   viewerPractitionerId = null,
   insurers = [],
+  onlinePayments = false,
 }: {
   patient: PatientAdminCore;
   initialBookings: AdminBookingsPage;
@@ -841,6 +851,8 @@ export function PatientAdminProfile({
   viewerPractitionerId?: string | null;
   /** T3d-1u: obras sociales activas para «Editar datos» (la página las pide solo con `patients.editAdmin`). */
   insurers?: InsurerOption[];
+  /** TP-3f2/TP-3z: el consultorio cobra online (la card «Links de pago» de Facturación). */
+  onlinePayments?: boolean;
 }) {
   const plansEnabled = useTenantModules().has("planes");
   const canEdit = capabilities.includes("patients.editAdmin");
@@ -936,6 +948,8 @@ export function PatientAdminProfile({
           showPlanTitles={false}
           onBillingChanged={reloadBalances}
           billingAccess={billingAccess}
+          patientId={patient.id}
+          onlinePayments={onlinePayments}
         />
       )}
 
