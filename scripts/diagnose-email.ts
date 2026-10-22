@@ -74,6 +74,7 @@ import {
   leadReceivedEmail,
   leadReplyEmail,
 } from "../lib/email/templates-support";
+import { paymentLinkEmail } from "../lib/email/templates-payments";
 
 const TENANT = "Consultorio de prueba";
 
@@ -176,6 +177,15 @@ function samples(base: string): Record<DiagnosableKind, () => RenderedEmail> {
         url: link("/plataforma/mensajes/diagnostico"),
       }),
     lead_reply: () => leadReplyEmail({ name: "Laura Ramos", subject: "Consulta de Laura Ramos", body: "Hola, te cuento los precios…" }),
+    // T5 (TP-2d): link de pago al paciente. Token de prueba de 22 caracteres (no es de ningún cobro real).
+    payment_link: () =>
+      paymentLinkEmail({
+        tenantName: TENANT,
+        practitionerName: "Laura Ramos",
+        amountCents: 2_000_000,
+        url: link("/pagar/diagnosticoDePrueba012"),
+        expiresAt: inAWeek,
+      }),
   };
 }
 

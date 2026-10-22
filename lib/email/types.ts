@@ -46,7 +46,10 @@ export type EmailKind =
   // T4-Y (T5a, decisión de Martin 22-oct): al mismo paciente, «un documento que te compartieron ya no está porque fue
   // modificado; pedilo de nuevo». Sale cuando anular una ficha (raíz o enmienda) revoca su documento compartido. Mismas
   // reglas que `portal_document`: sin título, sin motivo de anulación, sin nada clínico.
-  | "portal_document_revoked";
+  | "portal_document_revoked"
+  // T5 (TP-2d, C-TP9): al paciente, el link de pago que generó el consultorio. SIN concepto ni datos clínicos (TP-D27):
+  // el concepto lo escribe el staff a mano y puede ser clínico; el mail lo lee cualquiera con acceso al buzón.
+  | "payment_link";
 
 /**
  * Por dónde salió (o no) un mail:
