@@ -30,6 +30,9 @@ export const BUNDLE_GROUPS = [
       // DIR-3a: directorio público (mismas reglas que la landing: sin providers ni framer).
       /^\/profesionales/,
       /^\/consultorios\//,
+      // TP-3i (§25.2 hallazgo 14): link de pago `/pagar/[token]`. Sin el match caía en `workspace` (180): es la página
+      // que el paciente abre desde WhatsApp o el mail, server sin providers ni framer (guard de superficies públicas).
+      /^\/pagar\//,
     ],
   },
   { id: "turnero", budget: 135, blocking: true, match: [/^\/c\/\[slug\]\/booking/, /^\/booking\//] },

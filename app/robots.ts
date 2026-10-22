@@ -11,7 +11,8 @@ import { directoryMode } from "@/lib/directory-mode";
  * resultado de pago `/booking/<id>/*` y el portal. robots.txt NO es control de acceso (lo es la sesión);
  * sirve para que no aparezcan en resultados ni gasten crawl.
  *
- * La lista de la app sale de `app/(app)/*`: si se agrega un segmento nuevo de la app, sumarlo acá.
+ * La lista de la app sale de `app/(app)/*`: si se agrega un segmento nuevo de la app, sumarlo acá (desde TP-3i lo
+ * exige `tests/unit/robots-sitemap.test.ts`, que la compara con el árbol real).
  *
  * DIR-3b (C-DIR2):
  *   • `/cuenta` (seguridad, perfil público de la persona) va al disallow en TODOS los modos: está detrás de sesión y
@@ -36,6 +37,8 @@ const APP_SEGMENTS = [
   "/terapia-manual",
   "/reportes",
   "/configuracion",
+  // TP-3g: listado de cobros online. Lo fija `robots-sitemap.test.ts` contra el árbol real de `app/(app)/*`.
+  "/cobros",
 ];
 
 const ROBOTS_DISALLOW = [
@@ -50,6 +53,9 @@ const ROBOTS_DISALLOW = [
   "/auth/",
   "/reset",
   "/booking/",
+  // TP-3i (§25.2 hallazgo 14): el link de pago lleva el token en la URL, como `/invite/` y `/booking/`. La página
+  // además dice `noindex`; el disallow evita que se gaste crawl en tokens que circulan por WhatsApp y mail.
+  "/pagar/",
   "/cuenta",
 ];
 

@@ -57,6 +57,14 @@ describe("[VX F-e] scripts/bundle-groups.mjs", () => {
     expectGroup("/portal/c/[slug]", "portal");
   });
 
+  // [TP-3i] §25.2 hallazgo 14: `/pagar/[token]` caía en `workspace` (180 kB). Es la página que abre el paciente desde
+  // WhatsApp o el mail, a menudo en datos móviles: mismo presupuesto que el resto de lo público (≤120, bloqueante).
+  it("[TP-3i] /pagar/[token] → public (120, bloqueante); /pagarx no", () => {
+    expectGroup("/pagar/[token]", "public");
+    expect(groupFor("/pagar/[token]")).toMatchObject({ budget: 120, blocking: true });
+    expectGroup("/pagarx", "workspace");
+  });
+
   it("workspace es el comodín final: toda ruta tiene grupo", () => {
     expect(BUNDLE_GROUPS.at(-1)?.id).toBe("workspace");
     expect(groupFor("/cualquier/cosa")?.id).toBe("workspace");

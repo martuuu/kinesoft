@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import robots from "@/app/robots";
 import sitemap from "@/app/sitemap";
 import { env } from "@/lib/env";
@@ -44,6 +46,22 @@ describe("robots", () => {
 
   it("no bloquea por accidente la landing, el login ni el turnero", () => {
     for (const p of ["/", "/login", "/c/"]) expect(disallow).not.toContain(p);
+  });
+
+  // [TP-3i] §25.2 hallazgo 14: el link de pago lleva un token en la URL (como `/invite/` y `/booking/`); la página
+  // además lleva `noindex`. `/cobros` (TP-3g) es un segmento nuevo de la app.
+  it("[TP-3i] bloquea /pagar/ y /cobros", () => {
+    expect(disallow).toContain("/pagar/");
+    expect(disallow).toContain("/cobros");
+  });
+
+  // [TP-3i] La lista de la app se mantenía a mano («si se agrega un segmento nuevo, sumarlo acá»): ahora se afirma
+  // contra el árbol real de `app/(app)/*`, así un segmento nuevo que nadie sume al disallow rompe acá.
+  it("[TP-3i] todo segmento de app/(app)/* está en el disallow", () => {
+    const dir = join(process.cwd(), "app", "(app)");
+    const segments = readdirSync(dir).filter((f) => statSync(join(dir, f)).isDirectory() && !f.startsWith("("));
+    expect(segments.length).toBeGreaterThan(5);
+    for (const seg of [...segments, "cobros"]) expect(disallow, seg).toContain(`/${seg}`);
   });
 
   it("apunta al sitemap absoluto del dominio de la app", () => {
