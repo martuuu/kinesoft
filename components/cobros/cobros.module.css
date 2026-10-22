@@ -1,0 +1,231 @@
+/* [TP-3g] /cobros (§25.10): resumen, filtros, tabla desde 768 px y cards a 390 (un solo markup: la <table> se vuelve
+   una lista de cards bajo 768 px, así el lector de pantalla y el DOM no duplican filas). */
+.page {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+.summaryItem {
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: var(--r-md);
+  background: #fff;
+  border: 1px solid rgba(15, 30, 51, 0.08);
+  min-width: 0;
+}
+.summaryItem dt {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--navy-400);
+}
+.summaryItem dd {
+  margin: 4px 0 0;
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  color: var(--navy-900);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.summaryHint {
+  display: block;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--navy-500);
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--space-2) var(--space-3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.filter {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--navy-700);
+}
+.filters[aria-busy="true"] {
+  opacity: 0.7;
+}
+
+.empty {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+  padding: 28px 20px;
+  border-radius: var(--r-md);
+  background: #fff;
+  border: 1px dashed var(--navy-100);
+}
+.empty h2 {
+  margin: 0;
+  font-size: var(--fs-lg);
+  color: var(--navy-900);
+}
+.empty p {
+  margin: 0;
+  color: var(--navy-500);
+  max-width: 60ch;
+}
+
+/* ── Tabla (≥ 768 px) ───────────────────────────────────────────────────────────────────────────────────────────── */
+.tableWrap {
+  min-width: 0;
+  border-radius: var(--r-md);
+  background: #fff;
+  border: 1px solid rgba(15, 30, 51, 0.08);
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+.table th {
+  text-align: left;
+  padding: 10px 12px;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--navy-400);
+  border-bottom: 1px solid rgba(15, 30, 51, 0.08);
+}
+.table td {
+  padding: 12px;
+  vertical-align: top;
+  color: var(--navy-700);
+  border-top: 1px solid rgba(15, 30, 51, 0.06);
+  min-width: 0;
+}
+.amount {
+  font-weight: 650;
+  color: var(--navy-900);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.title {
+  font-weight: 600;
+  color: var(--navy-900);
+  overflow-wrap: anywhere;
+}
+.meta {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-xs);
+  color: var(--navy-500);
+}
+.notices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.notice {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--danger-fg);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.more {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+}
+.error {
+  margin: 0;
+  color: var(--danger-fg);
+}
+
+/* ── Cards (< 768 px; a 390 una columna sin scroll horizontal) ──────────────────────────────────────────────────── */
+@media (max-width: 767.98px) {
+  .summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tableWrap {
+    background: transparent;
+    border: 0;
+  }
+  .table,
+  .table tbody {
+    display: block;
+  }
+  .table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 12px;
+    padding: 14px 16px;
+    margin-bottom: var(--space-2);
+    border-radius: var(--r-md);
+    background: #fff;
+    border: 1px solid rgba(15, 30, 51, 0.08);
+  }
+  .table td {
+    display: block;
+    padding: 0;
+    border: 0;
+  }
+  .cellConcept {
+    grid-column: 1;
+  }
+  .cellAmount {
+    grid-column: 2;
+    grid-row: 1;
+    text-align: right;
+  }
+  .cellStatus {
+    grid-column: 1 / -1;
+  }
+  .cellPractitioner,
+  .cellDate {
+    grid-column: 1 / -1;
+    font-size: var(--fs-xs);
+    color: var(--navy-500);
+  }
+  .cellPractitioner::before,
+  .cellDate::before {
+    content: attr(data-label) ": ";
+    font-weight: 600;
+  }
+  .cellActions {
+    grid-column: 1 / -1;
+  }
+  .actions {
+    justify-content: flex-start;
+  }
+  /* 44 px de blanco táctil en mobile (MB-0d). */
+  .actions :global(.k-btn) {
+    min-height: 44px;
+  }
+}

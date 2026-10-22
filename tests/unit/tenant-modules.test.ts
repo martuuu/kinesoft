@@ -294,6 +294,8 @@ describe("nav único (C-EV2)", () => {
       "/seguimiento",
       "/biblioteca",
       "/terapia-manual",
+      // [TP-3g] Cobros online: con `billing.collect`, antes de Configuración.
+      "/cobros",
       "/configuracion",
     ]);
   });

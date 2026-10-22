@@ -102,6 +102,12 @@ export const NAV_ITEMS: readonly NavItem[] = [
   // Terapia manual = biblioteca de maniobras: es la parte "kine" de la
   // biblioteca, sin módulo propio en la matriz → va con `ejercicios`.
   { href: "/terapia-manual", label: "Terapia Manual", icon: "activity", module: "ejercicios" },
+  // [TP-3g] Cobros online (T5, §25.10; TP-UI-D7): SIEMPRE con `billing.collect`, aunque no haya cobros (la página
+  // muestra el estado vacío). Sin módulo: cobrar no depende del plan. El Profesional NO la ve en el nav (Anexo C 3g):
+  // con `billing.collectOwn` puede abrir /cobros y ve solo lo suyo, pero sus cobros los encuentra en el turno y en
+  // Facturación del paciente. Tiene capability → no es atajo del ⌘K (el ⌘K no conoce el rol).
+  // Ícono provisorio `bookmark` hasta que TP-3z sume uno propio de plata a `components/ui/icons.tsx` (handoff de TP-3g).
+  { href: "/cobros", label: "Cobros", icon: "bookmark", capability: "billing.collect" },
   // PL-F1b: «Reportes» salió del nav y del ⌘K (regla de Martin: lo que no tiene funcionalidad se saca). La página era
   // un placeholder («Pendiente para una iteración posterior»); la ruta la redirige a /dashboard. El módulo `reportes`
   // queda en la matriz; su ícono `chart` lo usa Seguimiento desde PF1.0-a.
