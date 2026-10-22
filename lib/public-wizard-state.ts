@@ -152,6 +152,22 @@ export function reconcileSelection(
   return { practitionerId, serviceId };
 }
 
+/**
+ * Hasta dos iniciales del nombre del consultorio, para el monograma del nav. Copia de `clinicInitials` de
+ * `components/booking/booking-unavailable.tsx` (paridad en `tests/unit/public-wizard-state.test.ts`): importarla de ahí
+ * metía en el chunk de la página del turnero todo `BookingFrame` y el mapa de clases de `booking-result.module.css`
+ * (~1,1 kB gz, medido con `perf:bundle --explain` en TP-3h) por una función de 6 líneas.
+ */
+export function clinicInitials(name: string): string {
+  return name
+    .split(/\s+/)
+    .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ""))
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]!.toUpperCase())
+    .join("");
+}
+
 // ─── Estado inicial y deep link (DIR-2d, C-DIR7) ──────────────────────
 
 /** Pasos del wizard: 0 Profesional · 1 Servicio · 2 Fecha y hora · 3 Tus datos. */
@@ -255,15 +271,72 @@ export function nextDayKey(dayKey: string): string {
   return addDays(dayKey, 1);
 }
 
-// ─── Cobro online o reserva sin cobro (TP-0) ───────────────────────────
+// ─── Cobro online o reserva sin cobro (TP-0 → T5, TP-3h) ──────────────
 
 /**
- * Piso del cobro online, el mismo de `decidePublicCheckout` (TP-0a, `MIN_ONLINE_CHARGE_CENTS = 100`): bajo $1 el server
- * no arma preferencia aunque el consultorio cobre online. Va repetido acá y no importado porque este módulo entra al
- * bundle del turnero (presupuesto ≤135 kB gz) y no tiene que arrastrar nada del lado server (hoy es puro, mañana puede
- * leer env); la paridad la fija el test `[TP-0] checkoutCopyFor · mismo piso que el server`.
+ * Cobro online que el wizard le ofrece a ESTE turno (C-TP8: `PublicClinic.onlinePayment`). null = sin cobro: política
+ * OFF/ausente, el profesional elegido sin cuenta usable (`practitionerIds`) o un monto bajo $1. Se cotiza con el precio
+ * del servicio; el server cobra sobre el copago resuelto del paciente y, si da otro monto, el wizard muestra el
+ * interstitial antes de ir a Mercado Pago (TP-UI-D6, `amountDiffers`).
  */
-const MIN_ONLINE_CHARGE_CENTS = 100;
+export type WizardOnlinePayment = {
+  mode: "OPTIONAL" | "REQUIRED";
+  quote: { amountCents: number; chargeKind: "FULL" | "DEPOSIT" };
+  cancellationNote: string | null;
+};
+
+export function wizardOnlinePaymentFor(
+  clinic: PublicClinic,
+  practitionerId: string | null,
+  priceCents: number
+): WizardOnlinePayment | null {
+  const op = clinic.onlinePayment;
+  if (!op || !practitionerId || !op.practitionerIds.includes(practitionerId)) return null;
+  const quote = quoteTurnero(op, priceCents);
+  return quote && { mode: op.mode, quote, cancellationNote: op.cancellationNote?.trim() || null };
+}
+
+/**
+ * Copia de la regla de montos de `quoteOnlineCharge` (`lib/online-charge-logic.ts`, TP-P3), con paridad fijada por
+ * `tests/unit/public-wizard-state.test.ts` sobre una matriz de políticas y precios. No se importa porque webpack no
+ * recorta exports de un módulo compartido entre rutas: importar `online-charge-logic` metía el módulo entero en el
+ * first load del turnero (+0,65 kB gz medido con `perf:bundle --explain` en TP-3h, techo ≤115 kB, §25.11).
+ * Base inválida o política mal formada → null (el server no cobra); < $1 o > $1.000.000 → null; ≥ valor → FULL por el
+ * valor.
+ */
+function quoteTurnero(
+  p: { chargeKind: "COPAGO" | "FIXED" | "PERCENT"; fixedCents: number | null; percentBps: number | null },
+  base: number
+): WizardOnlinePayment["quote"] | null {
+  if (!Number.isInteger(base) || base < 0) return null;
+  let cents = base;
+  if (p.chargeKind === "FIXED") {
+    if (!Number.isInteger(p.fixedCents) || p.fixedCents! <= 0) return null;
+    cents = p.fixedCents!;
+  } else if (p.chargeKind === "PERCENT") {
+    const bps = p.percentBps!;
+    if (!Number.isInteger(bps) || bps <= 0 || bps > 10_000) return null;
+    cents = Math.floor((base * bps + 500_000) / 1_000_000) * 100;
+  } else if (p.chargeKind !== "COPAGO") return null;
+  const q = cents >= base ? { amountCents: base, chargeKind: "FULL" as const } : { amountCents: cents, chargeKind: "DEPOSIT" as const };
+  return q.amountCents < 100 || q.amountCents > 100_000_000 ? null : q;
+}
+
+/** Elección del paciente con OPTIONAL. null = todavía no eligió: sin preselección (TP-UI-D5). */
+export type PayChoice = "now" | "later" | null;
+
+/**
+ * Lo que el wizard manda como `payNow` (C-TP8). REQUIRED y sin cobro: ausente (el server lo ignora). OPTIONAL: la
+ * elección explícita; sin elegir no se puede confirmar (`canConfirmPayment`), así que nunca viaja «undefined = sí».
+ */
+export function payNowFor(payment: WizardOnlinePayment | null, choice: PayChoice): boolean | undefined {
+  return payment?.mode === "OPTIONAL" && choice ? choice === "now" : undefined;
+}
+
+/** Con OPTIONAL el último paso exige elegir cómo pagar (sin preselección, TP-UI-D5). */
+export function canConfirmPayment(payment: WizardOnlinePayment | null, choice: PayChoice): boolean {
+  return payment?.mode !== "OPTIONAL" || choice !== null;
+}
 
 export type CheckoutCopy = {
   /** Si el submit va a terminar en Mercado Pago. */
@@ -274,23 +347,38 @@ export type CheckoutCopy = {
   /** Sin cobro y con precio 0 no hay fila de total: antes se leía «$ 0» como si el turno fuera gratis (H-TP2). */
   showTotal: boolean;
   note: string;
+  /** Con seña (§25.10): «Seña a pagar ahora» / «Resto en el consultorio». null = sin seña. */
+  split: { nowCents: number; restCents: number } | null;
 };
 
 /**
- * Copy del cierre del wizard. Hasta TP-0 era siempre «Pagar y reservar» + «El pago se hace en Mercado Pago», pero hoy
- * el turnero no cobra (H-TP1: la única cuenta MP es la de la plataforma, `TURNERO_CHECKOUT` en `off`): el paciente
- * reserva y paga en el consultorio. `onlineCheckout` ausente (payload viejo) = sin cobro, que es lo que hace el server.
+ * Copy del cierre del wizard y del resumen. Sin cobro (o OPTIONAL «pagar en el consultorio»): «Confirmar turno» y «Lo
+ * pagás en el consultorio.», como TP-0. Con cobro: «Pagar y reservar»; REQUIRED avisa el hold de 30 min
+ * (`PENDING_PUBLIC_HOLD_MS`, paridad en el test) y OPTIONAL que el turno queda reservado igual. Con una seña, el resumen
+ * parte el valor en lo que se paga ahora y el resto.
  */
-export function checkoutCopyFor(args: { onlineCheckout?: boolean; priceCents: number }): CheckoutCopy {
-  const online = args.onlineCheckout === true && args.priceCents >= MIN_ONLINE_CHARGE_CENTS;
-  if (online) {
+export function checkoutCopyFor(args: {
+  payment?: WizardOnlinePayment | null;
+  choice?: PayChoice;
+  priceCents: number;
+}): CheckoutCopy {
+  const p = args.payment ?? null;
+  const online = !!p && (p.mode === "REQUIRED" || args.choice === "now");
+  if (p && online) {
+    const deposit = p.quote.chargeKind === "DEPOSIT";
     return {
       online: true,
       cta: "Pagar y reservar",
       ctaPending: "Redirigiendo…",
-      totalLabel: "Total a pagar",
+      totalLabel: deposit ? "Valor del turno" : "Total a pagar",
       showTotal: true,
-      note: "El pago se hace en Mercado Pago.",
+      note:
+        p.mode === "REQUIRED"
+          ? "El pago se hace en Mercado Pago. Tenés 30 minutos para completarlo; si no, el horario se libera."
+          : "El pago se hace en Mercado Pago. Si no se completa, el turno queda reservado y lo pagás en el consultorio.",
+      split: deposit
+        ? { nowCents: p.quote.amountCents, restCents: Math.max(0, args.priceCents - p.quote.amountCents) }
+        : null,
     };
   }
   return {
@@ -299,8 +387,17 @@ export function checkoutCopyFor(args: { onlineCheckout?: boolean; priceCents: nu
     ctaPending: "Reservando…",
     totalLabel: "Valor del turno",
     showTotal: args.priceCents > 0,
-    note: "Lo pagás en el consultorio.",
+    note: p && !args.choice ? "Podés pagar ahora con Mercado Pago o en el consultorio." : "Lo pagás en el consultorio.",
+    split: null,
   };
+}
+
+/**
+ * TP-UI-D6: el server cobró otro monto que el cotizado (copago de la obra social del paciente, o particular por
+ * TP-D22) → antes de ir a Mercado Pago se muestra el monto real. Sin cotización (no esperábamos cobro) también.
+ */
+export function amountDiffers(r: { next: "checkout" | "reserved"; amountCents: number | null }, quotedCents: number | null): boolean {
+  return r.next === "checkout" && r.amountCents != null && r.amountCents !== quotedCents;
 }
 
 /**

@@ -586,6 +586,42 @@
   margin: 6px 0 0;
 }
 
+/* TP-3h · cobro online: seña/resto en el resumen, nota de cancelación (texto plano: respeta los saltos que escribió el
+   consultorio) y la elección OPTIONAL (radios nativos dentro de las mismas tarjetas `.choice`). */
+.splitValue {
+  font-weight: 600;
+}
+.cancelNote {
+  font-size: 13px;
+  color: var(--navy-700);
+  margin: var(--space-2) 0 0;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.payChoice {
+  display: grid;
+  gap: var(--space-2);
+  border: 0;
+  padding: 0;
+  margin: var(--space-4) 0 0;
+  min-width: 0;
+}
+.payChoice input {
+  accent-color: var(--sky-700);
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+.payChoice .choice:has(:checked) {
+  border-color: var(--sky-700);
+  background: rgba(31, 79, 190, 0.08);
+}
+.payNote {
+  margin: var(--space-4) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--navy-700);
+}
+
 /* VX-Z: contenedor del paso (destino del foco al cambiar de paso, ver `focusStepHeading`); no agrega caja. */
 .stepBody {
   display: contents;

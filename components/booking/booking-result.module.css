@@ -238,18 +238,6 @@
   color: var(--navy-500);
 }
 
-/* ── Solo desarrollo: los webhooks de MP no llegan a localhost ── */
-.dev {
-  margin-top: 20px;
-  padding: 12px;
-  border-radius: var(--r-sm);
-  background: var(--danger-bg);
-  border: 1px dashed var(--danger-border);
-  font-size: var(--fs-xs);
-  color: var(--navy-700);
-  text-align: left;
-}
-
 @media (max-width: 767.98px) {
   .top {
     min-height: 64px;

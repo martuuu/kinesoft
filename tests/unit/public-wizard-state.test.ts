@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   attemptSignature,
+  amountDiffers,
+  canConfirmPayment,
   checkoutCopyFor,
+  clinicInitials,
   destinationAfterSubmit,
+  payNowFor,
+  wizardOnlinePaymentFor,
+  type WizardOnlinePayment,
   coverageInsurerPrefill,
   coverageOptions,
   durationFor,
@@ -19,7 +25,9 @@ import {
   servicesForPractitioner,
 } from "@/lib/public-wizard-state";
 import type { PublicClinic, PublicLocation } from "@/lib/public-booking-types";
-import { MIN_ONLINE_CHARGE_CENTS } from "@/lib/public-booking-payment";
+import { MIN_ONLINE_CHARGE_CENTS, quoteOnlineCharge } from "@/lib/online-charge-logic";
+import { PENDING_PUBLIC_HOLD_MS } from "@/lib/booking-capacity";
+import { clinicInitials as frameInitials } from "@/components/booking/booking-unavailable";
 
 // B5.6 — lógica pura del turnero público (sin DOM). El componente
 // `components/booking/public-booking-wizard.tsx` usa exactamente estas
@@ -257,9 +265,9 @@ describe("precarga de obra social en Tus datos", () => {
 // adónde ir con la respuesta. Sin checkout no se menciona Mercado Pago (H-TP1: hoy la única cuenta es la de la
 // plataforma y el turnero no cobra).
 describe("[TP-0] checkoutCopyFor", () => {
-  it("sin cobro online (falso o ausente): «Confirmar turno», «Valor del turno» y «Lo pagás en el consultorio.»", () => {
-    for (const onlineCheckout of [false, undefined]) {
-      const c = checkoutCopyFor({ onlineCheckout, priceCents: 1_500_000 });
+  it("sin cobro online (null o ausente): «Confirmar turno», «Valor del turno» y «Lo pagás en el consultorio.»", () => {
+    for (const payment of [null, undefined]) {
+      const c = checkoutCopyFor({ payment, priceCents: 1_500_000 });
       expect(c).toEqual({
         online: false,
         cta: "Confirmar turno",
@@ -267,38 +275,165 @@ describe("[TP-0] checkoutCopyFor", () => {
         totalLabel: "Valor del turno",
         showTotal: true,
         note: "Lo pagás en el consultorio.",
+        split: null,
       });
       expect(JSON.stringify(c)).not.toMatch(/Mercado Pago|Pagar/);
     }
   });
 
   it("sin cobro y precio 0: sin fila de total (antes decía «$ 0»), la nota queda", () => {
-    const c = checkoutCopyFor({ onlineCheckout: false, priceCents: 0 });
+    const c = checkoutCopyFor({ payment: null, priceCents: 0 });
     expect(c.showTotal).toBe(false);
     expect(c.note).toBe("Lo pagás en el consultorio.");
   });
 
-  it("con cobro online y monto ≥ $1: el copy de Mercado Pago de siempre", () => {
-    expect(checkoutCopyFor({ onlineCheckout: true, priceCents: 1_500_000 })).toEqual({
+  it("con cobro online y monto ≥ $1: «Pagar y reservar» + «Total a pagar» + Mercado Pago", () => {
+    const c = checkoutCopyFor({ payment: pay("REQUIRED", "FULL", 1_500_000), priceCents: 1_500_000 });
+    expect(c).toMatchObject({
       online: true,
       cta: "Pagar y reservar",
       ctaPending: "Redirigiendo…",
       totalLabel: "Total a pagar",
       showTotal: true,
-      note: "El pago se hace en Mercado Pago.",
+      split: null,
+    });
+    expect(c.note).toMatch(/^El pago se hace en Mercado Pago\./);
+  });
+
+  it("mismo piso que el server (`MIN_ONLINE_CHARGE_CENTS`): bajo $1 no hay cobro que ofrecer", () => {
+    const m = MIN_ONLINE_CHARGE_CENTS;
+    const c = withPolicy({ mode: "REQUIRED", chargeKind: "COPAGO" });
+    expect(wizardOnlinePaymentFor(c, "A", m - 1)).toBeNull();
+    expect(wizardOnlinePaymentFor(c, "A", 0)).toBeNull();
+    expect(wizardOnlinePaymentFor(c, "A", m)?.quote.amountCents).toBe(m);
+  });
+});
+
+// ─── TP-3h · turnero con cobro (C-TP8, §25.5 / §25.10) ──────────────────
+function pay(mode: "OPTIONAL" | "REQUIRED", chargeKind: "FULL" | "DEPOSIT", amountCents: number): WizardOnlinePayment {
+  return { mode, quote: { amountCents, chargeKind }, cancellationNote: null };
+}
+function withPolicy(over: Partial<NonNullable<PublicClinic["onlinePayment"]>>): PublicClinic {
+  return {
+    slug: "x", name: "X", legalName: null, palette: "sky", practitioners: [], services: [],
+    onlinePayment: {
+      mode: "OPTIONAL", chargeKind: "COPAGO", fixedCents: null, percentBps: null, cancellationNote: null,
+      practitionerIds: ["A"], ...over,
+    },
+  };
+}
+
+describe("[TP-3h] wizardOnlinePaymentFor", () => {
+  it("sin política, sin profesional o profesional sin cuenta usable → sin cobro", () => {
+    expect(wizardOnlinePaymentFor({ ...withPolicy({}), onlinePayment: null }, "A", 1_500_000)).toBeNull();
+    expect(wizardOnlinePaymentFor({ ...withPolicy({}), onlinePayment: undefined }, "A", 1_500_000)).toBeNull();
+    expect(wizardOnlinePaymentFor(withPolicy({}), null, 1_500_000)).toBeNull();
+    expect(wizardOnlinePaymentFor(withPolicy({}), "B", 1_500_000)).toBeNull();
+  });
+
+  it("cotiza con la misma regla que el server (quoteOnlineCharge): copago, seña fija, porcentaje", () => {
+    expect(wizardOnlinePaymentFor(withPolicy({ chargeKind: "COPAGO" }), "A", 2_000_000)?.quote).toEqual({
+      amountCents: 2_000_000, chargeKind: "FULL",
+    });
+    expect(wizardOnlinePaymentFor(withPolicy({ chargeKind: "FIXED", fixedCents: 600_000 }), "A", 2_000_000)?.quote).toEqual(
+      quoteOnlineCharge({ policy: { mode: "OPTIONAL", chargeKind: "FIXED", fixedCents: 600_000, percentBps: null }, servicePriceCents: 2_000_000 })
+    );
+    expect(wizardOnlinePaymentFor(withPolicy({ chargeKind: "PERCENT", percentBps: 3000 }), "A", 2_000_000)?.quote).toEqual({
+      amountCents: 600_000, chargeKind: "DEPOSIT",
+    });
+    // Seña ≥ valor → FULL por el valor.
+    expect(wizardOnlinePaymentFor(withPolicy({ chargeKind: "FIXED", fixedCents: 9_000_000 }), "A", 2_000_000)?.quote).toEqual({
+      amountCents: 2_000_000, chargeKind: "FULL",
     });
   });
 
-  it("con cobro online pero monto < $1 (MIN_ONLINE_CHARGE_CENTS): el server no hace checkout → copy sin cobro", () => {
-    expect(checkoutCopyFor({ onlineCheckout: true, priceCents: 99 }).online).toBe(false);
-    expect(checkoutCopyFor({ onlineCheckout: true, priceCents: 0 }).cta).toBe("Confirmar turno");
-    expect(checkoutCopyFor({ onlineCheckout: true, priceCents: 100 }).online).toBe(true);
+  it("modo y nota de cancelación (recortada; vacía = null)", () => {
+    const r = wizardOnlinePaymentFor(withPolicy({ mode: "REQUIRED", cancellationNote: "  Avisá 24 h antes.  " }), "A", 100_000);
+    expect(r).toMatchObject({ mode: "REQUIRED", cancellationNote: "Avisá 24 h antes." });
+    expect(wizardOnlinePaymentFor(withPolicy({ cancellationNote: "   " }), "A", 100_000)?.cancellationNote).toBeNull();
+  });
+});
+
+describe("[TP-3h] elección OPTIONAL (sin preselección, TP-UI-D5) y payNow", () => {
+  it("OPTIONAL sin elegir no confirma; elegido sí; REQUIRED y sin cobro no piden elección", () => {
+    const opt = pay("OPTIONAL", "FULL", 100_000);
+    expect(canConfirmPayment(opt, null)).toBe(false);
+    expect(canConfirmPayment(opt, "now")).toBe(true);
+    expect(canConfirmPayment(opt, "later")).toBe(true);
+    expect(canConfirmPayment(pay("REQUIRED", "FULL", 100_000), null)).toBe(true);
+    expect(canConfirmPayment(null, null)).toBe(true);
   });
 
-  it("mismo piso que el server (`MIN_ONLINE_CHARGE_CENTS` de decidePublicCheckout)", () => {
-    const m = MIN_ONLINE_CHARGE_CENTS;
-    expect(checkoutCopyFor({ onlineCheckout: true, priceCents: m - 1 }).online).toBe(false);
-    expect(checkoutCopyFor({ onlineCheckout: true, priceCents: m }).online).toBe(true);
+  it("payNow: explícito solo con OPTIONAL; REQUIRED y sin cobro no lo mandan", () => {
+    const opt = pay("OPTIONAL", "FULL", 100_000);
+    expect(payNowFor(opt, "now")).toBe(true);
+    expect(payNowFor(opt, "later")).toBe(false);
+    expect(payNowFor(opt, null)).toBeUndefined();
+    expect(payNowFor(pay("REQUIRED", "FULL", 100_000), "now")).toBeUndefined();
+    expect(payNowFor(null, "now")).toBeUndefined();
+  });
+
+  it("CTA según la elección: sin elegir y «en el consultorio» → «Confirmar turno»; «ahora» → «Pagar y reservar»", () => {
+    const opt = pay("OPTIONAL", "FULL", 1_500_000);
+    const none = checkoutCopyFor({ payment: opt, choice: null, priceCents: 1_500_000 });
+    expect(none).toMatchObject({ online: false, cta: "Confirmar turno" });
+    expect(none.note).toBe("Podés pagar ahora con Mercado Pago o en el consultorio.");
+    expect(checkoutCopyFor({ payment: opt, choice: "later", priceCents: 1_500_000 })).toMatchObject({
+      online: false, cta: "Confirmar turno", note: "Lo pagás en el consultorio.",
+    });
+    const now = checkoutCopyFor({ payment: opt, choice: "now", priceCents: 1_500_000 });
+    expect(now).toMatchObject({ online: true, cta: "Pagar y reservar", totalLabel: "Total a pagar" });
+    expect(now.note).toContain("el turno queda reservado");
+  });
+
+  it("REQUIRED: nota de los 30 minutos del hold (paridad con PENDING_PUBLIC_HOLD_MS)", () => {
+    const c = checkoutCopyFor({ payment: pay("REQUIRED", "FULL", 100_000), priceCents: 100_000 });
+    expect(c.note).toContain(`${PENDING_PUBLIC_HOLD_MS / 60_000} minutos`);
+  });
+
+  it("con seña: «Seña a pagar ahora» / «Resto en el consultorio» = valor − seña", () => {
+    const c = checkoutCopyFor({ payment: pay("REQUIRED", "DEPOSIT", 600_000), priceCents: 2_000_000 });
+    expect(c.split).toEqual({ nowCents: 600_000, restCents: 1_400_000 });
+    expect(c.totalLabel).toBe("Valor del turno");
+    expect(checkoutCopyFor({ payment: pay("OPTIONAL", "DEPOSIT", 600_000), choice: "later", priceCents: 2_000_000 }).split).toBeNull();
+  });
+});
+
+describe("[TP-3h] paridad de la cotización con quoteOnlineCharge (copia local por bundle)", () => {
+  it("misma salida en una matriz de políticas y precios", () => {
+    const prices = [0, 1, 99, 100, 101, 150, 999, 1_000, 123_457, 600_000, 2_000_000, 100_000_000, 100_000_001, -5, 1.5];
+    const policies = [
+      { chargeKind: "COPAGO", fixedCents: null, percentBps: null },
+      ...[1, 99, 100, 600_000, 2_000_000, 0, -1, null, 1.5].map((f) => ({ chargeKind: "FIXED", fixedCents: f, percentBps: null })),
+      ...[1, 49, 50, 3000, 9999, 10_000, 10_001, 0, null].map((b) => ({ chargeKind: "PERCENT", fixedCents: null, percentBps: b })),
+    ] as const;
+    for (const mode of ["OPTIONAL", "REQUIRED"] as const)
+      for (const pol of policies)
+        for (const price of prices) {
+          const policy = { mode, ...pol } as unknown as Parameters<typeof quoteOnlineCharge>[0]["policy"];
+          const c = withPolicy(policy as never);
+          expect(wizardOnlinePaymentFor(c, "A", price)?.quote ?? null, JSON.stringify([pol, price])).toEqual(
+            quoteOnlineCharge({ policy, servicePriceCents: price })
+          );
+        }
+  });
+});
+
+describe("[TP-3h] clinicInitials (copia local por bundle)", () => {
+  it("misma salida que la de booking-unavailable", () => {
+    for (const n of ["Consultorio Norte", "  kine  sur  ", "Ñandú & Co.", "123 Salud", "", "—", "Á"]) {
+      expect(clinicInitials(n), n).toBe(frameInitials(n));
+    }
+  });
+});
+
+describe("[TP-3h] amountDiffers (interstitial, TP-UI-D6)", () => {
+  it("solo con checkout y un monto distinto al cotizado", () => {
+    expect(amountDiffers({ next: "checkout", amountCents: 1_500_000 }, 1_500_000)).toBe(false);
+    expect(amountDiffers({ next: "checkout", amountCents: 900_000 }, 1_500_000)).toBe(true);
+    expect(amountDiffers({ next: "checkout", amountCents: 900_000 }, null)).toBe(true);
+    expect(amountDiffers({ next: "reserved", amountCents: null }, 1_500_000)).toBe(false);
+    expect(amountDiffers({ next: "checkout", amountCents: null }, 1_500_000)).toBe(false);
   });
 });
 

@@ -10,8 +10,9 @@
  *   3. Fecha + hora: ventana de 5 días hábiles de `listPublicSlotWindow` (TP-1, `wizard/slot-window-step.tsx`), o en
  *      modo "cualquiera" el primer horario libre de `findFirstPublicSlot`
  *   4. Tus datos — Google sign-in or HC form
- *   5. Confirmación: reserva sin cobro («Confirmar turno» → `/booking/<id>/ok`) o, si el consultorio cobra online,
- *      redirección a Mercado Pago (TP-0: decide el server con `next`)
+ *   5. Confirmación: reserva sin cobro («Confirmar turno» → `/booking/<id>/ok`) o, si el consultorio cobra online
+ *      (T5, C-TP8 `onlinePayment`), Mercado Pago con la cuenta del profesional: REQUIRED siempre; OPTIONAL según la
+ *      elección del paciente, sin preselección (`wizard/payment-choice.tsx`). Adónde ir lo decide el `next` del server.
  *
  * The component is responsive: on desktop the steps run as a 2-column
  * layout (form left + summary right); on mobile they're a stack (VX2-d1:
@@ -24,12 +25,11 @@
  */
 import { useMemo, useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { KineLogo } from "@/components/ui/kine-logo";
 import { BRAND_NAME } from "@/lib/brand";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Field } from "@/components/ui/field";
-import { GoogleIcon } from "@/components/ui/brand-icons";
 import { IconAlert, IconArrow, IconCheck, IconChevL, IconClock } from "@/components/ui/icons";
 import { formatARS } from "@/lib/format";
 import { submitPublicBooking } from "@/lib/public-booking";
@@ -37,8 +37,11 @@ import { toARDateKey } from "@/lib/datetime-ar";
 import type { PublicClinic, PublicLocation, PrefillPatient } from "@/lib/public-booking-types";
 import type { TenantVertical } from "@prisma/client";
 import {
+  amountDiffers,
   attemptSignature,
+  canConfirmPayment,
   checkoutCopyFor,
+  clinicInitials,
   coverageInsurerPrefill,
   destinationAfterSubmit,
   durationFor,
@@ -49,12 +52,15 @@ import {
   initialWizardSelection,
   locationsForPractitioner,
   nextAttempt,
+  payNowFor,
   reconcileSelection,
   servicesForAny,
   servicesForPractitioner,
   windowNavAt,
+  wizardOnlinePaymentFor,
   type Attempt,
   type CheckoutCopy,
+  type PayChoice,
   type WindowNav,
   type WizardFilters,
   type WizardSelection,
@@ -63,8 +69,14 @@ import { PractitionerStep } from "./wizard/practitioner-step";
 import { FirstSlotStep } from "./wizard/first-slot-step";
 import { SlotWindowStep } from "./wizard/slot-window-step";
 import { EmptyBox, StepHeader, focusStepHeading, formatWhenAR } from "./wizard/shared";
-import { clinicInitials } from "./booking-unavailable";
 import s from "./public-booking.module.css";
+
+// TP-3h: «Tus datos» + cobro online en un chunk diferido (ver cabecera de `wizard/data-step.tsx`). Un solo loader para
+// los tres = un solo chunk; se precarga al llegar a «Fecha y hora» (`useEffect` de abajo) para que el paso 4 no espere.
+const loadDataStep = () => import("./wizard/data-step");
+const DataStep = dynamic(() => loadDataStep().then((m) => m.DataStep), { loading: () => <p className={s.loading}>Cargando…</p> });
+const PaymentChoice = dynamic(() => loadDataStep().then((m) => m.PaymentChoice));
+const PaymentInterstitial = dynamic(() => loadDataStep().then((m) => m.PaymentInterstitial));
 
 export type PatientHC = {
   firstName: string;
@@ -179,13 +191,14 @@ export function PublicBookingWizard({
 
   const practitioner = clinic.practitioners.find((p) => p.id === practitionerId) ?? null;
   const service = clinic.services.find((s) => s.id === serviceId) ?? null;
-  // TP-0: botón y resumen según si este turno se cobra online. Es solo copy: adónde ir lo decide el `next` del server.
-  // TP-2c: el cobro online sale de `onlinePayment` (C-TP8): solo REQUIRED y si el profesional elegido tiene cuenta.
-  const checkout = checkoutCopyFor({
-    onlineCheckout:
-      clinic.onlinePayment?.mode === "REQUIRED" && clinic.onlinePayment.practitionerIds.includes(practitionerId ?? ""),
-    priceCents: service?.priceCents ?? 0,
-  });
+  // TP-3h: cobro online de ESTE turno (profesional con cuenta usable + política) cotizado con el precio del servicio,
+  // y la elección del paciente en OPTIONAL (null = no eligió; sin preselección, TP-UI-D5). Botón y resumen son copy:
+  // adónde ir lo decide el `next` del server.
+  const payment = wizardOnlinePaymentFor(clinic, practitionerId, service?.priceCents ?? 0);
+  const [payChoice, setPayChoice] = useState<PayChoice>(null);
+  const checkout = checkoutCopyFor({ payment, choice: payChoice, priceCents: service?.priceCents ?? 0 });
+  // Interstitial antes de navegar (TP-UI-D6 monto distinto; MP caído en OPTIONAL). `href` = adónde sigue.
+  const [interstitial, setInterstitial] = useState<{ kind: "amount" | "unavailable"; amountCents: number | null; href: string } | null>(null);
 
   // Servicios del profesional elegido (`practitionerIds`, B3.2). En modo
   // "cualquiera": los que ofrece al menos un profesional que pasa los filtros.
@@ -245,7 +258,7 @@ export function PublicBookingWizard({
     (step === 0 && (mode === "any" || !!practitionerId)) ||
     (step === 1 && !!serviceId) ||
     (step === 2 && !!slotISO && !!practitionerId) ||
-    (step === 3 && isHcValid(hc));
+    (step === 3 && isHcValid(hc) && canConfirmPayment(payment, payChoice));
 
   const next = () => {
     if (!canAdvance) return;
@@ -264,6 +277,9 @@ export function PublicBookingWizard({
 
   // VX-Z: foco al título del paso nuevo al avanzar/retroceder (también «Elegir profesional» desde el primer turno).
   // No en el primer render: robarle el foco a quien recién llega rompe el recorrido normal de la página.
+  useEffect(() => {
+    if (step >= 2) void loadDataStep();
+  }, [step]);
   const cardRef = useRef<HTMLDivElement>(null);
   const prevStep = useRef(step);
   useEffect(() => {
@@ -289,6 +305,7 @@ export function PublicBookingWizard({
           ...hc,
           email: hc.email.trim().toLowerCase(),
         },
+        payNow: payNowFor(payment, payChoice),
       });
       if (!r.ok) {
         // T3: el server marca `fieldErrors.scheduledFor` cuando el horario ya no se puede reservar: volver a la ventana
@@ -302,9 +319,18 @@ export function PublicBookingWizard({
         setError(r.error);
         return;
       }
-      // `reserved` → resultado (/ok); `checkout` → Mercado Pago. Navegación dura a propósito: el resultado consulta el
-      // estado real y no hay nada del wizard que conservar.
-      window.location.href = destinationAfterSubmit(r.data);
+      // `reserved` → resultado (/ok); `checkout` → Mercado Pago. Navegación dura (`location.assign`, TP-UI-D3: sin
+      // tocar la CSP) a propósito: el resultado consulta el estado real y no hay nada del wizard que conservar.
+      // Antes de irse, el interstitial si el server cobra otro monto (TP-UI-D6) o si Mercado Pago no respondió en
+      // OPTIONAL (el turno quedó reservado). REQUIRED con MP caído llega como error y el reintento usa la misma key,
+      // o sea el mismo cobro (TP-D29).
+      if (r.data.notice === "payment-unavailable") {
+        setInterstitial({ kind: "unavailable", amountCents: null, href: destinationAfterSubmit(r.data) });
+      } else if (amountDiffers(r.data, checkout.online && payment ? payment.quote.amountCents : null)) {
+        setInterstitial({ kind: "amount", amountCents: r.data.amountCents, href: destinationAfterSubmit(r.data) });
+      } else {
+        window.location.assign(destinationAfterSubmit(r.data));
+      }
     });
   };
 
@@ -388,7 +414,7 @@ export function PublicBookingWizard({
               }}
             />
           )}
-          {step === 3 && (
+          {step === 3 && !interstitial && (
             <DataStep
               clinic={clinic}
               session={session}
@@ -396,11 +422,19 @@ export function PublicBookingWizard({
               hc={hc}
               setHc={setHc}
               error={error}
+              payment={payment && <PaymentChoice payment={payment} choice={payChoice} onChange={setPayChoice} />}
+            />
+          )}
+          {interstitial && (
+            <PaymentInterstitial
+              kind={interstitial.kind}
+              amountCents={interstitial.amountCents}
+              onContinue={() => window.location.assign(interstitial.href)}
             />
           )}
           </div>
 
-          <footer className={s.actions}>
+          {!interstitial && <footer className={s.actions}>
             {step > firstStep ? (
               <Button variant="ghost" size="md" onClick={back} disabled={pending}>
                 <IconChevL size={12} /> Atrás
@@ -416,7 +450,7 @@ export function PublicBookingWizard({
                 : "Continuar"}{" "}
               <IconArrow size={14} />
             </Button>
-          </footer>
+          </footer>}
         </Card>
 
         <SummaryAside
@@ -427,6 +461,7 @@ export function PublicBookingWizard({
           slotISO={slotISO}
           location={findLocation(clinic, slotLocationId)}
           checkout={checkout}
+          cancellationNote={payment?.cancellationNote ?? null}
         />
       </main>
 
@@ -463,14 +498,6 @@ function isHcValid(hc: PatientHC) {
     hc.documentId.trim().length >= 4 &&
     hc.dateOfBirth.length === 10
   );
-}
-
-/**
- * OAuth de Google del turnero (paso «Tus datos»): form POST a la ruta canónica `/api/auth/oauth/google` (PL-2e; el
- * alias viejo `/api/auth/google` sigue vivo para otros llamadores). POST porque un `<Link>` GET daba 405 (A3b-S-auth).
- */
-function googleAction(slug: string) {
-  return `/api/auth/oauth/google?next=${encodeURIComponent(`/c/${slug}/booking`)}`;
 }
 
 function Nav({ clinic, session }: { clinic: PublicClinic; session: { email: string } | null }) {
@@ -591,141 +618,7 @@ function ServiceStep({
 
 // ─── Step 2 ─ Slot: components/booking/wizard/slot-window-step.tsx (TP-1: ventana de 5 días hábiles)
 
-// ─── Step 3 ─ Patient HC ──────────────────────────────────────────────
-// Exportado solo para el render test (VX2-d1): el paso 4 no se alcanza con un render estático del wizard.
-export function DataStep({
-  clinic,
-  session,
-  googleEnabled = true,
-  hc,
-  setHc,
-  error,
-}: {
-  clinic: WizardClinic;
-  session: { email: string; fullName: string | null } | null;
-  googleEnabled?: boolean;
-  hc: PatientHC;
-  setHc: (next: PatientHC) => void;
-  error: string | null;
-}) {
-  const upd = <K extends keyof PatientHC>(k: K, v: PatientHC[K]) => setHc({ ...hc, [k]: v });
-  const isGeneral = clinic.vertical === "GENERAL";
-  // VX2-d1: `Field` del design system (label real + ids estables) y `autoComplete` en lo que el navegador sabe
-  // completar del propio paciente. El contacto de emergencia es OTRA persona: `off`, para que no se autocomplete
-  // con el nombre y el teléfono del paciente.
-  const text = (k: keyof PatientHC, extra: React.InputHTMLAttributes<HTMLInputElement> = {}) => (
-    <input
-      className="k-input"
-      type="text"
-      name={k}
-      value={hc[k]}
-      onChange={(e) => upd(k, e.target.value)}
-      {...extra}
-    />
-  );
-  return (
-    <>
-      <StepHeader
-        title="Completá tus datos"
-        subtitle="Los necesitamos para tu historia clínica y para el pago del turno."
-      />
-
-      {!session && googleEnabled && (
-        <div className={s.signIn}>
-          <div className={s.signInText}>
-            <p className={s.signInTitle}>¿Ya sos paciente?</p>
-            <p className={s.help}>Iniciá sesión con Google y precargamos tus datos.</p>
-          </div>
-          {/* A3b-S-auth: form POST (el GET daba 405). */}
-          <form action={googleAction(clinic.slug)} method="post" className={s.navForm}>
-            <button type="submit" className={s.pillButton}>
-              <GoogleIcon size={18} /> Ingresar con Google
-            </button>
-          </form>
-        </div>
-      )}
-
-      <div className={s.grid2}>
-        <Field id="booking-firstName" label="Nombre">
-          {text("firstName", { autoComplete: "given-name", required: true })}
-        </Field>
-        <Field id="booking-lastName" label="Apellido">
-          {text("lastName", { autoComplete: "family-name", required: true })}
-        </Field>
-        <Field id="booking-email" label="Email">
-          {text("email", { type: "email", autoComplete: "email", inputMode: "email", required: true })}
-        </Field>
-        <Field id="booking-phone" label="Teléfono">
-          {text("phone", { type: "tel", autoComplete: "tel", inputMode: "tel", required: true })}
-        </Field>
-        <Field id="booking-documentId" label="DNI">
-          {text("documentId", { inputMode: "numeric", autoComplete: "off", required: true })}
-        </Field>
-        <Field id="booking-dateOfBirth" label="Fecha de nacimiento">
-          {text("dateOfBirth", { type: "date", autoComplete: "bday", required: true })}
-        </Field>
-        <Field id="booking-coverageInsurer" label="Obra social" optional>
-          {text("coverageInsurer", { placeholder: "OSDE, Swiss…", autoComplete: "off" })}
-        </Field>
-        <Field id="booking-coveragePlan" label="Plan / N° de afiliado" optional>
-          {text("coveragePlan", { autoComplete: "off" })}
-        </Field>
-        <Field id="booking-emergencyName" label="Contacto de emergencia" optional>
-          {text("emergencyName", { placeholder: "Nombre y vínculo", autoComplete: "off" })}
-        </Field>
-        <Field id="booking-emergencyPhone" label="Teléfono de emergencia" optional>
-          {text("emergencyPhone", { type: "tel", inputMode: "tel", autoComplete: "off" })}
-        </Field>
-      </div>
-
-      <Field id="booking-notes" label="Motivo de consulta" optional>
-        <textarea
-          className="k-input"
-          name="notes"
-          rows={3}
-          value={hc.notes}
-          onChange={(e) => upd("notes", e.target.value)}
-          placeholder={
-            isGeneral
-              ? "Contanos brevemente qué te trae y desde cuándo."
-              : "Contanos brevemente qué te trae (zona, desde cuándo, qué actividad sentís limitada)."
-          }
-        />
-      </Field>
-
-      {/* EV1-C2: en Clínica general no hay diagnóstico de kinesiología, y «Motivo de consulta» ya es el campo
-          de arriba: el título (`hc.title` → `diagnosisTitle`) no se pide. La descripción queda: es texto libre. */}
-      {!isGeneral && (
-        <Field id="booking-title" label="Diagnóstico" optional>
-          {text("title", { placeholder: "Ej. Lumbalgia, esguince de tobillo…", autoComplete: "off" })}
-        </Field>
-      )}
-
-      <Field id="booking-description" label="Descripción" optional>
-        <textarea
-          className="k-input"
-          name="description"
-          rows={3}
-          value={hc.description}
-          onChange={(e) => upd("description", e.target.value)}
-          placeholder="Detalles que quieras que el profesional conozca."
-        />
-      </Field>
-
-      {error && (
-        <div className="k-alert" role="alert">
-          <IconAlert size={18} />
-          <span>{error}</span>
-        </div>
-      )}
-      <p className={s.consent}>
-        {/* PL-F1c: sin «Cancelás gratis hasta 6 hs antes»: el paciente no tiene cómo cancelar y no hay regla de
-            6 hs. VX2-d1 lo mantiene afuera. */}
-        Al continuar aceptás que el consultorio use estos datos para tu atención.
-      </p>
-    </>
-  );
-}
+// ─── Step 3 ─ Patient HC: components/booking/wizard/data-step.tsx (TP-3h: diferido junto con el cobro online)
 
 /** Exportado para el render test (TP-0): con un servicio elegido no se llega por render estático del wizard. */
 export function SummaryAside({
@@ -736,6 +629,7 @@ export function SummaryAside({
   slotISO,
   location,
   checkout,
+  cancellationNote = null,
 }: {
   clinic: PublicClinic;
   practitioner: PublicClinic["practitioners"][number] | null;
@@ -746,6 +640,8 @@ export function SummaryAside({
   /** Sede del horario elegido (cada slot trae la suya). */
   location: PublicLocation | null;
   checkout: CheckoutCopy;
+  /** Nota de cancelación de la política (≤280), en texto plano: React la escapa, nunca HTML. */
+  cancellationNote?: string | null;
 }) {
   const when = slotISO ? formatWhenAR(slotISO) : null;
   const address = location ? formatLocationAddress(location) : "";
@@ -774,7 +670,20 @@ export function SummaryAside({
               <span className={`k-display ${s.totalValue}`}>{service ? formatARS(service.priceCents) : "—"}</span>
             </div>
           )}
+          {checkout.split && (
+            <>
+              <div className={s.totalRow}>
+                <span className={s.totalLabel}>{"Seña a pagar ahora"}</span>
+                <span className={s.splitValue}>{formatARS(checkout.split.nowCents)}</span>
+              </div>
+              <div className={s.totalRow}>
+                <span className={s.totalLabel}>{"Resto en el consultorio"}</span>
+                <span className={s.splitValue}>{formatARS(checkout.split.restCents)}</span>
+              </div>
+            </>
+          )}
           <p className={s.totalNote}>{checkout.note}</p>
+          {cancellationNote && <p className={s.cancelNote}>{cancellationNote}</p>}
         </div>
       </Card>
     </aside>
