@@ -36,6 +36,16 @@ vi.mock("@/lib/diagnosis", () => proxy());
 vi.mock("@/lib/availability-actions", () => proxy());
 vi.mock("@/lib/time-blocks", () => proxy());
 vi.mock("@/lib/session", () => proxy());
+// TP-3f2: Facturación monta la card «Links de pago» (server actions de cobros online): solo la red, mockeada.
+vi.mock("@/lib/online-charges-read", () => ({
+  getBookingOnlineCharges: async () => ({ ok: true, data: [] }),
+  listPatientOnlineCharges: async () => ({ ok: true, data: [] }),
+}));
+vi.mock("@/lib/payment-links", () => ({
+  cancelPaymentLink: async () => ({ ok: false, error: "mock" }),
+  getPaymentLinkShare: async () => ({ ok: false, error: "mock" }),
+  sendPaymentLinkEmail: async () => ({ ok: false, error: "mock" }),
+}));
 vi.mock("@/components/ui/toast", () => ({
   useToast: () => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), show: vi.fn(), dismiss: vi.fn() }),
 }));

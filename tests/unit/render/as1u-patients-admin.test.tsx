@@ -38,6 +38,16 @@ vi.mock("@/lib/patients", () => ({
   updatePatient: vi.fn(),
 }));
 vi.mock("@/lib/bookings", () => ({ setBookingInsurerPaid: vi.fn(), setBookingCopagoPaid: vi.fn() }));
+// TP-3f2: Facturación monta la card «Links de pago» (server actions de cobros online): solo la red, mockeada.
+vi.mock("@/lib/online-charges-read", () => ({
+  getBookingOnlineCharges: async () => ({ ok: true, data: [] }),
+  listPatientOnlineCharges: async () => ({ ok: true, data: [] }),
+}));
+vi.mock("@/lib/payment-links", () => ({
+  cancelPaymentLink: async () => ({ ok: false, error: "mock" }),
+  getPaymentLinkShare: async () => ({ ok: false, error: "mock" }),
+  sendPaymentLinkEmail: async () => ({ ok: false, error: "mock" }),
+}));
 vi.mock("@/lib/plans-read", () => ({ getPatientPlans: vi.fn(), getPatientPlanBalances: vi.fn() }));
 vi.mock("@/lib/clinical-notes-read", () => ({ getPatientClinicalSummary: vi.fn() }));
 vi.mock("@/lib/catalog", () => ({ listPayerPlans: vi.fn(async () => []), proposePayerPlan: vi.fn() }));

@@ -38,6 +38,15 @@ import {
   shouldGroupByPlan,
   type PlanGroupMeta,
 } from "@/components/planes/plan-booking-groups";
+import {
+  ChargeReceiptsModal,
+  PatientLinksList,
+  linkPractitionerOptions,
+  linksCardWanted,
+  rowReceiptWanted,
+} from "@/components/payments/patient-links-list";
+import type { PaymentLinkPractitionerOption } from "@/components/payments/payments-ui-types";
+import { BOOKING_MONEY_COPY } from "@/lib/online-payments-copy";
 import tableStyles from "./profile-table.module.css";
 
 /** Facturación columns: Fecha · Servicio · Obra social · OS · Copago · Turno. */
@@ -148,23 +157,43 @@ function PaidCell({
  */
 function CopagoCell({
   amountCents,
+  depositCents = 0,
   view,
   pending,
   onCollect,
   onUndo,
+  onReceipt,
 }: {
   amountCents: number;
+  /** TP-3f2: Σ de señas PAID (`Booking.onlineDepositCents`). */
+  depositCents?: number;
   view: CopagoCollectView;
   pending: boolean;
   onCollect: () => void;
   onUndo: () => void;
+  /** TP-3f2: «Comprobante» (Modal) del pago de Mercado Pago del turno; sin esto no se ofrece. */
+  onReceipt?: () => void;
 }) {
   const paid = view.label?.startsWith("Pagado") ?? false;
+  // TP-3f2: con seña, «Por cobrar» dice lo que FALTA (copago − seña), lo mismo que cobra el modal; si la seña cubre todo
+  // no se muestra «Por cobrar · $ 0» (§25.5: nunca $ 0). El botón «Cobrar» queda para cerrar el turno.
+  const remaining = copagoRemainingCents({ resolvedCopagoCents: amountCents, onlineDepositCents: depositCents });
+  const label =
+    view.label === "Por cobrar" && depositCents > 0
+      ? remaining > 0
+        ? BOOKING_MONEY_COPY.remaining(formatARS(remaining))
+        : null
+      : view.label;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
       <span className="k-mono" style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-900)" }}>
         {formatARS(amountCents)}
       </span>
+      {depositCents > 0 && (
+        <span data-testid="fact-deposit" style={{ fontSize: 10.5, fontWeight: 700, color: "var(--lime-700)" }}>
+          {BOOKING_MONEY_COPY.depositPaid(formatARS(depositCents))}
+        </span>
+      )}
       {view.action === "collect" ? (
         <button type="button" onClick={onCollect} disabled={pending} className="k-tap-m" style={ACTION_PILL}>
           Cobrar
@@ -181,13 +210,27 @@ function CopagoCell({
         >
           <IconCheck size={9} stroke={3} /> {view.label}
         </button>
-      ) : view.label && paid ? (
+      ) : label && paid ? (
         <span style={PAID_CHIP}>
-          <IconCheck size={9} stroke={3} /> {view.label}
+          <IconCheck size={9} stroke={3} /> {label}
         </span>
-      ) : view.label ? (
-        <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--navy-500)" }}>{view.label}</span>
+      ) : label ? (
+        <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--navy-500)" }}>{label}</span>
       ) : null}
+      {/* Con seña, junto a «Cobrar» se lee cuánto falta (sin seña el botón solo, como antes de T5). */}
+      {view.action === "collect" && depositCents > 0 && label && (
+        <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--navy-500)" }}>{label}</span>
+      )}
+      {onReceipt && (
+        <button
+          type="button"
+          onClick={onReceipt}
+          className="k-tap-m"
+          style={{ border: "none", background: "none", padding: 0, cursor: "pointer", fontSize: 10.5, fontWeight: 700, color: "var(--sky-700)", textDecoration: "underline" }}
+        >
+          {BOOKING_MONEY_COPY.receipt}
+        </button>
+      )}
     </div>
   );
 }
@@ -227,6 +270,19 @@ export type FacturacionViewProps = {
   billingAccess?: { capabilities: readonly Capability[]; practitionerId: string | null };
   /** Nombre del paciente para la descripción del modal «Registrar cobro» (B2). Sin él, servicio · día y hora. */
   patientName?: string;
+  /**
+   * TP-3f2: el paciente de la card «Links de pago». Sin él se toma el de los turnos cargados (un paciente sin turnos
+   * no tendría card: por eso el perfil lo pasa).
+   */
+  patientId?: string;
+  /**
+   * TP-3f2: el consultorio tiene los cobros online prendidos (`mpConnectMode() !== "off"`, lo decide la página). Sin
+   * esto no se monta la card «Links de pago» (lo que no funciona no se muestra). Señas y comprobantes de las filas se
+   * ven igual: son datos del turno.
+   */
+  onlinePayments?: boolean;
+  /** TP-3f2: profesionales del consultorio para un link sin turno. Sin esto, los de los turnos del paciente. */
+  linkPractitioners?: readonly PaymentLinkPractitionerOption[];
 };
 
 export function FacturacionView({
@@ -240,6 +296,9 @@ export function FacturacionView({
   onBillingChanged,
   billingAccess,
   patientName,
+  patientId,
+  onlinePayments = false,
+  linkPractitioners,
 }: FacturacionViewProps) {
   const toast = useToast();
   const confirm = useConfirm();
@@ -249,6 +308,8 @@ export function FacturacionView({
   const [method, setMethod] = useState<PaymentMethod | null>(null);
   const [methodError, setMethodError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // TP-3f2: el turno cuyo «Comprobante» está abierto (Modal; los cobros se leen recién al abrirlo).
+  const [receiptFor, setReceiptFor] = useState<string | null>(null);
   const caps = useMemo(
     () => (billingAccess ? new Set<Capability>(billingAccess.capabilities) : null),
     [billingAccess]
@@ -292,7 +353,10 @@ export function FacturacionView({
   // Confirmado, va optimista como el toggle de la OS.
   const undoCopago = async (b: PatientBookingFull) => {
     if (pending || saving) return;
-    const ok = await confirm(UNDO_COLLECT_CONFIRM(formatARS(b.copagoCents)));
+    // TP-3f2: con seña, lo que se deshace es lo que se cobró a mano (lo que faltaba), no el copago entero.
+    const ok = await confirm(
+      UNDO_COLLECT_CONFIRM(formatARS(copagoRemainingCents({ resolvedCopagoCents: b.copagoCents, onlineDepositCents: b.onlineDepositCents })))
+    );
     if (!ok) return;
     patchBooking(b.id, { paymentStatus: "UNPAID", copagoPaymentMethod: null });
     start(async () => {
@@ -325,7 +389,8 @@ export function FacturacionView({
       return;
     }
     const b = collecting;
-    const amount = copagoRemainingCents({ resolvedCopagoCents: b.copagoCents, deposits: [] });
+    // TP-3f2 (handoff TP-P3): con seña se cobra lo que falta; la seña es la que vio Mercado Pago (`onlineDepositCents`).
+    const amount = copagoRemainingCents({ resolvedCopagoCents: b.copagoCents, onlineDepositCents: b.onlineDepositCents });
     setSaving(true);
     let r: Awaited<ReturnType<typeof setBookingCopagoPaid>>;
     try {
@@ -336,7 +401,15 @@ export function FacturacionView({
     setSaving(false);
     if (r.ok) {
       rememberPaymentMethod(v.method);
-      patchBooking(b.id, { paymentStatus: "PAID", copagoPaymentMethod: r.data.method, updatedAt: new Date(r.data.updatedAt) });
+      // `copagoCollectedById: undefined`: lo cobró una persona (el server guarda quién) pero el id no vuelve en la
+      // respuesta. Dejarlo en el `null` que traía la fila hacía que un cobro a mano con medio «Mercado Pago» se viera
+      // como «Pagado por Mercado Pago» sin deshacer hasta recargar; `undefined` = «no se sabe», y la vista no adivina.
+      patchBooking(b.id, {
+        paymentStatus: "PAID",
+        copagoPaymentMethod: r.data.method,
+        copagoCollectedById: undefined,
+        updatedAt: new Date(r.data.updatedAt),
+      });
       toast.success(
         `Cobro registrado · ${formatARS(amount)} · ${PAYMENT_METHOD_LABEL[v.method]}`,
         r.data.notice ? { description: r.data.notice } : undefined
@@ -398,9 +471,13 @@ export function FacturacionView({
         <div data-label="Copago (paciente)">
           <CopagoCell
             amountCents={b.copagoCents}
+            depositCents={b.onlineDepositCents}
             view={copagoCollectViewFor(
               {
                 ...b,
+                // TP-3f2 (handoff TP-P3): explícito, aunque ya viene en `...b` (la fila trae todas las columnas del
+                // turno): NULL + medio Mercado Pago = lo pagó un cobro online → «Pagado por Mercado Pago», sin deshacer.
+                copagoCollectedById: b.copagoCollectedById,
                 publicReservation: isPublicReservation({ idempotencyKey: b.idempotencyKey, patientId: b.patientId }),
               },
               canCollect(b)
@@ -408,6 +485,8 @@ export function FacturacionView({
             pending={pending || saving}
             onCollect={() => openCollect(b)}
             onUndo={() => void undoCopago(b)}
+            // Quien no cobra ese turno tampoco ve sus cobros online (`getBookingOnlineCharges`, mismo criterio).
+            onReceipt={rowReceiptWanted(b) && canCollect(b) ? () => setReceiptFor(b.id) : undefined}
           />
         </div>
         {/* B4b: el estado del turno va arriba a la derecha de la card bajo 768, al lado de la fecha. */}
@@ -444,6 +523,24 @@ export function FacturacionView({
       )}
     </div>
   );
+
+  const linksPatientId = patientId ?? bookings[0]?.patientId ?? null;
+  const linkTargets = linkPractitionerOptions({
+    bookings,
+    explicit: linkPractitioners,
+    caps,
+    viewerPractitionerId: billingAccess?.practitionerId ?? null,
+  });
+  const linksCard =
+    linksPatientId && linksCardWanted({ patientId: linksPatientId, onlinePayments, billingAccess }) ? (
+      <PatientLinksList
+        patientId={linksPatientId}
+        patientName={patientName ?? ""}
+        practitioners={linkTargets.options}
+        defaultPractitionerId={linkTargets.defaultId}
+      />
+    ) : null;
+  const receiptModal = <ChargeReceiptsModal source={receiptFor ? { bookingId: receiptFor } : null} onClose={() => setReceiptFor(null)} />;
 
   const collectModal = (
     <FacturacionCollectModal
@@ -491,8 +588,10 @@ export function FacturacionView({
             </Card>
           );
         })}
+        {linksCard}
         {footnote}
         {collectModal}
+        {receiptModal}
       </div>
     );
   }
@@ -515,8 +614,10 @@ export function FacturacionView({
           </TableScroll>
         )}
       </Card>
+      {linksCard}
       {footnote}
       {collectModal}
+      {receiptModal}
     </div>
   );
 }
@@ -547,7 +648,9 @@ export function FacturacionCollectModal({
   onClose: () => void;
   onConfirm: () => void;
 }) {
-  const amount = collecting ? copagoRemainingCents({ resolvedCopagoCents: collecting.copagoCents, deposits: [] }) : 0;
+  // TP-3f2 (handoff TP-P3/TP-3c): el modal cobra lo que falta y avisa la seña (`depositCents` de `CollectForm`).
+  const depositCents = collecting?.onlineDepositCents ?? 0;
+  const amount = collecting ? copagoRemainingCents({ resolvedCopagoCents: collecting.copagoCents, onlineDepositCents: depositCents }) : 0;
   return (
     <Modal
       open={collecting != null}
@@ -563,6 +666,7 @@ export function FacturacionCollectModal({
       {collecting && (
         <CollectForm
           amountCents={amount}
+          depositCents={depositCents}
           imputation={collectImputationLine({ practitionerId: collecting.practitionerId, practitionerName: collecting.practitionerName })}
           method={method}
           onMethod={onMethod}
