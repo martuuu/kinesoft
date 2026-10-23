@@ -72,9 +72,9 @@ const TEST_TTL_MS = 10 * 60_000;
 /**
  * Motivos de SKIPPED. `rescheduled` = el aviso era de otro horario (un «reprogramado», un «actualizados» o un
  * recordatorio quedó viejo porque el turno se volvió a mover; el aviso del horario nuevo tiene su propia clave).
- * Handoff a WA-P1/INT: sumarlo a `WA_SKIP_REASONS` y a `WA_SKIP_REASON_LABEL`.
+ * Desde WA-S3 vive en `WA_SKIP_REASONS` (con su etiqueta): el alias queda por compatibilidad de los importadores.
  */
-export type WaOutboxSkipReason = WaSkipReason | "rescheduled";
+export type WaOutboxSkipReason = WaSkipReason;
 
 export type WaEnqueueRow = {
   tenantId: string;

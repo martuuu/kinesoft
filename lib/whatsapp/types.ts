@@ -116,6 +116,9 @@ export const WA_SKIP_REASONS = [
   "template_pending",
   "mode_changed",
   "document_changed",
+  // WA-S2 (handoff aplicado en WA-S3): el aviso era de otro horario (un «reprogramado», un «actualizados» o un
+  // recordatorio quedó viejo porque el turno se volvió a mover; el del horario nuevo tiene su propia clave).
+  "rescheduled",
 ] as const;
 export type WaSkipReason = (typeof WA_SKIP_REASONS)[number];
 

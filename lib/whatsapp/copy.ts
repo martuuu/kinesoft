@@ -93,6 +93,7 @@ export const WA_SKIP_REASON_LABEL: Record<WaSkipReason, string> = {
   template_pending: "La plantilla no estaba aprobada por Meta.",
   mode_changed: "Cambió el modo de WhatsApp del sistema.",
   document_changed: "El documento cambió o se dejó de compartir.",
+  rescheduled: "El turno cambió de horario",
 };
 
 /** Lo que ve el consultorio cuando falla un envío. Nunca el mensaje crudo de Meta. */
