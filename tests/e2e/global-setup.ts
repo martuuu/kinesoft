@@ -9,6 +9,7 @@ import {
 } from "../helpers/tenant-factory";
 import { E2E_FIXTURE_FILE, E2E_PASSWORD, E2E_STATE_DIR, E2E_USERS_FILE } from "./support/e2e-constants.mjs";
 import type { E2EFixture } from "./support/fixture";
+import { createPlansFixtures, plansUsers } from "./support/plans";
 
 /**
  * OPS-6 · datos de la corrida: un tenant efímero con la MISMA factory que la integración (tests/helpers/tenant-factory.ts),
@@ -169,6 +170,9 @@ export default async function globalSetup(): Promise<void> {
       portal: { userId: portalUserId, email: portalEmail, password: E2E_PASSWORD, patientId: portalPatientId, bookingAt: portalBookingAt.toISOString() },
     };
     mkdirSync(E2E_STATE_DIR, { recursive: true });
+    // QA-E (T6+T7, §26.8): 3 consultorios más para `plans-matrix.spec.ts` (Consultorio General con Secretaría, Clínica
+    // Kine con salas, Individual Kine en solo lectura). Archivo propio (`plans.json`); sus usuarios van al GoTrue falso.
+    const plans = await createPlansFixtures(db);
     writeFileSync(E2E_FIXTURE_FILE, JSON.stringify(fixture, null, 2));
     // El GoTrue falso (support/start-server.mjs) lee este archivo en cada request.
     writeFileSync(
@@ -177,6 +181,7 @@ export default async function globalSetup(): Promise<void> {
         [
           { id: t.userId, email: owner.email, password: E2E_PASSWORD, fullName: fixture.owner.fullName },
           { id: portalUserId, email: portalEmail, password: E2E_PASSWORD, fullName: "Ana Portal E2E" },
+          ...plansUsers(plans),
         ],
         null,
         2

@@ -285,6 +285,8 @@ const childEnv = {
   // INF-ENV (C-WA5): WhatsApp con el Meta FALSO para toda la suite. Sin cuenta conectada (ninguna spec vieja la conecta)
   // el hook de turnos sale sin encolar nada, así que las specs de antes no cambian.
   WHATSAPP_MODE: "fake",
+  // QA-E: el gate ejercita el rechazo real de escrituras en solo lectura (el tenant principal es ACTIVE: no le cambia nada).
+  TENANT_ACCESS_ENFORCEMENT: "enforce",
   WHATSAPP_APP_ID: DEV_WAFAKE_LITERALS.WHATSAPP_APP_ID,
   WHATSAPP_APP_SECRET: DEV_WAFAKE_LITERALS.WHATSAPP_APP_SECRET,
   WHATSAPP_CONFIG_ID: DEV_WAFAKE_LITERALS.WHATSAPP_CONFIG_ID,
