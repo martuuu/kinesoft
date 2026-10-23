@@ -13,17 +13,20 @@ import { blockExternal, expectedNavFor, loginAs, readPlansFixture, sidebarHrefs 
  * - El menú esperado se DERIVA (`modulesFor` + `capabilitiesForMember` + `shellNavCaps` + `navFor`, desde la fila real
  *   del tenant y de la membresía) y además se fijan literales (§26.8: un oráculo roto no arrastra la fila).
  * - El copy del muro sale de `minimumPlanFor` + `SAAS_PLAN_LABEL` y se fija también el literal «… está en el plan Clínica».
- * - Solo lectura: `start-server.mjs` NO setea `TENANT_ACCESS_ENFORCEMENT` y ningún `.env*` lo trae, así que el server
- *   del E2E corre en el default `banner`: un trial vencido ve la banda «Pronto…» y el modo EFECTIVO es `full` (la escritura
- *   entra). Con `TENANT_ACCESS_ENFORCEMENT=enforce npm run test:e2e -- …` (el server hereda el env de Playwright) la misma
- *   spec afirma la banda de modo lectura y la escritura rechazada con `READ_ONLY_MESSAGE`. Ver el caso.
+ * - Solo lectura: `start-server.mjs` FIJA `TENANT_ACCESS_ENFORCEMENT=enforce` después de `...process.env` (el gate
+ *   ejercita el rechazo real), así que el env de Playwright no lo cambia: un trial vencido ve la banda de modo lectura y
+ *   la escritura se rechaza con `READ_ONLY_MESSAGE`. La rama `banner` queda para quien corra el server a mano con ese
+ *   modo (`E2E_TENANT_ACCESS_ENFORCEMENT=banner`, que tiene que coincidir con el server). Ver el caso.
  * - Todo lo que no sea el server local se aborta (`context.route`).
  */
 
-/** Como `tenantAccessEnforcement()` (lib/env.ts) en el server: el server hereda el env de este proceso. */
+/**
+ * El modo del server del E2E. Antes se leía de `TENANT_ACCESS_ENFORCEMENT` de este proceso con default `banner`, pero
+ * `start-server.mjs` lo fija en `enforce` y el caso afirmaba la banda equivocada (ZG 23-oct).
+ */
 const ENFORCEMENT = ((): "off" | "banner" | "enforce" => {
-  const v = process.env.TENANT_ACCESS_ENFORCEMENT?.trim();
-  return v === "off" || v === "banner" || v === "enforce" ? v : "banner";
+  const v = process.env.E2E_TENANT_ACCESS_ENFORCEMENT?.trim();
+  return v === "off" || v === "banner" || v === "enforce" ? v : "enforce";
 })();
 
 test.beforeEach(async ({ context }) => {

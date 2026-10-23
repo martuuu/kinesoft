@@ -481,6 +481,9 @@ describe.skipIf(!RUN)("M4 rooms · objetos, garantías en la base y migración s
           await tx.$executeRawUnsafe(`ALTER TABLE "PractitionerSchedule" DROP COLUMN "roomId"`);
           await tx.$executeRawUnsafe(`ALTER TABLE "TimeBlock" DROP COLUMN "roomId"`);
           await tx.$executeRawUnsafe(`DROP TYPE "RoomKind"`);
+          // M17 (T7) colgó de este índice la FK compuesta de la pantalla de la sala: se suelta antes (todo vuelve con
+          // el ROLLBACK intencional de abajo).
+          await tx.$executeRawUnsafe(`ALTER TABLE "ReceptionDisplay" DROP CONSTRAINT "ReceptionDisplay_location_tenant_fkey"`);
           await tx.$executeRawUnsafe(`DROP INDEX "Location_id_tenantId_key"`);
           for (const s of stmts) await tx.$executeRawUnsafe(s);
           const r = await tx.$queryRaw<{ updatedAt: Date; roomId: string | null }[]>`

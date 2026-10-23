@@ -6,7 +6,7 @@
  * never the function under test. Server actions from lib/*.ts run for real
  * against Postgres, through `runWithRls` and the real `getActor()`.
  */
-import { beforeEach, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, vi } from "vitest";
 import { realtimeFake as fakeRegistry } from "./realtime-fake";
 
 // PF-Z: `next start` instala `globalThis.AsyncLocalStorage` antes de cargar nada de Next; acá también, y en el setup
@@ -150,3 +150,19 @@ export { realtimeFake } from "./realtime-fake";
 
 // Cada test arranca con el registro vacío y sin fallos/latencia inyectados.
 beforeEach(() => fakeRegistry.reset());
+
+// ZG (23-oct): cada archivo arranca y termina con el MISMO process.env. Con `singleFork` todos los archivos comparten
+// el proceso, y `vi.stubEnv` guarda el valor «original» la primera vez que se stubbea una clave: si un test hacía
+// `vi.stubEnv("WHATSAPP_MODE", "off")` con el Meta falso instalado (que pone `fake` a mano), el original quedaba en
+// `fake` y el `vi.unstubAllEnvs()` de OTRO archivo lo resucitaba. Así `mps-3a` corría con WhatsApp prendido y los
+// archivos siguientes veían +1 sentencia en `createBooking` y la cuenta de WhatsApp en el caché del directorio.
+// Este hook corre al final del archivo (los `after*` van en orden inverso), después de los `uninstall()` propios.
+let envAtFileStart: Record<string, string | undefined> = {};
+beforeAll(() => {
+  envAtFileStart = { ...process.env };
+});
+afterAll(() => {
+  vi.unstubAllEnvs();
+  for (const k of Object.keys(process.env)) if (!(k in envAtFileStart)) delete process.env[k];
+  Object.assign(process.env, envAtFileStart);
+});

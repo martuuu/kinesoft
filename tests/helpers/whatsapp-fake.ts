@@ -106,6 +106,11 @@ export function installFakeGraph(
     appSecret?: string;
   } = {}
 ): InstalledFakeGraph {
+  // Un install sin su uninstall (p. ej. una fixture de `authz-matrix` que se arma dos veces en el mismo archivo) guardaba
+  // `WHATSAPP_MODE=fake` como «valor anterior»: el modo quedaba prendido para los archivos siguientes del mismo fork
+  // (ZG 23-oct: `createBooking` +1 sentencia y la clave `whatsapp:live-account` en el caché del directorio). Un install
+  // nuevo deshace el anterior primero, así el env y el fetch siempre vuelven a los del archivo.
+  activeFakeGraph?.uninstall();
   const app = (o.appUrl ?? FAKE_WA_APP_URL).replace(/\/+$/, "");
   const fake = `${app}${WA_FAKE_PATH}`;
   const hookPrefix = `${app}/api/webhooks/whatsapp`;
@@ -179,19 +184,28 @@ export function installFakeGraph(
   };
   globalThis.fetch = stub as typeof fetch;
 
-  return {
+  let installed = true;
+  const handle: InstalledFakeGraph = {
     hooks,
     calls,
     setWebhook: (h) => {
       webhook = h;
     },
+    // Idempotente: el `afterEach` y el `finally` de una celda pueden llamarlo los dos.
     uninstall: () => {
+      if (!installed) return;
+      installed = false;
+      if (activeFakeGraph === handle) activeFakeGraph = null;
       setEnv(prevEnv);
       globalThis.fetch = realFetch;
       if (o.reset !== false) resetFakeGraph();
     },
   };
+  activeFakeGraph = handle;
+  return handle;
 }
+
+let activeFakeGraph: InstalledFakeGraph | null = null;
 
 /** Lo mínimo de `EphemeralTenant` (no se importa el factory: este helper sirve también fuera de él). */
 type TenantLike = { tenantId: string; userId: string };

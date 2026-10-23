@@ -128,6 +128,8 @@ describe.skipIf(!RUN)("M8c saas_payment_method · objetos y datos", () => {
       SELECT conname FROM pg_constraint WHERE conrelid = '"SaasPayment"'::regclass AND contype = 'c' ORDER BY conname`;
     expect(checks.map((c) => c.conname)).toEqual([
       "SaasPayment_amountCents_check",
+      // M16 (T6, MPS) suma el tope del payload de Mercado Pago; el resto sigue igual que en M8.
+      "SaasPayment_mpPayload_check",
       "SaasPayment_notes_check",
       "SaasPayment_receipt_check",
       "SaasPayment_source_mp_check",
