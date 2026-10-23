@@ -43,6 +43,8 @@ describe("[BO3-A] PlatformShell", () => {
       "Facturación",
       "Precios",
       "Directorio",
+      // WA-U6 (T6): estado de la integración con Meta, después de Directorio.
+      "WhatsApp",
       "Salud",
       "Auditoría",
       "Sistema",

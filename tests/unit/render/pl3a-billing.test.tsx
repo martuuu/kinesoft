@@ -243,7 +243,7 @@ describe("[PL-3a] Plan y uso", () => {
       },
       new Date("2026-10-15T13:00:00Z")
     );
-  const overview = { plan: "INDIVIDUAL" as const, planLabel: "Individual", effectivePriceCents: null, customPriceCents: null, subscriptionStatus: "TRIALING" as const };
+  const overview = { plan: "INDIVIDUAL" as const, planLabel: "Individual", effectivePriceCents: null, customPriceCents: null, subscriptionStatus: "TRIALING" as const, nextCharge: null, charges: [] };
 
   it("prueba con días restantes, «1 de 1» y módulos", () => {
     const html = wrap(<PlanUsagePanel usage={usage({})} overview={overview} modules={KINE} choices={[]} />);

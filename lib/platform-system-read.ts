@@ -31,7 +31,7 @@ import "server-only";
  */
 import { createHash } from "node:crypto";
 import { prismaService } from "@/lib/db";
-import { env, mpConnectMode, mpConnectSignatureMode, tenantAccessEnforcement } from "@/lib/env";
+import { env, mpConnectMode, mpConnectSignatureMode, saasBillingMode, tenantAccessEnforcement, whatsappMode } from "@/lib/env";
 import { secretBoxStatus } from "@/lib/secret-box";
 import { pingDb } from "@/lib/db-ping";
 import { logger } from "@/lib/logger";
@@ -222,6 +222,8 @@ export async function getPlatformSystemStatus(): Promise<PlatformSystemStatus> {
       mpConnect,
       stuckCharges,
       envPresence: envPresence(),
+      // INT: modos que APLICA este deploy (getters de lib/env, en cada request), no el crudo.
+      appliedModes: { whatsapp: whatsappMode(), saasBilling: saasBillingMode() },
     },
     migrations,
     { up: ping.up, ms: ping.ms },

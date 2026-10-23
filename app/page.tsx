@@ -58,7 +58,8 @@ export default async function HomePage() {
   const plans = await getPublicPlanCatalog();
   const startedAt = Date.now();
   const trialDays = plans.find((p) => p.plan === "INDIVIDUAL")?.trialDays ?? null;
-  const showBilling = saasBillingMode() !== "off";
+  // D-VX17 / MPS-4a: la FAQ «¿Cómo pago?» aparece con `manual` o `mp` y su respuesta depende del modo.
+  const billingMode = saasBillingMode();
 
   return (
     <div className={base.page}>
@@ -72,7 +73,7 @@ export default async function HomePage() {
         <Specialty />
         <Steps trialDays={trialDays} />
         <LandingPricing plans={plans} />
-        <Faq trialDays={trialDays} showBilling={showBilling} />
+        <Faq trialDays={trialDays} billingMode={billingMode} />
         <LandingContact startedAt={startedAt} />
       </main>
       <SiteFooter />

@@ -43,8 +43,9 @@ import {
 
 /**
  * ¿El consultorio avisa por WhatsApp? (`PublicClinic.whatsappNotices` y la condición para guardar el consentimiento
- * del turnero.) Misma regla que el flag de la agenda (`agendaWhatsAppInTx`): modo ≠ off, cuenta ACTIVE del tenant y en
- * el MISMO modo que el env (una cuenta `fake` con `WHATSAPP_MODE=sandbox` no manda: el outbox re-chequea, C-WA7).
+ * del turnero.) Misma regla que el flag de la agenda (`agendaWhatsAppFor`, lib/agenda-page-loader.ts): modo ≠ off,
+ * cuenta ACTIVE del tenant y en el MISMO modo que el env (una cuenta `fake` con `WHATSAPP_MODE=sandbox` no manda: el
+ * outbox re-chequea, C-WA7).
  *
  *   - Con `off` corta ANTES de leer la cuenta: 0 sentencias (regla de T6: el modo apagado no agrega queries).
  *   - La cuenta sale de `getLiveAccountCached` (tag `whatsappAccount(tenantId)`): en caliente 0 sentencias; el

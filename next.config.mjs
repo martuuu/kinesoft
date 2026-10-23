@@ -216,6 +216,30 @@ const cspTvEnforced = [
   .map((d) => d.replace(/\s+/g, " ").trim())
   .join("; ");
 
+// --- Report-Only de /configuracion: alta embebida de WhatsApp (WA-U1, plan §26.3 fila INT) ------------------
+// En `sandbox`/`live` la pestaña WhatsApp carga el SDK de Facebook (`connect.facebook.net/…/sdk.js`) y `FB.login`
+// abre el Embedded Signup: el SDK monta iframes de `www`/`web`/`staticxx.facebook.com` (xd_arbiter) y le pega a
+// `graph.facebook.com`. Se habilita SOLO en esta ruta (el plan lo pide así): sumarlo a la global abría un script de
+// Meta en el portal, el turnero y la agenda, que no lo usan. Es la MISMA clave que la global en una entrada
+// posterior de `headers()`, así que la reemplaza (ver el comentario de Permissions-Policy). connect-src e img-src ya
+// tienen `https:` pelado en la Report-Only; los hosts van explícitos igual para que el día que pase a enforcing (sin
+// el comodín) la pestaña no se rompa en silencio. NO se manda `Cross-Origin-Opener-Policy: same-origin`: cortaría el
+// `window.opener` del popup de Meta y el `postMessage` con el resultado del alta nunca volvería.
+export const configuracionCspPaths = ["/configuracion", "/configuracion/:path*"];
+const FB_SCRIPT = "https://connect.facebook.net";
+const FB_FRAME = "https://www.facebook.com https://web.facebook.com https://staticxx.facebook.com";
+const FB_API = "https://graph.facebook.com https://www.facebook.com";
+const cspReportOnlyConfiguracion = cspReportOnly
+  .split("; ")
+  .map((d) => {
+    const name = d.split(" ")[0];
+    if (name === "script-src") return `${d} ${FB_SCRIPT}`;
+    if (name === "frame-src") return `${d} ${FB_FRAME}`;
+    if (name === "connect-src" || name === "img-src") return `${d} ${FB_API}`;
+    return d;
+  })
+  .join("; ");
+
 // Permissions-Policy: la global apaga cámara, micrófono y geolocalización en toda la app. `/tv` necesita además
 // autoplay (el video de la sala arranca solo, también dentro del iframe de YouTube), fullscreen (la tele en modo
 // kiosco) y screen-wake-lock (que la pantalla no se apague). En Next, cuando dos entradas de `headers()` matchean y
@@ -307,6 +331,11 @@ const nextConfig = {
           { key: "Content-Security-Policy", value: cspTvEnforced },
           { key: "Permissions-Policy", value: PERMISSIONS_POLICY_TV },
         ],
+      })),
+      // WA-U1: la Report-Only de /configuracion (global + Facebook) reemplaza a la global en esa ruta (misma clave).
+      ...configuracionCspPaths.map((source) => ({
+        source,
+        headers: [{ key: "Content-Security-Policy-Report-Only", value: cspReportOnlyConfiguracion }],
       })),
       // MB-0b (C-MB5): el navegador revisa /sw.js en cada navegación; sin caché HTTP un deploy nuevo del SW llega en
       // la próxima carga (riesgo «SW viejo pegado», junto con `updateViaCache: "none"` y `skipWaiting`). Va después

@@ -68,7 +68,9 @@ function errName(err: unknown): string {
 
 // ── Ruta ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
-export type CronJobName = "daily" | "invitations-expire" | "trial-reminders" | "health-digest";
+// WA-S4: «whatsapp» = el 2.º cron de vercel.json (18:00 AR). El nombre solo va al log `cron.done` y a la respuesta:
+// reusar «daily» haría que ese log se lea como el del cron diario.
+export type CronJobName = "daily" | "invitations-expire" | "trial-reminders" | "health-digest" | "whatsapp";
 
 const NO_STORE = { "cache-control": "no-store, max-age=0" };
 

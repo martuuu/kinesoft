@@ -162,6 +162,9 @@ describe("[BO3-F → PL-1d] Plan y uso", () => {
     effectivePriceCents: 2500000,
     customPriceCents: null,
     subscriptionStatus: "ACTIVE" as const,
+    // MPS-4a (INT): el panel le pasa al drawer la bajada programada y el primer período.
+    nextCharge: null,
+    charges: [],
   };
 
   it("plan SaaS, estado al día, cupos «Total 3 de 5», turnero y botón «Cambiar de plan» (PL-3a)", () => {

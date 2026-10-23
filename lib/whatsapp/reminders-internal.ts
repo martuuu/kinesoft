@@ -6,8 +6,8 @@ import { phoneHash, maskPhone } from "@/lib/whatsapp/crypto";
 import { getPhone, listTemplates, GRAPH_TIMEOUT_MS } from "@/lib/whatsapp/graph";
 import { eligibility, idemKey, tomorrowWindowAR, WA_MIN_LEAD_MS } from "@/lib/whatsapp/logic";
 import { TEMPLATE_SPECS } from "@/lib/whatsapp/templates";
-import type { WaConsentStatus, WaMode, WaTemplateKey, WaTemplateStatus } from "@/lib/whatsapp/types";
-import { loadCredential, markAccountProblem } from "@/lib/whatsapp/account-internal";
+import type { WaConsentStatus, WaMode, WaTemplateKey } from "@/lib/whatsapp/types";
+import { loadCredential, markAccountProblem, templateStatusOf } from "@/lib/whatsapp/account-internal";
 import {
   drainAll,
   enqueue,
@@ -300,27 +300,6 @@ async function enqueueReminders(
 }
 
 // ── 4. Sync de plantillas y calidad ────────────────────────────────────────────────────────────────────────────
-
-/**
- * Estado de Meta → el enum de M15. COPIA de `templateStatusOf` de `lib/whatsapp/account-internal.ts` (privada allá;
- * handoff a INT para exportarla y usar una sola). Lo desconocido (IN_APPEAL, PENDING_DELETION…) queda «en revisión».
- */
-function templateStatusOf(s: string | null | undefined): WaTemplateStatus {
-  switch ((s ?? "").toUpperCase()) {
-    case "APPROVED":
-      return "APPROVED";
-    case "REJECTED":
-      return "REJECTED";
-    case "PAUSED":
-      return "PAUSED";
-    case "DISABLED":
-    case "DELETED":
-    case "LIMIT_EXCEEDED":
-      return "DISABLED";
-    default:
-      return "PENDING";
-  }
-}
 
 type SyncAccount = {
   id: string;

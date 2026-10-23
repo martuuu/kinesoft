@@ -48,6 +48,8 @@ const MARKED: Required<SystemConfigInput> = {
   // PEND-b: cobros trabados ya armados (sin PHI) y la presencia de las variables de T6/T7 (solo booleanos).
   stuckCharges: { available: true, total: 0, tenants: 0, items: [] },
   envPresence: { WHATSAPP_APP_SECRET: true },
+  // INT: modos aplicados (enums, no secretos).
+  appliedModes: { whatsapp: "off", saasBilling: "off" },
 };
 
 const allChecks = (s: ReturnType<typeof buildSystemStatus>) => s.groups.flatMap((g) => g.checks);
@@ -293,6 +295,17 @@ describe("[BO3-E] getPlatformSystemStatus · el export real con env marcado", ()
     expect(Object.keys(args.select).sort()).toEqual(["createdAt", "kind", "reason", "status", "toMasked", "transport"]);
   });
 
+  it("[INT] los modos de WhatsApp y de la suscripción salen de los getters (fake fuera de lugar → off)", async () => {
+    const { mod } = await load(async () => ({ userId: "u", email: "e", homeTenantId: null }));
+    vi.stubEnv("WHATSAPP_MODE", "live");
+    vi.stubEnv("VERCEL_ENV", "preview"); // `live` en un Preview nunca manda: el getter lo baja a off
+    vi.stubEnv("SAAS_BILLING_MODE", "mp");
+    const s = await mod.getPlatformSystemStatus();
+    const byKey = Object.fromEntries(s.groups.flatMap((g) => g.checks).map((c) => [c.key, c]));
+    expect(byKey.whatsapp_mode_applied).toMatchObject({ value: "off" });
+    expect(byKey.saas_billing_mode_applied).toMatchObject({ value: "mp" });
+  });
+
   it("[OPS-1a] si EmailLog no se puede leer, la página no se cae (tarjeta «no disponible»)", async () => {
     emailLogFindMany.mockRejectedValueOnce(new Error("permission denied"));
     const { mod } = await load(async () => ({ userId: "u", email: "e", homeTenantId: null }));
@@ -354,5 +367,30 @@ describe("[OPS-1a] buildRecentEmailFailures · «Últimos mails que no salieron�
     expect(emailFailureLabel("unsafe_link_host")).toMatch(/localhost|local/i);
     expect(emailFailureLabel("timeout")).toMatch(/5 s/);
     expect(emailFailureLabel("desconocido")).toBeTruthy();
+  });
+});
+
+describe("[INT] Sistema · modos aplicados de WhatsApp y de la suscripción (§26.3, tarjetas WA/MPS)", () => {
+  const MIG = { available: true as const, applied: 46, last: null };
+  const byKey = (s: ReturnType<typeof buildSystemStatus>) => Object.fromEntries(allChecks(s).map((c) => [c.key, c]));
+
+  it("muestra el modo que aplica el deploy, en el grupo de T6/T7 y antes de la presencia", () => {
+    const s = buildSystemStatus({ ...MARKED, appliedModes: { whatsapp: "sandbox", saasBilling: "mp" } }, MIG, { up: true, ms: 1 });
+    const g = s.groups.find((x) => x.id === "env-t6t7")!;
+    expect(g.checks.slice(0, 2).map((c) => c.key)).toEqual(["whatsapp_mode_applied", "saas_billing_mode_applied"]);
+    expect(byKey(s).whatsapp_mode_applied).toMatchObject({ state: "value", value: "sandbox" });
+    expect(byKey(s).saas_billing_mode_applied).toMatchObject({ state: "value", value: "mp" });
+    expect(byKey(s).WHATSAPP_APP_SECRET).toMatchObject({ value: "sí" });
+  });
+
+  it("un valor que no es un modo no sale tal cual: «inválido» y warn", () => {
+    const s = buildSystemStatus({ appliedModes: { whatsapp: "SECRETO", saasBilling: "SECRETO" } }, MIG, { up: true, ms: 1 });
+    expect(JSON.stringify(s)).not.toContain("SECRETO");
+    expect(byKey(s).whatsapp_mode_applied).toMatchObject({ state: "warn", value: "inválido" });
+  });
+
+  it("sin modos ni presencia no hay grupo de T6/T7 (DTO armado a mano)", () => {
+    const s = buildSystemStatus({}, MIG, { up: true, ms: 1 });
+    expect(s.groups.some((g) => g.id === "env-t6t7")).toBe(false);
   });
 });

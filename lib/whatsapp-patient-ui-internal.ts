@@ -5,8 +5,8 @@ import "server-only";
  * paciente (alta, «Editar paciente», compartir ficha).
  *
  * Misma regla que el turnero (`turneroWhatsAppActive`, lib/public-booking-internal.ts) y la agenda
- * (`agendaWhatsAppInTx`): modo ≠ off, cuenta ACTIVE y en el MISMO modo que el env (una cuenta `fake` con
- * `WHATSAPP_MODE=sandbox` no manda). No se importa la del turnero porque `public-booking-internal` arrastra el ciclo
+ * (`agendaWhatsAppFor`, lib/agenda-page-loader.ts): modo ≠ off, cuenta ACTIVE y en el MISMO modo que el env (una
+ * cuenta `fake` con `WHATSAPP_MODE=sandbox` no manda). No se importa la del turnero porque `public-booking-internal` arrastra el ciclo
  * con `lib/public-booking` y el motor de reservas públicas: las páginas de pacientes no tienen por qué cargarlo.
  *
  *   - Con `off` corta ANTES de leer nada: 0 sentencias (regla de T6: el modo apagado no agrega queries).

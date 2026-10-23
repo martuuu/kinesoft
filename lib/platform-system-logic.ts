@@ -176,6 +176,39 @@ export const ENV_PRESENCE_VARS: ReadonlyArray<{ key: string; label: string; when
   { key: "MP_MIN_DEBIT_CENTS", label: "Mínimo del débito automático", whenMissing: "Sin cargar: usa el mínimo del código." },
 ];
 
+const WHATSAPP_MODE_DETAIL: Record<string, string> = {
+  off: "Apagado: no sale ningún WhatsApp y los write paths no agregan lecturas.",
+  fake: "Simulador local: los mensajes no le llegan a nadie.",
+  sandbox: "Sandbox de Meta: solo llega a los números de prueba de la app.",
+  live: "Producción: los avisos salen a los pacientes que dieron su consentimiento.",
+};
+const SAAS_BILLING_MODE_DETAIL: Record<string, string> = {
+  off: "No se cobra la suscripción: Facturación no muestra cargos ni pagos.",
+  manual: "Pago manual: el consultorio informa la transferencia con su comprobante.",
+  mp: "Mercado Pago: débito automático, pago con Mercado Pago cada mes o transferencia.",
+};
+
+function appliedModeChecks(m: { whatsapp: string; saasBilling: string }): SystemCheck[] {
+  const wa = enumValue(m.whatsapp, Object.keys(WHATSAPP_MODE_DETAIL), "off");
+  const saas = enumValue(m.saasBilling, Object.keys(SAAS_BILLING_MODE_DETAIL), "off");
+  return [
+    {
+      key: "whatsapp_mode_applied",
+      label: "WhatsApp (modo aplicado)",
+      state: wa === "inválido" ? "warn" : "value",
+      value: wa,
+      detail: WHATSAPP_MODE_DETAIL[wa] ?? "Valor no reconocido.",
+    },
+    {
+      key: "saas_billing_mode_applied",
+      label: "Cobro de la suscripción (modo aplicado)",
+      state: saas === "inválido" ? "warn" : "value",
+      value: saas,
+      detail: SAAS_BILLING_MODE_DETAIL[saas] ?? "Valor no reconocido.",
+    },
+  ];
+}
+
 function envPresenceChecks(presence: Readonly<Record<string, boolean>>): SystemCheck[] {
   return ENV_PRESENCE_VARS.map(({ key, label, whenMissing }): SystemCheck =>
     presence[key] === true
@@ -310,6 +343,12 @@ export type SystemConfigInput = {
   stuckCharges?: StuckChargesInfo | null;
   /** PEND-b: presencia (sí/no) de las variables de `ENV_PRESENCE_VARS`, calculada en el read. Nunca el valor. */
   envPresence?: Readonly<Record<string, boolean>> | null;
+  /**
+   * INT (§26.3, «tarjetas WA/MPS en Sistema»): el modo que la app APLICA, de los getters de `lib/env.ts`
+   * (`whatsappMode()`: `fake` en Vercel o `live` en Preview ya caen a `off`; `saasBillingMode()`). No es el crudo de
+   * `process.env`: la presencia de arriba dice si la variable está; esto dice qué hace el deploy con ella.
+   */
+  appliedModes?: { whatsapp: string; saasBilling: string } | null;
 };
 
 /** Lo que el read le pasa al builder del grupo «Cobros online (Mercado Pago)». Nada de esto es un secreto. */
@@ -751,8 +790,15 @@ export function buildSystemStatus(
       checks: [presence("CRON_SECRET", "Secreto de los cron", input.CRON_SECRET, "Sin secreto, los cron no pueden autenticarse.", "Cargado.")],
     },
   ];
-  if (input.envPresence) {
-    groups.push({ id: "env-t6t7", title: "WhatsApp y suscripción (variables)", checks: envPresenceChecks(input.envPresence) });
+  if (input.envPresence || input.appliedModes) {
+    groups.push({
+      id: "env-t6t7",
+      title: "WhatsApp y suscripción (variables)",
+      checks: [
+        ...(input.appliedModes ? appliedModeChecks(input.appliedModes) : []),
+        ...(input.envPresence ? envPresenceChecks(input.envPresence) : []),
+      ],
+    });
   }
 
   return { generatedAt: now.toISOString(), groups };

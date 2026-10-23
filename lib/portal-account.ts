@@ -24,6 +24,11 @@ export type PortalAccountPage = {
   /** ES4 P4.Z (handoff S24d): secciones de la ficha, para montar `<PortalTabs>` sin otra lectura. */
   sections: PortalSection[];
   account: PortalAccountDTO;
+  /**
+   * Del mismo vínculo resuelto (sin query extra). WA-U4: la tarjeta de avisos del portal pregunta si el consultorio
+   * tiene el canal activo por este id; antes la page volvía a llamar `requirePortalPatient` solo para sacarlo.
+   */
+  tenantId: string;
 };
 
 export async function getPortalAccount(slug: string): Promise<PortalAccountDTO | null> {
@@ -44,5 +49,6 @@ export async function getPortalAccountPage(slug: string): Promise<PortalAccountP
     showPlans: sections.has("plan"),
     sections: PORTAL_SECTIONS.filter((x) => sections.has(x)),
     account: await loadPortalAccount(ref),
+    tenantId: ref.tenantId,
   };
 }

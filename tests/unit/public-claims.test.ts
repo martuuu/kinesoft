@@ -169,11 +169,20 @@ describe("[VX2-c1] claims prohibidos en superficies públicas (§3.4)", () => {
     // Solo landing: el turnero (`components/booking/**`) sí muestra MP al paciente, que es quien paga.
     const landing = files.filter((f) => f.startsWith("components/landing/") || f === "app/page.tsx");
     expect(landing.length).toBeGreaterThan(5);
-    const hits = landing.flatMap((f) =>
-      stripComments(readFileSync(join(ROOT, f), "utf8"))
+    // INT (T6): con `SAAS_BILLING_MODE=mp` la FAQ «¿Cómo pago?» nombra Mercado Pago para la SUSCRIPCIÓN del consultorio
+    // (no el turnero). Se acepta solo con `// claim-ok: <archivo>:<línea>` en esa línea o la anterior, como el guard de
+    // arriba: otro «Mercado Pago» en la landing sigue en rojo.
+    const hits = landing.flatMap((f) => {
+      const raw = readFileSync(join(ROOT, f), "utf8");
+      const rawLines = raw.split("\n");
+      return stripComments(raw)
         .split("\n")
-        .flatMap((l, i) => (/mercado\s*pago/i.test(l) ? [`${f}:${i + 1} ${l.trim()}`] : [])),
-    );
+        .flatMap((l, i) =>
+          /mercado\s*pago/i.test(l) && !CLAIM_OK.test(rawLines[i]) && !(i > 0 && CLAIM_OK.test(rawLines[i - 1]))
+            ? [`${f}:${i + 1} ${l.trim()}`]
+            : [],
+        );
+    });
     expect(hits, hits.join("\n")).toEqual([]);
   });
 

@@ -72,6 +72,7 @@ export default async function ConfiguracionPage({
     onlinePayments,
     myMp,
     previewServicePriceCents,
+    whatsapp,
   } = loaded;
   // BO3-F: el soporte entra con `getMembershipRole` = ASSISTANT (su nivel de lectura clínica), que en la UI le
   // apagaba horarios, turnero y la pestaña Usuarios aunque el server se los deja (allowlist `withSupportWritable`,
@@ -140,6 +141,8 @@ export default async function ConfiguracionPage({
       previewServicePriceCents={previewServicePriceCents}
       myMp={myMp}
       mpReturn={parseMpReturn(searchParams?.mp)}
+      // WA-U1: pestaña WhatsApp (null = sin `tenant.sensitive` o `WHATSAPP_MODE=off`: la pestaña no aparece).
+      whatsapp={whatsapp}
     />
   );
 }

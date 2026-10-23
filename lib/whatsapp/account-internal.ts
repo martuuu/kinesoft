@@ -459,8 +459,11 @@ async function recordStepError(tenantId: string, accountId: string, code: string
   });
 }
 
-/** Estado de Meta → el enum de M15. Lo desconocido (IN_APPEAL, PENDING_DELETION…) queda «en revisión». */
-function templateStatusOf(s: string | null | undefined): WaTemplateStatus {
+/**
+ * Estado de Meta → el enum de M15. Lo desconocido (IN_APPEAL, PENDING_DELETION…) queda «en revisión». Exportada para
+ * el sync del cron (`lib/whatsapp/reminders-internal.ts`): una sola tabla, así el alta y el sync no clasifican distinto.
+ */
+export function templateStatusOf(s: string | null | undefined): WaTemplateStatus {
   switch ((s ?? "").toUpperCase()) {
     case "APPROVED":
       return "APPROVED";

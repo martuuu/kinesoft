@@ -110,7 +110,19 @@ export function PlanUsagePanel({
   onGoToBilling,
 }: {
   usage: TenantPlanUsageView | null;
-  overview: Pick<BillingOverview, "plan" | "planLabel" | "effectivePriceCents" | "subscriptionStatus" | "customPriceCents">;
+  overview: Pick<
+    BillingOverview,
+    | "plan"
+    | "planLabel"
+    | "effectivePriceCents"
+    | "subscriptionStatus"
+    | "customPriceCents"
+    // MPS-4a: la bajada programada y el primer período (sin cargos todavía) los muestra el drawer.
+    | "pendingPlan"
+    | "billableFrom"
+    | "nextCharge"
+    | "charges"
+  >;
   /** Módulos del consultorio hoy (`modulesFor(actor.entitlements)`). */
   modules: readonly TenantModule[];
   choices: readonly PlanChoice[];
@@ -252,6 +264,14 @@ export function PlanUsagePanel({
           vertical={vertical}
           trialing={overview.subscriptionStatus === "TRIALING"}
           usersNow={total?.used ?? null}
+          pendingPlan={overview.pendingPlan ?? null}
+          // MPS-4a: sin ningún cargo emitido el consultorio está en su primer período; el drawer avisa desde cuándo se
+          // cobra y cuándo llega el primer cargo.
+          firstPeriod={
+            overview.charges.length === 0 && overview.billableFrom && overview.nextCharge
+              ? { billableFrom: overview.billableFrom, nextChargeOn: overview.nextCharge.periodStart }
+              : null
+          }
           onContactSales={(d) => onContactSales?.(d)}
           // refresh-ok: el plan cambia los módulos del shell (nav, salas, sala de espera); el `revalidatePath` de la
           // action trae la página pero no re-renderiza el layout `(app)`.

@@ -141,7 +141,11 @@ describe("[VX2-c1] landing", () => {
     process.env[ENV_KEY] = "off";
     expect(await render()).not.toContain("¿Cómo pago?");
     process.env[ENV_KEY] = "mp";
-    expect(await render()).toContain("¿Cómo pago?");
+    const mp = await render();
+    expect(mp).toContain("¿Cómo pago?");
+    // INT (handoff de MPS-4a): con `mp` la respuesta ya no es la del pago manual.
+    expect(mp).toContain("débito automático o Mercado Pago cada mes, o transferencia informando el comprobante.");
+    expect(mp).not.toContain("Con un pago manual");
     process.env[ENV_KEY] = "manual";
     const html = await render();
     expect(html).toContain("¿Cómo pago?");
@@ -150,9 +154,9 @@ describe("[VX2-c1] landing", () => {
   });
 
   it("FAQ: la primera abierta y el resto cerradas; sin días si no hay prueba", () => {
-    expect(faqItems({ trialDays: 14, showBilling: false })[0].a).toContain("14 días gratis");
-    expect(faqItems({ trialDays: null, showBilling: false })[0].a).not.toMatch(/\d/);
-    expect(faqItems({ trialDays: 0, showBilling: true }).map((i) => i.q)).toContain("¿Cómo pago?");
+    expect(faqItems({ trialDays: 14, billingMode: "off" })[0].a).toContain("14 días gratis");
+    expect(faqItems({ trialDays: null, billingMode: "off" })[0].a).not.toMatch(/\d/);
+    expect(faqItems({ trialDays: 0, billingMode: "manual" }).map((i) => i.q)).toContain("¿Cómo pago?");
   });
 
   it("especialidad: título de Martin, sin switch, con ejercicios compartidos y el cierre para General (D-VX2/15/27)", async () => {
@@ -200,9 +204,10 @@ describe("[VX2-c1] landing", () => {
     const html = await render();
     expect(html).not.toMatch(/mercado\s*pago/i);
     expect(html).toContain("Tus pacientes reservan desde el link de tu consultorio: eligen profesional, servicio y horario.");
-    const reserva = faqItems({ trialDays: 14, showBilling: true }).find((i) => i.q === "¿Cómo reservan turno mis pacientes?");
+    const reserva = faqItems({ trialDays: 14, billingMode: "manual" }).find((i) => i.q === "¿Cómo reservan turno mis pacientes?");
     expect(reserva?.a).toBe("Desde el link de tu consultorio: eligen profesional, servicio y horario.");
-    for (const i of faqItems({ trialDays: 14, showBilling: true })) expect(i.a).not.toMatch(/mercado\s*pago/i);
+    // Con `mp` la respuesta de «¿Cómo pago?» SÍ nombra Mercado Pago: es la suscripción del consultorio (T6), no el turnero.
+    for (const i of faqItems({ trialDays: 14, billingMode: "manual" })) expect(i.a).not.toMatch(/mercado\s*pago/i);
   });
 
   it("[VX-Z] footer sin email de soporte: «¿Dudas? Escribinos.» con link a #contacto", () => {

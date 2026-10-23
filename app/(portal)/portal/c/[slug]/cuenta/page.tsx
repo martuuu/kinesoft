@@ -54,7 +54,7 @@ export default async function PortalAccountPageRoute({ params }: { params: { slu
   // WA-U4 (§26.5): «Avisos por WhatsApp». Con `WHATSAPP_MODE=off` (prod hoy) ni se lee: 0 queries extra y sin tarjeta.
   // Con el canal prendido: se ofrece activar solo si el consultorio tiene la cuenta ACTIVE en este modo (misma regla
   // que la casilla del turnero); un GRANTED se muestra igual para poder revocarlo aunque el consultorio se desconecte.
-  const wa = whatsappMode() === "off" ? null : await loadWhatsAppConsent(params.slug); // claim-ok: lib/portal-whatsapp-consent.ts:55
+  const wa = whatsappMode() === "off" ? null : await loadWhatsAppConsent(params.slug, data.tenantId); // claim-ok: lib/portal-whatsapp-consent.ts:55
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -87,13 +87,13 @@ export default async function PortalAccountPageRoute({ params }: { params: { slu
 }
 
 /**
- * WA-U4. `requirePortalPatient` otra vez por el `tenantId` (no está en `PortalAccountPage`): son 2 lecturas más solo
- * con el canal prendido (handoff: sumar `tenantId` a `PortalAccountPage` y sacarla). `turneroWhatsAppActive` no tira.
+ * WA-U4. El `tenantId` sale de `getPortalAccountPage` (el mismo vínculo ya resuelto): sin una 2.ª
+ * `requirePortalPatient`. Solo con el canal prendido. `turneroWhatsAppActive` no tira. // claim-ok: lib/portal-whatsapp-consent.ts:55
  */
-async function loadWhatsAppConsent(slug: string) { // claim-ok: lib/portal-whatsapp-consent.ts:55
-  const [consent, ref] = await Promise.all([getMyWhatsAppConsent(slug), requirePortalPatient(slug)]); // claim-ok: lib/portal-whatsapp-consent.ts:55
-  if (!consent || !ref) return null;
-  const canGrant = await turneroWhatsAppActive(ref.tenantId); // claim-ok: lib/portal-whatsapp-consent.ts:55
+async function loadWhatsAppConsent(slug: string, tenantId: string) { // claim-ok: lib/portal-whatsapp-consent.ts:55
+  const consent = await getMyWhatsAppConsent(slug); // claim-ok: lib/portal-whatsapp-consent.ts:55
+  if (!consent) return null;
+  const canGrant = await turneroWhatsAppActive(tenantId); // claim-ok: lib/portal-whatsapp-consent.ts:55
   if (!canGrant && consent.status !== "GRANTED") return null;
   return { consent, canGrant };
 }

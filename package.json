@@ -21,6 +21,7 @@
     "prisma:reset": "dotenv -e .env.local -- prisma migrate reset",
     "diag:email": "tsx --conditions=react-server scripts/diagnose-email.ts",
     "diagnose:mp-connect": "tsx --conditions=react-server scripts/diagnose-mp-connect.ts",
+    "diagnose:whatsapp": "tsx --conditions=react-server scripts/diagnose-whatsapp.ts",
     "guard:isolation": "node scripts/guard-tenant-isolation.mjs && node scripts/guard-realtime.mjs",
     "catalog:import": "dotenv -e .env.local -- tsx scripts/catalog-import.ts",
     "diagnosis:import": "dotenv -e .env.local -- tsx scripts/diagnosis-import.ts",
