@@ -176,7 +176,7 @@ describe.skipIf(!RUN)("[PL-2b] cron diario: cobros", () => {
     expect(r.subscriptionsCreated).toBe(1);
     const sub = await db.saasSubscription.findUniqueOrThrow({ where: { tenantId: t.tenantId } });
     const startKey = addDaysKey(toARDateKey(trialEndsAt), 1);
-    expect(sub.anchorDay).toBe(Math.min(Number(startKey.slice(8)), 28));
+    expect(sub.anchorDay).toBe(4);
     expect(toARDateKey(sub.nextChargeAt!) >= startKey).toBe(true);
     expect(await db.saasCharge.count({ where: { tenantId: t.tenantId } })).toBe(0);
 

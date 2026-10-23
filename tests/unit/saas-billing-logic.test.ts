@@ -41,12 +41,13 @@ describe("[PL-2b] anclaje y períodos (fechas civiles AR)", () => {
     expect(billingStartKey({ trialEndsAt, createdAt: new Date("2026-10-01T12:00:00Z") })).toBe("2026-10-15");
   });
 
-  it("alta 22:30 AR del 31-ene (01:30 UTC del 1-feb) sin prueba → empieza el 31-ene, anclaje 28", () => {
+  it("[MPS-1a] alta 22:30 AR del 31-ene (01:30 UTC del 1-feb) sin prueba → empieza el 31-ene, ancla 4 (MPS-D7)", () => {
     const start = billingStartKey({ trialEndsAt: null, createdAt: new Date("2026-02-01T01:30:00Z") });
     expect(start).toBe("2026-01-31");
-    expect(anchorDayFor(start)).toBe(28);
-    // 31 > 28: el primer período arranca el 28 SIGUIENTE (días de regalo, nunca superpuesto con la prueba).
-    expect(firstPeriodStartKey(start, 28)).toBe("2026-02-28");
+    // Antes (PL2b-D1) el ancla era el día del alta con tope 28; desde MPS-D7 es siempre el 4 y el tramo 31-ene → 4-feb
+    // se cobra como proporcional (stubFor), ya no hay días de regalo.
+    expect(anchorDayFor(start)).toBe(4);
+    expect(firstPeriodStartKey(start, anchorDayFor(start))).toBe("2026-02-04");
   });
 
   it("tope 28: un anclaje 28 existe en febrero (también bisiesto) y el período siguiente cae 28", () => {

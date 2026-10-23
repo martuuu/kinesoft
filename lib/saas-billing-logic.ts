@@ -1,28 +1,32 @@
 /**
- * Lógica pura de los cobros de la suscripción (PL-2b, contratos C-PL7..10 recortados: SIN Mercado Pago, decisión de
- * Martin del 16-oct; plan §20.5.6 y la nota final de §20.18). Sin DB, sin env, sin `next/*`: la usan
- * `lib/saas-billing-internal.ts` (canal service), las actions de Configuración y de Plataforma y los unit tests en
- * TZ=UTC y TZ=AR.
+ * Lógica pura de los cobros de la suscripción (PL-2b, contratos C-PL7..10; ampliada en MPS-1a con C-MPS2, plan §26.6
+ * y la enmienda §22.6). Sin DB, sin env, sin `next/*`: la usan `lib/saas-billing-internal.ts` (canal service), los
+ * escritores de MPS (`saas-adjustments-internal`, `saas-billing-schedule-internal`), las actions de Configuración y de
+ * Plataforma y los unit tests en TZ=UTC y TZ=AR.
  *
- * Fechas: un período es «del 5 de este mes al 5 del que viene» en Argentina, no un instante UTC. Por eso todo se
+ * Fechas: un período es «del 4 de este mes al 4 del que viene» en Argentina, no un instante UTC. Por eso todo se
  * calcula sobre CLAVES de fecha civil AR («YYYY-MM-DD», `toARDateKey`) con aritmética `Date.UTC` (no depende del TZ
  * del host: en Vercel corre en UTC y en la máquina de Martin en AR, y los dos tienen que dar lo mismo). Las columnas
  * `SaasCharge.periodStart/periodEnd/dueDate` son `DATE`: Prisma las lee y escribe como medianoche UTC del día, así
  * que la conversión clave ↔ Date de esas columnas es la UTC (`dbDateFromKey` / `keyFromDbDate`); el resto de los
  * instantes (`trialEndsAt`, `createdAt`, `now`) pasan por `toARDateKey`.
  *
- * Decisiones con default (anotadas en el reporte de PL-2b):
- *  - PL2b-D1 día de anclaje = el día siguiente al fin de la prueba (o el día del alta si no hubo prueba), con tope
- *    28 para que exista en todos los meses. Si ese día es 29..31, el primer período arranca el 28 SIGUIENTE (unos días
- *    de regalo, nunca un cobro superpuesto con la prueba; sin prorrateo, PL-D9).
- *  - PL2b-D2 el cargo vence `CHARGE_DUE_DAYS` (5) días después de empezar el período; vencido y sin pagar → PAST_DUE,
- *    y desde ahí corren los 10 días de gracia de `tenantAccessFor` (BO-D3) antes del modo lectura.
+ * Decisiones con default (PL-2b, y lo que cambió con MPS):
+ *  - PL2b-D1 (REEMPLAZADA por MPS-D7, §22.6, decisión de Martin): todos los consultorios cobran el día
+ *    `SAAS_ANCHOR_DAY` (4), sea cual sea el medio de pago. Antes el ancla era el día siguiente al fin de la prueba
+ *    (tope 28); eso dejaba un día de cobro distinto por consultorio y hacía imposible un débito automático con una
+ *    fecha fija y un único ajuste del monto el día 3. El alta a mitad de mes ya no regala días: el tramo hasta el
+ *    primer 4 se cobra como proporcional en el primer cargo (`stubFor`, MPS-D4/D13). Las suscripciones viejas se
+ *    re-anclan con `scripts/saas-reanchor.ts` (lo corre Martin).
+ *  - PL2b-D2 el cargo vence `CHARGE_DUE_DAYS` (5) días después de empezar el período: vence el 9, PAST_DUE desde el
+ *    10, y desde ahí corren los 10 días de gracia de `tenantAccessFor` (BO-D3) antes del modo lectura.
  *  - PL2b-D3 un consultorio en prueba con la prueba vencida y sin pagar NO pasa a PAST_DUE: sigue TRIALING y lo corta
  *    la regla de la prueba (7 días de gracia, BO-D2), que es más corta. Pasa a ACTIVE cuando salda un cargo.
- *  - PL2b-D4 CANCELLED lo pone y lo saca solo Plataforma: el cobro nunca lo toca.
+ *  - PL2b-D4 CANCELLED lo pone Plataforma o la baja programada que vence (MPS-D6); el cobro de cargos nunca lo toca.
  */
-import type { SaasChargeStatus, SubscriptionStatus } from "@prisma/client";
+import type { SaasAdjustmentKind, SaasChargeStatus, SaasPlan, SubscriptionStatus } from "@prisma/client";
 import { toARDateKey } from "@/lib/datetime-ar";
+import { PLAN_ORDER } from "@/lib/tenant-modules";
 
 /** «YYYY-MM-DD» de una fecha civil en Argentina. */
 export type DateKey = string;
@@ -30,8 +34,13 @@ export type DateKey = string;
 const DAY_MS = 86_400_000;
 const KEY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-/** PL2b-D1: el día de anclaje existe en todos los meses (CHECK 1..28 de `SaasSubscription.anchorDay`). */
+/** El día de anclaje existe en todos los meses (CHECK 1..28 de `SaasSubscription.anchorDay`). */
 export const MAX_ANCHOR_DAY = 28;
+/**
+ * MPS-D7 (§22.6): el día de cobro de TODAS las suscripciones. Es también el default de la columna
+ * `SaasSubscription.anchorDay` desde M16; si alguna vez cambia, cambia en los dos lados.
+ */
+export const SAAS_ANCHOR_DAY = 4;
 /** PL2b-D2: días entre el inicio del período y el vencimiento del cargo. */
 export const CHARGE_DUE_DAYS = 5;
 
@@ -99,7 +108,7 @@ export function arMidnight(key: DateKey): Date {
 // ── Anclaje y períodos ──────────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * Primer día que se cobra (PL2b-D1): el siguiente al último día de prueba (en AR), o el día del alta si no hubo
+ * Primer día que se factura (`billableFrom`, MPS-D13): el siguiente al último día de prueba (en AR), o el día del alta si no hubo
  * prueba. `trialEndsAt` es el FIN del último día de prueba (molde de `tenantAccessFor`: su día AR es el último día).
  */
 export function billingStartKey(t: { trialEndsAt: Date | null; createdAt: Date }): DateKey {
@@ -107,8 +116,29 @@ export function billingStartKey(t: { trialEndsAt: Date | null; createdAt: Date }
   return toARDateKey(t.createdAt);
 }
 
-export function anchorDayFor(startKey: DateKey): number {
-  return Math.min(dayOfKey(startKey), MAX_ANCHOR_DAY);
+/**
+ * Día de anclaje de una suscripción nueva. Desde MPS-D7 es siempre `SAAS_ANCHOR_DAY`: el parámetro queda por firma
+ * (lo llaman `ensureSubscriptionInTx` y `readLedger`, y el día que vuelva a depender del alta no hay que tocarlos).
+ */
+export function anchorDayFor(_startKey: DateKey): number {
+  return SAAS_ANCHOR_DAY;
+}
+
+/** `Date` (instante) o clave AR → clave AR. Los instantes pasan por `toARDateKey`, nunca por el reloj del host. */
+function keyOf(d: DateKey | Date): DateKey {
+  return typeof d === "string" ? (parseKey(d), d) : toARDateKey(d);
+}
+
+/**
+ * El próximo día de cobro ESTRICTAMENTE posterior a hoy (en AR). El mismo 4 cuenta como «ya pasó»: ese día el cron
+ * crea el cargo del período que empieza hoy, así que lo próximo es el 4 del mes siguiente. Acepta un instante: a las
+ * 23:59 AR del 3 (02:59Z del 4) todavía devuelve el 4 de ese mes.
+ */
+export function nextAnchorKey(today: DateKey | Date): DateKey {
+  const key = keyOf(today);
+  const [y, m] = parseKey(key);
+  const sameMonth = keyOfUtc(Date.UTC(y, m - 1, SAAS_ANCHOR_DAY));
+  return sameMonth > key ? sameMonth : addMonthsKey(sameMonth, 1);
 }
 
 /** La primera fecha con día `anchorDay` que no es anterior a `startKey`. */
@@ -130,6 +160,210 @@ export type BillingPeriod = { periodStart: DateKey; periodEnd: DateKey; dueDate:
 /** Período mensual que empieza en `periodStart` (fin exclusivo = mismo día del mes siguiente). */
 export function periodFor(periodStart: DateKey): BillingPeriod {
   return { periodStart, periodEnd: addMonthsKey(periodStart, 1), dueDate: addDaysKey(periodStart, CHARGE_DUE_DAYS) };
+}
+
+// ── Orden de planes y precio a medida ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * Orden de los planes, de menor a mayor (MPS-D11: la dirección de un cambio sale de acá, no del precio). Se reexporta
+ * el de `lib/tenant-modules.ts` para que haya una sola fuente: los módulos por plan y el cobro no pueden discrepar.
+ */
+export { PLAN_ORDER };
+
+function planIndex(p: SaasPlan): number {
+  const i = PLAN_ORDER.indexOf(p);
+  if (i < 0) throw new Error(`[saas-billing-logic] plan desconocido: ${String(p)}`);
+  return i;
+}
+
+/**
+ * MPS-D14: el precio a medida queda atado al plan para el que se pactó (`customPricePlan`): si el consultorio sube o
+ * baja de plan, paga el precio del plan nuevo (un descuento de Consultorio no viaja a Clínica). `customPricePlan`
+ * NULL con precio = precio fijado antes de M16 (legado): vale para cualquier plan, como antes, hasta que Plataforma lo
+ * vuelva a guardar. Devuelve el precio a medida que corresponde o `null` (= el del plan); se pasa tal cual a
+ * `chargeAmountFor`.
+ */
+export function effectiveCustomPrice(p: {
+  customPriceCents: number | null;
+  customPricePlan: SaasPlan | null;
+  plan: SaasPlan;
+}): number | null {
+  if (p.customPriceCents === null || p.customPriceCents === undefined) return null;
+  if (p.customPricePlan === null || p.customPricePlan === undefined) return p.customPriceCents;
+  return p.customPricePlan === p.plan ? p.customPriceCents : null;
+}
+
+// ── Proporcionales (SaasAdjustment PRORATION) ──────────────────────────────────────────────────────────────────
+
+function assertCents(v: number, what: string): void {
+  if (!Number.isSafeInteger(v)) throw new Error(`[saas-billing-logic] ${what} inválido: ${String(v)}`);
+}
+
+/**
+ * `cents · days / periodDays` redondeado half-up en enteros (sin flotantes: 0,5 sube siempre, nunca el redondeo
+ * bancario de `Math.round` sobre un producto que ya perdió precisión). Solo para montos ≥ 0.
+ */
+function halfUpShare(cents: number, days: number, periodDays: number): number {
+  return Math.floor((2 * cents * days + periodDays) / (2 * periodDays));
+}
+
+export type Proration = { amountCents: number; days: number; periodDays: number };
+
+/**
+ * Proporcional de una subida de plan (MPS-D4): la diferencia mensual por los días que faltan del período, contando el
+ * día de la subida (rige ya) y sin contar `periodEnd` (exclusivo, es el inicio del próximo). Días civiles AR.
+ * `null` = no hay nada que sumar: sin diferencia o bajada, la fecha ya está fuera del período o el monto redondea a 0
+ * (la tabla exige `amountCents > 0`). Una fecha anterior al período (no debería pasar) cobra el período entero.
+ */
+export function prorate(p: { diffCents: number; fromKey: DateKey; periodStart: DateKey; periodEnd: DateKey }): Proration | null {
+  assertCents(p.diffCents, "diffCents");
+  if (p.diffCents <= 0) return null;
+  const periodDays = diffDaysKey(p.periodStart, p.periodEnd);
+  if (periodDays <= 0) return null;
+  const days = Math.min(periodDays, diffDaysKey(p.fromKey, p.periodEnd));
+  if (days <= 0) return null;
+  const amountCents = halfUpShare(p.diffCents, days, periodDays);
+  return amountCents > 0 ? { amountCents, days, periodDays } : null;
+}
+
+export type StubProration = Proration & { effectiveOn: DateKey; idempotencyKey: string };
+
+/**
+ * Proporcional del primer período (MPS-D13, «stub»): el alta (o el fin de la prueba) cae a mitad de mes y el primer
+ * cargo completo arranca el 4 siguiente (`periodStart`). El tramo `[billableFrom, periodStart)` se cobra como
+ * PRORATION en ese primer cargo, sobre los días del período que termina en `periodStart` (21/10 → 4/11 = 14/31).
+ * Clave de idempotencia `stub:<billableFrom>` (UNIQUE por tenant: el cron puede correr dos veces). `null` = no hay
+ * tramo (arranca justo el 4), no hay precio («Consultá» o $0) o `billableFrom` es posterior al período.
+ */
+export function stubFor(p: { billableFrom: DateKey; periodStart: DateKey; priceCents: number | null }): StubProration | null {
+  if (p.priceCents === null || p.priceCents === undefined) return null;
+  assertCents(p.priceCents, "priceCents");
+  if (p.priceCents <= 0) return null;
+  const prevStart = addMonthsKey(p.periodStart, -1);
+  const periodDays = diffDaysKey(prevStart, p.periodStart);
+  const days = Math.min(periodDays, diffDaysKey(p.billableFrom, p.periodStart));
+  if (days <= 0) return null;
+  const amountCents = halfUpShare(p.priceCents, days, periodDays);
+  if (amountCents <= 0) return null;
+  return { amountCents, days, periodDays, effectiveOn: p.billableFrom, idempotencyKey: `stub:${p.billableFrom}` };
+}
+
+// ── Cambio de plan y baja ──────────────────────────────────────────────────────────────────────────────────────
+
+/** Mismo literal que `PlanChangeKind` de `lib/saas-billing-types.ts` (MPS-K); acá para no depender del archivo de tipos. */
+export type PlanChangeKindResult = "immediate" | "upgrade_prorated" | "scheduled_downgrade" | "blocked_cancel_pending";
+
+/**
+ * Qué tipo de cambio de plan es (MPS-D4/D5/D11/D18):
+ *  - baja pendiente (o CANCELLED, que ya es solo lectura) → `blocked_cancel_pending`: primero se deshace la baja.
+ *  - subida (por `PLAN_ORDER`) → rige hoy; lleva proporcional solo si el período ya tiene su cargo (`hasPeriodCharge`),
+ *    no está en prueba y la diferencia mensual es > 0. Si no, `immediate` (el próximo cargo ya sale con el plan nuevo).
+ *  - bajada → `scheduled_downgrade` al próximo 4 (el período pagado se respeta); en prueba o sin ningún cargo del
+ *    período no hay nada pagado que respetar y rige ya (`immediate`).
+ *  - mismo plan → `immediate` (no-op; anula una bajada programada si la había).
+ * `diffCents` = precio mensual nuevo − actual (null si alguno es «Consultá»).
+ */
+export function planChangeKind(p: {
+  from: SaasPlan;
+  to: SaasPlan;
+  subscriptionStatus: SubscriptionStatus;
+  cancelAtPeriodEnd: boolean;
+  hasPeriodCharge: boolean;
+  diffCents: number | null;
+}): PlanChangeKindResult {
+  if (p.cancelAtPeriodEnd || p.subscriptionStatus === "CANCELLED") return "blocked_cancel_pending";
+  const dir = planIndex(p.to) - planIndex(p.from);
+  if (dir === 0) return "immediate";
+  const billed = p.hasPeriodCharge && p.subscriptionStatus !== "TRIALING";
+  if (dir > 0) return billed && p.diffCents !== null && p.diffCents > 0 ? "upgrade_prorated" : "immediate";
+  return billed ? "scheduled_downgrade" : "immediate";
+}
+
+/**
+ * Día en que rige una baja pedida hoy (MPS-D6/D18): acceso completo hasta ese día, ese día el cron pone CANCELLED.
+ *  - En prueba: el día siguiente al fin de la prueba (no se le cobra un período que no quiere), nunca hoy ni antes
+ *    (una prueba vencida y sin pagar todavía TRIALING → mañana).
+ *  - Si no: el fin del período = el próximo cobro (`nextChargeKey`, de `SaasSubscription.nextChargeAt`, que respeta
+ *    un ancla legada sin re-anclar). Si falta o no es posterior a hoy (el 4 antes de que corra el cron), el próximo 4.
+ */
+export function cancelEffectiveOnFor(p: {
+  today: DateKey | Date;
+  subscriptionStatus: SubscriptionStatus;
+  trialEndsAt: Date | null;
+  nextChargeKey: DateKey | null;
+}): DateKey {
+  const today = keyOf(p.today);
+  if (p.subscriptionStatus === "TRIALING" && p.trialEndsAt) {
+    const dayAfterTrial = addDaysKey(toARDateKey(p.trialEndsAt), 1);
+    const tomorrow = addDaysKey(today, 1);
+    return dayAfterTrial > tomorrow ? dayAfterTrial : tomorrow;
+  }
+  if (p.nextChargeKey && p.nextChargeKey > today) return p.nextChargeKey;
+  return nextAnchorKey(today);
+}
+
+// ── Composición del cargo (base + ajustes) ─────────────────────────────────────────────────────────────────────
+
+export type PendingAdjustment = { id: string; kind: SaasAdjustmentKind; amountCents: number };
+
+export type ComposedCharge = {
+  baseCents: number;
+  /** Suma con signo de los ajustes imputados + el CARRYOVER: `baseCents + adjustmentsCents = amountCents` (CHECK). */
+  adjustmentsCents: number;
+  amountCents: number;
+  /** Ajustes que se marcan imputados a este cargo (`appliedChargeId`). */
+  appliedIds: string[];
+  /** CARRYOVER(+) que se crea imputado a este cargo para neutralizar el sobrante del CREDIT que cruzó 0. */
+  carryover: { amountCents: number; splitFromId: string } | null;
+  /** CREDIT(−) nuevo, pendiente, con lo que sobró (`splitFromId` = el CREDIT original). */
+  remainingCredit: { amountCents: number; splitFromId: string } | null;
+  /** Ajustes que no hicieron falta (créditos con el cargo ya en 0): siguen pendientes para el próximo. */
+  leftPendingIds: string[];
+};
+
+/**
+ * Arma el cargo del período (C-MPS5 paso 3): base + todos los positivos (PRORATION, DEBIT, CARRYOVER) y después los
+ * CREDIT en el orden en que llegan (el escritor los lee `ORDER BY effectiveOn, createdAt`). El cargo nunca da menos
+ * de 0. `SaasAdjustment` es solo-inserción salvo la imputación (trigger `saas_adjustment_guard`), así que un CREDIT
+ * que cruza el 0 no se puede achicar: se imputa entero, se suma un CARRYOVER(+) por el sobrante (el cargo queda en 0)
+ * y nace un CREDIT(−) nuevo, pendiente, por ese mismo sobrante. Los créditos que llegan con el cargo ya en 0 quedan
+ * pendientes sin tocar. Signos inválidos tiran (son los de `SaasAdjustment_sign_check`).
+ */
+export function composeCharge(p: { baseCents: number; pending: readonly PendingAdjustment[] }): ComposedCharge {
+  assertCents(p.baseCents, "baseCents");
+  if (p.baseCents < 0) throw new Error(`[saas-billing-logic] baseCents negativo: ${p.baseCents}`);
+  for (const a of p.pending) {
+    assertCents(a.amountCents, `ajuste ${a.id}`);
+    const ok = a.kind === "CREDIT" ? a.amountCents < 0 : a.amountCents > 0;
+    if (!ok) throw new Error(`[saas-billing-logic] signo inválido en el ajuste ${a.id} (${a.kind} ${a.amountCents})`);
+  }
+  let running = p.baseCents;
+  const appliedIds: string[] = [];
+  const leftPendingIds: string[] = [];
+  for (const a of p.pending) {
+    if (a.kind === "CREDIT") continue;
+    running += a.amountCents;
+    appliedIds.push(a.id);
+  }
+  let carryover: ComposedCharge["carryover"] = null;
+  let remainingCredit: ComposedCharge["remainingCredit"] = null;
+  for (const a of p.pending) {
+    if (a.kind !== "CREDIT") continue;
+    if (running === 0) {
+      leftPendingIds.push(a.id);
+      continue;
+    }
+    appliedIds.push(a.id);
+    const after = running + a.amountCents;
+    if (after >= 0) {
+      running = after;
+      continue;
+    }
+    carryover = { amountCents: -after, splitFromId: a.id };
+    remainingCredit = { amountCents: after, splitFromId: a.id };
+    running = 0;
+  }
+  return { baseCents: p.baseCents, adjustmentsCents: running - p.baseCents, amountCents: running, appliedIds, carryover, remainingCredit, leftPendingIds };
 }
 
 // ── Montos y saldo ──────────────────────────────────────────────────────────────────────────────────────────────
