@@ -6,6 +6,10 @@ import { formatARS, parseARS } from "@/lib/format";
 import { MP_FAKE_PATH, mpRedirectUri } from "@/lib/mp-connect/constants";
 import { mpAppUrl } from "@/lib/mp-connect/http";
 import { signMpNotification } from "@/lib/mp-connect/signature";
+// MPS-1b (C-MPS4): la suscripción SaaS (preapprovals, débitos) vive en su propio módulo; este router le delega sus rutas.
+// Import circular a propósito (fake-mp-saas usa `fakeMpKit` de acá): ninguno de los dos toca al otro al evaluarse, solo
+// adentro de funciones, así que el orden de carga no importa.
+import { fakeMpSaasHandle, fakeMpSaasPanelSection, resetFakeMpSaas } from "@/lib/mp-connect/fake-mp-saas";
 
 /**
  * Mercado Pago FALSO y simulador (T5 TP-P4, C-TP12, brief §25.9; TP-D21 + decisión 4 de Martin).
@@ -40,6 +44,15 @@ export const FAKE_MP_SELLERS = [
   { n: 2, userId: "900000002", nickname: "VENDEDOR_PRUEBA_2", label: "Vendedor de prueba 2", publicKey: "FAKE-pk-900000002" },
 ] as const;
 
+/**
+ * MPS-1b (C-MPS4): la cuenta de la PLATAFORMA (la que cobra la suscripción de KineSoft) en el simulador. No pasa por el
+ * OAuth: en MP real es `MP_ACCESS_TOKEN`, el token de la app; acá es un literal fijo que reconoce `bearerSeller` y que el
+ * puerto (`lib/mercadopago-saas.ts`) manda en modo fake EN VEZ del de `.env*` (así un token real nunca viaja ni al fake).
+ * Lo que cobra la plataforma (preapprovals, débitos, los links de pago de los cargos) avisa firmado con
+ * `MP_WEBHOOK_SECRET`, el secreto del webhook de la plataforma, y no con el de la app de OAuth (C-MPS6).
+ */
+export const FAKE_MP_PLATFORM = { userId: "900000100", accessToken: "FAKE-PLATFORM-ACCESS-TOKEN", nickname: "PLATAFORMA_PRUEBA", label: "Plataforma de prueba" } as const;
+
 /** Vida de un código de autorización (MP: 10 min) y de un access token (MP: 180 días). */
 const CODE_TTL_MS = 10 * 60_000;
 const ACCESS_TTL_S = 180 * 24 * 3600;
@@ -60,8 +73,10 @@ type PrefRec = {
   externalReference: string | null;
   createdAt: string;
 };
+export type FakeMpPaymentRec = PaymentRec;
 type PaymentRec = {
   id: string;
+  /** "" en un débito de suscripción (no sale de una preferencia). */
   preferenceId: string;
   collectorId: string;
   status: "approved" | "rejected" | "pending" | "refunded";
@@ -75,6 +90,8 @@ type PaymentRec = {
   updatedAt: string;
   externalReference: string | null;
   metadata: unknown;
+  /** MPS-1b: los débitos de una suscripción traen `point_of_interaction.transaction_data.subscription_id`. */
+  pointOfInteraction?: Record<string, unknown>;
 };
 type Store = {
   codes: Map<string, CodeRec>;
@@ -101,6 +118,7 @@ function store(): Store {
 /** Vacía el estado del fake (tests). */
 export function resetFakeMp(): void {
   (globalThis as unknown as Record<string, Store | undefined>)[STORE_KEY] = freshStore();
+  resetFakeMpSaas();
 }
 
 export class FakeMpError extends Error {
@@ -120,6 +138,14 @@ function nowIso(): string {
 }
 function sellerBy(userId: string) {
   return FAKE_MP_SELLERS.find((s) => s.userId === userId) ?? null;
+}
+/** Vendedor o plataforma (para el «Cobra:» de la página de pago y `/users/me`). */
+function collectorBy(userId: string): { userId: string; nickname: string; label: string; email: string } | null {
+  if (userId === FAKE_MP_PLATFORM.userId) {
+    return { userId, nickname: FAKE_MP_PLATFORM.nickname, label: FAKE_MP_PLATFORM.label, email: "plataforma@simulador.invalid" };
+  }
+  const s = sellerBy(userId);
+  return s ? { userId, nickname: s.nickname, label: s.label, email: `vendedor${s.n}@simulador.invalid` } : null;
 }
 function fakeBase(): string {
   return `${mpAppUrl().replace(/\/+$/, "")}${MP_FAKE_PATH}`;
@@ -241,6 +267,7 @@ function bearerSeller(req: Request): string | null {
   const h = req.headers.get("authorization") ?? "";
   const m = /^Bearer\s+(.+)$/i.exec(h);
   if (!m) return null;
+  if (m[1].trim() === FAKE_MP_PLATFORM.accessToken) return FAKE_MP_PLATFORM.userId;
   const t = store().tokens.get(m[1].trim());
   if (!t || t.expMs < Date.now()) return null;
   return t.sellerUserId;
@@ -268,6 +295,9 @@ export async function fakeMpHandle(req: Request): Promise<Response> {
   const [a, b, c] = parts;
 
   if (method === "GET" && (parts.length === 0 || (a === "panel" && parts.length === 1))) return panelPage();
+  // MPS-1b (C-MPS4): `/preapproval[/:id]`, `/authorized_payments/:id`, `/subscriptions/checkout`, `/panel/suscripciones`.
+  const saas = await fakeMpSaasHandle(req, url, parts, method);
+  if (saas) return saas;
   if (method === "POST" && a === "panel" && b === "reconectar") return panelReauth(req);
   if (a === "authorization" && parts.length === 1) return method === "GET" ? authorizationPage(url) : authorizationDecide(req);
   if (method === "POST" && a === "oauth" && b === "token") return tokenEndpoint(req);
@@ -383,9 +413,9 @@ async function tokenEndpoint(req: Request): Promise<Response> {
 
 function usersMe(req: Request): Response {
   const sellerUserId = bearerSeller(req);
-  const seller = sellerUserId ? sellerBy(sellerUserId) : null;
-  if (!seller) return mpError(401, "unauthorized", "invalid access token");
-  return json({ id: Number(seller.userId), nickname: seller.nickname, site_id: "MLA", email: `vendedor${seller.n}@simulador.invalid` });
+  const who = sellerUserId ? collectorBy(sellerUserId) : null;
+  if (!who) return mpError(401, "unauthorized", "invalid access token");
+  return json({ id: Number(who.userId), nickname: who.nickname, site_id: "MLA", email: who.email });
 }
 
 // ── Preferencias y pagos ─────────────────────────────────────────────────────────────────────────────────────────
@@ -449,7 +479,7 @@ function paymentJson(p: PaymentRec) {
     transaction_amount_refunded: p.refundedCents / 100,
     currency_id: "ARS",
     external_reference: p.externalReference,
-    preference_id: p.preferenceId,
+    preference_id: p.preferenceId || null,
     collector_id: Number(p.collectorId),
     payment_method_id: p.methodId,
     payment_type_id: p.typeId,
@@ -459,6 +489,7 @@ function paymentJson(p: PaymentRec) {
     date_last_updated: p.updatedAt,
     live_mode: false,
     metadata: p.metadata ?? {},
+    ...(p.pointOfInteraction ? { point_of_interaction: p.pointOfInteraction } : {}),
     card: p.typeId === "credit_card" || p.typeId === "debit_card" ? { last_four_digits: "4242" } : {},
     payer: { email: "comprador@simulador.invalid" },
   };
@@ -474,6 +505,13 @@ function paymentById(req: Request, id: string): Response {
 }
 
 // ── Simulador ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Id numérico de pago con la hora adelante: no choca con los que ya quedaron en la base local de otra corrida. */
+function nextPaymentId(): string {
+  const s = store();
+  s.seq += 1;
+  return `${Date.now()}${String(s.seq % 1000).padStart(3, "0")}`;
+}
 
 const METHOD_IDS: Record<FakeMpMethod, string> = {
   credit_card: "visa",
@@ -515,9 +553,8 @@ export async function simulateFakePayment(o: {
     // `binary_mode`: MP nunca deja un pago en pending, lo resuelve aprobado o rechazado.
     const status = o.outcome === "pending" && pref.binary ? "rejected" : o.outcome;
     const typeId: FakeMpMethod = o.method ?? (status === "pending" ? "ticket" : "credit_card");
-    s.seq += 1;
     pay = {
-      id: `${Date.now()}${String(s.seq % 1000).padStart(3, "0")}`,
+      id: nextPaymentId(),
       preferenceId: pref.id,
       collectorId: pref.collectorId,
       status,
@@ -546,19 +583,14 @@ async function postWebhook(pref: PrefRec, pay: PaymentRec, action: string): Prom
   } catch {
     throw new FakeMpError("no_notification_url");
   }
-  // Solo a esta misma app: el simulador no es un cliente HTTP para pegarle a cualquier host con una firma válida.
-  if (target.origin !== new URL(mpAppUrl()).origin) throw new FakeMpError("notification_url_foreign");
+  // Se conservan los parámetros que ya traía la `notification_url` (`?acct=` de T5, `?scope=saas` de la suscripción).
   target.searchParams.set("data.id", pay.id);
   target.searchParams.set("type", "payment");
 
-  const requestId = randomUUID();
-  const headers: Record<string, string> = { "content-type": "application/json", "x-request-id": requestId };
-  const secret = process.env.MP_CONNECT_WEBHOOK_SECRET?.trim() || env.MP_CONNECT_WEBHOOK_SECRET;
-  // Sin secreto va sin firma: con `MP_CONNECT_WEBHOOK_SIGNATURE=required` la ruta lo rechaza (401) y eso se ve en el
-  // resultado, que es justo lo que hay que notar en QA.
-  if (secret) {
-    headers["x-signature"] = signMpNotification({ dataId: pay.id, secret, ts: Math.floor(Date.now() / 1000), requestId });
-  }
+  // MPS-1b (C-MPS4/C-MPS6): lo que cobra la plataforma lo firma el secreto del webhook de la PLATAFORMA; lo del vendedor,
+  // el de la app de OAuth (T5). Si el fake firmara todo con uno solo, el E2E no vería una rama verificando con el
+  // secreto equivocado.
+  const secret = pref.collectorId === FAKE_MP_PLATFORM.userId ? platformHookSecret() : connectHookSecret();
   const body = {
     action,
     api_version: "v1",
@@ -569,6 +601,36 @@ async function postWebhook(pref: PrefRec, pay: PaymentRec, action: string): Prom
     type: "payment",
     user_id: pref.collectorId,
   };
+  return postSignedNotification({ url: target, dataId: pay.id, secret, body });
+}
+
+function connectHookSecret(): string | undefined {
+  return process.env.MP_CONNECT_WEBHOOK_SECRET?.trim() || env.MP_CONNECT_WEBHOOK_SECRET;
+}
+function platformHookSecret(): string | undefined {
+  return process.env.MP_WEBHOOK_SECRET?.trim() || env.MP_WEBHOOK_SECRET;
+}
+
+/**
+ * POST firmado (`x-signature` con el manifiesto de MP) a una URL de ESTA app. Sin secreto va sin firma: la ruta lo
+ * rechaza (401 en `?acct=` con firma obligatoria, 503 en la rama SaaS) y eso se ve en el resultado, que es justo lo que
+ * hay que notar en QA.
+ */
+async function postSignedNotification(o: {
+  url: URL;
+  dataId: string;
+  secret: string | undefined;
+  body: Record<string, unknown>;
+}): Promise<{ webhookStatus: number; webhookResult?: string }> {
+  const target = o.url;
+  // Solo a esta misma app: el simulador no es un cliente HTTP para pegarle a cualquier host con una firma válida.
+  if (target.origin !== new URL(mpAppUrl()).origin) throw new FakeMpError("notification_url_foreign");
+  const requestId = randomUUID();
+  const headers: Record<string, string> = { "content-type": "application/json", "x-request-id": requestId };
+  if (o.secret) {
+    headers["x-signature"] = signMpNotification({ dataId: o.dataId, secret: o.secret, ts: Math.floor(Date.now() / 1000), requestId });
+  }
+  const body = o.body;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 15_000);
   try {
@@ -606,7 +668,7 @@ function checkoutPage(prefId: string): Response {
   const action = `${MP_FAKE_PATH}/checkout/${encodeURIComponent(p.id)}/simulate`;
   const dis = (off: boolean) => (off ? " disabled" : "");
   const back = p.backUrls.failure ?? p.backUrls.success ?? null;
-  const seller = sellerBy(p.collectorId);
+  const seller = collectorBy(p.collectorId);
   return page(
     "Pagar · Simulador",
     `<h1>${esc(title)}</h1>
@@ -709,7 +771,7 @@ function panelPage(): Response {
     .join("");
   return page(
     "Simulador de Mercado Pago",
-    `<h1>Cuentas de prueba</h1><p class="muted">«Forzar reconexión» hace que la próxima renovación del token falle (invalid_grant): la cuenta pasa a «a reconectar» y su turnero reserva sin cobro online.</p>${rows}<h2>Últimos pagos</h2><ul>${pays || "<li>Sin pagos todavía</li>"}</ul>`
+    `<h1>Cuentas de prueba</h1><p class="muted">«Forzar reconexión» hace que la próxima renovación del token falle (invalid_grant): la cuenta pasa a «a reconectar» y su turnero reserva sin cobro online.</p>${rows}<h2>Últimos pagos</h2><ul>${pays || "<li>Sin pagos todavía</li>"}</ul>${fakeMpSaasPanelSection()}`
   );
 }
 
@@ -719,3 +781,31 @@ async function panelReauth(req: Request): Promise<Response> {
   if (sellerBy(sellerUserId)) fakeMpForceReauth(sellerUserId);
   return redirect(`${MP_FAKE_PATH}/panel`);
 }
+
+/**
+ * MPS-1b (C-MPS4): lo que `fake-mp-saas.ts` reusa de este módulo (HTML, JSON, bearer, pagos y notificaciones firmadas).
+ * Un solo objeto en vez de exportar cada helper: no amplía la superficie que usan T5 y sus tests. Interno del simulador.
+ */
+export const fakeMpKit = {
+  page,
+  json,
+  mpError,
+  notFound,
+  redirect,
+  esc,
+  readBody,
+  bearerSeller,
+  nowIso,
+  fakeBase,
+  nextPaymentId,
+  putPayment(p: PaymentRec): void {
+    store().payments.set(p.id, p);
+  },
+  getPayment(id: string): PaymentRec | null {
+    return store().payments.get(id) ?? null;
+  },
+  postSignedNotification,
+  platformHookSecret,
+  resultLabel,
+  paymentStatusEs: (s: string) => PAYMENT_STATUS_ES[s] ?? s,
+};

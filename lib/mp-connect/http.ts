@@ -33,6 +33,13 @@ export type MpFetchOptions = {
   timeoutMs?: number;
   /** `X-Idempotency-Key` (MP lo acepta en POST de preferencias): un reintento no crea dos preferencias. */
   idempotencyKey?: string;
+  /**
+   * MPS-1b (C-MPS3): base de la API fija, en vez de la que sale de `mpConnectMode()`. La usa el puerto de la suscripción
+   * (`lib/mercadopago-saas.ts`), que habla con MP con el token de la PLATAFORMA y decide su host con su propio modo
+   * (`SAAS_BILLING_MODE`): sin esto, con `MP_CONNECT_MODE=off` (cobros online apagados) la suscripción tampoco podría
+   * hablar con MP. Sin `apiBase` el comportamiento es el de T5, byte a byte.
+   */
+  apiBase?: string;
 };
 
 /** URL de la app vigente: los tests la cambian en caliente y `env` se congela al importar. */
@@ -56,7 +63,7 @@ function logPath(path: string): string {
 }
 
 export async function mpFetch(path: string, o: MpFetchOptions = {}): Promise<MpFetchResult> {
-  const base = mpApiBase();
+  const base = o.apiBase ? o.apiBase.replace(/\/+$/, "") : mpApiBase();
   const method = o.method ?? "GET";
   if (!base) {
     logger.warn("mp_connect.http.mode_off", { path: logPath(path), method });
