@@ -15,6 +15,9 @@
  * links de pago y la lectura de cobros de un turno. Las celdas ✅ nacen `it.fails("[TP-2b|TP-2d|TP-2h] …")` (las actions
  * son stubs de TP-K2) y las da vuelta TP-2i; las ⛔ ya pasan con el stub y quedan como red cuando llegue la implementación.
  * [TP-2i] Dadas vuelta (40 celdas) con las actions reales; + BASIC ✅ (propio) y SUPPORT ⛔ en `getBookingOnlineCharges`.
+ * [WA-S5] Filas de WhatsApp (T6, WA-D25): panel del drawer, recordatorio manual, «marcar como visto» y consentimiento
+ * del staff, contra el simulador de Meta. Nacieron con las actions de WA-S5 (wa-s5-actions.test.ts las vio fallar contra
+ * el stub).
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -92,6 +95,10 @@ import { createPaymentLink, cancelPaymentLink } from "@/lib/payment-links";
 import { getBookingOnlineCharges } from "@/lib/online-charges-read";
 import { MP_OAUTH_COOKIE } from "@/lib/mp-connect/oauth-state";
 import { connectFakeAccount, installFakeMp } from "@/tests/helpers/mp-connect-fake";
+import { installFakeGraph, connectFakeWhatsApp } from "@/tests/helpers/whatsapp-fake";
+import { getBookingWhatsAppPanel, sendBookingReminderNow, dismissPatientReply } from "@/lib/whatsapp-booking-actions";
+import { setPatientWhatsAppConsent } from "@/lib/whatsapp-consent-actions";
+import { WA_CONSENT_VERSION } from "@/lib/whatsapp/types";
 
 // ES4-S26b: abrir la sesión de soporte y cambiar el plan SaaS piden step-up de 2FA (frontera externa: TOTP/cookie).
 // Se mockea SOLO eso, como patient-portal-requests.test.ts; la barrera bajo test (capabilities, solo lectura) es real.
@@ -925,6 +932,40 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
   const mpAccountRow = (fx: Fx) => db.mpAccount.findUniqueOrThrow({ where: { id: fx.mpAccountId as string } });
   /** Política de prueba: OPTIONAL con el copago (no necesita cuenta del consultorio). */
   const POLICY_K3 = { mode: "OPTIONAL", chargeKind: "COPAGO", fixedCents: null, percentBps: null, useClinicAccount: false, cancellationNote: null } as const;
+
+  // ── [WA-S5] Fixtures de WhatsApp (T6). Todo contra el simulador de Meta local: nunca Meta real ni sandbox.
+
+  /**
+   * Celular válido en la ficha de la fixture (+ consentimiento GRANTED anclado a él salvo que se pida lo contrario) y
+   * cuenta de WhatsApp ACTIVE del consultorio dueño contra el fake. El fake queda instalado hasta `withFakeWa`.
+   */
+  async function fxWhatsApp(fx: Fx, o: { consent?: boolean; account?: boolean } = {}) {
+    const phone = `+54911${String(Math.floor(1e6 + Math.random() * 8e6)).padStart(7, "0")}9`;
+    await db.patient.update({
+      where: { id: fx.patientId },
+      data:
+        o.consent === false
+          ? { phone }
+          : { phone, waConsent: "GRANTED", waConsentAt: new Date(), waConsentSource: "STAFF", waConsentVersion: WA_CONSENT_VERSION, waPhoneE164: phone },
+    });
+    if (o.account === false) return;
+    const t = fx.host.tenantId;
+    await db.whatsAppMessage.deleteMany({ where: { tenantId: t } });
+    await db.whatsAppTemplate.deleteMany({ where: { tenantId: t } });
+    await db.whatsAppCredential.deleteMany({ where: { tenantId: t } });
+    await db.whatsAppAccount.deleteMany({ where: { tenantId: t } });
+    fx.waFake = installFakeGraph();
+    await connectFakeWhatsApp(db, fx.host);
+  }
+
+  /** Desinstala el fake de la celda (env + fetch) pase lo que pase. */
+  async function withFakeWa<T>(fx: Fx, fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } finally {
+      (fx.waFake as { uninstall: () => void } | undefined)?.uninstall();
+    }
+  }
 
   const ROWS_S26B: MatrixRow[] = [
     // ─────────────────────────────────────────── Turnos ───────────────────────────────────────────
@@ -1961,6 +2002,96 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
         const r = await settle(getBookingOnlineCharges({ bookingId: fx.bookingId as string }));
         return r.ok && "data" in r && Array.isArray(r.data) && r.data.some((c: { id: string }) => c.id === fx.chargeId);
       },
+    },
+    // ─────────────────────────────────────────── WhatsApp (T6, WA-S5, WA-D25) ───────────────────────────────────────────
+    {
+      kind: "read",
+      name: "WhatsApp · getBookingWhatsAppPanel (sección del drawer)",
+      cells: {
+        XT: { exp: "deny", note: "turno de K" },
+        OWNER: "ok",
+        BASIC: { exp: "deny", note: "paciente en básico: aunque el turno sea suyo, el consentimiento y el historial son del paciente" },
+        ASSISTANT: "ok",
+        BILLING: { exp: "ok", note: "admin: ve canal e historial (enmascarado), no manda" },
+        ADMIN: "ok",
+        PRO_CFG: { exp: "deny", note: "básico" },
+        GENERAL: "ok",
+        SUPPORT: { exp: "ok", note: "admin, como la Secretaria (lectura)" },
+      },
+      setup: async (fx) => {
+        await fxBooking(fx);
+        await fxWhatsApp(fx);
+      },
+      seen: (fx) => withFakeWa(fx, async () => (await getBookingWhatsAppPanel(fx.bookingId as string)) !== null),
+    },
+    {
+      kind: "write",
+      name: "WhatsApp · sendBookingReminderNow",
+      cells: {
+        XT: { exp: "deny", note: "turno de K" },
+        OWNER: "ok",
+        BASIC: { exp: "ok", note: "profesional del turno, aunque vea al paciente en básico" },
+        ASSISTANT: "ok",
+        BILLING: { exp: "deny", note: "no opera turnos" },
+        ADMIN: "ok",
+        PRO_CFG: { exp: "deny", note: "turno del Titular, sin agenda.operateAll" },
+        GENERAL: "ok",
+        SUPPORT: { exp: "deny", note: "soporte no le escribe a pacientes" },
+      },
+      setup: async (fx) => {
+        await fxBooking(fx);
+        await fxWhatsApp(fx);
+      },
+      act: (fx) => withFakeWa(fx, () => settle(sendBookingReminderNow({ bookingId: fx.bookingId as string, idempotencyKey: randomUUID() }))),
+      effect: async (fx, db) =>
+        (await db.whatsAppMessage.count({ where: { bookingId: fx.bookingId as string, kind: "BOOKING_REMINDER", trigger: "MANUAL" } })) > 0,
+    },
+    {
+      kind: "write",
+      name: "WhatsApp · dismissPatientReply",
+      cells: {
+        XT: { exp: "deny", note: "turno de K" },
+        OWNER: "ok",
+        BASIC: { exp: "ok", note: "profesional del turno" },
+        ASSISTANT: "ok",
+        BILLING: { exp: "deny", note: "no opera turnos" },
+        ADMIN: "ok",
+        PRO_CFG: { exp: "deny", note: "turno del Titular" },
+        GENERAL: "ok",
+        SUPPORT: { exp: "deny", note: "soporte no opera la agenda" },
+      },
+      setup: async (fx) => {
+        await fxBooking(fx);
+        const b = await db.booking.findUniqueOrThrow({ where: { id: fx.bookingId as string } });
+        // Como el webhook (WA-D22): SQL sin mover updatedAt.
+        await db.$executeRawUnsafe(
+          `UPDATE "Booking" SET "patientConfirmedAt" = $1, "patientReplyFor" = $2 WHERE id = $3`,
+          new Date(),
+          b.scheduledFor,
+          b.id
+        );
+      },
+      act: (fx) => settle(dismissPatientReply({ bookingId: fx.bookingId as string })),
+      effect: async (fx, db) => (await db.booking.findUniqueOrThrow({ where: { id: fx.bookingId as string } })).patientReplyFor === null,
+    },
+    {
+      kind: "write",
+      name: "WhatsApp · setPatientWhatsAppConsent (otorgar)",
+      cells: {
+        XT: { exp: "deny", note: "paciente de K" },
+        OWNER: "ok",
+        BASIC: { exp: "deny", note: "básico" },
+        ASSISTANT: { exp: "ok", note: "patients.editAdmin" },
+        ASSISTANT_CFG: "ok",
+        BILLING: { exp: "deny", note: "admin sin patients.editAdmin" },
+        ADMIN: "ok",
+        PRO_CFG: { exp: "deny", note: "básico" },
+        GENERAL: "ok",
+        SUPPORT: { exp: "deny", note: "soporte sin patients.editAdmin" },
+      },
+      setup: (fx) => fxWhatsApp(fx, { consent: false, account: false }),
+      act: (fx) => settle(setPatientWhatsAppConsent({ patientId: fx.patientId, granted: true, version: WA_CONSENT_VERSION })),
+      effect: async (fx, db) => (await db.patient.findUniqueOrThrow({ where: { id: fx.patientId } })).waConsent === "GRANTED",
     },
     // ─────────────────────────────────────────── ICS ───────────────────────────────────────────
     {
