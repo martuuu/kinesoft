@@ -15,7 +15,7 @@ import type { PractitionerScheduleSummaryRow } from "@/lib/practitioner-schedule
 import type { SupportSessionRow } from "@/lib/support-session-internal";
 import type { TenantPlanUsageView } from "@/lib/tenant-plan-usage-logic";
 import type { BillingOverview } from "@/lib/saas-billing-types";
-import type { ConfiguracionDirectoryData } from "@/lib/configuracion-page-loader";
+import type { ConfiguracionDirectoryData, ConfiguracionWhatsAppData } from "@/lib/configuracion-page-loader";
 import { PageHeader } from "@/components/ui/page-header";
 import { SkelForm } from "@/components/ui/skeleton";
 import styles from "./configuracion.module.css";
@@ -58,6 +58,8 @@ const PANEL_LOADERS = {
   "cobros-online": () => import("./panels/online-payments-panel"),
   // TP-3a: el MISMO chunk que «Cobros online» (ver abajo).
   "mercado-pago": () => import("./panels/online-payments-panel"),
+  // WA-U1: el panel y el alta embebida (`whatsapp-signup.ts`, importado estático desde el panel) en UN chunk.
+  whatsapp: () => import("./panels/whatsapp-panel"),
 } satisfies Record<Tab, () => Promise<unknown>>;
 
 /** `import()` sin await (C-PF2): deja el chunk de la pestaña en camino antes del click. */
@@ -104,6 +106,10 @@ const ExportPanel = dynamic(() => import("./panels/export-panel").then((m) => m.
 const MercadoPagoTab = dynamic(() => import("./panels/online-payments-panel").then((m) => m.MercadoPagoTab), {
   loading: PanelSkeleton,
 });
+
+// WA-U1 (§26.5 «UI», ~0 kB de primer load): fuera del JS inicial como las demás. El SDK de Facebook ni siquiera viaja
+// en el chunk: lo inyecta el panel al tocar «Conectar» (sandbox/live).
+const WhatsAppPanel = dynamic(() => import("./panels/whatsapp-panel").then((m) => m.WhatsAppPanel), { loading: PanelSkeleton });
 
 type Props = {
   role: Role;
@@ -175,6 +181,11 @@ type Props = {
   myMp?: MpAccountView | null;
   /** TP-3a: `?mp=` con el que volvió el callback de Mercado Pago (solo valores del contrato). */
   mpReturn?: MpConnectReturn | null;
+  /**
+   * WA-U1: pestaña «WhatsApp» (`tenant.sensitive` con `WHATSAPP_MODE` ≠ off): modo, destino del popup y si conecta
+   * (Titular). null/ausente = sin pestaña. Los datos de la cuenta los pide el panel al montar.
+   */
+  whatsapp?: ConfiguracionWhatsAppData | null;
 };
 
 export function ConfiguracionClient(props: Props) {
@@ -187,6 +198,7 @@ export function ConfiguracionClient(props: Props) {
   const fichas = props.fichas ?? null;
   const onlinePayments = props.onlinePayments ?? null;
   const myMp = props.myMp ?? null;
+  const whatsapp = props.whatsapp ?? null;
   const access: ConfigTabAccess = {
     ...props.access,
     canExport,
@@ -194,6 +206,7 @@ export function ConfiguracionClient(props: Props) {
     fichas: fichas !== null,
     onlinePayments: onlinePayments !== null,
     myMp: myMp !== null,
+    whatsapp: whatsapp !== null,
   };
   const visible = visibleConfigTabs(access, props.modules);
   const [tab, setTabRaw] = useState<Tab>(() => initialConfigTab(props.initialTab, visible));
@@ -345,6 +358,7 @@ export function ConfiguracionClient(props: Props) {
       {tab === "mercado-pago" && can("mercado-pago") && myMp && (
         <MercadoPagoTab tab="mercado-pago" account={myMp} mpReturn={mpReturn} support={props.support} />
       )}
+      {tab === "whatsapp" && can("whatsapp") && whatsapp && <WhatsAppPanel config={whatsapp} support={props.support} />}
       {tab === "soporte" && can("soporte") && (
         // PL-2d (C-PL11): la pestaña «Soporte» junta los Mensajes con el equipo de KineSoft y los Accesos de soporte.
         // PL-F1b: Mensajes y Accesos para cualquier miembro (antes PL-D20: `tenant.admin || account.billing`).

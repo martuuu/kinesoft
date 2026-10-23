@@ -47,6 +47,11 @@ import "server-only";
  * desconectada) y el test de igualdad de `pf2-config-budget` compara contra los símbolos reales. Ni tokens, ni
  * `webhookRef`, ni `mpUserId`: el select es el de la vista (C-TP4). La vista previa de «¿Cuánto se cobra online?» usa
  * el precio del servicio más usado de los que ya trae la tx (0 sentencias).
+ *
+ * WA-U1 (T6, §26.5): la pestaña «WhatsApp» NO lee nada acá (0 sentencias, con cualquier modo): solo el modo, el
+ * destino del popup del alta (`signupDialogTarget`, para validar `event.origin`) y si el que mira conecta (Titular).
+ * La cuenta, las plantillas y el cupo de pruebas los pide el panel al montar (`getWhatsAppPanel`): quien no abre la
+ * pestaña no paga la lectura y el presupuesto de PF2 no cambia.
  */
 import { runWithRls, type DbClient } from "@/lib/rls";
 // DIR-3c: solo para `ProfessionalPublicProfile` (SERVICE_ONLY, DIR-D12); ver la cabecera.
@@ -80,7 +85,9 @@ import type { PractitionerScheduleSummaryRow } from "@/lib/practitioner-schedule
 import type { PractitionerBookingCapView } from "@/lib/booking-cap-config";
 import { isClinicalMember } from "@/lib/roles-core";
 import type { Honorific } from "@/lib/directory-constants";
-import { mpConnectMode } from "@/lib/env";
+import { mpConnectMode, whatsappMode } from "@/lib/env";
+import { signupDialogTarget } from "@/lib/whatsapp/graph";
+import type { WaAccountMode } from "@/lib/whatsapp/types";
 import { publicPractitionerName } from "@/lib/display-name";
 import { DEFAULT_PAYMENT_POLICY, type PaymentPolicyInput } from "@/lib/booking-payment-policy-types";
 import { MIN_ONLINE_CHARGE_CENTS } from "@/lib/online-charge-logic";
@@ -649,6 +656,29 @@ async function unlessForbidden<T>(p: () => Promise<T>): Promise<T | null> {
   }
 }
 
+/** WA-U1: lo que la pestaña «WhatsApp» necesita antes de pedir sus datos. Sin secretos ni ids de Meta. */
+export type ConfiguracionWhatsAppData = {
+  mode: WaAccountMode;
+  dialog: NonNullable<ReturnType<typeof signupDialogTarget>>;
+  /** Conectar / continuar / desconectar: Titular y no soporte (la action lo vuelve a exigir, con step-up). */
+  canManage: boolean;
+};
+
+/**
+ * WA-U1 (puro sobre env + capacidades, 0 queries): la pestaña existe con `tenant.sensitive` y `WHATSAPP_MODE` ≠ off
+ * (con off no hay nada que configurar: «lo que no tiene funcionalidad se quita», TP-3z). El soporte la ve en solo
+ * lectura (tiene `tenant.sensitive` en `SUPPORT_CAPS`); sin destino de popup (sin `NEXT_PUBLIC_APP_URL` en fake) no
+ * hay alta posible y tampoco se muestra.
+ */
+export function whatsappTabFor(actor: Pick<Actor, "support">, caps: ReadonlySet<Capability>): ConfiguracionWhatsAppData | null {
+  if (!caps.has("tenant.sensitive")) return null;
+  const mode = whatsappMode();
+  if (mode === "off") return null;
+  const dialog = signupDialogTarget();
+  if (!dialog) return null;
+  return { mode, dialog, canManage: !actor.support && caps.has("account.owner") };
+}
+
 export type ConfiguracionPageData = Omit<ConfiguracionTxData, "directory"> & {
   /**
    * T3 (C-AS1): `tenant.sensitive` del actor, para que la UI esconda lo delicado (turnero, «quién ve la HC», datos del
@@ -663,6 +693,8 @@ export type ConfiguracionPageData = Omit<ConfiguracionTxData, "directory"> & {
   catalog: Awaited<ReturnType<typeof getPublicPlanCatalog>>;
   /** Foto de acceso del request (la misma que usó el gate; el soporte no la baja). */
   snapshot: Awaited<ReturnType<typeof getAccessSnapshot>>;
+  /** WA-U1: pestaña «WhatsApp» (null = modo off o sin `tenant.sensitive`). */
+  whatsapp: ConfiguracionWhatsAppData | null;
 };
 
 /**
@@ -718,5 +750,6 @@ export async function loadConfiguracionPage(
     billingOverview,
     catalog,
     snapshot,
+    whatsapp: whatsappTabFor(actor, caps),
   };
 }

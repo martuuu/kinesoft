@@ -12,6 +12,7 @@ export type Tab =
   | "servicios"
   | "obras-sociales"
   | "cobros-online"
+  | "whatsapp"
   | "diagnosticos"
   | "directorio"
   | "usuarios"
@@ -35,6 +36,8 @@ export const CONFIG_TABS: readonly Tab[] = [
   // TP-3a: `?tab=cobros-online` es la vuelta del callback de Mercado Pago (cuenta del consultorio) y el link de la
   // campana «Reconectá el Mercado Pago del consultorio». Quien no la ve (la Secretaría, Facturación) cae en su primera.
   "cobros-online",
+  // WA-U1 (C-WA9): `?tab=whatsapp` es el link de la campana WHATSAPP_ACCOUNT (reconectar, medio de pago en Meta).
+  "whatsapp",
   "diagnosticos",
   // DIR-3c: `?tab=directorio` (el link «Configurar» de una futura comunicación del directorio).
   "directorio",
@@ -81,6 +84,8 @@ export function parseConfigTab(raw: string | string[] | null | undefined): Tab {
  *    (el loader ya los manda en null sin él; la pestaña no depende solo de eso). La Secretaria y Facturación con
  *    «Configuración» no lo tienen (corte de staff): ven lo operativo y no el equipo ni el directorio. Opcional para los
  *    tests viejos; ausente = sin lo delicado (deny por default).
+ *  - `whatsapp` (WA-U1, C-WA9): «WhatsApp» = `tenant.sensitive` con `WHATSAPP_MODE` ≠ off (el loader manda sus datos en
+ *    null sin eso). Conectar y desconectar adentro son solo del Titular; la pestaña la ve también la administración.
  */
 export type ConfigTabAccess = {
   tenantAdmin: boolean;
@@ -92,6 +97,7 @@ export type ConfigTabAccess = {
   fichas?: boolean;
   onlinePayments?: boolean;
   myMp?: boolean;
+  whatsapp?: boolean;
 };
 
 /**
@@ -126,6 +132,8 @@ const TAB_DEFS: readonly TabDef[] = [
   { key: "obras-sociales", label: "Obras sociales", visible: admin },
   // TP-3a: la plata del turnero es lo delicado (decisión 1 de Martin, 19-oct): nunca la Secretaría ni Facturación.
   { key: "cobros-online", label: "Cobros online", visible: (a) => !!a.sensitive && !!a.onlinePayments },
+  // WA-U1: con `WHATSAPP_MODE=off` (default de prod hasta que Meta apruebe) la pestaña no existe.
+  { key: "whatsapp", label: "WhatsApp", visible: (a) => !!a.sensitive && !!a.whatsapp },
   { key: "diagnosticos", label: "Diagnósticos", module: "diagnostico", visible: admin },
   // DIR-3c: con el directorio en `off` (default de prod hasta que Martin lo prenda) la pestaña no existe: publicar en
   // algo que el público todavía no ve sería un switch sin efecto.
