@@ -127,3 +127,34 @@ describe("[TP-3e] card, Lista y Semana: solo el badge mínimo de T5", () => {
     expect(T5_HEAVY.test("@/lib/booking-money-badge")).toBe(false);
   });
 });
+
+/**
+ * [WA-U2] WhatsApp en la agenda (T6 §26.5 «UI», §26.10: `/agenda` en 172,1 / 172,1 kB). Lo único de WhatsApp que entra
+ * al first load es el mini-badge «Confirmó» / «Pidió cancelar» de la card, con los textos copiados (paridad en
+ * `tests/unit/render/wa-u2-agenda.test.tsx`). La sección del drawer baja por `import()` y solo con `whatsapp`; el copy,
+ * los tipos con valores y las actions de WhatsApp nunca son imports estáticos de la agenda, la card ni el drawer.
+ */
+describe("[WA-U2] WhatsApp: solo el badge mínimo en el first load; la sección del drawer por `import()`", () => {
+  const WA_ANY = /(?:^|\/)lib\/(?:whatsapp\/.*|whatsapp-[^/]*)$/;
+  const FILES = [
+    "components/agenda/agenda-client.tsx",
+    "components/agenda/grid/booking-card.tsx",
+    "components/agenda/booking-drawer/index.tsx",
+  ];
+
+  for (const file of FILES) {
+    it(`[WA-U2] ${file} no importa estáticamente módulos de WhatsApp`, () => {
+      const specs = staticValueSpecifiers(read(file));
+      expect(specs.filter((s) => WA_ANY.test(s)), file).toEqual([]);
+      expect(specs.some((s) => /\/whatsapp-section$/.test(s)), file).toBe(false);
+    });
+  }
+
+  it("[WA-U2] el drawer baja la sección por `import()` y el detector la reconocería si fuera estática", () => {
+    expect(read("components/agenda/booking-drawer/index.tsx")).toMatch(/import\(\s*["']\.\/whatsapp-section["']\s*\)/);
+    expect(staticValueSpecifiers('import { WhatsAppSection } from "./whatsapp-section";')).toEqual(["./whatsapp-section"]);
+    expect(WA_ANY.test("@/lib/whatsapp/copy")).toBe(true);
+    expect(WA_ANY.test("@/lib/whatsapp-booking-actions")).toBe(true);
+    expect(WA_ANY.test("@/lib/booking-money-badge")).toBe(false);
+  });
+});

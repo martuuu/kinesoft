@@ -59,7 +59,7 @@ import {
   setBookingStatus,
   updateBooking,
 } from "@/lib/bookings";
-import type { ReceptionActionResult } from "@/lib/bookings-types";
+import type { PatientReply, ReceptionActionResult } from "@/lib/bookings-types";
 import type { ReceptionAction } from "@/lib/reception-state";
 import { isStaleError } from "@/lib/reception-view-state";
 import { getPatientBookingsSummary, setPatientDiagnosis } from "@/lib/patients";
@@ -186,6 +186,15 @@ export function moneySectionWanted(
   return o.onlineMoney && o.canCollect && !!b.patientId && (b.paymentStatus === "UNPAID" || b.paymentStatus === "FAILED") && b.status !== "CANCELLED";
 }
 
+// [WA-U2] Sección WhatsApp del turno (estado del canal, recordatorio a mano, historial, respuesta del paciente): chunk
+// aparte, montado SOLO si el consultorio manda WhatsApp (`whatsapp` del loader) y el turno tiene paciente
+// (`whatsappSectionWanted`, en el mismo chunk: acá se repite la regla para no volverlo estático). Con el modo `off`
+// nadie lo baja (§26.10: `/agenda` sin margen). `ShareActions` (el wa.me manual) queda igual al lado.
+const WhatsAppSection = dynamic(() => import("./whatsapp-section").then((m) => m.WhatsAppSection), {
+  ssr: false,
+  loading: () => <Skel h={72} r={14} />,
+});
+
 const readBookingClinicalNote = (bookingId: string) =>
   import("@/lib/clinical-notes-read").then((m) => m.getBookingClinicalNote(bookingId));
 
@@ -207,8 +216,10 @@ export function BookingDrawer({
   rooms,
   primaryLocationId,
   onlineMoney = false,
+  whatsapp = false,
 }: {
-  booking: DrawerBooking | null;
+  /** WA-U2: la agenda pasa el `BookingDTO`, que trae `patientReply` (cable `rp`); la sección recarga con él. */
+  booking: (DrawerBooking & { patientReply?: PatientReply | null }) | null;
   onClose: () => void;
   onSaved: () => void;
   /**
@@ -237,6 +248,11 @@ export function BookingDrawer({
    * arrancar T5) nadie ve un botón que rebota con «no disponible».
    */
   onlineMoney?: boolean;
+  /**
+   * [WA-U2] El consultorio manda WhatsApp (modo ≠ off y cuenta ACTIVE de ese modo). Solo con esto se baja y monta la
+   * sección WhatsApp del turno; false (el default) = el drawer de siempre, sin el chunk.
+   */
+  whatsapp?: boolean;
 }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -1042,6 +1058,11 @@ export function BookingDrawer({
           )}
 
           <ShareActions booking={booking} />
+
+          {whatsapp && booking.patientId && (
+            // Otro turno = otra sección: el panel y la `idempotencyKey` del recordatorio son de ESTE turno.
+            <WhatsAppSection key={booking.id} booking={{ ...booking, patientReply: bookingProp?.patientReply ?? null }} />
+          )}
 
 
           {canDelete &&

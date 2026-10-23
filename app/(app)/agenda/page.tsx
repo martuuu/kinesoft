@@ -53,6 +53,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
     capabilities,
     availability,
     onlineMoney,
+    whatsapp,
   } = await loadAgendaPage(actor, { monday, patientId: searchParams.patient ?? null });
 
   // Preferencias contra lo que existe hoy: un favorito dado de baja o una sede
@@ -120,6 +121,10 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
       // T5 (TP-3z): `mpConnectMode() !== "off"` resuelto en el loader sin sentencias (`agendaOnlineMoneyFor`); el
       // drawer ofrece «Generar link de pago» solo si el consultorio cobra online.
       onlineMoney={onlineMoney.enabled}
+      // WA-S7/WA-U2: el consultorio manda WhatsApp (modo ≠ off y cuenta ACTIVE de ese modo, cacheada: 0 sentencias en
+      // caliente). Solo con esto el drawer baja y monta la sección WhatsApp (`import()`); el badge de la card sale del
+      // cable (`rp`).
+      whatsapp={whatsapp}
     />
   );
 }

@@ -1,7 +1,7 @@
 import type { BookingStatus, PaymentStatus } from "@prisma/client";
 import type { PaymentMethod } from "@/lib/payment-method";
 import { formatARS } from "@/lib/format";
-import type { AgendaBookingRow, AgendaPlanFields, BookingRow } from "@/lib/bookings-types";
+import type { AgendaBookingRow, AgendaPlanFields, BookingRow, PatientReply } from "@/lib/bookings-types";
 import type { Discipline } from "@/lib/plans-constants";
 import { effectiveRowMinutes, normalizeSlotMinutes, type AgendaSlotMinutes } from "@/lib/tenant-settings-constants";
 
@@ -112,6 +112,12 @@ export type BookingDTO = {
    */
   onlineDepositCents?: number;
   paidOnline?: boolean;
+  /**
+   * WA-S7: solo con respuesta vigente; cable `rp`. Lo que el paciente respondió por WhatsApp al aviso de ESTE horario
+   * (`patientReplyOf`, en el server). Ausente = sin respuesta (o respondió a otro horario). Lo pinta el mini-badge
+   * «Confirmó» / «Pidió cancelar» de la card (WA-U2) y el drawer lo usa para recargar la sección WhatsApp en vivo.
+   */
+  patientReply?: PatientReply;
 } & Partial<AgendaPlanFields>;
 /*
  * C9 (Planes, PLANES.md §4) en el DTO: `programId`, `sessionId`,

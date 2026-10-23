@@ -57,6 +57,7 @@ import { addDays, dayWindow } from "@/lib/availability/day";
 import type { DayKey } from "@/lib/availability/types";
 import { agendaRowToDTO, encodeAgendaWire, type AgendaWireBooking } from "@/lib/agenda-wire";
 import { logger } from "@/lib/logger";
+import { getLiveAccountCached } from "@/lib/whatsapp/account-internal";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -82,12 +83,6 @@ export type AgendaBootstrap = {
   businessHours: { start: number; end: number; slotMinutes: number };
   locations: AgendaLocationOption[];
   rooms: RoomOption[];
-  /**
-   * WA-S7 (T6 §26.5): el consultorio manda WhatsApp = `WHATSAPP_MODE` no está en `off` y tiene una cuenta ACTIVE de
-   * ese mismo modo. La agenda lo usa para mostrar la sección WhatsApp del drawer y el badge «Confirmó» / «Pidió
-   * cancelar» (WA-U2). Con el modo `off`: false sin ninguna query.
-   */
-  whatsapp: boolean;
 };
 
 /**
@@ -121,6 +116,13 @@ export type AgendaPageData = AgendaBootstrap & {
   capabilities: string[];
   availability: AgendaAvailability | null;
   onlineMoney: AgendaOnlineMoney;
+  /**
+   * WA-S7 (T6 §26.5): el consultorio manda WhatsApp = `WHATSAPP_MODE` no está en `off` y tiene una cuenta ACTIVE de
+   * ese mismo modo (`agendaWhatsAppFor`). La agenda lo usa para montar la sección WhatsApp del drawer (WA-U2). El badge
+   * «Confirmó» / «Pidió cancelar» de la card NO depende de esto: sale del cable (`rp`), que solo existe si el paciente
+   * respondió. Con el modo `off`: false sin ninguna query.
+   */
+  whatsapp: boolean;
 };
 
 /**
@@ -191,13 +193,6 @@ export async function loadAgendaBootstrapInTx(
     }
   }
 
-  // WA-S7: AL FINAL de la tx y con catch, como sedes y salas (si falla, la agenda de hoy no depende de WhatsApp: false
-  // y log). Modo `off` → ni la query (C-WA: con el modo apagado, cero queries extra).
-  // TODO(WA-U2/INT): cambiar por `getLiveAccountCached(tenantId)` (C-WA6, `lib/whatsapp/account-internal.ts`, tag
-  // `whatsappAccount(tenantId)`) cuando WA-S1 la cree: 0 sentencias en caliente. Hoy es UNA sentencia por índice
-  // (`WhatsAppAccount_tenantId_status_idx`) y solo con el modo prendido.
-  const whatsapp = await agendaWhatsAppInTx(tx, tenantId);
-
   return {
     services,
     practitioners: practitioners.map((p) => ({ id: p.id, name: displayMemberName(p.user.fullName) })),
@@ -210,27 +205,25 @@ export async function loadAgendaBootstrapInTx(
     },
     locations,
     rooms,
-    whatsapp,
   };
 }
 
 /**
  * WA-S7: ¿el consultorio manda WhatsApp? El modo de la cuenta tiene que ser el vigente: una cuenta `fake` con el env en
  * `live` (o al revés) no manda nada (el outbox re-chequea `mode === whatsappMode()`, C-WA7), así que la agenda no
- * ofrece lo que no va a salir.
+ * ofrece lo que no va a salir. Solo ACTIVE: una cuenta en SETUP o REAUTH_REQUIRED no manda.
+ *
+ * WA-U2 (handoff de WA-S7/WA-S1): lee la cuenta cacheada (`getLiveAccountCached`, tag `whatsappAccount(tenantId)`, la
+ * misma que usan el hook post-commit y la cola): 0 sentencias en caliente. Por eso va FUERA de la tx del bootstrap (lee
+ * por `prismaService` en un miss: no tiene sentido tener la tx abierta esperándola) y en paralelo con el resto. Con el
+ * modo `off` corta ANTES de llamar: cero queries extra (C-WA). Si falla, la agenda de hoy no depende de WhatsApp:
+ * false y log.
  */
-export async function agendaWhatsAppInTx(
-  tx: DbClient,
-  tenantId: string,
-  mode: WhatsappMode = whatsappMode()
-): Promise<boolean> {
+export async function agendaWhatsAppFor(tenantId: string, mode: WhatsappMode = whatsappMode()): Promise<boolean> {
   if (mode === "off") return false;
   try {
-    const acc = await tx.whatsAppAccount.findFirst({
-      where: { tenantId, status: "ACTIVE", mode },
-      select: { id: true },
-    });
-    return acc != null;
+    const a = await getLiveAccountCached(tenantId);
+    return a?.status === "ACTIVE" && a.mode === mode;
   } catch (e) {
     logger.warn("agenda.bootstrap.whatsappAccount_failed", { err: errMsg(e) });
     return false;
@@ -283,12 +276,16 @@ export async function loadAgendaPage(
     }
   });
 
-  const [rows, boot, agendaView, caps, availability] = await Promise.all([
+  // WA-U2: cuenta de WhatsApp cacheada, fuera de toda tx (ver `agendaWhatsAppFor`).
+  const whatsappP = agendaWhatsAppFor(actor.tenantId);
+
+  const [rows, boot, agendaView, caps, availability, whatsapp] = await Promise.all([
     bookingsP,
     bootP,
     prefsP,
     capsP,
     availabilityP,
+    whatsappP,
   ]);
   return {
     ...boot,
@@ -303,5 +300,6 @@ export async function loadAgendaPage(
     capabilities: [...caps],
     availability,
     onlineMoney: agendaOnlineMoneyFor(caps, actor),
+    whatsapp,
   };
 }

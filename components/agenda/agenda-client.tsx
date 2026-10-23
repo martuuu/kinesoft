@@ -350,6 +350,12 @@ export type Props = {
    * "off"`). Solo se le pasa al drawer del turno para ofrecer «Generar link de pago»; ausente = no.
    */
   onlineMoney?: boolean;
+  /**
+   * WA-S7/WA-U2: el consultorio manda WhatsApp (modo ≠ off y cuenta ACTIVE de ese modo; `agendaWhatsAppFor` en el
+   * loader, cacheado). Solo se le pasa al drawer: con true baja por `import()` la sección WhatsApp del turno; ausente o
+   * false = el drawer de siempre, sin el chunk. El badge «Confirmó» / «Pidió cancelar» de la card no depende de esto.
+   */
+  whatsapp?: boolean;
 } & Partial<AgendaBootstrapProps>;
 
 type AgendaHours = { start: number; end: number; slotMinutes: number };
@@ -1594,6 +1600,7 @@ export function AgendaClient(props: Props) {
         capabilities={props.capabilities ?? null}
         viewerPractitionerId={ownPractitionerId}
         onlineMoney={props.onlineMoney}
+        whatsapp={props.whatsapp === true}
         rooms={rooms}
         primaryLocationId={primaryLocationId}
         onClose={() => setEditing(null)}

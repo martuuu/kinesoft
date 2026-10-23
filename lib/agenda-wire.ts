@@ -77,12 +77,11 @@ type Lookup = {
 };
 
 /**
- * `BookingDTO` declara la plata online de T5 (`onlineDepositCents`/`paidOnline`, C-TP10) desde TP-3c.
- * WA-S7: `patientReply` todavía no está en `BookingDTO` (`components/agenda/agenda-utils.ts` es de WA-U2, handoff):
- * hasta entonces lo declara este tipo. Presente solo cuando hay respuesta vigente.
- * TODO(WA-U2): sumar `patientReply?: PatientReply` a `BookingDTO` y volver a `type AgendaWireDTO = BookingDTO`.
+ * `BookingDTO` declara la plata online de T5 (`onlineDepositCents`/`paidOnline`, C-TP10) desde TP-3c y la respuesta
+ * del paciente por WhatsApp (`patientReply`, WA-S7) desde WA-U2: el cable ya no suma campos propios. Alias y no
+ * reemplazo para no tocar los callers que lo nombran.
  */
-export type AgendaWireDTO = BookingDTO & { patientReply?: PatientReply };
+export type AgendaWireDTO = BookingDTO;
 type WireDTO = AgendaWireDTO;
 
 type Field = {

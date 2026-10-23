@@ -126,6 +126,37 @@ export function MoneyBadge({ b }: { b: BookingDTO }) {
   );
 }
 
+/**
+ * WA-U2 (T6 §26.5, WA-D21): lo que el paciente respondió por WhatsApp al aviso de ESTE horario (cable `rp` →
+ * `patientReply`; la regla «vigente / la última gana» vive en `patientReplyOf`, en el server). Mismo patrón que
+ * `MoneyBadge`: borde y sin relleno, porque el fondo de la card es el ESTADO y la barra el servicio (AGENTS §5): un
+ * «Confirmó» con relleno se confundiría con el estado Confirmado. Texto visible corto + nombre accesible completo con
+ * `role="img"` (cuenta en el nombre del botón de la card).
+ *
+ * Los textos son los de `WA_REPLY_BADGE` (`lib/whatsapp/copy.ts`) COPIADOS a propósito: `/agenda` está en el tope de
+ * bundle (172,1 / 172,1 kB) y el import del módulo de copy arrastraría todos sus mapas al first load. La paridad la fija
+ * `tests/unit/render/wa-u2-agenda.test.tsx`: si alguien cambia el copy allá, ese test frena acá. Tupla y no objeto
+ * (como `cardMoneyBadge`): las claves pesan. Sin `rp` en el cable → null y la card queda con los mismos nodos.
+ */
+export function cardReplyBadge(r: BookingDTO["patientReply"]): readonly [dataBadge: string, label: string, ariaLabel: string] | null {
+  return r == "confirmed"
+    ? ["wa-ok", "Confirmó", "El paciente confirmó el turno por WhatsApp"]
+    : r == "cancel_requested"
+      ? ["wa-no", "Pidió cancelar", "El paciente avisó por WhatsApp que no puede ir"]
+      : null;
+}
+
+export function ReplyBadge({ b }: { b: BookingDTO }) {
+  const m = cardReplyBadge(b.patientReply);
+  return (
+    m && (
+      <span role="img" data-badge={m[0]} aria-label={m[2]} style={{ ...miniBadge, border: "1px solid", lineHeight: "12px" }}>
+        {m[1]}
+      </span>
+    )
+  );
+}
+
 /** Chip + aviso juntos (Lista, modal de Semana, Recepción). `null` si no hay nada. */
 export function PlanMarks({ b, size = "xs" }: { b: BookingDTO; size?: "xs" | "sm" }) {
   const m = bookingPlanMarks(b);
@@ -448,6 +479,7 @@ export function BookingCard({
           )}
           {marks.outOfPlan && <OutOfPlanTag />}
           <MoneyBadge b={b} />
+          <ReplyBadge b={b} />
           {reception && (
             <span
               data-badge={reception.kind}
