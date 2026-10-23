@@ -399,7 +399,7 @@ function modeFailure(): SaasMpSyncFailure | null {
 }
 
 function preapprovalBackUrl(): string {
-  return `${mpAppUrl().replace(/\/+$/, "")}/configuracion?tab=plan&debito=1`;
+  return `${mpAppUrl().replace(/\/+$/, "")}/configuracion?tab=facturacion&debito=1`;
 }
 
 /** Crea (o reusa) el preapproval PENDIENTE sin tarjeta y devuelve su `init_point`; el vigente sigue cobrando hasta que MP autorice el nuevo. */

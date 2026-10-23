@@ -136,10 +136,12 @@ describe("[VX2-c1] landing", () => {
     }
   });
 
-  it("«¿Cómo pago?» solo con SAAS_BILLING_MODE=manual (D-VX17)", async () => {
+  it("«¿Cómo pago?» con SAAS_BILLING_MODE distinto de off (D-VX17; MPS-4a: `mp` ya no es alias de `manual`)", async () => {
+    expect(await render()).not.toContain("¿Cómo pago?");
+    process.env[ENV_KEY] = "off";
     expect(await render()).not.toContain("¿Cómo pago?");
     process.env[ENV_KEY] = "mp";
-    expect(await render()).not.toContain("¿Cómo pago?");
+    expect(await render()).toContain("¿Cómo pago?");
     process.env[ENV_KEY] = "manual";
     const html = await render();
     expect(html).toContain("¿Cómo pago?");

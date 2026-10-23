@@ -13,8 +13,10 @@ import type { SaasChargeStatus, SaasPaymentStatus, SaasPlan } from "@prisma/clie
 import { mustDisableFor, seatKindOf, type SeatKind, type SeatTally, type SeatUsageByKind } from "@/lib/plan-catalog";
 import type { PlanChangePreview } from "@/lib/saas-plan-change-types";
 import type { TenantModule } from "@/lib/tenant-modules";
-import { RECEIPT_MAX_BYTES, RECEIPT_MIME_TYPES } from "@/lib/saas-billing-logic";
+import { RECEIPT_MAX_BYTES, RECEIPT_MIME_TYPES, addDaysKey, cancelEffectiveOnFor, stubFor } from "@/lib/saas-billing-logic";
 import { toARDateKey } from "@/lib/datetime-ar";
+import { formatARS } from "@/lib/format";
+import type { BillingOverview, PlanChangeBilling, SaasCollectionMethod } from "@/lib/saas-billing-types";
 
 // ── Cupos y estado del plan ───────────────────────────────────────────────────────────────────────────────────────
 
@@ -332,4 +334,257 @@ export function validateReceiptForm(i: ReceiptFormInput, now: Date): ReceiptForm
   }
   if (i.note.trim().length > RECEIPT_NOTE_MAX) e.note = `La nota puede tener hasta ${RECEIPT_NOTE_MAX} caracteres.`;
   return e;
+}
+
+// ── MPS-4a (§26.6 UI, C-MPS10): suscripción con Mercado Pago ──────────────────────────────────────────────────────
+/*
+ * Todo lo que decide QUÉ se muestra en «Cómo pagás», el débito, la baja, el desglose del próximo cargo y el copy del
+ * cambio de plan vive acá, puro: la regla de Martin es «oculto si no tiene función» (con `manual` solo lo que aplica a
+ * transferencia y baja; con `off`, nada) y eso se prueba con números, no mirando HTML. Las barreras reales siguen en
+ * el server (`lib/saas-billing-mp.ts`: modo, step-up, `autoDebitAllowed`); esto solo evita ofrecer lo que va a rebotar.
+ * Fechas: claves civiles AR («YYYY-MM-DD») partidas a mano; nunca `new Date(key)` (en AR mostraba el día anterior).
+ */
+
+/** «4/12» desde una clave civil (el formato del brief para los días de cobro). */
+export function dayMonthKey(key: string | null | undefined): string {
+  if (!key) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+  return m ? `${Number(m[3])}/${Number(m[2])}` : "";
+}
+
+/** Copy de la suscripción (voseo; «Mercado Pago» completo). Los errores de las actions ya vienen en `error`. */
+export const SUBSCRIPTION_COPY = {
+  methodTitle: "Cómo pagás",
+  method: {
+    AUTO_DEBIT: { label: "Débito automático con Mercado Pago", hint: "Se debita el 4 de cada mes. Tu tarjeta la cargás en Mercado Pago, no acá." },
+    MP_CHECKOUT: { label: "Mercado Pago cada mes", hint: "Te avisamos el 4 y pagás hasta el 9." },
+    TRANSFER: { label: "Transferencia", hint: "Transferís y nos mandás el comprobante desde acá con «Informar pago»." },
+  } satisfies Record<SaasCollectionMethod, { label: string; hint: string }>,
+  pendingDebit: "Falta autorizar el débito en Mercado Pago",
+  continueMp: "Continuar en Mercado Pago",
+  cancel: "Cancelar",
+  changeCard: "Cambiar tarjeta",
+  stopDebit: "Dejar de usar el débito",
+  pausedDebit: "El débito está en pausa: este mes no se debita nada.",
+  noPrice: "Tu plan todavía no tiene precio: el débito se activa cuando lo carguemos.",
+  payMp: "Pagar con Mercado Pago",
+  paymentReceived: "Recibimos tu pago. Puede tardar unos minutos en verse acá.",
+  paymentRejected: "Mercado Pago no aprobó el pago. Probá de nuevo o elegí otra forma de pago.",
+  debitAuthorized: "Listo: el débito automático quedó activo.",
+  debitNotYet: "Mercado Pago todavía no nos confirmó la autorización. Si ya autorizaste, en unos minutos se ve acá.",
+  emailLabel: "Email de tu cuenta de Mercado Pago",
+  emailHint: "Es el email con el que entrás a Mercado Pago. Ahí cargás la tarjeta y autorizás el débito.",
+  debitDrawerTitle: "Débito automático con Mercado Pago",
+  cancelButton: "Dar de baja la suscripción",
+  cancelTitle: "¿Dar de baja la suscripción?",
+  undoCancel: "Deshacer baja",
+  reactivate: "Reactivar suscripción",
+  cancelledBand: "Tu suscripción está dada de baja: el consultorio quedó en solo lectura.",
+  cancelPendingPlan: "Anular el cambio de plan",
+} as const;
+
+/** Formas de pago que se ofrecen, en el orden del selector. Vacío = no se muestra «Cómo pagás». */
+export function collectionChoices(o: Pick<BillingOverview, "mode" | "subscriptionStatus" | "autoDebit">): SaasCollectionMethod[] {
+  // `manual`: la única forma es la transferencia y ya está explicada debajo del saldo; un selector de una opción no
+  // tiene función. Dada de baja: primero se reactiva (las actions de MP igual lo permitirían, pero no cobran nada).
+  if (o.mode !== "mp" || o.subscriptionStatus === "CANCELLED") return [];
+  // MPS-D24: sin suscripción creada (`autoDebit` null) el débito está permitido; Plataforma lo puede bloquear.
+  const allowed = o.autoDebit ? o.autoDebit.allowed : true;
+  return allowed ? ["AUTO_DEBIT", "MP_CHECKOUT", "TRANSFER"] : ["MP_CHECKOUT", "TRANSFER"];
+}
+
+export type AutoDebitBand = { kind: "pending" | "active" | "failed" | "paused"; text: string };
+
+/** Último cargo con saldo (el período más reciente): el que el débito rechazado dejó sin pagar. */
+function lastOpenCharge(o: Pick<BillingOverview, "charges">) {
+  return [...o.charges].filter((c) => c.status === "OPEN" && c.remainingCents > 0).sort((a, b) => (a.periodStart < b.periodStart ? 1 : -1))[0] ?? null;
+}
+
+/**
+ * Estado del débito en una frase (§26.6): «Falta autorizar…», «Débito activo · m***@… · próximo débito 4/12 por $X»,
+ * «No pudimos debitar $X. Pagalo antes del 9/12…» o la pausa. null = no hay débito en juego (o el modo no es `mp`).
+ * El monto del activo es la PROYECCIÓN del próximo cargo (base + ajustes − saldo, lo mismo que el reconcile pone en el
+ * preapproval los días 3-4) y, si no la hay, lo que tiene hoy el preapproval.
+ */
+export function autoDebitBand(
+  o: Pick<BillingOverview, "mode" | "autoDebit" | "charges" | "nextCharge" | "subscriptionStatus">
+): AutoDebitBand | null {
+  const d = o.autoDebit;
+  if (o.mode !== "mp" || !d || o.subscriptionStatus === "CANCELLED") return null;
+  switch (d.status) {
+    case "pending_authorization":
+      return { kind: "pending", text: SUBSCRIPTION_COPY.pendingDebit };
+    case "active": {
+      const amount = o.nextCharge?.breakdown?.amountCents ?? d.amountCents;
+      const on = d.nextDebitOn ?? o.nextCharge?.periodStart ?? null;
+      const parts = ["Débito activo"];
+      if (d.payerEmailMasked) parts.push(d.payerEmailMasked);
+      if (on && amount != null) parts.push(`próximo débito ${dayMonthKey(on)} por ${formatARS(amount)}`);
+      else if (on) parts.push(`próximo débito ${dayMonthKey(on)}`);
+      return { kind: "active", text: parts.join(" · ") };
+    }
+    case "failed": {
+      const c = lastOpenCharge(o);
+      if (c) return { kind: "failed", text: `No pudimos debitar ${formatARS(c.remainingCents)}. Pagalo antes del ${dayMonthKey(c.dueDate)} para no perder el acceso.` };
+      // Sin cargo abierto (se pagó por otro lado después del rechazo): ya no hay nada que pagar.
+      return null;
+    }
+    case "paused":
+      return { kind: "paused", text: SUBSCRIPTION_COPY.pausedDebit };
+    default:
+      // none / cancelled / blocked: no hay débito vivo (el selector ofrece activarlo, si se puede).
+      return null;
+  }
+}
+
+/**
+ * MPS-2b1: con el plan en «Consultá» y sin precio a medida el débito queda pausado (`no_price`). Se avisa solo si hay
+ * un débito en juego (elegido, pendiente o pausado): a quien paga por transferencia no le dice nada.
+ */
+export function noPriceNotice(o: Pick<BillingOverview, "mode" | "effectivePriceCents" | "collectionMethod" | "autoDebit">): string | null {
+  if (o.mode !== "mp" || o.effectivePriceCents != null) return null;
+  const st = o.autoDebit?.status;
+  const inPlay = o.collectionMethod === "AUTO_DEBIT" || st === "pending_authorization" || st === "paused" || st === "active";
+  return inPlay ? SUBSCRIPTION_COPY.noPrice : null;
+}
+
+export type ChargeLine = { label: string; amount: string; tone?: "total" };
+
+/**
+ * Desglose del próximo cargo (C-MPS5 `nextCharge.breakdown`): base + ajustes − saldo a favor = total. null si no hay
+ * nada que desglosar (sin ajustes ni saldo el total es la base, que ya se ve en «Próximo cargo»).
+ */
+export function nextChargeLines(o: Pick<BillingOverview, "planLabel" | "nextCharge" | "pendingPlan">): ChargeLine[] | null {
+  const n = o.nextCharge;
+  const b = n?.breakdown;
+  if (!n || !b || b.baseCents == null || b.amountCents == null) return null;
+  if (b.adjustmentsCents === 0 && b.creditCents === 0) return null;
+  // El plan que rige ese día: la bajada programada si vence ese día o antes (la misma cuenta de `readLedger`).
+  const planLabel = o.pendingPlan && o.pendingPlan.effectiveOn <= n.periodStart ? o.pendingPlan.planLabel : o.planLabel;
+  const lines: ChargeLine[] = [{ label: `Plan ${planLabel}`, amount: formatARS(b.baseCents) }];
+  if (b.adjustmentsCents !== 0) {
+    lines.push({ label: "Ajustes", amount: `${b.adjustmentsCents > 0 ? "+" : "−"} ${formatARS(Math.abs(b.adjustmentsCents))}` });
+  }
+  if (b.creditCents !== 0) lines.push({ label: "Saldo a favor", amount: `− ${formatARS(Math.abs(b.creditCents))}` });
+  lines.push({ label: `Total del ${dayMonthKey(n.periodStart)}`, amount: formatARS(b.amountCents), tone: "total" });
+  return lines;
+}
+
+/**
+ * Primer período (MPS-D13): el alta (o el fin de la prueba) cae a mitad de mes y el primer cargo del 4 suma el tramo
+ * `[billableFrom, 4)` como proporcional. Misma cuenta que el escritor (`stubFor`); null si no hay tramo, si ya hay
+ * cargos (el stub ya entró) o si el plan no tiene precio.
+ */
+export function firstPeriodNotice(p: { billableFrom: string | null | undefined; nextChargeOn: string | null | undefined; priceCents: number | null; hasCharges: boolean }): string | null {
+  if (p.hasCharges || !p.billableFrom || !p.nextChargeOn || p.priceCents == null) return null;
+  if (p.billableFrom >= p.nextChargeOn) return null;
+  const stub = stubFor({ billableFrom: p.billableFrom, periodStart: p.nextChargeOn, priceCents: p.priceCents });
+  if (!stub) return null;
+  return `El ${dayMonthKey(p.nextChargeOn)} se cobra el mes completo más ${formatARS(stub.amountCents)} por los días del ${dayMonthKey(p.billableFrom)} al ${dayMonthKey(addDaysKey(p.nextChargeOn, -1))}.`;
+}
+
+/**
+ * Qué pasa con la plata al cambiar de plan (C-MPS10 `billing`). Subida: el proporcional entra en el cargo que cierra el
+ * período (= hoy + los días cobrados, el `periodEnd` del cargo: `prorate` cuenta de hoy a ese día). Bajada: rige el día
+ * del próximo cobro y hasta entonces nadie pierde el acceso (MPS-D12: si no entra ese día, se anula). null = el copy
+ * de siempre (cambio inmediato).
+ */
+export function planChangeBillingCopy(b: PlanChangeBilling, l: { toLabel: string; fromLabel: string; trialing: boolean }): string | null {
+  switch (b.kind) {
+    case "upgrade_prorated": {
+      const on = dayMonthKey(addDaysKey(b.effectiveOn, b.days));
+      const days = b.days === 1 ? "por el día que queda" : `por los ${b.days} días que quedan`;
+      return `Pasás a ${l.toLabel} hoy. En el cargo del ${on} se suman ${formatARS(b.prorationCents)} ${days}.`;
+    }
+    case "scheduled_downgrade":
+      return (
+        `Tu plan pasa a ${l.toLabel} el ${dayMonthKey(b.effectiveOn)}. Hasta ese día seguís con ${l.fromLabel} y nadie pierde el acceso. ` +
+        "Si sumás usuarios antes, la bajada no se aplica y te avisamos."
+      );
+    case "blocked_cancel_pending":
+      return "Tenés una baja programada: deshacela para cambiar de plan.";
+    default:
+      return null;
+  }
+}
+
+/** Día en que regiría una baja pedida hoy: la MISMA cuenta que `scheduleCancelInTx` (para el texto del confirm). */
+export function cancelEffectiveOnPreview(o: Pick<BillingOverview, "subscriptionStatus" | "trialEndsAt" | "nextCharge">, now: Date): string {
+  return cancelEffectiveOnFor({
+    today: toARDateKey(now),
+    subscriptionStatus: o.subscriptionStatus,
+    trialEndsAt: o.trialEndsAt ? new Date(o.trialEndsAt) : null,
+    nextChargeKey: o.nextCharge?.periodStart ?? null,
+  });
+}
+
+/** Texto del confirm de la baja. «El débito se pausa ahora» solo si hay un débito que pausar. */
+export function cancelConfirmMessage(effectiveOn: string, hasDebit: boolean): string {
+  const base = `Vas a tener acceso completo hasta el ${dayMonthKey(effectiveOn)}. Después el consultorio queda en solo lectura.`;
+  return hasDebit ? `${base} El débito se pausa ahora.` : base;
+}
+
+/**
+ * Parámetros con los que vuelve Mercado Pago a Configuración: los nuestros (`cargo`, `debito`) y los que MP agrega al
+ * back_url del checkout y del preapproval. Se borran todos después de leerlos: un refresh no tiene que volver a
+ * confirmar el pago ni el link copiado llevar el id del pago.
+ */
+export const BILLING_RETURN_PARAMS = [
+  "cargo",
+  "debito",
+  "payment_id",
+  "collection_id",
+  "collection_status",
+  "status",
+  "external_reference",
+  "payment_type",
+  "merchant_order_id",
+  "preference_id",
+  "site_id",
+  "processing_mode",
+  "merchant_account_id",
+  "preapproval_id",
+] as const;
+
+export type BillingReturn = { kind: "checkout"; chargeId?: string; paymentId: string } | { kind: "debit" } | { kind: "none" };
+
+/**
+ * Qué trae la URL: vuelta del checkout de un cargo (`cargo` + `payment_id` numérico → `confirmCheckoutReturn`), del
+ * débito (`debito=1` → `refreshAutoDebit`), o una vuelta sin nada que confirmar (cancelaron en MP: `none`, solo se
+ * limpia). null = no es una vuelta de MP. El server vuelve a validar todo (no confía en la query).
+ */
+export function parseBillingReturn(search: string): BillingReturn | null {
+  const q = new URLSearchParams(search);
+  if (q.get("debito") === "1") return { kind: "debit" };
+  if (!BILLING_RETURN_PARAMS.some((k) => q.has(k))) return null;
+  const paymentId = q.get("payment_id") ?? q.get("collection_id");
+  if (q.has("cargo") && paymentId && /^\d{1,20}$/.test(paymentId)) {
+    const chargeId = q.get("cargo") || undefined;
+    return chargeId ? { kind: "checkout", chargeId, paymentId } : { kind: "checkout", paymentId };
+  }
+  return { kind: "none" };
+}
+
+/** La misma URL sin los parámetros de la vuelta (se conserva `tab` y lo demás). */
+export function stripBillingReturn(href: string): string {
+  const url = new URL(href);
+  for (const k of BILLING_RETURN_PARAMS) url.searchParams.delete(k);
+  return url.toString();
+}
+
+/**
+ * UUID v4 por instancia del drawer de cambio de plan (`applyPlanChange` lo exige `.uuid()`: la clave del proporcional
+ * es `upgrade:<uuid>` y un reintento tiene que dar el mismo ajuste). Sin `randomUUID` (contexto no seguro) se arma con
+ * `getRandomValues`; el fallback de otros drawers (`pl-<ts>`) no sirve acá porque el zod lo rechazaría.
+ */
+export function newPlanChangeKey(): string {
+  const c = typeof crypto !== "undefined" ? crypto : undefined;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  const b = new Uint8Array(16);
+  if (c && typeof c.getRandomValues === "function") c.getRandomValues(b);
+  else for (let i = 0; i < 16; i++) b[i] = Math.floor(Math.random() * 256);
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }

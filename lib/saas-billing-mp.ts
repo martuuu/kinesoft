@@ -179,7 +179,7 @@ export async function setCollectionMethod(raw: unknown): Promise<SaasMpActionRes
 
 /**
  * Activa (o cambia el email de) el débito automático (step-up, modo `mp`): crea o reusa el preapproval PENDIENTE sin
- * tarjeta y devuelve su `initPoint`; el consultorio autoriza en MP y vuelve a `?tab=plan&debito=1`
+ * tarjeta y devuelve su `initPoint`; el consultorio autoriza en MP y vuelve a `?tab=facturacion&debito=1`
  * (`refreshAutoDebit`). El vigente, si hay, sigue cobrando hasta que MP confirme el nuevo.
  */
 export async function startAutoDebit(raw: unknown): Promise<SaasMpActionResult<StartAutoDebitData>> {
@@ -281,7 +281,7 @@ export async function payChargeWithMp(raw?: unknown): Promise<SaasMpActionResult
 }
 
 /**
- * Vuelta del checkout (`?tab=plan&cargo=<id>&payment_id=<id>`, modo `mp`): re-pide el pago a MP con el token de la
+ * Vuelta del checkout (`?tab=facturacion&cargo=<id>&payment_id=<id>`, modo `mp`): re-pide el pago a MP con el token de la
  * plataforma, exige que su referencia sea `saas:<tenant del actor>` (y el cargo, si vino) y recién ahí lo consume con
  * el mismo camino que el webhook (`consumeSaasMpPayment`, idempotente: el webhook y la vuelta pueden llegar los dos).
  * Un pago ajeno se contesta igual que uno inexistente (no se confirma que exista).

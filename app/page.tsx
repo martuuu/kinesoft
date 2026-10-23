@@ -58,7 +58,7 @@ export default async function HomePage() {
   const plans = await getPublicPlanCatalog();
   const startedAt = Date.now();
   const trialDays = plans.find((p) => p.plan === "INDIVIDUAL")?.trialDays ?? null;
-  const showBilling = saasBillingMode() === "manual";
+  const showBilling = saasBillingMode() !== "off";
 
   return (
     <div className={base.page}>

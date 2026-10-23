@@ -15,6 +15,12 @@
  *   testeado). El server recuenta igual (`does_not_fit`) y el CAS contra `tenantUpdatedAt` corta si alguien cambió el
  *   consultorio mientras tanto (`stale`): los dos errores ofrecen «Actualizar» (vuelve a pedir la vista previa).
  * - `PlanChangeReview` es la parte sin estado (se renderiza en el test SSR con una vista previa fija).
+ *
+ * MPS-4a (C-MPS10, MPS-D10/D11/D12/D18): la vista previa trae `billing` y el drawer dice qué pasa con la plata. Subida
+ * con el período ya cobrado: rige hoy y el proporcional entra en el próximo cargo. Bajada con el período cobrado: queda
+ * PROGRAMADA para el próximo cobro (nadie pierde el acceso hasta ese día; si para entonces no entra, se anula). Con la
+ * baja programada no hay cambio de plan. «No hay prorrateo ni reintegros» dejó de ser cierto y se fue. Cada apertura
+ * lleva su `idempotencyKey` (UUID): un reintento después de un error de red da el MISMO proporcional, no dos.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { SaasPlan, TenantVertical } from "@prisma/client";
@@ -25,15 +31,22 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { useStepUpAction } from "@/components/account/step-up-modal";
 import { applyPlanChange, previewPlanChange } from "@/lib/saas-billing";
+import { cancelScheduledPlanChange } from "@/lib/saas-billing-mp";
 import type { PlanChangePreview } from "@/lib/saas-plan-change-types";
+import type { BillingPendingPlan, PlanChangeBilling, PlanChangePreviewWithBilling } from "@/lib/saas-billing-types";
 import { PLAN_DEFAULTS, SAAS_PLANS } from "@/lib/saas-plans-logic";
 import { SAAS_PLAN_LABEL } from "@/lib/tenant-modules";
 import { roleLabel } from "@/lib/roles";
 import { formatARS } from "@/lib/format";
 import {
+  SUBSCRIPTION_COPY,
   canReactivate,
   candidateLoadLabel,
+  dayMonthKey,
+  firstPeriodNotice,
   moduleLabels,
+  newPlanChangeKey,
+  planChangeBillingCopy,
   planChangeSelectionState,
   selectableForDisable,
   selectionHint,
@@ -95,6 +108,8 @@ export function PlanChangeDrawer({
   usersNow,
   onContactSales,
   onChanged,
+  pendingPlan,
+  firstPeriod,
 }: {
   open: boolean;
   onClose: () => void;
@@ -106,21 +121,30 @@ export function PlanChangeDrawer({
   usersNow: number | null;
   onContactSales: (draft: SupportDraft) => void;
   onChanged: () => void;
+  /** MPS-4a: bajada ya programada (`overview.pendingPlan`): el drawer la muestra con «Anular el cambio de plan». */
+  pendingPlan?: BillingPendingPlan | null;
+  /** MPS-4a: primer período sin cargos (`overview.billableFrom` + `nextCharge.periodStart`) para el proporcional del alta. */
+  firstPeriod?: FirstPeriod | null;
 }) {
   const runStepUp = useStepUpAction();
   const confirm = useConfirm();
   const toast = useToast();
   const all = useMemo(() => planChoicesWithDefaults(choices), [choices]);
   const [to, setTo] = useState<SaasPlan | null>(null);
-  const [preview, setPreview] = useState<PlanChangePreview | null>(null);
+  const [preview, setPreview] = useState<PlanChangePreviewWithBilling | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [canRefresh, setCanRefresh] = useState(false);
   const [disable, setDisable] = useState<ReadonlySet<string>>(new Set());
   const [reactivate, setReactivate] = useState<ReadonlySet<string>>(new Set());
   const [pending, setPending] = useState(false);
+  // Una clave por apertura del drawer (AGENTS §4): se renueva al cerrar, no en cada reintento.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => newPlanChangeKey());
+  const [pendingCancelled, setPendingCancelled] = useState(false);
 
   const reset = useCallback(() => {
+    setIdempotencyKey(newPlanChangeKey());
+    setPendingCancelled(false);
     setTo(null);
     setPreview(null);
     setError(null);
@@ -165,14 +189,42 @@ export function PlanChangeDrawer({
 
   const state = preview ? planChangeSelectionState(preview, disable, reactivate) : null;
   const toLabel = to ? (all.find((c) => c.plan === to)?.label ?? SAAS_PLAN_LABEL[to]) : "";
+  const fromLabel = all.find((c) => c.plan === currentPlan)?.label ?? SAAS_PLAN_LABEL[currentPlan];
+  const billing = preview?.billing;
+  // MPS-D18: con la baja programada el server lo rechaza (`cancel_pending`); no se ofrece confirmar.
+  const blocked = billing?.kind === "blocked_cancel_pending";
+  const scheduled = billing?.kind === "scheduled_downgrade";
+  const canConfirm = !!state?.canConfirm && !blocked;
+  const showPendingPlan = !!pendingPlan && !pendingCancelled;
+
+  async function onCancelPendingPlan() {
+    if (pending) return;
+    setPending(true);
+    setError(null);
+    try {
+      const r = await cancelScheduledPlanChange();
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      setPendingCancelled(true);
+      toast.success("Listo: seguís con tu plan.");
+      onChanged();
+    } catch {
+      setError(NETWORK_ERROR);
+    } finally {
+      setPending(false);
+    }
+  }
 
   async function onConfirm() {
-    if (!preview || !to || !state?.canConfirm || pending) return;
+    if (!preview || !to || !canConfirm || pending) return;
     if (disable.size > 0) {
+      const when = scheduled && billing ? ` el ${dayMonthKey(billing.effectiveOn)}` : "";
       const ok = await confirm({
         title: `¿Pasar al plan ${toLabel}?`,
         message:
-          (disable.size === 1 ? "1 persona va a perder el acceso." : `${disable.size} personas van a perder el acceso.`) +
+          (disable.size === 1 ? `1 persona va a perder el acceso${when}.` : `${disable.size} personas van a perder el acceso${when}.`) +
           " No se borra nada: sus turnos siguen en la agenda para reasignarlos y las podés reactivar si volvés a subir de plan.",
         tone: "danger",
         confirmLabel: "Cambiar de plan",
@@ -189,6 +241,7 @@ export function PlanChangeDrawer({
           disableMembershipIds: [...disable],
           reactivateMembershipIds: [...reactivate],
           expectedUpdatedAt: preview.tenantUpdatedAt,
+          idempotencyKey,
         })
       );
       if (!r.ok) {
@@ -197,7 +250,14 @@ export function PlanChangeDrawer({
         setCanRefresh(reason === "stale" || reason === "does_not_fit" || reason === "invalid_selection");
         return;
       }
-      toast.success(`Listo: ahora tenés el plan ${toLabel}`, { description: planChangeToastDescription(r.data) });
+      const done = "data" in r ? r.data : null;
+      if (done?.billing?.kind === "scheduled_downgrade") {
+        toast.success(`Listo: tu plan pasa a ${toLabel} el ${dayMonthKey(done.billing.effectiveOn)}`, {
+          description: "Hasta ese día nadie pierde el acceso.",
+        });
+      } else if (done) {
+        toast.success(`Listo: ahora tenés el plan ${toLabel}`, { description: planChangeToastDescription(done) });
+      }
       onChanged();
       onClose();
     } catch {
@@ -219,6 +279,19 @@ export function PlanChangeDrawer({
       dirtyMessage="Elegiste personas para este cambio. Si cerrás, no se cambia el plan."
     >
       <div style={{ display: "grid", gap: 16 }}>
+        {showPendingPlan && pendingPlan && (
+          <div data-pending-plan={pendingPlan.plan} style={{ display: "grid", gap: 8, padding: "10px 12px", borderRadius: 12, background: "rgba(15,30,51,0.04)", fontSize: 13.5, color: "var(--navy-700)", lineHeight: 1.45 }}>
+            <span>
+              Ya programaste el cambio: tu plan pasa a {pendingPlan.planLabel} el {dayMonthKey(pendingPlan.effectiveOn)}.
+            </span>
+            <div>
+              <Button type="button" variant="ghost" onClick={() => void onCancelPendingPlan()} disabled={pending}>
+                {SUBSCRIPTION_COPY.cancelPendingPlan}
+              </Button>
+            </div>
+          </div>
+        )}
+
         <PlanPicker choices={all} current={currentPlan} selected={to} onChoose={choose} disabled={pending} />
 
         {loading && (
@@ -231,6 +304,8 @@ export function PlanChangeDrawer({
           <PlanChangeReview
             preview={preview}
             toLabel={toLabel}
+            fromLabel={fromLabel}
+            firstPeriod={firstPeriod}
             vertical={vertical}
             trialing={trialing}
             disable={disable}
@@ -259,8 +334,8 @@ export function PlanChangeDrawer({
           <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
             Cancelar
           </Button>
-          <Button type="button" onClick={() => void onConfirm()} disabled={!state?.canConfirm || pending || loading}>
-            {pending ? "Cambiando…" : to ? `Pasar a ${toLabel}` : "Elegí un plan"}
+          <Button type="button" onClick={() => void onConfirm()} disabled={!canConfirm || pending || loading}>
+            {pending ? "Cambiando…" : to ? (scheduled ? `Programar el cambio a ${toLabel}` : `Pasar a ${toLabel}`) : "Elegí un plan"}
           </Button>
         </div>
       </div>
@@ -337,10 +412,15 @@ export function PlanPicker({
 const sectionTitle: React.CSSProperties = { margin: 0, fontSize: 13, fontWeight: 700, color: "var(--navy-900)" };
 const muted: React.CSSProperties = { margin: 0, fontSize: 13, color: "var(--navy-500)", lineHeight: 1.45 };
 
+/** Primer período sin cargos: desde cuándo se factura y el día del primer cobro (claves AR). */
+export type FirstPeriod = { billableFrom: string; nextChargeOn: string };
+
 /** Vista previa + selección (sin estado propio). */
 export function PlanChangeReview({
   preview,
   toLabel,
+  fromLabel,
+  firstPeriod,
   vertical,
   trialing,
   disable,
@@ -350,8 +430,12 @@ export function PlanChangeReview({
   onToggleDisable,
   onToggleReactivate,
 }: {
-  preview: PlanChangePreview;
+  /** `billing` (MPS-3a) viene de `previewPlanChange`; opcional para el preview de antes (y Plataforma). */
+  preview: PlanChangePreview & { billing?: PlanChangeBilling };
   toLabel: string;
+  /** Plan actual (para «Hasta ese día seguís con …» de la bajada). */
+  fromLabel?: string;
+  firstPeriod?: FirstPeriod | null;
   vertical: TenantVertical;
   trialing: boolean;
   disable: ReadonlySet<string>;
@@ -366,6 +450,11 @@ export function PlanChangeReview({
   const pendingInvites = preview.usage.total.used - preview.candidates.length;
   const hint = selectionHint(state);
   const mustChoose = state.required > 0 || disable.size > 0;
+  // El proporcional del alta solo cuando el cambio rige ya (sin cargos todavía no hay subida ni bajada «de período»).
+  const firstNotice =
+    firstPeriod && (!preview.billing || preview.billing.kind === "immediate")
+      ? firstPeriodNotice({ billableFrom: firstPeriod.billableFrom, nextChargeOn: firstPeriod.nextChargeOn, priceCents: preview.priceCents, hasCharges: false })
+      : null;
   return (
     <div style={{ display: "grid", gap: 14 }} data-plan-review={preview.to}>
       <section style={{ display: "grid", gap: 4 }}>
@@ -379,11 +468,15 @@ export function PlanChangeReview({
             "Precio a confirmar: te lo contamos antes del primer cargo."
           )}
         </p>
-        <p style={muted}>
-          {trialing
-            ? "Seguís en la prueba hasta la misma fecha. El primer cargo sale con el plan que tengas al terminarla."
-            : "El plan nuevo rige desde el próximo cargo. No hay prorrateo ni reintegros."}
+        <p style={muted} data-plan-billing={preview.billing?.kind ?? ""}>
+          {(preview.billing && planChangeBillingCopy(preview.billing, { toLabel, fromLabel: fromLabel ?? "tu plan actual", trialing })) ??
+            (trialing
+              ? "Seguís en la prueba hasta la misma fecha. El primer cargo sale con el plan que tengas al terminarla."
+              : preview.billing
+                ? "El plan nuevo rige desde hoy y el próximo cargo sale con este precio."
+                : "El plan nuevo rige desde el próximo cargo.")}
         </p>
+        {firstNotice && <p style={muted}>{firstNotice}</p>}
       </section>
 
       {(gained.length > 0 || lost.length > 0) && (

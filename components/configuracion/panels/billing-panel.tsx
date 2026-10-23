@@ -11,8 +11,13 @@
  *
  * `SAAS_BILLING_MODE=off` (default, PL-D16): no se cobra desde la app; se dice eso en vez de una pantalla vacía.
  * Fechas: períodos y vencimientos son claves civiles AR (`formatDateKey`, sin `Date`); los instantes, día AR.
+ *
+ * MPS-4a (§26.6): con `manual` o `mp` suma la sección «Suscripción» (cómo pagás, débito automático, baja, bajada
+ * programada, desglose del próximo cargo, vuelta de Mercado Pago) en un chunk aparte (`billing-subscription-section`,
+ * diferido: el techo de /configuracion no tiene margen y con `off` no se baja nunca). Con `mp`, cada cargo impago tiene
+ * «Pagar con Mercado Pago» (`payChargeWithMp`, sin step-up: pagar una deuda no se traba; permitido en solo lectura).
  */
-import { useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
@@ -20,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { formatARS } from "@/lib/format";
 import { getBillingOverview, getReceiptUrl } from "@/lib/saas-billing";
+import { payChargeWithMp } from "@/lib/saas-billing-mp";
 import { paymentMethodLabel, type BillingOverview } from "@/lib/saas-billing-types";
 import {
   balanceView,
@@ -28,6 +34,7 @@ import {
   formatInstantAR,
   paymentStatusView,
   periodLabel,
+  SUBSCRIPTION_COPY,
 } from "@/lib/saas-billing-view";
 // [PF1.1-config · C-PF2] El drawer del comprobante se baja recién al abrirlo (precarga en hover/foco del botón).
 const loadReceiptDrawer = () => import("./receipt-upload-drawer");
@@ -36,6 +43,11 @@ const ReceiptUploadDrawer = dynamic(() => loadReceiptDrawer().then((m) => m.Rece
   loading: () => null,
 });
 const preloadReceiptDrawer = () => void loadReceiptDrawer();
+// MPS-4a: la suscripción con Mercado Pago, su propio chunk (con SSR: si la pestaña inicial es Facturación sale pintada
+// en el HTML; no cuenta en el JS inicial de la ruta). `loading: null`: sin esqueleto, aparece debajo de lo que ya se ve.
+const BillingSubscriptionSection = dynamic(() => import("./billing-subscription-section").then((m) => m.BillingSubscriptionSection), {
+  loading: () => null,
+});
 
 export const BILLING_OFF_COPY = "Todavía no estamos cobrando desde la app.";
 /** PL-Z A2: sin `SAAS_BILLING_TRANSFER_INFO` no hay a dónde transferir, así que tampoco se ofrece «Informar pago». */
@@ -70,12 +82,35 @@ export function BillingPanel({ initial }: { initial: BillingOverview }) {
   const [uploadMounted, setUploadMounted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
+  const [paying, setPaying] = useState<string | null>(null);
 
-  async function reload() {
+  // Estable: la sección de la suscripción la usa en el efecto que procesa la vuelta de Mercado Pago.
+  const reload = useCallback(async () => {
     try {
       setO(await getBillingOverview());
     } catch {
       setError(NETWORK_ERROR);
+    }
+  }, []);
+
+  /** «Pagar con Mercado Pago» de un cargo: arma (o reusa) el link y navega a MP; vuelve a `?cargo=…&payment_id=…`. */
+  async function payWithMp(chargeId: string) {
+    if (paying) return;
+    setPaying(chargeId);
+    setError(null);
+    try {
+      const r = await payChargeWithMp({ chargeId });
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      const u = new URL(r.data.initPoint);
+      if (u.protocol !== "https:" && u.protocol !== "http:") throw new Error("init_point");
+      window.location.assign(u.toString());
+    } catch {
+      setError(NETWORK_ERROR);
+    } finally {
+      setPaying(null);
     }
   }
 
@@ -104,6 +139,7 @@ export function BillingPanel({ initial }: { initial: BillingOverview }) {
   }
 
   const off = o.mode === "off";
+  const mp = o.mode === "mp";
   const balance = balanceView(o.balanceCents, (c) => formatARS(c));
 
   return (
@@ -181,6 +217,8 @@ export function BillingPanel({ initial }: { initial: BillingOverview }) {
         )}
       </Card>
 
+      {!off && <BillingSubscriptionSection overview={o} onChanged={reload} />}
+
       {(!off || o.charges.length > 0) && (
         <Card style={{ padding: 20 }}>
           <EyebrowLabel>Cargos</EyebrowLabel>
@@ -202,6 +240,11 @@ export function BillingPanel({ initial }: { initial: BillingOverview }) {
                     <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <span className="k-mono" style={{ fontSize: 14, fontWeight: 600 }}>{formatARS(c.amountCents)}</span>
                       <Tag tone={st.tone}>{st.label}</Tag>
+                      {mp && c.status === "OPEN" && c.remainingCents > 0 && (
+                        <Button type="button" variant="ghost" data-pay-mp={c.id} disabled={paying !== null} onClick={() => void payWithMp(c.id)}>
+                          {paying === c.id ? "Abriendo…" : SUBSCRIPTION_COPY.payMp}
+                        </Button>
+                      )}
                     </span>
                   </li>
                 );

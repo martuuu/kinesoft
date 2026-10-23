@@ -18,6 +18,18 @@ vi.mock("@/lib/saas-billing", () => ({
   getReceiptUrl: async () => ({ ok: false, error: "x" }),
   submitPaymentReceipt: async () => ({ ok: false, error: "x" }),
 }));
+// MPS-4a: Facturación y el drawer importan las actions de Mercado Pago (red).
+vi.mock("@/lib/saas-billing-mp", () => ({
+  setCollectionMethod: async () => ({ ok: false, error: "x" }),
+  startAutoDebit: async () => ({ ok: false, error: "x" }),
+  refreshAutoDebit: async () => ({ ok: false, error: "x" }),
+  payChargeWithMp: async () => ({ ok: false, error: "x" }),
+  confirmCheckoutReturn: async () => ({ ok: false, error: "x" }),
+  scheduleCancel: async () => ({ ok: false, error: "x" }),
+  undoCancel: async () => ({ ok: false, error: "x" }),
+  reactivateSubscription: async () => ({ ok: false, error: "x" }),
+  cancelScheduledPlanChange: async () => ({ ok: false, error: "x" }),
+}));
 vi.mock("@/lib/two-factor", () => ({ getStepUpOptions: async () => ({ ok: false, error: "x" }) }));
 
 import { TabsBar, initialConfigTab, visibleConfigTabs, type ConfigTabAccess } from "@/components/configuracion/controls";

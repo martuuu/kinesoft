@@ -376,7 +376,7 @@ function checkoutNotificationUrl(): string | null {
 
 /** Vuelta del checkout: Configuración → Plan, con el cargo (lo lee `confirmCheckoutReturn`, MPS-3a). */
 function checkoutBackUrl(chargeId: string): string {
-  return `${mpAppUrl().replace(/\/+$/, "")}/configuracion?tab=plan&cargo=${encodeURIComponent(chargeId)}`;
+  return `${mpAppUrl().replace(/\/+$/, "")}/configuracion?tab=facturacion&cargo=${encodeURIComponent(chargeId)}`;
 }
 
 /**
