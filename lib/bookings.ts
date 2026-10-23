@@ -128,6 +128,7 @@ import {
 import { AgendaBookingsQuery, ReceptionActionInput, type AgendaBookingsQueryInput } from "@/lib/bookings-schemas";
 import {
   BOOKING_ONLINE_CHARGE_PATIENT_ERROR,
+  patientReplyOf,
   type AgendaBookingRow,
   type BatchDateOutcome,
   type BookingBlockedPrompt,
@@ -395,6 +396,12 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
         attendingAt: true,
         // SV05 (M5): estado «Llamado» de la sala de espera. Escalar, misma sentencia.
         calledAt: true,
+        // WA-S7 (M15, WA-D21/D22): respuesta del paciente por WhatsApp y el horario al que respondió. Escalares en la
+        // misma sentencia (0 sentencias, techo de 16 de `a.listAgendaBookings.week`); de acá sale SOLO `patientReply`
+        // (los timestamps no viajan al cliente).
+        patientConfirmedAt: true,
+        patientCancelRequestedAt: true,
+        patientReplyFor: true,
         // C9 (S12): vínculo con el plan, para la proyección de abajo.
         programId: true,
         sessionId: true,
@@ -544,6 +551,9 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
       // MERCADO_PAGO y nunca lleva quién cobró; un cobro a mano lo lleva siempre desde M12 (CHECK), aunque elija el
       // medio «Mercado Pago». Un FULL reintegrado deja el turno REFUNDED: deja de ser «pagado online».
       paidOnline: b.paymentStatus === "PAID" && b.copagoPaymentMethod === "MERCADO_PAGO" && b.copagoCollectedById == null,
+      // WA-S7: una sola señal, solo si la respuesta es de ESTE horario (si el turno se movió, la respuesta es vieja).
+      // No es PHI ni depende del acceso al paciente: la Secretaría la necesita para llamar a quien pidió cancelar.
+      patientReply: patientReplyOf(b),
     };
   });
 }

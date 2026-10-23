@@ -236,7 +236,39 @@ export type AgendaBookingRow = BookingRow & {
    * Cable `po`, omitido si es false.
    */
   paidOnline?: boolean;
+  /**
+   * WA-S7 (T6 §26.5, WA-D21): lo que el paciente respondió por WhatsApp al aviso de ESTE horario (`patientReplyOf`),
+   * calculado en el server con escalares de la misma sentencia (0 sentencias). Cable `rp` ("c" | "x"), omitido si es
+   * null. Opcional para los productores de filas que no lo proyectan (ausente = sin respuesta).
+   */
+  patientReply?: PatientReply | null;
 } & AgendaPlanFields;
+
+/** WA-S7 (WA-D21): «Confirmó» / «Pidió cancelar». El badge de la agenda (WA-U2) sale de acá. */
+export type PatientReply = "confirmed" | "cancel_requested";
+
+/**
+ * WA-S7 (§26.5, WA-D21/D22): la ÚNICA señal de respuesta del paciente que ve la agenda.
+ *  - Solo vale si `patientReplyFor` = `scheduledFor`: el webhook guarda el horario al que respondió y NO mueve
+ *    `updatedAt` (WA-D22); si después el turno se movió, la respuesta es de otro horario y no se muestra (el
+ *    webhook ya la trata como `stale`). Comparación por milisegundo: las dos columnas son TIMESTAMP(3).
+ *  - Si hay las dos marcas (confirmó y después pidió cancelar, o al revés) gana la más nueva; en un empate, «Pidió
+ *    cancelar»: es lo que la Secretaría tiene que mirar, nunca se esconde detrás de un «Confirmó».
+ *  - Sin `patientReplyFor` no hay respuesta (CHECK `Booking_patient_reply_check`).
+ * Pura e isomórfica (este archivo es de tipos y constantes que importa el cliente): sin fechas del host ni zona horaria.
+ */
+export function patientReplyOf(b: {
+  scheduledFor: Date;
+  patientReplyFor: Date | null;
+  patientConfirmedAt: Date | null;
+  patientCancelRequestedAt: Date | null;
+}): PatientReply | null {
+  if (!b.patientReplyFor || b.patientReplyFor.getTime() !== b.scheduledFor.getTime()) return null;
+  const ok = b.patientConfirmedAt?.getTime();
+  const no = b.patientCancelRequestedAt?.getTime();
+  if (no !== undefined && (ok === undefined || no >= ok)) return "cancel_requested";
+  return ok !== undefined ? "confirmed" : null;
+}
 
 /**
  * Chip del plan en la agenda (C9 · V1-D18): disciplina, ordinal entre las

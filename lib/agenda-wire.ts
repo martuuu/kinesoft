@@ -40,10 +40,16 @@
  * Compactas como las de C9/SR/SV (sin `dflt`): `agendaRowToDTO` las pone en el DTO SOLO cuando no son neutras, así el
  * DTO de un turno sin plata online es idéntico al de antes de T5 (y al de `toBookingDTO`). Ausente = 0 / false.
  *
+ * WA-S7 (T6 §26.5, WA-D21): la respuesta del paciente por WhatsApp viaja como `rp` = "c" («Confirmó») | "x" («Pidió
+ * cancelar»), AL FINAL de `FIELDS` (después de `od`/`po`) y ausente cuando no hay respuesta (o es de otro horario: la
+ * regla vive en `patientReplyOf`, en el server). El brief la llamaba `pr`, pero `pr` ya es `practitionerId`: gana el
+ * código. Como `od`/`po`, `agendaRowToDTO` pone `patientReply` en el DTO solo cuando no es null, así la semana sin
+ * respuestas da el mismo cable byte a byte (`pf2-agenda-budget`, 317.049). Un `rp` desconocido se descarta.
+ *
  * Isomórfico (sin `server-only` ni `"use client"`): lo usan el loader de la página y el borde cliente.
  */
 import { toBookingDTO, type BookingDTO } from "@/components/agenda/agenda-utils";
-import type { AgendaBookingRow } from "@/lib/bookings-types";
+import type { AgendaBookingRow, PatientReply } from "@/lib/bookings-types";
 
 /** Lo que el cliente ya recibe aparte (props `services` y `locations` de la agenda). */
 export type AgendaWireCatalog = {
@@ -70,15 +76,28 @@ type Lookup = {
   insurers: InsurerLookup | undefined;
 };
 
-/** `BookingDTO` declara la plata online de T5 (`onlineDepositCents`/`paidOnline`, C-TP10) desde TP-3c. */
-type WireDTO = BookingDTO;
+/**
+ * `BookingDTO` declara la plata online de T5 (`onlineDepositCents`/`paidOnline`, C-TP10) desde TP-3c.
+ * WA-S7: `patientReply` todavía no está en `BookingDTO` (`components/agenda/agenda-utils.ts` es de WA-U2, handoff):
+ * hasta entonces lo declara este tipo. Presente solo cuando hay respuesta vigente.
+ * TODO(WA-U2): sumar `patientReply?: PatientReply` a `BookingDTO` y volver a `type AgendaWireDTO = BookingDTO`.
+ */
+export type AgendaWireDTO = BookingDTO & { patientReply?: PatientReply };
+type WireDTO = AgendaWireDTO;
 
 type Field = {
   key: keyof WireDTO;
   wire: string;
   dflt?: unknown;
   derive?: (dto: Partial<BookingDTO>, l: Lookup) => unknown;
+  /** Valor del DTO ↔ valor en el cable (`dec` → `undefined` = basura: la clave queda ausente). */
+  enc?: (v: unknown) => unknown;
+  dec?: (w: unknown) => unknown;
 };
+
+// WA-S7: una letra por respuesta (`rp`); al decodificar, cualquier otra cosa se descarta (nunca se inventa un badge).
+const REPLY_WIRE: Readonly<Record<PatientReply, string>> = { confirmed: "c", cancel_requested: "x" };
+const REPLY_OF_WIRE: Readonly<Record<string, PatientReply>> = { c: "confirmed", x: "cancel_requested" };
 
 /** `undefined` = el catálogo no lo sabe → el valor viaja explícito. */
 const locationNameOf = (dto: Partial<BookingDTO>, l: Lookup) =>
@@ -137,6 +156,13 @@ const FIELDS: ReadonlyArray<Field> = [
   // no suma bytes ni claves.
   { key: "onlineDepositCents", wire: "od" },
   { key: "paidOnline", wire: "po" },
+  // WA-S7: al final y compacta (ausente sin respuesta vigente, ver `agendaRowToDTO`).
+  {
+    key: "patientReply",
+    wire: "rp",
+    enc: (v) => REPLY_WIRE[v as PatientReply] ?? v,
+    dec: (w) => (typeof w === "string" ? REPLY_OF_WIRE[w] : undefined),
+  },
 ];
 const KNOWN = new Set<string>(FIELDS.map((f) => f.key));
 // `oi` es corta aunque no esté en `FIELDS`: un `oi` que llega sin catálogo de obras sociales se descarta, no se
@@ -202,7 +228,7 @@ function decodeInsurerKey(w: unknown, ins: InsurerLookup): string | null | undef
  * `toBookingDTO` más la clave del filtro por obra social; lo usan el loader de la página y el refetch en vivo de la
  * agenda, así las dos listas son intercambiables. Si `toBookingDTO` la sumara al final, este spread no cambia nada.
  */
-export function agendaRowToDTO(row: AgendaBookingRow): BookingDTO {
+export function agendaRowToDTO(row: AgendaBookingRow): AgendaWireDTO {
   // T5: la plata online va DESPUÉS de las claves de `toBookingDTO` y ANTES de `insurerKey`, el mismo orden en que
   // `decodeOne` las rearma (FIELDS → `oi`): la ida y vuelta conserva el orden de claves (contrato del cable). Solo
   // cuando no son neutras: una seña ≤ 0 o no entera no es una seña (misma defensa que `bookingMoneyBadge`).
@@ -211,6 +237,8 @@ export function agendaRowToDTO(row: AgendaBookingRow): BookingDTO {
     ...toBookingDTO(row),
     ...(typeof od === "number" && Number.isInteger(od) && od > 0 ? { onlineDepositCents: od } : {}),
     ...(row.paidOnline === true ? { paidOnline: true } : {}),
+    // WA-S7: solo con respuesta vigente (null/ausente = nada: el DTO de siempre).
+    ...(row.patientReply === "confirmed" || row.patientReply === "cancel_requested" ? { patientReply: row.patientReply } : {}),
   };
   return row.insurerKey === undefined ? dto : { ...dto, insurerKey: row.insurerKey };
 }
@@ -226,7 +254,7 @@ function encodeOne(dto: BookingDTO, l: Lookup): AgendaWireBooking {
       const d = f.derive(dto, l);
       if (d !== undefined && d === v) continue;
     }
-    out[f.wire] = v;
+    out[f.wire] = f.enc ? f.enc(v) : v;
   }
   const ins = l.insurers;
   if (ins && src.insurerKey !== undefined) {
@@ -237,11 +265,13 @@ function encodeOne(dto: BookingDTO, l: Lookup): AgendaWireBooking {
   return out;
 }
 
-function decodeOne(w: AgendaWireBooking, l: Lookup): BookingDTO {
+function decodeOne(w: AgendaWireBooking, l: Lookup): AgendaWireDTO {
   const out: Record<string, unknown> = {};
   for (const f of FIELDS) {
-    if (f.wire in w) out[f.key] = w[f.wire];
-    else if ("dflt" in f) out[f.key] = f.dflt;
+    if (f.wire in w) {
+      const v = f.dec ? f.dec(w[f.wire]) : w[f.wire];
+      if (v !== undefined) out[f.key] = v;
+    } else if ("dflt" in f) out[f.key] = f.dflt;
     else if (f.derive) {
       // Se deriva con lo ya decodificado (serviceId/locationId van antes en `FIELDS`).
       const d = f.derive(out as Partial<BookingDTO>, l);
@@ -255,7 +285,7 @@ function decodeOne(w: AgendaWireBooking, l: Lookup): BookingDTO {
     if (k !== undefined) out.insurerKey = k;
   }
   for (const k of Object.keys(w)) if (!SHORT.has(k)) out[k] = w[k];
-  return out as BookingDTO;
+  return out as AgendaWireDTO;
 }
 
 /** Server: DTO de la proyección liviana (`toBookingDTO` de `listAgendaBookings`) → cable. */
@@ -265,7 +295,7 @@ export function encodeAgendaWire(dtos: ReadonlyArray<BookingDTO>, catalog: Agend
 }
 
 /** Cliente: cable → el mismo `BookingDTO` que antes (con el MISMO catálogo que usó `encodeAgendaWire`). */
-export function decodeAgendaWire(wire: ReadonlyArray<AgendaWireBooking>, catalog: AgendaWireCatalog): BookingDTO[] {
+export function decodeAgendaWire(wire: ReadonlyArray<AgendaWireBooking>, catalog: AgendaWireCatalog): AgendaWireDTO[] {
   const l = lookupOf(catalog);
   return wire.map((w) => decodeOne(w, l));
 }

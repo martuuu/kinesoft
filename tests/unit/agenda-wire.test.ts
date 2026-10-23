@@ -299,3 +299,83 @@ describe("[TP-2e] plata online en el cable (`od`/`po`)", () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [WA-S7] T6 (§26.5, WA-D21/D22): la respuesta del paciente por WhatsApp («Confirmo» / «No puedo ir») viaja como UNA
+// señal (`patientReply`), calculada en el server SOLO si `patientReplyFor` = `scheduledFor` (una respuesta a un horario
+// viejo no vale: el turno se movió) y con la última respuesta ganando por timestamp. En el cable es `rp` = "c" | "x",
+// al final de `FIELDS` y AUSENTE cuando es null: la semana sin respuestas da el mismo cable byte a byte (presupuesto de
+// `pf2-agenda-budget`). Nota: el brief decía `pr`, pero `pr` ya es `practitionerId` en el cable (gana el código).
+// ─────────────────────────────────────────────────────────────────────────────
+import { patientReplyOf } from "@/lib/bookings-types";
+
+describe("[WA-S7] respuesta del paciente en el cable (`rp`)", () => {
+  const AT = new Date("2026-10-05T12:00:00.000Z");
+  const t = (iso: string) => new Date(iso);
+
+  it("[WA-S7] patientReplyOf: solo vale si patientReplyFor = scheduledFor; la última gana", () => {
+    const none = { patientConfirmedAt: null, patientCancelRequestedAt: null, patientReplyFor: null, scheduledFor: AT };
+    expect(patientReplyOf(none)).toBeNull();
+    expect(patientReplyOf({ ...none, patientConfirmedAt: t("2026-10-04T18:00:00Z"), patientReplyFor: AT })).toBe("confirmed");
+    expect(patientReplyOf({ ...none, patientCancelRequestedAt: t("2026-10-04T18:00:00Z"), patientReplyFor: AT })).toBe(
+      "cancel_requested"
+    );
+    // Respuesta a otro horario (el turno se movió después) → null.
+    expect(
+      patientReplyOf({ ...none, patientConfirmedAt: t("2026-10-04T18:00:00Z"), patientReplyFor: t("2026-10-05T13:00:00Z") })
+    ).toBeNull();
+    // Las dos: gana la más nueva; empate → «Pidió cancelar» (lo conservador para la Secretaría).
+    const both = { ...none, patientReplyFor: AT };
+    expect(patientReplyOf({ ...both, patientConfirmedAt: t("2026-10-04T19:00:00Z"), patientCancelRequestedAt: t("2026-10-04T18:00:00Z") })).toBe("confirmed");
+    expect(patientReplyOf({ ...both, patientConfirmedAt: t("2026-10-04T18:00:00Z"), patientCancelRequestedAt: t("2026-10-04T19:00:00Z") })).toBe("cancel_requested");
+    expect(patientReplyOf({ ...both, patientConfirmedAt: t("2026-10-04T18:00:00Z"), patientCancelRequestedAt: t("2026-10-04T18:00:00Z") })).toBe("cancel_requested");
+    // Sin `patientReplyFor` no hay respuesta (CHECK Booking_patient_reply_check), aunque viniera un timestamp.
+    expect(patientReplyOf({ ...none, patientConfirmedAt: t("2026-10-04T18:00:00Z") })).toBeNull();
+  });
+
+  const withInsurers: AgendaWireCatalog = { ...catalog, insurers: [{ id: "ins_osde", name: "OSDE" }] };
+  const REPLY: Record<string, AgendaBookingRow> = {
+    confirmo: row({ patientReply: "confirmed" }),
+    pidioCancelar: row({ patientReply: "cancel_requested" }),
+    conPlataYObraSocial: row({ patientReply: "confirmed", onlineDepositCents: 1_000_00, paidOnline: true, insurerKey: "ins_osde" }),
+    todoDistinto: { ...ROWS.todoDistinto, patientReply: "cancel_requested" },
+  };
+
+  for (const [name, r] of Object.entries(REPLY)) {
+    it(`[WA-S7] wire con \`rp\`: ida y vuelta exacta (${name})`, () => {
+      const dto = agendaRowToDTO(r);
+      expect((dto as { patientReply?: string }).patientReply).toBe(r.patientReply);
+      for (const cat of r.insurerKey === undefined ? [catalog] : [catalog, withInsurers]) {
+        const [w] = encodeAgendaWire([dto], cat);
+        expect(w.rp).toBe(r.patientReply === "confirmed" ? "c" : "x");
+        expect(Object.keys(w)).not.toContain("patientReply");
+        const [back] = decodeAgendaWire([w], cat);
+        expect(JSON.stringify(back)).toBe(JSON.stringify(dto));
+      }
+    });
+  }
+
+  it("[WA-S7] `rp` va al final, después de `od`/`po`; en el DTO antes de `insurerKey`", () => {
+    const [w] = encodeAgendaWire([agendaRowToDTO(REPLY.conPlataYObraSocial)], catalog);
+    expect(Object.keys(w).slice(-4)).toEqual(["od", "po", "rp", "insurerKey"]);
+    expect(Object.keys(agendaRowToDTO(REPLY.conPlataYObraSocial)).slice(-2)).toEqual(["patientReply", "insurerKey"]);
+  });
+
+  it("[WA-S7] wire sin `rp`: sin respuesta (null / ausente) el DTO y el cable son los de antes, byte a byte", () => {
+    for (const r of [ROWS.neutro, row({ patientReply: null }), ROWS.todoDistinto]) {
+      const dto = agendaRowToDTO(r);
+      expect("patientReply" in dto).toBe(false);
+      const [w] = encodeAgendaWire([dto], catalog);
+      expect(Object.keys(w)).not.toContain("rp");
+      const { patientReply: _drop, ...before } = r;
+      expect(JSON.stringify(w)).toBe(JSON.stringify(encodeAgendaWire([toBookingDTO(before as AgendaBookingRow)], catalog)[0]));
+    }
+  });
+
+  it("[WA-S7] un `rp` desconocido en el cable se descarta (no inventa una respuesta)", () => {
+    const [w] = encodeAgendaWire([agendaRowToDTO(ROWS.neutro)], catalog);
+    const [back] = decodeAgendaWire([{ ...w, rp: "z" }], catalog);
+    expect("patientReply" in back).toBe(false);
+    expect("rp" in back).toBe(false);
+  });
+});

@@ -49,7 +49,7 @@ import { getAgendaAvailability } from "@/lib/availability-actions";
 import { getUserPreferences } from "@/lib/preferences";
 import { capabilitiesForActor } from "@/lib/authz";
 import type { Capability } from "@/lib/capabilities";
-import { mpConnectMode, type MpConnectMode } from "@/lib/env";
+import { mpConnectMode, whatsappMode, type MpConnectMode, type WhatsappMode } from "@/lib/env";
 import { roomsEnabled } from "@/lib/tenant-modules";
 import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 import { displayMemberName } from "@/lib/display-name";
@@ -82,6 +82,12 @@ export type AgendaBootstrap = {
   businessHours: { start: number; end: number; slotMinutes: number };
   locations: AgendaLocationOption[];
   rooms: RoomOption[];
+  /**
+   * WA-S7 (T6 §26.5): el consultorio manda WhatsApp = `WHATSAPP_MODE` no está en `off` y tiene una cuenta ACTIVE de
+   * ese mismo modo. La agenda lo usa para mostrar la sección WhatsApp del drawer y el badge «Confirmó» / «Pidió
+   * cancelar» (WA-U2). Con el modo `off`: false sin ninguna query.
+   */
+  whatsapp: boolean;
 };
 
 /**
@@ -185,6 +191,13 @@ export async function loadAgendaBootstrapInTx(
     }
   }
 
+  // WA-S7: AL FINAL de la tx y con catch, como sedes y salas (si falla, la agenda de hoy no depende de WhatsApp: false
+  // y log). Modo `off` → ni la query (C-WA: con el modo apagado, cero queries extra).
+  // TODO(WA-U2/INT): cambiar por `getLiveAccountCached(tenantId)` (C-WA6, `lib/whatsapp/account-internal.ts`, tag
+  // `whatsappAccount(tenantId)`) cuando WA-S1 la cree: 0 sentencias en caliente. Hoy es UNA sentencia por índice
+  // (`WhatsAppAccount_tenantId_status_idx`) y solo con el modo prendido.
+  const whatsapp = await agendaWhatsAppInTx(tx, tenantId);
+
   return {
     services,
     practitioners: practitioners.map((p) => ({ id: p.id, name: displayMemberName(p.user.fullName) })),
@@ -197,7 +210,31 @@ export async function loadAgendaBootstrapInTx(
     },
     locations,
     rooms,
+    whatsapp,
   };
+}
+
+/**
+ * WA-S7: ¿el consultorio manda WhatsApp? El modo de la cuenta tiene que ser el vigente: una cuenta `fake` con el env en
+ * `live` (o al revés) no manda nada (el outbox re-chequea `mode === whatsappMode()`, C-WA7), así que la agenda no
+ * ofrece lo que no va a salir.
+ */
+export async function agendaWhatsAppInTx(
+  tx: DbClient,
+  tenantId: string,
+  mode: WhatsappMode = whatsappMode()
+): Promise<boolean> {
+  if (mode === "off") return false;
+  try {
+    const acc = await tx.whatsAppAccount.findFirst({
+      where: { tenantId, status: "ACTIVE", mode },
+      select: { id: true },
+    });
+    return acc != null;
+  } catch (e) {
+    logger.warn("agenda.bootstrap.whatsappAccount_failed", { err: errMsg(e) });
+    return false;
+  }
 }
 
 /**
