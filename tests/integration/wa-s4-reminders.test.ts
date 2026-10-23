@@ -202,6 +202,22 @@ describe.skipIf(!RUN)("[WA-S4] cron de recordatorios de WhatsApp", () => {
     expect(await reminders()).toEqual([]);
   });
 
+  it("[ZF2] consultorio dado de baja (suscripción CANCELLED) → no se encola", async () => {
+    await connectFakeWhatsApp(db, T);
+    const now = new Date();
+    const win = tomorrowWindowAR(now);
+    await bookingAt(new Date(win.from.getTime() + 10 * HOUR));
+    const before = await db.tenant.findUniqueOrThrow({ where: { id: T.tenantId }, select: { subscriptionStatus: true } });
+    // `Tenant.status` sigue ACTIVE: la baja de la suscripción (MPS) no suspende el consultorio, pero ya no es cliente.
+    await db.tenant.update({ where: { id: T.tenantId }, data: { subscriptionStatus: "CANCELLED" } });
+    try {
+      await runWhatsAppCron(now);
+      expect(await reminders()).toEqual([]);
+    } finally {
+      await db.tenant.update({ where: { id: T.tenantId }, data: { subscriptionStatus: before.subscriptionStatus } });
+    }
+  });
+
   it("[WA-S4] sin presupuesto corta (truncated) sin escribir", async () => {
     await connectFakeWhatsApp(db, T);
     const now = new Date();

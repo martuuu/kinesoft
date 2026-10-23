@@ -438,6 +438,12 @@ async function graphFailure(m: Claimed, e: GraphErr, now: Date): Promise<Dispatc
   if (e.kind === "timeout" && !inMemory) {
     // Meta pudo haberlo aceptado: queda SENDING hasta que vence el lock. Si llega el `sent` con nuestro id,
     // `applyStatus` lo cierra; si no, el próximo drain lo re-toma (otro intento).
+    // RIESGO ACEPTADO (ZF2, handoff de WA-S2): si Meta SÍ lo aceptó y el webhook de estado no llega antes de que venza
+    // el lock (10′: webhook caído, suscripción rota, Meta demorada), el re-intento lo manda OTRA VEZ y el paciente
+    // recibe el aviso dos veces. No hay forma de preguntarle a Graph «¿mandaste este callback?» (no existe un GET por
+    // `biz_opaque_callback_data`), y la alternativa (no reintentar nunca un timeout) pierde el aviso en el caso común
+    // (el timeout fue nuestro y Meta no lo recibió). Un duplicado ocasional de un aviso sin PHI es el mal menor; el
+    // tope es uno por vencimiento de lock y `MAX_ATTEMPTS` lo acota.
     await settle(m, { errorCode: "timeout" });
     return { outcome: "timeout", id: m.id };
   }
@@ -615,16 +621,26 @@ export async function applyStatus(i: {
 
 // ── cancelQueued / expireOverdue ───────────────────────────────────────────────────────────────────────────────
 
-type Scope = { accountId: string; tenantId: string } | { tenantId: string };
+/**
+ * Alcance: el consultorio, una cuenta, o (ZF2) un DESTINATARIO de una cuenta (`toHash`: la BAJA del paciente cancela lo
+ * encolado a ese número, también lo que no tiene paciente). El destinatario exige la cuenta: un hash suelto por
+ * consultorio cancelaría también lo de una cuenta vieja reconectada.
+ */
+type Scope = { tenantId: string; accountId: string; toHash: string } | { accountId: string; tenantId: string } | { tenantId: string };
 
 /**
- * Cancela lo QUEUED (C-WA6 `disconnect`, y cualquier corte del canal). Lo SENDING no: un envío en vuelo ya salió o
- * sale, y el re-chequeo de `dispatch` corta los que todavía no llegaron a Graph. `reason` va al log (CANCELLED no tiene
- * columna de motivo propia y `skipReason` es del SKIPPED).
+ * Cancela lo QUEUED (C-WA6 `disconnect`, PARTNER_REMOVED, la BAJA del paciente). Lo SENDING no: un envío en vuelo ya
+ * salió o sale, y el re-chequeo de `dispatch` corta los que todavía no llegaron a Graph. `reason` va al log (CANCELLED
+ * no tiene columna de motivo propia y `skipReason` es del SKIPPED).
  */
 export async function cancelQueuedInTx(tx: Prisma.TransactionClient | typeof prismaService, scope: Scope, reason: string): Promise<number> {
   const n = await tx.whatsAppMessage.updateMany({
-    where: { tenantId: scope.tenantId, ...("accountId" in scope ? { accountId: scope.accountId } : {}), status: "QUEUED" },
+    where: {
+      tenantId: scope.tenantId,
+      ...("accountId" in scope ? { accountId: scope.accountId } : {}),
+      ...("toHash" in scope ? { toHash: scope.toHash } : {}),
+      status: "QUEUED",
+    },
     data: { status: "CANCELLED", lockedUntil: null, nextAttemptAt: null },
   });
   if (n.count > 0) logger.info("whatsapp.outbox.cancelled", { tenantId: scope.tenantId, count: n.count, reason });

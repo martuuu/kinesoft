@@ -15,8 +15,8 @@ import { PENDING_PUBLIC_HOLD_MS, isHoldingCapacity, isPublicReservation } from "
 import { lockCapacityWindow } from "@/lib/booking-cap-lock";
 import { expireOwnHoldChargeInTx } from "@/lib/public-booking-charge-internal";
 import { isPublicBookingOpen, type TenantEntitlements } from "@/lib/tenant-modules";
-import { tenantAccessEnforcement, whatsappMode, type WhatsappMode } from "@/lib/env";
-import { getLiveAccountCached } from "@/lib/whatsapp/account-internal";
+import { tenantAccessEnforcement, type WhatsappMode } from "@/lib/env";
+import { tenantWhatsAppActiveFor } from "@/lib/whatsapp/active-internal";
 import { logger } from "@/lib/logger";
 import {
   TENANT_ACCESS_SELECT,
@@ -43,24 +43,20 @@ import {
 
 /**
  * ¿El consultorio avisa por WhatsApp? (`PublicClinic.whatsappNotices` y la condición para guardar el consentimiento
- * del turnero.) Misma regla que el flag de la agenda (`agendaWhatsAppFor`, lib/agenda-page-loader.ts): modo ≠ off,
- * cuenta ACTIVE del tenant y en el MISMO modo que el env (una cuenta `fake` con `WHATSAPP_MODE=sandbox` no manda: el
- * outbox re-chequea, C-WA7).
+ * del turnero.) Regla común de `lib/whatsapp/active-internal.ts`, variante `notices` (ZF2): canal activo Y al menos un
+ * aviso automático prendido. Antes bastaba la cuenta ACTIVE y, con los dos avisos apagados, el turnero prometía «te
+ * avisamos por WhatsApp» sin que fuera a salir nada (hallazgo de ZB).
  *
  *   - Con `off` corta ANTES de leer la cuenta: 0 sentencias (regla de T6: el modo apagado no agrega queries).
- *   - La cuenta sale de `getLiveAccountCached` (tag `whatsappAccount(tenantId)`): en caliente 0 sentencias; el
- *     turnero es la superficie pública más visitada y no paga una lectura por request.
+ *   - La cuenta sale de `getLiveAccountCached`: en caliente 0 sentencias; el turnero es la superficie pública más
+ *     visitada y no paga una lectura por request.
  *   - Si la lectura falla, false (no tira): el turnero sigue reservando sin la casilla. Sin PHI en el log.
+ *
+ * HANDOFF (ZF2): el portal (`app/(portal)/portal/c/[slug]/cuenta/page.tsx`) también usa esta para «dar el
+ * consentimiento»; ahí corresponde la variante `channel` (documentos y avisos manuales también lo usan).
  */
-export async function turneroWhatsAppActive(tenantId: string, mode: WhatsappMode = whatsappMode()): Promise<boolean> {
-  if (mode === "off") return false;
-  try {
-    const a = await getLiveAccountCached(tenantId);
-    return !!a && a.status === "ACTIVE" && a.mode === mode;
-  } catch (e) {
-    logger.warn("booking.public.whatsapp_account_failed", { tenantId, err: e instanceof Error ? e.message : String(e) });
-    return false;
-  }
+export async function turneroWhatsAppActive(tenantId: string, mode?: WhatsappMode): Promise<boolean> {
+  return tenantWhatsAppActiveFor(tenantId, "notices", { mode, logEvent: "booking.public.whatsapp_account_failed" });
 }
 
 // ──────────────────────────────────────────────────────────────────────

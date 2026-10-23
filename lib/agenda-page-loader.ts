@@ -49,7 +49,7 @@ import { getAgendaAvailability } from "@/lib/availability-actions";
 import { getUserPreferences } from "@/lib/preferences";
 import { capabilitiesForActor } from "@/lib/authz";
 import type { Capability } from "@/lib/capabilities";
-import { mpConnectMode, whatsappMode, type MpConnectMode, type WhatsappMode } from "@/lib/env";
+import { mpConnectMode, type MpConnectMode, type WhatsappMode } from "@/lib/env";
 import { roomsEnabled } from "@/lib/tenant-modules";
 import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 import { displayMemberName } from "@/lib/display-name";
@@ -57,7 +57,7 @@ import { addDays, dayWindow } from "@/lib/availability/day";
 import type { DayKey } from "@/lib/availability/types";
 import { agendaRowToDTO, encodeAgendaWire, type AgendaWireBooking } from "@/lib/agenda-wire";
 import { logger } from "@/lib/logger";
-import { getLiveAccountCached } from "@/lib/whatsapp/account-internal";
+import { tenantWhatsAppActiveFor } from "@/lib/whatsapp/active-internal";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -218,16 +218,12 @@ export async function loadAgendaBootstrapInTx(
  * por `prismaService` en un miss: no tiene sentido tener la tx abierta esperándola) y en paralelo con el resto. Con el
  * modo `off` corta ANTES de llamar: cero queries extra (C-WA). Si falla, la agenda de hoy no depende de WhatsApp:
  * false y log.
+ *
+ * ZF2: la regla vive en `lib/whatsapp/active-internal.ts` (variante `channel`). La sección del drawer ofrece el
+ * recordatorio A MANO, que no depende de los switches de avisos automáticos: por eso no es la variante `notices`.
  */
-export async function agendaWhatsAppFor(tenantId: string, mode: WhatsappMode = whatsappMode()): Promise<boolean> {
-  if (mode === "off") return false;
-  try {
-    const a = await getLiveAccountCached(tenantId);
-    return a?.status === "ACTIVE" && a.mode === mode;
-  } catch (e) {
-    logger.warn("agenda.bootstrap.whatsappAccount_failed", { err: errMsg(e) });
-    return false;
-  }
+export async function agendaWhatsAppFor(tenantId: string, mode?: WhatsappMode): Promise<boolean> {
+  return tenantWhatsAppActiveFor(tenantId, "channel", { mode, logEvent: "agenda.bootstrap.whatsappAccount_failed" });
 }
 
 /**

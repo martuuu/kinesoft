@@ -22,6 +22,13 @@ import type { WaTemplateStatus } from "@/lib/whatsapp/types";
  * Después de los estados de una cuenta, re-drena SU cola (2,5 s / 5 mensajes): no hay `waitUntil` ni cola externa,
  * y cada webhook de estado es una señal de que Meta está aceptando mensajes (C-WA9 «Re-drenado»).
  *
+ * Errores (ZF2): un error de base procesando un cambio `messages` (un estado o un entrante) se cuenta en `failed` y la
+ * ruta responde 500 para que Meta REINTENTE el lote. Antes se respondía 200 igual y el «No puedo ir» que cayó con la base
+ * se perdía para siempre. Reintentar es seguro: el claim del `wamid` entrante va en la MISMA tx que su efecto (si la tx
+ * cayó, no quedó «ya lo vi»; si commiteó, el reintento sale `duplicate`) y `applyStatus` es monótono con CAS (un estado
+ * repetido no cambia nada). Los otros campos (plantillas, calidad, cuenta) NO cuentan: el sync del cron (WA-S4) corrige
+ * con `GET` lo que un webhook perdido no actualizó, y un 500 ahí solo sumaría reintentos.
+ *
  * Ruteo: `phone_number_id` (mensajes) o el id del WABA (`entry.id`, el resto) contra una cuenta NO DISCONNECTED en el
  * modo vigente. Los índices parciales de M15 garantizan que un número / WABA vivo está en UN consultorio. Lo que no
  * rutea (un número que se desconectó, otro modo, un id inventado) se ignora con 200: Meta no tiene que reintentar algo
@@ -50,6 +57,8 @@ export type WaWebhookSummary = {
   /** Cambios ignorados (sin cuenta, campo desconocido, forma rara). */
   ignored: number;
   statuses: number;
+  /** ZF2: cambios `messages` que fallaron por un error interno (base). > 0 → la ruta responde 500 y Meta reintenta. */
+  failed: number;
   /** Outcome de cada mensaje entrante, en orden. */
   outcomes: WaInboundOutcome[];
 };
@@ -118,10 +127,11 @@ function revalidateAccount(tenantId: string): void {
 
 /**
  * Procesa el cuerpo ya verificado. Los errores de un cambio no frenan a los demás (cada uno en su try, logueado sin
- * datos): un estado que falla no tiene que perder el «No puedo ir» que venía en el mismo lote.
+ * datos): un estado que falla no tiene que perder el «No puedo ir» que venía en el mismo lote. Los de `messages` se
+ * cuentan en `failed` (la ruta responde 500 y Meta reintenta todo el lote: lo ya hecho sale `duplicate` / sin cambio).
  */
 export async function handleWhatsAppWebhook(body: unknown, now: Date = new Date()): Promise<WaWebhookSummary> {
-  const out: WaWebhookSummary = { processed: 0, ignored: 0, statuses: 0, outcomes: [] };
+  const out: WaWebhookSummary = { processed: 0, ignored: 0, statuses: 0, failed: 0, outcomes: [] };
   if (!isObj(body) || body.object !== "whatsapp_business_account") {
     out.ignored += 1;
     return out;
@@ -166,7 +176,8 @@ export async function handleWhatsAppWebhook(body: unknown, now: Date = new Date(
           out.ignored += 1;
         }
       } catch (err) {
-        out.ignored += 1;
+        if (field === "messages") out.failed += 1;
+        else out.ignored += 1;
         logger.error("whatsapp.webhook.change_failed", { field, error: (err as Error)?.name, code: (err as { code?: unknown })?.code ?? null /* nunca el mensaje: un error de base puede traer valores */ });
       }
     }

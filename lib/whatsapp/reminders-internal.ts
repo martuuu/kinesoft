@@ -216,12 +216,16 @@ async function enqueueReminders(
   }
   // Consultorio ACTIVE (un suspendido o dado de baja no le escribe a nadie), cuenta ACTIVE en el modo vigente con el
   // recordatorio prendido y la plantilla APPROVED. Orden estable por id: si un día corta, al menos es determinista.
+  // ZF2: y con la suscripción NO cancelada. La baja de la suscripción (MPS) deja `Tenant.status` ACTIVE (el
+  // consultorio sigue pudiendo leer y exportar), pero ya no es cliente: el cron no le manda recordatorios a sus
+  // pacientes en nombre de un servicio que dejó de pagar.
   const accounts = await prismaService.$queryRaw<ReminderAccount[]>`
     SELECT a."id", a."tenantId" FROM "WhatsAppAccount" a
       JOIN "Tenant" t ON t."id" = a."tenantId"
       JOIN "WhatsAppTemplate" tp ON tp."accountId" = a."id" AND tp."tenantId" = a."tenantId"
                                 AND tp."key"::text = ${REMINDER_KEY} AND tp."status" = 'APPROVED'
      WHERE a."status" = 'ACTIVE' AND a."mode" = ${mode} AND a."autoReminder" = true AND t."status" = 'ACTIVE'
+       AND t."subscriptionStatus" <> 'CANCELLED'
      ORDER BY a."id" ASC
      LIMIT ${ACCOUNT_SCAN_LIMIT}`;
   r.accounts = accounts.length;

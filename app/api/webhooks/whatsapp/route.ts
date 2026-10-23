@@ -15,9 +15,12 @@ export const dynamic = "force-dynamic";
  *   - GET = verify challenge de la suscripción (`hub.mode=subscribe` + `hub.verify_token`): devuelve `hub.challenge`
  *     en texto plano; si no, 403.
  *   - POST: tope de 1 MB → cuerpo CRUDO → `X-Hub-Signature-256` con el App Secret sobre esos bytes (inválida → 401) →
- *     `handleWhatsAppWebhook`. Todo lo demás responde 200 RÁPIDO aunque no rutee o falle: Meta reintenta los 5xx
- *     durante días, y un reintento de algo que no es de nadie (o de un dato raro) solo suma carga. La firma es la
- *     única puerta: sin ella no se parsea ni se toca la base.
+ *     `handleWhatsAppWebhook`. Lo que no rutea o trae un dato raro responde 200 RÁPIDO: Meta reintenta los 5xx durante
+ *     días, y un reintento de algo que no es de nadie solo suma carga. La firma es la única puerta: sin ella no se
+ *     parsea ni se toca la base.
+ *   - ZF2: un error INTERNO procesando `messages` (`summary.failed > 0`) o uno que escapa del handler → 500, para que Meta
+ *     reintente. Antes era 200 siempre (pedido del brief) y una caída de la base perdía la respuesta del paciente sin
+ *     rastro. El reintento no duplica: el claim del `wamid` va en la misma tx que el efecto y `applyStatus` es monótono.
  *
  * Por qué el secreto y el token se leen de `process.env` en cada request (con `env` de respaldo): los tests y el
  * simulador los cambian en caliente; `env` se congela al cargar el módulo. No hay literal de dev de respaldo: un
@@ -74,12 +77,16 @@ export async function POST(req: Request): Promise<Response> {
     const s = await handleWhatsAppWebhook(body);
     // Un solo entrante (lo normal: un botón o un texto por webhook): su outcome va en `result` (el simulador lo
     // muestra en el panel y los tests lo leen). Varios o solo estados: un resumen.
+    if (s.failed > 0) {
+      // Lo que alcanzó a commitear quedó; lo que falló se fue con su rollback. Meta reintenta el lote entero.
+      logger.warn("whatsapp.webhook.retry_requested", { failed: s.failed, processed: s.processed });
+      return NextResponse.json({ result: "error", processed: s.processed, failed: s.failed }, { status: 500, headers: NO_STORE });
+    }
     const result = s.outcomes.length === 1 ? s.outcomes[0] : s.processed > 0 ? "ok" : "ignored";
     return NextResponse.json({ result, processed: s.processed, ignored: s.ignored, statuses: s.statuses }, { headers: NO_STORE });
   } catch (err) {
-    // 200 igual (ver cabecera). Lo que alcanzó a commitear quedó; un entrante a medias se fue con su rollback (la
-    // reclamación del `wamid` está en la misma tx que su efecto).
+    // 500 (ZF2, ver cabecera): no debería pasar (cada cambio tiene su try), pero si algo escapa, que Meta reintente.
     logger.error("whatsapp.webhook.failed", { error: (err as Error)?.name, code: (err as { code?: unknown })?.code ?? null /* nunca el mensaje: un error de base puede traer valores */ });
-    return NextResponse.json({ result: "error" }, { headers: NO_STORE });
+    return NextResponse.json({ result: "error" }, { status: 500, headers: NO_STORE });
   }
 }

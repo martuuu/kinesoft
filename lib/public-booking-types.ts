@@ -7,7 +7,6 @@ import { z } from "zod";
 import type { TenantVertical } from "@prisma/client";
 import type { ChargeStatus } from "@/lib/online-charge-logic";
 import type { PaymentPolicyInput } from "@/lib/booking-payment-policy-types";
-import { normalizeArMobile } from "@/lib/phone-e164";
 
 /**
  * Lo que ve el wizard público (`getPublicClinic`). Desde B3.2 (motor de
@@ -253,30 +252,20 @@ export type SubmitPublicBookingResult = {
    *   - `"saved"`: quedó el consentimiento anclado al celular tipeado (en replay: el del alta original, misma key);
    *   - `"invalid_phone"`: lo tipeado no es un celular argentino (fijo, sin área…): el turno entró igual, sin
    *     consentimiento → la confirmación NO dice «te avisamos por WhatsApp»;
-   *   - `"unavailable"`: el consultorio ya no tiene WhatsApp activo (se desconectó entre la carga y el submit).
-   * Depende solo de la cuenta y del número tipeado, nunca del estado de la ficha: el turnero es anónimo y no puede
-   * revelar si un DNI tiene ficha o qué consintió.
+   *   - `"unavailable"`: el consultorio ya no tiene WhatsApp activo (se desconectó entre la carga y el submit) o apagó
+   *     los dos avisos automáticos (ZF2);
+   *   - `"not_saved"` (ZF2): la reserva usó una ficha EXISTENTE (por DNI) cuyo celular no es el tipeado, o que dio de
+   *     baja los avisos (REVOKED): no se escribe nada (un anónimo con el DNI de otro no puede pisar su consentimiento) y
+   *     la confirmación NO promete avisos. Es un único valor para los dos casos a propósito: no dice cuál fue.
+   * Trade-off (ZF2): antes el flag dependía solo de la cuenta y del número tipeado; `not_saved` deja ver que ese DNI
+   * tiene ficha con otro celular o con baja. Se eligió no prometer avisos que no van a salir (decide Martin).
    */
   whatsappConsent?: TurneroWaConsentOutcome;
 };
 
-export type TurneroWaConsentOutcome = "saved" | "invalid_phone" | "unavailable";
-
-/**
- * WA-S8: decisión pura del consentimiento del turnero (testeada en tests/unit/public-booking-wa-consent.test.ts).
- * `requested` = la casilla; `accountActive` = `whatsappNotices` recalculado en el submit. null = no se pidió (no se
- * escribe nada ni hay flag). Con `saved`, `e164` es el número que se ancla en `Patient.waPhoneE164` (WA-D17).
- */
-export function decideTurneroWaConsent(o: {
-  requested: boolean | undefined;
-  accountActive: boolean;
-  phone: string;
-}): { outcome: "saved"; e164: string } | { outcome: Exclude<TurneroWaConsentOutcome, "saved"> } | null {
-  if (o.requested !== true) return null;
-  if (!o.accountActive) return { outcome: "unavailable" };
-  const n = normalizeArMobile(o.phone);
-  return n.ok ? { outcome: "saved", e164: n.e164 } : { outcome: "invalid_phone" };
-}
+export type TurneroWaConsentOutcome = "saved" | "invalid_phone" | "unavailable" | "not_saved";
+// La decisión (`decideTurneroWaConsent`) vive en `lib/public-booking-wa-consent.ts` (server): ZF2 la sacó de acá
+// porque este módulo lo carga el wizard y la decisión value-importaba el normalizador de celulares.
 
 export type PrefillPatient = {
   firstName: string;

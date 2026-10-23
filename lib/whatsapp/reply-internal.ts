@@ -12,7 +12,7 @@ import { GRAPH_INLINE_TIMEOUT_MS } from "@/lib/whatsapp/graph";
 import { IDEM_KEY_RE, parseButtonPayload, parseInboundText } from "@/lib/whatsapp/logic";
 import { formatWaDateAR, formatWaTimeAR } from "@/lib/whatsapp/templates";
 import { WA_CONSENT_VERSION, type WaInboundKind } from "@/lib/whatsapp/types";
-import { dispatch, enqueueInTx } from "@/lib/whatsapp/outbox-internal";
+import { cancelQueuedInTx, dispatch, enqueueInTx } from "@/lib/whatsapp/outbox-internal";
 
 /**
  * WA-S3 (T6, C-WA9, brief §26.5; WA-D7/D21/D22/D23) · Lo que el paciente le escribe al número del consultorio: los
@@ -167,7 +167,9 @@ type Effect = {
 
 /**
  * Procesa UN mensaje entrante de `value.messages[]`. Nunca tira por un dato raro de Meta (devuelve `invalid`); un error
- * de base sí sube (la ruta lo loguea y responde 200 igual: ver la ruta).
+ * de base EN LA TX sí sube (ZF2: el webhook lo cuenta en `failed`, la ruta responde 500 y Meta reintenta; el claim se
+ * fue con el rollback, así que el reintento lo procesa). Lo de después del commit (`afterCommit`) NO sube nunca: si
+ * subiera, el reintento saldría `duplicate` y lo que faltaba (la campana, el agradecimiento) igual no se haría.
  */
 export async function handleInboundMessage(acc: WaRoutedAccount, msg: WaInboundMessage, now: Date = new Date()): Promise<WaInboundOutcome> {
   const wamid = typeof msg.id === "string" && WAMID_RE.test(msg.id) ? msg.id : null;
@@ -260,16 +262,22 @@ async function afterCommit(acc: WaRoutedAccount, e: Effect, to: string): Promise
     if (b.reply === "cancel_requested") {
       // WA-D7: NO se cancela. El profesional del turno y quien opera la agenda (la Secretaría) deciden; la campana es lo
       // que hace que se enteren sin estar mirando la agenda. «Confirmo» no suena (WA-D21: el chip alcanza).
+      // En su propio try (ZF2): ya commiteó, el chip quedó en la agenda. Si la campana tirara, el webhook contaría un
+      // `failed` y el reintento de Meta saldría `duplicate` sin volver a intentarla: solo se perdería el agradecimiento.
       const who = b.patientName ? b.patientName : "Un paciente";
-      await notifyTenantOwners({
-        tenantId: acc.tenantId,
-        kind: "BOOKING_PATIENT_REPLY",
-        title: `${who} avisó que no puede ir`,
-        body: `Respondió «No puedo ir» al recordatorio de WhatsApp del turno del ${formatWaDateAR(b.scheduledFor)} a las ${formatWaTimeAR(b.scheduledFor)}. El turno sigue agendado: cancelalo o reprogramalo desde la agenda.`,
-        link: `/agenda?date=${toARDateKey(b.scheduledFor)}`,
-        alsoPractitionerId: b.practitionerId,
-        alsoAgendaOperators: true,
-      });
+      try {
+        await notifyTenantOwners({
+          tenantId: acc.tenantId,
+          kind: "BOOKING_PATIENT_REPLY",
+          title: `${who} avisó que no puede ir`,
+          body: `Respondió «No puedo ir» al recordatorio de WhatsApp del turno del ${formatWaDateAR(b.scheduledFor)} a las ${formatWaTimeAR(b.scheduledFor)}. El turno sigue agendado: cancelalo o reprogramalo desde la agenda.`,
+          link: `/agenda?date=${toARDateKey(b.scheduledFor)}`,
+          alsoPractitionerId: b.practitionerId,
+          alsoAgendaOperators: true,
+        });
+      } catch (err) {
+        logger.error("whatsapp.inbound.notify_failed", { tenantId: acc.tenantId, error: (err as Error)?.name });
+      }
     }
   }
   if (e.replyId && e.replyText) {
@@ -388,14 +396,10 @@ async function optOutInTx(tx: Tx, acc: WaRoutedAccount, from: string, fromHash: 
     UPDATE "Patient" SET "waConsent" = 'REVOKED', "waConsentAt" = ${now}, "waConsentSource" = 'WHATSAPP', "waConsentByUserId" = NULL
      WHERE "tenantId" = ${acc.tenantId} AND "waPhoneE164" = ${from} AND "waConsent" = 'GRANTED'
      RETURNING "id"`;
-  // HANDOFF (cola, WA-D24): esto es `cancelQueuedInTx` con alcance por destinatario; la cola todavía no lo expone
-  // (Scope = cuenta o consultorio). Mismo UPDATE que `cancelQueuedInTx` (QUEUED → CANCELLED, sin tocar lo SENDING),
-  // en la misma tx de la BAJA. El re-chequeo de `dispatch` igual saltearía estos mensajes (`revoked`).
-  const cancelled = await tx.whatsAppMessage.updateMany({
-    where: { tenantId: acc.tenantId, accountId: acc.id, toHash: fromHash, status: "QUEUED" },
-    data: { status: "CANCELLED", lockedUntil: null, nextAttemptAt: null },
-  });
-  if (cancelled.count > 0) logger.info("whatsapp.outbox.cancelled", { tenantId: acc.tenantId, count: cancelled.count, reason: "opt_out" });
+  // La cola es el escritor único (WA-D24): `cancelQueuedInTx` con alcance por destinatario (ZF2; antes era el mismo
+  // UPDATE a mano). QUEUED → CANCELLED sin tocar lo SENDING, en la misma tx de la BAJA. El re-chequeo de `dispatch`
+  // igual saltearía estos mensajes (`revoked`).
+  await cancelQueuedInTx(tx, { tenantId: acc.tenantId, accountId: acc.id, toHash: fromHash }, "opt_out");
   return { outcome: revoked.length > 0 ? "opted_out" : "no_match" };
 }
 

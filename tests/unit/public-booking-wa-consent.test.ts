@@ -3,7 +3,9 @@
  * del alta y los dos roles: tests/integration/wa-s8-turnero.test.ts.
  */
 import { describe, it, expect } from "vitest";
-import { SubmitSchema, decideTurneroWaConsent } from "@/lib/public-booking-types";
+import { readFileSync } from "node:fs";
+import { SubmitSchema } from "@/lib/public-booking-types";
+import { decideTurneroWaConsent, turneroConsentFitsFicha } from "@/lib/public-booking-wa-consent";
 
 describe("[WA-S8] decideTurneroWaConsent", () => {
   it("[WA-S8] sin la casilla → null (no se escribe nada ni hay flag)", () => {
@@ -51,5 +53,19 @@ describe("[WA-S8] decideTurneroWaConsent", () => {
     expect(SubmitSchema.safeParse(base).success).toBe(true);
     expect(SubmitSchema.safeParse({ ...base, waConsent: true }).success).toBe(true);
     expect(SubmitSchema.safeParse({ ...base, waConsent: "sí" }).success).toBe(false);
+  });
+
+  it("[ZF2] ficha nueva: siempre; ficha existente: solo si su celular normalizado es el E.164 tipeado", () => {
+    expect(turneroConsentFitsFicha({ createdHere: true, fichaPhone: null, e164: "+5491123456789" })).toBe(true);
+    expect(turneroConsentFitsFicha({ createdHere: false, fichaPhone: "011 15 2345-6789", e164: "+5491123456789" })).toBe(true);
+    expect(turneroConsentFitsFicha({ createdHere: false, fichaPhone: "1123456780", e164: "+5491123456789" })).toBe(false);
+    expect(turneroConsentFitsFicha({ createdHere: false, fichaPhone: null, e164: "+5491123456789" })).toBe(false);
+    expect(turneroConsentFitsFicha({ createdHere: false, fichaPhone: "011 4321-5678", e164: "+5491143215678" })).toBe(false);
+  });
+
+  it("[ZF2] public-booking-types (lo carga el wizard) no value-importa el normalizador de celulares", () => {
+    const src = readFileSync("lib/public-booking-types.ts", "utf8");
+    expect(src).not.toMatch(/from "@\/lib\/phone-e164"/);
+    expect(src).not.toMatch(/export function decideTurneroWaConsent/);
   });
 });

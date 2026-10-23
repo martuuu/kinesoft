@@ -9,7 +9,8 @@
  * avisos «a mano» (firma mala, otro número, wamid repetido) se arman con `signMetaPayload`, el mismo HMAC.
  *
  * Lo que fija:
- *   - firma inválida → 401 (lo único que no es 200: Meta reintenta los 5xx); modo off → 404; GET = verify challenge;
+ *   - firma inválida → 401; modo off → 404; GET = verify challenge; un error de base procesando `messages` → 500 (ZF2:
+ *     Meta reintenta y el reintento es seguro porque el claim del `wamid` va en la misma tx que el efecto);
  *   - estados monótonos aunque lleguen fuera de orden, y el webhook de estados re-drena la cola;
  *   - «Confirmo» = UPDATE SQL que NO mueve `updatedAt` (WA-D22) y deja el chip (`patientReply` del listado);
  *   - «No puedo ir» avisa al profesional del turno y a la Secretaría y NO cancela (WA-D7);
@@ -29,6 +30,7 @@ import { TEMPLATE_SPECS } from "@/lib/whatsapp/templates";
 import { WA_CONSENT_VERSION } from "@/lib/whatsapp/types";
 import { fakeGraphEmitStatus } from "@/lib/whatsapp/fake-graph";
 import { listAgendaBookings } from "@/lib/bookings";
+import { prismaService } from "@/lib/db";
 import { ownerClient, createEphemeralTenant, addPatient, addPractitioner, addStaff, type EphemeralTenant } from "@/tests/helpers/tenant-factory";
 import { asUser } from "@/tests/helpers/actor";
 import { realtimeFake } from "@/tests/helpers/realtime-fake";
@@ -427,6 +429,59 @@ describe.skipIf(!RUN)("[WA-S3] webhook de WhatsApp", () => {
     expect(await inbounds(A)).toHaveLength(1);
     expect(await replies(A)).toHaveLength(1);
     expect(await db.notification.count({ where: { tenantId: A.tenantId, kind: "BOOKING_PATIENT_REPLY", userId: prac2.userId } })).toBe(1);
+  });
+
+  it("[ZF2] error de base en un entrante → 500 (no se pierde) y el reintento de Meta lo procesa una sola vez", async () => {
+    const r = await reminder({ practitionerId: prac2.practitionerId });
+    const body = inboundBody(accA, r.phone, { type: "button", button: { payload: `wa1.x.${r.messageId}`, text: "No puedo ir" }, context: { id: r.wamid } });
+    const raw = JSON.stringify(body);
+    const req = () =>
+      new Request(HOOK, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-hub-signature-256": signMetaPayload(raw, FAKE_WA.WHATSAPP_APP_SECRET) },
+        body: raw,
+      });
+    // La caída de la base en la tx del entrante (lo único reemplazado: la conexión; el webhook, el ruteo y la ruta son
+    // los reales). Antes: 200 «processed: 0» y Meta no reintentaba → el «No puedo ir» se perdía.
+    const spy = vi.spyOn(prismaService, "$transaction").mockRejectedValueOnce(Object.assign(new Error("db down"), { code: "P1001" }));
+    const down = await POST(req());
+    spy.mockRestore();
+    expect(down.status).toBe(500);
+    expect(await inbounds(A)).toEqual([]);
+    expect((await db.booking.findUniqueOrThrow({ where: { id: r.booking.id } })).patientCancelRequestedAt).toBeNull();
+
+    // El reintento de Meta (mismos bytes, misma firma) lo procesa; el segundo reintento ya es `duplicate`.
+    const retry = await POST(req());
+    expect(retry.status).toBe(200);
+    expect(((await retry.json()) as { result: string }).result).toBe("cancel_requested");
+    const again = await POST(req());
+    expect(again.status).toBe(200);
+    expect(((await again.json()) as { result: string }).result).toBe("duplicate");
+    expect(await inbounds(A)).toHaveLength(1);
+    expect(await replies(A)).toHaveLength(1);
+    expect(await db.notification.count({ where: { tenantId: A.tenantId, kind: "BOOKING_PATIENT_REPLY", userId: prac2.userId } })).toBe(1);
+    expect((await db.booking.findUniqueOrThrow({ where: { id: r.booking.id } })).patientCancelRequestedAt).not.toBeNull();
+  });
+
+  it("[ZF2] la BAJA cancela solo lo QUEUED a ESE número (cancelQueuedInTx por destinatario)", async () => {
+    const phone = uniquePhone();
+    const other = uniquePhone();
+    await patientWith(A, phone);
+    const row = (to: string) => ({
+      tenantId: A.tenantId,
+      accountId: accA.accountId,
+      kind: "REPLY" as const,
+      trigger: "INBOUND" as const,
+      idempotencyKey: `rp:test-${randomUUID()}`,
+      templateName: null,
+      toHash: phoneHash(to),
+      toMasked: maskPhone(to),
+      expiresAt: new Date(Date.now() + 600_000),
+    });
+    const [mine, theirs] = await enqueue([row(phone), row(other)]);
+    expect((await sendInbound(phone, "BAJA", { phoneNumberId: accA.phoneNumberId })).webhookResult).toBe("opted_out");
+    expect((await db.whatsAppMessage.findUniqueOrThrow({ where: { id: mine } })).status).toBe("CANCELLED");
+    expect((await db.whatsAppMessage.findUniqueOrThrow({ where: { id: theirs } })).status).toBe("QUEUED");
   });
 
   it("[WA-S3] 131042 asíncrono → paymentIssueAt + un solo aviso por día", async () => {

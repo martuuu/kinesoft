@@ -6,9 +6,10 @@
  *
  *   - `whatsappNotices`: modo `off` = false y 0 sentencias extra (ni se mira la cuenta); prendido = true solo con una
  *     cuenta ACTIVE del consultorio en ese modo.
- *   - `waConsent: true` + cuenta ACTIVE + celular AR válido → GRANTED/TURNERO/versión con el E.164 del número TIPEADO,
- *     en la ficha que usa la reserva (nueva o existente por DNI). La ficha existente no cambia su teléfono (H4): el
- *     consentimiento queda anclado al número consentido (WA-D17).
+ *   - `waConsent: true` + cuenta ACTIVE + celular AR válido → GRANTED/TURNERO/versión con el E.164 del número TIPEADO
+ *     en una ficha NUEVA; en una ficha existente por DNI, solo si su celular es el mismo número (ZF2): si no, nada se
+ *     escribe y el flag dice «not_saved». La ficha existente nunca cambia su teléfono (H4).
+ *   - «Avisa por WhatsApp» exige además un aviso automático prendido (ZF2, `lib/whatsapp/active-internal.ts`).
  *   - Sin cuenta ACTIVE o con un fijo → no se guarda y el flag lo dice (la UI no miente).
  *   - Replay de la misma key → mismo turno, el consentimiento no se reescribe.
  */
@@ -245,7 +246,10 @@ describe.skipIf(!RUN)("[WA-S8] consentimiento de WhatsApp en el turnero", () => 
     expect((await consentOf(await patientOfBooking(r.data.bookingId))).waConsent).toBeNull();
   });
 
-  it("[WA-S8] ficha existente por DNI con otro teléfono → consentimiento con el número tipeado; la ficha no cambia", async () => {
+  // ZF2 (hallazgo 2): antes el consentimiento se escribía con el número TIPEADO sobre cualquier ficha existente por DNI.
+  // Un anónimo con el DNI de otro pisaba `waPhoneE164`/`waConsentAt` de esa ficha: el canal del paciente real quedaba
+  // `phone_changed` (le cortaba los avisos) y el rastro del consentimiento quedaba a nombre de alguien que no era él.
+  it("[ZF2] ficha existente por DNI con otro celular → NO se escribe el consentimiento; outcome «not_saved»", async () => {
     await setStatus("ACTIVE");
     fakeMode();
     const dni = `9${digits8()}`;
@@ -257,11 +261,62 @@ describe.skipIf(!RUN)("[WA-S8] consentimiento de WhatsApp en el turnero", () => 
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(await patientOfBooking(r.data.bookingId)).toBe(patientId);
-    expect(r.data.whatsappConsent).toBe("saved");
+    expect(r.data.whatsappConsent).toBe("not_saved");
     const c = await consentOf(patientId);
     expect(c.phone).toBe(filePhone); // H4: el contacto de la ficha no se pisa
     expect(c.email).toBe(fileEmail);
-    expect(c).toMatchObject({ waConsent: "GRANTED", waConsentSource: "TURNERO", waPhoneE164: `+54911${sub}` });
+    expect(c).toMatchObject({ waConsent: null, waPhoneE164: null, waConsentAt: null });
+  });
+
+  it("[ZF2] ficha existente por DNI con el MISMO celular (otro formato) → consentimiento guardado", async () => {
+    await setStatus("ACTIVE");
+    fakeMode();
+    const dni = `9${digits8()}`;
+    const sub = digits8();
+    const patientId = await addPatient(db, T, { documentId: dni, phone: `11${sub}` });
+    const r = await submitPublicBooking(await input({ documentId: dni, phone: `+54 9 11 ${sub}`, waConsent: true }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(await patientOfBooking(r.data.bookingId)).toBe(patientId);
+    expect(r.data.whatsappConsent).toBe("saved");
+    expect(await consentOf(patientId)).toMatchObject({ waConsent: "GRANTED", waConsentSource: "TURNERO", waPhoneE164: `+54911${sub}` });
+  });
+
+  it("[ZF2] ficha con BAJA (REVOKED) y el mismo celular → sigue REVOKED y el outcome no es «saved»", async () => {
+    await setStatus("ACTIVE");
+    fakeMode();
+    const dni = `9${digits8()}`;
+    const sub = digits8();
+    const patientId = await addPatient(db, T, { documentId: dni, phone: `11${sub}` });
+    const at = new Date(Date.now() - 86_400_000);
+    await db.patient.update({
+      where: { id: patientId },
+      data: { waConsent: "REVOKED", waConsentAt: at, waConsentSource: "WHATSAPP", waConsentVersion: WA_CONSENT_VERSION, waPhoneE164: `+54911${sub}` },
+    });
+    const r = await submitPublicBooking(await input({ documentId: dni, phone: `11 ${sub}`, waConsent: true }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.whatsappConsent).toBe("not_saved");
+    expect(await consentOf(patientId)).toMatchObject({ waConsent: "REVOKED", waConsentSource: "WHATSAPP", waConsentAt: at });
+  });
+
+  it("[ZF2] cuenta ACTIVE con los dos avisos automáticos apagados → whatsappNotices false y «unavailable»", async () => {
+    await setStatus("ACTIVE");
+    fakeMode();
+    await db.whatsAppAccount.update({ where: { id: accountId }, data: { autoBookingNotice: false, autoReminder: false } });
+    try {
+      expect((await getPublicClinic(T.slug))?.whatsappNotices).toBe(false);
+      const r = await submitPublicBooking(await input({ documentId: `3${digits8()}`, phone: `11${digits8()}`, waConsent: true }));
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.data.whatsappConsent).toBe("unavailable");
+      expect((await consentOf(await patientOfBooking(r.data.bookingId))).waConsent).toBeNull();
+      // Con uno solo de los dos prendido, sí avisa (el recordatorio alcanza para prometer «te avisamos»).
+      await db.whatsAppAccount.update({ where: { id: accountId }, data: { autoReminder: true } });
+      expect((await getPublicClinic(T.slug))?.whatsappNotices).toBe(true);
+    } finally {
+      await db.whatsAppAccount.update({ where: { id: accountId }, data: { autoBookingNotice: true, autoReminder: true } });
+    }
   });
 
   it("[WA-S8] replay de la misma key → mismo turno, el consentimiento no se reescribe", async () => {

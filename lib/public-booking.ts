@@ -84,7 +84,6 @@ import {
   ListPublicSlotWindowSchema,
   ListPublicSlotsSchema,
   SubmitSchema,
-  decideTurneroWaConsent,
   normalizeDocumentId,
   type FirstPublicSlotInput,
   type ListPublicSlotWindowInput,
@@ -96,7 +95,9 @@ import {
   type PublicBookingStatus,
   type SubmitPublicBookingInput,
   type SubmitPublicBookingResult,
+  type TurneroWaConsentOutcome,
 } from "@/lib/public-booking-types";
+import { decideTurneroWaConsent, turneroConsentFitsFicha } from "@/lib/public-booking-wa-consent";
 
 function callerIp(): string {
   const h = headers();
@@ -678,6 +679,10 @@ export async function submitPublicBooking(
   let born: { decision: OnlineChargeDecision; chargeId: string | null } | null = null;
   /** WA-S8: qué decidió ESTA llamada sobre la casilla de WhatsApp (null = no la mandó). En replay se recalcula abajo. */
   let waConsent: ReturnType<typeof decideTurneroWaConsent> = null;
+  /** ZF2: lo que se le dice a la UI. `saved` de la decisión baja a `not_saved` si la ficha no admitió la escritura. */
+  let waOutcome: TurneroWaConsentOutcome | null = null;
+  /** ZF2: la ficha del replay / gemelo, para recalcular el flag con lo que quedó escrito. */
+  let replayPatientId: string | null = null;
   if (prior) {
     const sameAttempt =
       prior.tenantId === tenant.id &&
@@ -691,6 +696,7 @@ export async function submitPublicBooking(
     // el paciente pagaba un turno que la agenda ya no mostraba como activo).
     if (prior.status === "CANCELLED") return { ok: false, error: CANCELLED_REPLAY_ERROR };
     bookingId = prior.id;
+    replayPatientId = prior.patientId;
   } else {
     // ── Horario: tiene que ser de la grilla y tener cupo (misma función que
     // la lista del wizard). Antes se aceptaba cualquier instante futuro.
@@ -749,6 +755,7 @@ export async function submitPublicBooking(
       accountActive: data.waConsent === true && (await turneroWhatsAppActive(tenant.id)),
       phone: data.patient.phone,
     });
+    waOutcome = waConsent?.outcome ?? null;
 
     // T5 (C-TP8): política + cuenta del vendedor, FUERA de la tx (son lecturas de configuración; con modo `off` o
     // política OFF es una sola o ninguna). Nunca la cuenta de la plataforma (H-TP1).
@@ -922,13 +929,25 @@ export async function submitPublicBooking(
         // consentimiento de una reserva que no existe) y ANTES del commit, así el hook post-commit del aviso
         // (`afterBookingsCommitted`, C-WA8) ya lo ve. Sobre la ficha que usa la reserva, nueva o existente por DNI:
         // H4 prohíbe pisar el contacto de una ficha existente y acá NO se toca `phone` ni `email`; el consentimiento
-        // queda anclado al número TIPEADO (`waPhoneE164`). Si no coincide con el teléfono de la ficha, el canal queda
-        // `phone_changed` (lib/whatsapp/logic.ts) y no se manda nada hasta que el staff lo revise: un anónimo con el
-        // DNI de otro no puede desviar los avisos a su número.
+        // queda anclado al número TIPEADO (`waPhoneE164`).
+        // ZF2 (hallazgo 2): sobre una ficha EXISTENTE (match por DNI) solo si su celular ES el número tipeado
+        // (`turneroConsentFitsFicha`). Antes se escribía siempre: el aviso no se desviaba (el canal quedaba
+        // `phone_changed`), pero un anónimo con el DNI de otro le pisaba el consentimiento y le cortaba los avisos.
+        // La ficha nueva (creada por esta reserva) sí: el número es el de quien la creó.
+        let waSaved = false;
         if (waConsent?.outcome === "saved") {
+          const fits =
+            resolution.created ||
+            turneroConsentFitsFicha({
+              createdHere: false,
+              fichaPhone:
+                (await tx.patient.findFirst({ where: { id: resolution.patientId, tenantId: tenant.id }, select: { phone: true } }))?.phone ?? null,
+              e164: waConsent.e164,
+            });
           // WA-S8 H-1: el turnero anónimo no revierte una BAJA (REVOKED): eso queda para ALTA, el portal o la
-          // Secretaría. OR explícito: un NOT REVOKED en SQL también dejaría afuera a los NULL (nunca respondió).
-          await tx.patient.updateMany({
+          // Secretaría. OR explícito: un NOT REVOKED en SQL también dejaría afuera a los NULL (nunca respondió). ZF2: si
+          // no escribió (REVOKED), el flag dice `not_saved` (antes decía `saved` y la UI prometía avisos).
+          const n = !fits ? { count: 0 } : await tx.patient.updateMany({
             where: { id: resolution.patientId, tenantId: tenant.id, OR: [{ waConsent: null }, { waConsent: "GRANTED" }] },
             data: {
               waConsent: "GRANTED",
@@ -939,12 +958,14 @@ export async function submitPublicBooking(
               waPhoneE164: waConsent.e164,
             },
           });
+          waSaved = n.count > 0;
         }
-        return { ...row, released, decision, chargeId };
+        return { ...row, released, decision, chargeId, waSaved };
       });
       bookingId = created.id;
       createdHere = true;
       born = { decision: created.decision, chargeId: created.chargeId };
+      if (waOutcome === "saved" && !created.waSaved) waOutcome = "not_saved";
       // SV06a · Sala de Espera realtime: una sola llamada por commit, JUSTO
       // después de la tx y ANTES de crear la preferencia. Por qué ahí:
       //   - fuera de la tx (contrato del hook): adentro, un rollback dejaba un
@@ -990,11 +1011,12 @@ export async function submitPublicBooking(
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
         const twin = await prisma.booking.findUnique({
           where: { idempotencyKey },
-          select: { id: true, status: true },
+          select: { id: true, status: true, patientId: true },
         });
         if (twin && twin.status !== "CANCELLED") {
           // El otro submit escribió (turno y cobro) y avisa; este sigue como un replay de su fila.
           bookingId = twin.id;
+          replayPatientId = twin.patientId;
         } else {
           return { ok: false, error: SAME_SLOT_ERROR };
         }
@@ -1010,14 +1032,22 @@ export async function submitPublicBooking(
 
   // WA-S8: en replay / gemelo no se escribe nada (lo escribió el alta original, misma key = misma instancia del
   // wizard = misma casilla); el flag se recalcula con la misma regla para que la UI diga lo mismo que la primera vez.
+  // ZF2: `saved` solo si la ficha quedó GRANTED con ESE número (lo que escribió, o no, el alta original).
   if (!createdHere && data.waConsent === true) {
     waConsent = decideTurneroWaConsent({
       requested: true,
       accountActive: await turneroWhatsAppActive(tenant.id),
       phone: data.patient.phone,
     });
+    waOutcome = waConsent?.outcome ?? null;
+    if (waConsent?.outcome === "saved") {
+      const p = replayPatientId
+        ? await prisma.patient.findFirst({ where: { id: replayPatientId, tenantId: tenant.id }, select: { waConsent: true, waPhoneE164: true } })
+        : null;
+      if (!(p?.waConsent === "GRANTED" && p.waPhoneE164 === waConsent.e164)) waOutcome = "not_saved";
+    }
   }
-  const waFlag = waConsent ? { whatsappConsent: waConsent.outcome } : {};
+  const waFlag = waOutcome ? { whatsappConsent: waOutcome } : {};
 
   const logDone = (next: SubmitPublicBookingResult["next"], extra: Record<string, unknown> = {}) =>
     // VX2-d1 (AUDIT `turnero-revalidatepath-doble`): sin `revalidatePath("/agenda", "/dashboard")`. La invalidación
@@ -1030,7 +1060,7 @@ export async function submitPublicBooking(
       next,
       charge: born ? (born.decision.kind === "charge" ? (born.decision.required ? "required" : "optional") : born.decision.reason) : "replay",
       // WA-S8: solo el resultado (nunca el número).
-      ...(waConsent ? { wa: waConsent.outcome } : {}),
+      ...(waOutcome ? { wa: waOutcome } : {}),
       ...extra,
     });
   const reserved = (notice?: "payment-unavailable"): ActionResult<SubmitPublicBookingResult> => {
