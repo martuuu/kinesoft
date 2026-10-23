@@ -24,6 +24,8 @@ beforeAll(async () => {
 
 // Red y server actions mockeadas (anti-false-green: se renderiza el SalaClient
 // real con el provider realtime real en su valor por defecto, `off`).
+// TV-2w2: el drawer «Pantallas» trae actions server; acá solo importa que el header no rompa.
+vi.mock("@/components/sala/displays/displays-drawer", () => ({ DisplaysDrawer: () => null }));
 vi.mock("@/lib/bookings", () => ({ listAgendaBookings: vi.fn(), markReceptionAction: vi.fn() }));
 vi.mock("@/lib/preferences", () => ({ updateAgendaViewPrefs: vi.fn(), updateUserPreferences: vi.fn() }));
 // RX-1a: el escritorio (RX-1b) se reemplaza por un testigo que expone lo que SalaClient le pasa; acá se prueba

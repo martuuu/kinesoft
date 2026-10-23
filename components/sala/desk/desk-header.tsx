@@ -7,6 +7,8 @@ import { fmtHour } from "@/components/agenda/agenda-utils";
 import type { DeskKpis } from "@/lib/reception-desk-state";
 import { salaDayLabel } from "@/components/sala/sala-day-label";
 import { preloadSalaFaces } from "@/components/sala/sala-faces";
+// TV-2w2: «Pantallas» (solo con `agenda.operateAll`, vía `DisplaysContext`); el drawer va diferido adentro.
+import { DisplaysButton } from "@/components/sala/displays/displays-button";
 
 /**
  * Header del escritorio de Recepción (RX-1b, prototipo `.top`): «Recepción», fecha, «En vivo», KPIs, buscador con
@@ -103,6 +105,8 @@ export function DeskHeader({
       <time className="desk-clock desk-mono" dateTime={clock.toISOString()} aria-label={`Hora actual ${time}`}>
         {time}
       </time>
+
+      <DisplaysButton />
 
       {onOpenView && (
         <button

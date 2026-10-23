@@ -85,6 +85,9 @@ export default async function SalaPage() {
       initialGroupBy={prefs.salaGroupBy}
       initialLayout={prefs.receptionLayout}
       canReadClinical={caps.has("clinical.read")}
+      // TV-2w2: «Pantallas» solo para quien opera toda la agenda y nunca en soporte (sesión de solo lectura, C-BO4):
+      // las actions de pantallas lo vuelven a exigir; esto solo evita un botón que terminaría en «no autorizado».
+      canManageDisplays={caps.has("agenda.operateAll") && !actor.support}
     />
   );
 }

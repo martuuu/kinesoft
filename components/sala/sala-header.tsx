@@ -7,6 +7,8 @@ import { IconSearch, IconX } from "@/components/ui/icons";
 import { LiveIndicator } from "@/components/realtime/live-indicator";
 import { SALA_COPY, SALA_COUNTERS, type SalaCounters } from "@/lib/sala-board-state";
 import type { SalaGroupBy } from "@/lib/preferences-constants";
+// TV-2w2: «Pantallas» (solo con `agenda.operateAll`, vía `DisplaysContext`); el drawer va diferido adentro.
+import { DisplaysButton } from "@/components/sala/displays/displays-button";
 
 
 /**
@@ -136,6 +138,7 @@ export function SalaHeader({
             </button>
           )}
         </label>
+        <DisplaysButton />
         <div className="sala-status">
           <AnimatePresence initial={false}>
             {status === "no-one-waiting" && (

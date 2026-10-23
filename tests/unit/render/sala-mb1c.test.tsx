@@ -24,6 +24,8 @@ beforeAll(async () => {
     await Promise.all(dynamicLoads);
   }
 });
+// TV-2w2: el drawer «Pantallas» trae actions server; acá solo importa que el header no rompa.
+vi.mock("@/components/sala/displays/displays-drawer", () => ({ DisplaysDrawer: () => null }));
 vi.mock("@/lib/bookings", () => ({ markReceptionAction: vi.fn(), setBookingCopagoPaid: vi.fn(), listAgendaBookings: vi.fn() }));
 vi.mock("@/lib/preferences", () => ({ updateAgendaViewPrefs: vi.fn(), updateUserPreferences: vi.fn() }));
 vi.mock("@/lib/realtime-token", () => ({ mintRealtimeToken: async () => ({ ok: false, error: "realtime-off" }) }));

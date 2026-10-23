@@ -10,6 +10,7 @@ import { useSalaLive } from "./use-sala-live";
 import { useAttendedNoteToast } from "@/components/agenda/reception/use-attended-note-toast";
 import { SalaBoardSkeleton, SalaDeskSkeleton } from "./sala-skeleton";
 import { loadBoardFace, loadReceptionDesk, preloadSalaFace } from "./sala-faces";
+import { DisplaysContext } from "./displays/displays-button";
 
 /*
  * PF1.1-sala (C-PF2): solo se baja la cara elegida. Las tres van con `next/dynamic` CON SSR (el default): el HTML del
@@ -59,6 +60,7 @@ export function SalaClient({
   initialGroupBy,
   initialLayout,
   canReadClinical = false,
+  canManageDisplays = false,
 }: {
   dayKey: string;
   initialNow: string;
@@ -73,6 +75,11 @@ export function SalaClient({
   initialLayout?: ReceptionLayout;
   /** EV2-3c: `caps.has("clinical.read")`. Sin la prop, sin toast «Cargar evolución». */
   canReadClinical?: boolean;
+  /**
+   * TV-2w2: `agenda.operateAll` sin sesión de soporte (la page). Llega a «Pantallas» de los dos headers por
+   * `DisplaysContext` y no como prop de cada cara (son chunks aparte). Sin la prop, sin botón.
+   */
+  canManageDisplays?: boolean;
 }) {
   const { practitionerId, canReception, canOperateAll, canCollect = false, canCollectAll = false } = viewerProp;
   // Identidad estable por valor: `viewer` es dep de `buildBoard`/`deskEntries` en cada render.
@@ -86,6 +93,14 @@ export function SalaClient({
 
   // En el render (no en un effect): durante la hidratación así sale a la vez que el chunk del shell. Idempotente.
   preloadSalaFace(layout);
-  if (layout === "board") return <SalaBoardFace live={live} initialGroupBy={initialGroupBy} />;
-  return <ReceptionDesk live={live} layout={layout} viewer={viewer} />;
+  const displays = useMemo(() => ({ canManage: canManageDisplays }), [canManageDisplays]);
+  return (
+    <DisplaysContext.Provider value={displays}>
+      {layout === "board" ? (
+        <SalaBoardFace live={live} initialGroupBy={initialGroupBy} />
+      ) : (
+        <ReceptionDesk live={live} layout={layout} viewer={viewer} />
+      )}
+    </DisplaysContext.Provider>
+  );
 }
