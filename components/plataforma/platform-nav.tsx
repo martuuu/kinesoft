@@ -12,6 +12,7 @@ import {
   IconFile,
   IconFilter,
   IconHome,
+  IconMail,
   IconPlans,
   IconSearch,
   IconSettings,
@@ -41,6 +42,9 @@ import { unreadBadgeLabel } from "@/components/plataforma/inbox/inbox-logic";
  *
  * DIR-3e: «Directorio» (moderación del directorio público, C-DIR9) después de Precios, con la lupa del set: es lo que
  * el directorio es para el paciente (buscar un profesional).
+ *
+ * WA-U6 (T6): «WhatsApp» (estado de la integración con Meta y de cada cuenta, sin teléfonos) después de Directorio. El
+ * set no tiene un globo de chat: va el sobre de mensajes (`IconMail`); sumar uno es de `icons.tsx`.
  */
 export type PlatformNavItem = {
   href: string;
@@ -66,6 +70,7 @@ export const PLATFORM_NAV_GROUPS: readonly PlatformNavGroup[] = [
       { href: "/plataforma/facturacion", label: "Facturación", match: "/plataforma/facturacion", icon: IconCheck },
       { href: "/plataforma/precios", label: "Precios", match: "/plataforma/precios", icon: IconStar },
       { href: "/plataforma/directorio", label: "Directorio", match: "/plataforma/directorio", icon: IconSearch },
+      { href: "/plataforma/whatsapp", label: "WhatsApp", match: "/plataforma/whatsapp", icon: IconMail },
       { href: "/plataforma/salud", label: "Salud", match: "/plataforma/salud", icon: IconActivity },
       { href: "/plataforma/auditoria", label: "Auditoría", match: "/plataforma/auditoria", icon: IconFile },
       { href: "/plataforma/sistema", label: "Sistema", match: "/plataforma/sistema", icon: IconSettings },
