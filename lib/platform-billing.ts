@@ -40,9 +40,18 @@ import {
   recordPaymentInTx,
   reviewPaymentInTx,
   schedulePlanPriceInTx,
+  ensureSubscriptionInTx,
+  lockSubscription,
+  lockTenant,
   setChargeStatusInTx,
   setCustomPriceInTx,
 } from "@/lib/saas-billing-internal";
+import { addAdjustmentInTx } from "@/lib/saas-adjustments-internal";
+import { undoCancelInTx } from "@/lib/saas-billing-schedule-internal";
+import { applyReanchorInTx, planReanchorInTx, type ReanchorRow } from "@/lib/saas-reanchor-internal";
+import { syncSaasMpAfterCommit } from "@/lib/saas-mp-sync-internal";
+import { getPreapproval, saasMpEnabled } from "@/lib/mercadopago-saas";
+import { maskEmail } from "@/lib/email/transport";
 import { parsePaymentForm, readReceiptFile, removeReceipt, signReceipt, uploadReceipt } from "@/lib/saas-receipts-internal";
 import {
   arMidnight,
@@ -54,14 +63,24 @@ import {
   type ChargeForBalance,
 } from "@/lib/saas-billing-logic";
 import { PLAN_DEFAULTS, SAAS_PLANS } from "@/lib/saas-plans-logic";
-import { BILLING_COPY, PLAN_CHANGE_COPY, type PlanChangeActionResult } from "@/lib/saas-billing-types";
+import {
+  BILLING_COPY,
+  PLAN_CHANGE_COPY,
+  type AddAdjustmentData,
+  type PlanChangeActionResult,
+  type PlatformMpSubscriptionStatus,
+} from "@/lib/saas-billing-types";
 import type {
   PlatformAccountRow,
   PlatformAccountsFilter,
   PlatformAccountsPage,
   PlatformPlanPriceRow,
   PlatformPriceHistoryRow,
+  PlatformReanchorPreview,
+  PlatformReanchorResult,
+  PlatformSubscriptionActionResult,
   PlatformTenantLedger,
+  SetAutoDebitAllowedData,
 } from "@/lib/platform-billing-types";
 import type { ActionResult } from "@/lib/validation";
 
@@ -397,29 +416,48 @@ export async function waiveCharge(raw: unknown): Promise<ActionResult> {
 
 const PRICE = z.number().int().min(0).max(MAX_PRICE_CENTS);
 
-/** Precio a medida del consultorio (centavos; null = el del plan). Rige desde el próximo cargo. */
-export async function setCustomPrice(tenantId: unknown, priceCents: unknown): Promise<ActionResult> {
+const CustomPriceInput = z.object({ tenantId: ID, priceCents: PRICE.nullable(), plan: SAAS_PLAN.optional() }).strict();
+
+/**
+ * Precio a medida del consultorio (centavos; null = el del plan). Rige desde el próximo cargo. MPS-D14: queda ATADO a
+ * un plan (`customPricePlan`): si el consultorio sube o baja, paga el precio del plan nuevo (un descuento de
+ * Consultorio no viaja a Clínica). Sin `plan` se ata al plan ACTUAL del consultorio: guardar desde Plataforma es lo
+ * que convierte un precio legado (sin plan, vale para cualquiera) en uno atado. Acepta la forma posicional de PL-2b
+ * (`tenantId, priceCents, plan?`, la usa la UI actual) y la de C-MPS11 (`SetCustomPriceInput`).
+ * Después del commit, el sync lleva el monto del débito al precio nuevo (fuera de la tx: MP nunca adentro).
+ */
+export async function setCustomPrice(tenantIdOrInput: unknown, priceCents?: unknown, plan?: unknown): Promise<ActionResult> {
   const actor = await requirePlatformAdmin("billing.price");
-  const id = ID.safeParse(tenantId);
-  const price = PRICE.nullable().safeParse(priceCents);
-  if (!id.success || !price.success) return invalid();
+  const raw =
+    tenantIdOrInput && typeof tenantIdOrInput === "object"
+      ? tenantIdOrInput
+      : { tenantId: tenantIdOrInput, priceCents, ...(plan === undefined || plan === null ? {} : { plan }) };
+  const parsed = CustomPriceInput.safeParse(raw);
+  if (!parsed.success) return invalid();
+  const { tenantId: id, priceCents: price } = parsed.data;
   const now = new Date();
   const r = await prismaService.$transaction(async (tx) => {
-    const res = await setCustomPriceInTx(tx, { tenantId: id.data, priceCents: price.data, now });
-    if (res.ok && res.before !== res.after) {
+    // Lock Tenant → Subscription antes de leer el plan anterior (setCustomPriceInTx vuelve a pedirlos: misma tx).
+    const sub = await ensureSubscriptionInTx(tx, id, now);
+    if (!sub) return { ok: false as const, reason: "not_found" as const };
+    const t = await tx.tenant.findUniqueOrThrow({ where: { id }, select: { saasPlan: true } });
+    const planAfter = price === null ? null : parsed.data.plan ?? t.saasPlan;
+    const res = await setCustomPriceInTx(tx, { tenantId: id, priceCents: price, plan: planAfter, now });
+    if (res.ok && (res.before !== res.after || sub.customPricePlan !== planAfter)) {
       await auditPlatformInTx(tx, {
         actor: refOf(actor),
-        affectedTenantId: id.data,
+        affectedTenantId: id,
         action: "platform.billing.custom_price",
         entity: "SaasSubscription",
-        entityId: id.data,
-        payload: { before: res.before, after: res.after },
+        entityId: id,
+        payload: { before: res.before, after: res.after, planBefore: sub.customPricePlan, planAfter },
       });
     }
     return res;
   });
   if (!r.ok) return invalid(r.reason === "not_found" ? "No encontramos el consultorio." : "Precio inválido.");
-  revalidateBilling(id.data);
+  revalidateBilling(id);
+  await syncSaasMpAfterCommit(id);
   return { ok: true, data: undefined };
 }
 
@@ -548,7 +586,13 @@ const PlatformApplyInput = z
   })
   .strict();
 
-/** Cambiar el plan desde Plataforma (source `platform`, audit doble del núcleo). Libre permitido. */
+/**
+ * Cambiar el plan desde Plataforma (source `platform`, audit doble del núcleo). Libre permitido. MPS-D20: sigue
+ * INMEDIATO y SIN proporcional automático (no pasa por `planChangeKind` ni `addUpgradeProrationInTx` como la subida
+ * del consultorio): Plataforma cambia el plan por acuerdo, negociación o corrección, y si corresponde cobrar o
+ * bonificar la diferencia lo carga a mano con `addAdjustment`. El débito se re-sincroniza después del commit (el
+ * monto del próximo 4 es la base del plan nuevo).
+ */
 export async function platformApplyPlanChange(raw: unknown): Promise<PlanChangeActionResult> {
   const actor = await requirePlatformAdmin("tenant.plan.change");
   const parsed = PlatformApplyInput.safeParse(raw);
@@ -576,6 +620,347 @@ export async function platformApplyPlanChange(raw: unknown): Promise<PlanChangeA
   for (const t of tenantEntitlementTags(d.tenantId)) revalidateTag(t);
   revalidateTag(tags.practitioners(d.tenantId));
   revalidateBilling(d.tenantId);
+  await syncSaasMpAfterCommit(d.tenantId);
   return { ok: true, data: { disabled: res.disabled, reactivated: res.reactivated, revokedInvites: res.revokedInvites } };
 }
 
+
+// ── Suscripción con Mercado Pago (MPS-3b, C-MPS11) ──────────────────────────────────────────────────────────────
+//
+// Claves (sin claves nuevas en PLATFORM_ACTION_POLICY: se reusa la clasificación existente, que ya decide el
+// step-up): `billing.read` (estado en vivo, preview del re-anclaje), `billing.write` (permitir/bloquear el débito,
+// ajustes, re-anclar, deshacer la baja: tocan plata o el cobro y son `high`) y `tenant.plan.change` (anular la bajada
+// programada: es un cambio de plan, el mismo peso que `platformApplyPlanChange`). Todas por el canal service:
+// `SaasSubscription`/`SaasAdjustment` son TENANT_READONLY. MP nunca adentro de una tx: el sync va después del commit.
+
+const SUB_COPY = {
+  not_found: "No encontramos el consultorio.",
+  no_subscription: "Este consultorio todavía no tiene suscripción.",
+  not_cancel_pending: "El consultorio no tiene una baja programada.",
+  stale: "La baja rige hoy: ya no se puede deshacer. Reactivá la suscripción.",
+  no_pending_plan: "El consultorio no tiene una bajada de plan programada.",
+  mp_unavailable: "No pudimos consultar Mercado Pago. Probá de nuevo en un rato.",
+} as const;
+
+function subFail<T>(reason: keyof typeof SUB_COPY): PlatformSubscriptionActionResult<T> {
+  return { ok: false, error: SUB_COPY[reason], reason };
+}
+
+const TenantOnly = z.object({ tenantId: ID }).strict();
+
+const AutoDebitAllowedInput = z.object({ tenantId: ID, allowed: z.boolean() }).strict();
+
+/**
+ * Permitir o bloquear el débito automático de un consultorio (MPS-D24: permitido por defecto). Bloquear NO toca el
+ * método elegido: `desiredDebit` da `cancelled/not_allowed` y el sync, DESPUÉS del commit, cancela en MP el
+ * preapproval vigente y el pendiente (si MP no contesta, la conciliación diaria lo reintenta: la fila ya dice
+ * «bloqueado»). Volver a permitirlo no revive nada (`cancelled` es terminal en MP): el titular lo autoriza de nuevo.
+ */
+export async function setAutoDebitAllowed(raw: unknown): Promise<PlatformSubscriptionActionResult<SetAutoDebitAllowedData>> {
+  const actor = await requirePlatformAdmin("billing.write");
+  const parsed = AutoDebitAllowedInput.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: "Datos inválidos", reason: "invalid_input" };
+  const { tenantId, allowed } = parsed.data;
+  const now = new Date();
+  const r = await prismaService.$transaction(async (tx) => {
+    const sub = await ensureSubscriptionInTx(tx, tenantId, now);
+    if (!sub) return null;
+    const cur = await tx.saasSubscription.findUniqueOrThrow({ where: { tenantId }, select: { autoDebitAllowed: true } });
+    if (cur.autoDebitAllowed === allowed) return { changed: false };
+    await tx.saasSubscription.update({ where: { tenantId }, data: { autoDebitAllowed: allowed } });
+    await auditPlatformInTx(tx, {
+      actor: refOf(actor),
+      affectedTenantId: tenantId,
+      action: "platform.billing.auto_debit_allowed",
+      entity: "SaasSubscription",
+      entityId: tenantId,
+      payload: { before: cur.autoDebitAllowed, after: allowed },
+    });
+    return { changed: true };
+  });
+  if (!r) return subFail("not_found");
+  revalidateBilling(tenantId);
+  if (r.changed && !allowed) await syncSaasMpAfterCommit(tenantId);
+  return { ok: true, data: { autoDebitAllowed: allowed, changed: r.changed } };
+}
+
+const AdjustmentInput = z
+  .object({
+    tenantId: ID,
+    kind: z.enum(["CREDIT", "DEBIT"]),
+    /** POSITIVO: el signo lo pone el tipo (CREDIT → negativo, CHECK de M16). */
+    amountCents: z.number().int().min(1).max(MAX_PRICE_CENTS),
+    effectiveOn: z.string().refine(isDateKey, "Fecha inválida").optional(),
+    description: z.string().trim().min(1).max(300),
+    idempotencyKey: z.string().uuid(),
+  })
+  .strict();
+
+/**
+ * Crédito o débito manual (C-MPS11). Entra en el próximo cargo (`composeCharge`: un crédito nunca deja el cargo en
+ * negativo; lo que sobra pasa al siguiente). Sin fecha rige desde el PRÓXIMO COBRO guardado (`nextChargeAt`) y no
+ * desde hoy: con el cron atrasado (cobro de ayer todavía sin cargo) «hoy» quedaría fuera de ese cargo, que es el que
+ * Plataforma quiso tocar. Idempotente por `idempotencyKey` (UUID por instancia del diálogo, UNIQUE de M16): un
+ * doble clic devuelve el mismo ajuste y no audita dos veces. La descripción la ve el consultorio; no va al audit.
+ */
+export async function addAdjustment(raw: unknown): Promise<PlatformSubscriptionActionResult<AddAdjustmentData>> {
+  const actor = await requirePlatformAdmin("billing.write");
+  const parsed = AdjustmentInput.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: "Datos inválidos", reason: "invalid_input" };
+  const d = parsed.data;
+  const now = new Date();
+  const r = await prismaService.$transaction(async (tx) => {
+    const sub = await ensureSubscriptionInTx(tx, d.tenantId, now);
+    if (!sub) return null;
+    const effectiveOn = d.effectiveOn ?? (sub.nextChargeAt ? toARDateKey(sub.nextChargeAt) : toARDateKey(now));
+    const amountCents = d.kind === "CREDIT" ? -d.amountCents : d.amountCents;
+    const res = await addAdjustmentInTx(tx, {
+      tenantId: d.tenantId,
+      kind: d.kind,
+      amountCents,
+      effectiveOn,
+      description: d.description,
+      idempotencyKey: `platform:${d.idempotencyKey}`,
+      createdById: actor.userId,
+    });
+    if (res.created) {
+      await auditPlatformInTx(tx, {
+        actor: refOf(actor),
+        affectedTenantId: d.tenantId,
+        action: "platform.billing.adjustment.added",
+        entity: "SaasAdjustment",
+        entityId: res.adjustmentId,
+        payload: { kind: d.kind, amountCents, effectiveOn },
+      });
+    }
+    return res;
+  });
+  if (!r) return subFail("not_found");
+  revalidateBilling(d.tenantId);
+  return { ok: true, data: r };
+}
+
+/**
+ * Foto del débito: lo guardado + un GET EN VIVO del preapproval por el puerto (fuera de cualquier tx; con el cobro
+ * por MP apagado no se llama y `liveStatus` queda null). Nunca datos de tarjeta: el puerto no los mapea y el email del
+ * pagador sale enmascarado (es dato del titular, no viaja completo al cliente). `drift` = MP dice otro estado o monto
+ * que lo guardado: lo corrige la conciliación diaria (no se compara contra `desiredDebit`, que necesita la proyección
+ * del cargo y es del sync).
+ */
+export async function getMpSubscriptionStatus(raw: unknown): Promise<PlatformSubscriptionActionResult<PlatformMpSubscriptionStatus>> {
+  await requirePlatformAdmin("billing.read");
+  const parsed = TenantOnly.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: "Datos inválidos", reason: "invalid_input" };
+  const tenantId = parsed.data.tenantId;
+  const sub = await prismaService.saasSubscription.findUnique({
+    where: { tenantId },
+    select: {
+      collectionMethod: true,
+      autoDebitAllowed: true,
+      autoDebitEnabled: true,
+      mpPreapprovalId: true,
+      mpPreapprovalStatus: true,
+      mpPayerEmail: true,
+      mpPreapprovalAmountCents: true,
+      mpPreapprovalNextAt: true,
+      mpPreapprovalSyncedAt: true,
+      mpPendingPreapprovalId: true,
+      mpPendingCreatedAt: true,
+      mpRetiredPreapprovalId: true,
+    },
+  });
+  if (!sub) {
+    const exists = await prismaService.tenant.findUnique({ where: { id: tenantId }, select: { id: true } });
+    return subFail(exists ? "no_subscription" : "not_found");
+  }
+  let liveStatus: string | null = null;
+  let liveAmountCents: number | null = null;
+  let liveNext: Date | null = null;
+  if (sub.mpPreapprovalId && saasMpEnabled()) {
+    const live = await getPreapproval(sub.mpPreapprovalId);
+    if (live.ok) {
+      liveStatus = live.data.status;
+      liveAmountCents = live.data.amountCents;
+      liveNext = live.data.nextPaymentDate;
+    }
+  }
+  const drift =
+    liveStatus !== null &&
+    (liveStatus !== sub.mpPreapprovalStatus || (liveAmountCents !== null && liveAmountCents !== sub.mpPreapprovalAmountCents));
+  const nextDebit = liveNext ?? sub.mpPreapprovalNextAt;
+  return {
+    ok: true,
+    data: {
+      tenantId,
+      collectionMethod: sub.collectionMethod,
+      autoDebitAllowed: sub.autoDebitAllowed,
+      autoDebitEnabled: sub.autoDebitEnabled,
+      preapprovalId: sub.mpPreapprovalId,
+      storedStatus: sub.mpPreapprovalStatus,
+      liveStatus,
+      payerEmailMasked: sub.mpPayerEmail ? maskEmail(sub.mpPayerEmail) : null,
+      amountCents: sub.mpPreapprovalAmountCents,
+      liveAmountCents,
+      nextDebitAt: nextDebit ? nextDebit.toISOString() : null,
+      syncedAt: sub.mpPreapprovalSyncedAt?.toISOString() ?? null,
+      pendingPreapprovalId: sub.mpPendingPreapprovalId,
+      pendingCreatedAt: sub.mpPendingCreatedAt?.toISOString() ?? null,
+      retiredPreapprovalId: sub.mpRetiredPreapprovalId,
+      drift,
+    },
+  };
+}
+
+/** Fila del núcleo de re-anclaje → DTO de Plataforma (sin el nombre del consultorio: la pantalla ya lo tiene). */
+function reanchorPreviewOf(row: ReanchorRow): PlatformReanchorPreview {
+  return {
+    tenantId: row.tenantId,
+    fromAnchorDay: row.oldAnchorDay,
+    toAnchorDay: row.newAnchorDay,
+    stubFrom: row.billableFrom,
+    stubTo: row.newNextChargeOn,
+    stubCents: row.stub?.amountCents ?? 0,
+    days: row.stub?.days ?? 0,
+    periodDays: row.stub?.periodDays ?? 0,
+    noop: row.action === "skip",
+    oldNextChargeOn: row.oldNextChargeOn,
+    newNextChargeOn: row.newNextChargeOn,
+    hasCharges: row.hasCharges,
+    // La regla del núcleo deja SIEMPRE el débito permitido (MPS-D24); si Plataforma lo había bloqueado, re-anclar lo
+    // vuelve a permitir. Se muestra en el preview para que no sea una sorpresa.
+    reenablesAutoDebit: row.action === "update" && !row.oldAutoDebitAllowed,
+  };
+}
+
+/** «Re-anclar al 4» (MPS-D7), solo lectura: lo que haría `applyReanchor` con este consultorio. */
+export async function previewReanchor(raw: unknown): Promise<PlatformSubscriptionActionResult<PlatformReanchorPreview>> {
+  await requirePlatformAdmin("billing.read");
+  const parsed = TenantOnly.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: "Datos inválidos", reason: "invalid_input" };
+  const rows = await prismaService.$transaction((tx) => planReanchorInTx(tx, { now: new Date(), tenantIds: [parsed.data.tenantId] }));
+  return rows.length === 1 ? { ok: true, data: reanchorPreviewOf(rows[0]) } : subFail("no_subscription");
+}
+
+/**
+ * Aplica el re-anclaje de un consultorio (el mismo núcleo que `scripts/saas-reanchor.ts`, con locks Tenant →
+ * Subscription y relectura adentro). Idempotente: ya anclado → `updated: false` sin audit. No toca cargos, pagos ni
+ * ajustes: el tramo corto lo cobra el primer cargo como proporcional (stub). El sync del débito va después del commit
+ * (la fecha del próximo débito cambia).
+ */
+export async function applyReanchor(raw: unknown): Promise<PlatformSubscriptionActionResult<PlatformReanchorResult>> {
+  const actor = await requirePlatformAdmin("billing.write");
+  const parsed = TenantOnly.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: "Datos inválidos", reason: "invalid_input" };
+  const tenantId = parsed.data.tenantId;
+  const r = await prismaService.$transaction(async (tx) => {
+    const res = await applyReanchorInTx(tx, { now: new Date(), tenantIds: [tenantId] });
+    const row = res.rows[0];
+    if (!row) return null;
+    if (res.updated > 0) {
+      await auditPlatformInTx(tx, {
+        actor: refOf(actor),
+        affectedTenantId: tenantId,
+        action: "platform.billing.reanchor",
+        entity: "SaasSubscription",
+        entityId: tenantId,
+        payload: {
+          fromAnchorDay: row.oldAnchorDay,
+          toAnchorDay: row.newAnchorDay,
+          oldNextChargeOn: row.oldNextChargeOn,
+          newNextChargeOn: row.newNextChargeOn,
+          billableFrom: row.billableFrom,
+          stubCents: row.stub?.amountCents ?? 0,
+          autoDebitAllowedBefore: row.oldAutoDebitAllowed,
+        },
+      });
+    }
+    return { row, updated: res.updated > 0 };
+  });
+  if (!r) return subFail("no_subscription");
+  revalidateBilling(tenantId);
+  if (r.updated) await syncSaasMpAfterCommit(tenantId);
+  return { ok: true, data: { preview: reanchorPreviewOf(r.row), updated: r.updated } };
+}
+
+/**
+ * «Deshacer baja» desde Plataforma (`undoCancelInTx`): solo antes del día en que rige (ese día la aplica el cron;
+ * después se reactiva). Sin la regla «propia» del consultorio: Plataforma deshace cualquier baja programada. Después
+ * del commit, el sync reanuda el débito (con baja programada estaba en pausa).
+ */
+export async function undoCancelFor(raw: unknown): Promise<PlatformSubscriptionActionResult<{ undone: boolean }>> {
+  const actor = await requirePlatformAdmin("billing.write");
+  const parsed = TenantOnly.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: "Datos inválidos", reason: "invalid_input" };
+  const tenantId = parsed.data.tenantId;
+  const r = await prismaService.$transaction(async (tx) => {
+    const before = await tx.saasSubscription.findUnique({ where: { tenantId }, select: { cancelEffectiveOn: true } });
+    const res = await undoCancelInTx(tx, { tenantId, actorUserId: actor.userId, now: new Date() });
+    if (res.ok) {
+      await auditPlatformInTx(tx, {
+        actor: refOf(actor),
+        affectedTenantId: tenantId,
+        action: "platform.billing.cancel_undone",
+        entity: "SaasSubscription",
+        entityId: tenantId,
+        payload: { cancelEffectiveOn: before?.cancelEffectiveOn ? keyFromDbDate(before.cancelEffectiveOn) : null },
+      });
+    }
+    return res;
+  });
+  if (!r.ok) return subFail(r.reason === "stale" ? "stale" : r.reason === "not_cancel_pending" ? "not_cancel_pending" : "not_found");
+  revalidateBilling(tenantId);
+  await syncSaasMpAfterCommit(tenantId);
+  return { ok: true, data: { undone: true } };
+}
+
+/**
+ * «Anular bajada» desde Plataforma: limpia la bajada de plan programada (`pendingPlan*`); el consultorio sigue con su
+ * plan y el cargo del próximo 4 sale con ese. El núcleo de programación (MPS-2c) no publica un `*InTx` para esto
+ * (solo la limpia como efecto de la baja o al aplicarla): se escribe acá con el mismo orden de locks (Tenant →
+ * Subscription) y los mismos campos que `CLEAR_PENDING_PLAN` (el CHECK `SaasSubscription_pendingPlan_check` exige los
+ * dos o ninguno). Después del commit, el sync lleva el débito a la base del plan que sigue.
+ */
+export async function cancelScheduledPlanFor(raw: unknown): Promise<PlatformSubscriptionActionResult<{ cancelled: boolean }>> {
+  const actor = await requirePlatformAdmin("tenant.plan.change");
+  const parsed = TenantOnly.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: "Datos inválidos", reason: "invalid_input" };
+  const tenantId = parsed.data.tenantId;
+  const r = await prismaService.$transaction(async (tx) => {
+    if (!(await lockTenant(tx, tenantId))) return "not_found" as const;
+    await lockSubscription(tx, tenantId);
+    const sub = await tx.saasSubscription.findUnique({
+      where: { tenantId },
+      select: { pendingPlan: true, pendingPlanEffectiveOn: true, pendingPlanDisableIds: true, pendingPlanRequestedById: true },
+    });
+    if (!sub) return "no_subscription" as const;
+    if (!sub.pendingPlan) return "no_pending_plan" as const;
+    await tx.saasSubscription.update({
+      where: { tenantId },
+      data: {
+        pendingPlan: null,
+        pendingPlanEffectiveOn: null,
+        pendingPlanDisableIds: [],
+        pendingPlanRequestedById: null,
+        pendingPlanRequestedAt: null,
+      },
+    });
+    await auditPlatformInTx(tx, {
+      actor: refOf(actor),
+      affectedTenantId: tenantId,
+      action: "platform.billing.plan_change_cancelled",
+      entity: "SaasSubscription",
+      entityId: tenantId,
+      payload: {
+        pendingPlan: sub.pendingPlan,
+        effectiveOn: sub.pendingPlanEffectiveOn ? keyFromDbDate(sub.pendingPlanEffectiveOn) : null,
+        disableCount: sub.pendingPlanDisableIds.length,
+        requestedById: sub.pendingPlanRequestedById,
+      },
+    });
+    return "ok" as const;
+  });
+  if (r !== "ok") return subFail(r);
+  revalidateBilling(tenantId);
+  await syncSaasMpAfterCommit(tenantId);
+  return { ok: true, data: { cancelled: true } };
+}
