@@ -47,6 +47,15 @@ import { sendPatientPortalInvite } from "@/lib/patients";
 import type { DocumentDeliveryOutcome } from "@/lib/patient-documents-types";
 import { WA_COPY } from "@/lib/whatsapp/copy";
 
+/**
+ * WA-E (T6, X8): el import diferido de la action va a NIVEL DE MÓDULO y no adentro del `useEffect`. Next 14 borra los
+ * `useEffect` del build de SSR (optimizeServerReact), y el registro de Server Actions recorre ESE grafo: con el
+ * `import()` adentro del efecto, `lib/whatsapp-patient-ui` no quedaba en el manifest y el server contestaba «Failed to
+ * find Server Action» (la fila de WhatsApp decía «No pudimos leer el estado…» y compartir nunca ofrecía WhatsApp).
+ * Lo fija `tests/unit/server-action-dynamic-imports.test.ts`.
+ */
+const loadWhatsAppPatientUi = () => import("@/lib/whatsapp-patient-ui");
+
 /** WA-U3: textos del envío por WhatsApp de la ficha (voseo). */
 export const SHARE_WA_COPY = {
   send: "Enviar también por WhatsApp",
@@ -117,7 +126,7 @@ export function ShareFichaDialog({
         if (alive && r.ok) setPortalInfo({ portal: r.data.portal, maskedEmail: r.data.maskedEmail });
       })
       .catch(() => {});
-    import("@/lib/whatsapp-patient-ui")
+    loadWhatsAppPatientUi()
       .then((m) => m.getPatientWhatsAppShareInfo({ patientId: patient.id }))
       .then((r) => {
         if (alive && r.ok) setWaAvailable(r.data.available);

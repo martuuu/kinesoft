@@ -26,6 +26,15 @@ import type { PatientWaConsentState } from "@/lib/whatsapp-patient-ui-types";
 import type { PatientWithRelations, InsurerOption, PractitionerOption } from "./types";
 
 /**
+ * WA-E (T6, X8): el import diferido de la action va a NIVEL DE MÓDULO y no adentro del `useEffect`. Next 14 borra los
+ * `useEffect` del build de SSR (optimizeServerReact), y el registro de Server Actions recorre ESE grafo: con el
+ * `import()` adentro del efecto, `lib/whatsapp-patient-ui` no quedaba en el manifest y el server contestaba «Failed to
+ * find Server Action» (la fila de WhatsApp decía «No pudimos leer el estado…» y compartir nunca ofrecía WhatsApp).
+ * Lo fija `tests/unit/server-action-dynamic-imports.test.ts`.
+ */
+const loadWhatsAppPatientUi = () => import("@/lib/whatsapp-patient-ui");
+
+/**
  * T3d-1u: lo que «Editar datos» necesita de la ficha `admin` (se le pasa `PatientAdminCore` tal cual). T3e-2p (H-1u-1):
  * la proyección trae `insurerId`, `payerPlanId`, `copagoCents` y `updatedAt`, así que el formulario arranca igual que
  * el del perfil completo: la OS del catálogo por id (antes por nombre, que un renombre perdía), el copago propio
@@ -209,7 +218,7 @@ export function EditPatientModal(props: EditPatientModalProps) {
   useEffect(() => {
     if (!whatsappActive) return;
     let alive = true;
-    import("@/lib/whatsapp-patient-ui")
+    loadWhatsAppPatientUi()
       .then((m) => m.getPatientWhatsAppConsentState({ patientId: patient.id }))
       .then((r) => {
         if (!alive) return;
