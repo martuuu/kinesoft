@@ -17,7 +17,7 @@ import { connectFakeMpViaUi, setParticularCopago, setPaymentPolicy, simulateOnFa
  * Datos: la cuenta del profesional se conecta por el OAuth del simulador (support/mp.ts) y la política se escribe en la
  * base local; al terminar vuelve a OFF para que `turnero.spec.ts` (reserva sin cobro, corre después) no cambie. El
  * copago de «Particular» se pone en $ 50 (= el precio de «Consulta») mientras corre: con el $ 0 de fábrica el server
- * resuelve copago $ 0 y no cobra (lo cubre el último test: el wizard avisa con el interstitial).
+ * resuelve copago $ 0 y no cobra (lo cubre el último test: desde PEND-a el wizard reserva sin pago online y lo dice).
  *
  * `pub:submit` limita a 5 reservas cada 5' por IP (lib/public-booking.ts): este spec hace TRES y `turnero.spec.ts` una.
  * Por eso el 390 va por `test.use` y no por el proyecto `mobile-390` (que repetiría las reservas).
@@ -234,27 +234,22 @@ test("[TP-E] OPTIONAL con seña: «Pagar ahora» → «Seña pagada» → el res
 });
 
 /**
- * Hallazgo de TP-E (22-oct): con el «Particular» de fábrica ($ 0, `lib/tenant-bootstrap.ts:228`) el wizard cotiza con el
- * PRECIO del servicio (`wizardOnlinePaymentFor`, lib/public-wizard-state.ts:294) y promete «Para confirmar el turno se
- * paga con Mercado Pago: $ 50», pero el submit resuelve el copago con la precedencia de la agenda
- * (`resolvePublicCopagoCents` → lib/copago.ts:30 → Particular = $ 0), `decideOnlineCharge` no cobra
- * (lib/online-charge-logic.ts:97) y el wizard va directo a `/ok` (el interstitial de monto distinto,
- * components/booking/public-booking-wizard.tsx:329, solo salta cuando SÍ hay cobro): un turno REQUIRED queda «¡Turno
- * reservado!» sin pago. La cotización la decide Martin (cotizar con el copago de Particular, o tratar Particular $ 0 como
- * «sin precio» → precio del servicio). Mientras tanto, TP-ZF2 (A1 de T5-Z): si el wizard cotizó y el server reservó sin
- * cobrar, el wizard ya no va callado a `/ok`: muestra el interstitial «Tu turno quedó reservado» (`amountDiffers`).
+ * Hallazgo de TP-E (22-oct), resuelto en PEND-a (T6+T7, enmienda C-TP8): con el «Particular» de fábrica ($ 0,
+ * `lib/tenant-bootstrap.ts:228`) el wizard cotizaba con el PRECIO del servicio y prometía «Para confirmar el turno se paga
+ * con Mercado Pago: $ 50», pero el server resolvía el copago con la precedencia de la agenda (Particular = $ 0) y no
+ * cobraba. Ahora el wizard cotiza `particularCopagoCents ?? precio` (`wizardOnlinePaymentFor`, lib/public-wizard-state.ts)
+ * y, si a un particular no se le cobraría nada, NO ofrece pagar y lo dice (`reservesWithoutOnlinePayment` +
+ * `checkoutCopyFor`): «Confirmar turno» y directo al resultado, sin pasar por el checkout. TV-E (X8) actualizó este test
+ * al contrato nuevo: antes esperaba la promesa de pago y el interstitial de TP-ZF2.
  */
-test("[TP-E] REQUIRED con «Particular» en $ 0: si el server no cobra lo cotizado, el wizard avisa antes del resultado", async ({ page }) => {
+test("[TP-E] REQUIRED con «Particular» en $ 0: el wizard no promete cobro y reserva sin pago online", async ({ page }) => {
   await setParticularCopago(0);
   await setPaymentPolicy({ mode: "REQUIRED", chargeKind: "COPAGO" });
   await fillWizard(page, { firstName: "Ines", lastName: "Particular Cero E2E" });
-  await expect(page.getByText(/Para confirmar el turno se paga con Mercado Pago/)).toBeVisible();
-  await page.getByRole("button", { name: "Pagar y reservar" }).click();
-  const heading = page.getByRole("heading", { level: 2, name: "Tu turno quedó reservado" });
-  await expect(heading).toBeVisible();
-  await expect(heading).toBeFocused();
-  await expect(page.getByText("No hace falta pagar online: lo arreglás en el consultorio.")).toBeVisible();
-  await expect(page).not.toHaveURL(/\/api\/mp\/fake\/checkout\//);
-  await page.getByRole("button", { name: /Ver mi turno/ }).click();
+  await expect(page.getByText("Este turno se reserva sin pago online: lo pagás en el consultorio.")).toBeVisible();
+  await expect(page.getByText(/Para confirmar el turno se paga con Mercado Pago/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Pagar y reservar" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Confirmar turno" }).click();
   await page.waitForURL(/\/booking\/[^/]+\/ok/);
+  await expect(page).not.toHaveURL(/\/api\/mp\/fake\/checkout\//);
 });
