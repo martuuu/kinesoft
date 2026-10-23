@@ -18,6 +18,14 @@ vi.mock("@/lib/platform-billing", () => ({
   getPlatformReceiptUrl: vi.fn(),
   platformPreviewPlanChange: vi.fn(),
   platformApplyPlanChange: vi.fn(),
+  // MPS-4b: el ledger monta la tarjeta de suscripción y los ajustes, que importan estas actions.
+  setAutoDebitAllowed: vi.fn(),
+  addAdjustment: vi.fn(),
+  getMpSubscriptionStatus: vi.fn(),
+  previewReanchor: vi.fn(),
+  applyReanchor: vi.fn(),
+  undoCancelFor: vi.fn(),
+  cancelScheduledPlanFor: vi.fn(),
 }));
 vi.mock("@/lib/platform-tenants", () => ({ updatePlatformTenant: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }), usePathname: () => "/plataforma/facturacion" }));

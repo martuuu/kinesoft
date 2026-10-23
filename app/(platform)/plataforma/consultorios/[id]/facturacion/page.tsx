@@ -15,10 +15,12 @@ export const metadata = { title: "Facturación · Consultorio · Plataforma · K
 export default async function ConsultorioFacturacionPage({ params }: { params: { id: string } }) {
   const ledger = await getTenantLedger(params.id);
   if (!ledger) notFound();
+  // MPS-4b: el modo decide qué partes de Mercado Pago, ajustes y re-anclaje se muestran (con `off`, nada a medio hacer).
+  const mode = saasBillingMode();
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <BillingModeNotice mode={saasBillingMode()} />
-      <TenantLedgerView ledger={ledger} />
+      <BillingModeNotice mode={mode} />
+      <TenantLedgerView ledger={ledger} mode={mode} />
     </div>
   );
 }

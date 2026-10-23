@@ -7,7 +7,9 @@
  * formatean con `formatDayKeyAR` (mediodía AR: ningún host los corre un día); los instantes (ISO) con `formatDateAR`.
  */
 import type {
+  SaasAdjustmentKind,
   SaasChargeStatus,
+  SaasCollectionMethod,
   SaasPaymentMethod,
   SaasPaymentStatus,
   SaasPlan,
@@ -18,7 +20,13 @@ import { toARDateKey } from "@/lib/datetime-ar";
 import { mustDisableFor, seatKindOf, type SeatTally } from "@/lib/plan-catalog";
 import { RECEIPT_MAX_BYTES, RECEIPT_MIME_TYPES, isDateKey } from "@/lib/saas-billing-logic";
 import { SAAS_PLANS } from "@/lib/saas-plans-logic";
-import type { PlatformAccountRow, PlatformAccountsFilter } from "@/lib/platform-billing-types";
+import type { PlatformAccountRow, PlatformAccountsFilter, PlatformReanchorPreview } from "@/lib/platform-billing-types";
+import type {
+  AddAdjustmentInput,
+  BillingAdjustmentRow,
+  BillingAutoDebitStatus,
+  PlatformMpSubscriptionStatus,
+} from "@/lib/saas-billing-types";
 import type { PlanChangePreview } from "@/lib/saas-plan-change-types";
 
 // ── Lista de cuentas ────────────────────────────────────────────────────────────────────────────────────────────
@@ -336,4 +344,188 @@ export function shortfallText(s: SeatTally): string | null {
 
 export function limitText(n: number | null): string {
   return n == null ? "sin límite" : String(n);
+}
+
+// ── MPS-4b (§26.6 UI de Plataforma): suscripción con Mercado Pago, ajustes y re-anclaje ─────────────────────────────
+
+/**
+ * Qué partes de la UI de MPS se muestran según `SAAS_BILLING_MODE` (regla de Martin: con el cobro apagado no aparece
+ * nada a medio hacer).
+ *  - `off`: nada nuevo. El cron no genera cargos, así que un ajuste quedaría pendiente para siempre y una baja o una
+ *    bajada programada no la aplica nadie: mostrar los botones sería prometer algo que no pasa.
+ *  - `manual`: ajustes, re-anclar, deshacer baja y anular bajada (los aplica el cron), pero nada de Mercado Pago (el
+ *    puerto está apagado: «Consultar en Mercado Pago» no tendría a quién preguntar).
+ *  - `mp`: todo.
+ */
+export type MpsUi = { subscription: boolean; adjustments: boolean; mercadoPago: boolean };
+export function mpsUiFor(mode: "off" | "manual" | "mp"): MpsUi {
+  if (mode === "off") return { subscription: false, adjustments: false, mercadoPago: false };
+  return { subscription: true, adjustments: true, mercadoPago: mode === "mp" };
+}
+
+/**
+ * «4/12» (día/mes sin ceros) desde una clave civil AR «YYYY-MM-DD», el formato del copy de §26.6 («próximo 4/12 por
+ * $X»). Corta el string: una clave civil no tiene zona, así que no pasa por `Date` (ningún host la corre un día).
+ */
+export function dayMonthAR(key: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+  if (!m) return key;
+  return `${Number(m[3])}/${Number(m[2])}`;
+}
+
+/** Lo mismo para un instante ISO: primero el día civil en Argentina (`toARDateKey`), después «d/m». */
+export function instantDayMonthAR(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : dayMonthAR(toARDateKey(d));
+}
+
+/** Mismos rótulos que «Cómo pagás» del consultorio (§26.6 UI), para que Plataforma y el titular hablen igual. */
+export const COLLECTION_METHOD_LABEL: Record<SaasCollectionMethod, string> = {
+  AUTO_DEBIT: "Débito automático con Mercado Pago",
+  MP_CHECKOUT: "Mercado Pago cada mes",
+  TRANSFER: "Transferencia",
+};
+
+export function collectionMethodText(m: SaasCollectionMethod | null | undefined): string {
+  return m ? COLLECTION_METHOD_LABEL[m] : "Sin elegir";
+}
+
+export const ADJUSTMENT_KIND_LABEL: Record<SaasAdjustmentKind, string> = {
+  PRORATION: "Proporcional",
+  CREDIT: "Saldo a favor",
+  DEBIT: "Cargo extra",
+  CARRYOVER: "Saldo del cargo anterior",
+};
+
+/** Monto con signo: «+ $ 1.500» (suma al cargo) / «− $ 1.500» (resta). El ajuste ya viene con signo del núcleo. */
+export function signedARS(cents: number): string {
+  if (cents < 0) return `− ${formatARS(-cents)}`;
+  return `+ ${formatARS(cents)}`;
+}
+
+/** «Proporcional · 12 de 30 días», «Saldo a favor»… (los días solo existen en PRORATION). */
+export function adjustmentTitle(a: Pick<BillingAdjustmentRow, "kind" | "days" | "periodDays" | "planFrom" | "planTo">, planLabel: (p: SaasPlan) => string): string {
+  const base = ADJUSTMENT_KIND_LABEL[a.kind];
+  if (a.kind !== "PRORATION") return base;
+  const plans = a.planFrom && a.planTo ? ` ${planLabel(a.planFrom)} → ${planLabel(a.planTo)}` : "";
+  const days = a.days != null && a.periodDays != null ? ` · ${a.days} de ${a.periodDays} días` : "";
+  return `${base}${plans}${days}`;
+}
+
+export const AUTO_DEBIT_STATUS_LABEL: Record<BillingAutoDebitStatus, string> = {
+  none: "Sin débito automático",
+  pending_authorization: "Falta que el titular autorice el débito",
+  active: "Débito activo",
+  paused: "Débito en pausa este mes",
+  failed: "No pudimos debitar",
+  cancelled: "Débito cancelado",
+  blocked: "Débito bloqueado desde Plataforma",
+};
+
+/**
+ * Estado del preapproval tal como lo devuelve Mercado Pago (`authorized`, `pending`, `paused`, `cancelled`). Un valor
+ * desconocido se muestra crudo: es Plataforma y sirve más el dato real que un «Otro».
+ */
+export function mpPreapprovalStatusText(s: string | null): string {
+  if (s == null) return "Sin dato";
+  const map: Record<string, string> = { authorized: "Autorizado", pending: "Pendiente de autorización", paused: "Pausado", cancelled: "Cancelado" };
+  return map[s] ?? s;
+}
+
+/**
+ * Por qué hay desvío (`drift` de `getMpSubscriptionStatus`): MP dice otro estado u otro monto que lo guardado. Lo
+ * corrige la conciliación diaria (etapa 4b del cron); acá solo se explica qué difiere. null = sin desvío.
+ */
+export function mpDriftText(s: Pick<PlatformMpSubscriptionStatus, "drift" | "storedStatus" | "liveStatus" | "amountCents" | "liveAmountCents">): string | null {
+  if (!s.drift) return null;
+  const parts: string[] = [];
+  if (s.liveStatus !== s.storedStatus) {
+    parts.push(`Mercado Pago dice «${mpPreapprovalStatusText(s.liveStatus)}» y acá figura «${mpPreapprovalStatusText(s.storedStatus)}»`);
+  }
+  if (s.liveAmountCents != null && s.liveAmountCents !== s.amountCents) {
+    parts.push(`el monto en Mercado Pago es ${formatARS(s.liveAmountCents)} y acá figura ${s.amountCents == null ? "sin monto" : formatARS(s.amountCents)}`);
+  }
+  const what = parts.length ? parts.join("; ") : "Mercado Pago no coincide con lo guardado";
+  return `${what.charAt(0).toUpperCase()}${what.slice(1)}. La conciliación diaria lo corrige sola; si sigue mañana, revisalo.`;
+}
+
+// ── Ajustes manuales (CREDIT / DEBIT) ───────────────────────────────────────────────────────────────────────────
+
+export const ADJUSTMENT_DESCRIPTION_MAX = 300;
+export type ManualAdjustmentKind = "CREDIT" | "DEBIT";
+export type AdjustmentFormState = { amountCents: number | null; description: string };
+
+/**
+ * UUID v4 por apertura del diálogo (el server lo valida con `z.uuid()`). Copia del de `new-tenant-drawer.tsx` y no un
+ * import: ese módulo arrastra la action de alta de consultorios al chunk del ledger. `randomUUID` exige contexto
+ * seguro (localhost/https); el fallback arma el v4 con `getRandomValues`.
+ */
+export function newAdjustmentKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+export function emptyAdjustment(): AdjustmentFormState {
+  return { amountCents: null, description: "" };
+}
+
+export function isAdjustmentDirty(s: AdjustmentFormState): boolean {
+  return s.amountCents != null || s.description.trim() !== "";
+}
+
+export function validateAdjustment(s: AdjustmentFormState): Record<string, string> {
+  const e: Record<string, string> = {};
+  if (s.amountCents == null || s.amountCents <= 0) e.amount = "Ingresá un monto mayor a cero.";
+  if (!s.description.trim()) e.description = "Contá el motivo: lo ve el consultorio en su cargo.";
+  else if (s.description.trim().length > ADJUSTMENT_DESCRIPTION_MAX) e.description = `Hasta ${ADJUSTMENT_DESCRIPTION_MAX} caracteres.`;
+  return e;
+}
+
+/**
+ * Payload de `addAdjustment`: el monto va POSITIVO (el signo lo pone el tipo en el server, CHECK de M16) y la clave es
+ * la del diálogo abierto (un reintento o un doble clic devuelven el mismo ajuste). Sin `effectiveOn`: el server lo
+ * pone en el próximo cobro guardado.
+ */
+export function buildAdjustmentPayload(tenantId: string, kind: ManualAdjustmentKind, s: AdjustmentFormState, idempotencyKey: string): AddAdjustmentInput {
+  return { tenantId, kind, amountCents: s.amountCents ?? 0, description: s.description.trim(), idempotencyKey };
+}
+
+export const ADJUSTMENT_COPY: Record<ManualAdjustmentKind, { button: string; title: string; intro: string; ok: string; confirm: (cents: number) => string }> = {
+  CREDIT: {
+    button: "Sumar saldo a favor",
+    title: "Sumar saldo a favor",
+    intro: "Se descuenta del próximo cargo. Si es más que el cargo, lo que sobra pasa al siguiente: el cargo nunca queda en negativo.",
+    ok: "Saldo a favor sumado",
+    confirm: (c) => `Se descuentan ${formatARS(c)} del próximo cargo del consultorio.`,
+  },
+  DEBIT: {
+    button: "Cargo extra",
+    title: "Cargo extra",
+    intro: "Se suma al próximo cargo del consultorio, con la descripción que escribas.",
+    ok: "Cargo extra sumado",
+    confirm: (c) => `Se suman ${formatARS(c)} al próximo cargo del consultorio.`,
+  },
+};
+
+// ── Re-anclar al 4 ──────────────────────────────────────────────────────────────────────────────────────────────
+
+const dayKeyText = (k: string | null) => (k ? dayMonthAR(k) : "—");
+
+/** Filas «antes → después» del preview de re-anclaje (tabla del diálogo). */
+export function reanchorRows(p: PlatformReanchorPreview): Array<{ label: string; before: string; after: string }> {
+  return [
+    { label: "Día de cobro", before: `El ${p.fromAnchorDay}`, after: `El ${p.toAnchorDay}` },
+    { label: "Próximo cobro", before: dayKeyText(p.oldNextChargeOn), after: dayKeyText(p.newNextChargeOn) },
+  ];
+}
+
+/** Texto del cargo proporcional que arma el primer cargo después de re-anclar (stub). */
+export function reanchorStubText(p: PlatformReanchorPreview): string {
+  if (p.stubCents <= 0) return `Se factura desde el ${dayKeyText(p.stubFrom)}. No hay proporcional: el período arranca justo el ${p.toAnchorDay} o el plan no tiene precio.`;
+  return `Se factura desde el ${dayKeyText(p.stubFrom)}. El primer cargo suma un proporcional de ${formatARS(p.stubCents)} (${p.days} de ${p.periodDays} días, hasta el ${dayKeyText(p.stubTo)}).`;
 }
