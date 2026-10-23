@@ -34,11 +34,12 @@ describe("[BO4] next.config.mjs · CSP de Plataforma", () => {
     expect(r[0].headers.find((h) => h.key === "Content-Security-Policy-Report-Only")).toBeDefined();
   });
 
-  it("enforced solo en /plataforma/:path* y /plataforma-mfa/:path*", async () => {
+  // TV-1c (plan §26.4, D9): las pantallas de sala `/tv` son la segunda superficie enforced; el resto sigue Report-Only.
+  it("enforced solo en /plataforma/:path*, /plataforma-mfa/:path* y /tv/:path*", async () => {
     vi.stubEnv("SENTRY_DSN", "");
     const r = await rules();
     const enforced = r.filter((x) => x.headers.some((h) => h.key === "Content-Security-Policy"));
-    expect(enforced.map((x) => x.source).sort()).toEqual(["/plataforma-mfa/:path*", "/plataforma/:path*"]);
+    expect(enforced.map((x) => x.source).sort()).toEqual(["/plataforma-mfa/:path*", "/plataforma/:path*", "/tv/:path*"]);
   });
 
   it("producción: sin unsafe-eval, sin comodines https: en img/connect, Supabase y su socket permitidos", async () => {

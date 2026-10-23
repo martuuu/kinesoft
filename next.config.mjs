@@ -40,7 +40,12 @@ const allowedOrigins = Array.from(
 // reported (browser console), never enforced — safe to ship without breaking
 // the app while we observe real traffic before flipping to enforcing mode.
 const supabaseOrigin = urlOrigin(supabaseUrl); // e.g. https://xxxx.supabase.co
-const MP = "https://*.mercadopago.com https://*.mercadolibre.com https://sdk.mercadopago.com";
+// TV-1c (AUDIT `t5-csp-com-ar`): `*.mercadopago.com` NO matchea `auth.mercadopago.com.ar` ni
+// `www.mercadopago.com.ar` (el comodín de CSP cubre subdominios, no un TLD distinto). El OAuth de MP Connect y el
+// checkout argentino viven en `.com.ar`: hoy van por navegación de nivel superior (no los rige la CSP), pero el día
+// que la global pase a enforcing un redirect de submit o un frame quedaría bloqueado. Se suma junto a cada `.com`.
+const MP_FRAME = "https://*.mercadopago.com https://*.mercadopago.com.ar https://*.mercadolibre.com";
+const MP = `${MP_FRAME} https://sdk.mercadopago.com`;
 const SUPA = [supabaseOrigin, "https://*.supabase.co"].filter(Boolean).join(" ");
 
 /**
@@ -105,7 +110,7 @@ const cspReportOnly = [
   // Sigue Report-Only; `wss:` acotado al host de Supabase (ver `realtimeWsOrigin`).
   `connect-src 'self' https: ${SUPA_WS} data: blob: ${SUPA} ${MP}`,
   // Videos de ejercicios embebidos (lib/exercise-media.ts → youtube-nocookie) + checkout de MP.
-  "frame-src 'self' https://www.youtube-nocookie.com https://*.mercadopago.com https://*.mercadolibre.com",
+  `frame-src 'self' https://www.youtube-nocookie.com ${MP_FRAME}`,
   // VX F-e: sin fonts.gstatic.com, mismo motivo que style-src (next/font sirve los woff2 desde 'self').
   "font-src 'self' data:",
   // MB-0b (C-MB5): el service worker (/sw.js) y el manifest son same-origin. `default-src 'self'` ya los cubre por
@@ -118,7 +123,7 @@ const cspReportOnly = [
   // accounts.google.com. Sin estos hosts, el login con Google del paciente
   // quedaría bloqueado el día que la CSP pase a enforcing. PL-2e: lo mismo con Facebook
   // (/api/auth/oauth/facebook → Supabase → www/m.facebook.com).
-  `form-action 'self' ${SUPA} https://accounts.google.com https://www.facebook.com https://m.facebook.com https://*.mercadopago.com https://*.mercadolibre.com`,
+  `form-action 'self' ${SUPA} https://accounts.google.com https://www.facebook.com https://m.facebook.com ${MP_FRAME}`,
   "object-src 'none'",
   "frame-ancestors 'none'",
   // report-uri (legacy, Firefox/Safari) + report-to (Chromium, vía Reporting-Endpoints).
@@ -174,11 +179,55 @@ const cspPlatformEnforced = [
   .map((d) => d.replace(/\s+/g, " ").trim())
   .join("; ");
 
+// --- Content-Security-Policy ENFORCED en las pantallas de sala (TV-1c, plan §26.4, D9) ------------------------
+// `/tv` corre SIN Actor en una tele del consultorio, con una cookie de dispositivo de 180 días, y muestra nombres de
+// pacientes: un script inyectado ahí lee el feed sin que nadie esté mirando la pantalla. Y es la superficie más
+// angosta de todas: no hay Mercado Pago, ni OAuth, ni formularios a terceros, ni archivos del paciente. Lo único que
+// sale del origen es el socket de Supabase (llamados en vivo) y el reproductor de YouTube nocookie (el video de la
+// sala). Por eso se cierra más que Plataforma:
+//   - img-src / media-src sin Supabase ni avatares OAuth: la pantalla no muestra fotos ni Storage; el video es un
+//     iframe de YouTube (lo rige frame-src), no un <video>.
+//   - connect-src: same-origin (server actions del feed y del vínculo) + Supabase REST (token de Realtime) y su wss.
+//   - script-src: 'unsafe-inline' por el bootstrap de RSC (sin nonces, igual que Plataforma); 'unsafe-eval' solo en
+//     dev por el overlay de Next.
+// El Referrer-Policy global (strict-origin-when-cross-origin) NO se pisa: con `same-origin` el embed de YouTube
+// no recibe Referer y responde «Error 153» (plan §26.4). `:path*` también matchea `/tv` pelado.
+export const tvCspPaths = ["/tv/:path*"];
+const cspTvEnforced = [
+  "default-src 'self'",
+  `script-src 'self' 'unsafe-inline'${isDevServer ? " 'unsafe-eval'" : ""}`,
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "media-src 'self'",
+  // Mismo motivo que en Plataforma para el ws://localhost:* de dev (HMR).
+  `connect-src 'self' ${SUPA} ${SUPA_WS}${isDevServer ? " ws://localhost:*" : ""}`,
+  "frame-src https://www.youtube-nocookie.com",
+  "font-src 'self' data:",
+  "manifest-src 'self'",
+  "worker-src 'self'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  cspReportUri ? `report-uri ${cspReportUri}` : "",
+  cspReportUri ? "report-to csp-endpoint" : "",
+]
+  .filter(Boolean)
+  .map((d) => d.replace(/\s+/g, " ").trim())
+  .join("; ");
+
+// Permissions-Policy: la global apaga cámara, micrófono y geolocalización en toda la app. `/tv` necesita además
+// autoplay (el video de la sala arranca solo, también dentro del iframe de YouTube), fullscreen (la tele en modo
+// kiosco) y screen-wake-lock (que la pantalla no se apague). En Next, cuando dos entradas de `headers()` matchean y
+// ponen la MISMA clave, gana la última: por eso la de `/tv` repite las tres globales en vez de sumar solo las nuevas.
+const PERMISSIONS_POLICY_GLOBAL = "camera=(), microphone=(), geolocation=()";
+const PERMISSIONS_POLICY_TV = `${PERMISSIONS_POLICY_GLOBAL}, autoplay=(self "https://www.youtube-nocookie.com"), fullscreen=(self), screen-wake-lock=(self)`;
+
 const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+  { key: "Permissions-Policy", value: PERMISSIONS_POLICY_GLOBAL },
   { key: "Content-Security-Policy-Report-Only", value: cspReportOnly },
   ...(cspReportUri ? [{ key: "Reporting-Endpoints", value: `csp-endpoint="${cspReportUri}"` }] : []),
   // HSTS solo en Production: en Preview (*.vercel.app) Vercel ya manda el suyo
@@ -249,6 +298,15 @@ const nextConfig = {
       ...platformCspPaths.map((source) => ({
         source,
         headers: [{ key: "Content-Security-Policy", value: cspPlatformEnforced }],
+      })),
+      // TV-1c: igual que Plataforma, se SUMA a la global (la Report-Only sigue reportando). La Permissions-Policy sí
+      // reemplaza a la global (misma clave, entrada posterior): por eso repite sus directivas.
+      ...tvCspPaths.map((source) => ({
+        source,
+        headers: [
+          { key: "Content-Security-Policy", value: cspTvEnforced },
+          { key: "Permissions-Policy", value: PERMISSIONS_POLICY_TV },
+        ],
       })),
       // MB-0b (C-MB5): el navegador revisa /sw.js en cada navegación; sin caché HTTP un deploy nuevo del SW llega en
       // la próxima carga (riesgo «SW viejo pegado», junto con `updateViaCache: "none"` y `skipWaiting`). Va después

@@ -55,6 +55,8 @@ describe("[VX F-e] next.config.mjs · CSP Report-Only pública", () => {
         "https://www.facebook.com",
         "https://m.facebook.com",
         "https://*.mercadopago.com",
+        // TV-1c (AUDIT t5-csp-com-ar): el OAuth y el checkout argentinos viven en `.com.ar`.
+        "https://*.mercadopago.com.ar",
       ]),
     );
     expect(new Set(fa).size).toBe(fa.length);

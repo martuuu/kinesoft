@@ -64,6 +64,12 @@ describe("robots", () => {
     for (const seg of [...segments, "cobros"]) expect(disallow, seg).toContain(`/${seg}`);
   });
 
+  // [TV-1c] Las pantallas de sala (`/tv`) muestran nombres de pacientes con una cookie de dispositivo: un buscador no
+  // tiene nada que hacer ahí (la página además lleva `noindex`).
+  it("[TV-1c] bloquea /tv", () => {
+    expect(disallow).toContain("/tv");
+  });
+
   it("apunta al sitemap absoluto del dominio de la app", () => {
     expect(r.sitemap).toBe(`${BASE}/sitemap.xml`);
   });

@@ -57,6 +57,9 @@ const ROBOTS_DISALLOW = [
   // además dice `noindex`; el disallow evita que se gaste crawl en tokens que circulan por WhatsApp y mail.
   "/pagar/",
   "/cuenta",
+  // TV-1c (plan §26.4): las pantallas de sala muestran nombres de pacientes detrás de una cookie de dispositivo; la
+  // página además dice `noindex`. Como prefijo cubre `/tv/vincular` y cualquier subruta.
+  "/tv",
 ];
 
 const DIRECTORY_ALLOW = ["/profesionales", "/consultorios/"];

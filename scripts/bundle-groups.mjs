@@ -39,6 +39,10 @@ export const BUNDLE_GROUPS = [
   { id: "portal", budget: 125, blocking: true, match: [/^\/portal/] },
   { id: "onboarding", budget: 160, blocking: true, match: [/^\/onboarding/] },
   { id: "plataforma", budget: 180, blocking: true, match: [/^\/plataforma/] }, // incluye /plataforma-mfa
+  // TV-1c (plan §26.10): pantallas de sala `/tv`. Corren en teles y sticks de gama baja todo el día, sin providers ni
+  // framer (guard de superficies de display en public-surface-imports). `(\/|$)` y no un prefijo pelado: `/tvx` no es
+  // una pantalla (el brief decía /^\/tv/; se acota para que una ruta futura que empiece con «tv» no caiga acá).
+  { id: "display", budget: 125, blocking: true, match: [/^\/tv(\/|$)/] },
   { id: "workspace", budget: 180, blocking: true, match: [/.*/] }, // resto (incluye /cuenta)
 ];
 

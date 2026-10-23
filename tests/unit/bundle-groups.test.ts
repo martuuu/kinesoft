@@ -69,4 +69,15 @@ describe("[VX F-e] scripts/bundle-groups.mjs", () => {
     expect(BUNDLE_GROUPS.at(-1)?.id).toBe("workspace");
     expect(groupFor("/cualquier/cosa")?.id).toBe("workspace");
   });
+
+  // [TV-1c] Las pantallas de sala son su propio grupo (plan §26.10: `/tv` ≤ 125 kB): sin el match caían en
+  // `workspace` (180) y una tele de gama baja cargaba JS de la app entera sin que CI lo notara.
+  it("[TV-1c] /tv y sus subrutas → display, bloqueante a 125 kB; /tvx no", () => {
+    for (const r of ["/tv", "/tv/vincular", "/tv/[id]"]) expectGroup(r, "display");
+    expect(groupFor("/tv")).toMatchObject({ budget: 125, blocking: true });
+    const ids = BUNDLE_GROUPS.map((g) => g.id);
+    expect(ids.indexOf("display")).toBeLessThan(ids.indexOf("workspace"));
+    expectGroup("/agenda", "workspace");
+    expectGroup("/tvx", "workspace");
+  });
 });

@@ -12,7 +12,7 @@
  * vive en `tests/helpers/import-graph.ts` desde FC-1e.
  */
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 // [FC-1e] El BFS vive en el helper (lo comparte el guard del portal «Documentos»); este test afirma lo mismo que antes.
 import {
@@ -74,6 +74,9 @@ function publicEntries(): string[] {
     "app/verificar-acceso/",
     "app/elegir-consultorio/",
     "app/(directory)/",
+    // TV-1c (plan §26.4): pantallas de sala `/tv`. Corren sin Actor en teles de gama baja (grupo de bundle `display`,
+    // 125 kB): ni framer, ni toast, ni confirm, ni drawer, ni modal.
+    "app/(display)/",
   ];
   const SINGLE = ["app/page.tsx", "app/not-found.tsx", "app/global-error.tsx"];
   return all.filter(
@@ -111,6 +114,16 @@ describe("[VX F-d] superficies públicas sin framer-motion ni providers de UI (C
     expect(entries.some((f) => f.startsWith("app/(portal)/"))).toBe(true);
     expect(entries.some((f) => f.startsWith("app/invite/"))).toBe(true);
     expect(entries.some((f) => f.startsWith("app/verificar-acceso/"))).toBe(true);
+  });
+
+  // [TV-1c] El grupo `app/(display)/` lo crea otra sesión de la ola (TV-2*): mientras no exista, el guard no tiene qué
+  // recorrer; cuando exista, sus páginas tienen que estar entre las entradas (si no, el guard pasaría en vacío).
+  it("[TV-1c] las páginas de app/(display)/ (si existen) son entradas del guard", () => {
+    const dir = join(ROOT, "app", "(display)");
+    if (!existsSync(dir)) return;
+    const pages = walk(dir).map(rel).filter((f) => /\/(page|layout)\.tsx?$/.test(f));
+    const entries = publicEntries();
+    for (const p of pages) expect(entries, p).toContain(p);
   });
 
   it("anti-false-green: el grafo SÍ detecta los prohibidos desde una superficie privada", () => {
