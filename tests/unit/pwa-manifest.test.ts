@@ -113,6 +113,14 @@ describe("[MB-0b] middleware.ts · matcher", () => {
     expect(re.test(p)).toBe(true);
   });
 
+  // [TV-I] El manifest de la TV (app/(display)/tv/manifest) es estático y sin datos de nadie, igual que el de la PWA:
+  // con MAINTENANCE_MODE=on pasaba por el middleware y salía 503 con la página de mantenimiento (el navegador de la TV
+  // descarta el manifest). /tv en sí SÍ pasa: el mantenimiento tiene que cortar el feed.
+  it("[TV-I] /tv/manifest no pasa por el middleware; /tv sí", () => {
+    expect(re.test("/tv/manifest")).toBe(false);
+    expect(re.test("/tv")).toBe(true);
+  });
+
   it("los estáticos de Next y los favicons siguen afuera", () => {
     for (const p of ["/_next/static/chunks/a.js", "/_next/image", "/favicon.ico", "/icon.svg", "/apple-icon.png"]) {
       expect(re.test(p)).toBe(false);

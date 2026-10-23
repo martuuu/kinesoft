@@ -27,6 +27,10 @@ beforeAll(async () => {
   }
 });
 
+// TV-I (patrón de TV-2w2 en sala-board): el drawer «Pantallas» del header trae actions server (lib/session usa `cache`
+// de React, que no existe fuera del runtime de Next) y el mock de next/dynamic de arriba lo carga; acá solo importa
+// que el header no rompa.
+vi.mock("@/components/sala/displays/displays-drawer", () => ({ DisplaysDrawer: () => null }));
 vi.mock("@/lib/bookings", () => ({ markReceptionAction: vi.fn(), setBookingCopagoPaid: vi.fn(), listAgendaBookings: vi.fn() }));
 vi.mock("@/lib/preferences", () => ({ updateAgendaViewPrefs: vi.fn(), updateUserPreferences: vi.fn() }));
 vi.mock("@/lib/realtime-token", () => ({ mintRealtimeToken: async () => ({ ok: false, error: "realtime-off" }) }));

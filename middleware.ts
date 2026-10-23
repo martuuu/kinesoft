@@ -236,8 +236,10 @@ export const config = {
   // mantenimiento con 503: el navegador no actualiza el SW y la instalación falla. Son estáticos sin datos de nadie
   // (sw.js, offline.html, manifest e íconos generados en el build), no necesitan tenant ni sesión. Lo de AUDIT §5.3
   // (strip de x-tenant-*, x-request-id, bypass de webhooks, mantenimiento) sigue igual para todo lo demás.
+  // TV-I: `tv/manifest` (el manifest estático de la TV, app/(display)/tv/manifest) por lo mismo: con mantenimiento
+  // salía 503. `/tv` sigue pasando (el mantenimiento corta el feed).
   // Test: tests/unit/pwa-manifest.test.ts compila este matcher con el mismo `getMiddlewareMatchers` del build.
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon.png|sw\\.js|manifest\\.webmanifest|offline\\.html|icons/).*)",
+    "/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon.png|sw\\.js|manifest\\.webmanifest|offline\\.html|icons/|tv/manifest).*)",
   ],
 };

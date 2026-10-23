@@ -327,6 +327,7 @@ export function useDisplayLive(initialFeed: DisplayFeed, bootstrap: RealtimeBoot
         skewRef.current = ctrl.clockSkewMs();
         if (newCall) setCallSeq((n) => n + 1);
       },
+      // refresh-ok: la TV se desvinculó (auth del dispositivo): el RSC de /tv pasa a la pantalla de vínculo.
       onUnpaired: () => router.refresh(),
       onStaleBuild: reloadForStaleBuild,
     });

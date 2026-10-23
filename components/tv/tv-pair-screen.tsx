@@ -102,12 +102,14 @@ export function TvPairScreen({
 
   useEffect(() => {
     if (reason !== "unavailable") return;
+    // refresh-ok: reintento periódico de una TV sin servicio; no hay action que revalide, el RSC re-evalúa la sesión.
     const t = setInterval(() => router.refresh(), UNAVAILABLE_RETRY_MS);
     return () => clearInterval(t);
   }, [reason, router]);
 
   // Respaldo de la re-renderización automática: si la ruta no se refrescó sola tras vincular, se pide una vez.
   useEffect(() => {
+    // refresh-ok: cambió la cookie del dispositivo (auth de la TV) y `pairDisplay` no revalida rutas.
     if (paired) router.refresh();
   }, [paired, router]);
 

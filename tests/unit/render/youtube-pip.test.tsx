@@ -176,15 +176,35 @@ describe("[TV-2p] motor del pip", () => {
     t.ready();
     t.engine.setAudio({ muted: false, soundUnlocked: true });
     t.engine.call("HIDE");
-    expect(t.visible).toEqual([false]);
+    // TV-I: el layout no se entera (sin onVisible); el recuadro se oculta por `setHidden` (test de abajo).
+    expect(t.visible).toEqual([]);
     expect(t.cmds().at(-1)).toEqual({ event: "command", func: "mute", args: [] });
     vi.advanceTimersByTime(DUCK_MS);
-    expect(t.visible).toEqual([false, true]);
+    expect(t.visible).toEqual([]);
     expect(t.cmds().slice(-2)).toEqual([
       { event: "command", func: "unMute", args: [] },
       { event: "command", func: "setVolume", args: [PIP_BASE_VOLUME] },
     ]);
     t.engine.dispose();
+  });
+
+  it("[TV-I] HIDE oculta solo el recuadro: no emite onVisible(false), así la TV no cambia de layout 12 s", () => {
+    const hidden: boolean[] = [];
+    const visible: boolean[] = [];
+    const engine = createYouTubePipEngine({
+      kind: "VIDEO",
+      post: () => {},
+      reload: () => {},
+      setVisible: (v) => visible.push(v),
+      setHidden: (h) => hidden.push(h),
+    });
+    engine.begin();
+    engine.handleRaw(YT_ORIGIN, '{"event":"onReady"}');
+    engine.call("HIDE");
+    vi.advanceTimersByTime(DUCK_MS);
+    expect(visible).toEqual([]);
+    expect(hidden).toEqual([true, false]);
+    engine.dispose();
   });
 
   it("[TV-2p] KEEP no hace nada", () => {

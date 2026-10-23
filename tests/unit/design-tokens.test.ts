@@ -91,7 +91,17 @@ describe("[P0-S04a] tokens inexistentes", () => {
       }
     };
     ["app", "components", "lib"].forEach((d) => walk(join(ROOT, d)));
-    const missing = [...used].filter(([t]) => !defined.has(t) && !allow.has(t));
+    // [TV-I] La TV de Sala de espera (T7, §26.4 TV-D11) define su paleta oscura propia y la unidad `--u` como
+    // variables LOCALES de `.tv` en components/tv/tv.module.css: no son tokens globales que falten (el bug que cuida
+    // este test), se definen y se usan en el mismo módulo, y el tema claro de la TV las reasigna con tokens de
+    // globals.css. Se permiten solo las que ese archivo define, y solo usadas desde ese archivo.
+    const TV_CSS = "components/tv/tv.module.css";
+    const tvLocal = new Set(
+      Array.from(readFileSync(join(ROOT, TV_CSS), "utf8").matchAll(/(--[a-z0-9-]+)\s*:/gi), (m) => m[1]),
+    );
+    const missing = [...used].filter(
+      ([t, file]) => !defined.has(t) && !allow.has(t) && !(file === TV_CSS && tvLocal.has(t)),
+    );
     expect(missing).toEqual([]);
   });
 });

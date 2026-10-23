@@ -15,7 +15,8 @@
  *   suele volver solo cuando el canal retoma la transmisión. En el reintento no se muestra hasta el `onReady`, para que
  *   el layout no parpadee cada 5 minutos con un recuadro negro.
  * - En cada llamado nuevo (`callSeq` cambia): DUCK baja el volumen `DUCK_MS` para que se oiga el chime y la voz,
- *   HIDE oculta (y silencia) el recuadro ese tiempo, KEEP no hace nada.
+ *   HIDE oculta (y silencia) el recuadro ese tiempo, KEEP no hace nada. HIDE oculta solo el recuadro (`setHidden`) y
+ *   NO emite `onVisible(false)`: el layout de la TV queda quieto (TV-I).
  *
  * Sin jsdom no corren effects en los tests: toda la lógica de tiempos vive en `createYouTubePipEngine`, que es el
  * mismo objeto que crea el componente (tests/unit/render/youtube-pip.test.tsx).
@@ -52,8 +53,16 @@ export type PipEngineOpts = {
   post: (msg: string) => void;
   /** Remonta el iframe (reintento). */
   reload: () => void;
-  /** Solo se llama cuando cambia; arranca visible. */
+  /**
+   * Disponibilidad del video (falló, no cargó, reintento): decide el layout del padre. Solo se llama cuando cambia;
+   * arranca visible.
+   */
   setVisible: (v: boolean) => void;
+  /**
+   * HIDE durante un llamado: oculta SOLO el recuadro, sin tocar el layout. TV-I (handoff de TV-2u2): antes HIDE pasaba
+   * por `setVisible(false)` y la TV saltaba a HERO_IDLE/sin video 12 s y volvía, un salto de layout por cada llamado.
+   */
+  setHidden?: (h: boolean) => void;
 };
 
 export type PipEngine = {
@@ -92,7 +101,8 @@ export function createYouTubePipEngine(o: PipEngineOpts): PipEngine {
 
   function emit() {
     // En el primer intento se muestra mientras carga (es lo esperable al prender la TV); en un reintento, no.
-    const v = !failed && !hiddenForCall && (ready || attempt === 0);
+    // `hiddenForCall` NO entra: es local al recuadro (`setHidden`), no cambia el layout.
+    const v = !failed && (ready || attempt === 0);
     if (v !== shown) {
       shown = v;
       o.setVisible(v);
@@ -180,8 +190,8 @@ export function createYouTubePipEngine(o: PipEngineOpts): PipEngine {
       ducked = true;
       if (audible && !hiddenForCall) applyAudio();
     } else {
+      if (!hiddenForCall) o.setHidden?.(true);
       hiddenForCall = true;
-      emit();
       applyAudio();
     }
     // Un llamado encima de otro extiende desde el último: el agache dura DUCK_MS desde el llamado más reciente.
@@ -191,7 +201,7 @@ export function createYouTubePipEngine(o: PipEngineOpts): PipEngine {
       const wasHidden = hiddenForCall;
       ducked = false;
       hiddenForCall = false;
-      if (wasHidden) emit();
+      if (wasHidden) o.setHidden?.(false);
       if (wasHidden || wasAudible) applyAudio();
     }, DUCK_MS);
   }
@@ -263,6 +273,7 @@ export function YouTubePip({
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const engineRef = useRef<PipEngine | null>(null);
   const [visible, setVisible] = useState(true);
+  const [hiddenForCall, setHiddenForCall] = useState(false);
   const [attemptKey, setAttemptKey] = useState(0);
   const onVisibleRef = useRef(onVisible);
   onVisibleRef.current = onVisible;
@@ -275,6 +286,7 @@ export function YouTubePip({
   useEffect(() => {
     if (!src || !kind) return;
     setVisible(true);
+    setHiddenForCall(false);
     onVisibleRef.current?.(true);
     const engine = createYouTubePipEngine({
       kind,
@@ -284,6 +296,7 @@ export function YouTubePip({
         setVisible(v);
         onVisibleRef.current?.(v);
       },
+      setHidden: setHiddenForCall,
     });
     engineRef.current = engine;
     engine.setAudio(audioRef.current);
@@ -315,13 +328,14 @@ export function YouTubePip({
   if (!src) return null;
 
   // Oculto = opacidad 0 y sin eventos, pero montado: un iframe desmontado no puede avisar su `onReady` en el
-  // reintento. El padre decide el layout con `onVisible`.
+  // reintento. El padre decide el layout con `onVisible`; el HIDE de un llamado solo apaga este recuadro.
+  const shown = visible && !hiddenForCall;
   return (
     <div
       className={className ?? "relative h-full w-full overflow-hidden rounded-[var(--r-lg)] bg-black"}
-      data-visible={visible ? "true" : "false"}
-      aria-hidden={visible ? undefined : true}
-      style={visible ? undefined : { opacity: 0, pointerEvents: "none" }}
+      data-visible={shown ? "true" : "false"}
+      aria-hidden={shown ? undefined : true}
+      style={shown ? undefined : { opacity: 0, pointerEvents: "none" }}
     >
       <iframe
         key={attemptKey}
