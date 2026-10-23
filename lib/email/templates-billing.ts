@@ -8,6 +8,8 @@
 import type { RenderedEmail } from "@/lib/email/types";
 import { compose, plain } from "@/lib/email/templates";
 import { formatARS } from "@/lib/format";
+import { SAAS_ANCHOR_DAY } from "@/lib/saas-billing-logic";
+import type { SaasCollectionMethod } from "@/lib/saas-billing-types";
 
 const AR_TZ = "America/Argentina/Buenos_Aires";
 
@@ -16,6 +18,22 @@ export function formatBillingDate(key: string): string {
   const d = new Date(`${key}T12:00:00-03:00`);
   if (Number.isNaN(d.getTime())) return plain(key);
   return d.toLocaleDateString("es-AR", { day: "numeric", month: "long", year: "numeric", timeZone: AR_TZ });
+}
+
+/**
+ * «9 de noviembre» (sin año) de una clave AR «YYYY-MM-DD»: el copy de MPS-3c habla del día de este mes o del que viene
+ * («Pagá hasta el 9 de noviembre»), donde el año sobra. Mismo mediodía AR que `formatBillingDate`.
+ */
+export function formatBillingDayMonth(key: string): string {
+  const d = new Date(`${key}T12:00:00-03:00`);
+  if (Number.isNaN(d.getTime())) return plain(key);
+  return d.toLocaleDateString("es-AR", { day: "numeric", month: "long", timeZone: AR_TZ });
+}
+
+/** «4 de noviembre»: el día del débito (`SAAS_ANCHOR_DAY`) del mes de la clave (el cargo vence el 9 del mismo mes). */
+function debitDayOf(key: string): string {
+  const ym = /^\d{4}-\d{2}/.exec(key)?.[0];
+  return ym ? formatBillingDayMonth(`${ym}-${String(SAAS_ANCHOR_DAY).padStart(2, "0")}`) : plain(key);
 }
 
 function money(cents: number): string {
@@ -64,16 +82,35 @@ export function billingChargeCreatedEmail(p: {
   dueDate: string;
   url: string;
   transferInfo?: string | null;
+  /**
+   * MPS-3c (C-MPS12): cómo paga el consultorio. Opcional a propósito: sin él (llamadores de PL-2b, el diagnóstico de
+   * mails) el texto queda como antes, pensado para transferencia. Con débito no se pide comprobante ni se muestran
+   * los datos para transferir: el cobro sale solo y un «transferí» confundiría (pagaría dos veces).
+   */
+  collection?: SaasCollectionMethod | null;
 }): RenderedEmail {
   const tenant = plain(p.tenantName);
+  const how: string[] =
+    p.collection === "AUTO_DEBIT"
+      ? [`Se debita el ${debitDayOf(p.dueDate)}.`]
+      : p.collection === "MP_CHECKOUT"
+        ? [`Pagá hasta el ${formatBillingDayMonth(p.dueDate)} para no perder el acceso. Podés pagar con Mercado Pago desde Configuración → Facturación.`]
+        : p.collection === "TRANSFER"
+          ? [
+              `Pagá hasta el ${formatBillingDayMonth(p.dueDate)} para no perder el acceso. Cuando transfieras, subí el comprobante desde Configuración → Facturación y lo acreditamos.`,
+              ...transferParagraph(p.transferInfo),
+            ]
+          : [
+              `Vence el ${formatBillingDate(p.dueDate)}. Cuando transfieras, subí el comprobante desde Configuración → Facturación y lo acreditamos.`,
+              ...transferParagraph(p.transferInfo),
+            ];
   return render({
     subject: `Tu cuota de KineSoft: ${money(p.amountCents)}`,
     context: tenant,
     title: "Ya está tu cuota del mes",
     paragraphs: [
       `La cuota de ${tenant} del ${formatBillingDate(p.periodStart)} al ${formatBillingDate(p.periodEnd)} es de ${money(p.amountCents)}.`,
-      `Vence el ${formatBillingDate(p.dueDate)}. Cuando transfieras, subí el comprobante desde Configuración → Facturación y lo acreditamos.`,
-      ...transferParagraph(p.transferInfo),
+      ...how,
     ],
     cta: { label: "Ver facturación", url: p.url },
     footer: FOOTER(tenant),
@@ -155,5 +192,139 @@ export function billingPriceChangeEmail(p: {
     ],
     cta: { label: "Ver facturación", url: p.url },
     footer: FOOTER(tenant),
+  });
+}
+
+// ── Mercado Pago de la suscripción (MPS-3c, C-MPS12) ───────────────────────────────────────────────────────────
+// Mismas reglas que los de arriba: al Titular y a «Planes y pagos», solo consultorio, montos, fechas y plan. El motivo
+// del rechazo de MP NO va al mail: el payload de MP es opaco y puede traer datos del pagador; alcanza con el monto.
+
+/** El débito automático quedó autorizado en Mercado Pago. */
+export function billingDebitActivatedEmail(p: { tenantName: string; url: string }): RenderedEmail {
+  const tenant = plain(p.tenantName);
+  return render({
+    subject: "Débito automático activo",
+    context: tenant,
+    title: "Débito automático activo",
+    paragraphs: [
+      `Listo: el débito automático quedó activo. Se debita el ${SAAS_ANCHOR_DAY} de cada mes.`,
+      "Lo podés cambiar o dar de baja cuando quieras desde Configuración → Facturación.",
+    ],
+    cta: { label: "Ver facturación", url: p.url },
+    footer: FOOTER(tenant),
+  });
+}
+
+/** Mercado Pago rechazó un débito del período. `dueDate` = clave AR del vencimiento del cargo (el 9). */
+export function billingDebitFailedEmail(p: { tenantName: string; amountCents: number; dueDate: string; url: string }): RenderedEmail {
+  const tenant = plain(p.tenantName);
+  return render({
+    subject: "No pudimos debitar tu cuota de KineSoft",
+    context: tenant,
+    title: "No pudimos debitar tu cuota",
+    paragraphs: [
+      `No pudimos debitar ${money(p.amountCents)}. Pagalo antes del ${formatBillingDayMonth(p.dueDate)} para no perder el acceso.`,
+      "Podés pagarlo desde Configuración → Facturación, o revisar el medio de pago del débito en Mercado Pago.",
+    ],
+    cta: { label: "Ir a Facturación", url: p.url },
+    footer: FOOTER(tenant),
+  });
+}
+
+/** El consultorio pidió la baja: sigue con acceso completo hasta el fin del período pago. */
+export function billingCancelScheduledEmail(p: { tenantName: string; accessUntil: string; url: string }): RenderedEmail {
+  const tenant = plain(p.tenantName);
+  return render({
+    subject: "Pediste la baja de KineSoft",
+    context: tenant,
+    title: "Pediste la baja",
+    paragraphs: [
+      `Pediste la baja. Vas a tener acceso completo hasta el ${formatBillingDate(p.accessUntil)}. Después el consultorio queda en solo lectura.`,
+      "Si cambiás de idea, podés deshacer la baja desde Configuración → Facturación hasta esa fecha.",
+    ],
+    cta: { label: "Ver facturación", url: p.url },
+    footer: FOOTER(tenant),
+  });
+}
+
+/** La baja se aplicó (CANCELLED): solo lectura, los datos siguen ahí. */
+export function billingCancelledEmail(p: { tenantName: string; url: string }): RenderedEmail {
+  const tenant = plain(p.tenantName);
+  return render({
+    subject: "Tu suscripción de KineSoft terminó",
+    context: tenant,
+    title: "Se aplicó la baja",
+    paragraphs: [
+      `Se aplicó la baja de ${tenant}. El consultorio quedó en solo lectura: vas a poder consultar todo, pero no cargar datos nuevos.`,
+      "Tus datos no se pierden. Para volver, tocá «Reactivar» en Configuración → Facturación.",
+    ],
+    cta: { label: "Ver facturación", url: p.url },
+    footer: FOOTER(tenant),
+  });
+}
+
+/**
+ * Cambio de plan (MPS-D11/D12):
+ *  - scheduled   bajada programada para el próximo período;
+ *  - applied     la bajada programada se aplicó;
+ *  - not_applied / annulled   no entraba (más usuarios que los del plan nuevo): se anuló y sigue el plan actual;
+ *  - upgraded    subida inmediata, con el proporcional que se suma al próximo cargo (si hubo).
+ * `annulled` es el nombre del stub de MPS-K y `not_applied` el del brief de MPS-3c: mismo mail.
+ */
+export function billingPlanChangeEmail(p: {
+  tenantName: string;
+  outcome: "scheduled" | "applied" | "not_applied" | "annulled" | "upgraded";
+  planToLabel: string;
+  effectiveOn?: string | null;
+  prorationCents?: number | null;
+  url: string;
+}): RenderedEmail {
+  const tenant = plain(p.tenantName);
+  const plan = plain(p.planToLabel);
+  const cta = { label: "Ver facturación", url: p.url };
+  const footer = FOOTER(tenant);
+  if (p.outcome === "scheduled") {
+    const when = p.effectiveOn ? ` el ${formatBillingDate(p.effectiveOn)}` : " en el próximo período";
+    return render({
+      subject: `Tu plan pasa a ${plan}`,
+      context: tenant,
+      title: "Programaste un cambio de plan",
+      paragraphs: [`Tu plan pasa a ${plan}${when}.`, "Hasta entonces seguís con tu plan actual. Lo podés anular desde Configuración → Facturación."],
+      cta,
+      footer,
+    });
+  }
+  if (p.outcome === "applied") {
+    return render({
+      subject: `Tu plan ya es ${plan}`,
+      context: tenant,
+      title: "Se aplicó el cambio de plan",
+      paragraphs: [`Tu plan ya es ${plan}.`, "La próxima cuota sale con el precio de este plan."],
+      cta,
+      footer,
+    });
+  }
+  if (p.outcome === "upgraded") {
+    const extra =
+      p.prorationCents && p.prorationCents > 0 ? [`En el próximo cargo se suman ${money(p.prorationCents)} por los días que quedan del período.`] : [];
+    return render({
+      subject: `Pasaste a ${plan}`,
+      context: tenant,
+      title: "Cambiaste de plan",
+      paragraphs: [`Pasaste a ${plan}.`, ...extra],
+      cta,
+      footer,
+    });
+  }
+  return render({
+    subject: `Tu cambio a ${plan} no se aplicó`,
+    context: tenant,
+    title: "No se aplicó el cambio de plan",
+    paragraphs: [
+      `Tu cambio a ${plan} no se aplicó porque el consultorio tiene más usuarios que los que permite ese plan.`,
+      "Seguís con tu plan actual. Si querés bajar de plan, primero desactivá los usuarios que sobran y programalo de nuevo.",
+    ],
+    cta,
+    footer,
   });
 }

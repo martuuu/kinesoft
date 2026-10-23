@@ -49,7 +49,13 @@ export type EmailKind =
   | "portal_document_revoked"
   // T5 (TP-2d, C-TP9): al paciente, el link de pago que generó el consultorio. SIN concepto ni datos clínicos (TP-D27):
   // el concepto lo escribe el staff a mano y puede ser clínico; el mail lo lee cualquiera con acceso al buzón.
-  | "payment_link";
+  | "payment_link"
+  // T6 (MPS-3c, C-MPS12): Mercado Pago de la suscripción, al Titular y a «Planes y pagos». Solo montos, fechas y plan.
+  | "billing_debit_activated" // el débito automático quedó autorizado
+  | "billing_debit_failed" // MP rechazó un débito del período
+  | "billing_cancel_scheduled" // el consultorio pidió la baja (acceso hasta el fin del período)
+  | "billing_cancelled" // la baja se aplicó: solo lectura
+  | "billing_plan_change"; // cambio de plan programado / aplicado / no aplicado / subida
 
 /**
  * Por dónde salió (o no) un mail:
