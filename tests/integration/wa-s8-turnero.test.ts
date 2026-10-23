@@ -240,7 +240,8 @@ describe.skipIf(!RUN)("[WA-S8] consentimiento de WhatsApp en el turnero", () => 
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data).not.toHaveProperty("whatsappConsent");
-    expect(recorded().filter((e) => /WhatsAppAccount/.test(e.query))).toEqual([]);
+    // La decisión del consentimiento no mira la cuenta; a lo sumo queda la del hook post-commit de WA-S2 (paso 3).
+    expect(recorded().filter((e) => /WhatsAppAccount/.test(e.query)).length).toBeLessThanOrEqual(1);
     expect((await consentOf(await patientOfBooking(r.data.bookingId))).waConsent).toBeNull();
   });
 
