@@ -29,6 +29,7 @@ const row = (o: Partial<Row> = {}): Row => ({
   copagoCents: 20_000_00,
   osAmountCents: 0,
   onlineDepositCents: 0,
+  refundedDepositAfterCollectCents: 0,
   ...o,
 });
 

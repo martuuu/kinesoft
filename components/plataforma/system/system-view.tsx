@@ -19,12 +19,24 @@
  * APLICADO es `fake`: sale del valor ya validado del check (no de `process.env`), así que en Vercel, donde
  * `mpConnectMode()` baja `fake` a `off`, nunca aparece. Es un `<a>` y no un `next/link`: es un route handler, sin
  * prefetch ni navegación cliente.
+ *
+ * PEND-b (AUDIT «Ronda T5», B4): la Card «Cobros en proceso trabados» lista, por consultorio, cuántos cobros online
+ * siguen AUTHORIZED más de 7 días después de vencer y el vencimiento más viejo. El DTO no trae nada del paciente ni del
+ * cobro (`StuckChargesInfo`). Sin el dato (un DTO armado a mano, viejo) la Card no aparece. Las filas sí/no de las
+ * variables de T6/T7 salen como un grupo más (`env-t6t7`), sin código propio acá.
  */
 import { Card } from "@/components/ui/card";
 import { buttonClassName } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { formatDateAR } from "@/lib/format";
-import type { EmailFailuresInfo, PlatformSystemStatus, SystemCheck, SystemGroup } from "@/lib/platform-system-logic";
+import {
+  STUCK_AUTHORIZED_DAYS,
+  type EmailFailuresInfo,
+  type PlatformSystemStatus,
+  type StuckChargesInfo,
+  type SystemCheck,
+  type SystemGroup,
+} from "@/lib/platform-system-logic";
 import { RealtimeProbe } from "@/components/plataforma/system/realtime-probe";
 
 function StateBadge({ c }: { c: SystemCheck }) {
@@ -80,6 +92,45 @@ function EmailFailuresCard({ info }: { info: EmailFailuresInfo }) {
   );
 }
 
+function StuckChargesCard({ info }: { info: StuckChargesInfo }) {
+  return (
+    <Card style={{ padding: 16, display: "grid", gap: 10 }} data-testid="system-stuck-charges">
+      <h2 style={{ fontSize: 15, fontWeight: 700, margin: 0, color: "var(--navy-900)" }}>Cobros en proceso trabados</h2>
+      {!info.available ? (
+        <p style={{ fontSize: 13, color: "var(--navy-500)", margin: 0 }}>No se pudieron leer los cobros en proceso con esta conexión.</p>
+      ) : info.items.length === 0 ? (
+        <p style={{ fontSize: 13, color: "var(--navy-500)", margin: 0 }}>
+          Ninguno: no hay cobros online en proceso más de {STUCK_AUTHORIZED_DAYS} días después de vencer.
+        </p>
+      ) : (
+        <>
+          <p style={{ fontSize: 13, color: "var(--navy-500)", margin: 0, lineHeight: 1.4 }}>
+            Mercado Pago no los resolvió y no vencen solos: mientras sigan así, el turno no se puede cobrar a mano. Revisalos
+            en la cuenta de Mercado Pago del consultorio.
+          </p>
+          <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 8 }}>
+            {info.items.map((i) => (
+              <li key={i.tenantSlug} style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-700)", overflowWrap: "anywhere" }}>
+                  {i.tenantName} <code style={{ fontSize: 11.5, color: "var(--navy-300)" }}>{i.tenantSlug}</code>
+                </span>
+                <span style={{ fontSize: 12, color: "var(--navy-500)" }}>
+                  {i.count} {i.count === 1 ? "cobro" : "cobros"} · venció el {formatDateAR(i.oldestExpiredAt, "short")}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {info.tenants > info.items.length ? (
+            <p style={{ fontSize: 12, color: "var(--navy-500)", margin: 0 }}>
+              Y {info.tenants - info.items.length} consultorios más ({info.total} cobros en total).
+            </p>
+          ) : null}
+        </>
+      )}
+    </Card>
+  );
+}
+
 export function SystemView({ status }: { status: PlatformSystemStatus }) {
   return (
     <div style={{ display: "grid", gap: 12 }}>
@@ -116,6 +167,7 @@ export function SystemView({ status }: { status: PlatformSystemStatus }) {
           </Card>
         ))}
       </div>
+      {status.stuckCharges ? <StuckChargesCard info={status.stuckCharges} /> : null}
       <EmailFailuresCard info={status.emailFailures} />
       <p style={{ fontSize: 12, color: "var(--navy-500)", margin: 0 }}>
         Foto de este deploy al {formatDateAR(status.generatedAt, "short")} {formatDateAR(status.generatedAt, "time")}. Los

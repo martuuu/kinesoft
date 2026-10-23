@@ -140,6 +140,13 @@ export type PatientBookingFull = Prisma.BookingGetPayload<object> & {
   copagoCents: number;
   /** What the obra social reimburses the kine per session (0 for Particular). */
   osAmountCents: number;
+  /**
+   * PEND-b (AUDIT «Ronda T5», `t5z facturacion-percibido-de-mas`): Σ de las señas online reintegradas DESPUÉS del cobro
+   * a mano (`refundedAt > copagoPaidAt`, acreditadas antes: `settledAt <= copagoPaidAt`). La recepción cobró solo el
+   * resto y la seña ya salió de MP, así que Facturación la descuenta del percibido. 0 si no hay o el turno no está PAID.
+   * Misma regla que el LATERAL de `manualNet` en `lib/dashboard.ts` (TP-ZF1 M1).
+   */
+  refundedDepositAfterCollectCents: number;
   // `insurerPaidAt` (OS payment confirmation) comes from BookingGetPayload.
 };
 

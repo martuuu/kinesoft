@@ -63,7 +63,132 @@ export type RecentEmailFailure = {
 
 export type EmailFailuresInfo = { available: true; items: RecentEmailFailure[] } | { available: false };
 
-export type PlatformSystemStatus = SystemConfigStatus & { emailFailures: EmailFailuresInfo };
+/**
+ * PEND-b (AUDIT «Ronda T5», `t5z B4 authorized-sin-vencimiento`) · cobros online AUTHORIZED que Mercado Pago nunca
+ * resolvió. El cron vence los ACTIVE pero no toca los AUTHORIZED (hay un pago en proceso: liberarlo podría perder un
+ * pago que MP aprueba tarde), y mientras siga así el cobro a mano del turno dice «en proceso». No vencen solos, así que
+ * Sistema los avisa para que Martin los mire en el panel de MP del consultorio. Una fila por CONSULTORIO con el
+ * conteo y el vencimiento más viejo: nada del paciente, ni el monto, ni ids del cobro o del turno (sin PHI).
+ */
+export type StuckChargeItem = {
+  tenantName: string;
+  tenantSlug: string;
+  count: number;
+  /** ISO del `expiresAt` más viejo del consultorio. */
+  oldestExpiredAt: string;
+};
+
+export type StuckChargesInfo =
+  | { available: true; total: number; tenants: number; items: StuckChargeItem[] }
+  | { available: false };
+
+/** Fila del read (`readStuckCharges`): ya agrupada por consultorio, con los totales por ventana. */
+export type StuckChargeRow = {
+  tenantName: string;
+  tenantSlug: string;
+  count: number;
+  oldestExpiredAt: Date;
+  /** Σ de cobros de TODOS los consultorios (no solo los que entran en el tope). */
+  total: number;
+  /** Cantidad de consultorios con alguno. */
+  tenants: number;
+};
+
+/** Margen sobre `expiresAt`: MP puede tardar días en resolver un `in_process`; a la semana ya no es «en proceso». */
+export const STUCK_AUTHORIZED_DAYS = 7;
+/** Techo de la tarjeta: con más consultorios trabados el problema es otro (el webhook), no uno por uno. */
+export const STUCK_AUTHORIZED_LIMIT = 20;
+
+const TENANT_SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const nonNegInt = (v: unknown): number => {
+  const n = typeof v === "bigint" ? Number(v) : typeof v === "number" ? v : NaN;
+  return Number.isSafeInteger(n) && n >= 0 ? n : 0;
+};
+
+/**
+ * Puro: re-valida cada fila por forma (lo que no tenga forma de consultorio con conteo no sale) y recorta al techo.
+ * El nombre del consultorio no es PHI (es el que ve cualquier paciente en el turnero); igual se recorta a 80.
+ */
+export function buildStuckCharges(rows: readonly StuckChargeRow[]): StuckChargesInfo {
+  const valid = rows.filter(
+    (r) =>
+      typeof r.tenantSlug === "string" &&
+      TENANT_SLUG.test(r.tenantSlug) &&
+      typeof r.tenantName === "string" &&
+      nonNegInt(r.count) > 0 &&
+      r.oldestExpiredAt instanceof Date &&
+      !Number.isNaN(r.oldestExpiredAt.getTime())
+  );
+  const items = valid.slice(0, STUCK_AUTHORIZED_LIMIT).map((r) => ({
+    tenantName: r.tenantName.trim().slice(0, 80) || r.tenantSlug,
+    tenantSlug: r.tenantSlug,
+    count: nonNegInt(r.count),
+    oldestExpiredAt: r.oldestExpiredAt.toISOString(),
+  }));
+  const first = valid[0];
+  const total = first ? Math.max(nonNegInt(first.total), items.reduce((s, i) => s + i.count, 0)) : 0;
+  const tenants = first ? Math.max(nonNegInt(first.tenants), items.length) : 0;
+  return { available: true, total, tenants, items };
+}
+
+function stuckChargesCheck(info: StuckChargesInfo | null | undefined): SystemCheck | null {
+  if (!info) return null;
+  if (!info.available) {
+    return {
+      key: "mp_stuck_authorized",
+      label: "Cobros en proceso trabados",
+      state: "warn",
+      value: null,
+      detail: "No se pudieron leer los cobros en proceso con esta conexión.",
+    };
+  }
+  return info.total > 0
+    ? {
+        key: "mp_stuck_authorized",
+        label: "Cobros en proceso trabados",
+        state: "warn",
+        value: `${info.total} en ${info.tenants} ${info.tenants === 1 ? "consultorio" : "consultorios"}`,
+        detail: `En proceso en Mercado Pago hace más de ${STUCK_AUTHORIZED_DAYS} días después de vencer: no vencen solos y frenan el cobro a mano del turno. Revisalos en la cuenta de Mercado Pago del consultorio.`,
+      }
+    : {
+        key: "mp_stuck_authorized",
+        label: "Cobros en proceso trabados",
+        state: "value",
+        value: "ninguno",
+        detail: `Ningún cobro sigue en proceso más de ${STUCK_AUTHORIZED_DAYS} días después de vencer.`,
+      };
+}
+
+/**
+ * PEND-b (handoff de ENV) · variables nuevas de T6/T7 en el inventario: solo si están (sí/no), NUNCA el valor, ni de
+ * las que no son secretas (`WHATSAPP_MODE`, la versión de la Graph API): sus tarjetas propias (WA/MPS, integrador)
+ * dicen el modo aplicado. Muchas tienen default en `lib/env.ts`, así que «no» no es un error: es «usa el default».
+ */
+export const ENV_PRESENCE_VARS: ReadonlyArray<{ key: string; label: string; whenMissing: string }> = [
+  { key: "WHATSAPP_MODE", label: "Modo de WhatsApp", whenMissing: "Sin cargar: WhatsApp apagado (off)." },
+  { key: "WHATSAPP_APP_ID", label: "App id de Meta", whenMissing: "Sin cargar: hace falta antes de sandbox o live." },
+  { key: "WHATSAPP_APP_SECRET", label: "App secret de Meta", whenMissing: "Sin cargar: sin él no se valida la firma del webhook." },
+  { key: "WHATSAPP_CONFIG_ID", label: "Config id del alta", whenMissing: "Sin cargar: ningún consultorio puede conectar su WhatsApp." },
+  { key: "WHATSAPP_WEBHOOK_VERIFY_TOKEN", label: "Token de verificación del webhook", whenMissing: "Sin cargar: Meta no puede suscribir el webhook." },
+  { key: "WHATSAPP_GRAPH_VERSION", label: "Versión de la Graph API", whenMissing: "Sin cargar: usa la del código." },
+  { key: "WHATSAPP_SIGNUP_FEATURE", label: "Tipo de alta de WhatsApp", whenMissing: "Sin cargar: alta clásica (número nuevo)." },
+  { key: "SAAS_MP_CHECKOUT_NOTIFY", label: "Aviso del checkout de la suscripción", whenMissing: "Sin cargar: usa el default (scope)." },
+  { key: "MP_MIN_DEBIT_CENTS", label: "Mínimo del débito automático", whenMissing: "Sin cargar: usa el mínimo del código." },
+];
+
+function envPresenceChecks(presence: Readonly<Record<string, boolean>>): SystemCheck[] {
+  return ENV_PRESENCE_VARS.map(({ key, label, whenMissing }): SystemCheck =>
+    presence[key] === true
+      ? { key, label, state: "ok", value: "sí", detail: "Cargada. El valor no se muestra." }
+      : { key, label, state: "value", value: "no", detail: whenMissing }
+  );
+}
+
+export type PlatformSystemStatus = SystemConfigStatus & {
+  emailFailures: EmailFailuresInfo;
+  /** PEND-b: opcional para no romper a quien arma el DTO a mano (tests de render); el read siempre lo trae. */
+  stuckCharges?: StuckChargesInfo;
+};
 
 /** Fila de EmailLog tal como la lee `platform-system-read.ts` (el `select` exacto). */
 export type EmailFailureRow = {
@@ -181,6 +306,10 @@ export type SystemConfigInput = {
    * claves del secret box, conteos): el builder nunca recibe un client secret, un secreto de webhook ni una clave.
    */
   mpConnect?: MpConnectSystemInfo | null;
+  /** PEND-b: cobros AUTHORIZED trabados (ya armados por `buildStuckCharges`); suma una fila al grupo de cobros online. */
+  stuckCharges?: StuckChargesInfo | null;
+  /** PEND-b: presencia (sí/no) de las variables de `ENV_PRESENCE_VARS`, calculada en el read. Nunca el valor. */
+  envPresence?: Readonly<Record<string, boolean>> | null;
 };
 
 /** Lo que el read le pasa al builder del grupo «Cobros online (Mercado Pago)». Nada de esto es un secreto. */
@@ -572,7 +701,10 @@ export function buildSystemStatus(
     {
       id: "mp-connect",
       title: "Cobros online (Mercado Pago)",
-      checks: mpConnectChecks(input.mpConnect ?? null, vercelEnv),
+      checks: [
+        ...mpConnectChecks(input.mpConnect ?? null, vercelEnv),
+        ...[stuckChargesCheck(input.stuckCharges)].filter((c): c is SystemCheck => c !== null),
+      ],
     },
     {
       id: "runtime",
@@ -619,6 +751,9 @@ export function buildSystemStatus(
       checks: [presence("CRON_SECRET", "Secreto de los cron", input.CRON_SECRET, "Sin secreto, los cron no pueden autenticarse.", "Cargado.")],
     },
   ];
+  if (input.envPresence) {
+    groups.push({ id: "env-t6t7", title: "WhatsApp y suscripción (variables)", checks: envPresenceChecks(input.envPresence) });
+  }
 
   return { generatedAt: now.toISOString(), groups };
 }

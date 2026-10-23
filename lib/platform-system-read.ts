@@ -22,6 +22,12 @@ import "server-only";
  * `requirePlatformAdmin`. El `select` trae solo fecha, tipo, estado, transporte, motivo y la máscara (de la que la
  * lógica pura se queda con el dominio). Sin índice por `createdAt` solo: hoy EmailLog es chica y la página es de
  * consulta ocasional; si crece, un índice `(status, createdAt)` va en una migración propia (no en esta tanda).
+ *
+ * PEND-b (AUDIT «Ronda T5», B4): «Cobros en proceso trabados» cuenta los OnlineCharge AUTHORIZED con más de 7 días
+ * desde `expiresAt`, por consultorio, por `prismaService` (cruza consultorios). Un `groupBy` que usa el índice
+ * `(status, expiresAt)` de M18 (agregado, sin filas: guard de BO2) + nombre y slug del consultorio; el conteo y el vencimiento más viejo, nada del
+ * paciente ni del cobro. Y la presencia (sí/no) de las variables nuevas de T6/T7 (`ENV_PRESENCE_VARS`), leída CRUDA de
+ * `process.env`: varias tienen default en `lib/env.ts`, y el `env` validado no distingue «no está» de «vale el default».
  */
 import { createHash } from "node:crypto";
 import { prismaService } from "@/lib/db";
@@ -33,8 +39,14 @@ import { requirePlatformAdmin } from "@/lib/platform-actor";
 import { describeRealtimeSecret } from "@/lib/realtime-token-internal";
 import {
   buildRecentEmailFailures,
+  buildStuckCharges,
   buildSystemStatus,
   EMAIL_FAILURE_SKIP_REASONS,
+  ENV_PRESENCE_VARS,
+  STUCK_AUTHORIZED_DAYS,
+  STUCK_AUTHORIZED_LIMIT,
+  type StuckChargeRow,
+  type StuckChargesInfo,
   EMAIL_FAILURES_LIMIT,
   type EmailFailuresInfo,
   type MigrationsInfo,
@@ -132,13 +144,60 @@ async function readMpConnect(): Promise<MpConnectSystemInfo> {
   };
 }
 
+async function readStuckCharges(now: Date): Promise<StuckChargesInfo> {
+  // Agregados y no SQL crudo: el guard de BO2 (tests/unit/platform-admin-guard.test.ts) no deja que un lib/platform-*
+  // lea filas de OnlineCharge (PHI_MODELS); `groupBy` con `_count`/`_min` no trae filas. Dos sentencias chicas: el
+  // agrupado por consultorio (índice `(status, expiresAt)` de M18) y nombre + slug de los consultorios del tope.
+  const cutoff = new Date(now.getTime() - STUCK_AUTHORIZED_DAYS * 86_400_000);
+  try {
+    const groups = await prismaService.onlineCharge.groupBy({
+      by: ["tenantId"],
+      where: { status: "AUTHORIZED", expiresAt: { lt: cutoff } },
+      _count: { _all: true },
+      _min: { expiresAt: true },
+    });
+    if (!Array.isArray(groups) || groups.length === 0) return buildStuckCharges([]);
+    const total = groups.reduce((acc, g) => acc + (g._count?._all ?? 0), 0);
+    const top = [...groups]
+      .sort(
+        (x, y) =>
+          (y._count?._all ?? 0) - (x._count?._all ?? 0) ||
+          (x._min?.expiresAt?.getTime() ?? 0) - (y._min?.expiresAt?.getTime() ?? 0)
+      )
+      .slice(0, STUCK_AUTHORIZED_LIMIT);
+    const tenants = await prismaService.tenant.findMany({
+      where: { id: { in: top.map((g) => g.tenantId) } },
+      select: { id: true, name: true, slug: true },
+    });
+    const byId = new Map(tenants.map((t) => [t.id, t]));
+    const rows: StuckChargeRow[] = top.flatMap((g) => {
+      const t = byId.get(g.tenantId);
+      const oldest = g._min?.expiresAt;
+      return t && oldest
+        ? [{ tenantName: t.name, tenantSlug: t.slug, count: g._count?._all ?? 0, oldestExpiredAt: oldest, total, tenants: groups.length }]
+        : [];
+    });
+    return buildStuckCharges(rows);
+  } catch (err) {
+    logger.warn("platform.system.stuck_charges_unavailable", { error: err instanceof Error ? err.name : "unknown" });
+    return { available: false };
+  }
+}
+
+/** Solo sí/no: el valor no sale de esta función. Vacía o solo espacios = no está (Vercel guarda «» como vacía). */
+function envPresence(): Record<string, boolean> {
+  return Object.fromEntries(ENV_PRESENCE_VARS.map(({ key }) => [key, (process.env[key] ?? "").trim() !== ""]));
+}
+
 export async function getPlatformSystemStatus(): Promise<PlatformSystemStatus> {
   await requirePlatformAdmin("platform.read");
-  const [migrations, ping, emailFailures, mpConnect] = await Promise.all([
+  const now = new Date();
+  const [migrations, ping, emailFailures, mpConnect, stuckCharges] = await Promise.all([
     readMigrations(),
     pingDb(),
     readEmailFailures(),
     readMpConnect(),
+    readStuckCharges(now),
   ]);
   if (!ping.up) logger.error("platform.system.db_down", { reason: ping.reason });
 
@@ -161,9 +220,12 @@ export async function getPlatformSystemStatus(): Promise<PlatformSystemStatus> {
       NEXT_PUBLIC_SUPABASE_ANON_KEY: env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
       realtimeSecret: describeRealtimeSecret(process.env.SUPABASE_JWT_SECRET),
       mpConnect,
+      stuckCharges,
+      envPresence: envPresence(),
     },
     migrations,
-    { up: ping.up, ms: ping.ms }
+    { up: ping.up, ms: ping.ms },
+    now
   );
-  return { ...config, emailFailures };
+  return { ...config, emailFailures, stuckCharges };
 }

@@ -216,12 +216,22 @@ type BillingRow = {
    * trae). Requerida desde TP-2i (un productor que no la proyecte no compila).
    */
   onlineDepositCents: number;
+  /**
+   * PEND-b: Σ de las señas reintegradas DESPUÉS del cobro a mano (`PatientBookingFull.refundedDepositAfterCollectCents`,
+   * del LATERAL de `patientBookingsAllInTx`). Requerida por la misma razón que `onlineDepositCents`.
+   */
+  refundedDepositAfterCollectCents: number;
 };
+
+/** Centavos saneados: un dato no entero o negativo no es plata (0). */
+function cents(v: number | null | undefined): number {
+  const d = v ?? 0;
+  return Number.isSafeInteger(d) && d > 0 ? d : 0;
+}
 
 /** Seña online cobrada del turno, saneada (un dato no entero o negativo no es plata: 0). */
 function depositOf(b: Pick<BillingRow, "onlineDepositCents">): number {
-  const d = b.onlineDepositCents ?? 0;
-  return Number.isSafeInteger(d) && d > 0 ? d : 0;
+  return cents(b.onlineDepositCents);
 }
 
 /** Lo de siempre: solo lo que efectivamente factura. */
@@ -292,6 +302,8 @@ export type BillingSummary = {
  *    max(0, copago − seña). Misma regla que `copagoRemainingCents`
  *    (`lib/booking-collect.ts`), repetida acá para no sumar ese módulo al
  *    bundle del perfil.
+ *  - PEND-b: la seña reintegrada después del cobro a mano no cuenta como
+ *    percibida (`refundedDepositAfterCollectCents`; ver `paidOf`).
  */
 export function billingSummary(
   bookings: readonly (BillingRow & { programId: string | null; copagoCents: number; osAmountCents: number })[],
@@ -301,10 +313,16 @@ export function billingSummary(
   const billable = bookings.filter(isBillableBooking);
   const osPaidCents = visible.reduce((s, b) => s + (b.insurerPaidAt ? b.osAmountCents : 0), 0);
   // PAID: el copago entero (si la seña quedó mayor porque el copago bajó, se percibió la seña). Sin cobrar: la seña.
-  const copagoPaidCents = visible.reduce(
-    (s, b) => s + (b.paymentStatus === "PAID" ? Math.max(b.copagoCents, depositOf(b)) : depositOf(b)),
-    0
-  );
+  // PEND-b (AUDIT «Ronda T5», `t5z facturacion-percibido-de-mas`): una seña reintegrada DESPUÉS del cobro a mano ya no
+  // está en `onlineDepositCents` (solo suma las PAID), pero la recepción cobró solo el resto: lo percibido es lo cobrado
+  // a mano (copago − señas al momento del cobro) + las señas que siguen PAID. Misma regla que `manualNet` de Ingresos
+  // (lib/dashboard.ts, TP-ZF1 M1). Sin reintegros después del cobro, da lo de siempre: max(copago, seña).
+  const paidOf = (b: BillingRow & { copagoCents: number }) => {
+    const dep = depositOf(b);
+    const manual = Math.max(0, b.copagoCents - dep - cents(b.refundedDepositAfterCollectCents));
+    return manual + dep;
+  };
+  const copagoPaidCents = visible.reduce((s, b) => s + (b.paymentStatus === "PAID" ? paidOf(b) : depositOf(b)), 0);
   const copagoDue = (b: BillingRow & { copagoCents: number }) =>
     b.paymentStatus === "PAID" ? 0 : Math.max(0, b.copagoCents - depositOf(b));
   if (!opts.grouped) {

@@ -335,13 +335,28 @@ export async function patientBookingsAllInTx(
   // `tenantId` a mano en el WHERE (en prod la conexión tiene BYPASSRLS); las FK de servicio y profesional las valida
   // la escritura del turno, como antes con el include.
   const ids = page.map((b) => b.id);
+  //
+  // PEND-b (AUDIT «Ronda T5», `t5z facturacion-percibido-de-mas`): la misma sentencia trae las señas reintegradas
+  // DESPUÉS del cobro a mano. `Booking.onlineDepositCents` solo suma las PAID, así que al reintegrarse la seña el
+  // percibido volvía al copago entero cuando la recepción había cobrado solo el resto. Regla literal del LATERAL de
+  // `manualNet` (lib/dashboard.ts, TP-ZF1 M1): DEPOSIT, REFUNDED con `refundedAt > copagoPaidAt` y acreditada antes del
+  // cobro (`settledAt <= copagoPaidAt`), solo con cobro a mano (no un PAID que escribió el webhook: MERCADO_PAGO sin
+  // quién cobró). En el LATERAL y no en otra query: el perfil tiene presupuesto de sentencias (pf2-profile-budget).
   const extras = ids.length
-    ? await tx.$queryRaw<{ id: string; serviceName: string; servicePriceCents: number; fullName: string | null }[]>`
-        SELECT b."id", s."name" AS "serviceName", s."priceCents" AS "servicePriceCents", u."fullName"
+    ? await tx.$queryRaw<
+        { id: string; serviceName: string; servicePriceCents: number; fullName: string | null; refundedAfterCents: number }[]
+      >`
+        SELECT b."id", s."name" AS "serviceName", s."priceCents" AS "servicePriceCents", u."fullName",
+          COALESCE(r."cents", 0)::int AS "refundedAfterCents"
         FROM "Booking" b
         JOIN "Service" s ON s."id" = b."serviceId"
         JOIN "Practitioner" p ON p."id" = b."practitionerId"
         JOIN "UserProfile" u ON u."id" = p."userId"
+        LEFT JOIN LATERAL (SELECT sum(c."amountCents") AS "cents" FROM "OnlineCharge" c
+            WHERE c."tenantId" = b."tenantId" AND c."bookingId" = b."id" AND c."kind" = 'DEPOSIT'
+              AND c."status" = 'REFUNDED' AND c."refundedAt" > b."copagoPaidAt" AND c."settledAt" <= b."copagoPaidAt"
+              AND b."paymentStatus" = 'PAID'
+              AND NOT COALESCE(b."copagoPaymentMethod" = 'MERCADO_PAGO' AND b."copagoCollectedById" IS NULL, false)) r ON true
         WHERE b."tenantId" = ${actor.tenantId} AND b."id" = ANY(${ids})`
     : [];
   const extraById = new Map(extras.map((e) => [e.id, e]));
@@ -366,6 +381,7 @@ export async function patientBookingsAllInTx(
         servicePriceCents: extra.servicePriceCents,
       }),
       osAmountCents: billing.insurerFixedFeeCents,
+      refundedDepositAfterCollectCents: extra.refundedAfterCents,
     };
   });
   return { rows, hasMore, nextCursor: hasMore ? page[page.length - 1].id : null };

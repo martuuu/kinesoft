@@ -45,6 +45,9 @@ const MARKED: Required<SystemConfigInput> = {
       lastRefreshAt: null,
     },
   },
+  // PEND-b: cobros trabados ya armados (sin PHI) y la presencia de las variables de T6/T7 (solo booleanos).
+  stuckCharges: { available: true, total: 0, tenants: 0, items: [] },
+  envPresence: { WHATSAPP_APP_SECRET: true },
 };
 
 const allChecks = (s: ReturnType<typeof buildSystemStatus>) => s.groups.flatMap((g) => g.checks);
