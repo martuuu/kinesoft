@@ -8,6 +8,7 @@ import { cn } from "@/lib/cn";
 import { formatARS } from "@/lib/format";
 import type { PublicBookingStatus } from "@/lib/public-booking-types";
 import { BookAgainLink, BookingFrame } from "./booking-unavailable";
+import { readWaSaved } from "./wa-saved-flag";
 import s from "./booking-result.module.css";
 
 /**
@@ -31,6 +32,12 @@ export const RESULT_MONEY_COPY = {
   date: "Fecha",
   method: "Medio de pago",
 } as const;
+
+/**
+ * WA-U4 (§26.5): solo cuando el submit devolvió `whatsappConsent: "saved"` (marca de `wa-saved-flag`). Con
+ * `invalid_phone`/`unavailable` o sin casilla no se dice nada: prometer avisos que no van a salir es peor que callar.
+ */
+export const RESULT_WA_LINE = "Te vamos a avisar por WhatsApp."; // claim-ok: lib/public-booking-types.ts:92
 
 /** 60 consultas cada 3 s ≈ 3 min: después se deja de consultar y se dice qué hacer, sin prometer nada. */
 export const MAX_POLL_ATTEMPTS = 60;
@@ -92,7 +99,7 @@ export const RESULT_COPY: Record<BookingResultVariant, { title: string; lead: st
   },
   pending: {
     title: "Procesando tu pago…",
-    lead: "Apenas Mercado Pago lo confirme, esta pantalla se actualiza sola. No la cierres.",
+    lead: "Apenas Mercado Pago lo confirme, esta pantalla se actualiza sola.",
     state: "Esperando el pago",
   },
   failed: {
@@ -132,11 +139,19 @@ export const PENDING_TIMEOUT_NOTE =
 export function BookingResult({
   initial,
   variant,
+  waNoticeSaved = false,
 }: {
   initial: PublicBookingStatus;
   variant: BookingResultVariant;
+  /** WA-U4: forzado (render test); en la app sale de la marca de la sesión (`wa-saved-flag`), después de hidratar. */
+  waNoticeSaved?: boolean;
 }) {
   const [status, setStatus] = useState(initial);
+  // En un efecto y no en el estado inicial: el server no ve `sessionStorage` y el HTML hidratado tiene que coincidir.
+  const [waSaved, setWaSaved] = useState(waNoticeSaved);
+  useEffect(() => {
+    if (readWaSaved(initial.bookingId)) setWaSaved(true);
+  }, [initial.bookingId]);
   const [attempts, setAttempts] = useState(0);
   const effective = effectiveVariantFor(status, variant);
 
@@ -166,6 +181,9 @@ export function BookingResult({
         <StatusIcon variant={effective} />
         <h1 className={cn("k-display", s.title)}>{copy.title}</h1>
         <p className={s.lead}>{copy.lead}</p>
+        {/* Solo con el turno en pie (DONE): procesando el pago (hold PENDING, C-WA2 no le escribe a un PENDING) o con el
+            pago caído todavía no hay turno que avisar. El poller la hace aparecer cuando pasa a confirmado. */}
+        {waSaved && DONE.has(effective) && <p className={s.lead}>{RESULT_WA_LINE}</p>}
       </div>
 
       <dl className={s.details}>

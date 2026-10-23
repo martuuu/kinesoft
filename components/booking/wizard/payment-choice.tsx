@@ -16,7 +16,7 @@
 import { Button } from "@/components/ui/button";
 import { IconAlert, IconArrow } from "@/components/ui/icons";
 import { formatARS } from "@/lib/format";
-import type { PayChoice, WizardOnlinePayment } from "@/lib/public-wizard-state";
+import { paymentAmountText, type PayChoice, type WizardOnlinePayment } from "@/lib/public-wizard-state";
 import s from "../public-booking.module.css";
 import { StepHeader } from "./shared";
 
@@ -33,9 +33,6 @@ export const PAY_COPY = {
   optionalUnavailable: "No pudimos abrir Mercado Pago: lo pagás en el consultorio.",
 } as const;
 
-const amountText = (p: WizardOnlinePayment) =>
-  p.quote.chargeKind === "DEPOSIT" ? `Seña de ${formatARS(p.quote.amountCents)}` : formatARS(p.quote.amountCents);
-
 export function PaymentChoice({
   payment,
   choice,
@@ -48,7 +45,7 @@ export function PaymentChoice({
   if (payment.mode === "REQUIRED") {
     return (
       <p className={s.payNote}>
-        Para confirmar el turno se paga con Mercado Pago: {amountText(payment)}.
+        Para confirmar el turno se paga con Mercado Pago{payment.coverageDependent ? ". " : ": "}{paymentAmountText(payment)}.
       </p>
     );
   }
@@ -67,7 +64,7 @@ export function PaymentChoice({
       {/* ZB-11: sin preselección (TP-UI-D5) el botón queda deshabilitado; sin esta línea no se entiende por qué. */}
       {choice === null && <p className={s.choiceSub}>Elegí una opción para confirmar el turno.</p>}
       {opt("later", PAY_COPY.payLater, "Tu turno queda reservado.")}
-      {opt("now", PAY_COPY.payNow, amountText(payment))}
+      {opt("now", PAY_COPY.payNow, paymentAmountText(payment))}
     </fieldset>
   );
 }

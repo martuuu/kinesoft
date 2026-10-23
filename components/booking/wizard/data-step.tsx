@@ -21,6 +21,16 @@ export { PaymentChoice, PaymentInterstitial } from "./payment-choice";
 type WizardClinic = PublicClinic & { vertical?: TenantVertical | null };
 
 /**
+ * WA-U4 (§26.5, C-WA9): copia literal de `WA_CONSENT_TEXT` (`lib/whatsapp/copy.ts`), con paridad fijada por
+ * `tests/unit/render/wa-u4-turnero.test.tsx`. No se importa: el módulo de copy trae todas las etiquetas de la UI de
+ * WhatsApp y el turnero mide 114,3 de 115 kB (TV-I). Si Martin cambia el texto legal, cambia acá también (el test
+ * falla hasta que coincidan) y sube `WA_CONSENT_VERSION`.
+ */
+export const TURNERO_WA_CONSENT_TEXT = // claim-ok: lib/public-booking-types.ts:92
+  "Vas a recibir por WhatsApp avisos de tus turnos (cuando se agendan, se reprograman y el día anterior) desde el número del consultorio. Los mensajes no incluyen datos de salud. Podés darte de baja cuando quieras respondiendo BAJA.";
+export const TURNERO_WA_CONSENT_LABEL = "Quiero recibir avisos de mis turnos por WhatsApp"; // claim-ok: lib/public-booking-types.ts:92
+
+/**
  * OAuth de Google del turnero (paso «Tus datos»): form POST a la ruta canónica `/api/auth/oauth/google` (PL-2e; el
  * alias viejo `/api/auth/google` sigue vivo para otros llamadores). POST porque un `<Link>` GET daba 405 (A3b-S-auth).
  */
@@ -36,6 +46,8 @@ export function DataStep({
   setHc,
   error,
   payment,
+  waConsent = false,
+  onWaConsentChange,
 }: {
   clinic: WizardClinic;
   session: { email: string; fullName: string | null } | null;
@@ -45,6 +57,9 @@ export function DataStep({
   error: string | null;
   /** TP-3h: elección/aviso de pago (`PaymentChoice`), arriba del error para que el error de MP quede cerca. */
   payment?: React.ReactNode;
+  /** WA-U4: la casilla de WhatsApp (estado en el wizard, que lo manda en el submit). Arranca destildada. */
+  waConsent?: boolean;
+  onWaConsentChange?: (next: boolean) => void;
 }) {
   const upd = <K extends keyof PatientHC>(k: K, v: PatientHC[K]) => setHc({ ...hc, [k]: v });
   const isGeneral = clinic.vertical === "GENERAL";
@@ -149,6 +164,41 @@ export function DataStep({
           placeholder="Detalles que quieras que el profesional conozca."
         />
       </Field>
+
+      {/* WA-U4 (§26.5): solo si el consultorio avisa por WhatsApp (`whatsappNotices`, cuenta ACTIVE en el modo del env).
+          Destildada: el consentimiento tiene que ser un acto del paciente (Ley 25.326). Label real envolviendo el input
+          y 44 px de alto (tap target a 390); el texto legal en un `<details>` (anda sin JS) y referido por
+          `aria-describedby`, así el lector de pantalla lo lee aunque esté plegado. */}
+      {/* // claim-ok: lib/public-booking-types.ts:92 */}
+      {clinic.whatsappNotices === true && onWaConsentChange && (
+        <div style={{ display: "grid", gap: 2 }}>
+          <label
+            htmlFor="booking-waConsent"
+            style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 44, cursor: "pointer", fontSize: 14 }}
+          >
+            <input
+              id="booking-waConsent"
+              type="checkbox"
+              name="waConsent"
+              checked={waConsent}
+              onChange={(e) => onWaConsentChange(e.target.checked)}
+              aria-describedby="booking-waConsent-legal"
+              style={{ width: 20, height: 20, flex: "none", margin: 0, accentColor: "var(--sky-600)" }}
+            />
+            <span>{TURNERO_WA_CONSENT_LABEL}</span>
+          </label>
+          <details>
+            <summary
+              style={{ minHeight: 44, display: "flex", alignItems: "center", cursor: "pointer", fontSize: 13, color: "var(--sky-700)" }}
+            >
+              Qué significa
+            </summary>
+            <p id="booking-waConsent-legal" className={s.consent} style={{ lineHeight: 1.5 }}>
+              {TURNERO_WA_CONSENT_TEXT}
+            </p>
+          </details>
+        </div>
+      )}
 
       {payment}
       {error && (

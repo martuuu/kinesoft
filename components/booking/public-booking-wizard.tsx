@@ -53,7 +53,9 @@ import {
   locationsForPractitioner,
   nextAttempt,
   payNowFor,
+  quotedForInterstitial,
   reconcileSelection,
+  reservesWithoutOnlinePayment,
   servicesForAny,
   servicesForPractitioner,
   windowNavAt,
@@ -69,6 +71,7 @@ import { PractitionerStep } from "./wizard/practitioner-step";
 import { FirstSlotStep } from "./wizard/first-slot-step";
 import { SlotWindowStep } from "./wizard/slot-window-step";
 import { EmptyBox, StepHeader, focusStepHeadingWhenReady, formatWhenAR } from "./wizard/shared";
+import { rememberWaSaved } from "./wa-saved-flag";
 import s from "./public-booking.module.css";
 
 // TP-3h: «Tus datos» + cobro online en un chunk diferido (ver cabecera de `wizard/data-step.tsx`). Un solo loader para
@@ -194,9 +197,18 @@ export function PublicBookingWizard({
   // TP-3h: cobro online de ESTE turno (profesional con cuenta usable + política) cotizado con el precio del servicio,
   // y la elección del paciente en OPTIONAL (null = no eligió; sin preselección, TP-UI-D5). Botón y resumen son copy:
   // adónde ir lo decide el `next` del server.
-  const payment = wizardOnlinePaymentFor(clinic, practitionerId, service?.priceCents ?? 0);
+  const coverage = { insurerId: filters.insurerId, coverageInsurer: hc.coverageInsurer };
+  const payment = wizardOnlinePaymentFor(clinic, practitionerId, service?.priceCents ?? 0, coverage);
   const [payChoice, setPayChoice] = useState<PayChoice>(null);
-  const checkout = checkoutCopyFor({ payment, choice: payChoice, priceCents: service?.priceCents ?? 0 });
+  // WA-U4 (§26.5): la casilla de WhatsApp de «Tus datos». Destildada; vive acá (no en `DataStep`) para sobrevivir el
+  // «Atrás» y para mandarla en el submit.
+  const [waConsent, setWaConsent] = useState(false);
+  const checkout = checkoutCopyFor({
+    payment,
+    choice: payChoice,
+    priceCents: service?.priceCents ?? 0,
+    withoutOnlinePayment: reservesWithoutOnlinePayment(clinic, practitionerId, coverage),
+  });
   // Interstitial antes de navegar (TP-UI-D6 monto distinto; MP caído en OPTIONAL). `href` = adónde sigue.
   const [interstitial, setInterstitial] = useState<{ kind: "amount" | "unavailable" | "reserved"; amountCents: number | null; href: string } | null>(null);
 
@@ -314,6 +326,7 @@ export function PublicBookingWizard({
           email: hc.email.trim().toLowerCase(),
         },
         payNow: payNowFor(payment, payChoice),
+        waConsent: waConsentForSubmit(clinic, waConsent),
       });
       if (!r.ok) {
         // T3: el server marca `fieldErrors.scheduledFor` cuando el horario ya no se puede reservar: volver a la ventana
@@ -327,6 +340,9 @@ export function PublicBookingWizard({
         setError(r.error);
         return;
       }
+      // WA-U4: la confirmación dice «Te vamos a avisar por WhatsApp» solo con `saved` (marca en la sesión del navegador,
+      // ver `wa-saved-flag`: sobrevive también la ida y vuelta de Mercado Pago).
+      rememberWaSaved(r.data.bookingId, r.data.whatsappConsent); // claim-ok: lib/public-booking-types.ts:92
       // `reserved` → resultado (/ok); `checkout` → Mercado Pago. Navegación dura (`location.assign`, TP-UI-D3: sin
       // tocar la CSP) a propósito: el resultado consulta el estado real y no hay nada del wizard que conservar.
       // Antes de irse, el interstitial si el server cobra otro monto (TP-UI-D6) o si Mercado Pago no respondió en
@@ -334,7 +350,7 @@ export function PublicBookingWizard({
       // o sea el mismo cobro (TP-D29).
       if (r.data.notice === "payment-unavailable") {
         setInterstitial({ kind: "unavailable", amountCents: null, href: destinationAfterSubmit(r.data) });
-      } else if (amountDiffers(r.data, checkout.online && payment ? payment.quote.amountCents : null)) {
+      } else if (amountDiffers(r.data, quotedForInterstitial(payment, checkout.online))) {
         // TP-ZF2: `reserved` acá = el wizard cotizó un cobro y el server no cobró (copago $ 0): se avisa en vez de ir
         // directo a `/ok` después de prometer «Pagar y reservar».
         setInterstitial({
@@ -437,6 +453,8 @@ export function PublicBookingWizard({
               setHc={setHc}
               error={error}
               payment={payment && <PaymentChoice payment={payment} choice={payChoice} onChange={setPayChoice} />}
+              waConsent={waConsent}
+              onWaConsentChange={setWaConsent}
             />
           )}
           {interstitial && (
@@ -488,6 +506,15 @@ export function PublicBookingWizard({
       </footer>
     </div>
   );
+}
+
+/**
+ * WA-U4: `waConsent` del submit. Solo con la casilla tildada y el consultorio avisando por WhatsApp; si no, ausente (el
+ * server no escribe nada ni devuelve `whatsappConsent`). Nunca `false`: destildada = no se pidió, no es una baja (el
+ * turnero anónimo no revoca ni re-otorga nada por un DNI, hallazgo H-1 de WA-S8).
+ */
+export function waConsentForSubmit(clinic: Pick<PublicClinic, "whatsappNotices">, checked: boolean): true | undefined { // claim-ok: lib/public-booking-types.ts:92
+  return clinic.whatsappNotices === true && checked ? true : undefined; // claim-ok: lib/public-booking-types.ts:92
 }
 
 /** UUID v4 (el server lo valida). `randomUUID` exige contexto seguro; fallback a `getRandomValues`. */
@@ -681,7 +708,7 @@ export function SummaryAside({
           {(!service || checkout.showTotal) && (
             <div className={s.totalRow}>
               <span className={s.totalLabel}>{checkout.totalLabel}</span>
-              <span className={`k-display ${s.totalValue}`}>{service ? formatARS(service.priceCents) : "—"}</span>
+              <span className={`k-display ${s.totalValue}`}>{service ? formatARS(checkout.totalCents) : "—"}</span>
             </div>
           )}
           {checkout.split && (

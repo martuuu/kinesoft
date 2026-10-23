@@ -2,13 +2,16 @@ import Link from "next/link";
 import { notFound, permanentRedirect } from "next/navigation";
 import { getPortalAccountPage } from "@/lib/portal-account";
 import { getPortalUser, requirePortalPatient } from "@/lib/portal-identity-internal";
-import { resolveSlugAlias } from "@/lib/public-booking-internal";
+import { resolveSlugAlias, turneroWhatsAppActive } from "@/lib/public-booking-internal"; // claim-ok: lib/portal-whatsapp-consent.ts:55
+import { getMyWhatsAppConsent } from "@/lib/portal-whatsapp-consent"; // claim-ok: lib/portal-whatsapp-consent.ts:55
+import { whatsappMode } from "@/lib/env"; // claim-ok: lib/portal-whatsapp-consent.ts:55
 import { Tag } from "@/components/ui/tag";
 import { Card } from "@/components/ui/card";
 import { ButtonLink } from "@/components/ui/button";
 import { IconArrow } from "@/components/ui/icons";
 import { PortalTabs } from "@/components/portal/portal-tabs";
 import { AccountStatement } from "@/components/portal/account-statement";
+import { WhatsAppConsentCard } from "@/components/portal/whatsapp-consent-card"; // claim-ok: lib/portal-whatsapp-consent.ts:55
 import { BRAND_NAME } from "@/lib/brand";
 
 // PHI y plata del paciente: siempre por request, nunca cacheado (brief ES4 §6).
@@ -48,6 +51,11 @@ export default async function PortalAccountPageRoute({ params }: { params: { slu
     notFound();
   }
 
+  // WA-U4 (§26.5): «Avisos por WhatsApp». Con `WHATSAPP_MODE=off` (prod hoy) ni se lee: 0 queries extra y sin tarjeta.
+  // Con el canal prendido: se ofrece activar solo si el consultorio tiene la cuenta ACTIVE en este modo (misma regla
+  // que la casilla del turnero); un GRANTED se muestra igual para poder revocarlo aunque el consultorio se desconecte.
+  const wa = whatsappMode() === "off" ? null : await loadWhatsAppConsent(params.slug); // claim-ok: lib/portal-whatsapp-consent.ts:55
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <Link
@@ -71,6 +79,21 @@ export default async function PortalAccountPageRoute({ params }: { params: { slu
       <PortalTabs slug={params.slug} sections={data.sections} active="cuenta" />
 
       <AccountStatement account={data.account} vertical={data.vertical} showPlans={data.showPlans} nowMs={Date.now()} />
+
+      {/* // claim-ok: lib/portal-whatsapp-consent.ts:55 */}
+      {wa && <WhatsAppConsentCard slug={params.slug} consent={wa.consent} canGrant={wa.canGrant} />}
     </div>
   );
+}
+
+/**
+ * WA-U4. `requirePortalPatient` otra vez por el `tenantId` (no está en `PortalAccountPage`): son 2 lecturas más solo
+ * con el canal prendido (handoff: sumar `tenantId` a `PortalAccountPage` y sacarla). `turneroWhatsAppActive` no tira.
+ */
+async function loadWhatsAppConsent(slug: string) { // claim-ok: lib/portal-whatsapp-consent.ts:55
+  const [consent, ref] = await Promise.all([getMyWhatsAppConsent(slug), requirePortalPatient(slug)]); // claim-ok: lib/portal-whatsapp-consent.ts:55
+  if (!consent || !ref) return null;
+  const canGrant = await turneroWhatsAppActive(ref.tenantId); // claim-ok: lib/portal-whatsapp-consent.ts:55
+  if (!canGrant && consent.status !== "GRANTED") return null;
+  return { consent, canGrant };
 }
