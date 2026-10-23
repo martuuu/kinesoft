@@ -11,6 +11,10 @@
 
 Estado: 🔴 pendiente · 🟡 en progreso · 🟢 hecho.
 
+> **Día del push (T3-T7): [PUSH-DIA.md](PUSH-DIA.md)** dice qué consola va antes (paso C: buckets y Data API) y en qué
+> orden se activa el resto después (paso G: Resend → Upstash → Sentry/CSP → Google → suscripción §0.14 → MP Connect
+> §0.12 → WhatsApp §0.13 → TV §0.15).
+
 ---
 
 ### 0. Bloque A0 — chequeos y tareas del dueño (2026-09-29) 🔴
@@ -192,8 +196,8 @@ corre. Un superadmin no puede resetear la 2FA de otro superadmin (recuperación:
 
 | Qué | Dónde | Cuándo |
 |---|---|---|
-| `CRON_SECRET` | Vercel → Production | Ya estaba (§0.5). Ahora lo usa el **único** cron, `/api/cron/daily` (11:00 UTC = 08:00 AR): cobros + invitaciones + recordatorios de prueba + resumen de salud. Las rutas viejas (`/api/cron/trial-reminders`, etc.) quedan solo para dispararlas a mano con el mismo `Bearer` |
-| `SAAS_BILLING_MODE` | Vercel → Production | Default `off`: se deploya sin cobrar (no genera cargos ni manda mails de cobro). Pasar a **`manual`** cuando cargues los precios en /plataforma y quieras empezar a cobrar por transferencia. `mp` existe en el enum pero **en esta etapa se comporta como `manual`** (sin Mercado Pago para la suscripción) |
+| `CRON_SECRET` | Vercel → Production | Ya estaba (§0.5). Lo usan los **dos** crons de `vercel.json`: `/api/cron/daily` (11:00 UTC = 08:00 AR: cobros + invitaciones + recordatorios de prueba + resumen de salud) y, desde T6, `/api/cron/whatsapp` (21:00 UTC = 18:00 AR, §0.13). Las rutas viejas (`/api/cron/trial-reminders`, etc.) quedan solo para dispararlas a mano con el mismo `Bearer` |
+| `SAAS_BILLING_MODE` | Vercel → Production | Default `off`: se deploya sin cobrar (no genera cargos ni manda mails de cobro). Pasar a **`manual`** cuando cargues los precios en /plataforma y quieras empezar a cobrar por transferencia. Desde T6, **`mp`** suma débito automático y «Pagar con Mercado Pago» (exige `MP_ACCESS_TOKEN`): orden `off → manual → sandbox S1-S10 → mp`, **§0.14** |
 | `SAAS_BILLING_TRANSFER_INFO` | Vercel → Production | **PL-Z (A2).** Texto libre (hasta 500 caracteres) con los datos para transferir: alias, CBU, titular y CUIT. Lo ve el consultorio en Configuración → Facturación. Sin ella **no se ofrece «Informar pago»**: el consultorio no tiene a dónde pagar. **Bloquea pasar `SAAS_BILLING_MODE` a `manual`**: cargarla antes (o en el mismo redeploy). Solo datos de cobro, nada interno |
 | `PLATFORM_INBOX_EMAIL` | Vercel → Production | La casilla que recibe los avisos de mensajes de consultorios y de leads de la web. Sin ella los mensajes quedan en /plataforma → Mensajes, pero no llega aviso por mail |
 | Bucket **`billing-receipts`** | Supabase → Storage → New bucket | **Privado** (Public bucket apagado), límite 4 MB, tipos `application/pdf, image/jpeg, image/png, image/webp`. Sin policies para `anon`/`authenticated`: la app lo usa con service-role y entrega URLs firmadas de 60 s. Crearlo **antes** de pasar a `manual` (sin bucket, subir un comprobante da error) |
@@ -369,6 +373,140 @@ desde «Mi Mercado Pago» → un turno o link de $ 1 → pagar → ver «Pagado 
 Pago** → ver «Reintegrado». Plataforma → Sistema → «Cobros online (Mercado Pago)» muestra modo, presencias, huellas de
 las claves, firma, cuentas por estado, último webhook y última renovación.
 
+### 0.13 T6 — Avisos por WhatsApp (Meta, 23-oct-2026) 🔴
+
+**Con migración M15** (`whatsapp_messaging`, [RUNBOOK «M15 en prod»](MIGRACIONES-RUNBOOK.md)). Diseño en
+[ARCHITECTURE ADR-029](ARCHITECTURE.md). Cada consultorio conecta **su propio número** por Embedded Signup y paga sus
+conversaciones a Meta; KineSoft es el **Tech Provider**. En T6 nada tocó Meta real: todo corrió contra el Meta falso
+(`npm run dev:local`). Reemplaza al viejo §13 (Twilio / 360dialog, descartados).
+
+**Progresión:** `WHATSAPP_MODE=off` en el deploy (no se encola nada, no hay queries extra en los write paths de turnos y
+no sale ningún request a Meta) → verificación del negocio → app de Meta → **sandbox** S1-S13 → `live` + redeploy.
+`fake` en Vercel frena el boot; `live` en Preview se lee como `off` (D26: un «copiar de Production» no manda WhatsApps).
+
+1. **Verificación del negocio en Meta Business Manager, desde el día 1.** Es lo que más tarda (días a semanas) y sin ella
+   no hay Tech Provider ni números reales. Datos fiscales de KineSoft, dominio verificado y sitio con política de
+   privacidad y condiciones.
+2. **App aparte** en developers.facebook.com, de tipo **Empresa** (Business), **separada de la de Facebook Login** (§0.6):
+   mezclarlas pide revisiones cruzadas y un problema en una frena la otra. Producto **WhatsApp** agregado.
+3. **Tech Provider:** desde la app, solicitar el acceso de Tech Provider (proveedor de tecnología) y los permisos
+   `whatsapp_business_management` y `whatsapp_business_messaging` (revisión de la app con video del alta y del envío).
+4. **Embedded Signup v4:** Facebook Login for Business → Configuraciones → nueva configuración «WhatsApp Embedded Signup»
+   (variante v4) → su id va en `WHATSAPP_CONFIG_ID`. Dominio permitido = el de prod (y el túnel para el sandbox). El
+   `code` del popup vive **30 s** y se canjea una vez (S1). Coexistencia con la app WhatsApp Business del celular
+   (`WHATSAPP_SIGNUP_FEATURE=whatsapp_business_app_onboarding`) **recién después del sandbox** (WA-D30).
+5. **Webhook:** WhatsApp → Configuración → URL `https://<dominio>/api/webhooks/whatsapp` (GET verifica, POST recibe),
+   token de verificación = `WHATSAPP_WEBHOOK_VERIFY_TOKEN` (**≥ 32 caracteres**: `openssl rand -hex 32`; el boot rechaza
+   uno más corto). Suscribir los campos `messages`, `message_template_status_update`, `account_update` y
+   `phone_number_quality_update`. Meta firma cada POST con el **App Secret** (`X-Hub-Signature-256`, S9).
+6. **Plantillas:** las da de alta la app por cada cuenta conectada (es_AR, UTILITY, con el pie «Respondé BAJA para no
+   recibir más avisos.»): `cs_turno_agendado_v1`, `cs_turno_reprogramado_v1`, `cs_turnos_actualizados_v1`,
+   `cs_recordatorio_turno_v1` (botones «Confirmo» / «No puedo ir») y `cs_documento_v1` (header DOCUMENT). La prueba usa
+   `hello_world`. Meta las aprueba una por una (estado en Configuración → WhatsApp).
+7. **Medio de pago por consultorio, en Meta:** cada consultorio carga su tarjeta en su WhatsApp Manager (la app lo muestra
+   como checklist en Configuración → WhatsApp). Sin medio de pago, Meta devuelve 131042 y el aviso queda fallido con el
+   motivo; la campana avisa al Titular.
+8. **Variables (Vercel → Production):**
+
+   | Variable | Valor | Nota |
+   |---|---|---|
+   | `WHATSAPP_MODE` | `off` → `sandbox` → `live` | `sandbox`/`live` en Production exigen las 4 de abajo + `SECRET_BOX_KEYS` (si falta una, el boot falla) |
+   | `WHATSAPP_APP_ID` / `WHATSAPP_APP_SECRET` | de la app de Meta (Configuración básica) | server-only; el secret firma el webhook |
+   | `WHATSAPP_CONFIG_ID` | id de la configuración de Embedded Signup | no es secreto (viaja al browser en el alta) |
+   | `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | `openssl rand -hex 32` | ≥ 32 en cualquier entorno |
+   | `WHATSAPP_GRAPH_VERSION` | sin setear (= `v23.0`) | se sube a mano, probando el sandbox antes |
+   | `WHATSAPP_SIGNUP_FEATURE` | sin setear | coexistencia, después del sandbox |
+
+   El token de cada consultorio no va en variables: queda sellado en `WhatsAppCredential` con `SECRET_BOX_KEYS`
+   (propósito `wa-credential`; se rota con `scripts/secret-box-rotate.ts --store=wa|all`).
+9. **Cron:** el segundo cron de `vercel.json`, `/api/cron/whatsapp` a las `0 21 * * *` (18:00 AR; en Hobby dispara dentro
+   de esa hora), manda los recordatorios del día siguiente y re-drena la cola. Usa el mismo `CRON_SECRET`.
+10. **Sandbox S1-S13** (lo corrés vos, en local, con la app de prueba de Meta, un número de prueba y un túnel apuntando a
+    `/api/webhooks/whatsapp`; nunca un agente). Sin flags corre contra el simulador (lo mismo que CI:
+    `npm run diagnose:whatsapp`). Con el sandbox:
+
+    ```bash
+    WHATSAPP_MODE=sandbox WHATSAPP_APP_ID=… WHATSAPP_APP_SECRET=… NEXT_PUBLIC_APP_URL=https://<túnel> \
+      npx tsx --conditions=react-server scripts/diagnose-whatsapp.ts --sandbox \
+        --code <code del popup, < 30 s> --waba <waba_id> --phone-number-id <id> --pin <6 dígitos> --to <+549…>
+    ```
+
+    S1-S7 y S12 son automáticos; S8-S11 y S13 se miran en el log del webhook (el script lo explica al final). Imprime
+    ✓/✗, nunca tokens, PINs ni teléfonos completos. Lo que verifica: canje del `code` (S1), `debug_token` con los dos
+    `granular_scopes` (S2), teléfonos (S3), `subscribed_apps` (S4), `register` con PIN (S5), plantilla PENDING → webhook
+    (S6), `wamid` y estados (S7), botón con nuestro payload y `context.id` (S8), firma (S9), GET de verificación (S10),
+    PDF por media (S11), formas de error 131026/131042/130429/190 (S12) y PARTNER_REMOVED (S13).
+11. **Pasar a `live`:** app aprobada + Tech Provider → `WHATSAPP_MODE=live` → redeploy → conectar el número del cliente
+    vivo desde Configuración → WhatsApp → prueba con `hello_world` → un turno real de prueba.
+
+### 0.14 T6 — Suscripción con Mercado Pago (MPS, 23-oct-2026) 🔴
+
+**Con migración M16** (`saas_mp_subscriptions`, [RUNBOOK «M16 en prod»](MIGRACIONES-RUNBOOK.md)). Diseño en
+[ARCHITECTURE ADR-027](ARCHITECTURE.md). Cobro el **día 4** (MPS-D7) por débito automático (preapproval), «Pagar con
+Mercado Pago» por cargo, o transferencia con comprobante. Usa la cuenta de Mercado Pago **de la plataforma**
+(`MP_ACCESS_TOKEN`), no la de los vendedores de §0.12.
+
+**Progresión:** `SAAS_BILLING_MODE=off` en el deploy → `saas-reanchor` (PUSH-DIA F1) → **`manual`** (precios en
+/plataforma + `SAAS_BILLING_TRANSFER_INFO` + bucket `billing-receipts`, §0.6) → **sandbox S1-S10** → **`mp`** + redeploy.
+`mp` = todo lo de `manual` **más** débito y checkout; en Production exige `MP_ACCESS_TOKEN` (y por eso
+`MP_WEBHOOK_SECRET`).
+
+| Qué | Cómo |
+|---|---|
+| Webhooks de la app de la plataforma | Tus integraciones → la app de `MP_ACCESS_TOKEN` → Webhooks: eventos **«Pagos»** y **«Planes y suscripciones»**, URL `https://<dominio>/api/webhooks/mercadopago` (sin `?scope=`; el checkout de cada cargo agrega `?scope=saas`). Firma con **`MP_WEBHOOK_SECRET`** (S3), no con el secreto de la app de OAuth |
+| Usuarios de prueba | Un **vendedor** de prueba AR (su token hace de `MP_ACCESS_TOKEN` en el sandbox) y un **comprador** de prueba AR (autoriza el débito con la tarjeta de prueba) |
+| `MP_MIN_DEBIT_CENTS` | Sin setear = 1500 ($ 15, el mínimo de MP). Entero en centavos; un valor roto frena el deploy |
+| `SAAS_MP_CHECKOUT_NOTIFY` | Sin setear = `scope` (`notification_url …?scope=saas`). `panel` solo si el sandbox muestra que la URL por preferencia no llega firmada |
+
+**Sandbox S1-S10** (lo corrés vos, con el webhook de la app apuntando a un túnel; nunca un agente). Sin flags corre
+contra el simulador (`npm run diagnose:mp-subscriptions`, lo mismo que CI):
+
+```bash
+SAAS_BILLING_MODE=mp MP_CONNECT_MODE=off MP_ACCESS_TOKEN=<token del vendedor de prueba> \
+NEXT_PUBLIC_APP_URL=https://<túnel> \
+  npx tsx --conditions=react-server scripts/diagnose-mp-subscriptions.ts --sandbox --test-user-token \
+    --payer-email <comprador de prueba>
+# → S1 e imprime el init_point: autorizá con el comprador y la tarjeta de prueba. Después:
+#   … --sandbox --test-user-token --preapproval <id>            → S2, S5, S6
+#   … --sandbox --test-user-token --preapproval <id> --cancel   → S8 (cancela de verdad: al final)
+# S3, S4, S7, S9 y S10 se miran en el log del webhook.
+```
+
+S1 preapproval `pending` sin tarjeta · S2 autorización en la página de MP · S3 aviso firmado con `MP_WEBHOOK_SECRET` ·
+S4 primer débito (`subscription_authorized_payment`) · S5 cambio de monto y mínimo · S6 pausa/reanuda · S7 rechazo,
+reintento y reintegro · S8 `cancelled` terminal · S9 link de pago de un cargo (`binary_mode`, 72 h, `?scope=saas`) ·
+S10 rechazado (nunca `pending`) y preferencia vencida.
+
+**Pasar a `mp`:** token de producción de la plataforma en `MP_ACCESS_TOKEN` → `SAAS_BILLING_MODE=mp` → redeploy → el
+cliente vivo elige el método en Configuración → Facturación. Plataforma → Facturación del consultorio muestra el
+estado de la suscripción en MP, el débito permitido, los ajustes y el re-anclaje.
+
+### 0.15 T7 — TV de la sala en modo kiosco (23-oct-2026) 🟡
+
+**Con migración M17** (`reception_displays`, [RUNBOOK «M17 en prod»](MIGRACIONES-RUNBOOK.md)). Diseño en
+[ARCHITECTURE ADR-028](ARCHITECTURE.md). Sin consola externa: lo arma el consultorio. El riesgo es el navegador de cada
+Smart TV: el **spike en una TV real** va al QA después del push (PUSH-DIA G8).
+
+1. **Hardware recomendado:** un **Chromecast con Google TV** o un **Fire TV Stick** con Chrome/Silk, o una mini PC con
+   Chrome. El navegador propio de las Smart TV (Tizen, webOS) es el riesgo: probarlo antes de recomendarlo.
+2. **Chrome en kiosco** (mini PC o notebook conectada a la TV):
+
+   ```bash
+   google-chrome --kiosk --autoplay-policy=no-user-gesture-required https://<dominio>/tv
+   ```
+
+   (En macOS: `open -a "Google Chrome" --args --kiosk --autoplay-policy=no-user-gesture-required https://<dominio>/tv`.)
+   El flag evita que Chrome frene el video por la política de autoplay. Igual, la TV arranca en silencio y muestra
+   «Tocá OK para activar el sonido»: la primera tecla del control (o un toque) activa el sonido y el aviso de llamado y
+   pide pantalla completa. Mantiene la pantalla encendida (wake lock) y se recarga sola a las 04:00 AR.
+3. **Vincular:** en la app, **/sala → Pantallas** (solo quien opera toda la agenda, nunca en soporte) → «Agregar
+   pantalla» → aparece un código de 8 caracteres, **una sola vez**, que vence a los **10 min**. En la TV, `/tv` muestra
+   «Vinculá esta pantalla»: se tipea el código. Tope: 10 pantallas por consultorio. Desvincular desde el mismo drawer.
+4. **Video de YouTube** (opcional, por pantalla): link de un video, vivo, lista o canal en vivo; se reproduce con
+   `youtube-nocookie`. La TV no muestra datos de salud: solo el nombre corto o la hora del turno.
+5. **Derechos de exhibición:** pasar música o video en una sala de espera es comunicación pública. Los derechos (SADAIC
+   / AADI-CAPIF si hay música) son **del consultorio**; la app lo avisa en el formulario de la pantalla.
+
 ### 1. Hosting / plataforma de despliegue — Vercel
 - **Qué configura:** proyecto en Vercel (región `gru1` ya fijada en `vercel.json`); env vars de prod;
   branch protection en `main` exigiendo el check de CI como required; `KINESOFT_ALLOW_DEMO_ACTOR`
@@ -542,8 +680,9 @@ prod `supabase` + redeploy. Volver atrás = `REALTIME_DRIVER=off` + redeploy.
      sigue igual (AUDIT §5.4).
   1b. **Cobros online con la cuenta del vendedor (T5, ADR-026):** app de MP con OAuth + PKCE, webhook «Pagos» con
      secreto, usuarios de prueba, sandbox S1-S11 y progresión off → sandbox → live: **§0.12**.
-  2. **Suscripción:** hoy por transferencia con comprobante (PL-2b, §0.6, ADR-016). Con MP llega en T6 (MPS, cobro el
-     día 4, MPS-D7; su ADR será el **ADR-027**).
+  2. **Suscripción:** transferencia con comprobante (PL-2b, §0.6, ADR-016) y, desde T6, débito automático y «Pagar con
+     Mercado Pago» con la cuenta de la plataforma (MPS, cobro el día 4, MPS-D7, ADR-027): webhooks «Pagos» + «Planes y
+     suscripciones», sandbox S1-S10 y `off → manual → mp` en **§0.14**.
 - **Bloquea:** checkout de turnos (corte E1 #2). Ya no bloquea el cobro del plan: es manual (PL-2b, §0.6; la Ola 2.4 quedó superada por PL).
 - **Responsable:** dueño.
 - **Estado:** 🔴 cobros online (T5) en código y probados con el MP falso; app de MP, sandbox y `live` pendientes (§0.12).
@@ -562,12 +701,18 @@ prod `supabase` + redeploy. Volver atrás = `REALTIME_DRIVER=off` + redeploy.
   mails que no salieron» de `/plataforma/sistema` (**§0.9**).
 
 ### 8. Identidad / OAuth
-- **Qué configura:** proveedores OAuth adicionales. **Google** ya está cableado. **Facebook**: el código está
-  (PL-2e, `/api/auth/oauth/facebook`); falta la app de Meta y el provider en Supabase (§0.6). **Apple** requiere
-  cuenta de Apple Developer (paga).
-- **Bloquea:** sesión `oauth-extra` (Ola 2.6) — opcional.
+- **Qué configura:** proveedores OAuth. **Google** y **Facebook** están en el **código** (PL-2e,
+  `POST /api/auth/oauth/{google|facebook}`, botones del login y del signup); a los dos les falta la **consola**:
+  - Google: Google Cloud → credenciales OAuth (cliente web) con la redirect URI `https://<ref>.supabase.co/auth/v1/callback`
+    → Supabase de prod → Authentication → Providers → **Google** (Client ID y Secret). Depende de la Site URL y de
+    `/auth/callback**` en Redirect URLs (§0.4). Verificar: `GET https://<ref>.supabase.co/auth/v1/settings` →
+    `"google": true`. Se prueba de verdad recién después del push (PUSH-DIA G4).
+  - Facebook: app de Meta para Login (**no** la de WhatsApp, §0.13) + provider en Supabase (§0.6).
+  - **Apple** requiere cuenta de Apple Developer (paga).
+- **Bloquea:** nada del push: sin provider, el botón termina en «Ese método de ingreso no está disponible por ahora».
 - **Responsable:** dueño.
-- **Estado:** 🟢 Google · 🟡 Facebook (código listo, consola pendiente) · 🔴 Apple.
+- **Estado:** 🟡 Google (código listo, provider de prod pendiente) · 🟡 Facebook (código listo, consola pendiente) ·
+  🔴 Apple. (Antes decía «🟢 Google»: era el código, no la consola; contradecía al ROADMAP, que lo tiene pendiente.)
 - **Gate de activación:** credenciales del proveedor en Supabase Auth.
 
 ### 9. Analítica de producto/uso — GA / Vercel Analytics / Google Business
@@ -602,46 +747,14 @@ prod `supabase` + redeploy. Volver atrás = `REALTIME_DRIVER=off` + redeploy.
 - **Estado:** 🔴
 - **Gate de activación:** assets entregados.
 
-### 13. Mensajería — WhatsApp Business API — bucket C
-- **Qué configura:** una cuenta de **WhatsApp Business API** para **enviar** recordatorios de turno
-  automáticos (hoy no hay nada configurado). Requiere: (a) elegir proveedor — **Twilio**
-  (más caro por mensaje, integración y soporte más simples) o **360dialog** (BSP oficial, tarifa
-  Meta directa, más barato a volumen, alta más burocrática); (b) verificar el negocio en Meta
-  Business Manager; (c) un número de teléfono dedicado (no puede ser el mismo que ya usa la app
-  WhatsApp normal del consultorio); (d) **registrar y aprobar plantillas** (message templates) —
-  Meta las revisa una por una y todo mensaje iniciado por el negocio fuera de la ventana de 24 h
-  tiene que ser una plantilla aprobada.
-- **Contexto (qué hay hoy):** en la **Ronda 5** se entregó "Compartir turno" en el booking-drawer
-  con un link **`wa.me`** (`components/agenda/booking-drawer/share-actions.tsx`) + recordatorio imprimible/PDF
-  client-side. Ese camino **no requiere ninguna configuración ni costo**: abre WhatsApp con el
-  texto pre-cargado y el profesional aprieta enviar. Cubre el caso real de hoy (1 cliente,
-  volumen bajo). La API oficial es lo que hace falta **solo** para envíos **automáticos** (cron de
-  recordatorios 24 h antes, confirmación automática al reservar) sin intervención humana.
-  Diferidos relacionados de la Ronda 5: envío por email/WhatsApp-API del recordatorio y el export
-  PDF/JPEG completo. **Gap conocido:** la landing publicita WhatsApp sin implementación real —
-  alinear el copy cuando esto exista (o antes).
-- **Costo aproximado:** Meta cobra **por conversación de 24 h**, no por mensaje, y por categoría.
-  En Argentina las de **utility/servicio** (que es la categoría del recordatorio de turno) están
-  en el orden de **USD 0,03-0,05 por conversación**; marketing es varias veces más caro. Twilio
-  suma su fee por mensaje encima de la tarifa Meta (~USD 0,005-0,01); 360dialog cobra una
-  suscripción mensual fija (del orden de USD 20-50) y pasa la tarifa Meta a costo. Para un
-  consultorio con ~200 turnos/mes el costo de plataforma domina al de conversaciones. **Verificar
-  los números vigentes antes de decidir** — Meta reajusta la tabla de precios por país
-  periódicamente.
-- **Decisión pendiente:** proveedor (Twilio vs 360dialog) y si el recordatorio automático es una
-  feature del plan base o un add-on facturable (afecta el billing SaaS de la Ola 2.4).
-- **Bloquea:** nada del corte E1/E2 — el link `wa.me` cubre el flujo manual. Bloquea los
-  recordatorios automáticos y el ítem (d) diferido de la Ronda 5.
-- **Responsable:** dueño (cuenta, número, verificación de negocio, plantillas) + ejecutor técnico
-  (cliente de envío + cron, patrón listo-para-activar con fallback no-op).
-- **Estado:** 🔴 (nada configurado; el dueño todavía no lo arrancó).
-- **Gate de activación:** **demanda real del cliente** — recién cuando el cliente vivo pida
-  recordatorios automáticos (o haya ≥2 consultorios pidiéndolo). No adelantarse: la API tiene
-  costo fijo y alta burocrática, y el link `wa.me` no cuesta nada.
-- **Env vars que haría falta:** `WHATSAPP_PROVIDER` (`twilio` | `360dialog`), `WHATSAPP_FROM`
-  (número en formato E.164) y el par de credenciales del proveedor —
-  Twilio: `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN`;
-  360dialog: `WHATSAPP_API_KEY` (+ `WHATSAPP_API_URL` si el endpoint no es el default).
-  Más `WHATSAPP_TEMPLATE_REMINDER` (nombre de la plantilla aprobada) y, si se implementa el
-  callback de estado de entrega, `WHATSAPP_WEBHOOK_SECRET`. Ausentes → el envío queda no-op y la
-  UI sigue ofreciendo solo el link `wa.me`.
+### 13. Mensajería — WhatsApp Business (Cloud API de Meta)
+- **Qué configura:** avisos automáticos por WhatsApp (turno agendado/reprogramado, recordatorio con «Confirmo» / «No
+  puedo ir», compartir ficha) con el número **de cada consultorio**, por Embedded Signup v4 y la Cloud API de Meta, con
+  KineSoft como Tech Provider. **Se descartaron Twilio y 360dialog** (T6, ADR-029): sin intermediario, el consultorio paga
+  sus conversaciones a Meta. El link `wa.me` de «Compartir turno» sigue igual y no necesita nada.
+- **Bloquea:** solo los avisos automáticos. El código está completo y probado con el Meta falso.
+- **Responsable:** dueño (verificación del negocio, app, Tech Provider, sandbox) + cada consultorio (su número y su
+  medio de pago en Meta).
+- **Estado:** 🔴 consola de Meta pendiente; código listo (`WHATSAPP_MODE=off`).
+- **Gate de activación:** `WHATSAPP_MODE` + `WHATSAPP_APP_ID/SECRET` + `WHATSAPP_CONFIG_ID` +
+  `WHATSAPP_WEBHOOK_VERIFY_TOKEN` + `SECRET_BOX_KEYS`. Paso a paso en **§0.13**.

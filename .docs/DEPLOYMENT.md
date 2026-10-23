@@ -1,320 +1,309 @@
-# KineSoft — Deployment & Operations Runbook
+# KineSoft — Deployment y operación
 
-How the environments fit together, how migrations flow, and the procedures
-that bite if you get them wrong.
+Cómo encajan los entornos, cómo viajan las migraciones y los procedimientos que muerden si se hacen mal.
+**El día del push de T3-T7 se sigue [PUSH-DIA.md](PUSH-DIA.md)** (el único checklist); este documento es la referencia.
 
-## The environment split (read this first)
+## Los entornos (leer primero)
 
-| File | Points at | Used by |
+| Archivo | Apunta a | Lo usan |
 | --- | --- | --- |
-| `.env` | Historically a **hand-toggled DEV/PROD** file. **Target (A0b, 2026-09-29): DEV only** — delete the commented PROD block | Prisma CLI and `@prisma/client` (both auto-load it) |
-| `.env.local` | **Local Docker** (`localhost:5433`, app role `kinesoft_app`) | `next dev`, the `prisma:*` scripts, tests |
-| `.env.prod.local` | **Supabase prod** (owner `DIRECT_URL` + `DATABASE_URL`) — gitignored, created by the owner | only the `db:prod:*` scripts |
+| `.env` | El objetivo es **solo DEV**, pero **puede apuntar a PRODUCCIÓN** (AGENTS §4): se trata como prod. Nunca se leen ni se imprimen sus valores | Prisma CLI y `@prisma/client` (lo cargan solos); `next dev` y `next build` (debajo de `.env.local`) |
+| `.env.local` | **Docker local** (`localhost:5433`, rol app `kinesoft_app`) | `npm run dev:local`, los scripts `prisma:*`, los tests |
+| `.env.prod.local` | **Supabase prod** (owner: `DIRECT_URL` + `DATABASE_URL`; para `qa-tenants` también las de Auth) — gitignored, lo crea Martin | solo `db:prod:*` y los scripts de PUSH-DIA F (`npx dotenv -e .env.prod.local -- …`) |
 
-**The footgun:** Next.js loads `.env.local` over `.env`, but the **Prisma CLI
-and `@prisma/client` load `.env`**. Whatever `.env` points to is what a bare
-`prisma …` or a script hits. That's why: local scripts are wrapped with
-`dotenv -e .env.local`; prod operations go ONLY through `db:prod:*`
-(`.env.prod.local`); and every seed/script calls `assertSafeTarget`
-(`scripts/lib/assert-safe-target.ts`), which prints the real target, refuses a
-remote DB for local-only seeds, and requires `KINESOFT_CONFIRM_PROD=<project
-ref>` for the few scripts allowed against prod.
+**La trampa:** Next carga `.env.local` por encima de `.env`, pero **el Prisma CLI y `@prisma/client` cargan `.env`**, y lo
+que `.env.local` no define (p. ej. las claves de Supabase) Next lo toma de `.env`. Por eso:
+
+- los scripts locales van con `dotenv -e .env.local`; lo de prod, **solo** por `db:prod:*` (`.env.prod.local`);
+- cada seed/script llama a `assertSafeTarget` (`scripts/lib/assert-safe-target.ts`): imprime el destino real, rechaza una
+  base remota en los seeds locales y exige `KINESOFT_CONFIRM_PROD=<project ref>` en los pocos scripts que van a prod;
+- ⚠️ **nunca `next build` pelado en el repo:** inlinea en el bundle los `NEXT_PUBLIC_SUPABASE_*` que encuentre, y si
+  `.env.local` no los trae salen los de `.env` (posible prod). El build local va aislado, con valores falsos explícitos:
+
+  ```bash
+  npx dotenv -e .env.local -v NODE_ENV=production -v NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54398 \
+    -v NEXT_PUBLIC_SUPABASE_ANON_KEY=dev-mpfake-anon-key-no-real -v SUPABASE_SERVICE_ROLE_KEY=build-local-no-real \
+    -v SUPABASE_JWT_SECRET=dev-mpfake-jwt-secret-solo-local-0123456789abcdef -- npx next build
+  ```
+
+- **`npm run dev` ahora es seguro** (`scripts/dev-safe.mjs`, INF-DEV): resuelve el Supabase y la base que vería
+  `next dev` (mismo orden que `@next/env`) y **no arranca** si alguno es remoto o coincide con `PROD_SUPABASE_REF`
+  (overrides separados: `ALLOW_DEV_REMOTE_SUPABASE=1`, `ALLOW_DEV_REMOTE_DB=1`). Nunca imprime valores.
+  **El comando diario es `npm run dev:local`** (= `dev:mpfake` = `dev:wafake`: Docker + simuladores de MP y de Meta,
+  `scripts/dev-mp-fake.mjs`).
 
 ```bash
-npm run prisma:migrate   # dotenv -e .env.local -- prisma migrate dev   → local Docker
-npm run prisma:seed      #                                              → local Docker
-npm run prisma:studio    #                                              → local Docker
-npm run prisma:reset     # prisma migrate reset                          → local Docker (wipes!)
-npm run db:prod:status   # prisma migrate status  (.env.prod.local)     → Supabase PROD (read)
-npm run db:prod:backup   # pg_dump -Fc → ~/kinesoft-backups/            → Supabase PROD (read)
-npm run db:prod:deploy   # prisma migrate deploy  (.env.prod.local)     → Supabase PROD (owner only)
+npm run dev:local          # diario: Docker :5433 + simuladores (nunca lee el Supabase de .env)
+npm run prisma:seed        # → Docker local (lo corre Martin; un agente nunca corre seeds)
+npm run prisma:studio      # → Docker local
+npm run prisma:reset       # migrate reset → Docker local (¡borra todo! solo Martin)
+npm run db:prod:status     # prisma migrate status   (.env.prod.local) → PROD (lectura)
+npm run db:prod:precheck   # prechecks/postchecks READ ONLY (--pre | --post) → PROD (lectura)
+npm run db:prod:backup     # pg_dump -Fc → ~/kinesoft-backups/ → PROD (lectura; pg_dump ≥ versión del server)
+npm run db:prod:deploy     # prisma migrate deploy   (.env.prod.local) → PROD (solo Martin)
 ```
 
-## Local dev setup
+`npm run prisma:migrate` (= `migrate dev`) **no se usa**: detecta drift, propone resetear y puede borrar los índices
+parciales escritos a mano.
+
+## Desarrollo local
 
 ```bash
-# 1) deps
 npm ci
-
-# 2) database (Docker Postgres on :5433)
 docker compose up -d db
-npm run prisma:migrate     # apply migrations to local
-npm run prisma:seed        # seed demo tenant (movare) + catalog
-
-# 3) run
-npm run dev                # http://localhost:3000
+npx dotenv -e .env.local -- npx prisma migrate deploy    # 46 migraciones al 23-oct
+npx prisma generate
+npm run dev:local                                        # http://localhost:3000
 ```
 
-`KINESOFT_ALLOW_DEMO_ACTOR=1` in `.env.local` lets you work without a Supabase
-session (falls back to the seeded `movare` tenant). **Never in prod** —
-`lib/session.ts` also gates it on `NODE_ENV !== "production"`.
+`KINESOFT_ALLOW_DEMO_ACTOR=1` en `.env.local` deja trabajar sin sesión de Supabase (cae al tenant demo `movare`).
+**Nunca en prod** (`lib/session.ts` además lo corta con `NODE_ENV === "production"`).
 
-## Migrations
+## Migraciones
 
-Hand-authored SQL under `prisma/migrations/<timestamp>_<name>/migration.sql`
-(not generated). After a schema edit:
+SQL escrito a mano en `prisma/migrations/<timestamp>_<nombre>/migration.sql`. Después de tocar el schema:
 
-1. Edit `prisma/schema.prisma`.
-2. `npx prisma generate` (refreshes the client + typecheck; no DB needed).
-3. Write the migration SQL.
-4. `npx dotenv -e .env.local -- npx prisma migrate deploy` → applies to **local**; verify object by object and
-   run the integration suite. **Not** `npm run prisma:migrate` (= `migrate dev`): it detects drift, proposes a
-   reset and can drop the hand-written partial indexes (Booking, Location, ScheduleException, PayerPlan…).
-5. Commit (the owner; agents never commit or push).
+1. Editar `prisma/schema.prisma` (a mano, solo el bloque que cambia: nada de `prisma format`).
+2. `npx prisma generate`.
+3. Escribir el SQL (aditivo, con el porqué en la cabecera).
+4. `npx dotenv -e .env.local -- npx prisma migrate deploy` → **local**; verificar objeto por objeto y correr la
+   integración con los dos roles.
+5. Commit (Martin; los agentes nunca commitean ni pushean).
 
-### Migrations on deploy (Production only, since A0b)
+### Migraciones en el deploy (solo Production, desde A0b)
 
 `vercel.json` → `node scripts/vercel-build.mjs`:
 
 ```
 VERCEL_ENV=production → prisma migrate deploy && prisma generate && next build
-anything else         →                          prisma generate && next build
+cualquier otro        →                          prisma generate && next build
 ```
 
-So **only Production deploys apply pending migrations** (idempotent — applied
-ones are skipped; a failing migration fails the deploy). Until A0b every
-Preview build migrated too, and Previews shared the prod DB: any pushed branch
-with a migration hit prod before review (AUDIT H6). Previews must point at
-**staging** (EXTERNAL-CONFIG §Staging).
+**Solo los deploys de Production aplican migraciones** (idempotente: lo aplicado se saltea; una migración que falla
+frena el deploy). Hasta A0b cada Preview migraba también y compartía la base de prod (AUDIT H6).
 
-**Order for a block with migrations** (the agent writes the exact list):
-1. read-only prechecks against prod (queries in MIGRACIONES-RUNBOOK);
+**Orden para una tanda con migraciones (sin staging, sin reset):**
+1. `npm run db:prod:precheck -- --pre` (solo lectura) → Martin pega la salida;
 2. `npm run db:prod:backup`;
-3. apply + QA on **staging**;
-4. merge to `main` → the Production build applies them (or `npm run
-   db:prod:deploy` beforehand, then deploy).
+3. `npm run db:prod:deploy` **antes** del push (todas aditivas y compatibles con el código viejo);
+4. `npm run db:prod:precheck -- --post`;
+5. push a `main` → el build de Production migra en vacío (no-op).
 
-> ⚠️ **Vercel env must include `DIRECT_URL`** (not just `DATABASE_URL`) —
-> `migrate deploy` uses the direct connection. Without it, the build step
-> can't migrate. Confirm in Vercel → Project → Settings → Environment Variables.
+> ⚠️ **Vercel necesita `DIRECT_URL`** (no solo `DATABASE_URL`): `migrate deploy` usa la conexión directa.
 
-**History:** the symptom that prompted this — a deploy threw a server-side
-exception because `Booking.seriesId` existed in the Prisma client but not in
-Supabase (the migration was only applied locally). The auto-migrate closes
-that gap. If you ever need to apply manually: `npm run db:prod:deploy`.
+### Estado de las migraciones
 
-### Migraciones pendientes de aplicar en producción
+46 en el repo. Las 15 de base (aplicadas en prod desde el principio):
 
-Rondas 4-9 ran entirely against **local Docker** — prod was deliberately left
-untouched. The full history in `prisma/migrations/`, in order:
+| # | Migración |
+| --- | --- |
+| 1 | `20260518134107_init` |
+| 2 | `20260519013041_sprint5` |
+| 3 | `20260519234538_sprint_9_plans_favorites_templates` |
+| 4 | `20260520170944_sprint_13_insurers_invitations_manual_therapy` |
+| 5 | `20260523234642_sprint_16_perf_indexes` |
+| 6 | `20260524002341_sprint_16_patient_share` |
+| 7 | `20260525000000_sprint_17_business_hours` |
+| 8 | `20260525001000_sprint_17_custom_conditions` |
+| 9 | `20260614120000_sprint_18_audit_fixes` |
+| 10 | `20260615120000_sprint_18_copago_overrides` |
+| 11 | `20260615140000_sprint_18_insurer_paid` |
+| 12 | `20260616120000_booking_series_id` |
+| 13 | `20260723213701_payment_expected_amount_and_delete_restrict` |
+| 14 | `20260725120000_rls_policies` |
+| 15 | `20260730120000_service_max_concurrent` |
 
-| # | Migration | Ronda / note |
-| --- | --- | --- |
-| 1 | `20260518134107_init` | baseline |
-| 2 | `20260519013041_sprint5` | baseline |
-| 3 | `20260519234538_sprint_9_plans_favorites_templates` | baseline |
-| 4 | `20260520170944_sprint_13_insurers_invitations_manual_therapy` | baseline |
-| 5 | `20260523234642_sprint_16_perf_indexes` | baseline |
-| 6 | `20260524002341_sprint_16_patient_share` | baseline |
-| 7 | `20260525000000_sprint_17_business_hours` | baseline |
-| 8 | `20260525001000_sprint_17_custom_conditions` | baseline |
-| 9 | `20260614120000_sprint_18_audit_fixes` | baseline |
-| 10 | `20260615120000_sprint_18_copago_overrides` | baseline |
-| 11 | `20260615140000_sprint_18_insurer_paid` | baseline |
-| 12 | `20260616120000_booking_series_id` | baseline |
-| 13 | `20260723213701_payment_expected_amount_and_delete_restrict` | Ronda 2 — anchored payment amount |
-| 14 | `20260725120000_rls_policies` | Ola B2 — **all** RLS policies |
-| 15 | `20260730120000_service_max_concurrent` | `Service.maxConcurrent` (overlap capacity) |
+Las 31 siguientes, con qué hace cada una y su estado en prod: [MIGRACIONES-RUNBOOK §2 «Tabla de migraciones»](MIGRACIONES-RUNBOOK.md).
+Prod tiene **40** (hasta M11); **pendientes: M12 → M14 → M18 → M17 → M15 → M16** ([PUSH-DIA.md](PUSH-DIA.md) A y D).
 
-**Applied in LOCAL, PENDING in PROD** (verify each against
-`_prisma_migrations` before assuming otherwise):
+## Variables de entorno
 
-| # | Migration | Ronda | What it does |
+Inventario completo: el schema de `lib/env.ts` + todo lo que el código lee por `process.env` (grep del 23-oct sobre
+`app/`, `lib/`, `components/`, `middleware.ts`, `next.config.mjs`, `instrumentation.ts`, `sentry.*.config.ts` y
+`scripts/`). `.env.example` tiene la misma lista con comentarios. El boot de Production (`productionSchema`) falla con el
+nombre de la variable, nunca el valor. «Martin» = la carga él en Vercel (o en su `.env*.local`).
+
+**Scope:** P = Production · Pv = Preview · L = local. «Secreta» = server-only, nunca `NEXT_PUBLIC_`, va al gestor de
+contraseñas.
+
+### Base, Supabase y dominio
+
+| Variable | Scope | Default seguro | Quién | Secreta | Nota |
+| --- | --- | --- | --- | --- | --- |
+| `DATABASE_URL` | P Pv L | — (**obligatoria en P**) | Martin | sí | Runtime de la app (pooler 6543, `pgbouncer=true&connection_limit=3`). Objetivo: rol `kinesoft_app` **sin** BYPASSRLS (OPS-3, pendiente: hoy prod conecta con BYPASSRLS y el `where: { tenantId }` es la barrera) |
+| `DIRECT_URL` | P Pv L | — (**obligatoria en P**) | Martin | sí | Owner, 5432 sin pooler: `migrate deploy` y fallback del canal service |
+| `DATABASE_URL_SERVICE` | P | cae a `DIRECT_URL` | Martin | sí | `kinesoft_service` (BYPASSRLS) para superficies sin Actor. Recomendada en P (aviso al boot) |
+| `NEXT_PUBLIC_SUPABASE_URL` | P Pv L | — (**obligatoria en P**) | Martin | no | Se inlinea en el build (ver «nunca `next build` pelado») |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | P Pv L | — (**obligatoria en P**) | Martin | no (pública) | Recortada: un `\n` rompía el socket (HF-1a) |
+| `SUPABASE_SERVICE_ROLE_KEY` | P Pv | — (**obligatoria en P**) | Martin | **sí** | Auth admin, Storage, Broadcast |
+| `NEXT_PUBLIC_APP_URL` | P Pv L | `http://localhost:3000` | Martin | no | En P **no** puede ser localhost (el boot lo rechaza): links de mails, `notification_url` de MP, redirect de OAuth |
+| `PROD_SUPABASE_REF` | **P Pv L** (mismo valor) | sin setear | Martin | no | Ref de prod. Activa el [guard de Preview](#guard-de-preview-ops-1c), `dev-safe` y `qa-tenants --target local` |
+| `NODE_ENV` | — | lo pone Next/Vercel | — | no | No se carga a mano |
+| `VERCEL_ENV` / `VERCEL` | P Pv | los pone Vercel | — | no | «Automatically expose System Environment Variables» **prendido**: CSP/HSTS y el rechazo de `fake` dependen de esto |
+| `LOG_LEVEL` | P Pv L | `info` | Martin | no | `debug`/`info`/`warn`/`error` |
+
+### Sala en vivo (realtime)
+
+| Variable | Scope | Default seguro | Quién | Secreta | Nota |
+| --- | --- | --- | --- | --- | --- |
+| `REALTIME_DRIVER` | P Pv L | `off` | Martin | no | **P: `supabase` (ya está).** `local` solo dev (en P frena el boot); `supabase` exige las 4 de Supabase + `SUPABASE_JWT_SECRET`. Se lee al cargar: cambiarla pide redeploy |
+| `SUPABASE_JWT_SECRET` | P | — | Martin | **sí** | Firma el token corto del canal (y el del dispositivo de TV). Recortado (HF-1a) |
+| `SUPABASE_JWT_KID` | P | sin setear | Martin | no | Solo con las JWT Signing Keys nuevas (R4) |
+
+### Mails, soporte y bandeja
+
+| Variable | Scope | Default seguro | Quién | Secreta | Nota |
+| --- | --- | --- | --- | --- | --- |
+| `RESEND_API_KEY` | P | sin setear (= mails a log, aviso al boot) | Martin | **sí** | [EXTERNAL-CONFIG §0.4](EXTERNAL-CONFIG.md) |
+| `EMAIL_FROM` | P | sin setear (= log) | Martin | no | `KineSoft <no-reply@mail.<dominio>>` |
+| `EMAIL_REPLY_TO` | P | sin setear | Martin | no | Reply-To por defecto |
+| `EMAIL_TRANSPORT` | **L** | — | dev | no | `mailpit`/`resend`/`log`; Production lo ignora. **No cargar en P** |
+| `MAILPIT_URL` | **L** | `http://localhost:8025` | dev | no | Solo local |
+| `NEXT_PUBLIC_SUPPORT_EMAIL` | P | sin setear | Martin | no | Canal de soporte público (banda de acceso, /suspendido) |
+| `PLATFORM_INBOX_EMAIL` | P | sin setear (los mensajes quedan en /plataforma) | Martin | no | Aviso por mail de mensajes y leads |
+
+### Observabilidad y rate limit
+
+| Variable | Scope | Default seguro | Quién | Secreta | Nota |
+| --- | --- | --- | --- | --- | --- |
+| `SENTRY_DSN` | P | sin setear (no-op, aviso al boot) | Martin | no | Errores + reportes de CSP. PUSH-DIA G3 |
+| `SENTRY_AUTH_TOKEN` / `SENTRY_ORG` / `SENTRY_PROJECT` | P (build) | sin setear (sin sourcemaps) | Martin | token **sí** | Solo `next.config.mjs`, para subir sourcemaps |
+| `UPSTASH_REDIS_REST_URL` / `_TOKEN` | P | sin setear (memoria por lambda, aviso al boot) | Martin | token **sí** | sa-east-1. PUSH-DIA G2 |
+
+### Interruptores de producto
+
+| Variable | Scope | Default seguro | Quién | Secreta | Nota |
+| --- | --- | --- | --- | --- | --- |
+| `TENANT_ACCESS_ENFORCEMENT` | P | `banner` | Martin | no | `off`/`banner`/`enforce`. `enforce` cuando Martin decida |
+| `PLATFORM_MFA_ENFORCEMENT` | P | `off` | Martin | no | Enrolar el TOTP con `off` → `enforce` + redeploy |
+| `SIGNUP_MODE` | P | `open` | Martin | no | `assisted` = alta solo desde /plataforma |
+| `MAINTENANCE_MODE` / `MAINTENANCE_MESSAGE` | P | `off` / sin setear | Martin | no | `on` = 503 a todo salvo webhooks, health y crons. El mensaje es público (280) |
+| `DIRECTORY_MODE` | P | `off` | Martin | no | `off`/`preview`/`public` (directorio público) |
+| `NEXT_PUBLIC_PWA` | P | sin setear (= prendido) | Martin | no | `off` desregistra los service workers (emergencia, MB-D6) |
+| `PATIENT_FILES_SIGNED_UPLOAD` | P | sin setear (= prendido) | Martin | no | `0`/`false`/`off` apaga la subida firmada de archivos (FC-2f) |
+| `SUPERADMIN_2FA_BYPASS` | P | **sin setear** | Martin | no | `<userId>@AAAA-MM-DD[,…]`, falla cerrado (HF-3). Solo temporal; se borra al terminar |
+
+### Crons
+
+| Variable | Scope | Default seguro | Quién | Secreta | Nota |
+| --- | --- | --- | --- | --- | --- |
+| `CRON_SECRET` | P | — (sin él: **503** y los crons no corren) | Martin | **sí** | `openssl rand -hex 32`. Vercel lo manda como `Authorization: Bearer` |
+
+`vercel.json` tiene **2 crons** (solo corren en Production; en Hobby disparan dentro de la hora indicada):
+
+| Ruta | Schedule (UTC) | Hora AR | Qué hace |
 | --- | --- | --- | --- |
-| 16 | `20260802220514_wave_service_color_booking_title_patient_diagnosis` | 4 | `Service.color`, `Booking.title/description`, `Patient.diagnosisTitle/diagnosisNote` (additive) |
-| 17 | `20260802232454_notification_kind_patient_shared` | 5 | `NotificationKind += PATIENT_SHARED` (isolated enum migration) |
-| 18 | `20260803002623_booking_patient_slot_active_unique` | 6 | partial unique index `Booking_tenant_patient_slot_active_key` — the race-free anti-duplicate backstop |
-| 19 | `20260803022526_platform_admin_flag` | 7 | `UserProfile.isPlatformAdmin` |
-| 20 | `20260803022544_tagkind_add_muscle_discipline` | 7 | `TagKind += MUSCLE_GROUP, DISCIPLINE` (isolated enum migration) |
-| 21 | `20260803022626_exercise_optional_reps_and_archive` | 7 | `Exercise`: `defaultSets`/`defaultReps` → nullable (drops NOT NULL + defaults), `+durationSeconds`, `+archivedAt` + index |
-| 22 | `20260803022653_exercise_media_and_article` | 7 | `ExerciseMediaType` enum, `ExerciseMedia` + `ExerciseArticle` tables, FKs, indexes — **and RLS policies** |
-| 23 | `20260803183019_user_prefs_catalog` | 8 | `UserPreferences.catalogPrefs Json?` |
-| 24 | `20260816014954_tenant_agenda_slot_minutes` | post-9 (in flight, 2026-08-16) | `Tenant.agendaSlotMinutes INTEGER NOT NULL DEFAULT 60` (configurable agenda slot granularity; additive, safe default) |
-| 25 | `20260930120000_tenant_onboarding` | Bloque A3c (30-sep-2026) | `Tenant.onboardingCompletedAt/phone/whatsapp/publicEmail` (nullable) + backfill `onboardingCompletedAt = createdAt`. **Exact order, prechecks and post-check in [MIGRACIONES-RUNBOOK.md §2.1](MIGRACIONES-RUNBOOK.md)** (A3 needs the owner's SMTP first; A3b never ships without A3c) |
-| 26 | `20260930200000_catalog_global` | B-pre (30-sep-2026) | Global catalog (Specialty, Practice, PracticeSpecialty, Payer, PayerPlan, CatalogImportRun) + nullable `Insurer.payerId`, `Coverage.payerPlanId`, `Service.practiceId` + **global read-only RLS** (SELECT-only policies) and split PayerPlan. No backfill |
-| 27 | `20261001090000_agenda_foundations` | B-pre (01-oct-2026) | Location, PractitionerSchedule, ScheduleException, TimeBlock, PractitionerService/Payer/Specialty, Booking expand (`locationId`, `isOverbooked`, reception, telemedicine), `UserPreferences.agendaPrefs`, RLS + **idempotent backfill** that needs a BYPASSRLS migrating role. **Order, prechecks, expected counts and post-deploy in [MIGRACIONES-RUNBOOK.md §2.2](MIGRACIONES-RUNBOOK.md)** |
+| `/api/cron/daily` | `0 11 * * *` | 08:00 | Cobros de la suscripción, invitaciones vencidas, recordatorios de prueba, resumen de salud (60 s) |
+| `/api/cron/whatsapp` | `0 21 * * *` | 18:00 | Recordatorios de WhatsApp del día siguiente, re-drenado de la cola, sync de plantillas y calidad (60 s). Con `WHATSAPP_MODE=off` no hace nada |
 
-> ⚠️ **B-pre ships TWO new migrations (#26, #27).** Both are additive: apply
-> them **before or together with** the code, never after. #27 runs its
-> backfill with `SET LOCAL row_security = off` — `DIRECT_URL` must be the owner
-> (`rolsuper` or `rolbypassrls`) or the migration fails on purpose. After the
-> code is live: the `isOverbooked` UPDATE for the deploy gap, re-run the
-> backfill if tenants/practitioners were created in between, then the catalog
-> import (owner) + "Refrescar catálogo". B-pre can ship alone or in the same
-> deploy as the (already committed) Bloque A; **A3 still needs the owner's SMTP**.
+Sin `Bearer` correcto → **401**; sin `CRON_SECRET` en Production → **503** (`lib/cron-auth.ts`).
 
-> ⚠️ **#22 also creates RLS policies.** It runs `ENABLE`/`FORCE ROW LEVEL
-> SECURITY` on `ExerciseMedia` + `ExerciseArticle` with a read-only policy
-> (`FOR SELECT USING (true)`) and **no write policy**. Consequence: once prod's
-> app role is a non-BYPASSRLS role, the Plataforma panel can only write those
-> tables through `DATABASE_URL_SERVICE`. Applying #22 without provisioning
-> `kinesoft_service` first means superadmin catalog writes fail.
+### Mercado Pago: checkout legado (cuenta de la plataforma)
 
-**Apply them** (owner / `DIRECT_URL` connection — `migrate deploy` is
-idempotent and skips what's already applied):
+| Variable | Scope | Default seguro | Quién | Secreta | Nota |
+| --- | --- | --- | --- | --- | --- |
+| `MP_ACCESS_TOKEN` | P | sin setear | Martin | **sí** | Token de la **plataforma**. Desde T6 lo usa la suscripción con `SAAS_BILLING_MODE=mp` (obligatorio ahí) |
+| `MP_PUBLIC_KEY` | P | sin setear | Martin | no | — |
+| `MP_WEBHOOK_SECRET` | P | — | Martin | **sí** | Obligatoria si hay `MP_ACCESS_TOKEN`; sin ella el webhook da 503. Firma también la rama SaaS (`?scope=saas` y preapproval) |
+| `TURNERO_CHECKOUT` | — | **sin setear** | — | no | Deprecada (T5): ya no la lee nadie; `platform` solo loguea un aviso |
 
-```bash
-# Preferred: just deploy — the Production build runs this for you.
-npm run db:prod:status && npm run db:prod:backup && npm run db:prod:deploy
+### Mercado Pago Connect (cobros online con la cuenta del vendedor, T5)
 
-# Manual / out-of-band, explicit owner connection:
-DATABASE_URL="<owner conn>" DIRECT_URL="<owner direct conn>" \
-  npx prisma migrate deploy
-```
+| Variable | Scope | Default seguro | Quién | Secreta | Nota |
+| --- | --- | --- | --- | --- | --- |
+| `MP_CONNECT_MODE` | P Pv L | `off` | Martin | no | `off`/`fake`/`sandbox`/`live`. `fake` en Vercel frena el boot. `sandbox`/`live` en P exigen las de abajo |
+| `MP_OAUTH_CLIENT_ID` / `MP_OAUTH_CLIENT_SECRET` | P | sin setear | Martin | secret **sí** | De la app de MP con OAuth + PKCE ([EXTERNAL-CONFIG §0.12](EXTERNAL-CONFIG.md)) |
+| `MP_CONNECT_WEBHOOK_SECRET` | P | sin setear | Martin | **sí** | Obligatoria con firma `required` |
+| `MP_CONNECT_WEBHOOK_SIGNATURE` | P | `required` | Martin | no | `fetch-only` solo si el sandbox (S3) lo pide |
+| `SECRET_BOX_KEYS` | P Pv (distintas) | sin setear (en L hay clave dev; en Vercel no sella) | Martin | **sí** | `k2:<b64 32 B>,k1:<b64 32 B>`, la primera sella. Sella tokens de MP y de WhatsApp. Se rota con `scripts/secret-box-rotate.ts --store=mp\|wa\|all`. **Cargarla antes del push** |
 
-Take a Supabase snapshot first. #21 relaxes NOT NULL and #17/#20 add enum
-values — all forward-compatible, but none of them are trivially reversible.
-Keep this table updated as new migrations land.
+### Suscripción SaaS (T6, MPS)
 
-## Required environment variables
+| Variable | Scope | Default seguro | Quién | Secreta | Nota |
+| --- | --- | --- | --- | --- | --- |
+| `SAAS_BILLING_MODE` | P | `off` | Martin | no | `off` → `manual` → `mp` ([EXTERNAL-CONFIG §0.14](EXTERNAL-CONFIG.md)). `mp` exige `MP_ACCESS_TOKEN` |
+| `SAAS_BILLING_TRANSFER_INFO` | P | sin setear (no se ofrece «Informar pago») | Martin | no | Alias, CBU, titular y CUIT (≤ 500). Antes de `manual` |
+| `MP_MIN_DEBIT_CENTS` | P | sin setear (= 1500, $ 15) | Martin | no | Entero en centavos; un valor roto frena el deploy |
+| `SAAS_MP_CHECKOUT_NOTIFY` | P | `scope` | Martin | no | `panel` = sin `notification_url` por preferencia (solo si el sandbox lo pide) |
 
-From `lib/env.ts` (all optional in the schema, but prod needs the real ones):
+### WhatsApp (T6)
 
-| Var | Purpose | Prod status |
+| Variable | Scope | Default seguro | Quién | Secreta | Nota |
+| --- | --- | --- | --- | --- | --- |
+| `WHATSAPP_MODE` | P Pv L | `off` | Martin | no | `off`/`fake`/`sandbox`/`live`. `fake` en Vercel frena el boot; `live` en Preview se lee `off`. `sandbox`/`live` en P exigen las 4 de abajo + `SECRET_BOX_KEYS` |
+| `WHATSAPP_APP_ID` | P | sin setear | Martin | no | App de Meta (separada de la de Facebook Login) |
+| `WHATSAPP_APP_SECRET` | P | sin setear | Martin | **sí** | Firma el webhook (`X-Hub-Signature-256`) |
+| `WHATSAPP_CONFIG_ID` | P | sin setear | Martin | no | Configuración de Embedded Signup v4 |
+| `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | P | sin setear | Martin | **sí** | ≥ 32 caracteres (`openssl rand -hex 32`) |
+| `WHATSAPP_GRAPH_VERSION` | P | `v23.0` | Martin | no | `vNN.0`; se sube a mano, sandbox antes |
+| `WHATSAPP_SIGNUP_FEATURE` | P | sin setear | Martin | no | `whatsapp_business_app_onboarding` (coexistencia), después del sandbox |
+
+### Solo local o solo scripts (nunca en Vercel)
+
+| Variable | Dónde | Nota |
 | --- | --- | --- |
-| `DATABASE_URL` | **App-role** runtime connection (pooler). Must be the role **without** BYPASSRLS so `FORCE ROW LEVEL SECURITY` actually evaluates — locally `kinesoft_app` (`prisma/roles.local.sql`); in prod `kinesoft_app` per `prisma/roles.supabase.sql`. | ✅ required · ⚠️ **still points at a BYPASSRLS role in prod** — see "Prod one-time setup" |
-| `DIRECT_URL` | **Owner-role** direct connection (:5432, no pooler). Used by `prisma migrate deploy` and as the local fallback for the service channel. | ✅ required (for auto-migrate) |
-| `DATABASE_URL_SERVICE` | **Service-role** connection — the dedicated **BYPASSRLS** role `kinesoft_service`. Used by `prismaService` (`lib/db.ts`) for Actor-less surfaces (MP webhook, public booking, job audit writes) **and by every superadmin write to the global exercise catalog**. Resolution order is `DATABASE_URL_SERVICE` → `DIRECT_URL` → `DATABASE_URL`, so **local needs nothing** (falls back to the Docker owner). | ⚠️ **required in prod** — without it the service channel falls back to `DIRECT_URL`; once prod's app role is flipped, missing/incorrect and the Plataforma panel can't write the catalog |
-| `KINESOFT_ALLOW_DEMO_ACTOR` | Local-dev escape hatch (`=1` → seeded `movare` tenant with no Supabase session). | 🚫 **must NEVER be set in prod** (`lib/session.ts` also gates on `NODE_ENV !== "production"`, but do not rely on that alone) |
-| `NEXT_PUBLIC_SUPABASE_URL` / `_ANON_KEY` | Supabase Auth client | ✅ required |
-| `SUPABASE_SERVICE_ROLE_KEY` | Admin ops (invites, storage — incl. the `exercise-media` bucket). Desde SV también el POST de Broadcast del publisher realtime (`lib/realtime-publisher-internal.ts`, server-only) | ✅ required |
-| `REALTIME_DRIVER` | Sala de Espera en vivo (SV): `off` (default; app idéntica a SR, `/sala` con polling de 60 s) · `local` (bus en memoria + SSE, **solo dev**) · `supabase` (Broadcast privado). Production: `local` hace fallar el build; `supabase` exige `SUPABASE_JWT_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_URL` y `_ANON_KEY` (`lib/env.ts`). Se lee al cargar el módulo: cambiarla pide **redeploy** | 🆕 arrancar en `off`; `supabase` después de V1-V7 en staging ([EXTERNAL-CONFIG.md §3.1](EXTERNAL-CONFIG.md), RUNBOOK «Deploy de SV») |
-| `SUPABASE_JWT_SECRET` | Secreto HS256 con el que el server firma el token corto (10 min) del canal realtime (`lib/realtime-token-internal.ts`). **Server-only**, nunca `NEXT_PUBLIC_` (guard (d)): con él se firma un token `authenticated` del proyecto | 🆕 required con `REALTIME_DRIVER=supabase` |
-| `SUPABASE_JWT_KID` | `kid` del header del token, solo si la clave HS256 es del sistema nuevo de JWT Signing Keys (con el secreto legacy, vacío; `""` = ausente) | 🆕 opcional (R4) |
-| `MP_ACCESS_TOKEN` / `MP_PUBLIC_KEY` | Mercado Pago checkout | ✅ required for payments |
-| `MP_WEBHOOK_SECRET` | Webhook signature verification | ✅ required (prod refuses 503 without it) |
-| `NEXT_PUBLIC_APP_URL` | Absolute URLs (emails, redirects) | ✅ set to the prod domain |
-| `UPSTASH_REDIS_REST_URL` / `_TOKEN` | Distributed rate limiting (sa-east-1; separate DB for staging). Since A3a a failing Upstash falls back to memory with a log | ⚠️ **NOT set — see EXTERNAL-CONFIG.md §0.1/§4** |
-| `SENTRY_DSN` | Error reporting + CSP reports (build **and** runtime). No-op when absent. Optional: `SENTRY_AUTH_TOKEN`/`SENTRY_ORG`/`SENTRY_PROJECT` (sourcemaps), `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_DEBUG` | ⚠️ code ready since A3b (30-sep-2026); DSN not set |
-| System Environment Variables (`VERCEL_ENV`) | CSP/HSTS/`allowedOrigins` are computed at build time from `VERCEL_ENV` | ⚠️ "Automatically expose System Environment Variables" must be ON |
-| `LOG_LEVEL` | `debug`/`info`/`warn`/`error` | optional (default `info`) |
-| `RESEND_API_KEY` / `EMAIL_FROM` / `EMAIL_REPLY_TO` | Mails propios (IAM, ADR-007). Production sin key o sin from → los mails van a `log` (warning al arrancar); Preview nunca manda. `EMAIL_REPLY_TO` opcional | ⚠️ owner — [EXTERNAL-CONFIG §0.4](EXTERNAL-CONFIG.md) |
-| `TENANT_ACCESS_ENFORCEMENT` | BO1: `off` \| `banner` (default) \| `enforce`. Qué pasa con un consultorio en prueba vencida o impago (`banner` avisa; suspendido/baja se respetan igual) | 🆕 dejar vacía (= `banner`); `enforce` cuando Martin decida |
-| `PLATFORM_MFA_ENFORCEMENT` | BO4: `off` (default) \| `enforce`. TOTP obligatorio para superadmins + re-verificación en acciones de riesgo | 🆕 `off` al deployar → enrolar → `enforce` + redeploy |
-| `MAINTENANCE_MODE` / `MAINTENANCE_MESSAGE` | BO5-B: `on` cierra la app con 503 (`/mantenimiento`); webhooks MP, `/api/health` y crons pasan. El mensaje es público (máx. 280) | 🆕 vacías (= `off`); se leen en el edge: cambiar pide **redeploy** |
-| `PROD_SUPABASE_REF` | OPS-1c: ref del proyecto Supabase de prod (no es secreto). Activa el [guard de Preview](#guard-de-preview-ops-1c) | 🆕 mismo valor en **todos** los scopes |
-| `CRON_SECRET` | BO5-A: `Authorization: Bearer` que Vercel manda a `/api/cron/*`. Sin él: 503 en Production y los crons no corren | 🆕 required (`openssl rand -hex 32`, Production) |
+| `KINESOFT_ALLOW_DEMO_ACTOR` | `.env.local` | Bypass de login local. 🚫 **Nunca en prod** |
+| `ALLOW_DEV_REMOTE_SUPABASE` / `ALLOW_DEV_REMOTE_DB` | línea de comando | Overrides de `npm run dev` (`scripts/dev-safe.mjs`) |
+| `PERF_TIMING` / `PERF_TIMING_IDLE_MS` | línea de comando | Server-Timing de diagnóstico (`lib/server-timing.ts`) |
+| `POOLER_HOST` / `POOLER_PORT` | `.env.local` | Solo `tests/helpers/pooler.ts` (`npm run test:pooler`) |
+| `KINESOFT_CONFIRM_PROD` | línea de comando | `<ref>` que exigen los scripts que van a prod (`assertSafeTarget`) |
+| `QA_EMAIL_BASE` / `QA_PASSWORD` | `.env.prod.local` | `scripts/qa-tenants.ts` (PUSH-DIA F2) |
+| `CI` | CI | Lo lee `next.config.mjs` |
 
-## Prod one-time setup (owner)
+## Setup de prod que va una sola vez (Martin)
 
-Steps that are **done locally but not in prod**. Each is a manual, one-time
-owner action; see EXTERNAL-CONFIG.md for the ownership/gate framing.
+### 1. Roles de la base (OPS-3, opcional; destraba RLS real)
 
-### 1. Provision the DB roles (unblocks real RLS)
-
-Run `prisma/roles.supabase.sql` with **psql** and the owner connection
-(`postgres` has CREATEROLE), **after** `prisma migrate deploy`, passing the
-passwords as psql variables — they are never written in the file, and
-re-running it **rotates** them (A0b):
+`prisma/roles.supabase.sql` con **psql** y la conexión owner, **después** de `migrate deploy`. Las contraseñas van como
+variables de psql (nunca en el archivo) y re-correrlo las **rota**. **`-hex` y no `-base64`:** `/`, `+` y `=` rompen las
+URLs de conexión.
 
 ```bash
-psql "$OWNER_URL" -v app_password="$(openssl rand -base64 32)" \
-  -v service_password="$(openssl rand -base64 32)" -f prisma/roles.supabase.sql
+set -a; . ./.env.prod.local; set +a
+APP_PW="$(openssl rand -hex 24)"; SVC_PW="$(openssl rand -hex 24)"
+psql "$DIRECT_URL" -v app_password="$APP_PW" -v service_password="$SVC_PW" -f prisma/roles.supabase.sql
 ```
 
-It creates two roles, idempotently:
+- `kinesoft_app` (`NOSUPERUSER NOBYPASSRLS`) → **`DATABASE_URL`**. Este cambio es el que hace que RLS deje de ser inerte
+  en prod.
+- `kinesoft_service` (`BYPASSRLS`) → **`DATABASE_URL_SERVICE`** (cargarla **antes** del cambio).
 
-- `kinesoft_app` — `NOSUPERUSER NOBYPASSRLS` → goes in **`DATABASE_URL`**.
-  This flip is what makes RLS stop being inert in prod.
-- `kinesoft_service` — `BYPASSRLS` → goes in **`DATABASE_URL_SERVICE`**.
+Verificar: `SELECT rolname, rolbypassrls FROM pg_roles WHERE rolname LIKE 'kinesoft%';`. Los `ALTER DEFAULT PRIVILEGES`
+cubren tablas futuras **solo si las crea `postgres`**; ante la duda, re-correr los dos bloques de GRANT.
 
-Then set both in Vercel and redeploy. Verify with
-`SELECT rolname, rolbypassrls FROM pg_roles WHERE rolname LIKE 'kinesoft%';`.
+### 2. Buckets de Storage (privados)
 
-> `GRANT … ON ALL TABLES` is a point-in-time snapshot. The
-> `ALTER DEFAULT PRIVILEGES` blocks in that file cover future tables **only if
-> `postgres` creates them**. After any migration that adds tables, re-run the
-> two GRANT blocks if unsure.
+`exercise-media`, `patient-files`, `practice-assets`, `patient-documents` y `billing-receipts`, todos **privados**
+(URLs firmadas). Límites y tipos en [EXTERNAL-CONFIG §0.6 y §0.11](EXTERNAL-CONFIG.md); el `--pre` del precheck revisa
+los cuatro que usa el código nuevo.
 
-### 2. Create the `exercise-media` Storage bucket
+### 3. Superadmin de plataforma
 
-Exercise uploads (`lib/exercise-media.ts`) write to a Supabase Storage bucket
-literally named **`exercise-media`**. It does **not** exist in prod yet and is
-not created by code — the owner must create it in the Supabase dashboard,
-**private** (access is by 1-hour signed URL only, same posture as
-`patient-files`). Without it, every video/image/GIF upload in
-`/plataforma/ejercicios` fails; YouTube-type media still works (it stores a
-link, not a file).
-
-### 3. Grant platform-superadmin
-
-`UserProfile.isPlatformAdmin` has no in-app grant path — it is set at the DB
-level with `scripts/set-platform-admin.ts`, run with the **owner** connection
-(`DATABASE_URL` is required — no localhost fallback since A0b — and prod also
-needs `KINESOFT_CONFIRM_PROD=<project ref>`; the script prints its target):
+`UserProfile.isPlatformAdmin` se marca en la base con `scripts/set-platform-admin.ts` y la conexión owner (sin fallback a
+localhost; prod exige `KINESOFT_CONFIRM_PROD=<ref>`):
 
 ```bash
-# grant (the user must already exist as a UserProfile — i.e. have signed in once)
-DATABASE_URL="<owner conn>" KINESOFT_CONFIRM_PROD=<ref> npx tsx scripts/set-platform-admin.ts you@example.com
-
-# revoke
-DATABASE_URL="<owner conn>" KINESOFT_CONFIRM_PROD=<ref> npx tsx scripts/set-platform-admin.ts someone@x.com --revoke
-
-# list current admins
-DATABASE_URL="<owner conn>" KINESOFT_CONFIRM_PROD=<ref> npx tsx scripts/set-platform-admin.ts --list
+DATABASE_URL="<owner>" KINESOFT_CONFIRM_PROD=<ref> npx tsx scripts/set-platform-admin.ts vos@ejemplo.com
+DATABASE_URL="<owner>" KINESOFT_CONFIRM_PROD=<ref> npx tsx scripts/set-platform-admin.ts alguien@x.com --revoke
+DATABASE_URL="<owner>" KINESOFT_CONFIRM_PROD=<ref> npx tsx scripts/set-platform-admin.ts --list
 ```
 
-The email is lower-cased and must match an existing `UserProfile.email`; the
-script exits non-zero if there's no such user. Grant it to the owner (and the
-client, if they author the catalog) after the migrations land.
+## Reset de la base
 
-## DB reset (start clean)
+- **Local:** `npm run prisma:reset` (solo Martin).
+- **Prod:** no hay reset (decisión del 14-oct: prod conserva sus datos). Si algún día se decide, es un procedimiento
+  aparte con backup, aviso y re-carga; nunca `prisma/seed.ts` (es demo y aborta contra una base remota).
 
-On the table once the product is validated for selling. **Destructive.**
-
-- **Local:** `npm run prisma:reset` (drops + re-migrates + re-seeds the Docker DB).
-- **Prod (Supabase):** do NOT use `migrate reset` against prod casually.
-  Procedure when intentional:
-  1. Announce downtime; take a Supabase backup/snapshot first.
-  2. In the Supabase SQL editor, drop the schema or truncate domain tables
-     (keep `_prisma_migrations` or re-baseline).
-  3. Re-apply: `npm run db:prod:deploy` (recreates schema from migrations).
-  4. Re-seed the tenant(s) as needed — **never with `prisma/seed.ts`** (demo
-     data; it is local-only and aborts against a remote DB).
-  5. Re-create the Particular insurer + base catalog per tenant.
-
-## Deploy de B-pre (agenda y catálogo, 01-oct-2026)
-
-Exact runbook: [MIGRACIONES-RUNBOOK.md §2.2](MIGRACIONES-RUNBOOK.md). Summary:
-
-1. Read-only prechecks (migrating role has BYPASSRLS; new tables absent; tenants/practitioners/insurers/
-   `[SOBRETURNO]` counts; bookings of a service owned by another practitioner).
-2. `npm run db:prod:backup`.
-3. **Staging**: `migrate deploy` (#26, #27) → compare expected counts → QA ([QA.md §B-pre](QA.md), `TZ=UTC`) →
-   catalog import in staging.
-4. Merge to `main` (the Production build migrates) — or `npm run db:prod:deploy` beforehand.
-5. Post-deploy: `UPDATE "Booking" SET "isOverbooked"=true WHERE notes LIKE '[SOBRETURNO]%' AND NOT "isOverbooked";`,
-   expected counts (Location = #tenants; PractitionerSchedule = 6 × accepted practitioners;
-   `Booking.locationId IS NULL` = 0), re-run the backfill block if needed (idempotent, GUC
-   `kinesoft.backfill_tenants`).
-6. Catalog import (owner): backup → dry-run → `--apply` → dry-run = 0 changes → Plataforma → Catálogo →
-   Importaciones → **"Refrescar catálogo"**. Local: `npm run catalog:import`.
-
-No new environment variables. No new console tasks besides the import.
-
-## Deploy del bloque BO (back-office, 14-oct-2026)
-
-Orden exacto, prechecks y vuelta atrás en [MIGRACIONES-RUNBOOK «M7 en prod» y «Deploy de BO»](MIGRACIONES-RUNBOOK.md).
-Resumen: **M7** (aditiva, puede ir antes) → variables con los flags en default (`TENANT_ACCESS_ENFORCEMENT` = `banner`,
-`PLATFORM_MFA_ENFORCEMENT` = `off`, `MAINTENANCE_MODE` = `off`) + `CRON_SECRET` → deploy → enrolar el TOTP en
-`/plataforma-mfa/configurar` → `PLATFORM_MFA_ENFORCEMENT=enforce` + redeploy → recién ahí usar soporte.
-
-`vercel.json` desde BO5:
-- `functions`: `app/api/consultorio/export/route.ts` 60 s (clave propia **antes** de `app/**/*` 30 s; con Vercel Pro se
-  puede subir a 300 s: un consultorio grande puede cortarse en 60 s y el archivo queda como JSON inválido).
-- `crons`: `/api/cron/invitations-expire` 06:00 UTC, `/api/cron/health-digest` 11:00 UTC, `/api/cron/trial-reminders`
-  12:00 UTC (09:00 AR). Hobby: una vez por día y hora inexacta; Pro: hora exacta. Solo corren en Production.
-
-## Deploy flow (summary)
+## Flujo de deploy
 
 ```
-local Docker (.env.local)  →  test  →  commit (owner)  →  staging (Preview)  →  QA
-  →  prod precheck + backup  →  merge to main  →  Vercel Production:
-     prisma migrate deploy  →  prisma generate  →  next build  →  live
+local (Docker, .env.local) → gate → commit (Martin) → prod precheck --pre → backup → db:prod:deploy
+  → precheck --post → push develop → main (Martin) → Vercel Production:
+     prisma migrate deploy (no-op) → prisma generate → next build → vivo → smoke
 ```
 
-Preview deploys must use **staging**, not the prod DB (A0d, owner). Keep
-migrations additive/backward-compatible (expand/contract) anyway.
+Sin staging (OPS-0 queda opcional). Las migraciones siempre aditivas (expand/contract). Historia de los deploys de
+B-pre (01-oct) y BO (14-oct): [MIGRACIONES-RUNBOOK «Deploy de BO» y Apéndice](MIGRACIONES-RUNBOOK.md).
 
 ### Guard de Preview (OPS-1c)
 
@@ -325,8 +314,8 @@ variable, nunca la URL. Production, Development y local no se miran (Production 
 
 - Sin `PROD_SUPABASE_REF` en Preview: solo `console.warn` en el log del build (el guard queda apagado).
 - Un ref con forma inválida (no 15-40 `[a-z0-9]`) frena el Preview: un valor roto apagaría el guard en silencio.
-- Si un Preview sale rojo por esto: el scope Preview de esa variable apunta a prod → cambiala a staging (OPS-0) y
-  redeployá. No se saltea borrando `PROD_SUPABASE_REF`.
+- Si un Preview sale rojo por esto: el scope Preview de esa variable apunta a prod → cambiala (staging u otro proyecto)
+  y redeployá. No se saltea borrando `PROD_SUPABASE_REF`.
 
 ### Pooler en modo transacción (OPS-1b)
 

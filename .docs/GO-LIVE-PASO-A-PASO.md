@@ -1,3 +1,6 @@
+> ⛔ **Superado por [PUSH-DIA.md](PUSH-DIA.md) (22-oct).** No seguir esta guía: el día del push se usa solo PUSH-DIA.
+> Esto queda como historia del go-live incremental del 14-oct (el reset nunca se hizo).
+
 # Go-live a producción · paso a paso (para Martin)
 
 > Escrito el 14-oct-2026, después de SV. Es la versión **con comandos y consolas** de la sección «Go-live con reset»

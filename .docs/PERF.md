@@ -548,9 +548,52 @@ Lo mide `node scripts/check-bundle-budget.mjs` sobre la salida de `next build` (
 marca framer-motion / zod / @supabase / react-dom; `npm run perf:bundle:baseline` regraba). Presupuesto por grupo en
 `scripts/bundle-groups.mjs`; sale 1 si una ruta excede o crece > 10 % sobre `scripts/bundle-baseline.json`.
 
-**Bloqueantes:** públicas ≤ 120, turnero ≤ 135, portal ≤ 125 (desde F-Z, 15-oct) y **onboarding ≤ 160, Plataforma ≤ 180
-y workspace ≤ 180 desde PF1-Z (16-oct, D-PF-B)**, cuando todas sus rutas entraron. Baseline regrabado en PF1-Z y en el
-cierre DIR-Z/MB-Z (16-oct, con el build de producción del gate).
+**Bloqueantes:** públicas ≤ 120, turnero ≤ 135, portal ≤ 125 (desde F-Z, 15-oct), **onboarding ≤ 160, Plataforma ≤ 180
+y workspace ≤ 180 desde PF1-Z (16-oct, D-PF-B)** y **display (`/tv`) ≤ 125 desde TV-1c (22-oct)**
+(`scripts/bundle-groups.mjs:45`, match `/^\/tv(\/|$)/`). Baseline regrabado en PF1-Z y en el cierre DIR-Z/MB-Z (16-oct,
+con el build de producción del gate). Los topes **por ruta** del workspace (`/agenda`, `/sala`, `/configuracion`) son del
+plan, no del script: el script solo frena el techo del grupo y el +10 % sobre el baseline.
+
+### T6/T7 · TV, WhatsApp y suscripción (22/23-oct-2026, TV-I / INT / ZF3)
+
+Medido con el **build seguro** (env local explícito, nunca el `.env` del repo: [TESTING «Build local»](TESTING.md)) +
+`check-bundle-budget.mjs`. Techos de §26.10 (lo de T5 re-basado a lo medido con margen de +0,2 por ruta del workspace).
+
+| Ruta | Antes (cierre T5) | T6/T7 | Tope de §26.10 |
+|---|---|---|---|
+| `/tv` (nueva, grupo display) | — | **113,9** | ≤ 125 (bloqueante) |
+| `/c/[slug]/booking` (turnero) | 114,1 | **113,7** | ≤ 115 (INT midió 115,9; ZF2/ZF3 sacaron `phone-e164` y bajaron el flag) |
+| `/pagar/[token]` | 98,7 | 98,9 | ≤ 120 |
+| `/portal` | — | 103,6 | ≤ 125 |
+| `/configuracion` | 141,6 | **142,0** | ≤ 141,8 — **excede 0,2** |
+| `/sala` | 155,4 | **156,1** | ≤ 155,6 — **excede 0,5** |
+| `/agenda` | 171,9 | **172,4** | ≤ 172,1 — **excede 0,3** |
+
+- **Dónde está el exceso.** `/configuracion`: en el chunk de la página (`configuracion-client`), no en Facturación ni en
+  WhatsApp (los paneles ya son `dynamic`). `/sala`: el botón «Pantallas» y su contexto; diferirlo entero ahorra 0,2-0,3
+  netos, no alcanza. `/agenda`: lo que sumaron al first load WA-U2 (badge «Confirmó» / «Pidió cancelar» en la card) y WA-S7
+  (cable `rp`), sin desglose por chunk; el copy y la sección de WhatsApp del drawer no están en el first load (guard
+  `agenda-first-load-guard`). **Recomendación:** re-basar los tres a lo
+  medido (decide Martin, AUDIT `t6t7-bundle-rebase`).
+- **`/tv`** lleva zod (≈ 12,9 kB) por `lib/reception-displays-types.ts:14` (el schema strict del feed). Se puede separar si
+  el grupo display se acerca al techo.
+- **Fuera del first load:** el simulador de Meta y el de MP (HTML en `/api/*/fake/*`, 0 kB), el drawer de «Pantallas»,
+  la pestaña WhatsApp de Configuración (un chunk), la sección WhatsApp del drawer del turno (`import()`) y Plataforma →
+  WhatsApp.
+
+**Sentencias.**
+- **WhatsApp en `off` = 0 extra.** El hook post-commit corta antes del `import()`
+  (`lib/booking-events-internal.ts:103-107`): `createBooking` y el resto de los write paths cuestan lo mismo que antes de T6
+  (`tests/integration/wa-s2-hook.test.ts:145`, con control de que el contador sí ve las sentencias con el modo prendido).
+  La agenda: `off` → 0 queries extra, prendido → +1 (`tests/integration/wa-s7-agenda.test.ts:127,142`); `rp` viaja solo
+  en los turnos con respuesta vigente.
+- **Cron del día 4.** La etapa 4b (`runSaasMpReconcile`) mira ≤ 50 suscripciones (`SAAS_MP_RECONCILE_MAX`,
+  `lib/saas-mp-sync-internal.ts:87`) con un GET cada una y un PUT solo si difiere, dentro de ≤ 10 s
+  (`lib/saas-billing-internal.ts:1519`) y **fuera** de toda tx; el resto del presupuesto de 45 s del cron diario queda
+  igual. Lo fijan `tests/integration/mps-2b-sync.test.ts:269,302` (reloj falso 3/4/5, `limit` con prioridad y corte por
+  presupuesto). El cron de WhatsApp es otro (18:00 AR, presupuesto propio de 45 s, `lib/whatsapp/reminders-internal.ts:118`).
+- **Pendiente de PF:** los dos escenarios viven en integración; no hay todavía escenario en `tests/perf/` ni en
+  `compare.ts` (sumarlos cuando se mida con volumen).
 
 ### T5 · cobros online (22-oct-2026, TP-2i / TP-3z / T5-Z)
 

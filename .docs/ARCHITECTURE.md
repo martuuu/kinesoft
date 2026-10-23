@@ -1312,7 +1312,15 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
   - Suspender una membresía (`disabledAt`) solo afecta ese consultorio: la persona cae al otro o a `/sin-acceso`.
   - El directorio público de profesionales (DIR, §19.7b del plan) se apoya en esto.
 
-### ADR-016 — Cobro de la suscripción a mano, sin Mercado Pago (status: ACCEPTED, PL-2b, 15-oct-2026; decisión de Martin)
+### ADR-016 — Cobro de la suscripción: cron diario y escritor único (status: ACCEPTED, PL-2b, 15-oct-2026; enmendado en T6/MPS, 22-oct-2026)
+
+> **Enmienda T6 (22-oct, MPS-D7 y §26.6).** El cobro con Mercado Pago (débito, «Pagar con Mercado Pago» por cargo) es
+> **ADR-027**. Lo que cambia acá: el ancla pasa a ser el **día 4** para todos (`SAAS_ANCHOR_DAY = 4`,
+> `lib/saas-billing-logic.ts:43`; `anchorDayFor` conserva la firma, `:123`), vence el 9 y `PAST_DUE` desde el 10; el
+> primer período se cobra **proporcional** desde `billableFrom` (stub PRORATION `stub:<billableFrom>`, `stubFor` `:238`;
+> MPS-D13); `SAAS_BILLING_MODE=mp` deja de ser alias de `manual` (`lib/env.ts:153`). Las suscripciones existentes se
+> re-anclan con `scripts/saas-reanchor.ts` después del deploy (lo corre Martin). Los cambios de plan quedan
+> implementados (último bullet).
 
 - **Contexto.** El plan §20.5.6 preveía débito automático (preapproval) y «Pagar con MP». Martin (16-oct): sin MP para la
   suscripción por ahora; la app se tiene que poder deployar sin cobrar.
@@ -1320,10 +1328,12 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
   etapas idempotentes; UNIQUE tenant+período) y pagos **manuales**: el consultorio sube el comprobante (bucket privado
   `billing-receipts`, magic bytes, ≤ 4 MB, URL firmada 60 s; se puede subir en solo lectura) y Plataforma aprueba,
   rechaza o imputa con recibo. Todas las escrituras de cobro viven en `lib/saas-billing-internal.ts` (guard estático).
-  Flag `SAAS_BILLING_MODE=off|manual` (`mp` = `manual` en esta etapa). Defaults PL2b-D1..D4: anclaje = día siguiente al
-  fin de la prueba (tope 28, sin retroactivos); vence a 5 días → `PAST_DUE` + 10 de gracia; prueba impaga sigue
-  TRIALING; `CANCELLED` solo lo toca Plataforma. Las rutas de cron viejas quedan como disparo manual.
-- **Descartados.** Preapproval y checkout de MP (vuelven con otra ola); un topic nuevo en el webhook (AUDIT §5.4 intacto).
+  Flag `SAAS_BILLING_MODE=off|manual|mp` (`mp` = todo lo de `manual` + MP, ADR-027). Defaults PL2b-D1..D4 (el anclaje
+  lo reemplazó el día 4 de la enmienda): vence a 5 días → `PAST_DUE` + 10 de gracia; prueba impaga sigue TRIALING;
+  `CANCELLED` lo escriben Plataforma y, desde T6, la baja a fin de período del propio consultorio (etapa 2b del cron).
+  Las rutas de cron viejas quedan como disparo manual.
+- **Descartados (en PL-2b).** Preapproval y checkout de MP: volvieron en T6 (ADR-027), sin tocar la rama legada del
+  webhook (AUDIT §5.4 enmendado).
 - **Consecuencias.** Martin revisa comprobantes a mano; el estado contable (`ACTIVE`/`PAST_DUE`) lo escribe solo el cron
   y Plataforma por el escritor único de entitlements (`source: "billing"`).
 - **Saldo a cuenta (PL-Z, a1#1/#2).** Cada pago APROBADO queda imputado a un solo cargo por, como mucho, lo que le
@@ -1345,11 +1355,22 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
   Transferencia por defecto, y la nota queda como la escribió la persona. Los pagos de antes de M8c (NULL) se muestran
   «Sin informar»: no se hace backfill parseando notas. El cargo sugerido en los dos drawers es el **último impago**
   (decisión de Martin, 16-oct); «A cuenta» sigue imputándose del más viejo (`applyCreditInTx`).
-- **Cambios de plan cuando se active el cobro (decisión de Martin, 16-oct; ⏳ pendiente de implementar, cierra AUDIT
-  a1#3).** La **bajada** rige desde el próximo período (el período en curso se cobra al plan que se usó); la **subida**
-  rige ya y cobra el **proporcional del resto del período** a la diferencia de precio; la **fecha de cobro queda fija**
-  (el anclaje no se mueve con el cambio). Hoy no hace falta: `SAAS_BILLING_MODE=off` y sin cobros activos. Se
-  implementa antes de prender `manual` en prod.
+- **Cambios de plan y baja (decisión de Martin, 16-oct; ✅ implementado en T6, MPS-2c/3a, cierra AUDIT a1#3).**
+  `planChangeKind` (`lib/saas-billing-logic.ts:266`) decide por el orden del plan (MPS-D11):
+  - **Subida** con el período ya cobrado → rige hoy y suma un ajuste PRORATION (`prorate`, `:218`: días AR, redondeo
+    half-up) al **próximo cargo**, en **una** tx del canal service (`lib/saas-billing.ts:329`; MPS-D10:
+    `SaasAdjustment` es TENANT_READONLY y el rol app no la escribe). Sin cargo del período, cambio inmediato sin
+    proporcional.
+  - **Bajada** → programada para el próximo 4 (`scheduleDowngradeInTx`, `lib/saas-billing-schedule-internal.ts:175`);
+    el período en curso se cobra al plan usado. Si el día que vence la selección ya no entra en el plan nuevo, se
+    anula, se avisa por mail y se cobra el plan actual (`applyDuePlanChangeInTx`, `:257`; MPS-D12).
+  - **Baja** → a fin de período (`scheduleCancelInTx`, `:378`; en prueba, al día siguiente del fin de la prueba,
+    MPS-D18); acceso completo hasta ese día, después `CANCELLED` = solo lectura (`applyDueCancelInTx`, `:464`).
+    «Deshacer baja» el mismo día (`undoCancelInTx`, `:444`) y «Reactivar» solo si la baja fue propia y no hay deuda
+    (`reactivateInTx`, `:509`; MPS-D19). Con baja pendiente no hay cambio de plan (`blocked_cancel_pending`).
+  - La **fecha de cobro queda fija** (el 4): el cambio no mueve el ancla. Las bajadas y bajas que vencen corren en la
+    etapa **2b** del cron, **antes** de crear el cargo del día (`lib/saas-billing-internal.ts:1622`), así el cargo del 4
+    sale con el plan nuevo.
 
 ### ADR-017 — Verificación en dos pasos por usuario (status: ACCEPTED, PL-2a, 15-oct-2026)
 
@@ -1634,7 +1655,7 @@ local ([RUNBOOK «M14 en prod»](MIGRACIONES-RUNBOOK.md)). Extiende ADR-020 (ver
 Plan §25 (brief `wip-20/brief-t5.md`, contratos C-TP1..C-TP14, defaults TP-D22..D30 y TP-UI-D1..D12, enmiendas de Martin
 del 22-oct); commits `a31337c`..`92c600c` (TP-M = `0a8e551`), **local, sin push**. M18 `20261022120000_turnero_cobros_mp`
 solo en el Docker local ([RUNBOOK «M18 en prod»](MIGRACIONES-RUNBOOK.md)). «Preservar»: AUDIT §5.62-68 y §5.4 enmendado.
-La suscripción del consultorio con Mercado Pago (MPS, T6) va en **ADR-027** cuando se haga; hasta entonces rige ADR-016.
+La suscripción del consultorio con Mercado Pago (MPS, T6) es **ADR-027**; WhatsApp reusa el secret box (ADR-029).
 
 - **Contexto.** El único checkout del turnero cobraba con `MP_ACCESS_TOKEN`, la cuenta **de la plataforma**: la plata del
   paciente no llegaba al consultorio (H-TP1, apagado desde TP-0). Martin decidió (§22.1 #4/#5, 19-oct #1-#4): cada
@@ -1726,8 +1747,212 @@ La suscripción del consultorio con Mercado Pago (MPS, T6) va en **ADR-027** cua
   claves distintas por entorno). Hay una escritura de `Booking` por trigger: el consumidor emite el realtime explícito y
   la palanca de emergencia es `DROP TRIGGER` (decide Martin). S3 (firma de pagos con token de vendedor) y S5 (si MP
   notifica también la URL del panel sin `acct`) se resuelven recién con el sandbox; mientras tanto el flag `required`
-  hace que MP reintente sin perder nada. Un AUTHORIZED que MP nunca resuelve no vence solo (AUDIT «Hallazgos de T5-Z»,
-  B4).
+  hace que MP reintente sin perder nada. Un AUTHORIZED que MP nunca resuelve no vence solo: desde PEND-b (`2a05d51`)
+  Plataforma → Sistema lista los que llevan más de 7 días (`lib/platform-system-logic.ts:98`).
+
+## T6 y T7 (22/23-oct-2026): TV, WhatsApp y suscripción con Mercado Pago
+
+Plan §26 (brief `wip-20/brief-t6t7.md`; olas X0-X9, contratos C-TV, C-WA1..9 y C-MPS2..12). Commits `b019d7c`
+(MIG) .. `609da3c` (ZF3), **local, sin push**. Migraciones solo en el Docker local, en orden de timestamp:
+**M17** `20261023120000_reception_displays` → **M15** `20261024120000_whatsapp_messaging` → **M16**
+`20261025120000_saas_mp_subscriptions` (las tres aditivas y **antes** del deploy; orden para prod en
+[PUSH-DIA](PUSH-DIA.md) y el RUNBOOK). Las tres features se despliegan **apagadas por flag** (`WHATSAPP_MODE=off`,
+`SAAS_BILLING_MODE=off`; `/tv` sin pantallas dadas de alta no muestra nada) y se construyeron contra simuladores
+locales: nada contra Meta, Mercado Pago ni una TV reales. «Preservar»: AUDIT §5.69-81 y §5.4 enmendado; hallazgos en
+[AUDIT «Ronda T6/T7»](AUDIT.md).
+
+### ADR-027 — Suscripción con Mercado Pago: débito, checkout por cargo o transferencia (status: ACCEPTED, T6/MPS, 22-oct-2026)
+
+- **Contexto.** ADR-016 cobraba a mano. Martin (§21.7, §22.6 MPS-D7): débito el día 4, «Pagar con Mercado Pago» por
+  cargo o transferencia; subida con proporcional, bajada programada, baja a fin de período. Cuatro hallazgos del
+  relevamiento cambiaron el diseño (§26.6): el CHECK de M8 rompía el sobrepago por MP; el `consumeWebhook` legado usa el
+  SDK (siempre api.mercadopago.com); la subida corre con el rol app, que no escribe ajustes; el E2E tenía
+  `MP_WEBHOOK_SECRET` vacío.
+- **Decisión.**
+  - **Tres métodos** (`SaasSubscription.collectionMethod`, M16): `AUTO_DEBIT` (preapproval de MP), `MP_CHECKOUT` (un
+    link por cargo) y `TRANSFER` (comprobante, como ADR-016; se ofrece solo con `SAAS_BILLING_TRANSFER_INFO`, ZF3).
+    `setCollectionMethod` acepta solo `TRANSFER|MP_CHECKOUT`: `AUTO_DEBIT` llega cuando MP autoriza
+    (`lib/saas-billing-mp.ts:141`). Todas las actions del consultorio van con `requireAccountBilling` +
+    `withAccountWritable` y step-up en lo que toca plata (`:11-15`).
+  - **Puerto** `lib/mercadopago-saas.ts`: token de la plataforma leído en vivo, **nunca tira** (`R<T>`) y **nunca corre
+    dentro de una tx** (`:16-18`; una llamada dura hasta 8 s). Checkout con `binary_mode`, 72 h
+    (`SAAS_CHECKOUT_TTL_MS`, `:86`), referencia `saas:<tenant>:<cargo>` y `notification_url …?scope=saas` (`:374`;
+    `SAAS_MP_CHECKOUT_NOTIFY=panel` la omite).
+  - **Ajustes solo-inserción** (`SaasAdjustment`, TENANT_READONLY): CREDIT, DEBIT, PRORATION y CARRYOVER. El trigger
+    `saas_adjustment_guard()` rechaza UPDATE, DELETE y TRUNCATE salvo la imputación `appliedChargeId` NULL → valor
+    (M16 `migration.sql:107-116`; BYPASSRLS no saltea triggers). `composeCharge` (`lib/saas-billing-logic.ts:332`) nunca
+    da menos de 0: el CREDIT que cruza el 0 se parte en CARRYOVER(+) y un CREDIT nuevo(−) con `splitFromId` al original.
+    VOID re-pende todos los ajustes y WAIVE solo los CREDIT, insertando **copias** que conservan la cadena
+    `splitFromId` (`lib/saas-billing-internal.ts:880`, ZF1).
+  - **Árbol de pagos.** El excedente de un pago se parte en un hermano con `splitFromId = raíz` (`:493`), sin copiar los
+    ids de MP (son UNIQUE); M16 reemplaza `SaasPayment_source_mp_check` por uno estrictamente más laxo que acepta el
+    hermano (`migration.sql:76-79`). Un reintegro reintegra la raíz y todos sus hermanos, reabre los cargos y recalcula
+    el estado (`refundPaymentTreeInTx`, `:611`).
+  - **Orden de locks** Tenant → Subscription → Charge → Payment → Adjustment (`lockTenant`/`lockSubscription`,
+    `:116,122`).
+  - **Webhook.** Dos líneas aditivas en `app/api/webhooks/mercadopago/route.ts:49-50`, después de `?acct=`: `scope=saas`
+    o un topic de suscripción (`isSaasTopic`, `lib/saas-mp-webhook-route.ts:43`) → `handleSaasWebhook` (`:89`): firma
+    **siempre** con `MP_WEBHOOK_SECRET` leído en vivo (sin secreto → 503; inválida → 401 sin llamar a MP), `data.id`
+    validado con la regex del topic y **re-fetch** con el token de la plataforma. En la rama legada, una línea delega
+    el pago con referencia `saas:` (`lib/mercadopago.ts:261`) y otra corta el SDK con el MP falso (`:257`, nunca en
+    Vercel). Sin `saas:`, el legado sigue byte a byte (`tests/integration/mp-webhook.test.ts` sin cambios).
+  - **Consumidores** (`lib/saas-billing-mp-internal.ts`): `consumeSaasMpPayment` (`:351`) exige collector = la
+    plataforma, ARS y un tenant existente; aprobado → al cargo si está OPEN, si no a cuenta; monto distinto → se registra
+    con nota; reintegro → árbol; P2002 → un reintento (`:109`). El débito apunta al período de `periodStartForDebit`;
+    `authorized` del pendiente lo promueve (salvo débito bloqueado o baja, `:511`, ZF1); `cancelled` desde MP apaga el
+    débito y avisa.
+  - **Sync y conciliación** (`lib/saas-mp-sync-internal.ts`, MP siempre fuera de tx, `:14`): `desiredDebit` lleva el
+    monto del preapproval a la proyección los días 3-4 y al saldo del cargo los días 5..reintento (`:257`, ZF1).
+    `runSaasMpReconcile` (`:759`) es la etapa **4b** del cron (solo `mp`): ≤ 50 suscripciones (`SAAS_MP_RECONCILE_MAX`,
+    `:87`), un GET y un PUT solo si difiere, ≤ 10 s (`MP_RECONCILE_BUDGET_MS`, `lib/saas-billing-internal.ts:1519`).
+    Un preapproval pendiente de más de 7 días se cancela (MPS-D17). **`runDaily` no cambió.**
+  - **Plataforma** (`lib/platform-billing.ts`): permitir/bloquear el débito, ajustes CREDIT/DEBIT, re-anclar al 4,
+    deshacer baja, anular bajada, precio a medida atado al plan (`customPricePlan`, MPS-D14).
+  - **Re-anclaje** (`lib/saas-reanchor-internal.ts`, `scripts/saas-reanchor.ts`): dry-run en READ ONLY por defecto,
+    `--apply`, exige BYPASSRLS (`:220`), idempotente, y **no toca** `autoDebitAllowed` (`:17`, ZF1).
+- **Descartados.** Imputaciones en tabla aparte (el hermano partido ya era el modelo de ADR-016); un topic nuevo en el
+  camino legado; la subida con el rol app (no puede escribir el ajuste); MP dentro de una tx; mandar `billing_day` a MP
+  (MPS-D23, salvo que S1 lo exija).
+- **Consecuencias.** Con `SaasPlanConfig.priceCents` en null el débito solo funciona con precio a medida (queda
+  pausado, `no_price`). Los supuestos de MP sin consola (S1-S10 de `scripts/diagnose-mp-subscriptions.ts`: firma de los
+  avisos de preapproval, mínimo de débito, `billing_day`) se verifican en sandbox; hasta entonces todo se re-pide.
+  Activación: `off` → `manual` → sandbox S1-S10 → `mp` ([PUSH-DIA](PUSH-DIA.md) G).
+
+### ADR-028 — Pantalla de la sala (TV) como dispositivo sin Actor (status: ACCEPTED, T7/TV, 22-oct-2026)
+
+- **Contexto.** Una TV de la sala de espera muestra a quién llaman, todo el día, sin nadie logueado (§21.8, §22.7).
+- **Decisión.**
+  - **Modelo** `ReceptionDisplay` (M17): nombre, sede, modo de nombre (`SHORT_NAME`/`TURN_TIME`), tema, video
+    (`mediaKind` + `mediaRef` canónico, nunca la URL cruda), estado de vínculo. Categoría por defecto del guard: el staff
+    escribe con RLS; el dispositivo, por `prismaService` con `id` + `tenantId` a mano.
+  - **Vínculo de un uso.** El staff genera un código de 8 caracteres Crockford (`PAIRING_CODE_LEN`,
+    `lib/reception-displays-types.ts:47`) que vence a los 10 min; se guarda como HMAC con clave derivada del server
+    (`kinesoft:tv-pair:v1`, `lib/display-pairing-internal.ts:44,64`: 40 bits se revierten offline con un sha256 pelado).
+    `pairDisplay` (`lib/display-device.ts:66`): rate limit 10/10 min y 30/h por IP (`:70-73`), CAS por `$executeRaw`
+    con `count === 1` (no `updateMany`: pisaría `updatedAt`, el CAS del drawer, `:20-21`), audit `display.paired` y el
+    mismo mensaje ante cualquier fallo.
+  - **Cookie `kine_tv`** (`:34-39` de los tipos): `path=/tv`, Strict, httpOnly, 180 días con renovación a los 30, valor
+    `v1.<id>.<secret>.<día>`; el secreto (32 bytes) se guarda como sha256 y se compara con `timingSafeEqual`
+    (`lib/display-pairing-internal.ts:97-102`).
+  - **Sesión y feed** (`lib/display-device-internal.ts`): `resolveDisplaySession` (`:88`) valida cookie → hash → no
+    revocada → acceso abierto (`publicSurfacesOpenFor`, `:126`) → módulo `salaEspera` con grants y revokes (`:133`).
+    `getDisplayFeed`: 30/min por pantalla y 240/min por IP (`lib/display-device.ts:151,157`). `touchDisplaySeen` escribe
+    a lo sumo una vez por minuto y por SQL crudo (`:230-239`). Sede principal = también los turnos sin sede.
+  - **Feed sin PHI** (`lib/display-feed-state.ts`): `label` = nombre corto u hora del turno, `key` = sha256 de
+    `bookingId|calledAt` recortado a 16 (`:83-84`); nunca apellido, DNI, teléfono, servicio, notas ni ids. La salida
+    pasa por `DisplayFeedSchema` strict (`:130-133`): si sobra una clave, 500 antes que fuga.
+  - **Realtime.** `mintDisplayRealtimeToken` (`lib/realtime-display-token.ts:31`) firma con el mismo
+    `signRealtimeToken({tenantId})` (`:67`): mismos claims y mismo topic, **M5 sin cambios** (TV-D12). Rate limit
+    `rt:display:<id>` 30/10 min (`:27,61`). Con driver `local`, solo polling (TV-D13).
+  - **Cliente** (`components/tv/`): polling de 15 s ±20 % de jitter, refetch por realtime, desfase de reloj por
+    `serverNow`, `rate_limited` espera 4× (`use-display-live.ts:13-29`); kiosco con cursor oculto a los 3 s,
+    `wakeLock` re-adquirido y recarga diaria a las 04:00 AR (`use-kiosk.ts:7-22`). Layout sin providers ni framer,
+    `noindex` y manifest propio (`app/(display)/tv/layout.tsx:14-20`); el manifest pasa por fuera del mantenimiento
+    (`middleware.ts:239-243`).
+  - **YouTube nocookie.** `parseYouTubeUrl` (`lib/youtube.ts:58`) entiende watch, youtu.be, shorts, `/live/`, listas y
+    vivos de canal; `MEDIA_REF_RE` (`:23`) son las mismas regex que el CHECK de M17 (test de paridad). El reproductor
+    habla por `postMessage` solo con el origen exacto `https://www.youtube-nocookie.com`; errores fatales
+    `[2,5,100,101,150,153]` → se oculta y reintenta (`lib/youtube-player-protocol.ts:14,21`). Con DUCK baja el volumen
+    12 s al llamar.
+  - **CSP enforced en `/tv`** (`next.config.mjs:182-216`): `frame-src` solo nocookie, `connect-src` same-origin +
+    Supabase, sin imágenes de Storage, `frame-ancestors 'none'`. El Referrer-Policy global no se pisa (sin Referer
+    YouTube da error 153). `Permissions-Policy` de `/tv` repite las globales (en Next la última entrada pisa). Grupo de
+    bundle `display` ≤ 125 kB, bloqueante (`scripts/bundle-groups.mjs:45`).
+  - **Staff** (`lib/reception-displays.ts`): `agenda.operateAll` + `assertModule("salaEspera")` (`:123-124`), tope de
+    10 vivas (`MAX_LIVE_DISPLAYS`), CAS, sede del tenant y `auditInTx` sin el código. UI: «Pantallas» en los dos
+    headers de `/sala`, drawer diferido.
+- **Descartados.** Un topic propio de realtime (cambiaba M5); re-llamado (un llamado nuevo es otro par
+  `(bookingId, calledAt)`); `referrer: same-origin`; CSP enforce global (TV-D9: después de Sentry y 2 semanas de
+  reportes).
+- **Consecuencias.** Sin `SUPABASE_SERVICE_ROLE_KEY` la clave del código es por lambda (igual que soporte). El riesgo
+  son los navegadores de Smart TV: el spike en una TV real va al QA después del push (recomendado Chromecast / Fire TV o
+  Chrome `--kiosk`).
+
+### ADR-029 — WhatsApp Cloud API por consultorio (status: ACCEPTED, T6/WA, 22-oct-2026)
+
+- **Contexto.** Cada consultorio manda desde **su** número (§21.6, WA-D1..D16): turno agendado, reprogramado,
+  recordatorio con «Confirmo» / «No puedo ir», compartir la ficha, con consentimiento del paciente. Todo se construyó
+  contra un **Meta falso**: Meta aprueba la app recién al final.
+- **Decisión.**
+  - **Modo** `WHATSAPP_MODE=off|fake|sandbox|live`, default `off` (`lib/env.ts:236`). `whatsappMode()`
+    (`:730-736`) lo lee en cada llamada: `live` en Preview = `off`; `fake` solo fuera de Vercel
+    (`fakeGraphAllowed`, `:742`), y en Vercel frena el boot (`:380`). En Production `sandbox`/`live` exigen App ID,
+    App Secret, Config ID, Verify Token y `SECRET_BOX_KEYS` (`:387-401`).
+  - **Simulador de Meta** (`lib/whatsapp/fake-graph.ts`, `app/api/whatsapp/fake/[...path]`, 404 si
+    `!fakeGraphAllowed()`): popup de alta embebida, `debug_token` con scopes, plantillas que se aprueban por webhook
+    firmado, media, mensajes con estados sent → delivered → read, números mágicos (131026, 131042, timeout, 130429) y
+    panel con Confirmo, No puedo ir, BAJA, ALTA, calidad y PARTNER_REMOVED.
+  - **Alta embebida v4** (`lib/whatsapp/account-internal.ts:180`): cookie `kine_wa_signup` atada a usuario + sesión +
+    tenant + nonce (10 min, `path=/configuracion`); canjea el `code` (vive 30 s), `debug_token` con `app_id` propio y el
+    WABA dentro de los `target_ids` de **los dos** scopes (`:214`); número vivo en otro consultorio → `in_use` (`:234`);
+    sella token y PIN con `waCredentialAad` (`:136-137`); pasos retomables SUBSCRIBED → REGISTERED → TEMPLATES → DONE.
+    Solo el Titular con step-up (`lib/whatsapp-actions.ts:7,112`). La plantilla con header DOCUMENT sube su muestra por
+    Resumable Upload (`uploadHeaderSample`, `lib/whatsapp/graph.ts:405`). La CSP de Facebook se habilita **solo** en
+    `/configuracion` (`next.config.mjs:219-229`).
+  - **Graph** (`lib/whatsapp/graph.ts`, el único archivo que conoce `graph.facebook.com`; lo fija
+    `tests/unit/whatsapp-guard.test.ts`): nunca tira, 8 s o 2,5 s inline (`:30-31`), y cada envío lleva
+    `biz_opaque_callback_data` = nuestro id (`:551`): tras un timeout la fila queda SENDING y el `sent` que llega con
+    ese id la cierra sin reenviar. Riesgo aceptado: si el estado no llega antes de que venza el lock (10′), se reenvía
+    y el paciente recibe el aviso dos veces (`lib/whatsapp/outbox-internal.ts:441`; Graph no deja preguntar por el id).
+  - **Cola, escritor único** (`lib/whatsapp/outbox-internal.ts`, `prismaService` con `tenantId` a mano): `enqueue` con
+    `ON CONFLICT DO NOTHING` (`:179-192`); `dispatch` (`:311`) hace CAS QUEUED → SENDING con lock de 10 min
+    (`WA_LOCK_MS`, `:63`), **re-chequea** elegibilidad, consentimiento, número, plantilla APPROVED, cuenta ACTIVE y
+    modo, y envía **fuera de tx**; `applyStatus` monótono (`:576`); reintentos 1′, 5′, 30′, 2 h. Nadie más escribe
+    `WhatsAppMessage` (WA-D24).
+  - **Hook post-commit** = paso 3 de `afterBookingsCommitted`, después del publish y en su propio try
+    (`lib/booking-events-internal.ts:100-110`): con `off` corta **antes** del `import()`, **0 sentencias**. Con modo
+    prendido (`lib/whatsapp/booking-hook-internal.ts:80`): cuenta cacheada ACTIVE en el mismo modo (`:91`), una query
+    de turnos + consentimiento, claves `bc:`/`bm:`/`bs:` e inline ≤ 3 mensajes en ≤ 2,5 s con breaker de 60 s tras 3
+    timeouts (`:32-46`). Firma C-SV3 intacta.
+  - **Webhook** `app/api/webhooks/whatsapp/route.ts`: GET verify challenge; POST con tope de 1 MB (413), firma
+    `X-Hub-Signature-256` con el **App Secret sobre los bytes crudos** (`:58-68`, `verifyMetaSignature`
+    `lib/whatsapp/crypto.ts:23-33`, tiempo constante); inválida → 401. Error interno al procesar `messages` → 500 para
+    que Meta reintente (ZF2, `:21,83`): el claim del `wamid` va en la misma tx que el efecto, el reintento no duplica.
+  - **Respuestas** (`lib/whatsapp/reply-internal.ts`): «Confirmo» / «No puedo ir» por UPDATE SQL de
+    `patientConfirmedAt` / `patientCancelRequestedAt` + `patientReplyFor`, **sin mover `updatedAt`** (WA-D22,
+    `:361-368`); si el turno se movió → `stale`. «No puedo ir» avisa en la campana (`BOOKING_PATIENT_REPLY`) y **no
+    cancela** (WA-D7). BAJA revoca el consentimiento de todos los pacientes del consultorio con ese número y cancela lo
+    encolado (`:389-399`); ALTA re-otorga solo a los REVOKED. Texto libre → respuesta automática como mucho una cada
+    24 h (`:87`); el texto nunca se guarda.
+  - **Cron** `app/api/cron/whatsapp` a las 18:00 AR (`vercel.json:31`, `0 21 * * *`; fuera de `runDaily`):
+    recordatorios de mañana (≤ 2000 por consultorio, `lib/whatsapp/reminders-internal.ts:49,118`), drenado, vencidos →
+    EXPIRED y sync de plantillas y calidad.
+  - **Consentimiento anclado** a `Patient.waPhoneE164` (WA-D17, sin backfill): GRANTED exige el celular actual
+    normalizado; si cambia el teléfono, se deja de mandar; REVOKED conserva el número (`lib/whatsapp/consent-internal.ts:16-18`).
+    El turnero no pisa una ficha existente con otro número ni revierte una BAJA (`lib/public-booking-wa-consent.ts:39`,
+    ZF2).
+  - **Regla única «WhatsApp activo»** (`lib/whatsapp/active-internal.ts:29-45`, ZF2): `channel` = modo ≠ off + cuenta
+    ACTIVE en el mismo modo (agenda, paciente, portal); `notices` = además algún aviso automático prendido (lo que
+    promete el turnero). Con `off` corta antes de leer.
+  - **Plantillas** (`lib/whatsapp/templates.ts`, única entrada de parámetros): nombre, consultorio, fecha y hora; nunca
+    servicio, notas, diagnóstico ni profesional (WA-D16). Teléfono en la base como HMAC (`kinesoft:wa-phone:v1`,
+    `lib/whatsapp/crypto.ts:59`) + máscara; la cola no guarda cuerpo.
+- **Descartados.** `WHATSAPP_TOKEN_KEYS` (se usa `SECRET_BOX_KEYS`, propósito `wa-credential`); `waitUntil` (envío
+  inline acotado + re-drenado); `libphonenumber-js` (se reusa `lib/phone-e164.ts`); cancelar desde «No puedo ir»;
+  `Patient.phoneE164` con backfill; mails de turno (backlog, WA-D27).
+- **Consecuencias.** Los textos de las plantillas, del consentimiento (Ley 25.326) y de las respuestas automáticas son
+  **borradores** de Martin antes de `live`. Los supuestos de Meta sin consola son S1-S13 de
+  `scripts/diagnose-whatsapp.ts` (S1-S7 y S12 automáticos con `--sandbox`; el resto manual). Perder `SECRET_BOX_KEYS`
+  obliga a reconectar. Activación: Meta (verificación del negocio, Tech Provider) → sandbox → `live`
+  ([EXTERNAL-CONFIG](EXTERNAL-CONFIG.md)).
+
+### Módulos nuevos de T6/T7
+
+| Módulo | Qué es |
+| --- | --- |
+| `lib/reception-displays{,-types}.ts` · `lib/display-feed-state.ts` | TV: actions del staff, tipos y constantes; feed puro sin PHI |
+| `lib/display-pairing-internal.ts` · `lib/display-device{,-internal}.ts` · `lib/realtime-display-token.ts` | TV: código y cookie, sesión/feed/vínculo del dispositivo sin Actor, token realtime |
+| `lib/youtube.ts` · `lib/youtube-player-protocol.ts` | Parser de YouTube (nocookie, vivos, listas) y protocolo `postMessage` |
+| `app/(display)/tv/**` · `components/tv/**` · `components/sala/displays/**` | `/tv` (vínculo, pantalla, manifest) y «Pantallas» en `/sala` |
+| `lib/whatsapp/{types,logic,templates,copy}.ts` | WA puro: elegibilidad, series, estados, errores, respuestas, plantillas |
+| `lib/whatsapp/{crypto,graph,fake-graph,fake-graph-html}.ts` · `app/api/whatsapp/fake/[...path]` | Firma, hash del teléfono, cliente de Graph y simulador de Meta |
+| `lib/whatsapp/{account,outbox,booking-hook,webhook,reply,reminders,document,consent,active}-internal.ts` | Cuenta, cola, hook, webhook, respuestas, cron, documentos, consentimiento y regla «activo» |
+| `lib/whatsapp-{actions,booking-actions,consent-actions,patient-ui}.ts` · `lib/portal-whatsapp-consent.ts` · `lib/platform-whatsapp-read.ts` | Actions y lecturas de staff, paciente, portal y Plataforma |
+| `app/api/webhooks/whatsapp` · `app/api/cron/whatsapp` | Webhook de Meta y cron de las 18:00 AR |
+| `lib/saas-mp-logic.ts` · `lib/mercadopago-saas.ts` · `lib/mp-connect/fake-mp-saas.ts` | MPS puro (día 4, débito deseado, referencias), puerto de MP de la plataforma y simulador de preapprovals |
+| `lib/saas-billing-mp{,-internal}.ts` · `lib/saas-mp-sync-internal.ts` · `lib/saas-mp-webhook-route.ts` | Actions del consultorio, consumidores, sync/conciliación y rama SaaS del webhook |
+| `lib/saas-billing-schedule-internal.ts` · `lib/saas-adjustments-internal.ts` · `lib/saas-reanchor-internal.ts` | Bajadas, bajas y subidas; ajustes solo-inserción; re-anclaje al 4 |
+| `scripts/{saas-reanchor,diagnose-whatsapp,diagnose-mp-subscriptions,prod-precheck,qa-tenants,dev-safe}` | Scripts que corre Martin (re-anclar, sandbox, precheck/postcheck de prod, consultorios QA) y `npm run dev` seguro |
 
 ## Cache & cookies (what is implemented — updated 30-sep-2026)
 
@@ -1807,13 +2032,14 @@ since BO4).
 
 ## Build / verify
 
-- `npm run dev` — local Next.js against Docker Postgres (`.env.local`).
+- `npm run dev:local` — el comando diario: Docker Postgres de `.env.local` + simuladores de MP y Meta, todo lo externo
+  pisado con literales. `npm run dev` pelado se niega a arrancar contra un Supabase o una base remotos
+  (`scripts/dev-safe.mjs`, SECURITY §25).
 - `npm run build` = `prisma generate && next build`. Vercel runs
   `node scripts/vercel-build.mjs`: `prisma migrate deploy` **only** when
   `VERCEL_ENV=production` (A0b), then generate + build.
 - Verify: `npx tsc --noEmit` + `npx next build` (clear `.next` on stale
   "Cannot find module for page" cache errors). `scripts/` is excluded from tsc.
-  Locally, `.env.local` defines `NODE_ENV`, which breaks the prerender: build
-  with `npx dotenv -e .env.local -v NODE_ENV=production -- npx next build`
-  (TESTING.md).
+  Local: build con el env local explícito (`NODE_ENV=production` y Supabase en loopback con literales de prueba),
+  porque `next build` inlinea Supabase del `.env`, que puede ser prod. Comando en TESTING «Build local».
 - Migrations + env split: see [DEPLOYMENT.md](DEPLOYMENT.md).

@@ -7,26 +7,31 @@
 
 ---
 
-## Go-live con reset (07-oct-2026) — **manda sobre §2.1-§2.4 donde choquen**
+## Estado y orden vigente (23-oct-2026) — **manda sobre todo lo de abajo**
 
-> **Paso a paso con comandos, consolas y variables: [GO-LIVE-PASO-A-PASO.md](GO-LIVE-PASO-A-PASO.md)** (14-oct). Esta
-> sección es la referencia técnica; si hay diferencias, manda la guía.
->
-> ⚠️ **Antes del reset:** `DROP SCHEMA public` borra también la biblioteca global (ejercicios, condiciones de
-> Diagnóstico, tags, regiones, media) y **no hay carga versionada** para recuperarla en prod (el seed es solo local).
-> Contar qué hay y resolverlo es el paso 1 de la guía.
->
-> **Decisión de Martin del 07-oct:** prod se **resetea** antes del go-live (reset total; el cliente vuelve a cargar).
-> No hay datos de prod que preservar: el deploy de todo el bloque B (A + B-pre + Planes + verticales + Sala de Espera)
-> es **una sola vez**, con la cadena completa de migraciones aplicada **desde vacío**. Contexto y contratos:
-> [VERTICALES.md](VERTICALES.md); prechecks marcados en [PLANES.md §16](PLANES.md).
->
-> **Obsoleto por el reset** (queda escrito abajo como historia, con nota en cada sección; se borra cuando el go-live
-> quede hecho): el deploy incremental de §2.1-§2.4, los prechecks de datos, el dedupe de `(programId, index)`, el ensayo
-> de datos en staging, el backfill de `agenda_foundations`, `normalize-patient-emails`, la ventana sin uso y el
-> down-script de M1. Siguen valiendo: el precheck (0) (rol con BYPASSRLS), (17) Storage privado y el P3009 liviano.
+> **Checklist del día del push: [PUSH-DIA.md](PUSH-DIA.md)** (el único; [GO-LIVE-PASO-A-PASO.md](GO-LIVE-PASO-A-PASO.md)
+> quedó superado). Esta sección y las «Mxx en prod» son la referencia técnica de cada migración.
 
-**⚠️ Ya, independiente del reset (bloque A, AUDIT `data-api-anon-sin-rls`):** en la consola de prod, Settings → API →
+- **Prod:** `main` (`3159539`, 18-oct) trae hasta **M11** (`20261019120000_public_directory`) = **40 migraciones**; el
+  build de Production las aplicó (go-live incremental del 14-oct y ventana M8 → M11 del 16-oct). **Local: 46.**
+- **Pendientes en prod: 6**, en el orden que aplica `migrate deploy` (el del timestamp, no el del número):
+  **M12 → M14 → M18 → M17 → M15 → M16**. Todas aditivas y compatibles con el código que hoy corre en prod, así que van
+  **todas antes del push**, en una sola ventana.
+- **Sin staging y sin reset** (decisiones del 14-oct): **precheck de solo lectura → backup → `db:prod:deploy` →
+  postcheck → push**. Lo corre Martin; el agente verifica la salida que él pega.
+- **Prechecks y postchecks automatizados:** `KINESOFT_CONFIRM_PROD=<ref> npm run db:prod:precheck -- --pre` y
+  `… -- --post --booking-relfilenode=<el del --pre>` (`scripts/prod-precheck.ts`, lógica en
+  `scripts/lib/prod-precheck-core.ts`, una tx READ ONLY, tabla PASS/WARN/FAIL sin secretos, exit 1 si hay FAIL). Corre
+  los prechecks de las 6 migraciones de abajo, los locks y tx largas sobre Booking/Patient/Tenant, la Data API, los
+  buckets, `pg_dump` local vs. server y el rol. El `--post` compara los objetos, los md5 de las 5 funciones y el checksum
+  de cada migración contra el sha256 del repo. Las queries de cada «Mxx en prod» quedan para correrlas a mano si hace
+  falta.
+- **`pg_dump` ≥ el server:** el del PATH de Martin es 14.18; antes del `--pre` y del backup,
+  `export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"` (el `--pre` marca FAIL `pre.pgdump.version` si no).
+- **Histórico:** el «go-live con reset» del 07-oct (nunca se hizo), las secciones de M3a/M4/M5 que dependían de él, el
+  orden del go-live desde vacío y los deploys de §2.1-§2.4 pasaron al [Apéndice · Histórico](#apéndice--histórico).
+
+**⚠️ Data API (bloque A, AUDIT `data-api-anon-sin-rls`; el `--pre` lo revisa como `dataapi.anon`):** en la consola de prod, Settings → API →
 Data API: si `public` está expuesto, **desactivarla** (o sacar `public` de los schemas expuestos). Precheck de solo
 lectura:
 
@@ -35,33 +40,22 @@ SELECT relname, relrowsecurity, has_table_privilege('anon', oid, 'UPDATE')
 FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind='r';
 ```
 
-**Cadena de migraciones** (en orden de timestamp, con `migrate deploy`). **Sin reset ni staging:** el go-live del
-14-oct fue incremental sobre la base viva (prod = datos demo) y desde ahí cada migración nueva se aplica **incremental**
-con precheck de solo lectura → backup → `db:prod:deploy` (todas aditivas y compatibles con el código anterior, así que
-pueden ir antes del deploy). Cada migración va sola, encabezando su ola, con timestamp posterior a la anterior. Orden
-vigente de corridas: el de §20 del plan ([ROADMAP.md «Plan vigente (15-oct)»](ROADMAP.md)): PL (M8) → EV2 (M9) → VX →
-ES4 → PF (M10) → DIR (M11). (El «reset + deploy único» del 13-oct no se hizo; queda como historia.)
+**Las 6 pendientes, por tanda** (todas commiteadas en `develop`, sin push; aplicadas y verificadas objeto por objeto
+solo en el Docker local):
 
-**Orden único para prod de todo lo pendiente (16-oct, cierre DIR-Z/MB-Z):** **M8 → M8b → M8c → M9 → M10 → M11 →
-deploy**, en una ventana, cada una con su precheck y postcheck de abajo («Orden de prod de PL», «M9 en prod», «M10 en
-prod», «M11 en prod») y un backup antes de la primera. Todas son aditivas y compatibles con el código anterior, así que
-van **antes** del deploy; el deploy sale con `DIRECTORY_MODE` sin setear (= `off`) y `NEXT_PUBLIC_PWA` sin setear (=
-prendido, [EXTERNAL-CONFIG «Directorio y PWA»](EXTERNAL-CONFIG.md)). MB no trae migración.
+| Orden | Migración | Tanda / commit | Detalle |
+|---|---|---|---|
+| 1 | **M12** `20261020120000_agenda_secretaria_config` | T3 (`12bb08b`) | «M12 en prod» |
+| 2 | **M14** `20261021120000_fichas_clinicas` | T4 (`fc97be9`) | «M14 en prod» (buckets antes) |
+| 3 | **M18** `20261022120000_turnero_cobros_mp` | T5 (`0a8e551`) | «M18 en prod» (`SECRET_BOX_KEYS` antes) |
+| 4 | **M17** `20261023120000_reception_displays` | T7 (`b019d7c`) | «M17 en prod» |
+| 5 | **M15** `20261024120000_whatsapp_messaging` | T6 (`b019d7c`) | «M15 en prod» |
+| 6 | **M16** `20261025120000_saas_mp_subscriptions` | T6 (`b019d7c`) | «M16 en prod» (después: `saas-reanchor`) |
 
-**T3 (19-oct) suma M12** (`agenda_secretaria_config`, commit `12bb08b`, sin push): va **después de M11 y antes que
-M14**, al final de todo el planning (§22.14 del plan: consolas, push y migraciones juntos), con precheck de solo lectura
-(§23.10) → backup → `db:prod:deploy` **antes** del deploy de T3. Es aditiva y compatible con el código anterior. T3-Z no
-la tocó. Detalle en «M12 en prod».
+El deploy sale con `WHATSAPP_MODE`, `SAAS_BILLING_MODE`, `MP_CONNECT_MODE` y `DIRECTORY_MODE` en `off`
+([PUSH-DIA.md](PUSH-DIA.md) paso B).
 
-**T4 (19-oct) suma M14** (`fichas_clinicas`, commit `fc97be9`, sin push): ⚠️ **migración nueva**, va **después de M12 y
-antes que M18**, también al final del planning: precheck → buckets → backup → `db:prod:deploy` **antes** del push de T4.
-Detalle en «M14 en prod». **Orden real de las pendientes** (lo da el timestamp, no el número; enmienda el viejo «M18 antes
-que M14..M17»): **M12 → M14 → M18 → M17 → M15/M16**, cada una antes del push de su tanda.
-
-**T5 (22-oct) suma M18** (`turnero_cobros_mp`, commit `0a8e551`, sin push): ⚠️ **migración nueva**, va **después de M14**,
-también al final del planning (§22.14): precheck → backup → variables (`SECRET_BOX_KEYS`, `MP_CONNECT_MODE=off`,
-`MP_CONNECT_WEBHOOK_SIGNATURE=required`) → `db:prod:deploy` **M12 → M14 → M18** **antes** del push. Detalle en «M18 en
-prod»; consola de MP en [EXTERNAL-CONFIG §0.12](EXTERNAL-CONFIG.md).
+**Estado y objetos por migración** (desde M1; la tabla numerada completa está en §2 «Tabla de migraciones»):
 
 | Migración | Corrida | Estado |
 |---|---|---|
@@ -82,58 +76,9 @@ prod»; consola de MP en [EXTERNAL-CONFIG §0.12](EXTERNAL-CONFIG.md).
 | `20261020120000_agenda_secretaria_config` (**M12**) | T3b-1m (sola) | **commiteada (`12bb08b`, sin push), aplicada solo en el Docker local (18-oct); hash re-verificado en T3-Z (igual)**. sha256 de `migration.sql` = `a0849c4d28c7154acb3b9a0cf47075bbbde608161d32d126d7ae9d85f9fd7485`. Aditiva, una tx, `lock_timeout` 5 s, sin tablas nuevas (`guard:isolation` sin cambios), con backfill de datos en la misma tx. Objetos: `Tenant.moduleGrants`/`moduleRevokes` (`TEXT[] NOT NULL DEFAULT '{}'`, CHECK `Tenant_moduleOverrides_check`: sin intersección, ≤ 32 cada uno) y `bookingCapCount`/`bookingCapIntervalMin` (INT NULL, CHECK `Tenant_bookingCap_check`: los dos o ninguno, 1..60, 15/30/60); enum `BookingCapMode` (INHERIT/NONE/CUSTOM) + `Practitioner.bookingCapMode` (NOT NULL default INHERIT), `bookingCapCount`, `bookingCapIntervalMin` (CHECK `Practitioner_bookingCap_check`: CUSTOM ⇔ los dos presentes); enum `BookingPaymentMethod` (CASH/TRANSFER/CARD/WALLET/MERCADO_PAGO/OTHER) + `Booking.copagoPaymentMethod` y `Booking.copagoCollectedById TEXT` (**sin FK ni índice**: tabla caliente), CHECKs `Booking_copago_method_check` (medio ⇒ PAID/REFUNDED) y `Booking_copago_collector_check` (quién cobró ⇒ medio y PAID/REFUNDED). Los dos CHECK de tope van con `COALESCE(…, false)` (desvío del SQL del brief, precedente M11: sin eso entraba un tope sin intervalo). Datos: ADMIN con `grantBilling = false` → true, salvo los que tienen un audit `membership.grants.change` / `platform.membership.grants.change` con `from.grantBilling = true` y `to.grantBilling = false` (verificado contra `setMemberGrantsInTx`; desvío del brief: el brief no exigía `from = true`). Sin policy nueva en `SupportSession` (§23.10). Drift aceptado: los 5 CHECK (`migrate diff` no propone nada de M12). Verificada objeto por objeto (psql + `tests/integration/as-m12.test.ts`, 2 roles); `migrate status` al día (41). Orden: «M12 en prod» |
 | `20261021120000_fichas_clinicas` (**M14**) | FC-0 (T4b, sola) | **commiteada (`fc97be9`, sin push), aplicada solo en el Docker local (19-oct)**. sha256 de `migration.sql` = `f7b12bab45002308751095ee12deb717c4f375ad39e9a3e8470f16afbe4967c9`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill (FC-D24), requiere PostgreSQL ≥ 13. Objetos: enums `DiagnosisSystem` (ICD11_MMS), `PatientDocumentKind` (FICHA), `PatientDocumentRevokeReason` (REPLACED/NOTE_VOIDED/MANUAL); `ClinicalNote.bodyDoc/diagnoses/authorLicense/importSource` + `ClinicalNoteRevision.bodyDoc/diagnoses`; tablas `DiagnosisCode` (**GLOBAL_READONLY**, policy `DiagnosisCode_read` FOR SELECT, único `(system, code)`, URI obligatoria con CHECK), `TenantDiagnosis` (parcial `TenantDiagnosis_tenantId_title_active_key`), `DiagnosisFavorite` (un destino exacto, 3 únicos + 4 índices) y `PatientDocument` (parcial `PatientDocument_noteId_live_key`, FKs compuestas RESTRICT a paciente, ficha y profesional); `Practitioner.honorific/signatureStorageKey/signatureUpdatedAt` y `Tenant.logoStorageKey/logoUpdatedAt` (al final); 26 CHECK; funciones `patient_document_guard()` (nueva) y `clinical_note_guard()` (**reemplazada línea por línea** sobre M9: suma las columnas nuevas y al anular una raíz revoca sus documentos) con triggers `PatientDocument_guard`/`_no_truncate`; RLS ENABLE + FORCE + `<T>_tenant_isolation` en las 3 tablas por tenant; sin GRANT (DEFAULT PRIVILEGES). md5 local: `clinical_note_guard` M9 `0a87f3688a5002c59a7b5238e2ae8a44` → M14 `d0164760670b55036a575042e945adcf`; `patient_document_guard` `677758023a72e44e21c8af18aa2c952b`. Drift aceptado («FC M14: DRIFT ACEPTADO» en el SQL y en `schema.prisma`: parciales, CHECKs, funciones, triggers, policies). Verificada objeto por objeto (`tests/integration/fichas-m14.test.ts` + `clinical-notes-m9.test.ts`, 2 roles); `guard:isolation` OK (`DiagnosisCode` en GLOBAL_READONLY). Orden: «M14 en prod» |
 | `20261022120000_turnero_cobros_mp` (**M18**) | TP-M (T5b, sola) | **commiteada (`0a8e551`, sin push), aplicada solo en el Docker local (22-oct)**. sha256 de `migration.sql` = `0ffc0c9157d5d9df71770f6d62019a6c916f673db7529eceaa00768d5c88006e`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill, requiere PostgreSQL ≥ 13. Objetos: 7 enums (`BookingPaymentMode`, `BookingChargeKind`, `MpAccountKind`, `MpAccountStatus`, `OnlineChargeOrigin`, `OnlineChargeKind`, `OnlineChargeStatus`); tablas `BookingPaymentPolicy` (RLS normal), `MpAccount` (TENANT_READONLY: policy `MpAccount_tenant_read` FOR SELECT), `MpCredential` (SERVICE_ONLY: RLS ENABLE + FORCE **sin policy**) y `OnlineCharge` (RLS normal); 6 parciales, 6 FKs compuestas, 25 CHECKs (24 en las tablas nuevas + `Booking_onlineDepositCents_check`); funciones `online_charge_guard()` y `online_charge_sync_booking()` con 3 triggers; `Booking.onlineDepositCents INT NOT NULL DEFAULT 0` al final (sin reescritura: `atthasmissing = t`, `relfilenode` igual). Parciales, CHECKs, triggers y RLS no están en Prisma: drift aceptado. Verificada objeto por objeto (`tests/integration/tpm-m18.test.ts` y bloque `[TP-M]` de `rls-isolation.test.ts`, 2 roles); `guard:isolation` OK. Orden para prod abajo («M18 en prod») |
-
-**M3a en prod (ES3).** Prod se resetea antes del go-live (plan §15.6), así que M3a **no se aplica sola**: va dentro de la
-cadena completa del deploy único de B (`migrate deploy` desde vacío, paso 4 de abajo). Solo si Martin decidiera
-aplicarla **antes** del reset, el orden es:
-1. Precheck de solo lectura (las 2 columnas no existen todavía; tiene que dar 0 filas):
-   ```sql
-   SELECT to_regclass('"Booking"') IS NOT NULL AS booking_ok;
-   SELECT table_name, column_name FROM information_schema.columns
-   WHERE table_schema = 'public'
-     AND ((table_name = 'Booking' AND column_name = 'copagoPaidAt')
-       OR (table_name = 'UserPreferences' AND column_name = 'dashboardPrefs'));
-   ```
-2. Backup (`npm run db:prod:backup`).
-3. Staging primero.
-4. Prod con el merge. Es aditiva, así que puede ir **antes** que el código (el código viejo no lee las columnas). Sin
-   backfill: los copagos ya cobrados quedan con `copagoPaidAt` NULL y el widget no los cuenta.
-
-**M4 en prod (SR).** Igual que M3a: **no se aplica sola**, va en la cadena del deploy único después de M3a y antes de
-M5. Solo si Martin decidiera aplicarla **antes** del reset:
-1. Precheck de solo lectura (la tabla no existe todavía; tiene que dar NULL):
-   ```sql
-   SELECT to_regclass('public."Room"');
-   ```
-2. Backup (`npm run db:prod:backup`).
-3. Staging primero. Después de migrar, confirmar que los roles reciben los privilegios por DEFAULT PRIVILEGES (M4 no
-   tiene GRANT): `SELECT has_table_privilege('kinesoft_app','"Room"','SELECT,INSERT,UPDATE');` → `t`, y lo mismo con
-   `kinesoft_service` si existe.
-4. Prod en horario de poco uso: `CREATE INDEX "Booking_tenantId_roomId_scheduledFor_idx"` **no es CONCURRENTLY** (frena
-   escrituras en `Booking` mientras se construye) y los `ALTER`/`ADD CONSTRAINT` sobre Booking, PractitionerSchedule y
-   TimeBlock toman lock exclusivo hasta el COMMIT; con `lock_timeout` 5 s falla rápido (P3009 liviano) en vez de
-   colgar la agenda. Es aditiva: puede ir **antes** que el código (el código viejo no lee `roomId`).
-
-**M5 en prod (SV).** Igual que M3a y M4: **no se aplica sola**, va en la cadena única del deploy desde vacío
-(`… → M3a → M4 → M5`). Solo si Martin decidiera aplicarla **antes** del reset:
-1. Precheck de solo lectura:
-   ```sql
-   -- la columna no existe todavía: 0 filas
-   SELECT column_name FROM information_schema.columns
-   WHERE table_schema = 'public' AND table_name = 'Booking' AND column_name = 'calledAt';
-   -- R1: existe realtime.messages (esperado: true; relkind 'p', relrowsecurity true)
-   SELECT to_regclass('realtime.messages') IS NOT NULL AS realtime_messages;
-   SELECT c.relkind, c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'realtime' AND c.relname = 'messages';
-   -- R2: ninguna policy abierta en realtime (antes de M5: 0 filas)
-   SELECT policyname, cmd, roles, qual, with_check FROM pg_policies WHERE schemaname = 'realtime';
-   ```
-2. Backup (`npm run db:prod:backup`).
-3. Staging primero. Después de migrar: R2 da **1 fila** `kinesoft_agenda_read | SELECT | {authenticated}` sin
-   `with_check`; en el log del deploy **no** tiene que aparecer el NOTICE `reception_call_realtime: no existe
-   realtime.messages` (en Supabase la tabla existe: si aparece, la policy no se creó y el canal privado no entrega nada).
-4. Prod: es aditiva, puede ir **antes** que el código (el código viejo no lee `calledAt`). `ALTER TABLE "Booking"` toma
-   lock exclusivo hasta el COMMIT; con `lock_timeout` 5 s falla rápido (P3009 liviano).
+| `20261023120000_reception_displays` (**M17**) | MIG (X0, las tres en un commit) | **commiteada (`b019d7c`, sin push), aplicada solo en el Docker local (22-oct)**. sha256 de `migration.sql` = `af7426dc3334f6aaa2fb1a9529d4acefc2e27b57f586212f2fffadd52748f430`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill, no toca tablas existentes. Objetos: 5 enums `Display*`; tabla `ReceptionDisplay` (RLS normal + `_tenant_isolation`), 5 CHECK, FK compuesta a `Location(id, tenantId)`, 2 parciales (`_pairingCodeHash_key`, `_tenant_name_live_key`). Drift aceptado: parciales, FK compuesta, CHECKs, policy. ADR-028. Orden: «M17 en prod» |
+| `20261024120000_whatsapp_messaging` (**M15**) | MIG (X0, las tres en un commit) | **commiteada (`b019d7c`, sin push), aplicada solo en el Docker local (22-oct)**. sha256 de `migration.sql` = `e8637727af84b64b38c303be5dc0d762006baa402fdcd989bace81674471cf0d`. Aditiva, sin backfill (WA-D17), `lock_timeout` 5 s; los 2 `ADD VALUE` de `NotificationKind` van **fuera** de la tx. Objetos: 10 enums `WhatsApp*`; `WhatsAppAccount`/`Template`/`Message`/`Inbound` (TENANT_READONLY) y `WhatsAppCredential` (SERVICE_ONLY); 5 parciales; FKs compuestas; 6 columnas `wa*` en `Patient` y 3 de respuesta en `Booking` (NULL sin DEFAULT) con sus CHECK. Hallazgo A de MIG: `seriesCount IS NOT NULL` explícito. En Prisma `WhatsAppAccount.credentials` es 1:n; la base garantiza 1:1 (`WhatsAppCredential_accountId_key`). Drift aceptado. ADR-029. Orden: «M15 en prod» |
+| `20261025120000_saas_mp_subscriptions` (**M16**) | MIG (X0, las tres en un commit) | **commiteada (`b019d7c`, sin push), aplicada solo en el Docker local (22-oct)**. sha256 de `migration.sql` = `b235454f0ceceef95394d752f1fe879ec2ec0baf6b7f052ae3e253e47f207798`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill (lo hace `scripts/saas-reanchor.ts` después del deploy). Objetos: 2 enums; 19 columnas + 3 CHECK + 2 parciales en `SaasSubscription` (`anchorDay` default 4, `autoDebitAllowed` default true), 4 columnas + 2 CHECK en `SaasCharge`, 3 columnas + CHECK + FK compuesta en `SaasPayment`, `SaasPayment_source_mp_check` recreado más laxo; tabla `SaasAdjustment` (TENANT_READONLY, solo inserción) con `saas_adjustment_guard()` (md5 `fd8790f4959e9f56ea743dead6bb6d2b`) y 2 triggers. Hallazgo A de MIG: `IS NOT NULL` explícito en breakdown/proration. Drift aceptado. ADR-027. Orden: «M16 en prod» |
 
 **M6 en prod (IAM-1).** Prod conserva sus datos (decisiones del 14-oct: sin reset y sin staging), así que M6 se aplica
 sobre la base viva:
@@ -551,7 +496,7 @@ que los CHECK validan sin backfill; va **antes** del deploy de DIR. sha256 de `m
 
 **M12 en prod (T3b-1m).** Aditiva, sin reset y sin staging separado (AGENTS). Va **al final de todo el planning**
 (§22.14 del plan: consolas, push y migraciones juntos al final), **antes** del deploy de T3 y **antes que M14**
-(`fichas_clinicas`, T4; orden real M12 → M14 → M18 → M17 → M15/M16). Compatible con el código anterior: nadie lee las
+(`fichas_clinicas`, T4; orden real M12 → M14 → M18 → M17 → M15 → M16). Compatible con el código anterior: nadie lee las
 columnas nuevas y nacen vacías/NULL/INHERIT;
 el único cambio visible con el código viejo es el backfill: los ADMIN pasan a ver «Planes y pagos» (decisión 2 del 19-oct).
 sha256 de `migration.sql` = `a0849c4d28c7154acb3b9a0cf47075bbbde608161d32d126d7ae9d85f9fd7485` (re-verificado en T3-Z:
@@ -689,7 +634,7 @@ tranquila.
 
 **M18 en prod (TP-M, T5).** ⚠️ **Migración nueva** (`20261022120000_turnero_cobros_mp`, commit `0a8e551`, sin push).
 Aditiva, una tx, `lock_timeout` 5 s, sin backfill, sin staging separado (AGENTS). Va **al final de todo el planning**
-(§22.14), **después de M14** (orden por timestamp **M12 → M14 → M18**, después M17 → M15/M16) y **antes** del push de T5:
+(§22.14), **después de M14** (orden por timestamp **M12 → M14 → M18**, después M17 → M15 → M16) y **antes** del push de T5:
 el build de Production migra (`scripts/vercel-build.mjs`). Compatible con el código anterior: el código viejo no conoce
 las tablas nuevas y `Booking.onlineDepositCents` nace en 0 sin reescribir la tabla. sha256 de `migration.sql` =
 `0ffc0c9157d5d9df71770f6d62019a6c916f673db7529eceaa00768d5c88006e`. **Locks:** el `ADD COLUMN` + CHECK de `Booking`
@@ -760,6 +705,150 @@ Ventana tranquila.
    "OnlineCharge"` (decide Martin; la seña deja de reflejarse hasta recrearlo con el cuerpo literal de M18). Sacar M18 =
    migración nueva con DROP, y se pierden cuentas, credenciales y cobros (backup del paso 2).
 
+**M17 en prod (MIG, T7 · TV de la sala).** ⚠️ **Migración nueva** (`20261023120000_reception_displays`, commit
+`b019d7c`, sin push). sha256 de `migration.sql` = `af7426dc3334f6aaa2fb1a9529d4acefc2e27b57f586212f2fffadd52748f430`.
+Aditiva, una tx, `lock_timeout` 5 s, sin backfill, **no toca tablas existentes** (solo crea; las FKs toman un lock corto
+SHARE ROW EXCLUSIVE en `Tenant` y `Location`). Va **después de M18** y **antes** del push. ADR-028.
+Objetos: 5 enums (`DisplayNameMode`, `DisplayTheme`, `DisplayMediaKind`, `DisplayMediaLayout`, `DisplayMediaDuringCall`);
+tabla `ReceptionDisplay` (RLS normal: ENABLE + FORCE + `ReceptionDisplay_tenant_isolation`; el dispositivo escribe por
+`prismaService` con `id` + `tenantId` a mano), 5 CHECK (`_name`, `_media`, `_pairing`, `_device`, `_revoked`), 3 FKs
+(`_tenantId_fkey`, `_locationId_fkey` y la compuesta `_location_tenant_fkey` → `Location(id, tenantId)`), 2 índices y 2
+**parciales** (`ReceptionDisplay_pairingCodeHash_key`, `ReceptionDisplay_tenant_name_live_key`). Sin GRANT (DEFAULT
+PRIVILEGES). Drift aceptado: parciales, FK compuesta, CHECKs y policy (no se borran si `migrate diff` lo propone).
+1. Precheck de solo lectura (lo corre el `--pre`: `pre.M17.absent`):
+   ```sql
+   SELECT to_regclass('public."ReceptionDisplay"');                                    -- NULL
+   SELECT typname FROM pg_type WHERE typname IN ('DisplayNameMode','DisplayTheme','DisplayMediaKind',
+     'DisplayMediaLayout','DisplayMediaDuringCall');                                   -- 0 filas
+   SELECT count(*) FROM pg_indexes WHERE indexname = 'Location_id_tenantId_key';        -- 1 (destino de la FK compuesta, M4)
+   ```
+2. Backup (`npm run db:prod:backup`) y `npm run db:prod:deploy` (va en la misma corrida que las otras 5).
+3. Postcheck (`--post`: `post.M17.*`):
+   ```sql
+   SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'ReceptionDisplay';     -- t, t
+   SELECT policyname, cmd FROM pg_policies WHERE tablename = 'ReceptionDisplay';  -- ReceptionDisplay_tenant_isolation ALL
+   SELECT indexname FROM pg_indexes WHERE tablename = 'ReceptionDisplay' AND indexdef LIKE '%WHERE%';  -- 2
+   SELECT contype, count(*) FROM pg_constraint WHERE conrelid = '"ReceptionDisplay"'::regclass
+     AND contype IN ('c','f') GROUP BY 1;                                              -- c 5, f 3
+   SELECT checksum FROM _prisma_migrations WHERE migration_name = '20261023120000_reception_displays';  -- el sha256 de arriba
+   ```
+4. Rollback: revertir el código sin tocar M17 (tabla sin lector, inocua). Sacarla = migración nueva con DROP (se pierden
+   las pantallas vinculadas: se re-vinculan con un código nuevo).
+
+**M15 en prod (MIG, T6 · WhatsApp).** ⚠️ **Migración nueva** (`20261024120000_whatsapp_messaging`, commit `b019d7c`, sin
+push). sha256 de `migration.sql` = `e8637727af84b64b38c303be5dc0d762006baa402fdcd989bace81674471cf0d`. Aditiva, sin
+backfill (WA-D17), `lock_timeout` 5 s. Va **después de M17** y **antes** del push. ADR-029.
+**Dos sentencias fuera de la tx:** `ALTER TYPE "NotificationKind" ADD VALUE IF NOT EXISTS 'BOOKING_PATIENT_REPLY'` y
+`… 'WHATSAPP_ACCOUNT'` van antes del `BEGIN` (un valor de enum nuevo no se puede usar en la misma tx). Si la tx de abajo
+falla, esos dos valores **quedan** (inocuos: nadie los escribe con `WHATSAPP_MODE=off`) y el reintento los saltea por el
+`IF NOT EXISTS`. **Locks:** `Patient` y `Booking` van **al final** (columnas NULL sin DEFAULT = solo metadatos, pero
+`ADD CONSTRAINT … CHECK` valida la tabla con ACCESS EXCLUSIVE hasta el COMMIT, y el índice parcial de `Patient` la
+recorre): ventana tranquila.
+Objetos: 10 enums `WhatsApp*` (`AccountStatus`, `SetupStep`, `TemplateKey`, `TemplateStatus`, `MessageKind`,
+`MessageTrigger`, `MessageStatus`, `InboundKind`, `ConsentStatus`, `ConsentSource`); tablas `WhatsAppAccount`,
+`WhatsAppTemplate`, `WhatsAppMessage`, `WhatsAppInbound` (**TENANT_READONLY**: `<T>_tenant_read` FOR SELECT, escritor
+único por canal service) y `WhatsAppCredential` (**SERVICE_ONLY**: ENABLE + FORCE sin policy; token y PIN sellados con
+`secret-box`, 1:1 con la cuenta por `WhatsAppCredential_accountId_key`); 5 **parciales** (`WhatsAppAccount_tenant_live_key`,
+`_phone_live_key`, `_waba_live_key`, `WhatsAppMessage_due_idx`, `Patient_tenantId_waPhoneE164_idx`); FKs compuestas a
+`WhatsAppAccount(id, tenantId)` y `Patient(id, tenantId)`; `Patient.waConsent/waConsentAt/waConsentSource/
+waConsentByUserId/waConsentVersion/waPhoneE164` + CHECK `Patient_wa_consent_check`; `Booking.patientConfirmedAt/
+patientCancelRequestedAt/patientReplyFor` + CHECK `Booking_patient_reply_check`. El `seriesCount` del CHECK de refs va con
+`IS NOT NULL` explícito (hallazgo A de MIG: un CHECK NULL pasa). Drift aceptado: parciales, FKs compuestas, CHECKs,
+policies.
+1. Precheck de solo lectura (`--pre`: `pre.M15.absent`):
+   ```sql
+   SELECT to_regclass('public."WhatsAppAccount"'), to_regclass('public."WhatsAppCredential"'),
+          to_regclass('public."WhatsAppTemplate"'), to_regclass('public."WhatsAppMessage"'),
+          to_regclass('public."WhatsAppInbound"');                                     -- todos NULL
+   SELECT typname FROM pg_type WHERE typname LIKE 'WhatsApp%';                          -- 0 filas
+   SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'
+     AND ((table_name = 'Patient' AND column_name IN ('waConsent','waConsentAt','waConsentSource','waConsentByUserId',
+           'waConsentVersion','waPhoneE164'))
+       OR (table_name = 'Booking' AND column_name IN ('patientConfirmedAt','patientCancelRequestedAt','patientReplyFor')));  -- 0
+   SELECT count(*) FROM pg_indexes WHERE indexname = 'Patient_id_tenantId_key';         -- 1 (destino de la FK compuesta)
+   SELECT count(*) FROM "Patient";                                                      -- anotarlo (el CHECK lo recorre)
+   ```
+   Y `pre.activity.locks` / `pre.activity.longTx` sin locks fuertes ni tx largas sobre `Patient`/`Booking`.
+2. Backup y `npm run db:prod:deploy` (misma corrida).
+3. Postcheck (`--post`: `post.M15.*`):
+   ```sql
+   SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+    WHERE t.typname = 'NotificationKind' AND enumlabel IN ('BOOKING_PATIENT_REPLY','WHATSAPP_ACCOUNT');   -- 2 filas
+   SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname LIKE 'WhatsApp%' AND relkind = 'r';  -- 5 × t, t
+   SELECT tablename, policyname, cmd FROM pg_policies WHERE tablename LIKE 'WhatsApp%' ORDER BY 1;
+     -- 4 × <T>_tenant_read SELECT; NINGUNA en WhatsAppCredential
+   SELECT indexname FROM pg_indexes WHERE indexname IN ('WhatsAppAccount_tenant_live_key','WhatsAppAccount_phone_live_key',
+     'WhatsAppAccount_waba_live_key','WhatsAppMessage_due_idx','Patient_tenantId_waPhoneE164_idx')
+     AND indexdef LIKE '%WHERE%';                                                      -- 5
+   SELECT conname FROM pg_constraint WHERE conname IN ('Patient_wa_consent_check','Booking_patient_reply_check');  -- 2
+   SELECT count(*) FROM "Patient";                                                      -- = el del precheck
+   SELECT checksum FROM _prisma_migrations WHERE migration_name = '20261024120000_whatsapp_messaging';  -- el sha256 de arriba
+   ```
+4. El deploy sale con `WHATSAPP_MODE=off`: nadie escribe nada de WhatsApp ni se agrega ninguna query en los write paths
+   de turnos. Activación: [EXTERNAL-CONFIG §0.13](EXTERNAL-CONFIG.md).
+5. Rollback: revertir el código sin tocar M15 (tablas y columnas sin lector; los valores de enum nuevos no los escribe
+   nadie con `off`). Un valor de enum **no se puede sacar** sin recrear el tipo: sacar M15 = migración nueva con DROP de
+   tablas y columnas, los valores de `NotificationKind` quedan.
+
+**M16 en prod (MIG, T6 · suscripción con Mercado Pago).** ⚠️ **Migración nueva** (`20261025120000_saas_mp_subscriptions`,
+commit `b019d7c`, sin push). sha256 de `migration.sql` = `b235454f0ceceef95394d752f1fe879ec2ec0baf6b7f052ae3e253e47f207798`.
+Aditiva, una tx, `lock_timeout` 5 s, **sin backfill**: el re-anclaje al día 4 lo hace `scripts/saas-reanchor.ts`
+**después** del deploy ([PUSH-DIA.md](PUSH-DIA.md) paso F1). Va **última** y **antes** del push. ADR-027.
+Objetos: enums `SaasCollectionMethod` (AUTO_DEBIT/MP_CHECKOUT/TRANSFER) y `SaasAdjustmentKind`
+(PRORATION/CREDIT/DEBIT/CARRYOVER); `SaasSubscription`: `anchorDay` **SET DEFAULT 4** y `autoDebitAllowed` **SET DEFAULT
+true** (solo para filas nuevas), 19 columnas (`collectionMethod`, `billableFrom`, `cancel*`, `pendingPlan*`,
+`customPricePlan`, `mpPending*`, `mpRetiredPreapprovalId`, `mpPreapprovalNextAt/SyncedAt`), 3 CHECK, único
+`SaasSubscription_mpPendingPreapprovalId_key` y 2 parciales (`_pendingPlan_idx`, `_cancel_idx`); `SaasCharge`:
+`baseAmountCents`, `adjustmentsCents` (NOT NULL DEFAULT 0), `mpCheckoutExpectedCents`, `mpCheckoutCreatedAt` + CHECKs
+`_breakdown_check` y `_checkout_check`; `SaasPayment`: `mpPreapprovalId`, `splitFromId`, `mpPayload` + CHECK
+`_mpPayload_check`, único `SaasPayment_id_tenantId_key`, FK compuesta `_splitFrom_tenant_fkey`; tabla `SaasAdjustment`
+(**TENANT_READONLY**: `SaasAdjustment_tenant_read` FOR SELECT; 4 CHECK, parcial `SaasAdjustment_pending_idx`, FKs
+compuestas a `SaasCharge(id, tenantId)` y a sí misma) con función `saas_adjustment_guard()` y triggers
+`SaasAdjustment_guard` (UPDATE/DELETE) / `SaasAdjustment_no_truncate`: solo inserción salvo la imputación
+`appliedChargeId` NULL → valor (BYPASSRLS no saltea triggers). md5 local de `saas_adjustment_guard` =
+`fd8790f4959e9f56ea743dead6bb6d2b` (recalculado del cuerpo literal del SQL el 23-oct: coincide). **Única excepción a
+«solo agrega»:** `SaasPayment_source_mp_check` se dropea y se recrea **estrictamente más laxo** (admite el hermano
+partido de un pago de MP con `splitFromId`); el código viejo no escribe nada que el nuevo rechace. Los CHECK de
+`breakdown`, `proration` y refs van con `IS NOT NULL` explícito (hallazgo A de MIG). Drift aceptado: parciales, FKs
+compuestas, CHECKs, la función y los triggers.
+**Locks:** `ALTER TABLE` sobre `SaasSubscription`, `SaasCharge` y `SaasPayment` (ACCESS EXCLUSIVE, tablas chicas; los
+CHECK nuevos las recorren). No toca Booking/Patient/Tenant salvo la FK a Tenant de `SaasAdjustment` (lock corto).
+1. Precheck de solo lectura (`--pre`: `pre.M16.*`; Anexo C del brief + handoff de MIG):
+   ```sql
+   SELECT to_regclass('public."SaasAdjustment"');                                      -- NULL
+   SELECT typname FROM pg_type WHERE typname IN ('SaasCollectionMethod','SaasAdjustmentKind');   -- 0 filas
+   SELECT proname FROM pg_proc WHERE proname = 'saas_adjustment_guard';                 -- 0 filas
+   SELECT count(*) FROM pg_indexes WHERE indexname = 'SaasCharge_id_tenantId_key';      -- 1 (M8: destino de la FK compuesta)
+   SELECT count(*) FROM "SaasCharge" WHERE "mpCheckoutPreferenceId" IS NOT NULL;        -- 0 (si no, SaasCharge_checkout_check falla)
+   SELECT count(*) FROM "SaasPayment" WHERE source <> 'MANUAL';                         -- 0 esperado (WARN si no)
+   SELECT "anchorDay", count(*) FROM "SaasSubscription" GROUP BY 1 ORDER BY 1;          -- informativo: lo re-ancla saas-reanchor
+   SELECT count(*) FROM "SaasSubscription" WHERE "customPriceCents" IS NOT NULL;        -- WARN si > 0: quedan con customPricePlan
+                                                                                        -- NULL = vale para cualquier plan (MPS-D14)
+   ```
+2. Backup y `npm run db:prod:deploy` (misma corrida; es la última de las 6).
+3. Postcheck (`--post`: `post.M16.*` y `post.md5.saas_adjustment_guard`):
+   ```sql
+   SELECT md5(prosrc) FROM pg_proc WHERE proname = 'saas_adjustment_guard';             -- fd8790f4959e9f56ea743dead6bb6d2b
+   SELECT tgname FROM pg_trigger WHERE tgrelid = '"SaasAdjustment"'::regclass AND NOT tgisinternal ORDER BY 1;
+     -- SaasAdjustment_guard, SaasAdjustment_no_truncate
+   SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'SaasAdjustment';       -- t, t
+   SELECT policyname, cmd FROM pg_policies WHERE tablename = 'SaasAdjustment';          -- SaasAdjustment_tenant_read SELECT
+   SELECT column_name, column_default FROM information_schema.columns
+    WHERE table_name = 'SaasSubscription' AND column_name IN ('anchorDay','autoDebitAllowed');  -- 4, true
+   SELECT indexname FROM pg_indexes WHERE indexname IN ('SaasSubscription_pendingPlan_idx','SaasSubscription_cancel_idx',
+     'SaasAdjustment_pending_idx') AND indexdef LIKE '%WHERE%';                         -- 3
+   SELECT conname FROM pg_constraint WHERE conname IN ('SaasSubscription_cancel_check','SaasSubscription_pendingPlan_check',
+     'SaasSubscription_mpPending_check','SaasCharge_breakdown_check','SaasCharge_checkout_check',
+     'SaasPayment_mpPayload_check','SaasPayment_source_mp_check');                     -- 7
+   SELECT checksum FROM _prisma_migrations WHERE migration_name = '20261025120000_saas_mp_subscriptions';  -- el sha256 de arriba
+   ```
+4. Después del deploy del código: `saas-reanchor` dry-run → `--apply` → dry-run = todo «skip» (PUSH-DIA F1), con
+   `SAAS_BILLING_MODE` en `off` y fuera de las 08:00 AR (cron diario).
+5. Rollback: revertir el código sin tocar M16 (columnas con default y tabla sin lector son inocuas; el CHECK de
+   `source` nuevo es más laxo). `SaasAdjustment` no se puede vaciar ni como owner (trigger). Si el guard rompiera algo,
+   la palanca es `DROP TRIGGER "SaasAdjustment_guard" ON "SaasAdjustment"` (decide Martin; se recrea con el cuerpo
+   literal de M16 y el md5 vuelve a dar `fd8790f4…`). Sacar M16 = migración nueva con DROP (backup del paso 2).
+
 **Deploy de BO** (código de `0d058bb`..`c60014f`, después de M7). Las variables nuevas nacen en su default seguro, así
 que el deploy no cambia el comportamiento de nadie salvo lo que se describe abajo.
 1. **Antes del deploy (solo lectura):**
@@ -797,7 +886,9 @@ que el deploy no cambia el comportamiento de nadie salvo lo que se describe abaj
 5. **Vuelta atrás sin código:** `TENANT_ACCESS_ENFORCEMENT=off` (ni la suspensión corta), `PLATFORM_MFA_ENFORCEMENT=off`
    (recuperación si se pierde el TOTP), `MAINTENANCE_MODE=off`; cada cambio pide redeploy. M7 no se revierte (aditiva).
 
-**Deploy de SV en escalones** (después de que M5 esté aplicada, con la cadena o sola):
+**Deploy de SV en escalones** (después de que M5 esté aplicada, con la cadena o sola). Hecho: prod ya corre con
+`REALTIME_DRIVER=supabase` (Tanda A). Sin staging, el paso 3 se corre con `.env.prod.local` y el `--confirm` de prod
+(V1-V7 son de solo lectura sobre datos):
 1. Vercel env `REALTIME_DRIVER=off` (variable nueva) y deploy del código: nada se conecta y la app es idéntica a SR.
 2. Env `SUPABASE_JWT_SECRET` (+ `SUPABASE_JWT_KID` si la clave HS256 es del sistema nuevo de JWT Signing Keys, R4);
    confirmar `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_URL` y `NEXT_PUBLIC_SUPABASE_ANON_KEY` (con
@@ -814,54 +905,14 @@ que el deploy no cambia el comportamiento de nadie salvo lo que se describe abaj
 4. Prod con `REALTIME_DRIVER=supabase` + **redeploy** (la env se lee al cargar el módulo). Rollback sin código:
    `REALTIME_DRIVER=off` + redeploy (la app queda igual que SR, con polling de 60 s en `/sala`).
 
-**Orden del go-live** (staging primero, desde vacío, con QA completo; después prod):
-
-1. Gate final del bloque B en local (después de EV1), commit de Martin, `develop` listo para `main`.
-2. **Backup** de prod (`npm run db:prod:backup`): aunque se descarte, es la única copia de lo que cargó el cliente.
-3. **Reset** de prod (acción de Martin en la consola de Supabase). Precheck (1) → **base vacía**:
-   `SELECT count(*) FROM pg_tables WHERE schemaname='public';` = 0. Precheck (0): el rol de `DIRECT_URL` tiene
-   `rolbypassrls = t`.
-4. `migrate deploy` desde vacío (cadena completa hasta M5): `npm run db:prod:deploy` y `npm run db:prod:status` →
-   "Database schema is up to date!". O merge a `main` y el build de Production aplica la cadena antes de servir.
-5. **Roles SQL** (`prisma/roles.supabase.sql`, ver §2 "Tareas de prod que van una sola vez", punto a) → en Vercel
-   `DATABASE_URL` al rol app y `DATABASE_URL_SERVICE` a `kinesoft_service`.
-6. **Import del catálogo global** (`scripts/catalog-import.ts`, dry-run → `--apply` → dry-run = 0; comandos en §2.2).
-7. **`create-tenant --vertical kinesiologia`** (casa de la plataforma):
-   `KINESOFT_CONFIRM_PROD=<project-ref> npx dotenv -e .env.prod.local -- npx tsx scripts/create-tenant.ts --vertical kinesiologia …`
-   (`--vertical general|kinesiologia`, default `kinesiologia`).
-8. **`set-platform-admin`** (§2, punto b).
-9. Desde **/plataforma** → Consultorios: vertical y plan del cliente kine (PRO u otro) y **prender los turnos online**
-   por consultorio (nacen apagados, EV-D2; también los prende el Titular desde Configuración → General).
-10. **Data API desactivada** (arriba) y **Storage privado** (precheck (17): buckets `public = false`, ninguna policy de
-    `storage.objects` para `anon`/`authenticated`; `SUPABASE_SERVICE_ROLE_KEY` en Vercel).
-11. **Post-checks:** los de M1 (§2.4 "Post-checks", objeto por objeto), (11) tags DISCIPLINE = 2 y (12) vertical/plan del
-    tenant ([PLANES.md §16](PLANES.md)), RLS de las tablas nuevas (incluida `Room` de M4) y **grants de M2** (tiene que dar 0 filas):
-
-    ```sql
-    SELECT c.relname
-    FROM pg_class c
-    WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r','p','v','m','f')
-      AND (has_table_privilege('anon', c.oid, 'SELECT,INSERT,UPDATE,DELETE')
-           OR has_table_privilege('authenticated', c.oid, 'SELECT,INSERT,UPDATE,DELETE'));
-    ```
-
-    Y en el log del deploy, ningún `WARNING tenant_verticals: … siguen accesibles` (autochequeo de M2). Columnas:
-    `SELECT vertical, "publicBookingEnabled" FROM "Tenant";` → el tenant casa con la vertical elegida.
-12. Con SV: `REALTIME_DRIVER=off` en el deploy → prechecks R1-R4 y V1-V7 en staging ([EXTERNAL-CONFIG.md §3.1](EXTERNAL-CONFIG.md))
-    → env → `supabase` (escalones de arriba, «Deploy de SV»).
-
-**Si falla un `migrate deploy` (P3009):** con la base vacía no hay nada que salvar: corregir la causa, re-reset y
-`migrate deploy` de nuevo (antes de abrir al cliente). Después de abrir, el rollback es revertir el deploy de Vercel.
-
----
 
 ## 0. Cómo está armado (leer una vez)
 
 | Archivo | Apunta a | Lo usan |
 |---|---|---|
-| `.env` | **Solo DEV** (Docker :5433). Borrá el bloque PROD comentado si todavía lo tenés | Prisma CLI y `@prisma/client` (lo cargan solos) |
-| `.env.local` | Docker :5433, rol app `kinesoft_app` (RLS activa) | `npm run dev`, scripts `prisma:*`, tests |
-| `.env.prod.local` | **Supabase PROD** (owner): `DIRECT_URL` + `DATABASE_URL` | **solo** los scripts `db:prod:*` |
+| `.env` | El objetivo es **solo DEV**, pero **puede apuntar a PRODUCCIÓN** (AGENTS §4): tratalo como prod. Nunca un `prisma …` pelado ni un `next build` pelado en el repo | Prisma CLI y `@prisma/client` (lo cargan solos), `next dev`/`next build` (debajo de `.env.local`) |
+| `.env.local` | Docker :5433, rol app `kinesoft_app` (RLS activa) | `npm run dev:local` (diario), scripts `prisma:*`, tests |
+| `.env.prod.local` | **Supabase PROD** (owner): `DIRECT_URL` + `DATABASE_URL` (+ las de Auth para `qa-tenants`, PUSH-DIA F2) | los scripts `db:prod:*` y los de PUSH-DIA F (con `npx dotenv -e .env.prod.local --`) |
 
 `.env.prod.local` lo creás vos (está en `.gitignore` por `.env*.local`) con dos líneas:
 
@@ -952,26 +1003,23 @@ SELECT rolname, rolbypassrls, rolcanlogin FROM pg_roles WHERE rolname LIKE 'kine
 npm run db:prod:backup      # pg_dump -Fc → ~/kinesoft-backups/prod-<fecha>.dump
 ```
 
-**4) Staging primero:** con el Preview apuntado a staging, aplicar ahí y hacer el QA del bloque.
+**4) Sin staging** (no hay proyecto de staging, decisión del 14-oct; OPS-0 queda opcional): precheck → backup →
+deploy, con las migraciones aditivas y compatibles con el código viejo.
 
-**5) Aplicar en prod:** o mergeás a `main` y el build de Production las aplica, o las aplicás antes:
+**5) Aplicar en prod antes del push** (así el build de Production migra en vacío):
 
 ```bash
 npm run db:prod:deploy
 npm run db:prod:status      # → "Database schema is up to date!"
 ```
 
-### Migraciones pendientes en prod (bloque reciente)
+**6) Postcheck** objeto por objeto (`npm run db:prod:precheck -- --post`, o las queries de cada «Mxx en prod») y
+recién ahí el push. Para T3-T7 el paso a paso completo es [PUSH-DIA.md](PUSH-DIA.md).
 
-> **Desde el reset del 07-oct:** esta tabla es la **cadena completa** que se aplica desde vacío en el go-live, no una
-> lista de pendientes sobre datos vivos. Los avisos de abajo (#3 con duplicados, etc.) ya no aplican a prod.
+### Tabla de migraciones (después de las 15 de base)
 
-> ⚠️ **Estado real sin verificar (auditoría 2026-09-23):** hasta A0b, `vercel.json` corría `migrate deploy` en
-> cada build y `main` ya contiene estas migraciones, así que **puede que ya estén aplicadas** — o que un
-> deploy haya fallado (por ejemplo la #3, si había duplicados). Antes de nada: `npm run db:prod:status` y la
-> query de `_prisma_migrations` del paso 2.
-
-En orden. Todas aplicadas y verificadas en local:
+En orden de timestamp. Todas aplicadas y verificadas en local; el estado en prod va en la última columna y en la nota
+de abajo (el `--pre` del precheck lo confirma contra `_prisma_migrations`):
 
 | # | Migración | Qué hace | Ronda |
 |---|---|---|---|
@@ -988,10 +1036,10 @@ En orden. Todas aplicadas y verificadas en local:
 | 11 | `20260930200000_catalog_global` | catálogo global + punteros nullable + RLS de solo lectura | B-pre — **ver §2.2** |
 | 12 | `20261001090000_agenda_foundations` | sedes, franjas, excepciones, bloqueos, PS/PP, Booking expand + **backfill** | B-pre — **ver §2.2** |
 | 13 | `20261004120000_plans_booking_link` | M1 de Planes: FK turno↔plan/sesión, 2 tablas con RLS, `Patient_userId_key` por consultorio + **backfill** | ES2a — **ver §2.3 y §2.4** |
-| 14 | `20261007120000_tenant_verticals` | M2: `Tenant.vertical` + `Tenant.publicBookingEnabled` + REVOKE guardado de `anon`/`authenticated` | EV0 — **ver «Go-live con reset»** |
-| 15 | `20261008120000_billing_paid_at` | M3a: `Booking.copagoPaidAt` + `UserPreferences.dashboardPrefs` (+ CHECK de objeto) | ES3 — **ver «Go-live con reset»** |
-| 16 | `20261009120000_rooms` | M4: `Room` con RLS + `roomId` en franja, turno y bloqueo (FKs compuestas, CHECKs) | SR — **ver «Go-live con reset»** |
-| 17 | `20261013120000_reception_call_realtime` | M5: `Booking.calledAt` (+ CHECK) + `kinesoft_realtime_can_read` + policy guardada de `realtime.messages` | SV — **ver «Go-live con reset»** |
+| 14 | `20261007120000_tenant_verticals` | M2: `Tenant.vertical` + `Tenant.publicBookingEnabled` + REVOKE guardado de `anon`/`authenticated` | EV0 — aplicada en prod (14-oct) — **ver Apéndice** |
+| 15 | `20261008120000_billing_paid_at` | M3a: `Booking.copagoPaidAt` + `UserPreferences.dashboardPrefs` (+ CHECK de objeto) | ES3 — aplicada en prod (14-oct) — **ver Apéndice** |
+| 16 | `20261009120000_rooms` | M4: `Room` con RLS + `roomId` en franja, turno y bloqueo (FKs compuestas, CHECKs) | SR — aplicada en prod (14-oct) — **ver Apéndice** |
+| 17 | `20261013120000_reception_call_realtime` | M5: `Booking.calledAt` (+ CHECK) + `kinesoft_realtime_can_read` + policy guardada de `realtime.messages` | SV — aplicada en prod (14-oct) — **ver Apéndice** |
 | 18 | `20261014120000_identity_access` | M6: `Practitioner` único por consultorio (DROP del único global, aprobado), `Membership.disabledAt`, campos de `Invitation`, tabla `EmailLog` con RLS | IAM-1 — **ver «M6 en prod»** |
 | 19 | `20261015120000_platform_backoffice` | M7: `Tenant.status` + fechas + `seatLimitOverride`, `UserProfile.disabledAt`, `PlatformAuditEvent` (solo inserción), `SupportSession` (sin vencimiento, parcial una abierta por superadmin), `TenantSlugAlias`; RLS service-only / tenant-readonly | BO0 — **ver «M7 en prod»** |
 | 20 | `20261015180000_pl_accounts_billing` | M8: `SaasPlan` + `Tenant.saasPlan` (backfill) y overrides de cupos, `Membership.clinical/grantSettings/grantBilling/disabledReason` (backfill), `Practitioner.publicBookingEnabled` (backfill true), `SaasPlanConfig` (4 filas), historial de precios, cobros (suscripción/cargos/pagos), mensajes, 2FA; RLS global-readonly / service-only / tenant-readonly | PL-0 — **ver «M8 en prod»** |
@@ -1000,7 +1048,15 @@ En orden. Todas aplicadas y verificadas en local:
 | 23 | `20261017120000_clinical_notes` | M9: `ClinicalNote` (evoluciones de HC, nunca se borran) + `ClinicalNoteRevision` (solo inserción), triggers de inalterabilidad, FKs compuestas, una raíz viva por turno (parcial), RLS; únicos destino en `Booking`/`Practitioner` | EV2-0 — **ver «M9 en prod»** |
 | 24 | `20261018120000_perf_fk_indexes` | M10: 13 índices btree de una columna sobre FKs sin índice (`Coverage.patientId`, `Patient.userId`, `Service.tenantId`, `Booking.serviceId`, tags/favoritos…), sin parciales | PF-M — **ver «M10 en prod»** |
 | 25 | `20261019120000_public_directory` | M11: opt-in y moderación del directorio en `Tenant`, `Location.provinceCode` (24 jurisdicciones) y `ProfessionalPublicProfile` (perfil por persona con consentimiento, SERVICE_ONLY, CHECK listed ⇒ consentimiento, nombre sin «@», trigger que des-verifica la matrícula) | DIR-1 — **ver «M11 en prod»** |
-| 26 | `20261020120000_agenda_secretaria_config` | M12: módulos a medida (`Tenant.moduleGrants/moduleRevokes`), tope de turnos por intervalo (`Tenant` y `Practitioner.bookingCap*`, enum `BookingCapMode`), medio de pago y quién cobró el copago (`Booking.copagoPaymentMethod/copagoCollectedById`, enum `BookingPaymentMethod`), 5 CHECK; backfill: ADMIN con «Planes y pagos» salvo a quien el Titular se lo sacó | T3b-1m — **ver «M12 en prod»** |
+| 26 | `20261020120000_agenda_secretaria_config` | M12: módulos a medida (`Tenant.moduleGrants/moduleRevokes`), tope de turnos por intervalo (`Tenant` y `Practitioner.bookingCap*`, enum `BookingCapMode`), medio de pago y quién cobró el copago (`Booking.copagoPaymentMethod/copagoCollectedById`, enum `BookingPaymentMethod`), 5 CHECK; backfill: ADMIN con «Planes y pagos» salvo a quien el Titular se lo sacó | T3b-1m — **ver «M12 en prod»** · ⏳ pendiente en prod |
+| 27 | `20261021120000_fichas_clinicas` | M14: fichas clínicas (`ClinicalNote.bodyDoc/diagnoses/…`), CIE-11 (`DiagnosisCode` global), diagnósticos del consultorio y favoritos, `PatientDocument` (documentos compartidos al portal) con guard; `clinical_note_guard()` reemplazada sobre M9; firma y logo | FC-0 — **ver «M14 en prod»** · ⏳ pendiente en prod |
+| 28 | `20261022120000_turnero_cobros_mp` | M18: cobros online con la cuenta de MP del profesional (`MpAccount`, `MpCredential` sellada, `OnlineCharge` con guard y sync a la seña, `BookingPaymentPolicy`), `Booking.onlineDepositCents` | TP-M — **ver «M18 en prod»** · ⏳ pendiente en prod |
+| 29 | `20261023120000_reception_displays` | M17: pantallas de TV de la sala (`ReceptionDisplay`: vínculo por código hasheado, secreto del dispositivo, medio de YouTube por id canónico), 5 enums | MIG (T7) — **ver «M17 en prod»** · ⏳ pendiente en prod |
+| 30 | `20261024120000_whatsapp_messaging` | M15: WhatsApp por consultorio (cuenta, credencial sellada, plantillas, cola de mensajes sin cuerpo, entrantes sin texto), consentimiento en `Patient`, respuesta del paciente en `Booking`, `NotificationKind` += 2 | MIG (T6) — **ver «M15 en prod»** · ⏳ pendiente en prod |
+| 31 | `20261025120000_saas_mp_subscriptions` | M16: suscripción con débito / MP / transferencia (`anchorDay` default 4, bajada y baja programadas, preapproval pendiente), desglose del cargo, `SaasAdjustment` solo inserción con guard, `SaasPayment_source_mp_check` más laxo | MIG (T6) — **ver «M16 en prod»** · ⏳ pendiente en prod |
+
+**#1-#25 están aplicadas en prod** (más las 15 de base de [DEPLOYMENT.md](DEPLOYMENT.md): 40 en total); **#26-#31 son
+las 6 del push**. Local: 46 (`migrate status` al día).
 
 ⚠️ La #7 además crea políticas RLS (`ENABLE`/`FORCE` + `SELECT` en las dos tablas nuevas).
 ⚠️ La #3 falla si ya existieran dos turnos activos del **mismo paciente en el mismo instante**
@@ -1052,10 +1108,145 @@ DATABASE_URL="$DIRECT_URL" KINESOFT_CONFIRM_PROD=<project-ref> \
 - `DIRECT_URL` → owner (migraciones)
 - `DATABASE_URL_SERVICE` → `kinesoft_service` (BYPASSRLS) — **sin esto el panel Plataforma no escribe**
 - `KINESOFT_ALLOW_DEMO_ACTOR` → **NO debe existir en prod** (es el bypass de login local)
+- La tabla completa (T3-T7 incluidas, con defaults seguros) está en [DEPLOYMENT.md «Variables de entorno»](DEPLOYMENT.md);
+  la lista del día del push, en [PUSH-DIA.md](PUSH-DIA.md) paso B.
 
 ---
 
-## 2.1 Deploy del Bloque A (A2 + A3) — orden exacto (30-sep-2026)
+## 3. Rollback
+
+Prisma no revierte automáticamente. El rollback real es **volver el deploy de Vercel** al commit anterior: las
+migraciones son aditivas y el código viejo sigue andando sobre el schema nuevo (columnas nuevas con default, tablas
+nuevas sin uso). Si hiciera falta revertir el DDL, se escribe una migración inversa nueva; nunca se edita una ya
+aplicada. Sin reset: un `migrate deploy` fallido (P3009) se resuelve como en §2.4 «Si falla: P3009» (Apéndice), con el
+backup del día a mano; el down-script de M1 quedó sin uso. Palancas por migración: el paso «Rollback» de cada «Mxx en
+prod».
+
+---
+
+## Apéndice · Histórico
+
+> Lo que sigue **ya no se ejecuta**: queda como historia de cómo se llegó al estado actual. El «go-live con reset» del
+> 07-oct **no se hizo** (decisiones del 14-oct: sin reset y sin staging); §2.1-§2.4 ya están aplicadas en prod. Donde
+> dice «staging primero», hoy vale **«sin staging: precheck → backup → deploy»** (sección «Estado y orden vigente»).
+
+### Go-live con reset (07-oct-2026) — no se hizo
+
+
+> **Paso a paso con comandos, consolas y variables: [GO-LIVE-PASO-A-PASO.md](GO-LIVE-PASO-A-PASO.md)** (14-oct). Esta
+> sección es la referencia técnica; si hay diferencias, manda la guía.
+>
+> ⚠️ **Antes del reset:** `DROP SCHEMA public` borra también la biblioteca global (ejercicios, condiciones de
+> Diagnóstico, tags, regiones, media) y **no hay carga versionada** para recuperarla en prod (el seed es solo local).
+> Contar qué hay y resolverlo es el paso 1 de la guía.
+>
+> **Decisión de Martin del 07-oct:** prod se **resetea** antes del go-live (reset total; el cliente vuelve a cargar).
+> No hay datos de prod que preservar: el deploy de todo el bloque B (A + B-pre + Planes + verticales + Sala de Espera)
+> es **una sola vez**, con la cadena completa de migraciones aplicada **desde vacío**. Contexto y contratos:
+> [VERTICALES.md](VERTICALES.md); prechecks marcados en [PLANES.md §16](PLANES.md).
+>
+> **Obsoleto por el reset** (queda escrito abajo como historia, con nota en cada sección; se borra cuando el go-live
+> quede hecho): el deploy incremental de §2.1-§2.4, los prechecks de datos, el dedupe de `(programId, index)`, el ensayo
+> de datos en staging, el backfill de `agenda_foundations`, `normalize-patient-emails`, la ventana sin uso y el
+> down-script de M1. Siguen valiendo: el precheck (0) (rol con BYPASSRLS), (17) Storage privado y el P3009 liviano.
+
+### M3a, M4 y M5 «antes del reset» (ya aplicadas en el go-live incremental del 14-oct)
+
+**M3a en prod (ES3).** Prod se resetea antes del go-live (plan §15.6), así que M3a **no se aplica sola**: va dentro de la
+cadena completa del deploy único de B (`migrate deploy` desde vacío, paso 4 de abajo). Solo si Martin decidiera
+aplicarla **antes** del reset, el orden es:
+1. Precheck de solo lectura (las 2 columnas no existen todavía; tiene que dar 0 filas):
+   ```sql
+   SELECT to_regclass('"Booking"') IS NOT NULL AS booking_ok;
+   SELECT table_name, column_name FROM information_schema.columns
+   WHERE table_schema = 'public'
+     AND ((table_name = 'Booking' AND column_name = 'copagoPaidAt')
+       OR (table_name = 'UserPreferences' AND column_name = 'dashboardPrefs'));
+   ```
+2. Backup (`npm run db:prod:backup`).
+3. Staging primero.
+4. Prod con el merge. Es aditiva, así que puede ir **antes** que el código (el código viejo no lee las columnas). Sin
+   backfill: los copagos ya cobrados quedan con `copagoPaidAt` NULL y el widget no los cuenta.
+
+**M4 en prod (SR).** Igual que M3a: **no se aplica sola**, va en la cadena del deploy único después de M3a y antes de
+M5. Solo si Martin decidiera aplicarla **antes** del reset:
+1. Precheck de solo lectura (la tabla no existe todavía; tiene que dar NULL):
+   ```sql
+   SELECT to_regclass('public."Room"');
+   ```
+2. Backup (`npm run db:prod:backup`).
+3. Staging primero. Después de migrar, confirmar que los roles reciben los privilegios por DEFAULT PRIVILEGES (M4 no
+   tiene GRANT): `SELECT has_table_privilege('kinesoft_app','"Room"','SELECT,INSERT,UPDATE');` → `t`, y lo mismo con
+   `kinesoft_service` si existe.
+4. Prod en horario de poco uso: `CREATE INDEX "Booking_tenantId_roomId_scheduledFor_idx"` **no es CONCURRENTLY** (frena
+   escrituras en `Booking` mientras se construye) y los `ALTER`/`ADD CONSTRAINT` sobre Booking, PractitionerSchedule y
+   TimeBlock toman lock exclusivo hasta el COMMIT; con `lock_timeout` 5 s falla rápido (P3009 liviano) en vez de
+   colgar la agenda. Es aditiva: puede ir **antes** que el código (el código viejo no lee `roomId`).
+
+**M5 en prod (SV).** Igual que M3a y M4: **no se aplica sola**, va en la cadena única del deploy desde vacío
+(`… → M3a → M4 → M5`). Solo si Martin decidiera aplicarla **antes** del reset:
+1. Precheck de solo lectura:
+   ```sql
+   -- la columna no existe todavía: 0 filas
+   SELECT column_name FROM information_schema.columns
+   WHERE table_schema = 'public' AND table_name = 'Booking' AND column_name = 'calledAt';
+   -- R1: existe realtime.messages (esperado: true; relkind 'p', relrowsecurity true)
+   SELECT to_regclass('realtime.messages') IS NOT NULL AS realtime_messages;
+   SELECT c.relkind, c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'realtime' AND c.relname = 'messages';
+   -- R2: ninguna policy abierta en realtime (antes de M5: 0 filas)
+   SELECT policyname, cmd, roles, qual, with_check FROM pg_policies WHERE schemaname = 'realtime';
+   ```
+2. Backup (`npm run db:prod:backup`).
+3. Staging primero. Después de migrar: R2 da **1 fila** `kinesoft_agenda_read | SELECT | {authenticated}` sin
+   `with_check`; en el log del deploy **no** tiene que aparecer el NOTICE `reception_call_realtime: no existe
+   realtime.messages` (en Supabase la tabla existe: si aparece, la policy no se creó y el canal privado no entrega nada).
+4. Prod: es aditiva, puede ir **antes** que el código (el código viejo no lee `calledAt`). `ALTER TABLE "Booking"` toma
+   lock exclusivo hasta el COMMIT; con `lock_timeout` 5 s falla rápido (P3009 liviano).
+
+### Orden del go-live desde vacío (no se hizo)
+
+**Orden del go-live (histórico)** (staging primero, desde vacío, con QA completo; después prod):
+
+1. Gate final del bloque B en local (después de EV1), commit de Martin, `develop` listo para `main`.
+2. **Backup** de prod (`npm run db:prod:backup`): aunque se descarte, es la única copia de lo que cargó el cliente.
+3. **Reset** de prod (acción de Martin en la consola de Supabase). Precheck (1) → **base vacía**:
+   `SELECT count(*) FROM pg_tables WHERE schemaname='public';` = 0. Precheck (0): el rol de `DIRECT_URL` tiene
+   `rolbypassrls = t`.
+4. `migrate deploy` desde vacío (cadena completa hasta M5): `npm run db:prod:deploy` y `npm run db:prod:status` →
+   "Database schema is up to date!". O merge a `main` y el build de Production aplica la cadena antes de servir.
+5. **Roles SQL** (`prisma/roles.supabase.sql`, ver §2 "Tareas de prod que van una sola vez", punto a) → en Vercel
+   `DATABASE_URL` al rol app y `DATABASE_URL_SERVICE` a `kinesoft_service`.
+6. **Import del catálogo global** (`scripts/catalog-import.ts`, dry-run → `--apply` → dry-run = 0; comandos en §2.2).
+7. **`create-tenant --vertical kinesiologia`** (casa de la plataforma):
+   `KINESOFT_CONFIRM_PROD=<project-ref> npx dotenv -e .env.prod.local -- npx tsx scripts/create-tenant.ts --vertical kinesiologia …`
+   (`--vertical general|kinesiologia`, default `kinesiologia`).
+8. **`set-platform-admin`** (§2, punto b).
+9. Desde **/plataforma** → Consultorios: vertical y plan del cliente kine (PRO u otro) y **prender los turnos online**
+   por consultorio (nacen apagados, EV-D2; también los prende el Titular desde Configuración → General).
+10. **Data API desactivada** (arriba) y **Storage privado** (precheck (17): buckets `public = false`, ninguna policy de
+    `storage.objects` para `anon`/`authenticated`; `SUPABASE_SERVICE_ROLE_KEY` en Vercel).
+11. **Post-checks:** los de M1 (§2.4 "Post-checks", objeto por objeto), (11) tags DISCIPLINE = 2 y (12) vertical/plan del
+    tenant ([PLANES.md §16](PLANES.md)), RLS de las tablas nuevas (incluida `Room` de M4) y **grants de M2** (tiene que dar 0 filas):
+
+    ```sql
+    SELECT c.relname
+    FROM pg_class c
+    WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r','p','v','m','f')
+      AND (has_table_privilege('anon', c.oid, 'SELECT,INSERT,UPDATE,DELETE')
+           OR has_table_privilege('authenticated', c.oid, 'SELECT,INSERT,UPDATE,DELETE'));
+    ```
+
+    Y en el log del deploy, ningún `WARNING tenant_verticals: … siguen accesibles` (autochequeo de M2). Columnas:
+    `SELECT vertical, "publicBookingEnabled" FROM "Tenant";` → el tenant casa con la vertical elegida.
+12. Con SV: `REALTIME_DRIVER=off` en el deploy → prechecks R1-R4 y V1-V7 en staging ([EXTERNAL-CONFIG.md §3.1](EXTERNAL-CONFIG.md))
+    → env → `supabase` (escalones de arriba, «Deploy de SV»).
+
+**Si falla un `migrate deploy` (P3009):** con la base vacía no hay nada que salvar: corregir la causa, re-reset y
+`migrate deploy` de nuevo (antes de abrir al cliente). Después de abrir, el rollback es revertir el deploy de Vercel.
+
+
+### 2.1 Deploy del Bloque A (A2 + A3) — orden exacto (30-sep-2026)
 
 > ⚠️ **Obsoleta por el reset de prod (07-oct):** el deploy incremental de A y `normalize-patient-emails` (no hay emails viejos que normalizar). `tenant_onboarding` se aplica desde vacío con la cadena; las tareas de consola de EXTERNAL-CONFIG §0.1 siguen valiendo. El orden vigente está en «Go-live con reset» (tope de este archivo). Se deja como historia hasta el go-live.
 
@@ -1159,7 +1350,7 @@ La URL tiene que ser la **owner** (BYPASSRLS): con el rol de la app RLS devuelve
 **6) Verificación final en prod:** login del cliente vivo sin stepper; `curl -I` con HSTS; en Sentry (si hay
 DSN) llega un evento de prueba; en Upstash aparecen claves `rl:production:`.
 
-## 2.2 Deploy de B-pre (agenda y catálogo) — orden exacto (01-oct-2026)
+### 2.2 Deploy de B-pre (agenda y catálogo) — orden exacto (01-oct-2026)
 
 > ⚠️ **Obsoleta por el reset de prod (07-oct):** los prechecks de datos y el backfill de `agenda_foundations` (con base vacía no hace nada). El import del catálogo (abajo) **sigue** y es el paso 6 del go-live. El orden vigente está en «Go-live con reset» (tope de este archivo). Se deja como historia hasta el go-live.
 
@@ -1329,7 +1520,7 @@ público ofrece los mismos horarios que antes; un sobreturno viejo muestra el ba
 (columnas nullable o con default, tablas nuevas sin uso). Las filas que cargue el código nuevo (sedes, franjas,
 bloqueos) quedan y se reusan al volver a desplegar.
 
-## 2.3 Planes: preparación del deploy de M1 (`plans_booking_link`) — desde ES1 (04-oct-2026)
+### 2.3 Planes: preparación del deploy de M1 (`plans_booking_link`) — desde ES1 (04-oct-2026)
 
 > ⚠️ **Obsoleta por el reset de prod (07-oct):** el dedupe de `(programId, index)` y los prechecks (2) y (15). El (17) Storage privado **sigue** (paso 10 del go-live). El orden vigente está en «Go-live con reset» (tope de este archivo). Se deja como historia hasta el go-live.
 
@@ -1400,7 +1591,7 @@ una viva no es duplicado, y el dry-run da 0. `tests/integration/plans-dedupe.tes
 archivada + viva = 0, se niega sin BYPASSRLS); el apply con duplicados quedó probado en ES1 y en el unit del
 planificador.
 
-## 2.4 Deploy de M1 (`plans_booking_link`) — escrita en ES2a (04-oct-2026)
+### 2.4 Deploy de M1 (`plans_booking_link`) — escrita en ES2a (04-oct-2026)
 
 > ⚠️ **Obsoleta por el reset de prod (07-oct):** los prechecks de datos, la ventana sin uso, el orden incremental y el down-script. **Siguen:** el precheck (0), el P3009 (liviano: re-reset) y los post-checks objeto por objeto. El orden vigente está en «Go-live con reset» (tope de este archivo). Se deja como historia hasta el go-live.
 
@@ -1410,7 +1601,7 @@ planificador.
 > archivo). Incluye la **única excepción** a "todo aditivo", aprobada por Martin el 03-oct: `DROP INDEX
 > "Patient_userId_key"`, reemplazado por `Patient_tenantId_userId_key`.
 
-### Prechecks (solo lectura; SQL completo en PLANES.md §16)
+#### Prechecks (solo lectura; SQL completo en PLANES.md §16)
 
 | # | Qué | Esperado | Si no |
 |---|---|---|---|
@@ -1429,7 +1620,7 @@ SELECT count(*) FROM (SELECT "programId","index" FROM "Session" GROUP BY 1,2 HAV
 SELECT id, slug, kind FROM "Tag" WHERE slug IN ('kinesiologia','osteopatia') OR id LIKE 'tag_discipline_%' OR kind='DISCIPLINE';
 ```
 
-### Ventana sin uso (no solo por el dedupe)
+#### Ventana sin uso (no solo por el dedupe)
 
 M1 es **una** transacción. Cada `ALTER TABLE` toma ACCESS EXCLUSIVE y lo retiene hasta el `COMMIT`: sobre
 `TreatmentProgram`, `Session`, `Booking`, `PlanTemplate`, `EvaScore` y `Service`, y el `DROP INDEX` toma ACCESS
@@ -1438,7 +1629,7 @@ Session antes que Booking, un turno en vuelo que tenga Booking y vaya a leer el 
 `lock_timeout = '5s'` hace que falle rápido en vez de colgar la agenda. Con el volumen actual son milisegundos, pero se
 hace en horario sin uso (el mismo de §2.3) y con el cliente avisado.
 
-### Orden en prod (deploy único al cierre de B)
+#### Orden en prod (deploy único al cierre de B)
 
 1. Prechecks (0)-(4), (11), (13), (15) y (17), primero en staging y después en prod.
 2. Si (2) > 0: dedupe según §2.3 (dry-run → revisar → `--apply` → dry-run = 0).
@@ -1454,7 +1645,7 @@ hace en horario sin uso (el mismo de §2.3) y con el cliente avisado.
 tests). En prod **no se setea** (= todos). Si alguna vez se acota, va **sin espacios**: `'id1,id2'`
 (`string_to_array` no recorta y `' id2'` no matchea nada, en silencio).
 
-### Si falla: P3009
+#### Si falla: P3009
 
 Cualquier error dentro de la tx (`lock_timeout`, duplicado `(programId, index)`, rol sin BYPASSRLS por la guarda del
 backfill, un id `tag_discipline_*` ya usado con otro slug) hace **ROLLBACK completo**: la base queda como antes, pero
@@ -1466,7 +1657,7 @@ npm run db:prod:status        # M1 vuelve a figurar como pendiente
 # reintentar: redeploy en Vercel (o npm run db:prod:deploy)
 ```
 
-### Post-checks (objeto por objeto)
+#### Post-checks (objeto por objeto)
 
 ```sql
 -- Registro: M1 aplicada una vez, sin error
@@ -1511,7 +1702,7 @@ líneas**: `DROP CONSTRAINT "Booking_plan_patient_fkey"`, `"Booking_plan_tenant_
 únicos parciales ni las policies, así que no aparecen. Cualquier otra línea → frenar y avisar. **Nunca** se corre
 `migrate dev` para "arreglarlo": borraría esos objetos.
 
-### Rollback
+#### Rollback
 
 1. **Lo normal:** volver el deploy de Vercel al commit anterior. El código viejo tolera M1 (columnas nuevas null o con
    default, tablas nuevas vacías, CHECKs que se cumplen sin vínculo, búsquedas por `Patient.userId` con `findFirst`).
@@ -1603,7 +1794,7 @@ npx dotenv -e .env.prod.local -- npx prisma migrate resolve --rolled-back 202610
    (Prisma ignora las filas con `rolled_back_at` y la vuelve a aplicar en el próximo deploy). Probarlo primero en
    staging.
 
-### Nota: bases que aplicaron la versión vieja de M1 (antes de F1)
+#### Nota: bases que aplicaron la versión vieja de M1 (antes de F1)
 
 En P1.Z se enmendó C1 (F1): `TreatmentProgram_pricing_check` y `PlanTemplate_pricing_check` pasaron de `=` a `IS NOT
 DISTINCT FROM`, porque con `pricingMode` NULL el `=` da NULL (lógica de 3 valores) y el CHECK dejaba pasar un precio sin
@@ -1630,10 +1821,3 @@ COMMIT;
 Si el `ADD CONSTRAINT` falla, hay filas con precio y sin modo: corregirlas antes (son justo las que el CHECK viejo dejaba
 pasar).
 
-## 3. Rollback
-
-Prisma no revierte automáticamente. El rollback real es **volver el deploy de Vercel** al commit anterior: las
-migraciones son aditivas y el código viejo sigue andando sobre el schema nuevo (columnas nuevas con default, tablas
-nuevas sin uso). Si hiciera falta revertir el DDL, se escribe una migración inversa nueva; nunca se edita una ya
-aplicada. Hasta el go-live con reset (07-oct), el rollback de un `migrate deploy` fallido es re-reset y volver a aplicar
-(«Go-live con reset»); el down-script de M1 (§2.4) quedó sin uso.

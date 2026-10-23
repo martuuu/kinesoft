@@ -23,7 +23,9 @@
 >   `tenant-business-hours` y `time-blocks`. Corre las **server actions reales** con `getActor()` real; solo se
 >   mockean la cookie/headers, la red de Supabase (+ el admin client, para que ningún test mande mails reales) y
 >   el runtime de cache de Next (`tests/helpers/integration-setup.ts`). CI la corre con **los dos roles**.
-> - **E2E (capa 4):** Playwright (OPS-6, 18-oct): **14 tests en 9 specs** (+ el login del proyecto `setup`) (`tests/e2e/`), `npm run test:e2e`. Ver «Capa 4».
+> - **E2E (capa 4):** Playwright (OPS-6, 18-oct): **49 tests en 19 specs** al cierre de T6/T7 (23-oct; + el login del
+>   proyecto `setup`) (`tests/e2e/`), `npm run test:e2e`. Ver «Capa 4». Los conteos de unit e integración de arriba son
+>   del 01-oct: al 23-oct hay 463 archivos de unit y 274 de integración (los números de tests, en el gate de cada ronda).
 > - **CI:** typecheck → unit (TZ=UTC y TZ=AR) → guard → build → reporte de bundle; y el job `integration`
 >   (Postgres efímero, migraciones desde cero, rol app + owner). En todas las PR y ramas de trabajo.
 > - **Performance:** baseline de A1 y multi-profesional de B4.6 en [PERF.md](PERF.md) (`npm run test:perf`, solo
@@ -365,17 +367,55 @@ su alcance queda vacío (anti falso verde).
 - **TTFB:** `scripts/perf/ttfb.mjs` hace su propio `next build` con las URLs del GoTrue falso (`NEXT_PUBLIC_*` se
   inlinean al compilar): con `--no-build` sobre un build normal todas las rutas dan 307.
 
-### Build local (`next build`) — por qué con `-v NODE_ENV=production`
+### Patrones nuevos de T6/T7 (TV, WhatsApp, suscripción con MP y QA por plan, 22/23-oct-2026)
 
-`.env.local` define `NODE_ENV`, y `next build` con ese valor falla en el
-prerender. Para el gate de build contra el Docker:
+- **Simuladores, siempre.** Nada contra Meta, Mercado Pago ni una TV reales:
+  - **Meta falso** (`lib/whatsapp/fake-graph.ts` + `app/api/whatsapp/fake/[...path]`, 404 fuera de `WHATSAPP_MODE=fake`):
+    alta embebida, plantillas, media, mensajes con estados por webhook **firmado** a la ruta real, números mágicos
+    (131026, 131042, timeout, 130429) y panel en `/api/whatsapp/fake/panel`. En tests, `tests/helpers/whatsapp-fake.ts`
+    (`installFakeGraph`, `connectFakeWhatsApp`, `pressButton`, `sendInbound`) y `fakeGraphEmitStatus` del simulador
+    para el `failed` asíncrono (`lib/whatsapp/fake-graph.ts:394`).
+  - **MP falso de la suscripción** (`lib/mp-connect/fake-mp-saas.ts`, sobre el de T5): preapprovals, débitos, checkout,
+    reintegro y «cancelar desde MP», con webhooks firmados con `MP_WEBHOOK_SECRET`. En tests,
+    `tests/helpers/mp-saas-fake.ts` (`installSaasFakeMp`, `walkFakeSubscriptionCheckout`).
+  - `npm run dev:local` (= `dev:mpfake` = `dev:wafake`) prende los dos; los `diagnose-*` (S1-S13 de WhatsApp, S1-S10 de
+    la suscripción) corren contra el simulador por defecto y `--sandbox` lo corre solo Martin.
+- **Matriz por plan** (`tests/integration/plan-routing-matrix.test.ts`, QA-M): 4 planes × 2 verticales × roles contra el
+  **oráculo** (`modulesFor` + cupos de `lib/saas-plans-logic.ts`), sin duplicar la tabla a mano: muros por segmento, menú,
+  pestañas de Configuración, cupos, estados de acceso (prueba vencida → solo lectura, `past_due`, suspendido con HC
+  legible) y overrides de Plataforma. Corre con los dos roles.
+- **Escenarios de costo en integración.** WhatsApp en `off` = 0 sentencias en el hook, con control de que el contador sí
+  las ve prendido (`wa-s2-hook.test.ts:145`); la agenda en `off` sin query extra (`wa-s7-agenda.test.ts:127`); la
+  conciliación con reloj falso del 3/4/5 y corte por presupuesto (`mps-2b-sync.test.ts:269,302`).
+- **`mp-webhook.test.ts` intacto.** La rama SaaS se prueba en `mps-2b-webhook.test.ts`; el legado tiene que seguir verde
+  sin tocar su test (AUDIT §5.4).
+- **Guards nuevos en la unit:** `whatsapp-guard` (`tests/unit/whatsapp-guard.test.ts:9-16`: Graph solo en
+  `lib/whatsapp/graph.ts` y el simulador; tablas `WhatsApp*` solo desde `lib/whatsapp/*-internal.ts`; el simulador solo
+  desde su ruta y los tests; plantillas sin servicio, notas ni diagnóstico; logs sin teléfono), `tv-csp`, `inf-dev-safe`
+  y el grupo `display` en `bundle-groups`. Ninguno corre dentro de `guard:isolation` (AUDIT `t6t7 wa-guard-fuera-de-isolation`). `public-claims` prohíbe
+  «whatsapp» en el turnero y el portal salvo `// claim-ok:`.
+- **E2E en serie, nunca dos builds a la vez.** Cada sesión corre su spec y al final la suite entera. Para corridas largas
+  (suite completa, gate) en la Mac: `caffeinate -i npm run test:e2e` (si la Mac se duerme, el `next start` y el GoTrue
+  falso se cortan y la corrida falla a mitad).
+
+### Build local (`next build`) — siempre con el env local explícito
+
+Dos problemas. `.env.local` define `NODE_ENV`, y `next build` con ese valor falla en el prerender. Y, más grave, `next build`
+**inlinea** `NEXT_PUBLIC_SUPABASE_URL` y la anon key del `.env` del repo, que puede ser **prod** (TV-I). Para el gate de build
+y las mediciones de bundle:
 
 ```bash
-npx dotenv -e .env.local -v NODE_ENV=production -- npx next build
+npx dotenv -e .env.local -v NODE_ENV=production \
+  -v NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54398 \
+  -v NEXT_PUBLIC_SUPABASE_ANON_KEY=dev-mpfake-anon-key-no-real \
+  -v SUPABASE_SERVICE_ROLE_KEY=build-local-no-real \
+  -v SUPABASE_JWT_SECRET=dev-mpfake-jwt-secret-solo-local-0123456789abcdef \
+  -- npx next build
 ```
 
-`-v` pisa solo esa clave para el build, sin tocar `.env.local`. La alternativa es sacar `NODE_ENV` de
-`.env.local`. Sin DSN, el build no carga Sentry (no-op).
+`-v` pisa esas claves solo para el build, sin tocar `.env.local`; los literales son de prueba. Sin DSN, el build no carga
+Sentry (no-op). Regla del incidente de FC-4i: **nunca** build ni E2E en una copia del árbol que tenga `.env*` (ver
+«Capa 4»). El E2E y `dev:local` ya pisan todo lo externo solos.
 
 ## Regla de oro: los fixes de timezone van ANTES que la suite de integración
 
@@ -466,12 +506,16 @@ E2E_KEEP_DATA=1 npm run test:e2e    # no borra el tenant al final (para mirar un
   `getSessionUser`). El actor demo **no sirve** (solo con `NODE_ENV !== "production"`, y cae en el seed). Se niega a
   arrancar si la DB no es localhost, y pisa con vacío / `log` / `off` todas las claves con efecto externo (MP, Resend,
   Sentry, Upstash, realtime) porque `next start` carga el `.env`, que puede ser de prod. Mercado Pago va con el **falso** (`MP_CONNECT_MODE=fake`, firma
-  `required` con un secreto literal de prueba; sin `VERCEL*`, que frenaría el boot).
+  `required` con un secreto literal de prueba; sin `VERCEL*`, que frenaría el boot). Desde T6/T7 también
+  `SAAS_BILLING_MODE=mp` (suscripción contra el MP falso), `WHATSAPP_MODE=fake` (Meta falso) y
+  `TENANT_ACCESS_ENFORCEMENT=enforce` (`tests/e2e/support/start-server.mjs:281-289`).
 - **Datos** (`tests/e2e/global-setup.ts`): un tenant efímero con `tests/helpers/tenant-factory.ts` (**nunca seeds**):
   OWNER, sede, franjas 08-19 los 7 días, un servicio con cupo 1 (el de la factory es ilimitado: sin conflicto), un
   paciente por familia de specs, turnos de hoy / mañana / ayer en hora AR, una evolución de hace 3 días (enmienda) y una
   usuaria del portal sin Membership (`Patient.userId`). `global-teardown.ts` lo borra con `deleteTenantDeep`; una
   corrida cortada la barre `sweepOrphanTestTenants` a los 30'. Los ids quedan en `tests/e2e/.state/fixture.json`.
+  Desde QA-E, 3 consultorios más para `plans-matrix` (`tests/e2e/support/plans.ts`, misma factory): Consultorio General
+  con Secretaría, Clínica Kine con 2 salas e Individual Kine en solo lectura, cada usuario con su `storageState`.
 - **Auth:** el proyecto `setup` (`auth.setup.ts`) entra por el form real y guarda `storageState`. Login, turnero y
   portal usan un contexto limpio.
 - **Serial** (`workers: 1`): los specs comparten tenant y agenda.
@@ -484,16 +528,21 @@ E2E_KEEP_DATA=1 npm run test:e2e    # no borra el tenant al final (para mirar un
 | `agenda` | turno nuevo; segundo turno a la misma hora con cupo 1 → aviso + «Forzar sobreturno», no entra; «Reprogramar» 09→15 |
 | `recepcion` | «Llegó» en el drawer del turno de hoy → `arrivedAt`; WhatsApp: `wa.me/<E.164>?text=` con la hora AR |
 | `cobro` | Facturación → «Confirmar» el copago → «Cobrado» + `copagoPaidAt` |
-| `evoluciones` | evolución nueva; enmienda de una nota fuera de la ventana de 24 h (la original no cambia) |
+| `fichas` · `ficha-share` · `ficha-documentos` · `ficha-import` | (T4) ficha con formato a 390, editar en 24 h, enmienda, anular; compartir con el paciente y dejar de compartir; PDF/Word y respaldo OPFS; importar un .docx |
 | `plan` | plan de 2 sesiones los lunes desde la ficha → 1 programa con 2 turnos |
 | `portal` | pantalla de entrada sin sesión; con sesión, «Hola, Ana» y el turno de mañana |
 | `turnero` | ventana de 5 días («Siguientes ›» / «‹ Anteriores»), reserva sin cobro → «¡Turno reservado!» + turno UNPAID |
 | `mp-connect` | (T5) el profesional conecta la cuenta del MP falso → «Conectada · Simulador local» → delegación |
 | `turnero-cobro` | (T5) REQUIRED total → aprobado → comprobante → drawer «Pagado por Mercado Pago»; OPTIONAL con seña → cobrar el resto en efectivo → Ingresos = seña + resto; a 390 |
 | `payment-link` | (T5) perfil → «Nuevo link de pago» → `/pagar` anónimo a 390 → «¡Pago recibido!» → /cobros «Pagado» → reintegro → «Reintegrado» |
+| `tv` | (T7) «Pantallas» en `/sala` → código → `/tv` vincula → llamar → nombre corto (sin apellido) → desvincular → vuelve al vínculo; CSP y manifest de `/tv` |
+| `subscription` | (T6) débito autorizado en el MP falso → «Débito activo»; débito aprobado → cargo Pagado; «Pagar con Mercado Pago»; baja → banda con la fecha → «Deshacer baja»; subida con el proporcional en la vista previa |
+| `whatsapp` | (T6) conectar con el Meta falso; consentimiento en el alta; «Turno agendado» hasta «Leído»; recordatorio → «Confirmo» → badge; «No puedo ir» → campana sin cancelar; BAJA; ALTA → compartir ficha; turnero a 390 con la casilla destildada; desconectar |
+| `plans-matrix` | (QA-E) menú por plan; muros por URL directa; Secretaría sin HC y cobrando con medio; Clínica con `/sala` y «Pantallas»; solo lectura según el modo; cupo lleno al invitar; General sin módulos Kine |
 
-Fuera por ahora: «informar pago»; y la vista Recepción / `/sala` (módulo `salaEspera`, solo Clínica/Libre). El rate limit del
-turnero es 5 reservas cada 5' por IP: un spec nuevo que reserve tiene que contar con eso.
+Fuera por ahora: «informar pago». El rate limit del turnero es 5 reservas cada 5' por IP: un spec nuevo que reserve tiene
+que contar con eso. `tv.spec` falló una vez en la suite completa (Server Action con id viejo): si vuelve, subir
+`TV_LATENCY_MS` (`tests/e2e/tv.spec.ts:25`) a 25 s.
 
 **CI:** job `e2e` en `ci.yml`, después de `verify`, con Postgres efímero (owner) y **`continue-on-error: true`**
 (no bloqueante 2 semanas, OPS-D5); sube `tests/e2e/.report/` y `.results/` como artefacto.
@@ -525,6 +574,7 @@ Corren en CI **sin levantar DB ni server**, parseando el repo. Sesión `ci-pipel
   `email-match`, `email-confirm-guard` y `actor-practitioner-guard` (ver «Patrones nuevos de IAM»). Faltan como guard
   estático `auth.admin.` solo en el puerto y `auth.getUser()` solo en `getVerifiedSessionUser` (AUDIT
   `guard-auth-admin-y-getuser`, BO).
+- **Guards de T6/T7** — en la unit: `whatsapp-guard`, `tv-csp`, `inf-dev-safe` (ver «Patrones nuevos de T6/T7»).
 - **Guards de la cara pública (VX)** — también en la unit: `public-surface-imports`, `public-claims`, `ui-ratchets`,
   `tokens-contract`, `bundle-groups`, `module-wall-page-cut` (ver «Patrones nuevos de VX»). El presupuesto de bundle
   corre después del build (`check-bundle-budget.mjs`).

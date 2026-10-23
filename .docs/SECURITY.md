@@ -232,6 +232,8 @@ environments. The new model (`lib/mercadopago.ts` +
   no cardholder name, document, or device fingerprint.
 - **T5 (22-oct):** con `?acct=` la ruta va a la rama de cobros con la cuenta del vendedor (§24); sin `acct`, todo lo de
   arriba sigue igual (AUDIT §5.4 enmendado). El checkout legado con la cuenta de la plataforma ya no lo usa nadie.
+- **T6 (22-oct):** con `?scope=saas` o un topic de suscripción va a la rama de la suscripción (§25); un pago legado con
+  referencia `saas:` se delega ahí. El resto del legado, igual (AUDIT §5.4, segunda enmienda).
 
 ## 5. Auth callback (`/auth/callback`)
 
@@ -1207,8 +1209,8 @@ que no coincide con el modo. Un code reusado, un state alterado o vencido, o la 
 **Simulador bloqueado en Vercel.** `MP_CONNECT_MODE=fake` frena el boot si existe `VERCEL_ENV` **o** `VERCEL` (cualquier
 scope) y el getter cae a `off` (`lib/env.ts:250-260`); `app/api/mp/fake/[...path]` da 404 fuera de fake; se guarda por
 Vercel y no por `NODE_ENV` porque el E2E corre `next start`. `npm run dev:mpfake` nunca lee `.env*` y pisa todo lo que
-tiene efecto externo con literales de prueba. ⚠️ Un `npm run dev` **pelado** toma Supabase de `.env` (puede ser prod):
-AUDIT `tp3j dev-pelado-supabase-env`, decide Martin.
+tiene efecto externo con literales de prueba. Desde INF-DEV/ZF1 un `npm run dev` pelado ya no arranca contra un Supabase
+o una base remotos (§25).
 
 **`/pagar/[token]` sin PHI y GET sin escrituras.** Página server en `app/(booking)/pagar/[token]`: `force-dynamic`,
 `no-store`, `noindex` + `Disallow: /pagar/` en robots, `referrer: same-origin` (el token viaja en la URL). Nunca muestra
@@ -1222,3 +1224,65 @@ concepto: lo ven el paciente y Mercado Pago.».
 `?tab=`). Links: `billing.collect`, o `collectOwn` para lo propio, más **delegación** del dueño de la cuenta salvo que el
 actor sea su dueño (también para el Titular). Lecturas de cobros con el mismo criterio; matriz en `authz-matrix`.
 
+
+## 25. TV, WhatsApp y suscripción con Mercado Pago (T6/T7, 22/23-oct-2026; local, sin push)
+
+Diseño en [ARCHITECTURE.md ADR-027/028/029](ARCHITECTURE.md); «preservar» en AUDIT §5.69-81 (+ §5.4 enmendado);
+hallazgos en [AUDIT «Ronda T6/T7»](AUDIT.md). Todo se probó contra simuladores: nada contra Meta, Mercado Pago ni prod.
+
+**Dispositivo de TV, una superficie sin Actor.** `/tv` corre en una tele sin usuario logueado. Lo que la ata a un
+consultorio es la cookie `kine_tv` (`path=/tv`, Strict, httpOnly, 180 días; `lib/reception-displays-types.ts:34-39`),
+emitida al canjear un código de un uso que generó el staff (HMAC con clave derivada `kinesoft:tv-pair:v1`,
+`lib/display-pairing-internal.ts:44,64`; 10 + 30 intentos por IP, `lib/display-device.ts:70-73`; un solo mensaje ante
+cualquier fallo). Cada request valida cookie → hash del secreto en tiempo constante → no revocada → acceso del
+consultorio abierto → módulo `salaEspera` (`lib/display-device-internal.ts:88-133`). Las lecturas y escrituras del
+dispositivo van por `prismaService` (BYPASSRLS) con `id` + `tenantId` **a mano** en cada `where`: como en el resto de
+las superficies sin Actor (turnero, webhook), es la única barrera. El feed no lleva PHI (solo nombre corto u hora,
+sala, profesional, `key` hasheada) y sale por un schema strict. Rate limit del feed 30/min por pantalla y 240/min por
+IP; token realtime con los mismos claims y topic que el staff (M5 sin cambios), 30 cada 10 min por pantalla.
+Desvincular desde `/sala` corta en el próximo request. CSP **enforced** solo en `/tv` (`next.config.mjs:182-216`):
+`frame-src` nocookie, sin imágenes de Storage, `frame-ancestors 'none'`; `noindex` y fuera de robots.
+
+**WhatsApp: canal service y credenciales selladas.** `WhatsAppAccount`, `WhatsAppTemplate`, `WhatsAppMessage` y
+`WhatsAppInbound` son TENANT_READONLY (el consultorio lee, escribe solo el canal service con `tenantId` a mano) y
+`WhatsAppCredential` es **SERVICE_ONLY**: ENABLE + FORCE sin policy (M15 `migration.sql:163`), invisible para
+`kinesoft_app` con cualquier GUC. Token y PIN van sellados con el secret box (AES-256-GCM, AAD
+`waCredentialAad(accountId, campo)`, propósito `wa-credential`, `lib/secret-box.ts:302`; `lib/whatsapp/account-internal.ts:136-137`);
+un sobre movido de fila o campo no abre. Desconectar borra la credencial. `scripts/secret-box-rotate.ts --store=wa|mp|all`
+rota las dos (la corre Martin). Conectar, retomar y desconectar: solo el Titular con step-up
+(`lib/whatsapp-actions.ts:7,112`); los switches y la prueba, `tenant.sensitive`. El alta embebida valida la cookie
+`kine_wa_signup` (usuario + sesión + tenant + nonce, 10 min, `path=/configuracion`), `app_id` propio y el WABA en los
+`target_ids` de los dos scopes (`:214`). El teléfono se guarda como HMAC (`kinesoft:wa-phone:v1`) + máscara y la cola
+no guarda cuerpos; Plataforma → WhatsApp no muestra teléfonos. La CSP de Facebook (SDK y Embedded Signup) va solo en
+`/configuracion` (`next.config.mjs:219-229`).
+
+**Webhook de WhatsApp.** `app/api/webhooks/whatsapp/route.ts`: con `off`, 404; tope de **1 MB** (413); firma
+`X-Hub-Signature-256` = HMAC-SHA256 del **App Secret** sobre los **bytes crudos** (`:58-68`;
+`lib/whatsapp/crypto.ts:23-33`, tiempo constante); inválida o secreto vacío → 401. El ruteo es por
+`metadata.phone_number_id` (un número vivo pertenece a un solo consultorio: índice parcial de M15). Error de base
+procesando `messages` → 500 para que Meta reintente; el claim del `wamid` va en la misma tx que el efecto, así que el
+reintento no duplica. El texto libre del paciente nunca se guarda.
+
+**Suscripción con MP: tx service y rama propia del webhook.** La subida de plan con proporcional corre en **una** tx de
+`prismaService` (`lib/saas-billing.ts:329`) porque `SaasAdjustment` es TENANT_READONLY; antes de entrar, la action ya
+pasó `requireAccountBilling` + `withAccountWritable` (+ step-up en lo que toca plata, `lib/saas-billing-mp.ts:9-15`).
+`SaasAdjustment` es solo-inserción por trigger (BYPASSRLS no lo saltea). El webhook SaaS (`?scope=saas` o topic de
+suscripción) firma **siempre** con `MP_WEBHOOK_SECRET` leído en vivo (sin secreto → 503, inválida → 401 sin llamar a
+MP; `lib/saas-mp-webhook-route.ts:89-103`), valida `data.id` con la regex del topic y re-pide el recurso con el token de
+la plataforma; el consumidor exige collector = la plataforma, ARS y un tenant existente. Los logs llevan el `name` del
+error, nunca el mensaje (`lib/saas-mp-sync-internal.ts:28`). Re-anclar (`scripts/saas-reanchor.ts`) es dry-run en READ
+ONLY por defecto, exige BYPASSRLS y `KINESOFT_CONFIRM_PROD` contra prod; lo corre Martin.
+
+**Simuladores bloqueados en Vercel.** `WHATSAPP_MODE=fake` y `MP_CONNECT_MODE=fake` frenan el boot con `VERCEL_ENV` o
+`VERCEL` (cualquier scope) y los getters caen a `off` (`fakeGraphAllowed` / `fakeMpAllowed`, `lib/env.ts:742,785`);
+`/api/whatsapp/fake/*` y `/api/mp/fake/*` dan 404 fuera de fake (`app/api/whatsapp/fake/[...path]/route.ts:14`). Se
+guarda por Vercel y no por `NODE_ENV` porque el E2E corre `next start`. `WHATSAPP_MODE=live` en Preview se lee como `off`
+(`lib/env.ts:733`): Preview nunca manda en vivo (WA-D26). En Production, `sandbox`/`live` sin App Secret, Verify Token o
+`SECRET_BOX_KEYS` frena el boot.
+
+**`npm run dev` seguro.** `scripts/dev-safe.mjs` lee solo cuatro claves de los `.env*` (`NEXT_PUBLIC_SUPABASE_URL`,
+`PROD_SUPABASE_REF`, `DATABASE_URL`, `DIRECT_URL`; `:12-13,37`), no imprime valores y no arranca si el Supabase efectivo
+no es local o coincide con `PROD_SUPABASE_REF` (salvo `ALLOW_DEV_REMOTE_SUPABASE=1`) ni si la base no es localhost
+(salvo `ALLOW_DEV_REMOTE_DB=1`, `:25-28`). El comando diario es `npm run dev:local`: dotenv-cli trae solo la DB de `.env.local`,
+el script verifica que sea localhost y pisa con literales de prueba todo lo que tiene efecto externo, con los dos
+simuladores prendidos (`scripts/dev-mp-fake.mjs:8-12`).

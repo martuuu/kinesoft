@@ -1044,7 +1044,7 @@ commitear. **Única migración: M11** (aplicada solo en local). Tabla «DIR y MB
 **Ronda 30 · Tanda A (18-oct-2026):** feedback del 17-oct del cliente principal (plan §22; orden de §22.13). **Sin
 migración.** Commiteados sobre `54e744c`: HF-2c (`59ca0a7`), TP-0b (`0469f10`), HF-3 (`eead8fc`), HF-2a (`5921d62`),
 TP-0a (`acb8792`), HF-1b (`fb65ad8`), HF-1a (`d1f08df`), TP-1s (`6facb80`), TP-1u (`841c67d` + `4e504ee`). Tabla
-«Hallazgos de la Tanda A» en §2: H-TP0..3, H-RT1..3, H-LL1..2, H-2FA cerrados; H-YT queda para TV (T7); `turnero-mp-
+«Hallazgos de la Tanda A» en §2: H-TP0..3, H-RT1..3, H-LL1..2, H-2FA cerrados; H-YT queda para TV (T7, cerrado en TV-1a/TV-2p); `turnero-mp-
 cuenta-plataforma` pasa a 🟡 (mitigado con `TURNERO_CHECKOUT=off`, se cierra en T5). Hallazgos nuevos clasificados
 en la misma tabla. QA en [QA «Tanda A»](QA.md); tareas de consola en [EXTERNAL-CONFIG §0.8](EXTERNAL-CONFIG.md).
 (El número de ronda sigue a la 29: «Ronda 25» ya es PL-Z.) **Gate (18-oct, sobre `4e504ee`):** tsc app y scripts 0 ·
@@ -1853,7 +1853,7 @@ integrador, y se verificó en el archivo.
 | realtime-leader-election | baja | C1 | components/providers/realtime-provider.tsx | 🔴 | **C1** (SV-D14) — un socket y un mint por pestaña; chime en dos pestañas visibles del mismo usuario |
 | arrival-alerts-refetch-por-pestana | baja | C1 (perf) | components/providers/arrival-alerts.tsx | 🔴 | **C1** — cada pestaña re-pide hoy por lote relevante (coalescido). Medir con el tenant perf |
 | horarios-config-en-vivo | baja | C | lib/practitioner-schedule.ts | 🔴 | **C** (SV-D12) — cambios de horarios en Configuración no publican `availability`. No entró en el reparto de EV1 |
-| sala-tv-y-campana | baja | D | — | 🔴 | **D** — pantalla TV de sala (topic propio) y notificaciones persistidas en la campana |
+| sala-tv-y-campana | baja | D | lib/realtime-display-token.ts:67 · lib/notifications.ts | 🟢 T7 + PL-F | La TV de sala salió en T7 (ADR-028) con el **mismo** topic y claims que el staff (TV-D12: M5 sin cambios), no un topic propio. La campana con avisos persistidos existe desde PL-F (H3) y AS-0c |
 
 ### Hallazgos de IAM (IAM-Z, 14-oct-2026)
 
@@ -1930,7 +1930,7 @@ Ronda 24. Evidencia y diseño en §20.2 del plan vigente; la ola de destino se c
 | H-PL4 tres-crons | baja | simplificación | vercel.json · app/api/cron/daily/route.ts | 🟢 | **PL-2b** — un solo cron (`/api/cron/daily`, 11:00 UTC, etapas idempotentes: precios → cargos → vencidos → mails → invitaciones, recordatorios de prueba, digest). Las rutas viejas quedan como disparo manual con `CRON_SECRET` |
 | H-TURN turnero-por-profesional | media | B | prisma/schema.prisma (`Practitioner.publicBookingEnabled`) · lib/public-booking*.ts · lib/practitioner-public.ts | 🟢 | **M8 + PL-2f** — el turnero solo ofrece profesionales con `publicBookingEnabled` (backfill `true` en M8); `setPractitionerPublicBooking` (en `SUPPORT_WRITABLE_*`). **PL-3b**: switch por profesional en Configuración → Profesionales y en Plataforma (el propio profesional sin «Configuración» → PL-Z) |
 | PL-2a 2fa-por-usuario | media | PL | lib/two-factor*.ts · lib/mfa-port.ts · app/verificar-acceso · app/cuenta/seguridad · lib/platform-users.ts | 🟢 | **PL-2a** — TOTP (puerto MFA de BO4) + código por email (HMAC, 10 min, 5 intentos) + 10 códigos de recuperación; corte en la foto de acceso → `/verificar-acceso` (app y Plataforma); step-up `kine_stepup` 10 min; reset por superadmin (auditado + mail); el sign-out borra las cookies. Se quitó el corte «soporte sin MFA en prod» de `lib/platform-support.ts` (decisión de Martin) |
-| PL-2b cobros-manuales | alta | PL (plata) | lib/saas-billing*.ts · lib/saas-receipts-internal.ts · lib/platform-billing.ts · app/api/cron/daily | 🟢 | **PL-2b** — sin Mercado Pago (decisión de Martin 16-oct): cargos por período (UNIQUE tenant+período), vencidos → `PAST_DUE` + 10 días de gracia, comprobantes en bucket privado `billing-receipts` (magic bytes, ≤ 4 MB, URL firmada 60 s), imputación/aprobación/rechazo desde Plataforma. `SAAS_BILLING_MODE=off` por defecto; `mp` = `manual` en esta etapa. Webhook de MP y `lib/mercadopago.ts` intactos (§5.4). **PL-3a**: Configuración → Facturación (`?tab=facturacion`, comprobantes con compresión de fotos) |
+| PL-2b cobros-manuales | alta | PL (plata) | lib/saas-billing*.ts · lib/saas-receipts-internal.ts · lib/platform-billing.ts · app/api/cron/daily | 🟢 | **PL-2b** — sin Mercado Pago (decisión de Martin 16-oct): cargos por período (UNIQUE tenant+período), vencidos → `PAST_DUE` + 10 días de gracia, comprobantes en bucket privado `billing-receipts` (magic bytes, ≤ 4 MB, URL firmada 60 s), imputación/aprobación/rechazo desde Plataforma. `SAAS_BILLING_MODE=off` por defecto; `mp` era `manual` hasta T6 (desde ahí prende MP, ADR-027). Webhook de MP y `lib/mercadopago.ts` intactos en PL (§5.4; T6 sumó la rama SaaS). **PL-3a**: Configuración → Facturación (`?tab=facturacion`, comprobantes con compresión de fotos) |
 | PL-2d mensajes-y-leads | media | PL | lib/support-threads*.ts · lib/platform-inbox.ts · lib/leads.ts | 🟢 | **PL-2d** — Configuración → «Soporte» (Mensajes + Accesos de soporte) y /plataforma → Mensajes; `submitLead` público con honeypot y límites (5/h IP, 3/día email, 200/día global), sin respuesta automática. Los mails al consultorio y a Plataforma no llevan el texto del mensaje. El formulario de la landing lo armó **VX2-c2** (`components/landing/contact-form.tsx`, sin JS, honeypot + `startedAt`) |
 | PL-2f salas-y-sala-de-espera-por-plan | media | PL | lib/availability-loader.ts · lib/bookings*.ts · lib/rooms.ts · lib/availability-actions.ts (`classifyBookingInstant`) | 🟢 | **PL-2f + integrador** — sin `salas` las salas «duermen» (el motor ignora `roomId`, datos intactos); sin `salaEspera` no hay Recepción ni «Llamar»; «Llegó»/«En atención» quedan en el núcleo. El aviso del modal tampoco mira salas dormidas (integrador). Tests escritos después del código (no tests-first) |
 | PL-2-emails-un-layout | baja | poda | lib/email/templates.ts (`compose` exportado) · templates-account/-billing/-support.ts | 🟢 | **Integrador PL-2** — las tres plantillas nuevas usan `compose` (antes cada sesión copió un layout); `compose` acepta `ctas: []` (el mail del código no lleva links) y `bodyBlocksHtml`. Todas registradas en `scripts/diagnose-email.ts` (menos `billing_auto_debit_changed`: es de MP) |
@@ -2117,7 +2117,7 @@ diff real — (a) a11y/responsive/copy-claims; (b) seguridad y contratos: 0 alto
 | F2-colores-no-exactos | baja | **PF1** | app/** · components/** | 🟡 PF1-Z | **PF1-Z (16-oct)** — `#9A5B00` 14 → 0 y `#4F8A10` 8 → 0 (ratchet en 0). Quedan 7 no exactos en `components/ui` (`node scripts/codemod-status-colors.mjs --dry`): `rgba(159,31,31,0.3)` ×2 (void-note-dialog, confirm-dialog), `rgba(225,75,75,0.5)` (money-input) y en `toast.tsx` las barras/fondos del ícono (`#E14B4B`, `rgba(54,179,126,0.16)`, `rgba(228,70,70,0.16)`, `rgba(255,176,32,0.18)`) → PF-Z |
 | vx-formfield-densidad | baja | **PF1** | components/ui/form-field.tsx (49 llamadores) | 🔴 abierto | D-VX13: `.k-input` pasó a 44 px / 16 px y textarea `min-height: 120`. Revisar drawers densos de la Secretaria a 1366×768 (riesgo 3 del brief); no achicar el token |
 | vx-note-card-tag | baja | **PF1** | components/clinical-notes/note-card.tsx:117 | 🟢 PF1.1 | `<Tag tone="soft" variant="outline">` en `note-card.tsx:127` |
-| vx-guard-module-segment | baja | C | lib/authz.ts:216 | 🔴 abierto | `guardModuleSegment` sin llamadores de producción tras el muro (solo `tests/integration/module-guards.test.ts`). Retirarlo junto con su test y los comentarios de `lib/nav.ts`, `tenant-modules-context.tsx`, `sidebar.tsx` |
+| vx-guard-module-segment | baja | C | lib/authz.ts:230 | 🟢 PF1.0-a | `guardModuleSegment` se retiró (D-PF-K); queda solo el comentario en `lib/authz.ts:230` y en `tests/integration/module-guards.test.ts:139` |
 | vx-visual-pendiente | baja | **PF1** | components/landing/pricing.tsx · components/auth/product-panel.tsx | 🔴 abierto | Tarjetas de precios desbalanceadas (Individual con más bullets); mock del login con filas bajas y texto recortado. (La parte MB, el muro a 390 con el sidebar de escritorio, quedó cerrada: bajo 768 el sidebar no se monta visible y manda la barra inferior.) |
 
 ### PF1-Z (16-oct-2026): cierre de PF1
@@ -2297,7 +2297,7 @@ cerrado se verificó en el diff de cada commit. Decisiones con default en §22.1
 | H-LL1 llego-sin-lugar | media | B | components/agenda/booking-drawer/reception-actions.tsx · app/(app)/agenda/page.tsx | 🟢 HF-2c `59ca0a7` | Llegó · En atención · Deshacer en el drawer, solo turnos de hoy AR, con `agenda.reception` + `canOperate`; «Llamar» solo con `salaEspera`. Toast «Marcaste la llegada de …» con «Deshacer»; «En sala de espera desde las …». Integración `bookings-reception.test.ts` (plan CONSULTORIO → ok) |
 | H-LL2 reflejo-recepcion | baja | C | lib/agenda-client-state.ts · lib/agenda-slot-helpers.ts · components/agenda/grid/* · views/* · app/globals.css | 🟢 HF-2a `5921d62` | `waitingPulse` (solo en-sala y hoy AR; `long` ≥ 15′); punto lima `--rc-insala-dot` (≥ 3:1) sobre `.k-live-dot`, o «Borde que late» en Apariencia (D-LL1, `data-waiting-cue`); `now` hasta `SlotCell`; `denseOverflow` promueve a los que esperan; tope 12 puntos animados (D-HF5); «En sala» solo hoy; Semana y lista mobile con punto de 6 px; reduced motion = punto fijo |
 | H-2FA bypass-superadmin | — | HF | lib/two-factor-bypass{,-logic}.ts · lib/session.ts · lib/two-factor-step-up.ts · lib/platform-mfa-actions.ts | 🟢 HF-3 `eead8fc` | `SUPERADMIN_2FA_BYPASS="<userId>@AAAA-MM-DD"`, falla cerrado (superadmin activo, id exacto, fecha AR vigente a ≤ 30 días, nunca con `enforce`, una entrada mal formada invalida todas). Foto de acceso → `satisfied`; `requireStepUp` sale con `2fa.stepup_bypassed`; **no** aplica a sumar un factor (`allowBypass: false`) ni a `resolveTwoFactorSession`. Banda en Plataforma y `/cuenta/seguridad`. Ver SECURITY §20.1 |
-| H-YT youtube-tv | — | **TV (T7)** | lib/exercise-media-internal.ts:33-47 · next.config.mjs | 🔴 abierto | `youtubeId` server-only, sin vivos ni listas; CSP solo `youtube-nocookie`. Se resuelve con `lib/youtube.ts` en TV-1 (§22.7) |
+| H-YT youtube-tv | — | **TV (T7)** | lib/youtube.ts:23,58 · lib/youtube-player-protocol.ts:14 · next.config.mjs:182-216 | 🟢 TV-1a `ea82e82` + TV-2p `1dd97cf` | `parseYouTubeUrl` entiende videos, shorts, vivos, listas y vivos de canal, siempre nocookie; `MEDIA_REF_RE` = el CHECK de M17. Los videos de ejercicios siguen con su `youtubeId` (`lib/exercise-media-internal.ts:33`) |
 | webhook-pago-sin-operadores | baja | **T5** | lib/mercadopago.ts:467 · lib/mp-connect/consume.ts | 🟢 TP-2a `ba640c3` | La rama legada suma `alsoAgendaOperators: true` (única línea tocada, §5.4 intacto; `mp-webhook.test.ts` sin cambios) y la rama `?acct=` avisa a titulares, profesional, Secretaría y creador del link |
 | slot-window-seq-scan-booking | baja | PF | lib/public-booking-slots.ts (`PUBLIC_WINDOW_SCAN_DAYS = 42`) · loader del turnero | 🔴 abierto | La ventana carga 6 semanas en una sola lectura (≤ 14 sentencias, `turnero.slotWindow` en `loaders.perf.test.ts`), pero el reporte de TP-1s vio un Seq Scan de `Booking` sobre el rango de 42 días. Con pocos datos puede ser lo más barato; revisar con volumen de prod (PF) |
 | realtime-probe-node22 | baja | OPS | lib/platform-realtime-probe-internal.ts:21,117 | 🟡 consola | «Probar desde el servidor» usa el `WebSocket` global: en Node 20 (runtime de hoy en Vercel) dice «no disponible en este runtime». Se habilita con Node 22 en Vercel (EXTERNAL-CONFIG §0.8); no se agrega `ws` a prod |
@@ -2467,16 +2467,16 @@ tope de 3/h por paciente con compartir, `PATIENT_NOTIFY_RATE_LIMIT`).
 
 | Slug | Sev | Bloque | Ubicación | Estado | Detalle / destino |
 |---|---|---|---|---|---|
-| t5z B4 authorized-sin-vencimiento | baja | C | lib/mp-connect/cron-internal.ts | 🔴 abierto | Un cobro AUTHORIZED que MP nunca resuelve no vence solo y bloquea el cobro a mano («en proceso»). Propuesta: aviso en Plataforma → Sistema con los AUTHORIZED de más de N días |
-| t5z facturacion-percibido-de-mas | media | C | components/planes/plan-booking-groups.ts:304-307 · BillingRow | 🔴 abierto | Facturación del paciente muestra percibido de más si la seña se reintegra **después** del cobro a mano: `BillingRow` no trae las señas reintegradas (Ingresos sí, M1). Mismo criterio que C-TP11 |
+| t5z B4 authorized-sin-vencimiento | baja | C | lib/platform-system-logic.ts:67,98 | 🟢 PEND-b `2a05d51` | Plataforma → Sistema lista los AUTHORIZED con más de 7 días desde `expiresAt` (tope 20). El cobro sigue sin vencer solo (a propósito: hay un pago en proceso) |
+| t5z facturacion-percibido-de-mas | media | C | components/planes/plan-booking-groups.ts:220-223 · lib/patients-profile-internal.ts:342 | 🟢 PEND-b `2a05d51` | `refundedDepositAfterCollectCents` con el mismo criterio que el LATERAL de `manualNet` (C-TP11) |
 | t5z cancelled-authorized-aprobado | baja | C | lib/booking-copago-internal.ts · lib/mercadopago.ts | 🔴 abierto (preexistente) | Un turno CANCELLED con copago AUTHORIZED que después se aprueba queda AUTHORIZED. Pasaba con el legado; ahora también con seña |
-| t5z particular-en-cero-cotiza | media | T5 (enmienda C-TP8) | lib/public-booking-charge-internal.ts:90 · public-booking-wizard.tsx | 🟡 **decide Martin** | El wizard sigue cotizando con el precio del servicio cuando Particular está en $ 0 (A1 solo avisa). Recomendado: exponer el copago de Particular en `PublicClinicOnlinePayment` (= enmienda de C-TP8) |
+| t5z particular-en-cero-cotiza | media | T5 (enmienda C-TP8) | lib/public-booking-types.ts:97,116 · lib/public-booking.ts:268 | 🟢 PEND-a `6249d2c` (default §26.1 #5) | El wizard cotiza con `particularCopagoCents`; con obra social dice «El monto final depende de tu cobertura» |
 | t5z tenant-modules-3-chunks | baja | C (PF) | `/agenda` | 🔴 abierto | `tenant-modules-context` queda duplicado en 3 chunks de `/agenda` |
-| t5z copy-no-la-cierres | baja | C | components/booking/booking-result.tsx:95 | 🔴 abierto | Frase «No la cierres.» en el resultado del turnero: suena a orden; revisar copy |
-| tp3j dev-pelado-supabase-env | **alta** | OPS | package.json (`dev`) · `.env.local` | 🟡 **decide Martin** | Hallazgo A de TP-3j: un `npm run dev` pelado toma Supabase de `.env` (puede ser **prod**) porque `.env.local` solo trae la DB. Contradice «local sí, prod nunca». Usar `npm run dev:mpfake` (pisa Supabase a loopback) o `.env.local` completo. Recomendado: que `dev` pise Supabase como `dev:mpfake` |
-| t5-bundle-agenda-sala | — | PF | /agenda · /sala | 🟡 **decide Martin** | `/agenda` **171,9** (tope 171,6) y `/sala` **155,4** (+0,4 sobre T5d): el exceso viene de T5e aprobado (badges, drawer y sala con seña). Recomendado: subir el tope a lo medido ([PERF «T5»](PERF.md)) |
+| t5z copy-no-la-cierres | baja | C | components/booking/booking-result.tsx | 🟢 WA-U4 `4c00f08` | La frase salió (la sacó WA-U4, no PEND-b como decía el plan) |
+| tp3j dev-pelado-supabase-env | **alta** | OPS | package.json:6-9 · scripts/dev-safe.mjs:8,25-28 | 🟢 INF-DEV `be68e16` + ZF1 `98cdd36` | `npm run dev` se niega a arrancar si el Supabase **o la base** efectivos no son locales (o el ref es `PROD_SUPABASE_REF`), salvo `ALLOW_DEV_REMOTE_SUPABASE=1` / `ALLOW_DEV_REMOTE_DB=1`; no imprime valores. Comando diario: `npm run dev:local` (= `dev:mpfake` = `dev:wafake`, con los simuladores) |
+| t5-bundle-agenda-sala | — | PF | /agenda · /sala | 🔀 T6/T7 | Rigió el default «tope = lo medido» (§26.1 #5). Lo reemplaza `t6t7-bundle-rebase` (Ronda T6/T7) |
 | t5-s3-s5 sandbox | — | T5 (final) | lib/mp-connect/consume.ts · scripts/diagnose-mp-connect.ts | 🔴 al final | S3 (¿el pago con token de vendedor llega firmado con nuestro secreto?) decide `MP_CONNECT_WEBHOOK_SIGNATURE`; S5 (¿MP también notifica la URL del panel sin `acct`?) decide un pre-despacho por `user_id`. Sandbox con túnel, lo corre Martin ([EXTERNAL-CONFIG §0.12](EXTERNAL-CONFIG.md)) |
-| t5-csp-com-ar | baja | **T7** | next.config.mjs:43,108,121 | 🔴 abierto | `*.mercadopago.com` no matchea `auth.mercadopago.com.ar` ni `www.mercadopago.com.ar`. Hoy no hace falta (OAuth y checkout por navegación); entra con el CSP enforce de T7 |
+| t5-csp-com-ar | baja | **T7** | next.config.mjs:43-47 | 🟢 TV-1c `20cb351` | `MP_FRAME` suma `https://*.mercadopago.com.ar` en el Report-Only (frame-src y form-action) |
 | t5-secret-box-rotate-cabecera | — | docs | lib/secret-box-rotate-internal.ts (cabecera) | 🔴 limpieza | Dice «el cliente Prisma de T5a no la conoce»: ya la conoce (M18 generada). Corregir en la próxima sesión que toque el archivo |
 | t5-bajos-c | baja | C | varios | 🔴 abierto | `notifyTenantOwners` no filtra `disabledAt` en OWNER/ADMIN (`lib/notifications-internal.ts:~92`, previo a T5); `deleteTenantDeep` rama `foreignPrograms` no limpia `OnlineCharge`; `casUpdate` usa `CURRENT_TIMESTAMP` en columna sin zona; saldo P7 de planes y `patientBillableCountInTx` no cuentan la seña; Esc cierra los dos drawers a la vez (`components/ui/drawer.tsx:257`); Semana mobile sin badge; `actorCapsInTx` duplicado en `lib/payment-links.ts` (mover a un módulo de capabilities); `X-Robots-Tag`/`Cache-Control` explícitos para `/pagar`; `data.id` alfanumérico en minúsculas en el manifiesto de firma (hoy ids numéricos); `setBookingCopagoPaid` no devuelve `copagoCollectedById`; REFUNDED legado ofrece «Comprobante» vacío |
 
@@ -2494,10 +2494,72 @@ tope de 3/h por paciente con compartir, `PATIENT_NOTIFY_RATE_LIMIT`).
 
 **Decisiones con default de T5 que siguen abiertas** (las lista [decisiones pendientes](plannings-claude/decisiones-pendientes-18-oct.md) §13): con `MP_CONNECT_MODE=off` se esconden «Cobros»,
 «Mi Mercado Pago» y «Cobros online»; el profesional BASIC ve los cobros online de su propio turno; delegar la cuenta del
-consultorio no pide step-up (desconectar sí); «Cobros» en el nav solo con `billing.collect`; tope de bundle de `/agenda`
-y `/sala`; Particular en $ 0.
+consultorio no pide step-up (desconectar sí); «Cobros» en el nav solo con `billing.collect`. El tope de bundle y
+Particular en $ 0 se cerraron con el default de §26.1 #5 (ver «Ronda T6/T7»).
+
+### Ronda T6/T7 (22/23-oct): TV (M17), WhatsApp (M15) y suscripción con Mercado Pago (M16)
+
+Ronda 35. Plan §26 (brief `wip-20/brief-t6t7.md`; olas X0-X9), commits `b019d7c` (MIG) .. `609da3c` (ZF3), **local, sin
+push**. M17, M15 y M16 aplicadas solo en el Docker local, en ese orden (después de M12, M14 y M18); orden para prod en
+[PUSH-DIA](PUSH-DIA.md) y el RUNBOOK. Diseño en ARCHITECTURE ADR-027 (MPS), ADR-028 (TV) y ADR-029 (WA), más ADR-016
+enmendado; «preservar» nuevos §5.69-81 y enmienda de §5.4. Revisores de solo lectura: **ZA** (seguridad, plata, PHI,
+webhooks, simuladores, RLS) y **ZB** (UX, a11y, mobile, bundle, copy, routing por plan); fixers ZF1 (MPS + `dev`),
+ZF2 (WA) y ZF3 (UI). Todo contra simuladores: nada contra Meta, Mercado Pago, una TV real ni prod.
+
+**Cerrado por T6/T7:** H-YT, `t5-csp-com-ar`, `sala-tv-y-campana`, `tp3j dev-pelado-supabase-env` y los pendientes de T5
+B4, `facturacion-percibido-de-mas`, `particular-en-cero-cotiza` y `copy-no-la-cierres` (filas de arriba, con su commit).
+`vx-guard-module-segment` ya estaba resuelto desde PF1.0-a (se podó la fila). También:
+- MIG, hallazgo A: tres CHECKs de los Anexos pasaban con NULL (`breakdown`, `proration`, `refs seriesCount`); se
+  corrigieron con `IS NOT NULL` antes de aplicar.
+- WA-P3/WA-S1, hallazgo 1: Meta exige `example.header_handle` para la plantilla con header DOCUMENT. Resuelto con
+  `uploadHeaderSample` (Resumable Upload, `lib/whatsapp/graph.ts:405`) en WA-S6 `69c87f5`.
+- X5 `84a05e2`: el turnero no revierte una BAJA de WhatsApp.
+
+**Arreglado en el cierre (ZF1 `98cdd36`, ZF2 `6c8b370` + `bfb831d`, ZF3 `609da3c`)**
+
+| Slug | Sev | Ubicación | Estado | Cierre |
+|---|---|---|---|---|
+| zf1 reanchor-desbloquea-debito | alta | lib/saas-reanchor-internal.ts:17 · lib/platform-billing.ts:827 | 🟢 ZF1 | Re-anclar ponía `autoDebitAllowed = true` y lo contaba para «ya anclada»: desbloqueaba un débito que Plataforma bloqueó. Ahora no lo toca; el script imprime el valor |
+| zf1 void-waive-credito-de-mas | alta | lib/saas-billing-internal.ts:880 | 🟢 ZF1 | Las copias de ajustes al anular/perdonar salían sin `splitFromId`: un WAIVE posterior devolvía el crédito entero (saldo a favor de más) |
+| zf1 reactivar-doble-cobro | media | lib/saas-billing-schedule-internal.ts:524 | 🟢 ZF1 | Reactivar una baja de Plataforma a mitad de un período pago cobraba otra vez esos días: se factura desde hoy o desde el fin del último período cobrado |
+| zf1 autorizacion-tardia | media | lib/saas-billing-mp-internal.ts:511 | 🟢 ZF1 | Un preapproval autorizado después de bloquear el débito o de la baja ya no se promueve: se limpia y se cancela en MP |
+| zf1 preapproval-pendiente | media | lib/saas-billing-mp.ts:174,240 · lib/saas-mp-sync-internal.ts:597,702 | 🟢 ZF1 + ZF3 | «Cancelar» de la banda «Falta autorizar…» cancela el pendiente en MP (`cancelPendingAutoDebit`); elegir otro método lo abandona |
+| zf1 debito-monto | media | lib/saas-mp-sync-internal.ts:210,257 | 🟢 ZF1 | El saldo a favor se descuenta solo después de la deuda vieja; los días de reintento (5..) el débito es el saldo del cargo del 4, no la base |
+| zf1 mail-debito-rechazado | baja | lib/saas-billing-mp-internal.ts:328 · lib/saas-billing-mail-internal.ts:82 | 🟢 ZF1 | Un mail por preapproval y período (no por intento) y con `effectiveOn`: sin la fecha la plantilla no se armaba |
+| zf1 cancel-pending-plan-unico | baja | lib/saas-billing-schedule-internal.ts:411-415 | 🟢 ZF1 | `cancelPendingPlanInTx` en un solo lugar (estaba duplicado en `saas-billing-mp` y `platform-billing`) |
+| zf1 logs-sin-mensaje | baja | lib/saas-mp-sync-internal.ts:28 | 🟢 ZF1 | Los logs llevan el `name` del error, nunca el mensaje (puede traer la URL de conexión) |
+| zf1 dev-db-remota | alta | scripts/dev-safe.mjs:25-28 | 🟢 ZF1 | `npm run dev` también frena con `DATABASE_URL`/`DIRECT_URL` no locales (`ALLOW_DEV_REMOTE_DB=1`, override aparte) |
+| zf2 webhook-wa-500 | media | app/api/webhooks/whatsapp/route.ts:21,83 · lib/whatsapp/webhook-internal.ts:25,60 | 🟢 ZF2 | Un error de base procesando `messages` respondía 200 y se perdía la respuesta del paciente. Ahora 500 y Meta reintenta (el claim del `wamid` va en la misma tx: sin duplicados) |
+| zf2 turnero-pisa-consentimiento | alta | lib/public-booking-wa-consent.ts:39 · lib/public-booking.ts:968,1047 | 🟢 ZF2 | Un anónimo con el DNI de otro pisaba `waPhoneE164` y el consentimiento de esa ficha. Ahora solo se ancla en una ficha nueva o con el mismo celular; si no, `not_saved` |
+| zf2 regla-wa-activo | media | lib/whatsapp/active-internal.ts:29-45 | 🟢 ZF2 | La regla estaba triplicada y el turnero prometía avisos con los dos automáticos apagados. Una sola, con `channel` / `notices` |
+| zf2 baja-por-destinatario | baja | lib/whatsapp/outbox-internal.ts:625 · lib/whatsapp/reply-internal.ts:399 | 🟢 ZF2 | La BAJA cancela lo encolado por `cancelQueuedInTx` con alcance por destinatario (escritor único) |
+| zf2 cron-sin-bajas | baja | lib/whatsapp/reminders-internal.ts:219 | 🟢 ZF2 | El cron no manda recordatorios de un consultorio con la suscripción CANCELLED |
+| zf2 portal-consentimiento | baja | app/(portal)/portal/c/[slug]/cuenta/page.tsx | 🟢 ZF2 `bfb831d` | El portal ofrece el consentimiento con la cuenta activa aunque los avisos automáticos estén apagados (vale para documentos y avisos manuales) |
+| zf2 phone-e164-en-turnero | baja | lib/public-booking-wa-consent.ts | 🟢 ZF2 | `decideTurneroWaConsent` pasó a un módulo server: el normalizador de celulares salió del first load del turnero |
+| zf3 transferencia-sin-datos | alta | lib/saas-billing-view.ts:396 | 🟢 ZF3 | Sin `SAAS_BILLING_TRANSFER_INFO` no se ofrece «Transferencia» como método |
+| zf3 ui-copy-a11y | media/baja | components/tv/* · components/configuracion/panels/{billing-subscription-section,whatsapp-panel}.tsx · components/portal/whatsapp-consent-card.tsx · components/landing/faq.tsx · lib/whatsapp/copy.ts | 🟢 ZF3 | TV legible a distancia; objetivos de 44 px; avisos con `role="status"`; URL de vuelta de MP limpia con `router.replace` (`billing-subscription-section.tsx:125`); FAQ «¿Cómo pago?» según el modo; «Última sincronización»; turnero en 113,7 (≤ 115) |
+
+**Pendiente (para Martin o Bloque C)**
+
+| Slug | Sev | Bloque | Ubicación | Estado | Detalle / destino |
+|---|---|---|---|---|---|
+| t6t7 mail-debito-cancelado-mp | baja | C | lib/saas-billing-mp-internal.ts:617-626 | 🔴 abierto | El mail «El débito automático se canceló desde Mercado Pago» se arma sin `effectiveOn`; como en el rechazado (ZF1), sin la fecha la plantilla no se arma y **nunca sale** |
+| t6t7 hook-wa-cancelled | baja | C | lib/whatsapp/booking-hook-internal.ts:80-118 · lib/whatsapp/outbox-internal.ts:342-343 | 🔴 abierto | Cuando un turno pasa a CANCELLED el hook no hace nada propio: no cancela lo que ya estaba encolado para ese turno ni avisa la cancelación. Hoy lo salva el re-chequeo de `dispatch` (`eligibility` exige CONFIRMED, `lib/whatsapp/logic.ts:113` → SKIPPED `not_confirmed`), pero ningún test de integración lo fija |
+| t6t7-bundle-rebase | — | PF | /configuracion · /sala · /agenda | 🟡 **decide Martin** | Build seguro final: `/configuracion` **142,0** (tope 141,8), `/sala` **156,1** (155,6), `/agenda` **172,4** (172,1). El copy de WhatsApp no está en el first load; diferir «Pantallas» ahorra 0,2-0,3. Recomendado: re-basar a lo medido ([PERF «T6/T7»](PERF.md)) |
+| t6t7 not-saved-privacidad | baja | — | lib/public-booking-types.ts:257-262 | 🟡 **decide Martin** | `not_saved` deja ver que ese DNI tiene ficha con otro celular o con baja. Se eligió no prometer avisos que no van a salir. Alternativa: devolver `saved` sin escribir (promete de más) |
+| t6t7 debito-bloqueado-pre-m16 | media | OPS | lib/saas-reanchor-internal.ts:17-20 | 🟡 Martin | Las suscripciones de antes de M16 nacieron con `autoDebitAllowed = false` y re-anclar ya no lo cambia: se desbloquean desde Plataforma («Permitir débito») antes de prender `mp` |
+| t6t7 textos-borrador | — | Martin | lib/whatsapp/templates.ts · lib/whatsapp/copy.ts · lib/whatsapp/reply-internal.ts | 🟡 **decide Martin** | Las 5 plantillas, el texto del consentimiento (`WA_CONSENT_TEXT`, Ley 25.326), las respuestas automáticas y la campana son borradores. Confirmar antes de mandar las plantillas a Meta |
+| t6t7 supuestos-sin-consola | — | final | scripts/diagnose-whatsapp.ts · scripts/diagnose-mp-subscriptions.ts | 🔴 al final | Meta S1-S13 (Embedded Signup v4, firma, plantillas, estados `failed` asíncronos de 131026/131042, `wa_id` AR sin el 9) y MP S1-S10 (firma de preapproval, mínimo de débito, `billing_day`). Corren contra el simulador; el sandbox lo corre Martin |
+| t6t7 spike-tv-real | — | QA | components/tv/* | 🔴 al QA | Navegadores de Smart TV sin probar. Spike después del push (Chromecast / Fire TV / Chrome `--kiosk`); si YouTube no toma los comandos, sumar `id` + `channel:"widget"` en `ytCommand` |
+| t6t7 tv-spec-flaky | baja | QA | tests/e2e/tv.spec.ts:25 | 🟡 vigilar | Falló una vez en la suite completa (Server Action con id viejo / 20 s). Si vuelve: subir la constante `TV_LATENCY_MS` a 25 s |
+| t6t7 duplicado-tras-timeout | baja | — | lib/whatsapp/outbox-internal.ts:441 | 🟡 aceptado | Un timeout de Graph cuyo estado no llega antes de que venza el lock (10′) se reenvía: el paciente puede recibir el aviso dos veces. Graph no deja preguntar por el `biz_opaque_callback_data` |
+| t6t7 sin-precio-sin-debito | — | Martin | lib/saas-mp-sync-internal.ts | 🟡 Martin | Con `SaasPlanConfig.priceCents` en null el débito solo funciona con precio a medida (queda pausado, `no_price`). Cargar precios antes de `manual` |
+| t6t7 wa-guard-fuera-de-isolation | baja | C | tests/unit/whatsapp-guard.test.ts · package.json:26 | 🔴 abierto | El guard de WhatsApp corre en la unit, no dentro de `npm run guard:isolation` |
 
 ### Resumen del checklist (al 2026-09-29)
+
+> **Histórico.** Los conteos son del 29-sep y no se recuentan: el estado vivo está en cada tabla de ronda (la última,
+> «Ronda T6/T7»).
 
 93 filas en total (26 confirmados + 62 menores + 5 ítems nuevos). No incluye los hallazgos de la
 auditoría del 23-sep ni los de A2/A3 (tabla de arriba). *Los conteos de abajo son del 29-sep; los cierres
@@ -2584,6 +2646,12 @@ era intencional.
    `consumeWebhook`, texto «revisá el reembolso»; `tests/integration/mp-webhook.test.ts` intacto y en verde). Lo único
    que cambió en `lib/mercadopago.ts` es `alsoAgendaOperators: true` en el aviso (`:467`). La rama nueva no relaja nada
    de esto: ver §5.63.
+   **Enmienda T6 (22-oct, ADR-027, C-MPS6):** una segunda rama aditiva, **después** de `?acct=`
+   (`app/api/webhooks/mercadopago/route.ts:49-50`): `?scope=saas` o un topic de suscripción (`isSaasTopic`) →
+   `handleSaasWebhook`, que firma **siempre** con `MP_WEBHOOK_SECRET` y re-pide el recurso (§5.79). En el legado,
+   `consumeWebhook` suma dos líneas: un pago con referencia `saas:` delega en el consumidor SaaS (`lib/mercadopago.ts:261`)
+   y, con el MP falso, el SDK no sale a api.mercadopago.com (`:257`; `fakeMpAllowed()` es false en Vercel). Sin `saas:`
+   y fuera del simulador, el legado sigue byte a byte (`mp-webhook.test.ts` sin cambios).
 5. **`lib/copago.ts`** (re-exportado por `lib/billing-internal.ts`) — `resolveBookingCopagoCents` con precedencia estricta nullable
    (`Booking.copagoCents` → `Coverage.copagoCents` → insurer → Particular → service); 0 es
    intencional. Fuente única de copago. No duplicar el cálculo.
@@ -2954,6 +3022,56 @@ era intencional.
     `onlineDepositCents`, sin CHECK que un pago real (duplicado, monto distinto, tardío, sobre un turno cancelado) pueda
     violar: un CHECK violado sería un webhook en 500 reintentado durante días. Lo anómalo se registra y se avisa
     («Pago duplicado», «Pago con monto distinto», «si corresponde, reintegralo desde Mercado Pago»).
+69. **El dispositivo de TV no tiene Actor (M17, ADR-028).** Vínculo, feed y latido van por `prismaService` con `id` +
+    `tenantId` a mano (`lib/display-device-internal.ts:26`), después de validar cookie → hash → no revocada → acceso
+    abierto → módulo `salaEspera` (`:88-133`). Las escrituras del dispositivo (vínculo, `lastSeenAt`) son SQL crudo y
+    **no mueven `updatedAt`**: es el CAS del drawer del staff (`lib/display-device.ts:20-21`). No pasar a `updateMany`.
+70. **Código de vínculo de un uso y cookie de dispositivo.** Código Crockford de 8 guardado como HMAC con clave derivada
+    (`kinesoft:tv-pair:v1`; un sha256 pelado de 40 bits se revierte offline); el CAS exige `count === 1`; cualquier fallo
+    da el mismo mensaje. Cookie `kine_tv` `path=/tv`, Strict, httpOnly, secreto guardado como sha256 y comparado con
+    `timingSafeEqual`. No loguear ni auditar el código.
+71. **El feed de la TV nunca lleva PHI.** Solo nombre corto u hora del turno, sala, profesional y una `key` hasheada; sin
+    apellido, DNI, teléfono, servicio, notas ni ids. `DisplayFeedSchema` strict tira antes que dejar pasar una clave de más
+    (`lib/display-feed-state.ts:130-133`). No «enriquecer» el feed.
+72. **La TV usa el mismo token y el mismo topic de realtime (TV-D12).** `mintDisplayRealtimeToken` firma con
+    `signRealtimeToken({tenantId})` (`lib/realtime-display-token.ts:67`): M5 no cambia. No crear un topic ni claims
+    propios sin tocar el SQL de M5 y el guard-realtime.
+73. **CSP enforced en `/tv` sin pisar el Referrer.** `frame-src` solo `https://www.youtube-nocookie.com`, `connect-src`
+    same-origin + Supabase (`next.config.mjs:182-216`). No poner `referrer: same-origin` (YouTube da error 153) y la
+    `Permissions-Policy` de `/tv` repite las globales (en Next la última entrada pisa). El reproductor acepta mensajes
+    solo del origen exacto (`lib/youtube-player-protocol.ts:14`).
+74. **WhatsApp en `off` cuesta cero (C-WA8).** El paso 3 de `afterBookingsCommitted` corta con `whatsappMode() === "off"`
+    **antes** del `import()` (`lib/booking-events-internal.ts:103-107`): 0 sentencias y el módulo ni se carga
+    (`tests/integration/wa-s2-hook.test.ts:145`). La regla «activo» también corta con `off` antes de leer
+    (`lib/whatsapp/active-internal.ts:40-41`). No mover lecturas de la cuenta antes del corte.
+75. **La cola es el único escritor de `WhatsAppMessage` (WA-D24).** Todo pasa por `lib/whatsapp/outbox-internal.ts`:
+    encolar idempotente, CAS QUEUED → SENDING con lock, re-chequeo completo antes de enviar, Graph **fuera de tx** y
+    `biz_opaque_callback_data` = nuestro id. Desconectar, PARTNER_REMOVED y la BAJA cancelan por `cancelQueuedInTx`
+    (`:636`), no con un UPDATE a mano. La cola no guarda cuerpo y el teléfono va como HMAC + máscara.
+76. **El webhook de WhatsApp firma sobre los bytes crudos.** Tope de 1 MB, `X-Hub-Signature-256` con el **App Secret**
+    sobre el cuerpo tal cual llegó (`app/api/webhooks/whatsapp/route.ts:58-68`), comparación en tiempo constante; un
+    secreto vacío no valida nada. Error interno con `messages` → 500 (Meta reintenta: el claim del `wamid` va en la
+    misma tx que el efecto). No parsear antes de firmar.
+77. **La respuesta del paciente no mueve `updatedAt` ni cancela (WA-D22, WA-D7).** «Confirmo» / «No puedo ir» son un
+    UPDATE SQL de las columnas de M15 con `patientReplyFor` = el horario vigente y el WHERE que lo vuelve a exigir
+    (`lib/whatsapp/reply-internal.ts:361-368`); si el turno se movió, `stale`. «No puedo ir» avisa, nunca cancela.
+78. **Consentimiento anclado al número (WA-D17).** GRANTED exige el celular actual y ancla `waPhoneE164`; si cambia el
+    teléfono, no se manda más; REVOKED conserva el número (`lib/whatsapp/consent-internal.ts:16-18`). El turnero anónimo
+    no pisa una ficha existente con otro número ni revierte una BAJA (`lib/public-booking-wa-consent.ts:39`); una BAJA
+    se revierte solo por ALTA, el portal o la Secretaría.
+79. **La rama SaaS del webhook de MP firma siempre y re-pide (C-MPS6/C-MPS7).** `handleSaasWebhook`
+    (`lib/saas-mp-webhook-route.ts:89-103`): `MP_WEBHOOK_SECRET` leído en vivo (sin secreto → 503, inválida → 401 sin
+    llamar a MP), `data.id` con la regex del topic y re-fetch con el token de la plataforma; el consumidor exige collector
+    = la plataforma, ARS y tenant existente. El legado de §5.4 sigue intacto.
+80. **Ajustes solo-inserción y MP nunca dentro de una tx (M16, ADR-027).** `saas_adjustment_guard()` solo deja la
+    imputación `appliedChargeId` NULL → valor; VOID/WAIVE re-penden con **copias** que conservan `splitFromId`
+    (`lib/saas-billing-internal.ts:880`). El hermano de un sobrepago apunta a la raíz y el reintegro va por el árbol. El
+    puerto (`lib/mercadopago-saas.ts:16-18`) y la sync (`lib/saas-mp-sync-internal.ts:14`) nunca llaman a MP con una tx
+    abierta; la subida con proporcional va en una tx del canal service. El re-anclaje no toca `autoDebitAllowed`.
+81. **Los simuladores nunca corren en Vercel.** `fakeGraphAllowed()` y `fakeMpAllowed()` miran `VERCEL_ENV` **o**
+    `VERCEL` (no `NODE_ENV`: el E2E corre `next start`; `lib/env.ts:742,785`); `fake` en Vercel frena el boot y las rutas
+    `/api/whatsapp/fake/*` y `/api/mp/fake/*` dan 404. `npm run dev` se niega a arrancar contra un Supabase o una base
+    remotos (`scripts/dev-safe.mjs`). No relajar a `NODE_ENV`.
 
 ---
 

@@ -99,7 +99,7 @@
       **«Archivos»** del perfil (`PatientFile`, adjuntos del equipo). **«Compartir con el paciente»** (una ficha al portal)
       no es **«Compartir con un profesional»** (dar acceso al paciente a otro kine). «Ficha» es la ficha clínica: los
       datos del paciente son «datos del paciente», no «ficha».
-    - ADR-025 = fichas. ADR-026 = T5 (cobros online) y ADR-027 = MPS.
+    - ADR-025 = fichas. ADR-026 = T5 (cobros online); ADR-027..029 en §26, abajo.
     - «T4-Y» (22-oct) = el aviso por mail al paciente cuando se anula una ficha compartida; no es una tanda de T4.
   - **§25 del plan (19/22-oct; T5 = TP, cobros online con Mercado Pago):** «T5a..T5f» sus tandas y «T5-Z» el cierre.
     Sesiones «TP-P1..P5» (piezas puras), «TP-M» (= **M18** `turnero_cobros_mp`), «TP-K1..K4» (contratos y stubs),
@@ -110,6 +110,16 @@
     migraciones ni olas. «S1..S11» de T5 son los supuestos de `scripts/diagnose-mp-connect.ts`, no los del fake de GoTrue.
     Vocabulario: «seña», «link de pago» (nunca «preferencia» ni «cupón»), «reintegro» (nunca «reembolso»), «Mercado Pago»
     completo, «Secretaría» con tilde en la UI.
+  - **§26 del plan (22-oct; T7 = TV, T6 = WA + MPS):** olas «X0..X9» (X0 = migraciones solas, X9 = cierre). Sesiones
+    «MIG», «ENV», «TV-1a/1k/1c», «TV-2s/2d/2u1/2u2/2p/2w1/2w2», «TV-I» (integrador de TV), «WA-P1/P3», «WA-S1..S8»,
+    «WA-U1..U4/U6», «MPS-1a/1b/K», «MPS-2a/2b1/2b2/2c», «MPS-3a/3b/3c», «MPS-4a/4b», «INF-S/INF-DEV», «QA-M/QA-E»,
+    «PEND-a/b», «INT» (integrador global) y los E2E «TV-E/MPS-E/WA-E». Cierre: «ZA/ZB» (revisores), «ZF1..ZF3» (fixers:
+    no son los ZF1..ZF5 de T4, ni los TP-ZF de T5, ni F1/F2 de P3.Z), «ZG» (gate) y «DOC-1..3» (docs). «C-TV», «C-WA1..9»
+    y «C-MPS2..12» son sus contratos (no los C1-C14 de Planes); «TV-D5..D14», «WA-D17..D30» y «MPS-D8..D24» sus defaults.
+    «M17» = `reception_displays`, «M15» = `whatsapp_messaging`, «M16» = `saas_mp_subscriptions`: el número no es el
+    orden, que es **M12 → M14 → M18 → M17 → M15 → M16** (timestamp). ADR-027 = MPS, ADR-028 = TV, ADR-029 = WA. «S1..S13»
+    de `scripts/diagnose-whatsapp.ts` y «S1..S10» de `scripts/diagnose-mp-subscriptions.ts` no son los del fake de GoTrue
+    ni los S1..S11 de T5. «Pantalla» / «TV» es `ReceptionDisplay` (`/tv`), no la vista Recepción de la agenda.
   - «Plan» choca en tres sentidos: plan de tratamiento, plan SaaS del tenant y plan de la obra social.
   - «Vertical» (`Tenant.vertical`: General / Kinesiología) es el tipo de consultorio: no es la «disciplina» de un
     servicio o plan (Kine / Osteo) ni el plan SaaS (`Tenant.plan`). «Kine PRO» = vertical Kinesiología + plan PRO.
