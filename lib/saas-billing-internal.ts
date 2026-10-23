@@ -85,12 +85,14 @@ export function billingActive(): boolean {
 
 // ── Locks ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
-async function lockTenant(tx: Tx, tenantId: string): Promise<boolean> {
+/** MPS-K: exportado para `lib/saas-{adjustments,billing-schedule,billing-mp}-internal.ts` (mismo orden de locks). `false` = no existe. */
+export async function lockTenant(tx: Tx, tenantId: string): Promise<boolean> {
   const r = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "Tenant" WHERE "id" = ${tenantId} FOR UPDATE`;
   return r.length > 0;
 }
 
-async function lockSubscription(tx: Tx, tenantId: string): Promise<void> {
+/** MPS-K: exportado (ver `lockTenant`). Se pide siempre DESPUÉS de `lockTenant`. */
+export async function lockSubscription(tx: Tx, tenantId: string): Promise<void> {
   await tx.$queryRaw`SELECT "tenantId" FROM "SaasSubscription" WHERE "tenantId" = ${tenantId} FOR UPDATE`;
 }
 
