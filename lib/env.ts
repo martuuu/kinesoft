@@ -16,6 +16,13 @@ const emptyAsUndefined = (v: unknown) => (typeof v === "string" && v.trim() === 
 // recorte llega a la firma sin más cambios.
 const trimmedOrUndefined = (v: unknown) => (typeof v === "string" ? emptyAsUndefined(v.trim()) : v);
 
+/**
+ * WA (C-WA1): versión de la Graph API de Meta que usa `lib/whatsapp/graph.ts` si `WHATSAPP_GRAPH_VERSION` no está.
+ * Constante en el código a propósito: subirla es un cambio revisado (sandbox antes), no un default que se mueve solo.
+ */
+export const WHATSAPP_GRAPH_VERSION_DEFAULT = "v23.0";
+const WHATSAPP_GRAPH_VERSION_SHAPE = /^v\d{2}\.0$/;
+
 const schema = z.object({
   DATABASE_URL: z.string().url().optional(),
   DIRECT_URL: z.string().url().optional(),
@@ -103,7 +110,9 @@ const schema = z.object({
   ),
 
   // BO-Z (BO-D11, plan §19.5): alta web de consultorios.
-  //   open     = DEFAULT: /signup crea consultorios nuevos (nacen en prueba PRO de 14 días, BO-D1).
+  //   open     = DEFAULT: /signup crea consultorios nuevos. INF-ENV: nacen en prueba INDIVIDUAL (CONSULTORIO si el
+  //              Titular no atiende, VX-Z) con los días de `SaasPlanConfig.trialDays` (`lib/onboarding.ts`). El «prueba
+  //              PRO de 14 días» de BO-D1 ya no es cierto desde PL; el comentario viejo lo seguía diciendo.
   //   assisted = el alta la hace el equipo desde /plataforma: /signup muestra «escribinos» y el server rechaza
   //              crear un consultorio nuevo. Unirse por invitación sigue funcionando (no crea consultorio).
   // Lo lee `signupMode()` (process.env en cada llamada), no este objeto congelado.
@@ -133,14 +142,41 @@ const schema = z.object({
   // PL (PL-D16, plan §20.5.6): cobro de la suscripción SaaS de los consultorios.
   //   off    = DEFAULT: no se generan cargos ni se habla con MP; la app se deploya sin cobrar.
   //   manual = el cron genera cargos y Plataforma imputa pagos/comprobantes a mano (sin débito de MP).
-  //   mp     = además débito automático y «Pagar con MP» (preapproval / checkout). EN ESTA ETAPA `mp` SE TRATA
-  //            COMO `manual` (decisión de Martin 16-oct: sin Mercado Pago para la suscripción; PL-2b no tiene
-  //            preapproval ni checkout). Se acepta en el enum para no frenar un deploy con el valor ya cargado.
+  //   mp     = todo lo de `manual` (sigue «activo»: `billingActive()` de lib/saas-billing-internal.ts es `!== "off"`)
+  //            Y ADEMÁS débito automático y «Pagar con MP» con el token de la plataforma (preapproval / checkout,
+  //            MPS §26.6). INF-ENV (T6): deja de ser un alias de `manual`; lo que solo vale con MP pregunta
+  //            `saasMpActive()`. Hasta PL-Z se trataba como `manual` (decisión del 16-oct, sin MP para la suscripción).
+  //            En Production exige `MP_ACCESS_TOKEN` (y por la regla de abajo `MP_WEBHOOK_SECRET`): sin token no hay
+  //            débito posible y el cobro quedaría «prendido» sin hacer nada.
   // Lo lee `saasBillingMode()` (process.env en cada llamada), no este objeto congelado. Mismo criterio de forma que
   // MAINTENANCE_MODE: un typo frena el deploy en vez de dejar el cobro en un modo que nadie eligió.
   SAAS_BILLING_MODE: z.preprocess(
     (v) => (typeof v === "string" ? emptyAsUndefined(v.trim().toLowerCase()) : v),
     z.enum(["off", "manual", "mp"]).default("off")
+  ),
+  // PL-Z (A2): datos para transferir (alias, CBU, titular, CUIT), texto libre. INF-ENV lo suma al schema solo para que
+  // figure en el inventario (`.env.example`, DEPLOYMENT): sin forma, porque lo lee `saasBillingTransferInfo()` en cada
+  // llamada y lo corta a 500; validarlo acá podría frenar un deploy por un texto.
+  SAAS_BILLING_TRANSFER_INFO: z.preprocess(emptyAsUndefined, z.string().optional()),
+  // MPS (C-MPS2, S5): piso del débito automático en centavos. Opcional: sin ella vale `MP_MIN_DEBIT_CENTS` de
+  // `lib/saas-mp-logic.ts` (1500). Entero positivo, sin decimales ni notación científica (plata en centavos `Int`).
+  // Lo lee `mpMinDebitCents()` en cada llamada. Un valor roto frena el deploy: un mínimo mal leído cobra de más o de menos.
+  MP_MIN_DEBIT_CENTS: z.preprocess(
+    (v) => (typeof v === "string" ? emptyAsUndefined(v.trim()) : v),
+    z
+      .string()
+      .regex(/^[1-9]\d{0,8}$/, "entero positivo en centavos (p. ej. 1500 = $ 15)")
+      .transform((s) => Number(s))
+      .optional()
+  ),
+  // MPS-D9: cómo se entera la app del pago de un checkout SaaS.
+  //   scope = DEFAULT: el checkout lleva `notification_url …/api/webhooks/mercadopago?scope=saas` (rama propia).
+  //   panel = sin `notification_url`: llega por el webhook configurado en el panel de MP (si S-x del sandbox muestra
+  //           que la URL por preferencia no llega con la firma esperada).
+  // Lo lee `saasMpCheckoutNotify()` en cada llamada. Un typo frena el deploy.
+  SAAS_MP_CHECKOUT_NOTIFY: z.preprocess(
+    (v) => (typeof v === "string" ? emptyAsUndefined(v.trim().toLowerCase()) : v),
+    z.enum(["scope", "panel"]).default("scope")
   ),
   // PL (C-PL11): buzón del equipo de KineSoft que recibe el aviso de mensajes de consultorios y leads de la landing.
   // Opcional: sin él los mensajes quedan en /plataforma → Mensajes y no sale el aviso por mail.
@@ -187,6 +223,58 @@ const schema = z.object({
   // Opcional (sin ella, en local, secret-box usa una clave dev determinista). Acá solo se valida la FORMA
   // (`secretBoxKeysShapeError`); el mensaje de error nunca trae la clave.
   SECRET_BOX_KEYS: z.preprocess(trimmedOrUndefined, z.string().optional()),
+
+  // WA (C-WA1, brief §26.5): avisos por WhatsApp con el número de cada consultorio (Embedded Signup v4 de Meta).
+  //   off     = DEFAULT: ningún aviso, ninguna query extra en los write paths de turnos, ningún request a Meta.
+  //   fake    = simulador local (`lib/whatsapp/fake-graph.ts`, `/api/whatsapp/fake/*`): `next dev`, vitest y el
+  //             `next start` del E2E. NUNCA en Vercel: el boot lo rechaza con `VERCEL_ENV` o `VERCEL` y `whatsappMode()`
+  //             lo baja a `off` (mismo criterio y misma razón que MP_CONNECT_MODE=fake: el E2E corre con NODE_ENV=production).
+  //   sandbox = app de Meta en modo desarrollo (números de prueba).
+  //   live    = mensajes reales. En Preview se LEE como `off` (no un error): un «copiar de Production» en Vercel no
+  //             puede dejar a un branch sin revisar mandando WhatsApps a pacientes reales.
+  // Lo leen `whatsappMode()` / `fakeGraphAllowed()` (process.env en cada llamada). Un typo frena el deploy.
+  WHATSAPP_MODE: z.preprocess(
+    (v) => (typeof v === "string" ? emptyAsUndefined(v.trim().toLowerCase()) : v),
+    z.enum(["off", "fake", "sandbox", "live"]).default("off")
+  ),
+  // Credenciales de la APP de Meta (no de un consultorio; el token de cada WABA va sellado con secret-box,
+  // propósito `wa-credential`, `waCredentialAad`). SERVER-ONLY. Recortadas por lo de HF-1a: Meta firma el webhook con
+  // el App Secret y un `\n` final invalidaría cada firma.
+  WHATSAPP_APP_ID: z.preprocess(trimmedOrUndefined, z.string().optional()),
+  WHATSAPP_APP_SECRET: z.preprocess(trimmedOrUndefined, z.string().optional()),
+  // `config_id` de la configuración de Embedded Signup (Facebook Login for Business). No es secreto (viaja al browser
+  // en el alta), pero sin él no hay alta posible.
+  WHATSAPP_CONFIG_ID: z.preprocess(trimmedOrUndefined, z.string().optional()),
+  // Lo que Meta manda en el GET de verificación del webhook (`hub.verify_token`). ≥ 32 en cualquier entorno: es lo
+  // único que separa a cualquiera de suscribir NUESTRO endpoint a otra app. El mensaje de error no trae el valor.
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.preprocess(
+    trimmedOrUndefined,
+    z.string().min(32, "tiene que tener al menos 32 caracteres").optional()
+  ),
+  // Versión de la Graph API (`vNN.0`). Fija en un default del código para que un cambio de Meta no nos cambie el
+  // contrato en silencio; se sube a mano, probando el sandbox. Solo `vNN.0` (Meta no publica menores).
+  WHATSAPP_GRAPH_VERSION: z.preprocess(
+    (v) => (typeof v === "string" ? emptyAsUndefined(v.trim()) : v),
+    z
+      .string()
+      .regex(WHATSAPP_GRAPH_VERSION_SHAPE, "formato vNN.0 (p. ej. v23.0)")
+      .default(WHATSAPP_GRAPH_VERSION_DEFAULT)
+  ),
+  // `featureType` del Embedded Signup. Vacía = alta clásica (número nuevo en la Cloud API). Con
+  // `whatsapp_business_app_onboarding` el consultorio sigue usando la app WhatsApp Business del celular (coexistencia).
+  WHATSAPP_SIGNUP_FEATURE: z.preprocess(
+    (v) => (typeof v === "string" ? emptyAsUndefined(v.trim()) : v),
+    z.enum(["whatsapp_business_app_onboarding"]).optional()
+  ),
+
+  // Interruptores que ya se leían por `process.env` (INF-ENV los suma al schema para el inventario, sin validar la
+  // forma: sus lectores ya tratan cualquier valor y frenar un deploy por ellos sería peor que el valor raro).
+  //   SUPERADMIN_2FA_BYPASS        HF-3 (D-HF7): `<userId>@AAAA-MM-DD[,…]`; `lib/two-factor-bypass.ts` falla cerrado.
+  //   NEXT_PUBLIC_PWA              MB-D6: `off` desregistra los service workers (`components/pwa/sw-register.tsx`).
+  //   PATIENT_FILES_SIGNED_UPLOAD  FC-2f: `0`/`false`/`off` apaga la subida firmada (`lib/files.ts`).
+  SUPERADMIN_2FA_BYPASS: z.preprocess(emptyAsUndefined, z.string().optional()),
+  NEXT_PUBLIC_PWA: z.preprocess(emptyAsUndefined, z.string().optional()),
+  PATIENT_FILES_SIGNED_UPLOAD: z.preprocess(emptyAsUndefined, z.string().optional()),
 
   // TP-0 (H-TP0/H-TP1, plan §22.5): ¿el turnero público cobra online al reservar?
   // TP-P4 (C-TP2): DEPRECADO. Queda en el enum para no romper un deploy con el valor ya cargado, pero el turnero de
@@ -282,6 +370,41 @@ function mpConnectRules(e: z.infer<typeof schema>, ctx: z.RefinementCtx): void {
 }
 
 /**
+ * WA (C-WA1): reglas de WHATSAPP_MODE. `fake` en Vercel frena el boot en cualquier scope (el simulador acepta
+ * cualquier número y firma con un secreto conocido). En Production, `sandbox`/`live` sin App ID/Secret no canjean el
+ * code del alta ni verifican la firma del webhook (todo 401), sin Config ID no abre el popup, sin Verify Token Meta no
+ * deja suscribir el webhook y sin SECRET_BOX_KEYS secret-box se niega a sellar el token en Vercel: mejor que el deploy
+ * no salga a que el alta falle en la cara del consultorio. Preview no exige nada: ahí `live` se lee como `off`.
+ */
+function whatsappRules(e: z.infer<typeof schema>, ctx: z.RefinementCtx): void {
+  if (e.WHATSAPP_MODE === "fake" && onVercel(e)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["WHATSAPP_MODE"],
+      message: "\"fake\" (simulador local de Meta) no se permite en Vercel: usá \"off\", \"sandbox\" o \"live\"",
+    });
+  }
+  if (e.VERCEL_ENV !== "production") return;
+  if (e.WHATSAPP_MODE !== "sandbox" && e.WHATSAPP_MODE !== "live") return;
+  const required = [
+    "WHATSAPP_APP_ID",
+    "WHATSAPP_APP_SECRET",
+    "WHATSAPP_CONFIG_ID",
+    "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+    "SECRET_BOX_KEYS",
+  ] as const;
+  for (const key of required) {
+    if (!e[key]) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key],
+        message: `obligatoria en Production con WHATSAPP_MODE=${e.WHATSAPP_MODE}`,
+      });
+    }
+  }
+}
+
+/**
  * OPS-1c · guard de Preview (OPS-D1). Por qué: hasta A0b los Preview compartían la base de prod y migraban (AUDIT
  * H6); el scope Preview → staging (OPS-0) se configura a mano en Vercel y un «copiar de Production» lo deshace sin que
  * nada avise. Con el guard, un build de Preview que apunta al proyecto de prod sale ROJO en vez de dejar un deploy
@@ -368,7 +491,17 @@ const RECOMMENDED_IN_PRODUCTION = [
 const productionSchema = schema.superRefine((e, ctx) => {
   previewTargetsProd(e, ctx);
   mpConnectRules(e, ctx);
+  whatsappRules(e, ctx);
   if (e.VERCEL_ENV !== "production") return;
+  // INF-ENV (C-MPS2): `mp` habla con MP con el token de la PLATAFORMA (preapproval y checkout de la suscripción). Sin
+  // él, el cobro queda «prendido» sin poder debitar nada; el secreto lo exige la regla de abajo.
+  if (e.SAAS_BILLING_MODE === "mp" && !e.MP_ACCESS_TOKEN) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["MP_ACCESS_TOKEN"],
+      message: "obligatoria en Production con SAAS_BILLING_MODE=mp",
+    });
+  }
   for (const key of REQUIRED_IN_PRODUCTION) {
     if (!e[key]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: "obligatoria en Production" });
   }
@@ -501,7 +634,27 @@ export const env = parseEnv({
   SECRET_BOX_KEYS: process.env.SECRET_BOX_KEYS,
   VERCEL: process.env.VERCEL,
   PROD_SUPABASE_REF: process.env.PROD_SUPABASE_REF,
+  // INF-ENV (T6+T7). `process.env.X` literal, una por una: Next inlinea `NEXT_PUBLIC_*` solo con el acceso literal.
+  SAAS_BILLING_TRANSFER_INFO: process.env.SAAS_BILLING_TRANSFER_INFO,
+  MP_MIN_DEBIT_CENTS: process.env.MP_MIN_DEBIT_CENTS,
+  SAAS_MP_CHECKOUT_NOTIFY: process.env.SAAS_MP_CHECKOUT_NOTIFY,
+  WHATSAPP_MODE: process.env.WHATSAPP_MODE,
+  WHATSAPP_APP_ID: process.env.WHATSAPP_APP_ID,
+  WHATSAPP_APP_SECRET: process.env.WHATSAPP_APP_SECRET,
+  WHATSAPP_CONFIG_ID: process.env.WHATSAPP_CONFIG_ID,
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
+  WHATSAPP_GRAPH_VERSION: process.env.WHATSAPP_GRAPH_VERSION,
+  WHATSAPP_SIGNUP_FEATURE: process.env.WHATSAPP_SIGNUP_FEATURE,
+  SUPERADMIN_2FA_BYPASS: process.env.SUPERADMIN_2FA_BYPASS,
+  NEXT_PUBLIC_PWA: process.env.NEXT_PUBLIC_PWA,
+  PATIENT_FILES_SIGNED_UPLOAD: process.env.PATIENT_FILES_SIGNED_UPLOAD,
 });
+
+/**
+ * INF-ENV (§26.7): las claves del schema, para el inventario de `.env.example` (lo verifica `tests/unit/inf-env.test.ts`)
+ * y la tabla de env de `.docs/DEPLOYMENT.md`. Solo nombres: nunca valores.
+ */
+export const ENV_SCHEMA_KEYS: readonly string[] = Object.freeze(Object.keys(schema.shape));
 
 /**
  * `TENANT_ACCESS_ENFORCEMENT` vigente, leído de `process.env` en cada llamada (como el transporte de mail): los
@@ -534,11 +687,67 @@ export type SaasBillingMode = "off" | "manual" | "mp";
 /**
  * `SAAS_BILLING_MODE` vigente (PL-D16), leído en cada llamada: los tests lo cambian en caliente. Cualquier valor que
  * no sea `manual` ni `mp` → `off` (el boot ya rechazó un valor inválido; acá no se tira en medio de un request ni del
- * cron, y ante la duda no se cobra).
+ * cron, y ante la duda no se cobra). `mp` incluye todo lo de `manual`: quien pregunta «¿se cobra?» compara con `off`;
+ * quien pregunta «¿hay Mercado Pago?» usa `saasMpActive()`.
  */
 export function saasBillingMode(): SaasBillingMode {
   const v = process.env.SAAS_BILLING_MODE?.trim().toLowerCase();
   return v === "manual" || v === "mp" ? v : "off";
+}
+
+/**
+ * INF-ENV (C-MPS2): ¿el cobro de la suscripción usa Mercado Pago (débito automático, «Pagar con MP», webhooks
+ * `?scope=saas`)? Solo con `SAAS_BILLING_MODE=mp`. Desde T6 `mp` ya no es un alias de `manual`: esta es la pregunta
+ * que cada superficie de MPS tiene que hacer antes de hablar con MP. Leído en cada llamada.
+ */
+export function saasMpActive(): boolean {
+  return saasBillingMode() === "mp";
+}
+
+/**
+ * `MP_MIN_DEBIT_CENTS` vigente (C-MPS2), leído en cada llamada. `null` = sin override: vale el default del código
+ * (`MP_MIN_DEBIT_CENTS` de `lib/saas-mp-logic.ts`). Un valor inválido → `null` (el boot ya lo rechazó; acá no se tira
+ * en medio del cron).
+ */
+export function mpMinDebitCents(): number | null {
+  const v = process.env.MP_MIN_DEBIT_CENTS?.trim();
+  return v && /^[1-9]\d{0,8}$/.test(v) ? Number(v) : null;
+}
+
+/** `SAAS_MP_CHECKOUT_NOTIFY` vigente (MPS-D9). Solo `panel` explícito cambia; cualquier otro valor → `scope`. */
+export function saasMpCheckoutNotify(): "scope" | "panel" {
+  return process.env.SAAS_MP_CHECKOUT_NOTIFY?.trim().toLowerCase() === "panel" ? "panel" : "scope";
+}
+
+export type WhatsappMode = "off" | "fake" | "sandbox" | "live";
+
+/**
+ * WA (C-WA1): `WHATSAPP_MODE` vigente, leído en cada llamada (los tests lo cambian en caliente; el outbox re-chequea
+ * `mode === whatsappMode()` antes de cada envío). Inválido o vacío → `off`. `fake` fuera de lo permitido
+ * (`fakeGraphAllowed()`) → `off`: el boot ya lo rechazó en Vercel, esta es la segunda barrera. `live` en Preview →
+ * `off`: un Preview nunca le manda un WhatsApp real a un paciente, aunque alguien copie el env de Production.
+ */
+export function whatsappMode(): WhatsappMode {
+  const v = process.env.WHATSAPP_MODE?.trim().toLowerCase();
+  if (v === "sandbox") return v;
+  if (v === "live") return process.env.VERCEL_ENV?.trim() === "preview" ? "off" : "live";
+  if (v === "fake") return fakeGraphAllowed() ? "fake" : "off";
+  return "off";
+}
+
+/**
+ * WA (C-WA5): ¿puede responder el simulador de Meta (`/api/whatsapp/fake/*`)? Solo `WHATSAPP_MODE=fake` y fuera de
+ * Vercel (ni `VERCEL_ENV` ni `VERCEL`, aun vacías). Como `fakeMpAllowed()`, NO mira NODE_ENV: el E2E corre `next start`.
+ */
+export function fakeGraphAllowed(): boolean {
+  if (process.env.VERCEL_ENV !== undefined || process.env.VERCEL !== undefined) return false;
+  return process.env.WHATSAPP_MODE?.trim().toLowerCase() === "fake";
+}
+
+/** WA (C-WA4): versión de la Graph API, leída en cada llamada. Sin forma `vNN.0` → el default del código. */
+export function whatsappGraphVersion(): string {
+  const v = process.env.WHATSAPP_GRAPH_VERSION?.trim();
+  return v && WHATSAPP_GRAPH_VERSION_SHAPE.test(v) ? v : WHATSAPP_GRAPH_VERSION_DEFAULT;
 }
 
 /**

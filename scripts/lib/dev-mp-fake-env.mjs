@@ -21,6 +21,22 @@ export const DEV_MPFAKE_LITERALS = Object.freeze({
   MP_OAUTH_CLIENT_ID: "kinesoft-fake-app",
   MP_OAUTH_CLIENT_SECRET: "kinesoft-fake-secret",
   MP_CONNECT_WEBHOOK_SECRET: "secreto-de-prueba-del-webhook",
+  // INF-ENV (T6, MPS hallazgo 4): cuenta de la PLATAFORMA falsa (cobro de la suscripción SaaS con `SAAS_BILLING_MODE=mp`).
+  // Antes iban vacíos: sin secreto, el webhook legado saltea la firma en dev y la rama `?scope=saas` no se podía probar
+  // como en prod (firma `required`). El token es un literal que el simulador reconoce; NUNCA un `APP_USR-…` real.
+  MP_ACCESS_TOKEN: "FAKE-PLATFORM-ACCESS-TOKEN",
+  MP_WEBHOOK_SECRET: "secreto-de-prueba-del-webhook-de-la-plataforma",
+});
+
+/**
+ * INF-ENV (T6, C-WA1/C-WA5): literales del Meta FALSO (`WHATSAPP_MODE=fake`). Los mismos tiene que usar
+ * `tests/helpers/whatsapp-fake.ts`. El verify token cumple el mínimo de 32 de `lib/env.ts`. Nunca de `.env*`.
+ */
+export const DEV_WAFAKE_LITERALS = Object.freeze({
+  WHATSAPP_APP_ID: "kinesoft-fake-wa-app",
+  WHATSAPP_APP_SECRET: "kinesoft-fake-wa-app-secret",
+  WHATSAPP_CONFIG_ID: "kinesoft-fake-wa-config",
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN: "kinesoft-fake-wa-verify-token-0123456789",
 });
 
 /** Supabase a ningún lado: loopback, puerto sin servidor. La URL tiene que ser válida (`lib/env.ts` la valida con zod). */
@@ -85,10 +101,29 @@ export function devMpFakeEnv(parentEnv, { port = DEV_MPFAKE_DEFAULT_PORT } = {})
     MP_CONNECT_WEBHOOK_SIGNATURE: "required",
     SECRET_BOX_KEYS: "",
     TURNERO_CHECKOUT: "off",
-    // Mercado Pago legado (token de la plataforma, AUDIT §5.4): apagado.
-    MP_ACCESS_TOKEN: "",
+    // Cuenta de la PLATAFORMA (legado AUDIT §5.4 + suscripción SaaS): literales falsos, nunca los del padre.
+    MP_ACCESS_TOKEN: DEV_MPFAKE_LITERALS.MP_ACCESS_TOKEN,
     MP_PUBLIC_KEY: "",
-    MP_WEBHOOK_SECRET: "",
+    MP_WEBHOOK_SECRET: DEV_MPFAKE_LITERALS.MP_WEBHOOK_SECRET,
+
+    // Cobro de la suscripción SaaS por MP contra el simulador (MPS-D22). Sin datos de transferencia ni override del
+    // mínimo: lo que valga es lo del código, igual en cada máquina.
+    SAAS_BILLING_MODE: "mp",
+    SAAS_BILLING_TRANSFER_INFO: "",
+    MP_MIN_DEBIT_CENTS: "",
+    SAAS_MP_CHECKOUT_NOTIFY: "scope",
+
+    // WhatsApp con el Meta FALSO (C-WA5): versión y feature del código, nada del padre.
+    WHATSAPP_MODE: "fake",
+    WHATSAPP_APP_ID: DEV_WAFAKE_LITERALS.WHATSAPP_APP_ID,
+    WHATSAPP_APP_SECRET: DEV_WAFAKE_LITERALS.WHATSAPP_APP_SECRET,
+    WHATSAPP_CONFIG_ID: DEV_WAFAKE_LITERALS.WHATSAPP_CONFIG_ID,
+    WHATSAPP_WEBHOOK_VERIFY_TOKEN: DEV_WAFAKE_LITERALS.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
+    WHATSAPP_GRAPH_VERSION: "",
+    WHATSAPP_SIGNUP_FEATURE: "",
+
+    // Ninguna pausa de 2FA heredada: el QA de Plataforma ve la 2FA como es.
+    SUPERADMIN_2FA_BYPASS: "",
 
     // Supabase a ningún lado (ver la cabecera) y el actor demo para entrar.
     NEXT_PUBLIC_SUPABASE_URL: DEV_MPFAKE_SUPABASE_URL,
@@ -101,7 +136,7 @@ export function devMpFakeEnv(parentEnv, { port = DEV_MPFAKE_DEFAULT_PORT } = {})
     // Tiempo real con el bus en memoria (un proceso): la agenda de otra pestaña se actualiza sola (QA manual #3).
     REALTIME_DRIVER: "local",
 
-    // Ni mails, ni Sentry, ni Upstash, ni cobro SaaS.
+    // Ni mails, ni Sentry, ni Upstash.
     EMAIL_TRANSPORT: "log",
     RESEND_API_KEY: "",
     PLATFORM_INBOX_EMAIL: "",
@@ -111,7 +146,6 @@ export function devMpFakeEnv(parentEnv, { port = DEV_MPFAKE_DEFAULT_PORT } = {})
     SENTRY_PROJECT: "",
     UPSTASH_REDIS_REST_URL: "",
     UPSTASH_REDIS_REST_TOKEN: "",
-    SAAS_BILLING_MODE: "off",
     MAINTENANCE_MODE: "off",
   };
   // Las de Vercel se BORRAN (no ""): `VERCEL_ENV` es un enum en lib/env.ts y con `VERCEL`/`VERCEL_ENV` presentes el

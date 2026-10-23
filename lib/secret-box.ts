@@ -291,3 +291,14 @@ export type MpCredentialField = "accessToken" | "refreshToken";
 export function mpCredentialAad(mpAccountId: string, field: MpCredentialField): SecretBoxAad {
   return { purpose: "mp-credential", recordId: mpAccountId, field };
 }
+
+// ── WhatsApp (WA, C-WA3) ─────────────────────────────────────────────────
+// Igual que `mpCredentialAad`: el alta (Embedded Signup), el envío y la rotación sellan y abren con la MISMA AAD.
+// recordId = id de la cuenta de WhatsApp del consultorio (no de la fila de credencial: se puede recrear sin re-sellar).
+//   token = token de negocio de la WABA (lo devuelve el canje del `code`, vive mientras no se revoque).
+//   pin   = PIN de 6 dígitos con el que se registró el número en la Cloud API (aleatorio, hace falta para re-registrar).
+export type WaCredentialField = "token" | "pin";
+
+export function waCredentialAad(waAccountId: string, field: WaCredentialField): SecretBoxAad {
+  return { purpose: "wa-credential", recordId: waAccountId, field };
+}

@@ -11,6 +11,7 @@ import {
   secretBoxStatus,
   type SecretBoxAad,
 } from "@/lib/secret-box";
+import * as secretBox from "@/lib/secret-box";
 
 /**
  * [TP-P1] Secret box (C-TP1). Se testea el módulo real con la variable de
@@ -236,5 +237,20 @@ describe("[TP-P1] Secret box", () => {
     // Variable rota: el panel de Sistema no se cae; dice "no configurada".
     vi.stubEnv("SECRET_BOX_KEYS", "basura");
     expect(secretBoxStatus()).toMatchObject({ configured: false, devFallback: false, primaryKid: null, kids: [] });
+  });
+});
+
+// [INF-ENV] (C-WA3: «`waCredentialAad` vive en `lib/secret-box.ts`»). Misma idea que `mpCredentialAad`: el alta, el
+// envío y la rotación sellan y abren con EXACTAMENTE la misma AAD, por cuenta y campo.
+describe("[INF-ENV] waCredentialAad", () => {
+  it("[INF-ENV] AAD wa-credential por cuenta y campo (token | pin); no abre con otra cuenta, otro campo ni la AAD de MP", () => {
+    const aad = secretBox.waCredentialAad("wa_acc_1", "token");
+    expect(aad).toEqual({ purpose: "wa-credential", recordId: "wa_acc_1", field: "token" });
+    expect(secretBox.waCredentialAad("wa_acc_1", "pin")).toEqual({ purpose: "wa-credential", recordId: "wa_acc_1", field: "pin" });
+    const sealed = sealSecret("EAAG-token-de-prueba", aad);
+    expect(openSecret(sealed, secretBox.waCredentialAad("wa_acc_1", "token"))).toBe("EAAG-token-de-prueba");
+    expect(codeOf(() => openSecret(sealed, secretBox.waCredentialAad("wa_acc_2", "token")))).toBe("auth");
+    expect(codeOf(() => openSecret(sealed, secretBox.waCredentialAad("wa_acc_1", "pin")))).toBe("auth");
+    expect(codeOf(() => openSecret(sealed, { purpose: "mp-credential", recordId: "wa_acc_1", field: "token" }))).toBe("auth");
   });
 });

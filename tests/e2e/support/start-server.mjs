@@ -41,7 +41,8 @@ import {
   E2E_USERS_FILE,
 } from "./e2e-constants.mjs";
 // TP-E (T5): los MISMOS literales del MP falso que `npm run dev:mpfake` y `tests/helpers/mp-connect-fake.ts`. Nunca de `.env*`.
-import { DEV_MPFAKE_LITERALS } from "../../../scripts/lib/dev-mp-fake-env.mjs";
+// INF-ENV (T6): ídem los del Meta falso (`DEV_WAFAKE_LITERALS`).
+import { DEV_MPFAKE_LITERALS, DEV_WAFAKE_LITERALS } from "../../../scripts/lib/dev-mp-fake-env.mjs";
 
 const APP_DIR = process.env.E2E_APP_DIR ?? E2E_REPO_ROOT;
 
@@ -246,9 +247,11 @@ const childEnv = {
   REALTIME_DRIVER: "off",
   EMAIL_TRANSPORT: "log",
   RESEND_API_KEY: "",
-  MP_ACCESS_TOKEN: "",
+  // INF-ENV (T6, MPS hallazgo 4): la cuenta de la PLATAFORMA también es falsa (literales fijos, nunca del `.env`). Antes
+  // iba vacía y el webhook legado salteaba la firma: la rama SaaS (`?scope=saas`) no se podía probar con `required`.
+  MP_ACCESS_TOKEN: DEV_MPFAKE_LITERALS.MP_ACCESS_TOKEN,
   MP_PUBLIC_KEY: "",
-  MP_WEBHOOK_SECRET: "",
+  MP_WEBHOOK_SECRET: DEV_MPFAKE_LITERALS.MP_WEBHOOK_SECRET,
   SENTRY_DSN: "",
   SENTRY_AUTH_TOKEN: "",
   UPSTASH_REDIS_REST_URL: "",
@@ -273,7 +276,23 @@ const childEnv = {
   // Resto de lo que tiene efecto externo o apunta a prod, tapado igual que en `scripts/lib/dev-mp-fake-env.mjs`.
   PROD_SUPABASE_REF: "",
   PLATFORM_INBOX_EMAIL: "",
-  SAAS_BILLING_MODE: "off",
+  // INF-ENV (MPS-D22): cobro de la suscripción en `mp` contra el simulador. Para las specs de antes no cambia nada: el
+  // cron de cobros no corre en el E2E y ninguna spec abre Configuración → Facturación ni /plataforma/facturacion.
+  SAAS_BILLING_MODE: "mp",
+  SAAS_BILLING_TRANSFER_INFO: "",
+  MP_MIN_DEBIT_CENTS: "",
+  SAAS_MP_CHECKOUT_NOTIFY: "scope",
+  // INF-ENV (C-WA5): WhatsApp con el Meta FALSO para toda la suite. Sin cuenta conectada (ninguna spec vieja la conecta)
+  // el hook de turnos sale sin encolar nada, así que las specs de antes no cambian.
+  WHATSAPP_MODE: "fake",
+  WHATSAPP_APP_ID: DEV_WAFAKE_LITERALS.WHATSAPP_APP_ID,
+  WHATSAPP_APP_SECRET: DEV_WAFAKE_LITERALS.WHATSAPP_APP_SECRET,
+  WHATSAPP_CONFIG_ID: DEV_WAFAKE_LITERALS.WHATSAPP_CONFIG_ID,
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN: DEV_WAFAKE_LITERALS.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
+  WHATSAPP_GRAPH_VERSION: "",
+  WHATSAPP_SIGNUP_FEATURE: "",
+  // Una pausa de 2FA del `.env` cambiaría el login de Plataforma en la suite.
+  SUPERADMIN_2FA_BYPASS: "",
   SENTRY_ORG: "",
   SENTRY_PROJECT: "",
 };

@@ -11,10 +11,13 @@ import { describe, expect, it } from "vitest";
 import {
   DEV_MPFAKE_LITERALS,
   DEV_MPFAKE_SUPABASE_URL,
+  DEV_WAFAKE_LITERALS,
   devMpFakeEnv,
   parsePort,
 } from "../../scripts/lib/dev-mp-fake-env.mjs";
+import { parseEnv } from "@/lib/env";
 import { FAKE_CLIENT_ID, FAKE_CLIENT_SECRET, FAKE_HOOK_SECRET } from "../helpers/mp-connect-fake";
+import { FAKE_MP_PLATFORM, FAKE_SAAS_HOOK_SECRET } from "../helpers/mp-saas-fake";
 
 const LOCAL_DB = "postgresql://kinesoft:kinesoft@localhost:5433/kinesoft?schema=public";
 const PROD = "PROD-MARCADO";
@@ -53,7 +56,18 @@ function prodLikeParent(): Record<string, string> {
     UPSTASH_REDIS_REST_URL: `https://${PROD}.upstash.io`,
     UPSTASH_REDIS_REST_TOKEN: `${PROD}-upstash`,
     REALTIME_DRIVER: "supabase",
-    SAAS_BILLING_MODE: "mp",
+    SAAS_BILLING_MODE: "manual",
+    SAAS_BILLING_TRANSFER_INFO: `CBU ${PROD}`,
+    MP_MIN_DEBIT_CENTS: "99999",
+    SAAS_MP_CHECKOUT_NOTIFY: "panel",
+    SUPERADMIN_2FA_BYPASS: `${PROD}@2026-10-30`,
+    WHATSAPP_MODE: "live",
+    WHATSAPP_APP_ID: `${PROD}-wa-app`,
+    WHATSAPP_APP_SECRET: `${PROD}-wa-secret`,
+    WHATSAPP_CONFIG_ID: `${PROD}-wa-config`,
+    WHATSAPP_WEBHOOK_VERIFY_TOKEN: `${PROD}-wa-verify-token-0123456789abcdef`,
+    WHATSAPP_GRAPH_VERSION: "v99.0",
+    WHATSAPP_SIGNUP_FEATURE: "whatsapp_business_app_onboarding",
     MAINTENANCE_MODE: "on",
     KINESOFT_ALLOW_DEMO_ACTOR: "0",
     TZ: "America/Argentina/Buenos_Aires",
@@ -93,9 +107,42 @@ describe("[TP-3j] dev:mpfake · entorno del next dev", () => {
     expect(leaked).toEqual([]);
     for (const k of ["VERCEL", "VERCEL_ENV", "VERCEL_URL"]) expect(k in env).toBe(false);
     // Vacías (no borradas): Next no pisa una clave presente, así que "" tapa la del `.env`.
-    for (const k of ["MP_ACCESS_TOKEN", "MP_WEBHOOK_SECRET", "SECRET_BOX_KEYS", "RESEND_API_KEY", "SENTRY_DSN", "UPSTASH_REDIS_REST_TOKEN", "SUPABASE_SERVICE_ROLE_KEY"]) {
+    for (const k of ["MP_PUBLIC_KEY", "SECRET_BOX_KEYS", "SAAS_BILLING_TRANSFER_INFO", "MP_MIN_DEBIT_CENTS", "SUPERADMIN_2FA_BYPASS", "WHATSAPP_GRAPH_VERSION", "WHATSAPP_SIGNUP_FEATURE", "RESEND_API_KEY", "SENTRY_DSN", "UPSTASH_REDIS_REST_TOKEN", "SUPABASE_SERVICE_ROLE_KEY"]) {
       expect(env[k]).toBe("");
     }
+  });
+
+  it("[INF-ENV] cobro SaaS en mp y WhatsApp en fake, con literales FALSOS fijos (MPS hallazgo 4: el secreto del webhook legado ya no va vacío)", () => {
+    const env = devMpFakeEnv(prodLikeParent());
+    expect(env.SAAS_BILLING_MODE).toBe("mp");
+    expect(env.SAAS_MP_CHECKOUT_NOTIFY).toBe("scope");
+    expect(env.MP_ACCESS_TOKEN).toBe("FAKE-PLATFORM-ACCESS-TOKEN");
+    expect(env.MP_ACCESS_TOKEN).toBe(DEV_MPFAKE_LITERALS.MP_ACCESS_TOKEN);
+    expect(env.MP_WEBHOOK_SECRET).toBe(DEV_MPFAKE_LITERALS.MP_WEBHOOK_SECRET);
+    expect(env.MP_WEBHOOK_SECRET).toMatch(/prueba/);
+    // Los mismos que reconoce el simulador (C-MPS4) y que usan los tests de integración: si se desalinean, dev y E2E
+    // verían 401 en cada preapproval o en cada webhook de la plataforma.
+    expect(env.MP_ACCESS_TOKEN).toBe(FAKE_MP_PLATFORM.accessToken);
+    expect(env.MP_WEBHOOK_SECRET).toBe(FAKE_SAAS_HOOK_SECRET);
+    // El secreto de la plataforma y el de la app de Connect son distintos: una firma de una rama no abre la otra.
+    expect(env.MP_WEBHOOK_SECRET).not.toBe(env.MP_CONNECT_WEBHOOK_SECRET);
+    expect(env.WHATSAPP_MODE).toBe("fake");
+    expect(env.WHATSAPP_APP_ID).toBe(DEV_WAFAKE_LITERALS.WHATSAPP_APP_ID);
+    expect(env.WHATSAPP_APP_SECRET).toBe(DEV_WAFAKE_LITERALS.WHATSAPP_APP_SECRET);
+    expect(env.WHATSAPP_CONFIG_ID).toBe(DEV_WAFAKE_LITERALS.WHATSAPP_CONFIG_ID);
+    expect(env.WHATSAPP_WEBHOOK_VERIFY_TOKEN).toBe(DEV_WAFAKE_LITERALS.WHATSAPP_WEBHOOK_VERIFY_TOKEN);
+    expect(DEV_WAFAKE_LITERALS.WHATSAPP_WEBHOOK_VERIFY_TOKEN.length).toBeGreaterThanOrEqual(32);
+    for (const v of [...Object.values(DEV_MPFAKE_LITERALS), ...Object.values(DEV_WAFAKE_LITERALS)]) {
+      expect(v).toMatch(/fake|prueba|FAKE/i);
+    }
+  });
+
+  it("[INF-ENV] el entorno del hijo pasa el boot real (parseEnv) con fake en MP y en WhatsApp", () => {
+    const env = devMpFakeEnv(prodLikeParent());
+    const parsed = parseEnv(env);
+    expect(parsed.WHATSAPP_MODE).toBe("fake");
+    expect(parsed.MP_CONNECT_MODE).toBe("fake");
+    expect(parsed.SAAS_BILLING_MODE).toBe("mp");
   });
 
   it("no arranca contra una base remota (ni DIRECT_URL ni el canal de servicio)", () => {
