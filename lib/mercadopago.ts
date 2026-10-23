@@ -23,7 +23,7 @@
 import crypto from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { MercadoPagoConfig, Preference, Payment as MpPayment } from "mercadopago";
-import { env } from "@/lib/env";
+import { env, fakeMpAllowed } from "@/lib/env";
 // Webhook + checkout preference run without an Actor → service channel (BYPASSRLS). See lib/db.ts#prismaService.
 import { prismaService as prisma } from "@/lib/db";
 import { notifyTenantOwners } from "@/lib/notifications-internal";
@@ -253,8 +253,12 @@ function isP2002(e: unknown): boolean {
  *     vuelta ve la fila y actualiza).
  */
 export async function consumeWebhook(paymentId: string) {
+  // MPS-2b1 (handoff ENV): con el MP falso el SDK saldría a api.mercadopago.com con el token falso; el pago se lee del simulador por el puerto de la suscripción (un pago sin `saas:` → ignorado).
+  if (fakeMpAllowed()) return (await import("@/lib/saas-billing-mp-internal")).consumeSaasMpPayment(paymentId, { source: "legacy" });
   const pay = new MpPayment(client());
   const detail = await pay.get({ id: paymentId });
+  // MPS (C-MPS6): pago de la suscripción que llegó sin `?scope=saas` (débito, o el link con la notificación de la app) → consumidor SaaS, que lo re-pide con el token de la plataforma.
+  if (String(detail.external_reference ?? "").startsWith("saas:")) return (await import("@/lib/saas-billing-mp-internal")).consumeSaasMpPayment(paymentId, { source: "legacy" });
   const bookingId = detail.external_reference ?? detail.metadata?.bookingId;
   if (!bookingId) return { ok: false, reason: "no external_reference" };
 

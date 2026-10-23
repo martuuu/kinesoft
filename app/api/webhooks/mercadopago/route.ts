@@ -6,6 +6,7 @@ import { clientIp } from "@/lib/client-ip";
 import { logger } from "@/lib/logger";
 import { env } from "@/lib/env";
 import { handleConnectWebhook } from "@/lib/mp-connect/webhook-route";
+import { isSaasTopic } from "@/lib/saas-mp-webhook-route";
 
 export const runtime = "nodejs";
 
@@ -45,6 +46,8 @@ export async function POST(req: Request) {
   // T5 (C-TP6): cobros con la cuenta del vendedor → rama nueva; sin `?acct=` todo sigue igual (AUDIT §5.4).
   const acct = url.searchParams.get("acct");
   if (acct !== null) return handleConnectWebhook(req, { acct, dataId: dataId == null ? null : String(dataId), type, ip });
+  // MPS (C-MPS6): suscripción de la plataforma (`?scope=saas` o topic de preapproval/débito) → rama propia, firma SIEMPRE con MP_WEBHOOK_SECRET.
+  if (url.searchParams.get("scope") === "saas" || isSaasTopic(type)) return (await import("@/lib/saas-mp-webhook-route")).handleSaasWebhook(req, { dataId: dataId == null ? null : String(dataId), type, ip });
 
   if (type && type !== "payment") {
     return NextResponse.json({ ok: true, ignored: type });
