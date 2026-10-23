@@ -49,6 +49,11 @@ describe.skipIf(!RUN)("[PL-Z] cobros: saldo a cuenta, excedentes, precios y mail
     tenants.push(t);
     return t;
   }
+  /**
+   * [MPS-2a] Suscripción LEGADA (previa a M16, sin re-anclar): ancla en cualquier día y `billableFrom` NULL, así el
+   * cargo es solo la base (sin stub) y estos tests de saldo a cuenta siguen midiendo lo mismo. El ancla en 4 con stub
+   * la prueba `mps-2a-writer.test.ts`.
+   */
   async function subscribed(t: EphemeralTenant, o: { daysAgo: number; customPriceCents: number | null }) {
     const start = addDaysKey(toARDateKey(new Date()), -o.daysAgo);
     await db.saasSubscription.create({
@@ -189,6 +194,9 @@ describe.skipIf(!RUN)("[PL-Z] cobros: saldo a cuenta, excedentes, precios y mail
     const rest = ps.filter((p) => p.chargeId === null);
     expect(rest.map((p) => p.amountCents)).toEqual([80_000]);
     expect(rest[0]).toMatchObject({ status: "APPROVED", source: "MANUAL", receiptPath: `${t.tenantId}/r-150000.pdf` });
+    // [MPS-2a] el hermano apunta a la raíz (M16 `splitFromId`): el reintegro y Plataforma ven el árbol entero.
+    const root = ps.find((p) => p.amountCents === 70_000 && p.chargeId === c.id);
+    expect(rest[0].splitFromId).toBe(root?.id);
     expect((await readLedger(prismaService, t.tenantId, new Date()))?.creditCents).toBe(80_000);
   });
 

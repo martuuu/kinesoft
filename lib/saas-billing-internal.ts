@@ -10,9 +10,10 @@ import "server-only";
  * quién puede es del caller (`requireAccountBilling` / `requirePlatformAdmin`), y acá se filtra SIEMPRE por
  * `tenantId` a mano (la conexión service saltea RLS).
  *
- * Locks (orden fijo para no cruzarse con nadie): Tenant → SaasSubscription → SaasCharge → SaasPayment. Tenant
- * primero porque el escritor único de entitlements (`applyTenantEntitlementsInTx`, que cambia el estado de la
- * suscripción) y los cupos ya lo toman primero; volverlo a pedir en la misma tx no espera.
+ * Locks (orden fijo para no cruzarse con nadie): Tenant → SaasSubscription → SaasCharge → SaasPayment →
+ * SaasAdjustment (C-MPS5). Tenant primero porque el escritor único de entitlements (`applyTenantEntitlementsInTx`, que
+ * cambia el estado de la suscripción) y los cupos ya lo toman primero; volverlo a pedir en la misma tx no espera.
+ * Los ajustes van últimos: `listPendingAdjustmentsForUpdateInTx` los toma recién cuando el cargo ya está decidido.
  *
  * Estado de la suscripción: lo escribe SOLO `applyTenantEntitlementsInTx` con source `billing` (escritor único,
  * C-EV5); `recomputeSubscriptionStatusInTx` decide (`nextSubscriptionStatus`) y le pasa el patch. El escritor estampa
@@ -20,8 +21,16 @@ import "server-only";
  * repetidas.
  *
  * `SAAS_BILLING_MODE` (PL-D16, `saasBillingMode()`): `off` = el cron no genera cargos ni cambia estados, y el
- * recálculo de estado no escribe. `manual` = todo lo de acá. `mp` = igual que `manual` (Mercado Pago quedó fuera de
- * esta etapa; el enum ya aceptaba `mp` y se trata como `manual` hasta que vuelva al roadmap).
+ * recálculo de estado no escribe. `manual` = todo lo de acá. `mp` (T6, MPS-D8) = lo de `manual` + la etapa 4b del cron
+ * (conciliación del débito con Mercado Pago, `runSaasMpReconcile`). Este módulo NUNCA llama a MP: los consumidores
+ * del webhook (`lib/saas-billing-mp-internal.ts`) piden el recurso afuera y delegan acá la escritura
+ * (`imputeApprovedPaymentInTx`, `refundPaymentTreeInTx`), y el sync (`lib/saas-mp-sync-internal.ts`) no importa este
+ * módulo.
+ *
+ * Ajustes (M16 `SaasAdjustment`, C-MPS5): el cargo del período = base (precio del plan, `effectiveCustomPrice`) +
+ * ajustes pendientes con `effectiveOn ≤ periodStart` (proporcionales, créditos, débitos), nunca menos de 0
+ * (`composeCharge`). La tabla es solo inserción salvo la imputación: anular un cargo no «des-imputa», crea copias
+ * pendientes (`repend:<id>`).
  *
  * Auditoría: este módulo NO audita; el caller audita en la MISMA tx (consultorio: `auditInTx`; Plataforma: doble con
  * `auditPlatformInTx`; cron: el registro de plataforma de los mails). Así cada caller dice quién fue.
@@ -33,6 +42,7 @@ import { prismaService } from "@/lib/db";
 import type { DbClient } from "@/lib/rls";
 import { env, saasBillingMode, saasBillingTransferInfo } from "@/lib/env";
 import { formatARS } from "@/lib/format";
+import { maskEmail } from "@/lib/email/transport";
 import { logger } from "@/lib/logger";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { SAAS_PLANS_TAG } from "@/lib/cache-tags";
@@ -45,6 +55,10 @@ import {
 import { auditPlatformGlobalInTx, type PlatformActorRef } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
 import "@/lib/email/log";
+import { addAdjustmentInTx, listPendingAdjustmentsForUpdateInTx, markAdjustmentsAppliedInTx } from "@/lib/saas-adjustments-internal";
+import { applyDueCancelInTx, applyDuePlanChangeInTx } from "@/lib/saas-billing-schedule-internal";
+import { sendSaasBillingMpMail } from "@/lib/saas-billing-mail-internal";
+import { runSaasMpReconcile, type SaasMpReconcileResult } from "@/lib/saas-mp-sync-internal";
 import type { RenderedEmail, EmailKind } from "@/lib/email/types";
 import {
   billingChargeCreatedEmail,
@@ -54,6 +68,8 @@ import {
   billingPriceChangeEmail,
 } from "@/lib/email/templates-billing";
 import {
+  addDaysKey,
+  addMonthsKey,
   anchorDayFor,
   arMidnight,
   balanceCents,
@@ -61,7 +77,9 @@ import {
   chargeAmountFor,
   chargeCreatedMailKey,
   chargeInitialState,
+  composeCharge,
   dbDateFromKey,
+  effectiveCustomPrice,
   firstPeriodStartKey,
   isOverdue,
   keyFromDbDate,
@@ -71,14 +89,23 @@ import {
   priceChangeMailKey,
   remainingCents,
   settles,
+  stubFor,
   type ChargeForBalance,
   type DateKey,
 } from "@/lib/saas-billing-logic";
-import type { BillingChargeRow, BillingLedger, BillingPaymentRow } from "@/lib/saas-billing-types";
+import type {
+  BillingAdjustmentRow,
+  BillingAutoDebitState,
+  BillingChargeBreakdown,
+  BillingChargeRow,
+  BillingLedger,
+  BillingNextChargeBreakdown,
+  BillingPaymentRow,
+} from "@/lib/saas-billing-types";
 
 type Tx = Prisma.TransactionClient;
 
-/** `mp` se trata como `manual` en esta etapa (ver cabecera). */
+/** `manual` y `mp` cobran; `off` no (ver cabecera). */
 export function billingActive(): boolean {
   return saasBillingMode() !== "off";
 }
@@ -114,20 +141,40 @@ async function planPriceCents(tx: DbClient, plan: SaasPlan): Promise<{ priceCent
 export type SubscriptionRow = {
   tenantId: string;
   customPriceCents: number | null;
+  /** MPS-D14: plan al que está atado el precio a medida (null = legado, vale para cualquiera). */
+  customPricePlan: SaasPlan | null;
   anchorDay: number;
   nextChargeAt: Date | null;
+  /** MPS-D13: primer día que se factura (columna DATE); null = suscripción previa a M16 sin re-anclar (sin stub). */
+  billableFrom: Date | null;
+  cancelAtPeriodEnd: boolean;
+  cancelEffectiveOn: Date | null;
 };
 
-const SUB_SELECT = { tenantId: true, customPriceCents: true, anchorDay: true, nextChargeAt: true } as const;
+const SUB_SELECT = {
+  tenantId: true,
+  customPriceCents: true,
+  customPricePlan: true,
+  anchorDay: true,
+  nextChargeAt: true,
+  billableFrom: true,
+  cancelAtPeriodEnd: true,
+  cancelEffectiveOn: true,
+} as const;
 
 /**
- * Crea la suscripción del consultorio si no existe (anclaje PL2b-D1). Toma el lock del Tenant. `null` = el consultorio
- * no existe.
+ * Crea la suscripción del consultorio si no existe. Toma el lock del Tenant (y después el de la suscripción). `null` =
+ * el consultorio no existe.
  *
- * El primer período nunca arranca antes de HOY: un consultorio que ya existía cuando se prendió el cobro (o con la
- * prueba vencida hace meses) no recibe cargos retroactivos; queda anclado al día en que se crea la suscripción.
- * Mientras siga en prueba y sin cargos, se RE-ANCLA si cambió la prueba (Plataforma la extendió): el primer cobro se
- * corre con ella. Fuera de la prueba, o con algún cargo generado, el anclaje queda fijo.
+ * Ancla (MPS-D7): siempre el día 4. El primer cobro es el primer 4 ≥ el inicio del cobro, y el inicio queda guardado en
+ * `billableFrom` (MPS-D13): el tramo entre los dos lo suma el primer cargo como proporcional (stub,
+ * `createPeriodChargeInTx`). Antes de M16 el ancla era el día siguiente al fin de la prueba y no hacía falta stub; con
+ * un día fijo para todos, sin `billableFrom` el alta a mitad de mes regalaría hasta un mes.
+ *
+ * El inicio nunca es anterior a HOY: un consultorio que ya existía cuando se prendió el cobro (o con la prueba vencida
+ * hace meses) no recibe cargos ni stubs retroactivos. Mientras siga en prueba y sin cargos, se RE-ANCLA si Plataforma
+ * extendió la prueba: el primer cobro y `billableFrom` se corren con ella (si no, el stub cobraría días de prueba).
+ * Fuera de la prueba, o con algún cargo generado, el anclaje queda fijo.
  */
 export async function ensureSubscriptionInTx(tx: Tx, tenantId: string, now: Date): Promise<SubscriptionRow | null> {
   if (!(await lockTenant(tx, tenantId))) return null;
@@ -146,7 +193,7 @@ export async function ensureSubscriptionInTx(tx: Tx, tenantId: string, now: Date
   const sub = await tx.saasSubscription.findUnique({ where: { tenantId }, select: SUB_SELECT });
   if (!sub) {
     return tx.saasSubscription.create({
-      data: { tenantId, anchorDay, nextChargeAt: arMidnight(first) },
+      data: { tenantId, anchorDay, nextChargeAt: arMidnight(first), billableFrom: dbDateFromKey(start) },
       select: SUB_SELECT,
     });
   }
@@ -158,7 +205,7 @@ export async function ensureSubscriptionInTx(tx: Tx, tenantId: string, now: Date
   if (anyCharge) return sub;
   return tx.saasSubscription.update({
     where: { tenantId },
-    data: { anchorDay, nextChargeAt: arMidnight(first) },
+    data: { anchorDay, nextChargeAt: arMidnight(first), billableFrom: dbDateFromKey(start) },
     select: SUB_SELECT,
   });
 }
@@ -166,15 +213,41 @@ export async function ensureSubscriptionInTx(tx: Tx, tenantId: string, now: Date
 // ── Cargos del período ──────────────────────────────────────────────────────────────────────────────────────────
 
 export type CreateChargeResult =
-  | { kind: "created"; chargeId: string; periodStart: DateKey; amountCents: number }
-  | { kind: "not_due" | "exists" | "no_price" | "tenant_inactive" | "cancelled" | "in_trial" | "not_found"; periodStart?: DateKey };
+  | { kind: "created"; chargeId: string; periodStart: DateKey; amountCents: number; baseCents: number; adjustmentsCents: number }
+  | {
+      kind: "not_due" | "exists" | "no_price" | "tenant_inactive" | "cancelled" | "cancel_due" | "in_trial" | "not_found";
+      periodStart?: DateKey;
+    };
+
+/** «21/10» de una clave (copy de los ajustes que ve el consultorio). */
+function dayMonth(key: DateKey): string {
+  const [, m, d] = key.split("-");
+  return `${Number(d)}/${Number(m)}`;
+}
 
 /**
- * Genera el cargo del período que marca `nextChargeAt` (si ya llegó) y avanza el cursor un mes. Idempotente: el
- * UNIQUE (tenantId, periodStart) hace que una segunda corrida (o dos crons a la vez) no duplique: `ON CONFLICT DO
- * NOTHING` → `exists`. Sin precio (plan en «Consultá» y sin precio a medida), consultorio suspendido/dado de baja o
- * suscripción cancelada: no se cobra ese período, pero el cursor avanza igual (no se acumulan cargos para cuando se
- * reactive: sin prorrateo ni retroactivos, PL-D9).
+ * Genera el cargo del período que marca `nextChargeAt` (si ya llegó) y avanza el cursor un mes. Idempotente: con el
+ * lock del Tenant tomado (`ensureSubscriptionInTx`), una segunda corrida ve el cursor avanzado (`not_due`) o el cargo
+ * ya creado (`exists`); el UNIQUE (tenantId, periodStart) queda de red. Sin precio (plan en «Consultá» y sin precio a
+ * medida), consultorio suspendido/dado de baja o suscripción cancelada: no se cobra ese período, pero el cursor avanza
+ * igual (no se acumulan cargos para cuando se reactive, PL-D9); los ajustes pendientes siguen pendientes.
+ *
+ * Con ajustes (C-MPS5, en este orden; locks Tenant → Subscription → [cargo nuevo] → Adjustment):
+ *  1. stub PRORATION del primer período (MPS-D13) si `billableFrom` cae en el período ANTERIOR a este
+ *     (`[periodStart − 1 mes, periodStart)`): `stubFor`, clave `stub:<billableFrom>` (un reintento no lo duplica).
+ *     Fuera de esa ventana no hay stub: más atrás significaría cobrar un período entero que no se generó (consultorio
+ *     suspendido, sin precio), y eso no es un proporcional;
+ *  2. ajustes pendientes con `effectiveOn ≤ periodStart`, FOR UPDATE;
+ *  3. `composeCharge` (base + positivos, después los CREDIT; nunca menos de 0);
+ *  4. el cargo con `baseAmountCents` + `adjustmentsCents` (CHECK `SaasCharge_breakdown_check`: monto = base + ajustes);
+ *  5. imputación de los ajustes usados (`markAdjustmentsAppliedInTx`);
+ *  6. si un CREDIT cruzó el 0: CARRYOVER(+) imputado a este cargo y un CREDIT(−) nuevo pendiente para el próximo
+ *     período, los dos con `splitFromId` = el CREDIT original (la tabla no deja achicar el original);
+ *  7. el saldo a cuenta (pagos aprobados sin cargo) se aplica al cargo si quedó abierto (`applyCreditInTx`).
+ *
+ * `cancel_due` (defensivo): la baja programada vence en este período o antes y todavía no se aplicó (la aplica la
+ * etapa 2b del cron ANTES de esta; si esa etapa falló, no se cobra un período que ya no corresponde). El cursor NO
+ * avanza: cuando la baja se aplique, la próxima corrida lo mueve como `cancelled`.
  */
 export async function createPeriodChargeInTx(tx: Tx, p: { tenantId: string; now: Date }): Promise<CreateChargeResult> {
   const sub = await ensureSubscriptionInTx(tx, p.tenantId, p.now);
@@ -201,13 +274,55 @@ export async function createPeriodChargeInTx(tx: Tx, p: { tenantId: string; now:
     await advance();
     return { kind: "cancelled", periodStart };
   }
+  if (sub.cancelAtPeriodEnd && sub.cancelEffectiveOn && keyFromDbDate(sub.cancelEffectiveOn) <= periodStart) {
+    return { kind: "cancel_due", periodStart };
+  }
+  // El cargo ya existe (lo creó otro camino sin pasar por el cursor): no se agrega un stub que quedaría colgado para
+  // el período siguiente ni se re-componen los ajustes de un cargo ya emitido.
+  const existing = await tx.saasCharge.findFirst({
+    where: { tenantId: p.tenantId, periodStart: dbDateFromKey(period.periodStart) },
+    select: { id: true },
+  });
+  if (existing) {
+    await advance();
+    return { kind: "exists", periodStart };
+  }
   const price = await planPriceCents(tx, t.saasPlan);
-  const amountCents = chargeAmountFor({ customPriceCents: sub.customPriceCents, planPriceCents: price.priceCents });
-  if (amountCents === null) {
+  const baseCents = chargeAmountFor({
+    customPriceCents: effectiveCustomPrice({ customPriceCents: sub.customPriceCents, customPricePlan: sub.customPricePlan, plan: t.saasPlan }),
+    planPriceCents: price.priceCents,
+  });
+  if (baseCents === null) {
     await advance();
     return { kind: "no_price", periodStart };
   }
-  const init = chargeInitialState(amountCents);
+
+  // 1. Stub del primer período.
+  if (sub.billableFrom) {
+    const billableFrom = keyFromDbDate(sub.billableFrom);
+    if (billableFrom >= addMonthsKey(periodStart, -1) && billableFrom < periodStart) {
+      const stub = stubFor({ billableFrom, periodStart, priceCents: baseCents });
+      if (stub) {
+        await addAdjustmentInTx(tx, {
+          tenantId: p.tenantId,
+          kind: "PRORATION",
+          amountCents: stub.amountCents,
+          effectiveOn: stub.effectiveOn,
+          description: `Proporcional del ${dayMonth(billableFrom)} al ${dayMonth(addDaysKey(periodStart, -1))} (${stub.days} de ${stub.periodDays} días)`,
+          idempotencyKey: stub.idempotencyKey,
+          planTo: t.saasPlan,
+          days: stub.days,
+          periodDays: stub.periodDays,
+          createdById: null,
+        });
+      }
+    }
+  }
+  // 2-3. Ajustes pendientes (FOR UPDATE) y composición.
+  const pending = await listPendingAdjustmentsForUpdateInTx(tx, { tenantId: p.tenantId, upTo: periodStart });
+  const composed = composeCharge({ baseCents, pending });
+  // 4. El cargo.
+  const init = chargeInitialState(composed.amountCents);
   const rows = await tx.saasCharge.createManyAndReturn({
     data: [
       {
@@ -216,7 +331,9 @@ export async function createPeriodChargeInTx(tx: Tx, p: { tenantId: string; now:
         periodStart: dbDateFromKey(period.periodStart),
         periodEnd: dbDateFromKey(period.periodEnd),
         dueDate: dbDateFromKey(period.dueDate),
-        amountCents,
+        amountCents: composed.amountCents,
+        baseAmountCents: composed.baseCents,
+        adjustmentsCents: composed.adjustmentsCents,
         status: init.status,
         paidAt: init.paid ? p.now : null,
       },
@@ -224,11 +341,43 @@ export async function createPeriodChargeInTx(tx: Tx, p: { tenantId: string; now:
     skipDuplicates: true,
     select: { id: true },
   });
+  // Con el lock del Tenant y el chequeo de arriba no puede pasar; si pasa (alguien insertó sin el lock), se aborta
+  // la tx para no dejar el stub ni las imputaciones a medias.
+  if (rows.length === 0) throw new Error(`[saas-billing] el cargo ${periodStart} apareció en el medio (tenant ${p.tenantId})`);
+  const chargeId = rows[0].id;
+  // 5. Imputación.
+  await markAdjustmentsAppliedInTx(tx, { tenantId: p.tenantId, adjustmentIds: composed.appliedIds, chargeId, now: p.now });
+  // 6. El CREDIT que cruzó el 0.
+  if (composed.carryover && composed.remainingCredit) {
+    const original = pending.find((a) => a.id === composed.carryover!.splitFromId);
+    const of = original ? ` (resto de un crédito de ${formatARS(-original.amountCents)})` : "";
+    const carry = await addAdjustmentInTx(tx, {
+      tenantId: p.tenantId,
+      kind: "CARRYOVER",
+      amountCents: composed.carryover.amountCents,
+      effectiveOn: periodStart,
+      description: `Saldo a favor que pasa al próximo cargo${of}`,
+      idempotencyKey: `carryover:${chargeId}`,
+      splitFromId: composed.carryover.splitFromId,
+      createdById: null,
+    });
+    await markAdjustmentsAppliedInTx(tx, { tenantId: p.tenantId, adjustmentIds: [carry.adjustmentId], chargeId, now: p.now });
+    await addAdjustmentInTx(tx, {
+      tenantId: p.tenantId,
+      kind: "CREDIT",
+      amountCents: composed.remainingCredit.amountCents,
+      // Se imputa al primer cargo con periodStart ≥ el fin de este: el del período siguiente.
+      effectiveOn: period.periodEnd,
+      description: `Saldo a favor del cargo del ${dayMonth(periodStart)}${of}`,
+      idempotencyKey: `credit-rest:${chargeId}`,
+      splitFromId: composed.remainingCredit.splitFromId,
+      createdById: null,
+    });
+  }
   await advance();
-  if (rows.length === 0) return { kind: "exists", periodStart };
-  // PL-Z a1#1: si hay saldo a cuenta, el cargo nuevo se cobra de ahí (no vence ni manda a PAST_DUE con plata a favor).
+  // 7. PL-Z a1#1: si hay saldo a cuenta, el cargo nuevo se cobra de ahí (no vence ni manda a PAST_DUE con plata a favor).
   if (init.status === "OPEN") await applyCreditInTx(tx, p.tenantId, p.now);
-  return { kind: "created", chargeId: rows[0].id, periodStart, amountCents };
+  return { kind: "created", chargeId, periodStart, amountCents: composed.amountCents, baseCents: composed.baseCents, adjustmentsCents: composed.adjustmentsCents };
 }
 
 // ── Pagos ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -276,6 +425,8 @@ type PaymentForSplit = {
   submittedById: string | null;
   reviewedById: string | null;
   reviewedAt: Date | null;
+  /** M16: raíz del árbol si este pago ya es un hermano partido (null = es la raíz). */
+  splitFromId: string | null;
 };
 
 const SPLIT_SELECT = {
@@ -290,12 +441,19 @@ const SPLIT_SELECT = {
   submittedById: true,
   reviewedById: true,
   reviewedAt: true,
+  splitFromId: true,
 } as const;
 
 /**
  * Imputa un pago APROBADO al cargo `chargeId`, por como mucho `needCents`. Si el pago es mayor, el pago queda por
  * `needCents` y el resto pasa a un pago hermano a cuenta (devuelve su id). `needCents` ≤ 0 → el pago entero queda a
  * cuenta. El caller tiene los locks (Tenant → SaasSubscription → SaasCharge).
+ *
+ * El hermano (MPS, hallazgo 1 de §26.6) apunta a la RAÍZ del árbol (`splitFromId = pay.splitFromId ?? pay.id`): partir
+ * un hermano otra vez no arma una cadena, así el reintegro de MP (`refundPaymentTreeInTx`) encuentra todas las partes
+ * con un solo `WHERE splitFromId = raíz`. NO copia los ids de MP (`mpPaymentId`/`mpAuthorizedPaymentId` son UNIQUE: la
+ * raíz los conserva) ni `mpPreapprovalId`/`mpPayload`: el CHECK `SaasPayment_source_mp_check` de M16 acepta un pago
+ * no-MANUAL sin id de MP solo porque tiene `splitFromId` (antes de M16 este INSERT fallaba con 23514 para un pago de MP).
  */
 async function allocatePaymentInTx(
   tx: Tx,
@@ -332,6 +490,7 @@ async function allocatePaymentInTx(
       submittedById: pay.submittedById,
       reviewedById: pay.reviewedById,
       reviewedAt: pay.reviewedAt,
+      splitFromId: pay.splitFromId ?? pay.id,
     },
     select: SPLIT_SELECT,
   });
@@ -404,8 +563,14 @@ export async function applyCreditInTx(tx: Tx, tenantId: string, now: Date): Prom
  * Imputa un pago recién APROBADO: al cargo `target` por lo que le falta (el resto, a cuenta) o, sin cargo, a cuenta;
  * y después aplica el saldo a cuenta a los cargos abiertos. Devuelve el cargo donde quedó el pago (el original, no el
  * hermano) y si se saldó algún cargo.
+ *
+ * MPS-2a: exportado para los consumidores de MP (`lib/saas-billing-mp-internal.ts`, que lo envuelve con firma de
+ * objeto). Contrato: el pago ya existe APROBADO y SIN cargo (`chargeId` null: si trae uno, `allocatePaymentInTx` lo
+ * pisa); `target` null o un cargo que no está OPEN → todo a cuenta (`chargeNeedCents` da 0). Locks: el caller tiene
+ * Tenant → Subscription y, si hay `target`, el del cargo; acá se toman los de los cargos abiertos y los pagos a cuenta
+ * (`applyCreditInTx`). NO recalcula el estado de la suscripción: el caller llama a `recomputeSubscriptionStatusInTx`.
  */
-async function imputeApprovedPaymentInTx(
+export async function imputeApprovedPaymentInTx(
   tx: Tx,
   tenantId: string,
   paymentId: string,
@@ -421,6 +586,59 @@ async function imputeApprovedPaymentInTx(
   const credit = await applyCreditInTx(tx, tenantId, now);
   const after = await tx.saasPayment.findFirstOrThrow({ where: { id: paymentId, tenantId }, select: { chargeId: true } });
   return { chargeId: after.chargeId, chargePaid: chargePaid || credit.paidChargeIds.length > 0 };
+}
+
+export type RefundTreeResult = {
+  /** Pagos que pasaron a REFUNDED en esta llamada (raíz + hermanos que seguían vivos). [] = ya estaba reintegrado. */
+  refundedIds: string[];
+  /** Cargos PAID que dejaron de estar cubiertos y volvieron a OPEN (con `paidAt` null). */
+  reopenedChargeIds: string[];
+  statusChanged: SubscriptionStatus | null;
+};
+
+/**
+ * Reintegro de un pago de MP (C-MPS5/C-MPS7): pasa a REFUNDED la raíz `rootId` y todos sus hermanos partidos
+ * (`splitFromId = rootId`, ver `allocatePaymentInTx`), tengan cargo o estén a cuenta. Los cargos PAID que con eso dejan
+ * de estar cubiertos vuelven a OPEN con `paidAt` null (el CHECK de M8 exige `paidAt` solo en PAID); después se aplica el
+ * saldo a cuenta que quede (otro pago a favor puede volver a cubrirlos) y se recalcula el estado: un cargo reabierto y
+ * ya vencido manda al consultorio a PAST_DUE (PL2b-D2).
+ *
+ * Idempotente: un replay del webhook de reintegro encuentra todo REFUNDED y no hace nada. Reintegro TOTAL (el
+ * consumidor decide si el de MP lo es; uno parcial no pasa por acá). Los pagos conservan su `chargeId` (historia: el
+ * ledger muestra «reintegrado» en el cargo); `approvedCentsOf` solo suma APROBADOS.
+ * Locks: Tenant → Subscription (los vuelve a pedir: en la misma tx no esperan) → cargos del árbol (por id) → pagos.
+ */
+export async function refundPaymentTreeInTx(tx: Tx, p: { tenantId: string; rootId: string; now: Date }): Promise<RefundTreeResult> {
+  const none: RefundTreeResult = { refundedIds: [], reopenedChargeIds: [], statusChanged: null };
+  if (!(await lockTenant(tx, p.tenantId))) return none;
+  await lockSubscription(tx, p.tenantId);
+  const tree = await tx.saasPayment.findMany({
+    where: { tenantId: p.tenantId, OR: [{ id: p.rootId }, { splitFromId: p.rootId }] },
+    select: { id: true, chargeId: true },
+  });
+  if (tree.length === 0) return none;
+  const chargeIds = [...new Set(tree.map((x) => x.chargeId).filter((x): x is string => x !== null))].sort();
+  for (const id of chargeIds) await lockCharge(tx, id, p.tenantId);
+  const ids = tree.map((x) => x.id);
+  await tx.$queryRaw`SELECT "id" FROM "SaasPayment" WHERE "tenantId" = ${p.tenantId} AND "id" = ANY(${ids}) ORDER BY "id" FOR UPDATE`;
+  const live = await tx.saasPayment.findMany({
+    where: { tenantId: p.tenantId, id: { in: ids }, status: { not: "REFUNDED" } },
+    select: { id: true },
+  });
+  if (live.length === 0) return none;
+  await tx.saasPayment.updateMany({ where: { tenantId: p.tenantId, id: { in: live.map((x) => x.id) } }, data: { status: "REFUNDED" } });
+
+  const reopenedChargeIds: string[] = [];
+  for (const id of chargeIds) {
+    const c = await tx.saasCharge.findFirst({ where: { id, tenantId: p.tenantId }, select: { status: true, amountCents: true } });
+    if (!c || c.status !== "PAID") continue;
+    if (settles(c.amountCents, await approvedCentsOf(tx, id, p.tenantId))) continue;
+    await tx.saasCharge.update({ where: { id }, data: { status: "OPEN", paidAt: null, statusChangedAt: p.now } });
+    reopenedChargeIds.push(id);
+  }
+  if (reopenedChargeIds.length > 0) await applyCreditInTx(tx, p.tenantId, p.now);
+  const st = await recomputeSubscriptionStatusInTx(tx, p.tenantId, p.now, null);
+  return { refundedIds: live.map((x) => x.id), reopenedChargeIds, statusChanged: st.changedTo };
 }
 
 export type ReceiptRef = { path: string; mimeType: string; sizeBytes: number };
@@ -595,6 +813,15 @@ export type ChargeStatusChangeResult =
 /**
  * VOID (el cargo no correspondía: se generó por error) o WAIVED (correspondía y se perdona lo que falte). Solo sobre
  * cargos OPEN. Anular un cargo con pagos aprobados se rechaza (la plata ya está imputada: se condona el resto).
+ *
+ * Ajustes imputados al cargo (C-MPS5): `SaasAdjustment` es solo inserción, así que no se «des-imputan»: se crean
+ * COPIAS pendientes (clave `repend:<id>`, misma fecha, mismo monto) que entran en el próximo cargo.
+ *  - VOID re-pende TODOS: el cargo no existió, y lo que traía (un proporcional, un débito, un crédito) sigue debiéndose
+ *    o a favor.
+ *  - WAIVE re-pende solo los CREDIT (y el CARRYOVER que haya salido de ellos, para que la suma no cambie): lo que se
+ *    perdona es lo que faltaba pagar, que ya incluía los positivos; un crédito que se «gastó» en un cargo perdonado
+ *    no se usó de verdad y vuelve a favor. (Hoy un CARRYOVER no puede estar en un cargo OPEN: solo nace en un cargo
+ *    que quedó en 0, que nace PAID; se incluye igual por si eso cambia.)
  */
 export async function setChargeStatusInTx(
   tx: Tx,
@@ -616,8 +843,56 @@ export async function setChargeStatusInTx(
       note: p.note?.trim() ? p.note.trim().slice(0, 500) : null,
     },
   });
+  await rependAdjustmentsInTx(tx, { tenantId: p.tenantId, chargeId: p.chargeId, onlyCredits: p.to === "WAIVED", actorId: p.actorId });
   const st = await recomputeSubscriptionStatusInTx(tx, p.tenantId, p.now, null);
   return { ok: true, statusChanged: st.changedTo };
+}
+
+/** Copias pendientes de los ajustes imputados a un cargo anulado/condonado (ver `setChargeStatusInTx`). Último lock. */
+async function rependAdjustmentsInTx(
+  tx: Tx,
+  p: { tenantId: string; chargeId: string; onlyCredits: boolean; actorId: string | null }
+): Promise<number> {
+  const applied = await tx.$queryRaw<
+    {
+      id: string;
+      kind: "PRORATION" | "CREDIT" | "DEBIT" | "CARRYOVER";
+      amountCents: number;
+      effectiveOn: Date;
+      description: string;
+      planFrom: SaasPlan | null;
+      planTo: SaasPlan | null;
+      days: number | null;
+      periodDays: number | null;
+      splitFromId: string | null;
+    }[]
+  >`
+    SELECT "id", "kind"::text AS "kind", "amountCents", "effectiveOn", "description", "planFrom"::text AS "planFrom",
+           "planTo"::text AS "planTo", "days", "periodDays", "splitFromId"
+    FROM "SaasAdjustment"
+    WHERE "tenantId" = ${p.tenantId} AND "appliedChargeId" = ${p.chargeId}
+    ORDER BY "effectiveOn" ASC, "createdAt" ASC, "id" ASC
+    FOR UPDATE`;
+  const creditIds = new Set(applied.filter((a) => a.kind === "CREDIT").map((a) => a.id));
+  const chosen = p.onlyCredits
+    ? applied.filter((a) => a.kind === "CREDIT" || (a.kind === "CARRYOVER" && a.splitFromId !== null && creditIds.has(a.splitFromId)))
+    : applied;
+  for (const a of chosen) {
+    await addAdjustmentInTx(tx, {
+      tenantId: p.tenantId,
+      kind: a.kind,
+      amountCents: a.amountCents,
+      effectiveOn: keyFromDbDate(a.effectiveOn),
+      description: a.description,
+      idempotencyKey: `repend:${a.id}`,
+      planFrom: a.planFrom,
+      planTo: a.planTo,
+      days: a.days,
+      periodDays: a.periodDays,
+      createdById: p.actorId,
+    });
+  }
+  return chosen.length;
 }
 
 export const voidChargeInTx = (tx: Tx, p: Omit<Parameters<typeof setChargeStatusInTx>[1], "to">) =>
@@ -685,16 +960,22 @@ async function chargesForBalance(
 
 // ── Precio a medida y precios del plan ──────────────────────────────────────────────────────────────────────────
 
-/** Precio a medida del consultorio (null = el del plan). Rige desde el próximo cargo (sin prorrateo, PL-D9). */
+/**
+ * Precio a medida del consultorio (null = el del plan). Rige desde el próximo cargo (sin prorrateo, PL-D9).
+ * MPS-D14 (C-MPS11): `plan` = el plan al que queda atado (`customPricePlan`; si el consultorio cambia de plan, paga el
+ * del plan nuevo, ver `effectiveCustomPrice`). Sin `plan` (llamadores previos a M16) no se toca `customPricePlan`;
+ * borrar el precio (null) lo limpia siempre.
+ */
 export async function setCustomPriceInTx(
   tx: Tx,
-  p: { tenantId: string; priceCents: number | null; now: Date }
+  p: { tenantId: string; priceCents: number | null; plan?: SaasPlan | null; now: Date }
 ): Promise<{ ok: true; before: number | null; after: number | null } | { ok: false; reason: "not_found" | "invalid" }> {
   if (p.priceCents !== null && !(Number.isInteger(p.priceCents) && p.priceCents >= 0)) return { ok: false, reason: "invalid" };
   const sub = await ensureSubscriptionInTx(tx, p.tenantId, p.now);
   if (!sub) return { ok: false, reason: "not_found" };
-  if (sub.customPriceCents === p.priceCents) return { ok: true, before: sub.customPriceCents, after: p.priceCents };
-  await tx.saasSubscription.update({ where: { tenantId: p.tenantId }, data: { customPriceCents: p.priceCents } });
+  const plan = p.priceCents === null ? null : p.plan === undefined ? sub.customPricePlan : p.plan;
+  if (sub.customPriceCents === p.priceCents && sub.customPricePlan === plan) return { ok: true, before: sub.customPriceCents, after: p.priceCents };
+  await tx.saasSubscription.update({ where: { tenantId: p.tenantId }, data: { customPriceCents: p.priceCents, customPricePlan: plan } });
   return { ok: true, before: sub.customPriceCents, after: p.priceCents };
 }
 
@@ -777,10 +1058,105 @@ async function applyPriceChangeInTx(tx: Tx, changeId: string, now: Date): Promis
 
 // ── Lectura: ledger ─────────────────────────────────────────────────────────────────────────────────────────────
 
+const LEDGER_SUB_SELECT = {
+  ...SUB_SELECT,
+  collectionMethod: true,
+  cancelRequestedAt: true,
+  pendingPlan: true,
+  pendingPlanEffectiveOn: true,
+  pendingPlanDisableIds: true,
+  autoDebitAllowed: true,
+  autoDebitEnabled: true,
+  mpPreapprovalId: true,
+  mpPreapprovalStatus: true,
+  mpPayerEmail: true,
+  mpPreapprovalAmountCents: true,
+  mpPendingPreapprovalId: true,
+  mpPendingInitPoint: true,
+  mpPendingPayerEmail: true,
+  mpPreapprovalNextAt: true,
+  mpPreapprovalSyncedAt: true,
+} as const;
+
+type LedgerSub = Prisma.SaasSubscriptionGetPayload<{ select: typeof LEDGER_SUB_SELECT }>;
+
+const ADJ_SELECT = {
+  id: true,
+  kind: true,
+  amountCents: true,
+  effectiveOn: true,
+  description: true,
+  planFrom: true,
+  planTo: true,
+  days: true,
+  periodDays: true,
+  idempotencyKey: true,
+  appliedChargeId: true,
+  appliedAt: true,
+  createdAt: true,
+} as const;
+
+/** Vigencia del «Pagar con Mercado Pago» de un cargo (C-MPS3: el checkout vence a las 72 h). */
+const CHECKOUT_TTL_MS = 72 * 3_600_000;
+
+function adjustmentRow(a: Prisma.SaasAdjustmentGetPayload<{ select: typeof ADJ_SELECT }>): BillingAdjustmentRow {
+  return {
+    id: a.id,
+    kind: a.kind,
+    amountCents: a.amountCents,
+    effectiveOn: keyFromDbDate(a.effectiveOn),
+    description: a.description,
+    planFrom: a.planFrom,
+    planTo: a.planTo,
+    days: a.days,
+    periodDays: a.periodDays,
+    appliedChargeId: a.appliedChargeId,
+    appliedAt: a.appliedAt?.toISOString() ?? null,
+    createdAt: a.createdAt.toISOString(),
+  };
+}
+
 /**
- * Estado contable de un consultorio. Lo usan Configuración → Facturación (en `runWithRls`: las tres tablas tienen
- * policy de lectura por tenant) y Plataforma (canal service). Filtra por `tenantId` a mano igual (BYPASSRLS en prod).
- * Sin suscripción creada todavía (`off`, o antes del primer cron) el próximo cargo se calcula sin escribir.
+ * Estado del débito automático para la UI (`BillingAutoDebitStatus`). El email del pagador sale SIEMPRE enmascarado
+ * (`maskEmail`): el completo es dato del pagador y no viaja al cliente. Lo autoritativo es MP: esto es la foto del
+ * último sync (`mpPreapprovalSyncedAt`). `failed` = el último débito que llegó (pago MP_AUTO, D15: solo aprobados,
+ * rechazados y reintegrados crean filas) fue rechazado.
+ */
+function autoDebitStateOf(sub: LedgerSub, lastAutoPaymentStatus: string | null): BillingAutoDebitState {
+  const email = sub.mpPayerEmail ?? sub.mpPendingPayerEmail;
+  const base = {
+    allowed: sub.autoDebitAllowed,
+    payerEmailMasked: email ? maskEmail(email) : null,
+    amountCents: sub.mpPreapprovalAmountCents,
+    nextDebitOn: sub.mpPreapprovalNextAt ? toARDateKey(sub.mpPreapprovalNextAt) : null,
+    initPoint: sub.mpPendingPreapprovalId ? sub.mpPendingInitPoint : null,
+    syncedAt: sub.mpPreapprovalSyncedAt?.toISOString() ?? null,
+  };
+  if (!sub.autoDebitAllowed) return { ...base, status: "blocked" };
+  const st = sub.mpPreapprovalId ? sub.mpPreapprovalStatus : null;
+  // Un preapproval nuevo sin autorizar: «Falta autorizar…» solo si no hay otro vigente cobrando (si lo hay, sigue
+  // activo hasta que MP confirme el nuevo, y el link viaja igual en `initPoint`).
+  if (sub.mpPendingPreapprovalId && !(st === "authorized" && sub.autoDebitEnabled)) return { ...base, status: "pending_authorization" };
+  if (!sub.mpPreapprovalId) return { ...base, status: "none" };
+  if (st === "cancelled") return { ...base, status: "cancelled" };
+  if (st === "paused") return { ...base, status: "paused" };
+  if (st === "pending") return { ...base, status: "pending_authorization" };
+  if (st === "authorized" && sub.autoDebitEnabled) return { ...base, status: lastAutoPaymentStatus === "REJECTED" ? "failed" : "active" };
+  return { ...base, status: sub.autoDebitEnabled ? "active" : "cancelled" };
+}
+
+/**
+ * Estado contable de un consultorio. Lo usan Configuración → Facturación (en `runWithRls`: las tablas tienen policy de
+ * lectura por tenant, `SaasAdjustment` incluida) y Plataforma (canal service). Filtra por `tenantId` a mano igual
+ * (BYPASSRLS en prod). Sin suscripción creada todavía (`off`, o antes del primer cron) el próximo cargo se calcula sin
+ * escribir.
+ *
+ * MPS (C-MPS5): suma el desglose por cargo (base + ajustes imputados, checkout vigente), los ajustes pendientes y
+ * aplicados, cómo paga, el débito (email enmascarado), la baja y la bajada programadas, `billableFrom` y la PROYECCIÓN
+ * del próximo cargo (`nextCharge.breakdown`) con la misma cuenta que va a hacer `createPeriodChargeInTx` ese día: plan
+ * que rige (la bajada programada si vence ese día o antes), precio a medida atado al plan, stub si corresponde,
+ * ajustes con `effectiveOn ≤` esa fecha y, al final, el saldo a cuenta. `nextCharge.amountCents` = la base de ese plan
+ * (lo que se paga por mes); null en `nextCharge` si no hay próximo cargo (baja que rige antes o ese mismo día).
  */
 export async function readLedger(db: DbClient, tenantId: string, now: Date): Promise<BillingLedger | null> {
   const t = await db.tenant.findUnique({
@@ -788,8 +1164,8 @@ export async function readLedger(db: DbClient, tenantId: string, now: Date): Pro
     select: { saasPlan: true, subscriptionStatus: true, trialEndsAt: true, createdAt: true },
   });
   if (!t) return null;
-  const [sub, price, charges, payments] = await Promise.all([
-    db.saasSubscription.findUnique({ where: { tenantId }, select: SUB_SELECT }),
+  const [sub, price, charges, payments, pendingAdj] = await Promise.all([
+    db.saasSubscription.findUnique({ where: { tenantId }, select: LEDGER_SUB_SELECT }),
     planPriceCents(db, t.saasPlan),
     db.saasCharge.findMany({
       where: { tenantId },
@@ -805,6 +1181,10 @@ export async function readLedger(db: DbClient, tenantId: string, now: Date): Pro
         status: true,
         paidAt: true,
         note: true,
+        baseAmountCents: true,
+        adjustmentsCents: true,
+        mpCheckoutPreferenceId: true,
+        mpCheckoutCreatedAt: true,
       },
     }),
     db.saasPayment.findMany({
@@ -827,7 +1207,20 @@ export async function readLedger(db: DbClient, tenantId: string, now: Date): Pro
         reviewedAt: true,
       },
     }),
+    db.saasAdjustment.findMany({
+      where: { tenantId, appliedChargeId: null },
+      orderBy: [{ effectiveOn: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      take: 200,
+      select: ADJ_SELECT,
+    }),
   ]);
+  const appliedAdj = charges.length
+    ? await db.saasAdjustment.findMany({
+        where: { tenantId, appliedChargeId: { in: charges.map((c) => c.id) } },
+        orderBy: [{ effectiveOn: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+        select: ADJ_SELECT,
+      })
+    : [];
   const today = toARDateKey(now);
   const forBalance = await chargesForBalance(db, tenantId, { onlyOpenOrSettled: true });
   const credit = await db.saasPayment.aggregate({
@@ -839,15 +1232,18 @@ export async function readLedger(db: DbClient, tenantId: string, now: Date): Pro
   const pendingReviewCount = await db.saasPayment.count({ where: { tenantId, status: "PENDING_REVIEW" } });
   const paidBy = new Map(forBalance.map((c) => [c.id, c.approvedCents]));
   const periodOf = new Map(charges.map((c) => [c.id, keyFromDbDate(c.periodStart)]));
+  const appliedRows = appliedAdj.map(adjustmentRow);
 
-  const chargeRows: BillingChargeRow[] = charges.map((c) => {
+  const chargeRows: BillingChargeRow[] = [];
+  const chargeBreakdown: Record<string, BillingChargeBreakdown> = {};
+  for (const c of charges) {
     const cb: ChargeForBalance = {
       status: c.status,
       amountCents: c.amountCents,
       approvedCents: paidBy.get(c.id) ?? 0,
       dueDate: keyFromDbDate(c.dueDate),
     };
-    return {
+    chargeRows.push({
       id: c.id,
       plan: c.plan,
       periodStart: keyFromDbDate(c.periodStart),
@@ -860,8 +1256,18 @@ export async function readLedger(db: DbClient, tenantId: string, now: Date): Pro
       overdue: isOverdue(cb, today),
       paidAt: c.paidAt?.toISOString() ?? null,
       note: c.note,
+    });
+    chargeBreakdown[c.id] = {
+      baseAmountCents: c.baseAmountCents,
+      adjustmentsCents: c.adjustmentsCents,
+      adjustments: appliedRows.filter((a) => a.appliedChargeId === c.id),
+      hasCheckout:
+        c.status === "OPEN" &&
+        !!c.mpCheckoutPreferenceId &&
+        !!c.mpCheckoutCreatedAt &&
+        now.getTime() - c.mpCheckoutCreatedAt.getTime() < CHECKOUT_TTL_MS,
     };
-  });
+  }
   const paymentRows: BillingPaymentRow[] = payments.map((p) => ({
     id: p.id,
     chargeId: p.chargeId,
@@ -880,15 +1286,75 @@ export async function readLedger(db: DbClient, tenantId: string, now: Date): Pro
   }));
 
   const customPriceCents = sub?.customPriceCents ?? null;
-  const effectivePriceCents = chargeAmountFor({ customPriceCents, planPriceCents: price.priceCents });
+  const customPricePlan = sub?.customPricePlan ?? null;
+  const effectivePriceCents = chargeAmountFor({
+    customPriceCents: effectiveCustomPrice({ customPriceCents, customPricePlan, plan: t.saasPlan }),
+    planPriceCents: price.priceCents,
+  });
   let nextKey: DateKey | null = sub?.nextChargeAt ? toARDateKey(sub.nextChargeAt) : null;
+  let billableFrom: DateKey | null = sub?.billableFrom ? keyFromDbDate(sub.billableFrom) : null;
   if (!sub) {
-    const start = billingStartKey({
+    // Misma cuenta que `ensureSubscriptionInTx` (sin escribir): nunca antes de hoy.
+    const computed = billingStartKey({
       trialEndsAt: t.subscriptionStatus === "TRIALING" ? t.trialEndsAt : null,
       createdAt: t.createdAt,
     });
-    nextKey = firstPeriodStartKey(start, anchorDayFor(start));
+    billableFrom = computed > today ? computed : today;
+    nextKey = firstPeriodStartKey(billableFrom, anchorDayFor(billableFrom));
   }
+
+  const cancelOn = sub?.cancelEffectiveOn ? keyFromDbDate(sub.cancelEffectiveOn) : null;
+  const cancelBlocksNext = !!sub?.cancelAtPeriodEnd && cancelOn !== null && nextKey !== null && cancelOn <= nextKey;
+  const pendingPlanOn = sub?.pendingPlan && sub.pendingPlanEffectiveOn ? keyFromDbDate(sub.pendingPlanEffectiveOn) : null;
+
+  let nextCharge: BillingLedger["nextCharge"] = null;
+  if (nextKey && t.subscriptionStatus !== "CANCELLED" && !cancelBlocksNext) {
+    const projPlan = sub?.pendingPlan && pendingPlanOn && pendingPlanOn <= nextKey ? sub.pendingPlan : t.saasPlan;
+    const projPrice = projPlan === t.saasPlan ? price : await planPriceCents(db, projPlan);
+    const baseCents = chargeAmountFor({
+      customPriceCents: effectiveCustomPrice({ customPriceCents, customPricePlan, plan: projPlan }),
+      planPriceCents: projPrice.priceCents,
+    });
+    const due = pendingAdj.filter((a) => keyFromDbDate(a.effectiveOn) <= nextKey!);
+    let breakdown: BillingNextChargeBreakdown;
+    if (baseCents === null) {
+      // Sin precio no hay cargo (el cron avanza el cursor y los ajustes siguen pendientes).
+      breakdown = { baseCents: null, adjustmentsCents: 0, creditCents: 0, amountCents: null };
+    } else {
+      const virtual: { id: string; kind: "PRORATION"; amountCents: number }[] = [];
+      if (billableFrom && billableFrom >= addMonthsKey(nextKey, -1) && billableFrom < nextKey) {
+        const stub = stubFor({ billableFrom, periodStart: nextKey, priceCents: baseCents });
+        const already = stub ? await db.saasAdjustment.count({ where: { tenantId, idempotencyKey: stub.idempotencyKey } }) : 1;
+        if (stub && already === 0) virtual.push({ id: stub.idempotencyKey, kind: "PRORATION", amountCents: stub.amountCents });
+      }
+      const composed = composeCharge({ baseCents, pending: [...virtual, ...due.map((a) => ({ id: a.id, kind: a.kind, amountCents: a.amountCents }))] });
+      const fromCredit = Math.min(creditCents, composed.amountCents);
+      breakdown = {
+        baseCents,
+        adjustmentsCents: composed.adjustmentsCents,
+        // `0 - 0` da -0 en JS: se normaliza (la UI compara y serializa el valor).
+        creditCents: fromCredit === 0 ? 0 : -fromCredit,
+        amountCents: composed.amountCents - fromCredit,
+      };
+    }
+    nextCharge = { periodStart: nextKey, amountCents: baseCents, breakdown };
+  }
+
+  const lastAuto = payments.find((p) => p.source === "MP_AUTO" && p.status !== "PENDING_REVIEW");
+  const cancel =
+    sub && cancelOn && (sub.cancelAtPeriodEnd || t.subscriptionStatus === "CANCELLED")
+      ? { effectiveOn: cancelOn, requestedAt: sub.cancelRequestedAt?.toISOString() ?? null }
+      : null;
+  const pendingPlan =
+    sub?.pendingPlan && pendingPlanOn
+      ? {
+          plan: sub.pendingPlan,
+          planLabel: (await planPriceCents(db, sub.pendingPlan)).label,
+          effectiveOn: pendingPlanOn,
+          disableCount: sub.pendingPlanDisableIds.length,
+        }
+      : null;
+
   return {
     tenantId,
     plan: t.saasPlan,
@@ -899,13 +1365,21 @@ export async function readLedger(db: DbClient, tenantId: string, now: Date): Pro
     subscriptionStatus: t.subscriptionStatus,
     trialEndsAt: t.trialEndsAt?.toISOString() ?? null,
     anchorDay: sub?.anchorDay ?? null,
-    nextCharge: nextKey && t.subscriptionStatus !== "CANCELLED" ? { periodStart: nextKey, amountCents: effectivePriceCents } : null,
+    nextCharge,
     balanceCents: balanceCents(forBalance, creditCents),
     creditCents,
     overdueCount: forBalance.filter((c) => isOverdue(c, today)).length,
     pendingReviewCount,
     charges: chargeRows,
     payments: paymentRows,
+    collectionMethod: sub?.collectionMethod ?? null,
+    pendingAdjustments: pendingAdj.map(adjustmentRow),
+    appliedAdjustments: appliedRows,
+    chargeBreakdown,
+    autoDebit: sub ? autoDebitStateOf(sub, lastAuto?.status ?? null) : null,
+    cancel,
+    pendingPlan,
+    billableFrom,
   };
 }
 
@@ -1020,15 +1494,30 @@ export type SaasBillingRunResult = {
   mailsSent: number;
   mailsNotSent: number;
   errors: number;
+  /** Etapa 2b (MPS): bajadas de plan aplicadas / anuladas porque la selección ya no entraba (MPS-D12). */
+  plansApplied: number;
+  plansAborted: number;
+  /** Etapa 2b (MPS): bajas a fin de período que pasaron a CANCELLED. */
+  cancelsApplied: number;
+  /** Etapa 4b, solo con `SAAS_BILLING_MODE=mp`: conciliación del débito con MP. null = no corrió. */
+  mp: SaasMpReconcileResult | null;
 };
+
+/** Techo de la etapa 4b (C-MPS8: ≤ 10 s, un GET por suscripción); nunca más que lo que queda del presupuesto. */
+const MP_RECONCILE_BUDGET_MS = 10_000;
 
 /**
  * Etapas de cobro del cron diario (H-PL4, PL-D18), cada una idempotente y con techo; entre consultorios se mira el
  * presupuesto (`budgetMs`): si se termina, se corta y lo que falte sale en la próxima corrida (`truncated`).
  *   1. precios con vigencia vencida → `SaasPlanConfig` (+ revalidar el catálogo público);
  *   2. suscripciones que faltan (consultorios sin fila) → se crean ancladas;
+ *   2b. (MPS) bajadas de plan y bajas a fin de período que vencen hoy (`applyDuePlanChangeInTx` /
+ *       `applyDueCancelInTx`, actor null = el cron). ANTES de los cargos: el cargo del 4 tiene que salir con el plan
+ *       nuevo, y una baja que rige hoy no tiene que generar el cargo del período que ya no usa. Después del commit:
+ *       `billing_plan_change` si la bajada se anuló (MPS-D12) y `billing_cancelled` si se aplicó la baja;
  *   3. cargos del período (`nextChargeAt` ≤ ahora), hasta `MAX_CATCH_UP` por consultorio;
  *   4. estado: PAST_DUE / ACTIVE según cargos vencidos;
+ *   4b. (MPS, solo `mp`) `runSaasMpReconcile`: lleva cada preapproval al `desiredDebit` (≤ 10 s, fuera de toda tx);
  *   5. mails idempotentes (cargo nuevo, vencido, precio nuevo), con reserva en `PlatformAuditEvent`.
  * Un consultorio que falla suma a `errors` y se sigue con el siguiente. `SAAS_BILLING_MODE=off` → no hace nada.
  *
@@ -1057,6 +1546,10 @@ export async function runSaasBilling(
     mailsSent: 0,
     mailsNotSent: 0,
     errors: 0,
+    plansApplied: 0,
+    plansAborted: 0,
+    cancelsApplied: 0,
+    mp: null,
   };
   if (mode === "off") return { ...r, skipped: true };
   const startedAt = Date.now();
@@ -1114,6 +1607,60 @@ export async function runSaasBilling(
     }
   }
 
+  // 2b. Bajadas de plan y bajas que vencen hoy (antes de los cargos: ver arriba).
+  const todayDb = dbDateFromKey(toARDateKey(now));
+  const dueSchedule = await prismaService.saasSubscription.findMany({
+    where: {
+      ...(only ? { tenantId: only } : {}),
+      tenant: { status: { not: "CLOSED" } },
+      OR: [
+        { pendingPlan: { not: null }, pendingPlanEffectiveOn: { lte: todayDb } },
+        { cancelAtPeriodEnd: true, cancelEffectiveOn: { lte: todayDb } },
+      ],
+    },
+    select: { tenantId: true },
+    orderBy: { tenantId: "asc" },
+    take: SCAN_LIMIT,
+  });
+  const mpMail = async (...args: Parameters<typeof sendSaasBillingMpMail>) => {
+    try {
+      const s = await sendSaasBillingMpMail(...args);
+      r.mailsSent += s.sent;
+      r.mailsNotSent += s.notSent;
+    } catch (err) {
+      // El contrato dice que nunca tira; si tira, el cambio ya está commiteado y no se deshace por un mail.
+      logger.warn("cron.billing.mail_failed", { kind: args[0], tenantId: args[1], error: err instanceof Error ? err.name : "unknown" });
+    }
+  };
+  for (const s of dueSchedule) {
+    if (outOfBudget()) return r;
+    try {
+      const out = await prismaService.$transaction(async (tx) => {
+        const plan = await applyDuePlanChangeInTx(tx, { tenantId: s.tenantId, actor: null, now });
+        const cancel = await applyDueCancelInTx(tx, { tenantId: s.tenantId, actor: null, now });
+        return { plan, cancel };
+      });
+      if (out.plan.outcome === "applied") r.plansApplied++;
+      if (out.plan.outcome === "annulled") {
+        r.plansAborted++;
+        await mpMail("billing_plan_change", s.tenantId, {
+          entity: "SaasSubscription",
+          entityId: s.tenantId,
+          planFrom: out.plan.plan,
+          planTo: out.plan.pendingPlan ?? null,
+          effectiveOn: out.plan.effectiveOn ?? null,
+          planChangeOutcome: "annulled",
+        });
+      }
+      if (out.cancel.cancelled) {
+        r.cancelsApplied++;
+        await mpMail("billing_cancelled", s.tenantId, { entity: "SaasSubscription", entityId: s.tenantId, effectiveOn: toARDateKey(now) });
+      }
+    } catch (err) {
+      fail("schedule", s.tenantId, err);
+    }
+  }
+
   // 3. Cargos del período.
   const dueSubs = await prismaService.saasSubscription.findMany({
     where: { ...(only ? { tenantId: only } : {}), nextChargeAt: { lte: now }, tenant: { status: { not: "CLOSED" } } },
@@ -1128,7 +1675,7 @@ export async function runSaasBilling(
         const c = await prismaService.$transaction((tx) => createPeriodChargeInTx(tx, { tenantId: s.tenantId, now }));
         if (c.kind === "created") r.chargesCreated++;
         else if (c.kind !== "not_due") r.chargesSkipped++;
-        if (c.kind === "not_due" || c.kind === "in_trial" || c.kind === "not_found") break;
+        if (c.kind === "not_due" || c.kind === "in_trial" || c.kind === "not_found" || c.kind === "cancel_due") break;
       }
     } catch (err) {
       fail("charge", s.tenantId, err);
@@ -1137,7 +1684,7 @@ export async function runSaasBilling(
 
   // 4. Estado (vencidos → PAST_DUE; al día → ACTIVE). Candidatos: con cargos abiertos, en PAST_DUE, o en prueba con
   //    algún cargo saldado.
-  const today = dbDateFromKey(toARDateKey(now));
+  const today = todayDb;
   const candidates = await prismaService.tenant.findMany({
     where: {
       ...tenantScope,
@@ -1166,6 +1713,22 @@ export async function runSaasBilling(
     }
   }
 
+  // 4b. Conciliación del débito con MP (solo `mp`). `runSaasMpReconcile` habla con MP fuera de toda tx y escribe en
+  //     txs cortas propias; acá solo se le da presupuesto (≤ 10 s y nunca más que lo que queda).
+  if (mode === "mp") {
+    const left = budgetMs - (Date.now() - startedAt);
+    if (left <= 0) {
+      r.truncated = true;
+      return r;
+    }
+    try {
+      r.mp = await runSaasMpReconcile(now, Math.min(MP_RECONCILE_BUDGET_MS, left), only ? { tenantIds: [...only.in] } : undefined);
+      if (r.mp.timedOut) r.truncated = true;
+    } catch (err) {
+      fail("mp_reconcile", null, err);
+    }
+  }
+
   // 5. Mails.
   const mailStage = async (tenantId: string, key: string, action: `platform.${string}`, entity: { entity: string; entityId: string }, payload: Record<string, unknown>, build: () => Promise<{ kind: EmailKind; mail: RenderedEmail } | null>) => {
     const recipients = await billingRecipients(tenantId);
@@ -1183,7 +1746,15 @@ export async function runSaasBilling(
   const since = new Date(now.getTime() - MAIL_WINDOW_MS);
   const newCharges = await prismaService.saasCharge.findMany({
     where: { ...(only ? { tenantId: only } : {}), createdAt: { gte: since }, status: "OPEN", amountCents: { gt: 0 } },
-    select: { id: true, tenantId: true, amountCents: true, periodStart: true, periodEnd: true, dueDate: true, tenant: { select: { name: true } } },
+    select: {
+      id: true,
+      tenantId: true,
+      amountCents: true,
+      periodStart: true,
+      periodEnd: true,
+      dueDate: true,
+      tenant: { select: { name: true, saasSubscription: { select: { collectionMethod: true } } } },
+    },
     orderBy: { createdAt: "asc" },
     take: SCAN_LIMIT,
   });
@@ -1206,6 +1777,9 @@ export async function runSaasBilling(
             dueDate: keyFromDbDate(c.dueDate),
             url: billingUrl(),
             transferInfo: saasBillingTransferInfo(),
+            // MPS-3c: «Se debita el 4…» con débito; «Pagá hasta el 9…» con checkout o transferencia; sin elegir, el
+            // texto de siempre.
+            collection: c.tenant.saasSubscription?.collectionMethod ?? null,
           }),
         })
       );

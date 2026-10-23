@@ -1,7 +1,7 @@
 import "server-only";
 /**
- * Ajustes de la suscripción (M16 `SaasAdjustment`, C-MPS5). MPS-K: STUBS con la firma de contrato; los implementa
- * MPS-2a. Único escritor de la tabla (TENANT_READONLY, canal service; el trigger `saas_adjustment_guard` la deja SOLO
+ * Ajustes de la suscripción (M16 `SaasAdjustment`, C-MPS5). MPS-K publicó las firmas; MPS-2c implementó
+ * `addAdjustmentInTx` y MPS-2a la lectura FOR UPDATE y la imputación. Único escritor de la tabla (TENANT_READONLY, canal service; el trigger `saas_adjustment_guard` la deja SOLO
  * INSERCIÓN salvo la imputación `appliedChargeId` NULL → valor).
  *
  * Orden de locks (fijo, el de `lib/saas-billing-internal.ts`): Tenant → Subscription → Charge → Payment → Adjustment.
@@ -10,6 +10,7 @@ import "server-only";
  */
 import type { Prisma, SaasPlan } from "@prisma/client";
 import type { SaasAdjustmentKind } from "@/lib/saas-billing-types";
+import { keyFromDbDate } from "@/lib/saas-billing-logic";
 
 type Tx = Prisma.TransactionClient;
 
@@ -100,22 +101,47 @@ export async function addAdjustmentInTx(tx: Tx, p: AddAdjustmentParams): Promise
   return { adjustmentId: existing.id, created: false };
 }
 
-/** Ajustes pendientes (`appliedChargeId IS NULL`) con effectiveOn ≤ `upTo`, FOR UPDATE, del más viejo. Último lock del orden. */
+/**
+ * Ajustes pendientes (`appliedChargeId IS NULL`) con `effectiveOn ≤ upTo`, FOR UPDATE: es el ÚLTIMO lock del orden
+ * (el caller ya tiene Tenant → Subscription y, si corresponde, el cargo). `ORDER BY effectiveOn, createdAt, id`: es el
+ * orden en que `composeCharge` aplica los CREDIT (el más viejo primero); `id` desempata los que nacen en la misma tx
+ * (mismo `createdAt` = el `CURRENT_TIMESTAMP` de la tx, p. ej. el resto de un CREDIT partido).
+ * Sin el FOR UPDATE, dos escritores (cron y una VOID de Plataforma) podrían imputar el mismo ajuste a dos cargos: el
+ * trigger lo frenaría con una excepción que aborta la tx entera; con el lock el segundo espera y lo ve imputado.
+ */
 export async function listPendingAdjustmentsForUpdateInTx(
   tx: Tx,
   p: { tenantId: string; upTo: string }
 ): Promise<PendingAdjustment[]> {
-  void tx;
-  void p;
-  throw new Error("not implemented: listPendingAdjustmentsForUpdateInTx");
+  if (!ADJ_KEY_RE.test(p.upTo)) throw new Error(`[saas-adjustments] upTo inválido: ${p.upTo}`);
+  const rows = await tx.$queryRaw<{ id: string; kind: SaasAdjustmentKind; amountCents: number; effectiveOn: Date; description: string }[]>`
+    SELECT "id", "kind"::text AS "kind", "amountCents", "effectiveOn", "description" FROM "SaasAdjustment"
+    WHERE "tenantId" = ${p.tenantId} AND "appliedChargeId" IS NULL AND "effectiveOn" <= ${p.upTo}::date
+    ORDER BY "effectiveOn" ASC, "createdAt" ASC, "id" ASC
+    FOR UPDATE`;
+  return rows.map((r) => ({
+    id: r.id,
+    kind: r.kind,
+    amountCents: r.amountCents,
+    effectiveOn: keyFromDbDate(r.effectiveOn),
+    description: r.description,
+  }));
 }
 
-/** Marca la imputación (NULL → `chargeId`, `appliedAt = now`), lo único que el trigger deja actualizar. Devuelve cuántos marcó. */
+/**
+ * Marca la imputación (NULL → `chargeId`, `appliedAt = now`), lo único que el trigger `saas_adjustment_guard` deja
+ * actualizar. El filtro `appliedChargeId IS NULL` va en el WHERE (no se confía en el caller): re-marcar uno ya imputado
+ * dispararía la excepción del trigger y abortaría la tx; así simplemente no cuenta. Devuelve cuántos marcó.
+ */
 export async function markAdjustmentsAppliedInTx(
   tx: Tx,
   p: { tenantId: string; adjustmentIds: string[]; chargeId: string; now: Date }
 ): Promise<number> {
-  void tx;
-  void p;
-  throw new Error("not implemented: markAdjustmentsAppliedInTx");
+  if (p.adjustmentIds.length === 0) return 0;
+  const r = await tx.saasAdjustment.updateMany({
+    where: { tenantId: p.tenantId, id: { in: p.adjustmentIds }, appliedChargeId: null },
+    data: { appliedChargeId: p.chargeId, appliedAt: p.now },
+  });
+  return r.count;
 }
+
