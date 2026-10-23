@@ -164,7 +164,7 @@ export type DisplayPairingCode = { code: string; expiresAt: string };
 export type DisplaysPanel = {
   displays: DisplayListItem[];
   /** Sedes activas del consultorio para el select (la sede elegida se valida igual en el server). */
-  locations: { id: string; name: string }[];
+  locations: { id: string; name: string; isPrimary: boolean }[];
   maxLive: number;
 };
 
