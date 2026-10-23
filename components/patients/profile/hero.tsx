@@ -91,12 +91,15 @@ export function PatientHero({
   plansEnabled,
   onOpenPlan,
   editRequest = 0,
+  whatsappActive = false,
 }: PatientHeroProps & {
   /**
    * PF1.1 (D6): contador que sube cuando otra superficie de la ficha pide «Editar paciente» (el «Cargar diagnóstico»
    * de Resumen). Cada cambio > 0 abre el drawer; el estado del drawer sigue viviendo acá.
    */
   editRequest?: number;
+  /** WA-U3: el consultorio manda avisos por WhatsApp; «Editar paciente» muestra el consentimiento. */
+  whatsappActive?: boolean;
 }) {
   // Modals lifted here — outside the <Card glass> — so backdrop-filter
   // on the card doesn't create a stacking context that traps position:fixed.
@@ -194,6 +197,7 @@ export function PatientHero({
           insurers={insurers}
           practitioners={practitioners}
           canReassign={canReassign}
+          whatsappActive={whatsappActive}
           onClose={() => setEditing(false)}
         />
       )}
@@ -224,12 +228,15 @@ export function PatientAdminHero({
   canBook,
   canEdit = false,
   insurers = [],
+  whatsappActive = false,
 }: {
   patient: PatientAdminCore;
   canBook: boolean;
   canEdit?: boolean;
   /** Obras sociales activas del consultorio (sin «Particular»), para el select de cobertura. Solo con `canEdit`. */
   insurers?: InsurerOption[];
+  /** WA-U3: la Secretaría registra el consentimiento de WhatsApp desde «Editar datos». */
+  whatsappActive?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const age = patient.dateOfBirth
@@ -289,7 +296,13 @@ export function PatientAdminHero({
       <PortalRequestBanner patientId={patient.id} canDecide={canEdit} />
       {/* Hermano del Card glass, como en el hero completo (el backdrop-filter atrapa los position:fixed). */}
       {editing && canEdit && (
-        <EditPatientModal mode="admin" patient={patient} insurers={insurers} onClose={() => setEditing(false)} />
+        <EditPatientModal
+          mode="admin"
+          patient={patient}
+          insurers={insurers}
+          whatsappActive={whatsappActive}
+          onClose={() => setEditing(false)}
+        />
       )}
     </>
   );

@@ -5,6 +5,7 @@ import { loadFilterFacets } from "@/lib/exercises";
 import { getCapabilities, getTenantModules } from "@/lib/authz";
 import { getActor } from "@/lib/session";
 import { listPractitioners } from "@/lib/bookings";
+import { tenantWhatsAppActive } from "@/lib/whatsapp-patient-ui-internal";
 import { displayMemberName } from "@/lib/display-name";
 import { newPatientMode } from "@/components/patients/patient-form-payload";
 import { patientsGridColumns } from "@/components/patients/patients-grid";
@@ -77,7 +78,8 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
   // `practitioners`, reservables y sin suspender: el mismo filtro que valida `createPatient`). Solo se pide en ese modo,
   // y en paralelo con el resto (encadenada a las capabilities, que ya están en el cache del request).
   const capsP = getCapabilities();
-  const [patients, facets, insurers, caps, actor, assigneeRows] = await Promise.all([
+  // WA-U3: casilla de WhatsApp del alta. Con `WHATSAPP_MODE=off`, 0 sentencias; con cuenta, cacheada por tag.
+  const [patients, facets, insurers, caps, actor, assigneeRows, whatsappActive] = await Promise.all([
     listPatients({
       q,
       filter,
@@ -96,6 +98,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
     Promise.all([capsP, getActor()]).then(([c, a]) =>
       newPatientMode(c, { support: !!a.support }) === "admin" ? listPractitioners() : null
     ),
+    getActor().then((a) => tenantWhatsAppActive(a.tenantId)),
   ]);
   // T3d-1u (plan §23.5): sin clinical.read, `createPatient` exige `assignTo` (el profesional a cargo). Antes (P0-S07sp)
   // el botón se escondía para la Secretaria y ella daba de alta solo desde el modal del turno; ahora el alta de la
@@ -174,6 +177,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
               <NewPatientButton
                 insurers={osOptions}
                 assignees={assignees}
+                whatsappActive={whatsappActive}
               />
             )}
           </>

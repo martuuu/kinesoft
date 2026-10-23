@@ -11,6 +11,7 @@ import { loadPatientProfilePage, profileNoteBookingId } from "@/lib/patient-prof
 import { PatientProfile, PatientAdminProfile } from "@/components/patients/patient-profile";
 import { PatientBasicView } from "@/components/patients/patient-basic-view";
 import { mpConnectMode } from "@/lib/env";
+import { tenantWhatsAppActive } from "@/lib/whatsapp-patient-ui-internal";
 
 export const dynamic = "force-dynamic";
 
@@ -63,7 +64,12 @@ export default async function PatientPage({
   // (`listInsurers`, cacheada por tag: sin query en caliente); Facturación no edita y no las pide.
   if (data.access === "admin") {
     const caps = await memberCapabilitiesForActor(actor);
-    const insurers = caps.has("patients.editAdmin") ? await listInsurers({ onlyActive: true }) : [];
+    const canEditAdmin = caps.has("patients.editAdmin");
+    // WA-U3: el consentimiento de WhatsApp vive en «Editar datos»: solo se mira con `editAdmin` (0 sentencias con `off`).
+    const [insurers, whatsappActive] = await Promise.all([
+      canEditAdmin ? listInsurers({ onlyActive: true }) : Promise.resolve([]),
+      canEditAdmin ? tenantWhatsAppActive(actor.tenantId) : Promise.resolve(false),
+    ]);
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <Breadcrumbs name={`${data.core.firstName} ${data.core.lastName}`} />
@@ -79,6 +85,7 @@ export default async function PatientPage({
             .filter((i) => !i.isParticular)
             .map((i) => ({ id: i.id, name: i.name, payerId: i.payerId }))}
           onlinePayments={mpConnectMode() !== "off"}
+          whatsappActive={whatsappActive}
         />
       </div>
     );
@@ -104,6 +111,8 @@ export default async function PatientPage({
   // Por MIEMBRO (PL-1, H-PL1): un Titular sin agenda no recibe `clinical.read`. Plantillas: el shell usa el
   // módulo `plantillas` (enmienda EV0, mismo criterio que `gatingForActor().canBuildTemplates`).
   const capabilities = Array.from(await memberCapabilitiesForActor(actor));
+  // WA-U3: consentimiento en «Editar paciente». Con `WHATSAPP_MODE=off`, 0 sentencias; con cuenta, cacheada por tag.
+  const whatsappActive = await tenantWhatsAppActive(actor.tenantId);
   // T3-Z M2: reasignar = `tenant.sensitive` del miembro, el mismo criterio que `assignPatientToPractitioner` (antes
   // `tenant.admin`, PL-Z a3#9: por rol,
   // la UI le ofrecía el selector a un ADMIN sin «Configuración» (la action lo rechaza) y se lo escondía a un
@@ -149,6 +158,7 @@ export default async function PatientPage({
         viewerPractitionerId={actor.practitionerId ?? null}
         // TP-3f2/TP-3z: la card «Links de pago» de Facturación, solo con los cobros online prendidos (0 sentencias).
         onlinePayments={mpConnectMode() !== "off"}
+        whatsappActive={whatsappActive}
         noteBooking={
           noteBookingRow
             ? {

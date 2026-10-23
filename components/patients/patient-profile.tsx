@@ -246,6 +246,8 @@ export type PatientProfileProps = {
    * esto Facturación no monta la card «Links de pago».
    */
   onlinePayments?: boolean;
+  /** WA-U3: el consultorio manda avisos por WhatsApp (la página, sin sentencias con `off`). */
+  whatsappActive?: boolean;
 };
 
 export function PatientProfile({
@@ -270,6 +272,7 @@ export function PatientProfile({
   noteBooking = null,
   viewerPractitionerId = null,
   onlinePayments = false,
+  whatsappActive = false,
 }: PatientProfileProps) {
   const modules = useTenantModules();
   const toast = useToast();
@@ -618,6 +621,7 @@ export function PatientProfile({
         practitioners={practitioners}
         canReassign={canReassign}
         editRequest={editPatientRequest}
+        whatsappActive={whatsappActive}
       />
 
       <TabsBar
@@ -835,6 +839,7 @@ export function PatientAdminProfile({
   viewerPractitionerId = null,
   insurers = [],
   onlinePayments = false,
+  whatsappActive = false,
 }: {
   patient: PatientAdminCore;
   initialBookings: AdminBookingsPage;
@@ -853,6 +858,8 @@ export function PatientAdminProfile({
   insurers?: InsurerOption[];
   /** TP-3f2/TP-3z: el consultorio cobra online (la card «Links de pago» de Facturación). */
   onlinePayments?: boolean;
+  /** WA-U3: consentimiento de WhatsApp en «Editar datos». */
+  whatsappActive?: boolean;
 }) {
   const plansEnabled = useTenantModules().has("planes");
   const canEdit = capabilities.includes("patients.editAdmin");
@@ -908,7 +915,13 @@ export function PatientAdminProfile({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <PatientAdminHero patient={patient} canBook={canBook} canEdit={canEdit} insurers={insurers} />
+      <PatientAdminHero
+        patient={patient}
+        canBook={canBook}
+        canEdit={canEdit}
+        insurers={insurers}
+        whatsappActive={whatsappActive}
+      />
 
       <TabsBar
         active={tab}

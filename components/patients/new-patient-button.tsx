@@ -30,10 +30,13 @@ function preload() {
 export function NewPatientButton({
   insurers = [],
   assignees,
+  whatsappActive = false,
 }: {
   insurers?: InsurerOption[];
   /** T3d-1u: alta de la recepción con «Profesional a cargo» (ver `NewPatientModal`). Ausente = alta del profesional. */
   assignees?: PractitionerOption[];
+  /** WA-U3: casilla de consentimiento de WhatsApp en el alta (ver `NewPatientModal`). */
+  whatsappActive?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -56,7 +59,7 @@ export function NewPatientButton({
           <IconPlus size={24} />
         </button>
       </span>
-      {open && <NewPatientModal insurers={insurers} assignees={assignees} onClose={() => setOpen(false)} />}
+      {open && <NewPatientModal insurers={insurers} assignees={assignees} whatsappActive={whatsappActive} onClose={() => setOpen(false)} />}
     </>
   );
 }

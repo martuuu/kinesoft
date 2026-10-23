@@ -20,6 +20,9 @@ import { listPayerPlans, proposePayerPlan } from "@/lib/catalog";
 import type { PayerPlanOption } from "@/lib/catalog-schemas";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { Section, Grid2 } from "./ui";
+import { WA_CONSENT_UI_COPY, WhatsAppConsentRow, consentPhoneError } from "@/components/patients/whatsapp-consent-field";
+import { WA_CONSENT_VERSION } from "@/lib/whatsapp/types";
+import type { PatientWaConsentState } from "@/lib/whatsapp-patient-ui-types";
 import type { PatientWithRelations, InsurerOption, PractitionerOption } from "./types";
 
 /**
@@ -138,6 +141,8 @@ type EditPatientModalProps =
       insurers: InsurerOption[];
       practitioners: PractitionerOption[];
       canReassign: boolean;
+      /** WA-U3: el consultorio manda avisos por WhatsApp (lo calcula la página; con `off`, false sin queries). */
+      whatsappActive?: boolean;
       onClose: () => void;
     }
   | {
@@ -149,6 +154,8 @@ type EditPatientModalProps =
       mode: "admin";
       patient: AdminEditablePatient;
       insurers: InsurerOption[];
+      /** WA-U3: la Secretaría registra el consentimiento (dato administrativo, `patients.editAdmin`). */
+      whatsappActive?: boolean;
       onClose: () => void;
     };
 
@@ -188,6 +195,56 @@ export function EditPatientModal(props: EditPatientModalProps) {
   // EV1-C2: en Clínica general no hay «diagnóstico» de kinesiología; los campos
   // (`diagnosisTitle/Note`) son los mismos, pero se rotulan como motivo de consulta.
   const isKine = useTenantModules().has("diagnostico");
+
+  // ── WhatsApp (WA-U3, brief §26.5) ─────────────────────────────────────
+  // El estado se lee al abrir (diferido, fresco: el paciente pudo responder BAJA con la ficha abierta) y solo con
+  // WhatsApp activo. `null` del server = el consultorio no lo tiene activo (se desconectó): la sección no se muestra.
+  // Revocar es inmediato (con `useConfirm`); otorgar se aplica al guardar, DESPUÉS de los datos, porque se ancla al
+  // teléfono que quede guardado (WA-D17) y el staff puede estar corrigiéndolo en este mismo formulario.
+  const whatsappActive = props.whatsappActive === true;
+  const [waState, setWaState] = useState<PatientWaConsentState | null | undefined>(undefined);
+  const [waError, setWaError] = useState<string | null>(null);
+  const [waGrant, setWaGrant] = useState(false);
+  const [waRevoking, setWaRevoking] = useState(false);
+  useEffect(() => {
+    if (!whatsappActive) return;
+    let alive = true;
+    import("@/lib/whatsapp-patient-ui")
+      .then((m) => m.getPatientWhatsAppConsentState({ patientId: patient.id }))
+      .then((r) => {
+        if (!alive) return;
+        if (r.ok) setWaState(r.data);
+        else setWaError(r.error);
+      })
+      .catch(() => {
+        if (alive) setWaError(WA_CONSENT_UI_COPY.loadFailed);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [whatsappActive, patient.id]);
+
+  const revokeWa = async () => {
+    if (!(await confirm(WA_CONSENT_UI_COPY.revokeConfirm))) return;
+    setWaRevoking(true);
+    setWaError(null);
+    try {
+      const { setPatientWhatsAppConsent } = await import("@/lib/whatsapp-consent-actions");
+      const r = await setPatientWhatsAppConsent({ patientId: patient.id, granted: false, version: WA_CONSENT_VERSION });
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      setWaGrant(false);
+      setWaState((s) =>
+        s ? { ...s, status: "REVOKED", at: new Date().toISOString(), source: "STAFF", phoneChanged: false, versionOutdated: false } : s
+      );
+    } catch {
+      setError(WA_CONSENT_UI_COPY.loadFailed);
+    } finally {
+      setWaRevoking(false);
+    }
+  };
 
   // ── Plan del catálogo (B1) ────────────────────────────────────────────
   // Si la OS elegida está vinculada a una prestadora del catálogo, el plan
@@ -259,6 +316,7 @@ export function EditPatientModal(props: EditPatientModalProps) {
     planChoice,
     newPlanName,
     ownCopagoCents,
+    waGrant,
   });
   const initialPlan = currentCoverage?.planName ?? "";
   const initialMember = currentCoverage?.memberId ?? "";
@@ -275,6 +333,13 @@ export function EditPatientModal(props: EditPatientModalProps) {
         : ({ kind: "none" } as const);
     if (copago.kind === "invalid") {
       setError("Revisá el copago propio: tiene que ser un monto en pesos, por ejemplo 6.000.");
+      return;
+    }
+    // WA-U3: sin celular válido no se puede registrar el consentimiento; se frena antes de guardar nada.
+    const wantsWa = whatsappActive && !!waState && waGrant;
+    const waPhoneError = consentPhoneError(wantsWa, String(formData.get("phone") ?? ""));
+    if (waPhoneError) {
+      setError(waPhoneError);
       return;
     }
     // H2 (A2a-S08): dirty-check de la cobertura. Antes se re-guardaba siempre
@@ -385,6 +450,22 @@ export function EditPatientModal(props: EditPatientModalProps) {
         }
       }
 
+      // WA-U3: el consentimiento, al final (ancla al teléfono recién guardado). Si falla, los datos ya quedaron: el
+      // drawer sigue abierto con el motivo y un reintento no choca (`expectedUpdatedAt` ya se actualizó).
+      if (wantsWa) {
+        try {
+          const { setPatientWhatsAppConsent } = await import("@/lib/whatsapp-consent-actions");
+          const r = await setPatientWhatsAppConsent({ patientId: patient.id, granted: true, version: WA_CONSENT_VERSION });
+          if (!r.ok) {
+            setError(WA_CONSENT_UI_COPY.savedWithoutConsent + r.error);
+            return;
+          }
+        } catch {
+          setError(WA_CONSENT_UI_COPY.savedWithoutConsent + WA_CONSENT_UI_COPY.loadFailed);
+          return;
+        }
+      }
+
       onClose();
       // PF-0d: sin `router.refresh()`. `updatePatient`, `setPatientCoverage` y
       // `assignPatientToPractitioner` revalidan `/pacientes/<id>` en su OK:
@@ -420,6 +501,20 @@ export function EditPatientModal(props: EditPatientModalProps) {
             <FormField label="Teléfono" name="phone" defaultValue={patient.phone ?? ""} />
           </Grid2>
         </Section>
+
+        {whatsappActive && waState !== null && (
+          <Section title={WA_CONSENT_UI_COPY.sectionTitle}>
+            <WhatsAppConsentRow
+              state={waState}
+              error={waError}
+              grantChecked={waGrant}
+              onGrantChange={setWaGrant}
+              onRevoke={() => void revokeWa()}
+              revoking={waRevoking}
+              disabled={pending}
+            />
+          </Section>
+        )}
 
         <Section title="Cobertura - Obra social">
           <FormField

@@ -11,6 +11,9 @@ import { Section } from "@/components/patients/profile/ui";
 import { createPatient } from "@/lib/patients";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { patientCreatePayload } from "@/components/patients/patient-form-payload";
+import { useToast } from "@/components/ui/toast";
+import { WA_CONSENT_UI_COPY, WhatsAppConsentField, consentPhoneError } from "@/components/patients/whatsapp-consent-field";
+import { WA_CONSENT_VERSION } from "@/lib/whatsapp/types";
 
 type InsurerOption = { id: string; name: string };
 type PractitionerOption = { id: string; name: string };
@@ -22,6 +25,7 @@ type PractitionerOption = { id: string; name: string };
 export function NewPatientModal({
   insurers,
   assignees,
+  whatsappActive = false,
   onClose,
 }: {
   insurers: InsurerOption[];
@@ -32,6 +36,11 @@ export function NewPatientModal({
    * profesional de siempre, que queda a su cargo.
    */
   assignees?: PractitionerOption[];
+  /**
+   * WA-U3 (brief §26.5): el consultorio manda avisos por WhatsApp (modo ≠ off + cuenta ACTIVE, lo calcula la página).
+   * Con true aparece la casilla de consentimiento, destildada. La Secretaría también la ve: es un dato administrativo.
+   */
+  whatsappActive?: boolean;
   onClose: () => void;
 }) {
   const mode = assignees ? "admin" : "full";
@@ -47,15 +56,25 @@ export function NewPatientModal({
   const [otherInsurer, setOtherInsurer] = useState("");
   // Sin preselección aunque haya uno solo: la ficha queda a cargo de quien se elija y decide quién ve la HC.
   const [assignTo, setAssignTo] = useState("");
+  const [waConsent, setWaConsent] = useState(false);
+  const toast = useToast();
   // Dirty-guard (A2b-S-ui): Esc / fondo / X ya no tiran la ficha a medio cargar.
   const formRef = useRef<HTMLFormElement | null>(null);
-  const { dirty, onFormInput } = useFormDirty(formRef, { coverage, otherInsurer, assignTo });
+  const { dirty, onFormInput } = useFormDirty(formRef, { coverage, otherInsurer, assignTo, waConsent });
 
   const submit = (formData: FormData) => {
     setError(null);
     setFieldErrors({});
     if (mode === "admin" && !assignTo) {
       setFieldErrors({ assignTo: ["Elegí el profesional a cargo."] });
+      return;
+    }
+    // WA-U3: el consentimiento se ancla al celular cargado (WA-D17); sin celular, se frena ANTES de crear para no
+    // dejar un alta a medias.
+    const wantsWa = whatsappActive && waConsent;
+    const phoneError = consentPhoneError(wantsWa, String(formData.get("phone") ?? ""));
+    if (phoneError) {
+      setFieldErrors({ phone: [phoneError] });
       return;
     }
     start(async () => {
@@ -67,6 +86,21 @@ export function NewPatientModal({
         setError(result.error);
         if (result.fieldErrors) setFieldErrors(result.fieldErrors);
         return;
+      }
+      // WA-U3: después del alta (la action ancla al teléfono guardado). Si falla, el paciente ya quedó creado: se avisa
+      // con un toast (sobrevive a la navegación) y se sigue a su ficha, donde se puede volver a registrar.
+      if (wantsWa) {
+        try {
+          const { setPatientWhatsAppConsent } = await import("@/lib/whatsapp-consent-actions");
+          const c = await setPatientWhatsAppConsent({
+            patientId: result.data.id,
+            granted: true,
+            version: WA_CONSENT_VERSION,
+          });
+          if (!c.ok) toast.warning(WA_CONSENT_UI_COPY.createdWithoutConsent, { description: c.error });
+        } catch {
+          toast.warning(WA_CONSENT_UI_COPY.createdWithoutConsent, { description: "Probá de nuevo desde «Editar paciente»." });
+        }
       }
       onClose();
       // PF-0d: sin `router.refresh()` antes del push: `createPatient` ya
@@ -117,6 +151,8 @@ export function NewPatientModal({
             placeholder="Ej: PAMI, IOSFA…"
           />
         )}
+
+        <WhatsAppConsentField active={whatsappActive} checked={waConsent} onChange={setWaConsent} disabled={pending} />
 
         {assignees && (
           <FormField
