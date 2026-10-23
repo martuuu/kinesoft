@@ -1,7 +1,7 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import { BRAND_NAME } from "@/lib/brand";
-import { fakeMpAllowed, saasBillingMode } from "@/lib/env";
+import { fakeMpAllowed, saasBillingMode, saasMpCheckoutNotify } from "@/lib/env";
 import { parseARS } from "@/lib/format";
 import { AR_OFFSET } from "@/lib/datetime-ar";
 import { MP_API_BASE, MP_FAKE_PATH, MP_USERS_ME_PATH } from "@/lib/mp-connect/constants";
@@ -363,12 +363,14 @@ export async function getSaasPayment(id: string): Promise<R<SaasPayment>> {
 
 /**
  * `notification_url` del checkout de un cargo: la ruta de siempre con `?scope=saas` (MPS-D9) para que la ruta
- * (C-MPS6) la mande a la rama de la suscripción y verifique con `MP_WEBHOOK_SECRET`. `SAAS_MP_CHECKOUT_NOTIFY=off` la
- * omite (MP avisa entonces al webhook de la aplicación, sin `scope`, y el camino legado delega por la referencia
- * `saas:`): la salida por si S-diagnóstico muestra que MP no firma las notificaciones de una `notification_url` propia.
+ * (C-MPS6) la mande a la rama de la suscripción y verifique con `MP_WEBHOOK_SECRET`. `SAAS_MP_CHECKOUT_NOTIFY=panel` la
+ * omite (MP avisa entonces al webhook configurado en el panel de la aplicación, sin `scope`, y el camino legado delega
+ * por la referencia `saas:`): la salida por si S-diagnóstico muestra que MP no firma las notificaciones de una
+ * `notification_url` propia. MPS-2b2: se lee por el getter de `lib/env.ts` (`scope|panel`, validado al boot); MPS-1b
+ * había leído un `on|off` propio que el schema de ENV rechaza (conflicto del cierre de X1).
  */
 function checkoutNotificationUrl(): string | null {
-  if (process.env.SAAS_MP_CHECKOUT_NOTIFY?.trim().toLowerCase() === "off") return null;
+  if (saasMpCheckoutNotify() === "panel") return null;
   return `${mpAppUrl().replace(/\/+$/, "")}/api/webhooks/mercadopago?scope=saas`;
 }
 
@@ -426,6 +428,25 @@ export async function createChargeCheckout(input: {
     const initPoint = strOrNull(o?.init_point);
     if (!preferenceId || !initPoint) return INVALID;
     return { ok: true, data: { preferenceId, initPoint, expiresAt: new Date(Date.parse(String(body.expiration_date_to))) } };
+  });
+}
+
+/**
+ * Relee el link de pago de un cargo (MPS-2b2, `createOrReuseChargeCheckout`): la base guarda solo el id de la
+ * preferencia, el monto esperado y cuándo se creó (M16), no el `init_point`, y el link no se arma a mano (el formato de
+ * la URL es de MP). `expiresAt` null = la preferencia no vence. Una preferencia de otro collector → `http` 404.
+ */
+export async function getChargeCheckout(preferenceId: string): Promise<R<Omit<SaasChargeCheckout, "expiresAt"> & { expiresAt: Date | null }>> {
+  return call(async (token, base) => {
+    if (!MP_ID_RE.test(String(preferenceId ?? ""))) return INVALID;
+    const r = await mpFetch(`/checkout/preferences/${encodeURIComponent(preferenceId)}`, { token, apiBase: base });
+    if (!r.ok) return errOf(r);
+    const o = obj(r.json);
+    const id = typeof o?.id === "string" && MP_ID_RE.test(o.id) ? o.id : null;
+    const initPoint = strOrNull(o?.init_point);
+    if (!o || !id || !initPoint) return INVALID;
+    const expiresAt = o.expires === true ? dateOrNull(o.expiration_date_to) : null;
+    return { ok: true, data: { preferenceId: id, initPoint, expiresAt } };
   });
 }
 
