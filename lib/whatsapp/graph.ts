@@ -399,7 +399,7 @@ const APP_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
  * `example.header_handle` del alta de una plantilla con header DOCUMENT. Dos pasos (doc de Meta):
  *   1. `POST /{app_id}/uploads?file_name&file_length&file_type` → `{ id: "upload:…" }` (abre la sesión);
  *   2. `POST /{upload_id}` con `Authorization: OAuth <token>`, `file_offset: 0` y los bytes crudos → `{ h }`.
- * El `app_id` es el de la app de KineSoft (no el WABA): la sesión es de la app. Nunca tira (como todo este módulo); el
+ * El `app_id` es el de la app de la plataforma (no el WABA): la sesión es de la app. Nunca tira (como todo este módulo); el
  * id de sesión no se loguea (`logPath` corta el `?sig=` y acorta el resto).
  */
 export async function uploadHeaderSample(

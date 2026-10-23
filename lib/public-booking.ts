@@ -914,8 +914,10 @@ export async function submitPublicBooking(
         // `phone_changed` (lib/whatsapp/logic.ts) y no se manda nada hasta que el staff lo revise: un anónimo con el
         // DNI de otro no puede desviar los avisos a su número.
         if (waConsent?.outcome === "saved") {
+          // WA-S8 H-1: el turnero anónimo no revierte una BAJA (REVOKED): eso queda para ALTA, el portal o la
+          // Secretaría. OR explícito: un NOT REVOKED en SQL también dejaría afuera a los NULL (nunca respondió).
           await tx.patient.updateMany({
-            where: { id: resolution.patientId, tenantId: tenant.id },
+            where: { id: resolution.patientId, tenantId: tenant.id, OR: [{ waConsent: null }, { waConsent: "GRANTED" }] },
             data: {
               waConsent: "GRANTED",
               waConsentAt: new Date(),

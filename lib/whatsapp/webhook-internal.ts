@@ -293,7 +293,7 @@ async function qualityChange(acc: WaRoutedAccount, value: Obj): Promise<void> {
 
 const PARTNER_REMOVED_COPY = {
   title: "WhatsApp se desconectó desde Meta",
-  body: "Se quitó el acceso de KineSoft a la cuenta de WhatsApp Business del consultorio desde Meta. Los avisos por WhatsApp quedan apagados hasta que el titular lo vuelva a conectar desde Configuración → WhatsApp.",
+  body: "Se quitó el acceso de la plataforma a la cuenta de WhatsApp Business del consultorio desde Meta. Los avisos por WhatsApp quedan apagados hasta que el titular lo vuelva a conectar desde Configuración → WhatsApp.",
 } as const;
 
 /** Eventos de Meta que son un problema de la cuenta (no la desconectan, pero el titular tiene que mirarlo). */

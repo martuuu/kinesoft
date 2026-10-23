@@ -6,7 +6,9 @@
  *    ese email);
  *  - `scripts/create-tenant.ts`: alta asistida que corre Martin a mano;
  *  - `lib/identity/auth-admin.ts`: el puerto (traduce `emailConfirm` → `email_confirm`);
- *  - `scripts/diagnose-auth.ts`: verificación del contrato del fake contra Supabase real (lo corre Martin).
+ *  - `scripts/diagnose-auth.ts`: verificación del contrato del fake contra Supabase real (lo corre Martin);
+ *  - `scripts/lib/qa-tenants-core.ts`: cuentas de los consultorios QA (INF-S, §26.8), con emails de Martin por
+ *    plus-addressing y solo para slugs `qa-`; lo corre Martin a mano, como `create-tenant`.
  * El H5 original (signup que auto-confirmaba cualquier email tipeado) no puede volver por otro archivo.
  */
 import { describe, it, expect } from "vitest";
@@ -19,6 +21,7 @@ const ALLOWED = new Set([
   "lib/identity/auth-admin.ts",
   "scripts/create-tenant.ts",
   "scripts/diagnose-auth.ts",
+  "scripts/lib/qa-tenants-core.ts",
 ]);
 const PATTERN = /\b(email_confirm|emailConfirm)\s*:\s*true\b/;
 
