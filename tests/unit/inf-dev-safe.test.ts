@@ -163,7 +163,7 @@ describe("[INF-DEV] el script por texto", () => {
     // Imports/llamadas reales (la cabecera nombra `dotenv` y `@next/env` justamente para decir que no se usan).
     expect(src).not.toMatch(/(from|import)\s*\(?\s*["'](dotenv|@next\/env)|require\(\s*["'](dotenv|@next\/env)|loadEnvConfig\s*\(/);
     expect(src).not.toMatch(/process\.env\[[^\]]+\]\s*=|Object\.assign\(\s*process\.env/);
-    expect(src).not.toMatch(/console\.\w+\([^)]*(supabaseUrl|prodRef)/);
+    expect(src).not.toMatch(/console\.\w+\([^)]*(supabaseUrl|prodRef|databaseUrl|directUrl)/);
   });
   it("[INF-DEV] package.json: dev → dev-safe, dev:local = dev:mpfake, alias y scripts de Martin", () => {
     const pkg = JSON.parse(readFileSync(resolve(__dirname, "../../package.json"), "utf8"));
@@ -174,6 +174,65 @@ describe("[INF-DEV] el script por texto", () => {
     expect(s["dev:wafake"]).toBe("npm run dev:local --");
     expect(s["db:prod:precheck"]).toBe("dotenv -e .env.prod.local -- tsx scripts/prod-precheck.ts");
     expect(s["qa:tenants"]).toBe("tsx --conditions=react-server scripts/qa-tenants.ts");
-    expect(s["saas:reanchor"]).toBe("tsx scripts/saas-reanchor.ts");
+    // [ZF1] el núcleo del re-anclaje es `server-only`: sin la condición react-server el import tira y el script no corre.
+    expect(s["saas:reanchor"]).toBe("tsx --conditions=react-server scripts/saas-reanchor.ts");
+  });
+});
+
+describe("[ZF1] base de datos efectiva de next dev (DATABASE_URL / DIRECT_URL)", () => {
+  const PROD_DB = "postgresql://postgres.prodmarcadoabcdefghij:CLAVE-DB-MARCADA@aws-0-sa-east-1.pooler.supabase.com:6543/postgres";
+  const LOCAL_DB = "postgresql://kinesoft:local@localhost:5433/kinesoft";
+  const noDbLeak = (out: unknown) => {
+    const s = JSON.stringify(out);
+    expect(s).not.toContain("CLAVE-DB-MARCADA");
+    expect(s).not.toContain("pooler.supabase.com");
+    expect(s).not.toContain(PROD_REF);
+  };
+
+  it("[ZF1] DATABASE_URL remota en .env (sin pisar en .env.local) → bloquea aunque el Supabase sea local, sin imprimir el valor", () => {
+    const dir = tmpRepo({
+      ".env": `DATABASE_URL=${PROD_DB}\nDIRECT_URL=${PROD_DB}\n`,
+      ".env.local": "NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321\n",
+    });
+    const eff = resolveEffectiveSupabase({ cwd: dir, env: {} });
+    const d = decideDevStart(eff);
+    expect(d.action).toBe("block");
+    expect(d.reason).toBe("remote-db");
+    expect(d.message).toContain("DATABASE_URL sale de .env");
+    noDbLeak(d);
+    noDbLeak(eff.dbSources);
+  });
+
+  it("[ZF1] DIRECT_URL remota con DATABASE_URL local → bloquea (nombra DIRECT_URL y el archivo)", () => {
+    const dir = tmpRepo({
+      ".env.local": `DATABASE_URL=${LOCAL_DB}\nNEXT_PUBLIC_SUPABASE_URL=http://localhost:54321\n`,
+      ".env": `DIRECT_URL=${PROD_DB}\n`,
+    });
+    const d = decideDevStart(resolveEffectiveSupabase({ cwd: dir, env: {} }));
+    expect(d.action).toBe("block");
+    expect(d.reason).toBe("remote-db");
+    expect(d.message).toContain("DIRECT_URL sale de .env");
+    noDbLeak(d);
+  });
+
+  it("[ZF1] las dos locales (.env.local pisa al .env de prod) → arranca; URL de base inválida → bloquea", () => {
+    const ok = tmpRepo({
+      ".env": `DATABASE_URL=${PROD_DB}\nDIRECT_URL=${PROD_DB}\nNEXT_PUBLIC_SUPABASE_URL=${PROD_URL}\n`,
+      ".env.local": `DATABASE_URL=${LOCAL_DB}\nDIRECT_URL=${LOCAL_DB}\nNEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321\n`,
+    });
+    expect(decideDevStart(resolveEffectiveSupabase({ cwd: ok, env: {} })).action).toBe("start");
+    const bad = decideDevStart({ supabaseUrl: undefined, prodRef: "", allowRemote: "", databaseUrl: "no es url", databaseUrlSource: ".env" });
+    expect(bad).toMatchObject({ action: "block", reason: "remote-db" });
+    expect(bad.message).not.toContain("no es url");
+  });
+
+  it("[ZF1] process.env manda; ALLOW_DEV_REMOTE_SUPABASE no alcanza para la base (es ALLOW_DEV_REMOTE_DB=1)", () => {
+    const dir = tmpRepo({ ".env": `DATABASE_URL=${PROD_DB}\n` });
+    const local = resolveEffectiveSupabase({ cwd: dir, env: { DATABASE_URL: LOCAL_DB } });
+    expect(decideDevStart(local).action).toBe("start");
+    const remote = resolveEffectiveSupabase({ cwd: dir, env: { ALLOW_DEV_REMOTE_SUPABASE: "1" } });
+    expect(decideDevStart(remote)).toMatchObject({ action: "block", reason: "remote-db" });
+    const both = resolveEffectiveSupabase({ cwd: dir, env: { ALLOW_DEV_REMOTE_SUPABASE: "1", ALLOW_DEV_REMOTE_DB: "1" } });
+    expect(decideDevStart(both).action).toBe("start");
   });
 });

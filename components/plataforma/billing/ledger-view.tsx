@@ -478,12 +478,14 @@ export function TenantLedgerView({ ledger, mode = "off" }: { ledger: PlatformTen
   const [voiding, setVoiding] = useState<BillingChargeRow | null>(null);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [customPrice, setCustomPriceValue] = useState<number | null>(ledger.customPriceCents);
-  const [customPlan, setCustomPlan] = useState<SaasPlan>(ledger.plan);
+  // ZF1: el plan GUARDADO del precio a medida (MPS-D14); sin precio atado, el actual del consultorio.
+  const savedPricePlan = ledger.customPricePlan ?? ledger.plan;
+  const [customPlan, setCustomPlan] = useState<SaasPlan>(savedPricePlan);
   const [pageError, setPageError] = useState<string | null>(null);
 
   // El refresh trae el precio guardado (el propio o el de otro superadmin): el input lo refleja.
   useEffect(() => setCustomPriceValue(ledger.customPriceCents), [ledger.customPriceCents]);
-  useEffect(() => setCustomPlan(ledger.plan), [ledger.plan]);
+  useEffect(() => setCustomPlan(savedPricePlan), [savedPricePlan]);
 
   const openCharges = openChargesOf(ledger.charges);
 
@@ -634,7 +636,7 @@ export function TenantLedgerView({ ledger, mode = "off" }: { ledger: PlatformTen
         saved={ledger.customPriceCents}
         planPriceCents={ledger.planPriceCents}
         plan={customPlan}
-        savedPlan={ledger.plan}
+        savedPlan={savedPricePlan}
         pending={busy}
         onChange={setCustomPriceValue}
         onPlanChange={setCustomPlan}

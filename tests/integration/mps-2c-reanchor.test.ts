@@ -68,7 +68,7 @@ describe.skipIf(!RUN)("[MPS-2c] re-anclaje al 4", () => {
   const sub = (t: EphemeralTenant) => db.saasSubscription.findUniqueOrThrow({ where: { tenantId: t.tenantId } });
   const run = (ids: string[], apply: boolean) => runSaasReanchor({ db, tenantIds: ids, apply, now: NOW });
 
-  it("[MPS-2c] reanclaje sin cargos: billableFrom = hoy, primer 4, débito permitido; dry-run no escribe; idempotente", async () => {
+  it("[MPS-2c] reanclaje sin cargos: billableFrom = hoy, primer 4, débito sin tocar [ZF1]; dry-run no escribe; idempotente", async () => {
     const t = await legacy();
     const before = await sub(t);
 
@@ -96,7 +96,7 @@ describe.skipIf(!RUN)("[MPS-2c] re-anclaje al 4", () => {
     expect(s.anchorDay).toBe(4);
     expect(toARDateKey(s.nextChargeAt!)).toBe("2030-04-04");
     expect(keyFromDbDate(s.billableFrom!)).toBe("2030-03-10");
-    expect(s.autoDebitAllowed).toBe(true);
+    expect(s.autoDebitAllowed).toBe(false); // [ZF1] se conserva (era el bloqueo legado)
 
     const again = await run([t.tenantId], true);
     expect(again.updated).toBe(0);
@@ -118,7 +118,7 @@ describe.skipIf(!RUN)("[MPS-2c] re-anclaje al 4", () => {
     const s = await sub(t);
     expect(keyFromDbDate(s.billableFrom!)).toBe("2030-03-21");
     expect(toARDateKey(s.nextChargeAt!)).toBe("2030-04-04");
-    expect(s.autoDebitAllowed).toBe(true);
+    expect(s.autoDebitAllowed).toBe(false); // [ZF1] se conserva (era el bloqueo legado)
     // El cargo cobrado no se toca.
     const [c] = await db.saasCharge.findMany({ where: { tenantId: t.tenantId } });
     expect(c).toMatchObject({ amountCents: 3_100_000, status: "PAID" });

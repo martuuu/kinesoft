@@ -8,7 +8,8 @@
  *  - sin cargos: billableFrom = max(inicio del cobro, hoy), próximo cobro = el primer 4 ≥ eso;
  *  - con cargos: billableFrom = el próximo cobro viejo (lo cobrado no se toca), próximo cobro = el primer 4 ≥ eso;
  *    el tramo entre los dos lo cobra el primer cargo como proporcional (se imprime proyectado);
- *  - siempre autoDebitAllowed = true.
+ *  - `autoDebitAllowed` no se toca (ZF1: es el bloqueo de Plataforma); se imprime el valor actual. Las filas de antes
+ *    de M16 que salgan «débito permitido no» se desbloquean desde Plataforma si corresponde.
  * No toca cargos, pagos ni ajustes. Idempotente: una segunda corrida saltea lo ya anclado.
  *
  * Seguridad:
@@ -74,7 +75,7 @@ async function main() {
         `  • ${x.action === "skip" ? "skip  " : "update"} ${x.tenantId} «${x.tenantName}» · ${x.saasPlan}/${x.subscriptionStatus} · ` +
           `${x.hasCharges ? "con cargos" : "sin cargos"} · ancla ${x.oldAnchorDay} → ${x.newAnchorDay} · ` +
           `próximo cobro ${x.oldNextChargeOn ?? "-"} → ${x.newNextChargeOn} · billableFrom ${x.oldBillableFrom ?? "-"} → ${x.billableFrom} · ` +
-          `débito permitido ${x.oldAutoDebitAllowed ? "sí" : "no"} → sí · stub proyectado ${stub}`
+          `débito permitido ${x.oldAutoDebitAllowed ? "sí" : "no"} (no cambia) · stub proyectado ${stub}`
       );
     }
     if (!apply) {

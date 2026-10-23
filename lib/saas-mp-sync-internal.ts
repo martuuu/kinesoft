@@ -25,6 +25,8 @@ import "server-only";
  *     Tampoco audita: el caller audita (mismo criterio que el escritor).
  *   - **Nunca tira** hacia el caller: un MP caído no puede tumbar un request ni el cron. Todo vuelve como resultado.
  *   - Plata en centavos `Int`; fechas civiles AR (`toARDateKey`) — en Vercel el host está en UTC.
+ *   - Logs con el `name` del error, nunca su mensaje (ZF1): el de Prisma o el de fetch puede traer la URL de conexión,
+ *     el email del pagador o el cuerpo de MP.
  */
 import { createHash, randomUUID } from "node:crypto";
 import type { SaasCollectionMethod, SaasPlan, SubscriptionStatus, TenantStatus } from "@prisma/client";
@@ -186,7 +188,7 @@ async function projectedChargeCents(c: SubCtx, periodStart: DateKey, prices: Map
   if (t.status !== "ACTIVE") return 0;
   const base = baseOn(c, periodStart, prices);
   if (base === null) return null;
-  const [rows, chargeCount, credit] = await Promise.all([
+  const [rows, chargeCount, credit, olderDebt] = await Promise.all([
     prismaService.saasAdjustment.findMany({
       where: { tenantId: c.tenantId, appliedChargeId: null, effectiveOn: { lte: dbDateFromKey(periodStart) } },
       orderBy: [{ effectiveOn: "asc" }, { createdAt: "asc" }],
@@ -194,6 +196,7 @@ async function projectedChargeCents(c: SubCtx, periodStart: DateKey, prices: Map
     }),
     prismaService.saasCharge.count({ where: { tenantId: c.tenantId } }),
     prismaService.saasPayment.aggregate({ where: { tenantId: c.tenantId, status: "APPROVED", chargeId: null }, _sum: { amountCents: true } }),
+    olderOpenDebtCents(c.tenantId, periodStart),
   ]);
   const pending: PendingAdjustment[] = rows.map((r) => ({ id: r.id, kind: r.kind, amountCents: r.amountCents }));
   // El stub (alta a mitad de mes) lo crea el cron recién con el primer cargo: si todavía no existe, se proyecta.
@@ -204,39 +207,73 @@ async function projectedChargeCents(c: SubCtx, periodStart: DateKey, prices: Map
     }
   }
   const amount = composeCharge({ baseCents: base, pending }).amountCents;
-  return Math.max(0, amount - (credit._sum.amountCents ?? 0));
+  // ZF1: `applyCreditInTx` usa el saldo a cuenta primero en los cargos OPEN más viejos; al cargo nuevo solo le llega lo
+  // que sobra. Antes se restaba entero y, con deuda vieja, el débito del 4 salía de menos.
+  const usable = Math.max(0, (credit._sum.amountCents ?? 0) - olderDebt);
+  return Math.max(0, amount - usable);
 }
+
+/** Lo que falta pagar de los cargos OPEN de períodos anteriores a `periodStart` (pagos APROBADOS imputados). */
+async function olderOpenDebtCents(tenantId: string, periodStart: DateKey): Promise<number> {
+  const open = await prismaService.saasCharge.findMany({
+    where: { tenantId, status: "OPEN", periodStart: { lt: dbDateFromKey(periodStart) } },
+    select: { id: true, amountCents: true },
+  });
+  if (open.length === 0) return 0;
+  const paid = await prismaService.saasPayment.groupBy({
+    by: ["chargeId"],
+    where: { tenantId, status: "APPROVED", chargeId: { in: open.map((o) => o.id) } },
+    _sum: { amountCents: true },
+  });
+  const byId = new Map(paid.map((p) => [p.chargeId, p._sum.amountCents ?? 0]));
+  return open.reduce((s, o) => s + Math.max(0, o.amountCents - (byId.get(o.id) ?? 0)), 0);
+}
+
+/** Lo que falta pagar del cargo del período `periodStart`: null = no hay cargo; 0 = no está OPEN o ya está cubierto. */
+async function remainingOfPeriodCents(tenantId: string, periodStart: DateKey): Promise<number | null> {
+  const charge = await prismaService.saasCharge.findUnique({
+    where: { tenantId_periodStart: { tenantId, periodStart: dbDateFromKey(periodStart) } },
+    select: { id: true, status: true, amountCents: true },
+  });
+  if (!charge) return null;
+  if (charge.status !== "OPEN") return 0;
+  const paid = await prismaService.saasPayment.aggregate({
+    where: { tenantId, chargeId: charge.id, status: "APPROVED" },
+    _sum: { amountCents: true },
+  });
+  return Math.max(0, charge.amountCents - (paid._sum.amountCents ?? 0));
+}
+
+/**
+ * Último día (AR) en que MP puede reintentar el débito del 4 (recicla un rechazado durante unos días). Hasta acá, con
+ * el cargo del 4 todavía OPEN, el preapproval queda en lo que falta pagar.
+ */
+const DEBIT_RETRY_LAST_DAY = 10;
 
 /**
  * Estado deseado del preapproval HOY (`desiredDebit`): la base del próximo período fuera de la ventana; los días 3 y 4
  * la proyección del cargo del 4 (el 4, si el cron ya creó el cargo, lo que falta pagar de ese cargo).
+ *
+ * ZF1 (revisor ZA de T6+T7): los días 5..`DEBIT_RETRY_LAST_DAY`, si el cargo del 4 sigue OPEN con saldo, el deseado es
+ * ese saldo. Antes el 5 se «restauraba» a la base del mes siguiente y el reintento de MP de un débito rechazado (o de
+ * un cargo pagado en parte) cobraba la base: de más o de menos. Se pasa como `nextBaseCents` porque `desiredDebit`
+ * (`lib/saas-mp-logic.ts`, puro, ajeno) solo mira la proyección en la ventana del 3-4; el resultado es el mismo
+ * (mínimo de MP, 0 → paused).
  */
 async function desiredFor(c: SubCtx, now: Date, prices: Map<SaasPlan, number | null>, forceMethod?: SaasCollectionMethod): Promise<DesiredDebit | null> {
   try {
     const today = toARDateKey(now);
     const nextKey = c.nextChargeAt ? toARDateKey(c.nextChargeAt) : nextAnchorKey(today);
-    const nextBaseCents = baseOn(c, nextKey > today ? nextKey : nextAnchorKey(today), prices);
+    let nextBaseCents = baseOn(c, nextKey > today ? nextKey : nextAnchorKey(today), prices);
     const day = dayOfKey(today);
     let projectedCents: number | null = null;
     if (day === SAAS_ANCHOR_DAY - 1 || day === SAAS_ANCHOR_DAY) {
       const periodStart = day === SAAS_ANCHOR_DAY ? today : nextAnchorKey(today);
-      const charge =
-        day === SAAS_ANCHOR_DAY
-          ? await prismaService.saasCharge.findUnique({
-              where: { tenantId_periodStart: { tenantId: c.tenantId, periodStart: dbDateFromKey(periodStart) } },
-              select: { id: true, status: true, amountCents: true },
-            })
-          : null;
-      if (charge) {
-        if (charge.status !== "OPEN") projectedCents = 0;
-        else {
-          const paid = await prismaService.saasPayment.aggregate({
-            where: { tenantId: c.tenantId, chargeId: charge.id, status: "APPROVED" },
-            _sum: { amountCents: true },
-          });
-          projectedCents = Math.max(0, charge.amountCents - (paid._sum.amountCents ?? 0));
-        }
-      } else projectedCents = await projectedChargeCents(c, periodStart, prices);
+      const remaining = day === SAAS_ANCHOR_DAY ? await remainingOfPeriodCents(c.tenantId, periodStart) : null;
+      projectedCents = remaining ?? (await projectedChargeCents(c, periodStart, prices));
+    } else if (day > SAAS_ANCHOR_DAY && day <= DEBIT_RETRY_LAST_DAY) {
+      const remaining = await remainingOfPeriodCents(c.tenantId, `${today.slice(0, 8)}${String(SAAS_ANCHOR_DAY).padStart(2, "0")}` as DateKey);
+      if (remaining !== null && remaining > 0) nextBaseCents = remaining;
     }
     return desiredDebit({
       today,
@@ -249,7 +286,7 @@ async function desiredFor(c: SubCtx, now: Date, prices: Map<SaasPlan, number | n
       minDebitCents: mpMinDebitCents() ?? undefined,
     });
   } catch (err) {
-    logger.error("saas_mp_sync.desired_failed", { tenantId: c.tenantId, error: err instanceof Error ? err.message : String(err) });
+    logger.error("saas_mp_sync.desired_failed", { tenantId: c.tenantId, error: err instanceof Error ? err.name : "unknown" });
     return null;
   }
 }
@@ -298,7 +335,7 @@ async function promote(preapprovalId: string, now: Date, source: "reconcile" | "
     const r = await consumeSaasPreapproval(preapprovalId, { now, source });
     return r.ok;
   } catch (err) {
-    logger.error("saas_mp_sync.promote_failed", { preapprovalId, error: err instanceof Error ? err.message : String(err) });
+    logger.error("saas_mp_sync.promote_failed", { preapprovalId, error: err instanceof Error ? err.name : "unknown" });
     return false;
   }
 }
@@ -493,7 +530,7 @@ export async function startPreapprovalFlow(p: {
     logger.info("saas_mp_sync.preapproval_started", { tenantId: p.tenantId, actorUserId: p.actorUserId, amountCents });
     return { ok: true, initPoint, preapprovalId: pre.id, reused: false };
   } catch (err) {
-    logger.error("saas_mp_sync.start_failed", { tenantId: p.tenantId, error: err instanceof Error ? err.message : String(err) });
+    logger.error("saas_mp_sync.start_failed", { tenantId: p.tenantId, error: err instanceof Error ? err.name : "unknown" });
     return { ok: false, reason: "mp_unavailable" };
   }
 }
@@ -542,12 +579,35 @@ export async function refreshPendingPreapproval(p: { tenantId: string; now: Date
     }
     return { status: await statusOf(c) };
   } catch (err) {
-    logger.error("saas_mp_sync.refresh_failed", { tenantId: p.tenantId, error: err instanceof Error ? err.message : String(err) });
+    logger.error("saas_mp_sync.refresh_failed", { tenantId: p.tenantId, error: err instanceof Error ? err.name : "unknown" });
     try {
       return { status: await statusOf(await loadCtx(p.tenantId)) };
     } catch {
       return { status: "none" };
     }
+  }
+}
+
+/**
+ * «Cancelar» de la banda «Falta autorizar el débito…» (ZF1): cancela en MP el preapproval PENDIENTE y lo limpia; el
+ * vigente (si hay) sigue como estaba. Idempotente (sin pendiente → el estado actual). Si MP no contesta, el pendiente
+ * queda (limpiarlo sin cancelarlo dejaría una autorización viva sin nadie que la mire) → `mp_unavailable`.
+ * Sin Actor ni audit: lo hace la action (`cancelPendingAutoDebit` de `lib/saas-billing-mp.ts`).
+ */
+export async function cancelPendingPreapproval(p: {
+  tenantId: string;
+  now: Date;
+}): Promise<{ ok: true; status: BillingAutoDebitStatus } | { ok: false; reason: SaasMpSyncFailure }> {
+  try {
+    const off = modeFailure();
+    if (off) return { ok: false, reason: off };
+    const c = await loadCtx(p.tenantId);
+    if (!c) return { ok: false, reason: "not_found" };
+    if (c.mpPendingPreapprovalId && !(await abandonPending(c))) return { ok: false, reason: "mp_unavailable" };
+    return { ok: true, status: await statusOf(await loadCtx(p.tenantId)) };
+  } catch (err) {
+    logger.error("saas_mp_sync.cancel_pending_failed", { tenantId: p.tenantId, error: err instanceof Error ? err.name : "unknown" });
+    return { ok: false, reason: "mp_unavailable" };
   }
 }
 
@@ -617,26 +677,53 @@ export async function createOrReuseChargeCheckout(p: { tenantId: string; chargeI
     }
     return { ok: true, initPoint: created.data.initPoint, preferenceId: created.data.preferenceId, reused: false };
   } catch (err) {
-    logger.error("saas_mp_sync.checkout_failed", { tenantId: p.tenantId, chargeId: p.chargeId, error: err instanceof Error ? err.message : String(err) });
+    logger.error("saas_mp_sync.checkout_failed", { tenantId: p.tenantId, chargeId: p.chargeId, error: err instanceof Error ? err.name : "unknown" });
     return { ok: false, reason: "mp_unavailable" };
   }
 }
 
-/** Después del commit de un cambio de plan/baja/método: lleva el preapproval al `desiredDebit`. Nunca tira (loguea). */
-export async function syncSaasMpAfterCommit(tenantId: string): Promise<void> {
+/** Cancela en MP el preapproval PENDIENTE y lo limpia. 404 = ya no existe (se limpia igual); otro error de MP → no se limpia (quedaría huérfano autorizable). */
+async function abandonPending(c: SubCtx): Promise<boolean> {
+  const id = c.mpPendingPreapprovalId;
+  if (!id) return true;
+  const g = await getPreapproval(id);
+  if (!g.ok && !(g.kind === "http" && g.status === 404)) return false;
+  if (g.ok && g.data.status !== "cancelled") {
+    const u = await updatePreapproval(id, { status: "cancelled" });
+    if (!u.ok) return false;
+  }
+  await clearPending(c.tenantId, id);
+  return true;
+}
+
+/**
+ * Después del commit de un cambio de plan/baja/método: lleva el preapproval al `desiredDebit`. Nunca tira (loguea).
+ *
+ * `abandonPending` (ZF1, revisor ZA de T6+T7): el consultorio ELIGIÓ otro método (`setCollectionMethod`) con una
+ * autorización de débito a medio hacer → se cancela en MP y se limpia; si no, la banda «Falta autorizar…» no se iba y
+ * una autorización tardía lo pasaba a débito contra lo que eligió. NO se hace por `collectionMethod !== AUTO_DEBIT` en
+ * cualquier sync (lo que pedía el revisor, literal): el primer débito se autoriza con el método todavía en TRANSFER o
+ * sin elegir (AUTO_DEBIT llega con la promoción), y cualquier otro sync del medio (cambio de plan, baja, webhook) le
+ * cancelaría la autorización al consultorio mientras está en la página de MP.
+ */
+export async function syncSaasMpAfterCommit(tenantId: string, opts: { abandonPending?: boolean } = {}): Promise<void> {
   try {
     if (modeFailure()) return;
     const c = await loadCtx(tenantId);
     if (!c) return;
     const now = new Date();
     if (c.mpRetiredPreapprovalId) await stepRetired(c);
-    if (c.mpPendingPreapprovalId && (!c.autoDebitAllowed || c.tenant.subscriptionStatus === "CANCELLED")) await stepPending(c, now, "reconcile");
+    if (opts.abandonPending && c.mpPendingPreapprovalId && c.collectionMethod !== "AUTO_DEBIT") {
+      if (!(await abandonPending(c))) logger.warn("saas_mp_sync.abandon_pending_failed", { tenantId });
+    } else if (c.mpPendingPreapprovalId && (!c.autoDebitAllowed || c.tenant.subscriptionStatus === "CANCELLED")) {
+      await stepPending(c, now, "reconcile");
+    }
     if (c.mpPreapprovalId) {
       const r = await stepCurrent(c, await desiredFor(c, now, await planPrices()), now, "reconcile");
       if (!r.ok) logger.warn("saas_mp_sync.after_commit_failed", { tenantId });
     }
   } catch (err) {
-    logger.error("saas_mp_sync.after_commit_error", { tenantId, error: err instanceof Error ? err.message : String(err) });
+    logger.error("saas_mp_sync.after_commit_error", { tenantId, error: err instanceof Error ? err.name : "unknown" });
   }
 }
 
@@ -712,14 +799,14 @@ export async function runSaasMpReconcile(now: Date, budgetMs: number, scope?: Sa
         // El sync de un pendiente/retirado también cuenta como visita (si no, vuelve primero en cada corrida).
         if (r.ok && item.focus !== "current") await touchSynced(item.c.tenantId, now);
       } catch (err) {
-        logger.error("saas_mp_sync.reconcile_item_failed", { tenantId: item.c.tenantId, error: err instanceof Error ? err.message : String(err) });
+        logger.error("saas_mp_sync.reconcile_item_failed", { tenantId: item.c.tenantId, error: err instanceof Error ? err.name : "unknown" });
         r = { ok: false, changed: false };
       }
       if (!r.ok) res.failed++;
       else if (r.changed) res.updated++;
     }
   } catch (err) {
-    logger.error("saas_mp_sync.reconcile_failed", { error: err instanceof Error ? err.message : String(err) });
+    logger.error("saas_mp_sync.reconcile_failed", { error: err instanceof Error ? err.name : "unknown" });
   }
   return res;
 }

@@ -34,7 +34,6 @@
  */
 import { revalidatePath, revalidateTag } from "next/cache";
 import { z } from "zod";
-import type { Prisma } from "@prisma/client";
 import { prismaService } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { requireAccountBilling } from "@/lib/authz";
@@ -46,9 +45,10 @@ import { auditInTx } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { saasBillingMode } from "@/lib/env";
 import { tenantEntitlementTags } from "@/lib/cache-tags";
-import { ensureSubscriptionInTx, lockSubscription, lockTenant } from "@/lib/saas-billing-internal";
-import { reactivateInTx, scheduleCancelInTx, undoCancelInTx } from "@/lib/saas-billing-schedule-internal";
+import { ensureSubscriptionInTx } from "@/lib/saas-billing-internal";
+import { cancelPendingPlanInTx, reactivateInTx, scheduleCancelInTx, undoCancelInTx } from "@/lib/saas-billing-schedule-internal";
 import {
+  cancelPendingPreapproval,
   createOrReuseChargeCheckout,
   refreshPendingPreapproval,
   startPreapprovalFlow,
@@ -62,6 +62,7 @@ import { mapMpPaymentStatus, parseSaasExternalReference } from "@/lib/saas-mp-lo
 import { keyFromDbDate, suggestedChargeId } from "@/lib/saas-billing-logic";
 import {
   SAAS_MP_COPY,
+  type CancelPendingAutoDebitData,
   type CancelScheduledPlanChangeData,
   type ConfirmCheckoutReturnData,
   type PayChargeWithMpData,
@@ -170,7 +171,8 @@ export async function setCollectionMethod(raw: unknown): Promise<SaasMpActionRes
     });
     if (!done) return fail("not_found", SAAS_MP_COPY.not_found);
     revalidatePath("/configuracion");
-    await syncSaasMpAfterCommit(tenantId);
+    // ZF1: elegir otro método abandona una autorización de débito a medio hacer (se cancela en MP; ver la sync).
+    await syncSaasMpAfterCommit(tenantId, { abandonPending: true });
     return { ok: true, data: { collectionMethod: method } };
   });
 }
@@ -224,6 +226,40 @@ export async function refreshAutoDebit(): Promise<SaasMpActionResult<RefreshAuto
     const limited = await limitGate<RefreshAutoDebitData>("refresh", actor.userId, 30);
     if (limited) return limited;
     const r = await refreshPendingPreapproval({ tenantId: actor.tenantId, now: new Date() });
+    revalidatePath("/configuracion");
+    return { ok: true, data: { status: r.status } };
+  });
+}
+
+/**
+ * «Cancelar» de la banda «Falta autorizar el débito…» (ZF1, revisor ZA de T6+T7): cancela en MP el preapproval
+ * PENDIENTE y lo limpia, sin tocar el método ni el débito vigente. Antes el botón llamaba a `setCollectionMethod` y el
+ * pendiente seguía vivo (la banda no se iba). Sin step-up: no habilita ni mueve plata, solo descarta una autorización
+ * que el consultorio no terminó. Modo `mp` (con otro modo no hay pendientes que cancelar en MP).
+ */
+export async function cancelPendingAutoDebit(): Promise<SaasMpActionResult<CancelPendingAutoDebitData>> {
+  return withAccountWritable(`${FILE}#cancelPendingAutoDebit`, async (): Promise<SaasMpActionResult<CancelPendingAutoDebitData>> => {
+    const actor = await gate({ stepUp: false });
+    const off = modeGate<CancelPendingAutoDebitData>(true);
+    if (off) return off;
+    const limited = await limitGate<CancelPendingAutoDebitData>("cancel-pending", actor.userId, 10);
+    if (limited) return limited;
+    const tenantId = actor.tenantId;
+    const before = await prismaService.saasSubscription.findUnique({ where: { tenantId }, select: { mpPendingPreapprovalId: true } });
+    const r = await cancelPendingPreapproval({ tenantId, now: new Date() });
+    if (!r.ok) return fromSync<CancelPendingAutoDebitData>(r.reason, "debit");
+    if (before?.mpPendingPreapprovalId) {
+      await prismaService.$transaction((tx) =>
+        auditInTx(tx, {
+          tenantId,
+          actorId: actor.userId,
+          action: "billing.auto_debit.pending_cancelled",
+          entity: "SaasSubscription",
+          entityId: tenantId,
+          payload: { preapprovalId: before.mpPendingPreapprovalId },
+        })
+      );
+    }
     revalidatePath("/configuracion");
     return { ok: true, data: { status: r.status } };
   });
@@ -451,19 +487,10 @@ export async function reactivateSubscription(): Promise<SaasMpActionResult<React
   });
 }
 
-/** Lo que se limpia al anular la bajada (mismo set que `scheduleDowngradeInTx` escribe). */
-const CLEAR_PENDING_PLAN: Prisma.SaasSubscriptionUpdateInput = {
-  pendingPlan: null,
-  pendingPlanEffectiveOn: null,
-  pendingPlanDisableIds: [],
-  pendingPlanRequestedById: null,
-  pendingPlanRequestedAt: null,
-};
-
 /**
- * Anula la bajada de plan programada: el consultorio sigue con su plan y nadie pierde el acceso. Con los locks del
- * escritor (Tenant → Subscription) para no cruzarse con la etapa 2b del cron que la aplica ese día: si ya se aplicó, no
- * queda nada pendiente y contesta `no_pending_plan`.
+ * Anula la bajada de plan programada: el consultorio sigue con su plan y nadie pierde el acceso. El UPDATE con los locks
+ * del escritor es `cancelPendingPlanInTx` (el mismo que usa Plataforma): si la etapa 2b del cron ya la aplicó, no queda
+ * nada pendiente y contesta `no_pending_plan`.
  */
 export async function cancelScheduledPlanChange(): Promise<SaasMpActionResult<CancelScheduledPlanChangeData>> {
   return withAccountWritable(`${FILE}#cancelScheduledPlanChange`, async (): Promise<SaasMpActionResult<CancelScheduledPlanChangeData>> => {
@@ -475,18 +502,15 @@ export async function cancelScheduledPlanChange(): Promise<SaasMpActionResult<Ca
 
     const tenantId = actor.tenantId;
     const r = await prismaService.$transaction(async (tx) => {
-      if (!(await lockTenant(tx, tenantId))) return "not_found" as const;
-      await lockSubscription(tx, tenantId);
-      const sub = await tx.saasSubscription.findUnique({ where: { tenantId }, select: { pendingPlan: true } });
-      if (!sub?.pendingPlan) return "none" as const;
-      await tx.saasSubscription.update({ where: { tenantId }, data: CLEAR_PENDING_PLAN });
+      const c = await cancelPendingPlanInTx(tx, { tenantId });
+      if (!c.ok) return c.reason === "not_found" ? ("not_found" as const) : ("none" as const);
       await auditInTx(tx, {
         tenantId,
         actorId: actor.userId,
         action: "billing.plan_change.cancelled",
         entity: "SaasSubscription",
         entityId: tenantId,
-        payload: { plan: sub.pendingPlan },
+        payload: { plan: c.pendingPlan },
       });
       return "cancelled" as const;
     });

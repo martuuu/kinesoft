@@ -99,6 +99,12 @@ export type BillingLedger = {
   planPriceCents: number | null;
   /** Precio a medida del consultorio (null = el del plan). */
   customPriceCents: number | null;
+  /**
+   * Plan al que está atado el precio a medida (MPS-D14; null = vale para cualquier plan, filas previas a M16).
+   * ZF1: Plataforma lo necesita para abrir el form con el plan GUARDADO (antes asumía el actual y un precio atado a
+   * otro plan aparecía como un cambio sin guardar). Opcional para los ledgers armados a mano (tests, previos a M16).
+   */
+  customPricePlan?: SaasPlan | null;
   /** Lo que se cobra por mes: a medida > lista; null = no se cobra. */
   effectivePriceCents: number | null;
   subscriptionStatus: SubscriptionStatus;
@@ -387,6 +393,9 @@ export type StartAutoDebitData = { initPoint: string; reused: boolean };
 
 /** `refreshAutoDebit`: re-lee el preapproval pendiente/vigente en MP. */
 export type RefreshAutoDebitData = { status: BillingAutoDebitStatus };
+
+/** `cancelPendingAutoDebit` (ZF1): «Cancelar» de la banda «Falta autorizar…»; `status` = el estado del débito después. */
+export type CancelPendingAutoDebitData = { status: BillingAutoDebitStatus };
 
 /** `payChargeWithMp`: sin `chargeId` = el último impago. */
 export type PayChargeWithMpInput = { chargeId?: string };

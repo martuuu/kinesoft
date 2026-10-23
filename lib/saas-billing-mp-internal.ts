@@ -33,7 +33,7 @@ import {
   imputeApprovedPaymentInTx as coreImputeApprovedPaymentInTx,
   refundPaymentTreeInTx as coreRefundPaymentTreeInTx,
 } from "@/lib/saas-billing-internal";
-import { dbDateFromKey, type DateKey } from "@/lib/saas-billing-logic";
+import { dbDateFromKey, periodFor, type DateKey } from "@/lib/saas-billing-logic";
 import {
   mapMpPaymentStatus,
   nextSaasPaymentStatus,
@@ -46,6 +46,7 @@ import {
   getPreapproval,
   getSaasPayment,
   platformCollectorId,
+  updatePreapproval,
   type SaasMpErrorKind,
   type SaasPayment,
   type SaasPreapproval,
@@ -324,12 +325,19 @@ async function applyMpPayment(inc: IncomingPayment, source: SaasMpConsumeSource)
   if (out.status === "APPROVED") {
     await afterCommit("payment_received", inc.tenantId, () => notifyPaymentReceived(inc.tenantId, out.paymentId, out.amountCents));
   } else if (out.status === "REJECTED" && inc.source === "MP_AUTO") {
+    // ZF1 (revisor ZA de T6+T7): UN aviso por preapproval y período (`billing_debit_failed:<preapproval>:<período>`),
+    // no uno por intento: MP recicla el rechazado varias veces en la semana y cada intento es otro pago. Y con la fecha
+    // de vencimiento del cargo de ese período (`effectiveOn`): sin ella la plantilla no se arma y el mail no salía.
+    const periodStart = "periodStart" in inc.target ? inc.target.periodStart : null;
     await afterCommit("debit_failed", inc.tenantId, () =>
       sendMpMail("billing_debit_failed", inc.tenantId, {
         entity: "SaasPayment",
         entityId: out.paymentId,
+        paymentId: out.paymentId,
         amountCents: out.amountCents,
+        effectiveOn: periodStart ? periodFor(periodStart).dueDate : null,
         reason: "Mercado Pago rechazó el débito de la tarjeta.",
+        idempotencyKey: inc.preapprovalId && periodStart ? `billing_debit_failed:${inc.preapprovalId}:${periodStart}` : null,
       })
     );
   }
@@ -447,6 +455,7 @@ type PreOutcome =
   | { kind: "ignored" | "replay" }
   | { kind: "promoted"; amountCents: number | null; nextAt: Date | null }
   | { kind: "pending_cleared" }
+  | { kind: "pending_refused" }
   | { kind: "recorded" }
   | { kind: "cancelled_by_mp"; amountCents: number | null };
 
@@ -500,6 +509,24 @@ export async function consumeSaasPreapproval(preapprovalId: string, opts?: SaasM
         sub.mpPendingPreapprovalId ?? (who.pre && !sub.mpPreapprovalId && pre.status === "authorized" ? preapprovalId : null);
 
       if (preapprovalId === pendingId) {
+        if (pre.status === "authorized" && (!sub.autoDebitAllowed || sub.tenant.subscriptionStatus === "CANCELLED")) {
+          // ZF1 (revisor ZA de T6+T7): el titular autorizó en MP DESPUÉS de que Plataforma bloqueara el débito o de
+          // que la suscripción se diera de baja. No se promueve (sería AUTO_DEBIT con el débito prohibido) ni se avisa
+          // «débito activado». Se limpia el pendiente y, después del commit, se cancela en MP: autorizado y sin nadie
+          // que lo mire, debitaría igual. Si el lugar del retirado está libre se lo deja ahí: la sync y la conciliación
+          // lo re-cancelan si el PUT de abajo falla (sus cobros tardíos se siguen imputando por la referencia).
+          await tx.saasSubscription.update({
+            where: { tenantId },
+            data: {
+              mpPendingPreapprovalId: null,
+              mpPendingInitPoint: null,
+              mpPendingPayerEmail: null,
+              mpPendingCreatedAt: null,
+              ...(sub.mpRetiredPreapprovalId ? {} : { mpRetiredPreapprovalId: preapprovalId }),
+            },
+          });
+          return { kind: "pending_refused" };
+        }
         if (pre.status === "authorized") {
           await tx.saasSubscription.update({
             where: { tenantId },
@@ -571,6 +598,12 @@ export async function consumeSaasPreapproval(preapprovalId: string, opts?: SaasM
   }
 
   if (out.kind === "ignored" || out.kind === "replay") return ok(out.kind, tenantId);
+  if (out.kind === "pending_refused") {
+    await afterCommit("pending_refused_cancel", tenantId, async () => {
+      const u = await updatePreapproval(preapprovalId, { status: "cancelled" });
+      if (!u.ok) logger.warn("saas_mp.pending_refused_cancel_failed", { tenantId, kind: u.kind });
+    });
+  }
   if (out.kind === "promoted") {
     const nextAt = out.nextAt;
     await afterCommit("debit_activated", tenantId, () =>

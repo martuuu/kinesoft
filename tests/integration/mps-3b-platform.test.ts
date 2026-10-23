@@ -259,7 +259,8 @@ describe.skipIf(!RUN)("[MPS-3b] Plataforma → suscripción con Mercado Pago", (
     const p = await previewReanchor({ tenantId: t.tenantId });
     expect(p.ok).toBe(true);
     if (!p.ok) return;
-    expect(p.data).toMatchObject({ tenantId: t.tenantId, fromAnchorDay: 15, toAnchorDay: 4, noop: false, reenablesAutoDebit: true });
+    expect(p.data).toMatchObject({ tenantId: t.tenantId, fromAnchorDay: 15, toAnchorDay: 4, noop: false });
+    expect(p.data).not.toHaveProperty("reenablesAutoDebit");
     expect(dayOfKey(p.data.newNextChargeOn)).toBe(4);
     const untouched = await db.saasSubscription.findUniqueOrThrow({ where: { tenantId: t.tenantId } });
     expect(untouched.anchorDay).toBe(15);
@@ -270,7 +271,8 @@ describe.skipIf(!RUN)("[MPS-3b] Plataforma → suscripción con Mercado Pago", (
     expect(sub.anchorDay).toBe(4);
     expect(toARDateKey(sub.nextChargeAt!)).toBe(p.data.newNextChargeOn);
     expect(keyFromDbDate(sub.billableFrom!)).toBe(p.data.stubFrom);
-    expect(sub.autoDebitAllowed).toBe(true);
+    // [ZF1] el bloqueo de Plataforma se conserva (antes re-anclar lo desbloqueaba).
+    expect(sub.autoDebitAllowed).toBe(false);
     await expectAudited(t.tenantId, "platform.billing.reanchor");
 
     const again = await applyReanchor({ tenantId: t.tenantId });

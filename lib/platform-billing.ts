@@ -41,13 +41,11 @@ import {
   reviewPaymentInTx,
   schedulePlanPriceInTx,
   ensureSubscriptionInTx,
-  lockSubscription,
-  lockTenant,
   setChargeStatusInTx,
   setCustomPriceInTx,
 } from "@/lib/saas-billing-internal";
 import { addAdjustmentInTx } from "@/lib/saas-adjustments-internal";
-import { undoCancelInTx } from "@/lib/saas-billing-schedule-internal";
+import { cancelPendingPlanInTx, undoCancelInTx } from "@/lib/saas-billing-schedule-internal";
 import { applyReanchorInTx, planReanchorInTx, type ReanchorRow } from "@/lib/saas-reanchor-internal";
 import { syncSaasMpAfterCommit } from "@/lib/saas-mp-sync-internal";
 import { getPreapproval, saasMpEnabled } from "@/lib/mercadopago-saas";
@@ -826,9 +824,8 @@ function reanchorPreviewOf(row: ReanchorRow): PlatformReanchorPreview {
     oldNextChargeOn: row.oldNextChargeOn,
     newNextChargeOn: row.newNextChargeOn,
     hasCharges: row.hasCharges,
-    // La regla del núcleo deja SIEMPRE el débito permitido (MPS-D24); si Plataforma lo había bloqueado, re-anclar lo
-    // vuelve a permitir. Se muestra en el preview para que no sea una sorpresa.
-    reenablesAutoDebit: row.action === "update" && !row.oldAutoDebitAllowed,
+    // ZF1: sin `reenablesAutoDebit`. Re-anclar ya no toca el bloqueo del débito (lo conserva el núcleo), así que no
+    // hay nada que avisar.
   };
 }
 
@@ -915,10 +912,9 @@ export async function undoCancelFor(raw: unknown): Promise<PlatformSubscriptionA
 
 /**
  * «Anular bajada» desde Plataforma: limpia la bajada de plan programada (`pendingPlan*`); el consultorio sigue con su
- * plan y el cargo del próximo 4 sale con ese. El núcleo de programación (MPS-2c) no publica un `*InTx` para esto
- * (solo la limpia como efecto de la baja o al aplicarla): se escribe acá con el mismo orden de locks (Tenant →
- * Subscription) y los mismos campos que `CLEAR_PENDING_PLAN` (el CHECK `SaasSubscription_pendingPlan_check` exige los
- * dos o ninguno). Después del commit, el sync lleva el débito a la base del plan que sigue.
+ * plan y el cargo del próximo 4 sale con ese. El UPDATE es `cancelPendingPlanInTx` del núcleo de programación (el
+ * mismo que usa el consultorio; ZF1 sacó la copia que vivía acá). Después del commit, el sync lleva el débito a la base
+ * del plan que sigue.
  */
 export async function cancelScheduledPlanFor(raw: unknown): Promise<PlatformSubscriptionActionResult<{ cancelled: boolean }>> {
   const actor = await requirePlatformAdmin("tenant.plan.change");
@@ -926,36 +922,15 @@ export async function cancelScheduledPlanFor(raw: unknown): Promise<PlatformSubs
   if (!parsed.success) return { ok: false, error: "Datos inválidos", reason: "invalid_input" };
   const tenantId = parsed.data.tenantId;
   const r = await prismaService.$transaction(async (tx) => {
-    if (!(await lockTenant(tx, tenantId))) return "not_found" as const;
-    await lockSubscription(tx, tenantId);
-    const sub = await tx.saasSubscription.findUnique({
-      where: { tenantId },
-      select: { pendingPlan: true, pendingPlanEffectiveOn: true, pendingPlanDisableIds: true, pendingPlanRequestedById: true },
-    });
-    if (!sub) return "no_subscription" as const;
-    if (!sub.pendingPlan) return "no_pending_plan" as const;
-    await tx.saasSubscription.update({
-      where: { tenantId },
-      data: {
-        pendingPlan: null,
-        pendingPlanEffectiveOn: null,
-        pendingPlanDisableIds: [],
-        pendingPlanRequestedById: null,
-        pendingPlanRequestedAt: null,
-      },
-    });
+    const c = await cancelPendingPlanInTx(tx, { tenantId });
+    if (!c.ok) return c.reason;
     await auditPlatformInTx(tx, {
       actor: refOf(actor),
       affectedTenantId: tenantId,
       action: "platform.billing.plan_change_cancelled",
       entity: "SaasSubscription",
       entityId: tenantId,
-      payload: {
-        pendingPlan: sub.pendingPlan,
-        effectiveOn: sub.pendingPlanEffectiveOn ? keyFromDbDate(sub.pendingPlanEffectiveOn) : null,
-        disableCount: sub.pendingPlanDisableIds.length,
-        requestedById: sub.pendingPlanRequestedById,
-      },
+      payload: { pendingPlan: c.pendingPlan, effectiveOn: c.effectiveOn, disableCount: c.disableCount, requestedById: c.requestedById },
     });
     return "ok" as const;
   });

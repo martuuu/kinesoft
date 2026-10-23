@@ -95,8 +95,6 @@ export type PlatformReanchorPreview = ReanchorPreview & {
   oldNextChargeOn: string | null;
   newNextChargeOn: string;
   hasCharges: boolean;
-  /** Re-anclar deja el débito permitido (MPS-D24): true si Plataforma lo tenía bloqueado. */
-  reenablesAutoDebit: boolean;
 };
 
 /**

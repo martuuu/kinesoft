@@ -14,11 +14,14 @@ import "server-only";
  *  - CON cargos: `billableFrom` = el `nextChargeAt` viejo (lo ya cobrado no se toca: el período en curso termina
  *    donde terminaba) y `nextChargeAt` = el primer 4 ≥ eso. El tramo entre los dos lo cobra el primer cargo como
  *    proporcional (stub `stub:<billableFrom>`, MPS-D13; lo arma `createPeriodChargeInTx`): acá solo se PROYECTA.
- *  - Siempre `autoDebitAllowed = true` (MPS-D24: el débito queda permitido salvo que Plataforma lo apague; antes de
- *    M16 la columna nacía false y nadie la usaba, hallazgo 5 de §26.6).
- *  - Idempotente: una suscripción ya anclada al 4 (día 4, próximo cobro un 4, `billableFrom` cargado y débito
- *    permitido) se SALTEA. Sin esto, la segunda corrida tomaría el `nextChargeAt` nuevo como `billableFrom` y
- *    borraría el stub del primer cargo.
+ *  - `autoDebitAllowed` NO se toca (ZF1, revisor ZA de T6+T7): es el bloqueo del débito que pone Plataforma
+ *    («Permitir/Bloquear débito»). Antes el re-anclaje lo ponía siempre en true (MPS-D24) y lo contaba para «ya
+ *    anclada»: un consultorio bloqueado a propósito salía «update» en cada corrida y quedaba desbloqueado sin que nadie
+ *    lo pidiera (y «Re-anclar al 4» de Plataforma lo desbloqueaba como efecto colateral). Las filas de antes de M16
+ *    (la columna nacía false) se desbloquean a mano desde Plataforma: el script imprime el valor actual para verlas.
+ *  - Idempotente: una suscripción ya anclada al 4 (día 4, próximo cobro un 4 y `billableFrom` cargado) se SALTEA.
+ *    Sin esto, la segunda corrida tomaría el `nextChargeAt` nuevo como `billableFrom` y borraría el stub del primer
+ *    cargo.
  *
  * Canal: TENANT_READONLY → conexión con BYPASSRLS (el script aborta sin ella: bajo RLS se verían 0 suscripciones =
  * falso «nada que re-anclar»). Locks: Tenant → Subscription por consultorio, en orden de id. No toca cargos, pagos ni
@@ -58,6 +61,7 @@ export type ReanchorRow = {
   newNextChargeOn: DateKey;
   oldBillableFrom: DateKey | null;
   billableFrom: DateKey;
+  /** Valor actual del bloqueo de Plataforma (solo informativo: el re-anclaje no lo cambia). */
   oldAutoDebitAllowed: boolean;
   /** Proporcional proyectado del primer cargo (null = arranca justo el 4 o el plan no tiene precio). */
   stub: { amountCents: number; days: number; periodDays: number } | null;
@@ -100,8 +104,8 @@ export function planReanchorRow(i: ReanchorInput, now: Date): ReanchorRow {
     oldBillableFrom: oldBillable,
     oldAutoDebitAllowed: i.autoDebitAllowed,
   };
-  const anchored =
-    i.anchorDay === SAAS_ANCHOR_DAY && oldNext !== null && dayOfKey(oldNext) === SAAS_ANCHOR_DAY && oldBillable !== null && i.autoDebitAllowed;
+  // Sin `autoDebitAllowed`: el bloqueo de Plataforma no es parte del ancla (ver cabecera).
+  const anchored = i.anchorDay === SAAS_ANCHOR_DAY && oldNext !== null && dayOfKey(oldNext) === SAAS_ANCHOR_DAY && oldBillable !== null;
   if (anchored) {
     return { ...base, newNextChargeOn: oldNext!, billableFrom: oldBillable!, stub: projectStub(oldBillable!, oldNext!, i.priceCents), action: "skip" };
   }
@@ -205,7 +209,6 @@ export async function applyReanchorInTx(tx: Tx, p: { now: Date; tenantIds: Reanc
         anchorDay: row.newAnchorDay,
         nextChargeAt: arMidnight(row.newNextChargeOn),
         billableFrom: dbDateFromKey(row.billableFrom),
-        autoDebitAllowed: true,
       },
     });
     updated++;

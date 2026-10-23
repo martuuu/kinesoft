@@ -9,7 +9,8 @@
  * El comando diario recomendado pasa a ser `npm run dev:local` (simuladores, `scripts/dev-mp-fake.mjs`).
  *
  * Reglas:
- *   - lee los `.env*` SOLO para decidir, y solo dos claves (`NEXT_PUBLIC_SUPABASE_URL`, `PROD_SUPABASE_REF`); no usa
+ *   - lee los `.env*` SOLO para decidir, y solo cuatro claves (`NEXT_PUBLIC_SUPABASE_URL`, `PROD_SUPABASE_REF`,
+ *     `DATABASE_URL`, `DIRECT_URL`); no usa
  *     `dotenv` ni `@next/env` y no carga nada al `process.env` (el hijo hereda el entorno del padre tal cual: Next hace
  *     su carga normal);
  *   - NUNCA imprime un valor: los mensajes nombran el archivo de donde salió la URL, no la URL ni el ref;
@@ -18,8 +19,14 @@
  *
  * Orden de carga de `next dev` (@next/env, NODE_ENV=development): lo ya exportado en `process.env` gana; después
  * `.env.development.local`, `.env.local`, `.env.development`, `.env`, y el PRIMER archivo que define una clave gana.
- * Descartado: expandir `$VAR` como hace @next/env (nadie lo usa en estas dos claves; una URL con `$` no parsea como
+ * Descartado: expandir `$VAR` como hace @next/env (nadie lo usa en estas claves; una URL con `$` no parsea como
  * host local y bloquea, que es el lado seguro).
+ *
+ * [ZF1] La BASE también (revisor ZA de T6+T7): con el Supabase local en `.env.local` pero sin `DATABASE_URL` ahí,
+ * `next dev` toma la de `.env` (prod) y Prisma escribe en producción desde la máquina de Martin. Se resuelven
+ * `DATABASE_URL` y `DIRECT_URL` con el mismo orden y, si alguna efectiva no es localhost, no arranca salvo
+ * `ALLOW_DEV_REMOTE_DB=1`. Override APARTE del de Supabase a propósito: querer un Supabase remoto de pruebas no implica
+ * querer la base de prod. Los mensajes nombran la clave y el archivo, nunca el valor (la URL lleva la contraseña).
  */
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -27,8 +34,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const DEV_ENV_FILES = Object.freeze([".env.development.local", ".env.local", ".env.development", ".env"]);
-const KEYS = ["NEXT_PUBLIC_SUPABASE_URL", "PROD_SUPABASE_REF"];
+const KEYS = ["NEXT_PUBLIC_SUPABASE_URL", "PROD_SUPABASE_REF", "DATABASE_URL", "DIRECT_URL"];
+/** Claves de conexión a Postgres que `next dev` (Prisma) usaría. */
+export const DB_KEYS = Object.freeze(["DATABASE_URL", "DIRECT_URL"]);
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+export const DB_BLOCK_MESSAGE =
+  "`npm run dev` apuntaría a una base de datos remota (posible producción). Usá `npm run dev:local` (Docker :5433) o, " +
+  "si de verdad querés la base remota, ALLOW_DEV_REMOTE_DB=1 npm run dev.";
 
 export const BLOCK_MESSAGE =
   "`npm run dev` apuntaría a un Supabase remoto (posible producción). Usá `npm run dev:local` (simuladores) o, si de " +
@@ -79,6 +92,13 @@ export function resolveEffectiveSupabase({ cwd, env }) {
     urlSource: source.NEXT_PUBLIC_SUPABASE_URL ?? null,
     prodRef: found.PROD_SUPABASE_REF,
     allowRemote: env.ALLOW_DEV_REMOTE_SUPABASE,
+    databaseUrl: found.DATABASE_URL,
+    databaseUrlSource: source.DATABASE_URL ?? null,
+    directUrl: found.DIRECT_URL,
+    directUrlSource: source.DIRECT_URL ?? null,
+    allowRemoteDb: env.ALLOW_DEV_REMOTE_DB,
+    /** Solo NOMBRES de origen por clave (se puede mostrar). */
+    dbSources: { DATABASE_URL: source.DATABASE_URL ?? null, DIRECT_URL: source.DIRECT_URL ?? null },
   };
 }
 
@@ -95,10 +115,42 @@ export function supabaseRefOf(url) {
 
 /**
  * Decisión pura. Devuelve `{ action: "start" | "block", reason, message }`; `message` nunca lleva la URL ni el ref.
+ * `reason` = `remote-db` si bloquea por `DATABASE_URL`/`DIRECT_URL` (ver `decideDb`).
  * El override es exactamente "1" (como el resto de los flags del repo): "true" no alcanza, para que no se active de
  * casualidad.
  */
-export function decideDevStart({ supabaseUrl, urlSource = null, prodRef, allowRemote }) {
+/** ¿La URL de Postgres apunta a esta máquina? Sin URL → no hay remoto (null); no parsea → false (no se puede verificar). */
+function dbUrlIsLocal(url) {
+  if (url === undefined || url === null || url === "") return null;
+  try {
+    return LOCAL_HOSTS.has(new URL(url).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+/** Bloqueo por la base (o null si las dos efectivas son locales o faltan). Nunca lleva el valor. */
+function decideDb({ databaseUrl, databaseUrlSource = null, directUrl, directUrlSource = null, allowRemoteDb }) {
+  if (allowRemoteDb === "1") return null;
+  for (const [key, url, src] of [
+    ["DATABASE_URL", databaseUrl, databaseUrlSource],
+    ["DIRECT_URL", directUrl, directUrlSource],
+  ]) {
+    if (dbUrlIsLocal(url) === false) {
+      return {
+        action: "block",
+        reason: "remote-db",
+        message: `${DB_BLOCK_MESSAGE}\nEl host de ${key} no es localhost/127.0.0.1${src ? ` (${key} sale de ${src})` : ""}.`,
+      };
+    }
+  }
+  return null;
+}
+
+export function decideDevStart({ supabaseUrl, urlSource = null, prodRef, allowRemote, ...db }) {
+  // La base primero y con su propio override (ver cabecera): ALLOW_DEV_REMOTE_SUPABASE no la habilita.
+  const dbBlock = decideDb(db);
+  if (dbBlock) return dbBlock;
   const where = urlSource ? ` (NEXT_PUBLIC_SUPABASE_URL sale de ${urlSource})` : "";
   if (allowRemote === "1") {
     return { action: "start", reason: "override", message: "dev: ALLOW_DEV_REMOTE_SUPABASE=1, arranca sin verificar el Supabase." };

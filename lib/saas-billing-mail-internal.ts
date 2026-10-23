@@ -77,7 +77,9 @@ const SYSTEM_ACTOR: PlatformActorRef = { userId: null, email: null, homeTenantId
 
 /**
  * Clave de idempotencia (C-MPS12):
- *  - `billing_debit_failed:<authId>:<paymentId>`: un aviso por intento de cobro, no por webhook;
+ *  - `billing_debit_failed:<authId>:<paymentId>`: un aviso por intento de cobro, no por webhook. El débito rechazado
+ *    (`lib/saas-billing-mp-internal.ts`) lo pisa con `idempotencyKey = billing_debit_failed:<preapproval>:<período>`
+ *    (ZF1): uno por período, porque MP recicla el rechazado varios días y cada intento es otro pago;
  *  - `billing_debit_activated:<preapprovalId>`: un aviso por autorización;
  *  - `cron.billing_<kind>:<tenant>:<fecha>`: baja programada, baja aplicada y cambio de plan (con el resultado en el
  *    kind, para que «programado» y «aplicado» del mismo día no se pisen).

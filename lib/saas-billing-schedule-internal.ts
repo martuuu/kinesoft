@@ -406,6 +406,38 @@ export async function scheduleCancelInTx(
 }
 
 /**
+ * Anula la bajada de plan programada (`pendingPlan*`, todos juntos: el CHECK `SaasSubscription_pendingPlan_check`
+ * exige los dos o ninguno). Locks del escritor (Tenant → Subscription) para no cruzarse con la etapa 2b del cron que la
+ * aplica ese día: si ya se aplicó, no queda nada pendiente → `no_pending_plan`. Único escritor (ZF1): antes estaba
+ * duplicado en «Anular bajada» del consultorio (`lib/saas-billing-mp.ts`) y de Plataforma (`lib/platform-billing.ts`).
+ * Devuelve lo que había, para el audit de cada caller. El sync con MP va después del commit (lo hace el caller).
+ */
+export async function cancelPendingPlanInTx(
+  tx: Tx,
+  p: { tenantId: string }
+): Promise<
+  | { ok: true; pendingPlan: SaasPlan; effectiveOn: DateKey | null; disableCount: number; requestedById: string | null }
+  | { ok: false; reason: "not_found" | "no_subscription" | "no_pending_plan" }
+> {
+  if (!(await lockTenant(tx, p.tenantId))) return { ok: false, reason: "not_found" };
+  await lockSubscription(tx, p.tenantId);
+  const sub = await tx.saasSubscription.findUnique({
+    where: { tenantId: p.tenantId },
+    select: { pendingPlan: true, pendingPlanEffectiveOn: true, pendingPlanDisableIds: true, pendingPlanRequestedById: true },
+  });
+  if (!sub) return { ok: false, reason: "no_subscription" };
+  if (!sub.pendingPlan) return { ok: false, reason: "no_pending_plan" };
+  await tx.saasSubscription.update({ where: { tenantId: p.tenantId }, data: CLEAR_PENDING_PLAN });
+  return {
+    ok: true,
+    pendingPlan: sub.pendingPlan,
+    effectiveOn: sub.pendingPlanEffectiveOn ? keyFromDbDate(sub.pendingPlanEffectiveOn) : null,
+    disableCount: sub.pendingPlanDisableIds.length,
+    requestedById: sub.pendingPlanRequestedById,
+  };
+}
+
+/**
  * Deshace la baja programada. Solo ANTES del día en que rige: ese día la aplica el cron (etapa 2b) y deshacerla en
  * paralelo dejaría una carrera entre «sigue» y CANCELLED → `stale` (después se reactiva).
  */
@@ -468,8 +500,8 @@ async function hasDebtInTx(tx: Tx, tenantId: string): Promise<boolean> {
 }
 
 /**
- * Reactiva una suscripción CANCELLED → ACTIVE y RE-ANCLA el período (§21.7): `billableFrom = hoy`, ancla 4 y
- * `nextChargeAt` = el primer 4 ≥ hoy; el tramo hasta ese 4 lo cobra el primer cargo como proporcional (stub,
+ * Reactiva una suscripción CANCELLED → ACTIVE y RE-ANCLA el período (§21.7): `billableFrom = max(hoy, fin del último
+ * cargo no VOID)` (ZF1), ancla 4 y `nextChargeAt` = el primer 4 ≥ eso; el tramo hasta ese 4 lo cobra el primer cargo como proporcional (stub,
  * MPS-D13). Desde el consultorio solo si la baja fue propia y no hay deuda (MPS-D19); Plataforma reactiva cualquier
  * baja pero tampoco con deuda (primero se condona o se paga: si no, el cron la mandaría a PAST_DUE al otro día).
  * Un consultorio suspendido o cerrado no se reactiva por acá (su `status` es de Plataforma).
@@ -489,15 +521,26 @@ export async function reactivateInTx(
 
   const w = await writeStatusInTx(tx, p.tenantId, "ACTIVE", p.actor);
   if (!w.ok) return fail(w.reason === "stale" ? "stale" : "not_found");
+  // ZF1 (revisor ZA de T6+T7): se factura desde hoy o desde el fin del último período cobrado, lo que sea más tarde.
+  // Una baja inmediata de Plataforma a mitad de un período ya pagado, reactivada antes de que termine, dejaba
+  // `billableFrom = hoy` y el primer cargo sumaba un proporcional por días que ya estaban pagos. Un cargo VOID no
+  // cuenta (se anuló: ese período no se cobró); uno WAIVED sí (se perdonó, pero el período quedó saldado).
   const today = toARDateKey(p.now);
-  const next = firstPeriodStartKey(today, SAAS_ANCHOR_DAY);
+  const lastCharge = await tx.saasCharge.findFirst({
+    where: { tenantId: p.tenantId, status: { not: "VOID" } },
+    orderBy: { periodEnd: "desc" },
+    select: { periodEnd: true },
+  });
+  const paidUntil = lastCharge ? keyFromDbDate(lastCharge.periodEnd) : null;
+  const billableFrom = paidUntil && paidUntil > today ? paidUntil : today;
+  const next = firstPeriodStartKey(billableFrom, SAAS_ANCHOR_DAY);
   await tx.saasSubscription.upsert({
     where: { tenantId: p.tenantId },
-    create: { tenantId: p.tenantId, anchorDay: SAAS_ANCHOR_DAY, nextChargeAt: arMidnight(next), billableFrom: dbDateFromKey(today) },
+    create: { tenantId: p.tenantId, anchorDay: SAAS_ANCHOR_DAY, nextChargeAt: arMidnight(next), billableFrom: dbDateFromKey(billableFrom) },
     update: {
       anchorDay: SAAS_ANCHOR_DAY,
       nextChargeAt: arMidnight(next),
-      billableFrom: dbDateFromKey(today),
+      billableFrom: dbDateFromKey(billableFrom),
       ...CLEAR_CANCEL,
       ...CLEAR_PENDING_PLAN,
     },

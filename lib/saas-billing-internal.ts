@@ -877,8 +877,17 @@ async function rependAdjustmentsInTx(
   const chosen = p.onlyCredits
     ? applied.filter((a) => a.kind === "CREDIT" || (a.kind === "CARRYOVER" && a.splitFromId !== null && creditIds.has(a.splitFromId)))
     : applied;
-  for (const a of chosen) {
-    await addAdjustmentInTx(tx, {
+  // ZF1 (revisor ZA de T6+T7): las copias conservan la cadena `splitFromId`. Los CREDIT van PRIMERO para tener el mapa
+  // original → copia, y el CARRYOVER copiado apunta a la COPIA de su CREDIT. Antes las copias salían sin `splitFromId`:
+  // un WAIVE posterior del cargo que las usaba re-pendía el CREDIT pero no su CARRYOVER (el filtro de `onlyCredits` lo
+  // reconoce por `splitFromId`) y devolvía el crédito entero, un saldo a favor de más. El CREDIT copiado conserva el
+  // suyo (el resto de un crédito sigue siendo de ese crédito). Si el CREDIT del CARRYOVER no está en este cargo, se
+  // conserva el id original (no hay copia a la que apuntar).
+  const ordered = [...chosen.filter((a) => a.kind === "CREDIT"), ...chosen.filter((a) => a.kind !== "CREDIT")];
+  const copyOf = new Map<string, string>();
+  for (const a of ordered) {
+    const splitFromId = a.kind === "CARRYOVER" && a.splitFromId ? (copyOf.get(a.splitFromId) ?? a.splitFromId) : a.splitFromId;
+    const r = await addAdjustmentInTx(tx, {
       tenantId: p.tenantId,
       kind: a.kind,
       amountCents: a.amountCents,
@@ -889,8 +898,10 @@ async function rependAdjustmentsInTx(
       planTo: a.planTo,
       days: a.days,
       periodDays: a.periodDays,
+      splitFromId,
       createdById: p.actorId,
     });
+    if (a.kind === "CREDIT") copyOf.set(a.id, r.adjustmentId);
   }
   return chosen.length;
 }
@@ -1361,6 +1372,7 @@ export async function readLedger(db: DbClient, tenantId: string, now: Date): Pro
     planLabel: price.label,
     planPriceCents: price.priceCents,
     customPriceCents,
+    customPricePlan,
     effectivePriceCents,
     subscriptionStatus: t.subscriptionStatus,
     trialEndsAt: t.trialEndsAt?.toISOString() ?? null,

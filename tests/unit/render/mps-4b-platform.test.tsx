@@ -155,7 +155,6 @@ const preview = (over: Partial<PlatformReanchorPreview> = {}): PlatformReanchorP
   oldNextChargeOn: "2026-11-15",
   newNextChargeOn: "2026-12-04",
   hasCharges: true,
-  reenablesAutoDebit: false,
   ...over,
 });
 
@@ -405,15 +404,13 @@ describe("[MPS-4b] re-anclar al 4", () => {
     expect(reanchorStubText(preview({ stubCents: 0 }))).toContain("No hay proporcional");
   });
 
-  it("[MPS-4b] preview: tabla, «Factura desde», y aviso si re-anclar vuelve a permitir el débito", () => {
-    const html = renderToStaticMarkup(<ReanchorPreviewView preview={preview({ reenablesAutoDebit: true })} />);
+  it("[MPS-4b] preview: tabla y «Factura desde»; [ZF1] sin aviso de débito (re-anclar no toca el bloqueo)", () => {
+    const html = renderToStaticMarkup(<ReanchorPreviewView preview={preview()} />);
     expect(html).toContain("<table");
     expect(html).toContain("El 15");
     expect(html).toContain("El 4");
     expect(html).toContain("Se factura desde el 15/11");
-    expect(html).toContain("vuelve a permitir el débito automático");
-    const plain = renderToStaticMarkup(<ReanchorPreviewView preview={preview()} />);
-    expect(plain).not.toContain("vuelve a permitir");
+    expect(html).not.toContain("vuelve a permitir");
     const noop4 = renderToStaticMarkup(<ReanchorPreviewView preview={preview({ noop: true, fromAnchorDay: 4 })} />);
     expect(noop4).toContain("Ya cobra el 4");
   });
