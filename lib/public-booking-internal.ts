@@ -15,7 +15,9 @@ import { PENDING_PUBLIC_HOLD_MS, isHoldingCapacity, isPublicReservation } from "
 import { lockCapacityWindow } from "@/lib/booking-cap-lock";
 import { expireOwnHoldChargeInTx } from "@/lib/public-booking-charge-internal";
 import { isPublicBookingOpen, type TenantEntitlements } from "@/lib/tenant-modules";
-import { tenantAccessEnforcement } from "@/lib/env";
+import { tenantAccessEnforcement, whatsappMode, type WhatsappMode } from "@/lib/env";
+import { getLiveAccountCached } from "@/lib/whatsapp/account-internal";
+import { logger } from "@/lib/logger";
 import {
   TENANT_ACCESS_SELECT,
   effectiveMode,
@@ -34,6 +36,31 @@ import {
   type PrefillPatient,
   type PublicClinic,
 } from "@/lib/public-booking-types";
+
+// ──────────────────────────────────────────────────────────────────────
+// WhatsApp del turnero (WA-S8, §26.5)
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * ¿El consultorio avisa por WhatsApp? (`PublicClinic.whatsappNotices` y la condición para guardar el consentimiento
+ * del turnero.) Misma regla que el flag de la agenda (`agendaWhatsAppInTx`): modo ≠ off, cuenta ACTIVE del tenant y en
+ * el MISMO modo que el env (una cuenta `fake` con `WHATSAPP_MODE=sandbox` no manda: el outbox re-chequea, C-WA7).
+ *
+ *   - Con `off` corta ANTES de leer la cuenta: 0 sentencias (regla de T6: el modo apagado no agrega queries).
+ *   - La cuenta sale de `getLiveAccountCached` (tag `whatsappAccount(tenantId)`): en caliente 0 sentencias; el
+ *     turnero es la superficie pública más visitada y no paga una lectura por request.
+ *   - Si la lectura falla, false (no tira): el turnero sigue reservando sin la casilla. Sin PHI en el log.
+ */
+export async function turneroWhatsAppActive(tenantId: string, mode: WhatsappMode = whatsappMode()): Promise<boolean> {
+  if (mode === "off") return false;
+  try {
+    const a = await getLiveAccountCached(tenantId);
+    return !!a && a.status === "ACTIVE" && a.mode === mode;
+  } catch (e) {
+    logger.warn("booking.public.whatsapp_account_failed", { tenantId, err: e instanceof Error ? e.message : String(e) });
+    return false;
+  }
+}
 
 // ──────────────────────────────────────────────────────────────────────
 // Switch del turnero (EV0, plan §15.3, EV-D2)

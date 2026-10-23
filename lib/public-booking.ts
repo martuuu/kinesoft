@@ -71,7 +71,9 @@ import {
   promoteHeldPublicBookingInTx,
   releaseOwnExpiredPublicHold,
   resolvePublicPatient,
+  turneroWhatsAppActive,
 } from "@/lib/public-booking-internal";
+import { WA_CONSENT_VERSION } from "@/lib/whatsapp/types";
 import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 import type { ActionResult } from "@/lib/validation";
 import { publicPractitionerName } from "@/lib/display-name";
@@ -81,6 +83,7 @@ import {
   ListPublicSlotWindowSchema,
   ListPublicSlotsSchema,
   SubmitSchema,
+  decideTurneroWaConsent,
   normalizeDocumentId,
   type FirstPublicSlotInput,
   type ListPublicSlotWindowInput,
@@ -243,10 +246,15 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
 
   const offering = new Set(offered.flatMap((o) => o.offeredBy));
   // T5 (C-TP8): cobro online con la cuenta del vendedor. Con `MP_CONNECT_MODE=off` o la política en OFF no lee más.
-  const onlinePayment = await loadPublicOnlinePayment(
-    tenantId,
-    pracIds.filter((id) => offering.has(id))
-  );
+  // WA-S8: la casilla de WhatsApp, en paralelo; con `WHATSAPP_MODE=off` no lee nada (y con la cuenta cacheada, nada
+  // en caliente).
+  const [onlinePayment, whatsappNotices] = await Promise.all([
+    loadPublicOnlinePayment(
+      tenantId,
+      pracIds.filter((id) => offering.has(id))
+    ),
+    turneroWhatsAppActive(tenantId),
+  ]);
   const primary = locations.find((l) => l.isPrimary) ?? null;
   const locationOrder = locations.map((l) => l.id);
   // VX2-d1: el nav del turnero decía «lun-sáb 8 a 19hs» fijo. Ahora sale de las franjas de los profesionales
@@ -303,6 +311,7 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
     insurers,
     // Solo el copy del wizard (cotiza con `quoteOnlineCharge`); cada submit lo decide `decideOnlineCharge` con el copago real.
     onlinePayment,
+    whatsappNotices,
   };
 }
 
@@ -655,6 +664,8 @@ export async function submitPublicBooking(
   let createdHere = false;
   /** Lo que decidió el alta de ESTA llamada sobre el cobro online (null en replay/twin: lo dice la fila). */
   let born: { decision: OnlineChargeDecision; chargeId: string | null } | null = null;
+  /** WA-S8: qué decidió ESTA llamada sobre la casilla de WhatsApp (null = no la mandó). En replay se recalcula abajo. */
+  let waConsent: ReturnType<typeof decideTurneroWaConsent> = null;
   if (prior) {
     const sameAttempt =
       prior.tenantId === tenant.id &&
@@ -718,6 +729,14 @@ export async function submitPublicBooking(
       });
       return { ok: false, error: GENERIC_SUBMIT_ERROR };
     }
+
+    // WA-S8 (§26.5): consentimiento de WhatsApp, decidido FUERA de la tx (lectura de configuración, cacheada; sin la
+    // casilla o con modo `off`, 0 sentencias). Se escribe ADENTRO de la tx del alta, más abajo.
+    waConsent = decideTurneroWaConsent({
+      requested: data.waConsent,
+      accountActive: data.waConsent === true && (await turneroWhatsAppActive(tenant.id)),
+      phone: data.patient.phone,
+    });
 
     // T5 (C-TP8): política + cuenta del vendedor, FUERA de la tx (son lecturas de configuración; con modo `off` o
     // política OFF es una sola o ninguna). Nunca la cuenta de la plataforma (H-TP1).
@@ -887,6 +906,26 @@ export async function submitPublicBooking(
             expiresAt: turneroChargeExpiresAt({ required: decision.required, createdAt: row.createdAt, scheduledFor }),
           }));
         }
+        // WA-S8 (§26.5, WA-D3/WA-D17): el consentimiento en la MISMA tx del alta (si el turno no entra, no queda un
+        // consentimiento de una reserva que no existe) y ANTES del commit, así el hook post-commit del aviso
+        // (`afterBookingsCommitted`, C-WA8) ya lo ve. Sobre la ficha que usa la reserva, nueva o existente por DNI:
+        // H4 prohíbe pisar el contacto de una ficha existente y acá NO se toca `phone` ni `email`; el consentimiento
+        // queda anclado al número TIPEADO (`waPhoneE164`). Si no coincide con el teléfono de la ficha, el canal queda
+        // `phone_changed` (lib/whatsapp/logic.ts) y no se manda nada hasta que el staff lo revise: un anónimo con el
+        // DNI de otro no puede desviar los avisos a su número.
+        if (waConsent?.outcome === "saved") {
+          await tx.patient.updateMany({
+            where: { id: resolution.patientId, tenantId: tenant.id },
+            data: {
+              waConsent: "GRANTED",
+              waConsentAt: new Date(),
+              waConsentSource: "TURNERO",
+              waConsentByUserId: null,
+              waConsentVersion: WA_CONSENT_VERSION,
+              waPhoneE164: waConsent.e164,
+            },
+          });
+        }
         return { ...row, released, decision, chargeId };
       });
       bookingId = created.id;
@@ -955,6 +994,17 @@ export async function submitPublicBooking(
     }
   }
 
+  // WA-S8: en replay / gemelo no se escribe nada (lo escribió el alta original, misma key = misma instancia del
+  // wizard = misma casilla); el flag se recalcula con la misma regla para que la UI diga lo mismo que la primera vez.
+  if (!createdHere && data.waConsent === true) {
+    waConsent = decideTurneroWaConsent({
+      requested: true,
+      accountActive: await turneroWhatsAppActive(tenant.id),
+      phone: data.patient.phone,
+    });
+  }
+  const waFlag = waConsent ? { whatsappConsent: waConsent.outcome } : {};
+
   const logDone = (next: SubmitPublicBookingResult["next"], extra: Record<string, unknown> = {}) =>
     // VX2-d1 (AUDIT `turnero-revalidatepath-doble`): sin `revalidatePath("/agenda", "/dashboard")`. La invalidación
     // la hace `afterBookingsCommitted` (tags `bookingDays` + `dashboard`) justo después de cada commit; los replays no
@@ -965,18 +1015,20 @@ export async function submitPublicBooking(
       replay: !createdHere,
       next,
       charge: born ? (born.decision.kind === "charge" ? (born.decision.required ? "required" : "optional") : born.decision.reason) : "replay",
+      // WA-S8: solo el resultado (nunca el número).
+      ...(waConsent ? { wa: waConsent.outcome } : {}),
       ...extra,
     });
   const reserved = (notice?: "payment-unavailable"): ActionResult<SubmitPublicBookingResult> => {
     logDone("reserved", notice ? { notice } : {});
     return {
       ok: true,
-      data: { bookingId, next: "reserved", initPoint: null, amountCents: null, ...(notice ? { notice } : {}) },
+      data: { bookingId, next: "reserved", initPoint: null, amountCents: null, ...(notice ? { notice } : {}), ...waFlag },
     };
   };
   const checkout = (initPoint: string, amountCents: number): ActionResult<SubmitPublicBookingResult> => {
     logDone("checkout");
-    return { ok: true, data: { bookingId, next: "checkout", initPoint, amountCents } };
+    return { ok: true, data: { bookingId, next: "checkout", initPoint, amountCents, ...waFlag } };
   };
   /** BOOKING_CREATED (H-TP3) del alta de esta llamada, cuando el turno quedó RESERVADO (nunca en un replay). */
   const notifyCreated = async () => {

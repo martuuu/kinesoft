@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { TenantVertical } from "@prisma/client";
 import type { ChargeStatus } from "@/lib/online-charge-logic";
 import type { PaymentPolicyInput } from "@/lib/booking-payment-policy-types";
+import { normalizeArMobile } from "@/lib/phone-e164";
 
 /**
  * Lo que ve el wizard público (`getPublicClinic`). Desde B3.2 (motor de
@@ -81,6 +82,13 @@ export type PublicClinic = {
    * cobra turnos (H-TP1).
    */
   onlinePayment?: PublicClinicOnlinePayment | null;
+  /**
+   * WA-S8 (§26.5, contrato para WA-U4): el consultorio avisa por WhatsApp = `WHATSAPP_MODE` ≠ off Y una cuenta del
+   * consultorio ACTIVE en ese mismo modo (con otro modo el outbox no manda, C-WA7). Solo con true el wizard muestra la
+   * casilla de consentimiento (DESTILDADA, texto `WA_CONSENT_TEXT`) y manda `waConsent` en el submit. Siempre lo
+   * setea el server; es opcional solo por los fixtures viejos (ausente = false).
+   */
+  whatsappNotices?: boolean;
 };
 
 /** C-TP8: `PublicClinic.onlinePayment`. Nunca trae montos de copago ni nada de la cuenta (es público). */
@@ -224,7 +232,35 @@ export type SubmitPublicBookingResult = {
   initPoint: string | null;
   amountCents: number | null;
   notice?: "payment-unavailable";
+  /**
+   * WA-S8 (contrato para WA-U4): qué pasó con la casilla de WhatsApp. AUSENTE si el submit no mandó `waConsent: true`.
+   *   - `"saved"`: quedó el consentimiento anclado al celular tipeado (en replay: el del alta original, misma key);
+   *   - `"invalid_phone"`: lo tipeado no es un celular argentino (fijo, sin área…): el turno entró igual, sin
+   *     consentimiento → la confirmación NO dice «te avisamos por WhatsApp»;
+   *   - `"unavailable"`: el consultorio ya no tiene WhatsApp activo (se desconectó entre la carga y el submit).
+   * Depende solo de la cuenta y del número tipeado, nunca del estado de la ficha: el turnero es anónimo y no puede
+   * revelar si un DNI tiene ficha o qué consintió.
+   */
+  whatsappConsent?: TurneroWaConsentOutcome;
 };
+
+export type TurneroWaConsentOutcome = "saved" | "invalid_phone" | "unavailable";
+
+/**
+ * WA-S8: decisión pura del consentimiento del turnero (testeada en tests/unit/public-booking-wa-consent.test.ts).
+ * `requested` = la casilla; `accountActive` = `whatsappNotices` recalculado en el submit. null = no se pidió (no se
+ * escribe nada ni hay flag). Con `saved`, `e164` es el número que se ancla en `Patient.waPhoneE164` (WA-D17).
+ */
+export function decideTurneroWaConsent(o: {
+  requested: boolean | undefined;
+  accountActive: boolean;
+  phone: string;
+}): { outcome: "saved"; e164: string } | { outcome: Exclude<TurneroWaConsentOutcome, "saved"> } | null {
+  if (o.requested !== true) return null;
+  if (!o.accountActive) return { outcome: "unavailable" };
+  const n = normalizeArMobile(o.phone);
+  return n.ok ? { outcome: "saved", e164: n.e164 } : { outcome: "invalid_phone" };
+}
 
 export type PrefillPatient = {
   firstName: string;
@@ -283,6 +319,9 @@ export const SubmitSchema = z.object({
   // consultorio» = false). Sin preselección (TP-UI-D5): ausente con OPTIONAL = no eligió, y el server no cobra. Con
   // REQUIRED se ignora (siempre cobra); con OFF también (nunca cobra).
   payNow: z.boolean().optional(),
+  // WA-S8 (§26.5, WA-D3): la casilla «Quiero recibir avisos de este turno por WhatsApp» (destildada por defecto). Solo
+  // cuenta con `whatsappNotices` true y un celular AR válido; si no, se ignora sin error (ver `whatsappConsent`).
+  waConsent: z.boolean().optional(),
 });
 
 export type SubmitPublicBookingInput = z.infer<typeof SubmitSchema>;
