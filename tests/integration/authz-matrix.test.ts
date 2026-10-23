@@ -75,6 +75,7 @@ import { GET as getFichaDownload } from "@/app/api/pacientes/[id]/fichas/[noteId
 import { GET as getRecordDownload } from "@/app/api/pacientes/[id]/historia-clinica/[format]/route";
 import { getPatientTimeline, getPatientClinicalSummary } from "@/lib/clinical-notes-read";
 import { getBillingOverview, previewPlanChange, applyPlanChange, submitPaymentReceipt, getReceiptUrl } from "@/lib/saas-billing";
+import { cancelScheduledPlanChange, refreshAutoDebit, scheduleCancel, setCollectionMethod, undoCancel } from "@/lib/saas-billing-mp";
 import { setSharedPatientView, setPublicBookingEnabled, updateTenantBasics } from "@/lib/tenant-settings";
 import { addSessionExercise } from "@/lib/sessions";
 import { exportBookingsIcs } from "@/lib/bookings-export-internal";
@@ -648,6 +649,17 @@ async function settle<T extends { ok: boolean }>(p: Promise<T>): Promise<{ ok: b
   } catch (e) {
     if (e instanceof ForbiddenError || e instanceof ReadOnlyModeError) return { ok: false };
     throw e;
+  }
+}
+/** MPS-3a: `SAAS_BILLING_MODE` solo alrededor de la action (lo lee `saasBillingMode()` en vivo). */
+async function withSaasMode<T>(mode: "manual" | "mp", fn: () => Promise<T>): Promise<T> {
+  const prev = process.env.SAAS_BILLING_MODE;
+  process.env.SAAS_BILLING_MODE = mode;
+  try {
+    return await fn();
+  } finally {
+    if (prev === undefined) delete process.env.SAAS_BILLING_MODE;
+    else process.env.SAAS_BILLING_MODE = prev;
   }
 }
 async function resolves(p: Promise<unknown>): Promise<boolean> {
@@ -1470,6 +1482,85 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
         fx.paymentId = pay.id;
       },
       seen: async (fx) => (await settle(getReceiptUrl(fx.paymentId))).ok,
+    },
+    // ─────────────────────── MPS-3a · suscripción con Mercado Pago (C-MPS10, lib/saas-billing-mp.ts) ───────────────────────
+    // Misma barrera que applyPlanChange: `account.billing` (Titular / «Planes y pagos»), soporte nunca. El step-up está
+    // mockeado arriba (frontera externa); que se exija lo fija mps-3a-actions.test.ts. Modo `manual`: estas cuatro no
+    // hablan con Mercado Pago (las que sí, con el MP falso, también están en mps-3a-actions.test.ts).
+    {
+      kind: "write",
+      name: "MPS · setCollectionMethod (Transferencia)",
+      cells: { XT: "isolated", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: { exp: "ok", note: "«Planes y pagos» por default" }, GENERAL: "ok", SUPPORT: { exp: "ro", note: "soporte nunca `account.*`" } },
+      act: () => withSaasMode("manual", () => settle(setCollectionMethod({ method: "TRANSFER" }))),
+      effect: async (fx, db) => {
+        const changed = (await db.saasSubscription.findUnique({ where: { tenantId: fx.host.tenantId } }))?.collectionMethod === "TRANSFER";
+        await db.saasSubscription.updateMany({ where: { tenantId: { in: [fx.host.tenantId, Other.tenantId] } }, data: { collectionMethod: null } });
+        return changed;
+      },
+    },
+    {
+      kind: "write",
+      name: "MPS · scheduleCancel (baja a fin de período)",
+      cells: { XT: "isolated", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "ok", GENERAL: "ok", SUPPORT: "ro" },
+      act: () => withSaasMode("manual", () => settle(scheduleCancel())),
+      effect: async (fx, db) => {
+        const changed = (await db.saasSubscription.findUnique({ where: { tenantId: fx.host.tenantId } }))?.cancelAtPeriodEnd === true;
+        await db.saasSubscription.updateMany({
+          where: { tenantId: { in: [fx.host.tenantId, Other.tenantId] } },
+          data: { cancelAtPeriodEnd: false, cancelEffectiveOn: null, cancelRequestedAt: null, cancelRequestedById: null },
+        });
+        return changed;
+      },
+    },
+    {
+      kind: "write",
+      name: "MPS · undoCancel",
+      cells: { XT: "isolated", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "ok", GENERAL: "ok", SUPPORT: "ro" },
+      setup: async (fx) => {
+        const on = new Date(Date.now() + 20 * 86_400_000);
+        await db.saasSubscription.upsert({
+          where: { tenantId: fx.host.tenantId },
+          create: { tenantId: fx.host.tenantId, cancelAtPeriodEnd: true, cancelEffectiveOn: on, cancelRequestedAt: new Date() },
+          update: { cancelAtPeriodEnd: true, cancelEffectiveOn: on, cancelRequestedAt: new Date() },
+        });
+      },
+      act: () => withSaasMode("manual", () => settle(undoCancel())),
+      effect: async (fx, db) => {
+        const changed = (await db.saasSubscription.findUnique({ where: { tenantId: fx.host.tenantId } }))?.cancelAtPeriodEnd === false;
+        await db.saasSubscription.updateMany({
+          where: { tenantId: fx.host.tenantId },
+          data: { cancelAtPeriodEnd: false, cancelEffectiveOn: null, cancelRequestedAt: null, cancelRequestedById: null },
+        });
+        return changed;
+      },
+    },
+    {
+      kind: "write",
+      name: "MPS · cancelScheduledPlanChange",
+      cells: { XT: "isolated", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "ok", GENERAL: "ok", SUPPORT: "ro" },
+      setup: async (fx) => {
+        const on = new Date(Date.now() + 20 * 86_400_000);
+        await db.saasSubscription.upsert({
+          where: { tenantId: fx.host.tenantId },
+          create: { tenantId: fx.host.tenantId, pendingPlan: "INDIVIDUAL", pendingPlanEffectiveOn: on, pendingPlanRequestedAt: new Date() },
+          update: { pendingPlan: "INDIVIDUAL", pendingPlanEffectiveOn: on, pendingPlanRequestedAt: new Date() },
+        });
+      },
+      act: () => withSaasMode("manual", () => settle(cancelScheduledPlanChange())),
+      effect: async (fx, db) => {
+        const changed = (await db.saasSubscription.findUnique({ where: { tenantId: fx.host.tenantId } }))?.pendingPlan === null;
+        await db.saasSubscription.updateMany({
+          where: { tenantId: fx.host.tenantId },
+          data: { pendingPlan: null, pendingPlanEffectiveOn: null, pendingPlanDisableIds: [], pendingPlanRequestedById: null, pendingPlanRequestedAt: null },
+        });
+        return changed;
+      },
+    },
+    {
+      kind: "read",
+      name: "MPS · refreshAutoDebit (estado del débito)",
+      cells: { OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "ok", GENERAL: "ok", SUPPORT: { exp: "deny", note: "soporte nunca `account.*`" } },
+      seen: () => withSaasMode("manual", async () => (await settle(refreshAutoDebit())).ok),
     },
     {
       kind: "write",

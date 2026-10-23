@@ -7,11 +7,20 @@ import { ACCOUNT_WRITABLE_ACTIONS, isAccountWritableAction, withAccountWritable 
 import { SUPPORT_WRITABLE_ACTIONS } from "@/lib/support-writable";
 
 describe("[PL-1e] ACCOUNT_WRITABLE_ACTIONS", () => {
-  it("es exactamente la lista del contrato C-PL10 (PL-2b: sin las actions de Mercado Pago)", () => {
+  it("es exactamente la lista del contrato C-PL10 + las actions de Mercado Pago de la suscripción (MPS-3a, C-MPS10)", () => {
     expect([...ACCOUNT_WRITABLE_ACTIONS].sort()).toEqual(
       [
         "lib/saas-billing.ts#applyPlanChange",
         "lib/saas-billing.ts#submitPaymentReceipt",
+        "lib/saas-billing-mp.ts#cancelScheduledPlanChange",
+        "lib/saas-billing-mp.ts#confirmCheckoutReturn",
+        "lib/saas-billing-mp.ts#payChargeWithMp",
+        "lib/saas-billing-mp.ts#reactivateSubscription",
+        "lib/saas-billing-mp.ts#refreshAutoDebit",
+        "lib/saas-billing-mp.ts#scheduleCancel",
+        "lib/saas-billing-mp.ts#setCollectionMethod",
+        "lib/saas-billing-mp.ts#startAutoDebit",
+        "lib/saas-billing-mp.ts#undoCancel",
         "lib/support-threads.ts#createSupportThread",
         "lib/support-threads.ts#replySupportThread",
         "lib/support-threads.ts#markSupportThreadRead",

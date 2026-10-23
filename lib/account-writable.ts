@@ -18,10 +18,20 @@
 import { getRequestContext, runWithRequestContext, type RequestContext } from "@/lib/request-context";
 
 export const ACCOUNT_WRITABLE_ACTIONS: ReadonlySet<string> = new Set([
-  // Planes y pagos (PL-2b). Sin débito automático ni «Pagar con MP»: Mercado Pago para la suscripción quedó fuera
-  // de esta etapa (Martin, 16-oct); cuando vuelva, sus actions se suman acá en la misma tanda que las crea.
+  // Planes y pagos (PL-2b).
   "lib/saas-billing.ts#applyPlanChange",
   "lib/saas-billing.ts#submitPaymentReceipt",
+  // MPS-3a (C-MPS10): Mercado Pago en la suscripción. Un consultorio en solo lectura (deuda, prueba vencida, baja) es
+  // justamente el que tiene que poder pagar, elegir cómo paga, activar el débito y reactivar la suscripción.
+  "lib/saas-billing-mp.ts#cancelScheduledPlanChange",
+  "lib/saas-billing-mp.ts#confirmCheckoutReturn",
+  "lib/saas-billing-mp.ts#payChargeWithMp",
+  "lib/saas-billing-mp.ts#reactivateSubscription",
+  "lib/saas-billing-mp.ts#refreshAutoDebit",
+  "lib/saas-billing-mp.ts#scheduleCancel",
+  "lib/saas-billing-mp.ts#setCollectionMethod",
+  "lib/saas-billing-mp.ts#startAutoDebit",
+  "lib/saas-billing-mp.ts#undoCancel",
   // Mensajes a soporte (PL-2d)
   "lib/support-threads.ts#createSupportThread",
   "lib/support-threads.ts#replySupportThread",

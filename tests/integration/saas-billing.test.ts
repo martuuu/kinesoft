@@ -320,7 +320,8 @@ describe.skipIf(!RUN)("[PL-2b] Configuración → Facturación", () => {
       setStepUpCookie(A.userId, "sess-billing");
       expect(await applyPlanChange(await input("LIBRE"))).toMatchObject({ ok: false, reason: "libre_platform_only" });
       const r = await applyPlanChange(await input("CLINICA"));
-      expect(r).toEqual({ ok: true, data: { disabled: 0, reactivated: 0, revokedInvites: 0 } });
+      // MPS-3a: `data.billing` dice si la subida llevó proporcional (depende del precio de Clínica en la base local).
+      expect(r).toMatchObject({ ok: true, data: { disabled: 0, reactivated: 0, revokedInvites: 0 } });
       const t = await db.tenant.findUniqueOrThrow({ where: { id: A.tenantId } });
       expect(t).toMatchObject({ saasPlan: "CLINICA", plan: "PRO" });
       const ev = await db.auditEvent.findFirstOrThrow({ where: { tenantId: A.tenantId, action: "tenant.entitlements" }, orderBy: { createdAt: "desc" } });
@@ -383,12 +384,18 @@ describe.skipIf(!RUN)("[PL-2b] Configuración → Facturación", () => {
 
   // ── Solo lectura ────────────────────────────────────────────────────────────────────────────────────────────
 
-  describe("solo lectura (suscripción cancelada + enforce)", () => {
+  // MPS-3a (MPS-D18): una suscripción CANCELLED ya no cambia de plan (primero se reactiva, `planChangeKind` →
+  // blocked_cancel_pending); el solo lectura que tiene que poder pagar y elegir plan es el de la DEUDA (PAST_DUE pasada
+  // la gracia) y el de la prueba vencida. Antes de MPS-3a esta fixture usaba CANCELLED.
+  describe("solo lectura (deuda pasada la gracia + enforce)", () => {
     let H: EphemeralTenant;
     beforeAll(async () => {
       H = await createEphemeralTenant(db);
       await db.userProfile.update({ where: { id: H.userId }, data: { isPlatformAdmin: true } });
-      await db.tenant.update({ where: { id: A.tenantId }, data: { subscriptionStatus: "CANCELLED" } });
+      await db.tenant.update({
+        where: { id: A.tenantId },
+        data: { subscriptionStatus: "PAST_DUE", subscriptionStatusChangedAt: new Date(Date.now() - 60 * 86_400_000) },
+      });
     });
     beforeEach(() => vi.stubEnv("TENANT_ACCESS_ENFORCEMENT", "enforce"));
     afterAll(async () => {
@@ -421,6 +428,31 @@ describe.skipIf(!RUN)("[PL-2b] Configuración → Facturación", () => {
       expect(c.ok).toBe(true);
       expect((await db.tenant.findUniqueOrThrow({ where: { id: A.tenantId } })).saasPlan).toBe("CLINICA");
       await db.tenant.update({ where: { id: A.tenantId }, data: { saasPlan: "CONSULTORIO", plan: "STARTER" } });
+    });
+
+    it("[MPS-3a] dada de baja (CANCELLED): comprobante sí, cambio de plan no (primero se reactiva)", async () => {
+      await db.tenant.update({ where: { id: A.tenantId }, data: { subscriptionStatus: "CANCELLED" } });
+      try {
+        await db.userProfile.update({ where: { id: A.userId }, data: { twoFactorTotp: true } });
+        tok.claims = { session_id: "sess-ro-cancelled", aal: "aal2" };
+        setStepUpCookie(A.userId, "sess-ro-cancelled");
+        const r = await submitPaymentReceipt(form({ file: file(PNG, "image/png", "c.png"), amount: "1.000", method: "TRANSFER" }));
+        expect(r.ok).toBe(true);
+        const t0 = await db.tenant.findUniqueOrThrow({ where: { id: A.tenantId } });
+        const c = await applyPlanChange({ to: "CLINICA", disableMembershipIds: [], reactivateMembershipIds: [], expectedUpdatedAt: t0.updatedAt.toISOString() });
+        expect(c).toEqual({
+          ok: false,
+          error: "Tu suscripción está dada de baja: reactivala para cambiar de plan.",
+          reason: "cancel_pending",
+          detail: "cancelled",
+        });
+        expect((await db.tenant.findUniqueOrThrow({ where: { id: A.tenantId } })).saasPlan).toBe("CONSULTORIO");
+      } finally {
+        await db.tenant.update({
+          where: { id: A.tenantId },
+          data: { subscriptionStatus: "PAST_DUE", subscriptionStatusChangedAt: new Date(Date.now() - 60 * 86_400_000) },
+        });
+      }
     });
 
     it("el soporte no: ni sube comprobante ni cambia el plan", async () => {

@@ -18,6 +18,7 @@ import type {
   SubscriptionStatus,
 } from "@prisma/client";
 import type { SaasBillingMode } from "@/lib/env";
+import type { PlanChangePreview } from "@/lib/saas-plan-change-types";
 
 export type { SaasBillingMode };
 
@@ -144,11 +145,29 @@ export const BILLING_COPY = {
 
 /** Resultado de `applyPlanChange` / `platformApplyPlanChange`: en el error va la razón para que el drawer reaccione. */
 export type PlanChangeActionResult =
-  | { ok: true; data: { disabled: number; reactivated: number; revokedInvites: number } }
+  | {
+      ok: true;
+      /**
+       * MPS-3a (C-MPS10): `billing` dice qué pasó: subida que rige hoy (con o sin proporcional) o bajada PROGRAMADA
+       * (en ese caso `disabled` es 0: nadie pierde el acceso hasta `effectiveOn`). Opcional porque
+       * `platformApplyPlanChange` (Plataforma, MPS-D20: sin proporcional automático) devuelve el mismo tipo sin él.
+       */
+      data: { disabled: number; reactivated: number; revokedInvites: number; billing?: PlanChangeBilling };
+    }
   | {
       ok: false;
       error: string;
-      reason?: "stale" | "not_found" | "does_not_fit" | "owner_selected" | "self_selected" | "invalid_selection" | "libre_platform_only" | "invalid_input";
+      reason?:
+        | "stale"
+        | "not_found"
+        | "does_not_fit"
+        | "owner_selected"
+        | "self_selected"
+        | "invalid_selection"
+        | "libre_platform_only"
+        | "invalid_input"
+        /** MPS-D18: con la baja programada (o ya dada de baja) no se cambia de plan; `detail: "cancelled"` = ya rige. */
+        | "cancel_pending";
       detail?: string;
     };
 
@@ -165,6 +184,9 @@ export const PLAN_CHANGE_COPY = {
   custom_limits: "Tu consultorio tiene cupos a medida: escribinos para cambiar el plan.",
   /** PL-Z a3#2: elegir a quién se le corta el acceso exige también `tenant.admin`. */
   needs_settings: "Para elegir a quién deshabilitar necesitás también permiso de Configuración.",
+  /** MPS-3a (MPS-D18). */
+  cancel_pending: "Tenés una baja programada: deshacela para cambiar de plan.",
+  cancelled: "Tu suscripción está dada de baja: reactivala para cambiar de plan.",
 } as const;
 
 // ── MPS (T6, §26.6 · C-MPS5..C-MPS11): Mercado Pago en la suscripción ─────────────────────────────────────────────
@@ -199,6 +221,9 @@ export type PlanChangeBilling = {
   days: number;
   periodDays: number;
 };
+
+/** C-MPS10: lo que devuelve `previewPlanChange` (el recuento del equipo de siempre + qué pasa con la plata). */
+export type PlanChangePreviewWithBilling = PlanChangePreview & { billing: PlanChangeBilling };
 
 /** Un ajuste tal como lo ve el consultorio o Plataforma (C-MPS5 `readLedger`). Montos con signo, en centavos. */
 export type BillingAdjustmentRow = {
@@ -321,6 +346,36 @@ export type SaasMpActionReason =
 export type SaasMpActionResult<T = void> =
   | { ok: true; data: T }
   | { ok: false; error: string; reason?: SaasMpActionReason };
+
+/**
+ * Copy (voseo) de los errores de `lib/saas-billing-mp.ts` (MPS-3a). Vive acá y no en el archivo "use server" (que solo
+ * exporta funciones async): la UI (MPS-4a) y los tests comparan contra el mismo texto.
+ */
+export const SAAS_MP_COPY = {
+  mode_off: BILLING_COPY.modeOff,
+  mp_off: "El pago con Mercado Pago todavía no está habilitado. Podés pagar por transferencia.",
+  mp_unavailable: "No pudimos conectarnos con Mercado Pago. Probá de nuevo en unos minutos.",
+  not_allowed: "El débito automático no está disponible para tu consultorio. Elegí otra forma de pago o escribinos.",
+  invalid_input: "Datos inválidos.",
+  invalid_email: "Revisá el email: tiene que ser el de tu cuenta de Mercado Pago.",
+  below_minimum: "El monto del cargo es muy bajo para el débito automático. Elegí otra forma de pago.",
+  no_price: "Tu plan todavía no tiene precio: escribinos y lo vemos antes de activar el débito.",
+  stale: BILLING_COPY.stale,
+  not_found: "No encontramos el consultorio.",
+  charge_not_found: BILLING_COPY.chargeNotFound,
+  charge_not_open: BILLING_COPY.chargeNotOpen,
+  no_unpaid: "No tenés cargos pendientes de pago.",
+  payment_not_found: "No encontramos ese pago en tu consultorio.",
+  cancel_pending: "Ya tenés una baja programada.",
+  already_cancelled: "Tu suscripción ya está dada de baja.",
+  not_cancel_pending: "No hay una baja programada.",
+  undo_today: "La baja se aplica hoy y ya no se puede deshacer. Mañana vas a poder reactivar la suscripción desde acá.",
+  not_cancelled: "Tu suscripción no está dada de baja.",
+  reactivate_not_own: "La baja la hizo nuestro equipo: escribinos desde Soporte para reactivarla.",
+  tenant_inactive: "Tu consultorio está suspendido: escribinos desde Soporte.",
+  has_debt: "Tenés cargos impagos: pagalos y después reactivá la suscripción.",
+  no_pending_plan: "No hay un cambio de plan programado.",
+} as const;
 
 /** `setCollectionMethod` (step-up). */
 export type SetCollectionMethodInput = { method: SaasCollectionMethod };
