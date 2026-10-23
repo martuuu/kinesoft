@@ -45,7 +45,7 @@ export const FAKE_MP_SELLERS = [
 ] as const;
 
 /**
- * MPS-1b (C-MPS4): la cuenta de la PLATAFORMA (la que cobra la suscripción de KineSoft) en el simulador. No pasa por el
+ * MPS-1b (C-MPS4): la cuenta de la PLATAFORMA (la que cobra la suscripción del SaaS) en el simulador. No pasa por el
  * OAuth: en MP real es `MP_ACCESS_TOKEN`, el token de la app; acá es un literal fijo que reconoce `bearerSeller` y que el
  * puerto (`lib/mercadopago-saas.ts`) manda en modo fake EN VEZ del de `.env*` (así un token real nunca viaja ni al fake).
  * Lo que cobra la plataforma (preapprovals, débitos, los links de pago de los cargos) avisa firmado con

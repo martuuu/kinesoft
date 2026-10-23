@@ -136,7 +136,7 @@ export const WA_COPY = {
   historyEmpty: "Todavía no se mandó nada por WhatsApp para este turno.",
   staleReply: "El paciente respondió a un horario anterior.",
   dismissReply: "Marcar como visto",
-  paymentChecklist: "Cargá un medio de pago en Meta: cada aviso entregado tiene un costo que cobra Meta, no KineSoft.",
+  paymentChecklist: "Cargá un medio de pago en Meta: cada aviso entregado tiene un costo que cobra Meta, no nosotros.",
   switches: {
     autoBookingNotice: "Avisar al paciente cuando se agenda o se reprograma un turno",
     autoReminder: "Mandar un recordatorio el día anterior, con «Confirmo» / «No puedo ir»",
