@@ -1586,3 +1586,229 @@ describe.skipIf(!RUN || BYPASS)("[TP-M] RLS cobros online (M18 OnlineCharge / Bo
     expect(await runWithRls(B.tenantId, (tx) => tx.onlineCharge.count({ where: { tenantId: A.tenantId } }))).toBe(0);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════
+// [MIG] M17 reception_displays + M15 whatsapp_messaging + M16 saas_mp_subscriptions (app role, por runWithRls)
+//   · ReceptionDisplay: categoría por defecto (policy ALL por tenant): el staff la escribe por runWithRls.
+//   · WhatsApp{Account,Template,Message,Inbound} y SaasAdjustment: TENANT_READONLY (solo SELECT por tenant).
+//   · WhatsAppCredential: SERVICE_ONLY (cero policies: invisible con cualquier GUC).
+// Se usa el cliente generado (no SQL crudo) a propósito: es lo que van a llamar las sesiones de TV/WA/MPS.
+// ═════════════════════════════════════════════════════════════════════
+describe.skipIf(!RUN || BYPASS)("[MIG] RLS pantallas, WhatsApp y ajustes SaaS (M17 / M15 / M16, app role)", () => {
+  const prismaOwner = new PrismaClient({
+    datasources: { db: { url: process.env.DIRECT_URL ?? process.env.DATABASE_URL } },
+  });
+  const box = () =>
+    ["v1", "k1", randomBytes(12).toString("base64url"), randomBytes(24).toString("base64url"), randomBytes(16).toString("base64url")].join(".");
+  let seq = 0;
+  /** Id numérico de Meta único por corrida (los parciales *_live_key son GLOBALES). */
+  const metaId = () => `${Date.now()}${String(++seq).padStart(4, "0")}`;
+  const hex64 = () => randomBytes(32).toString("hex");
+
+  type Ids = { display: string; acc: string; cred: string; tpl: string; msg: string; inb: string; adj: string };
+  let A: EphemeralTenant;
+  let B: EphemeralTenant;
+  const ids: Record<"A" | "B", Ids> = {} as never;
+
+  /** Pantalla + cuenta ACTIVE con credencial, plantilla, mensaje TEST y entrante + un CREDIT. Todo con el owner. */
+  async function seed(t: EphemeralTenant, label: "A" | "B") {
+    const display = await prismaOwner.receptionDisplay.create({
+      data: { tenantId: t.tenantId, name: `Recepción ${label}`, createdByUserId: t.userId },
+    });
+    const acc = await prismaOwner.whatsAppAccount.create({
+      data: {
+        tenantId: t.tenantId,
+        mode: "fake",
+        wabaId: metaId(),
+        phoneNumberId: metaId(),
+        status: "ACTIVE",
+        setupStep: "DONE",
+        connectedByUserId: t.userId,
+        connectedAt: new Date(),
+      },
+    });
+    const cred = await prismaOwner.whatsAppCredential.create({
+      data: { tenantId: t.tenantId, accountId: acc.id, tokenBox: box(), pinBox: box(), keyId: "k1" },
+    });
+    const tpl = await prismaOwner.whatsAppTemplate.create({
+      data: { tenantId: t.tenantId, accountId: acc.id, key: "BOOKING_CREATED", name: "kinesoft_turno_nuevo", specVersion: 1 },
+    });
+    const msg = await prismaOwner.whatsAppMessage.create({
+      data: {
+        tenantId: t.tenantId,
+        accountId: acc.id,
+        kind: "TEST",
+        trigger: "MANUAL",
+        idempotencyKey: `test:${randomUUID()}`,
+        templateName: "hello_world",
+        toHash: hex64(),
+        toMasked: "+54 9 11 ****-1234",
+        expiresAt: new Date(Date.now() + 3_600_000),
+      },
+    });
+    const inb = await prismaOwner.whatsAppInbound.create({
+      data: {
+        tenantId: t.tenantId,
+        accountId: acc.id,
+        wamid: `wamid.${randomUUID()}`,
+        kind: "OTHER",
+        fromHash: hex64(),
+        messageId: msg.id,
+        outcome: "ignored",
+        receivedAt: new Date(),
+      },
+    });
+    const adj = await prismaOwner.saasAdjustment.create({
+      data: {
+        tenantId: t.tenantId,
+        kind: "CREDIT",
+        amountCents: -1500,
+        effectiveOn: new Date("2026-11-04T00:00:00Z"),
+        description: "Crédito de prueba",
+        idempotencyKey: `rls:${randomUUID()}`,
+      },
+    });
+    ids[label] = { display: display.id, acc: acc.id, cred: cred.id, tpl: tpl.id, msg: msg.id, inb: inb.id, adj: adj.id };
+  }
+
+  beforeAll(async () => {
+    A = await createEphemeralTenant(prismaOwner);
+    B = await createEphemeralTenant(prismaOwner);
+    await seed(A, "A");
+    await seed(B, "B");
+  });
+
+  afterAll(async () => {
+    // deleteTenantDeep borra SaasAdjustment en modo réplica (saas_adjustment_guard rechaza DELETE incluso al owner).
+    await A?.cleanup();
+    await B?.cleanup();
+    await prismaOwner.$disconnect();
+  });
+
+  it("[MIG] lectura: A ve su pantalla, cuenta, plantilla, mensaje, entrante y ajuste; no los de B (ni por id); la credencial no", async () => {
+    const pick = (k: keyof Ids) => [ids.A[k], ids.B[k]];
+    const seen = await runWithRls(A.tenantId, async (tx) => [
+      (await tx.receptionDisplay.findMany({ where: { id: { in: pick("display") } }, select: { id: true } })).map((r) => r.id),
+      (await tx.whatsAppAccount.findMany({ where: { id: { in: pick("acc") } }, select: { id: true } })).map((r) => r.id),
+      (await tx.whatsAppTemplate.findMany({ where: { id: { in: pick("tpl") } }, select: { id: true } })).map((r) => r.id),
+      (await tx.whatsAppMessage.findMany({ where: { id: { in: pick("msg") } }, select: { id: true } })).map((r) => r.id),
+      (await tx.whatsAppInbound.findMany({ where: { id: { in: pick("inb") } }, select: { id: true } })).map((r) => r.id),
+      (await tx.saasAdjustment.findMany({ where: { id: { in: pick("adj") } }, select: { id: true } })).map((r) => r.id),
+      await tx.whatsAppCredential.count(),
+    ]);
+    expect(seen).toEqual([[ids.A.display], [ids.A.acc], [ids.A.tpl], [ids.A.msg], [ids.A.inb], [ids.A.adj], 0]);
+    const fromB = await runWithRls(B.tenantId, async (tx) => [
+      await tx.receptionDisplay.count({ where: { tenantId: A.tenantId } }),
+      await tx.whatsAppAccount.count({ where: { tenantId: A.tenantId } }),
+      await tx.whatsAppMessage.count({ where: { tenantId: A.tenantId } }),
+      await tx.saasAdjustment.count({ where: { tenantId: A.tenantId } }),
+      await tx.whatsAppCredential.count({ where: { id: { in: pick("cred") } } }),
+    ]);
+    expect(fromB).toEqual([0, 0, 0, 0, 0]);
+  });
+
+  it("[MIG] TENANT_READONLY: la app no encola un mensaje ni se acredita un ajuste; UPDATE/DELETE de lo propio afectan 0 filas", async () => {
+    await expect(
+      runWithRls(A.tenantId, (tx) =>
+        tx.whatsAppMessage.create({
+          data: {
+            tenantId: A.tenantId,
+            accountId: ids.A.acc,
+            kind: "TEST",
+            trigger: "MANUAL",
+            idempotencyKey: `test:${randomUUID()}`,
+            templateName: "hello_world",
+            toHash: hex64(),
+            toMasked: "+54 9 11 ****-9999",
+            expiresAt: new Date(Date.now() + 3_600_000),
+          },
+        })
+      )
+    ).rejects.toThrow(/row-level security/i);
+    await expect(
+      runWithRls(A.tenantId, (tx) =>
+        tx.saasAdjustment.create({
+          data: {
+            tenantId: A.tenantId,
+            kind: "CREDIT",
+            amountCents: -999_999,
+            effectiveOn: new Date("2026-11-04T00:00:00Z"),
+            description: "Me regalo saldo",
+            idempotencyKey: `rls:${randomUUID()}`,
+          },
+        })
+      )
+    ).rejects.toThrow(/row-level security/i);
+    const counts = await runWithRls(A.tenantId, async (tx) => [
+      (await tx.whatsAppAccount.updateMany({ where: { id: ids.A.acc }, data: { autoReminder: false } })).count,
+      (await tx.whatsAppTemplate.updateMany({ where: { id: ids.A.tpl }, data: { status: "APPROVED" } })).count,
+      (await tx.whatsAppMessage.updateMany({ where: { id: ids.A.msg }, data: { status: "CANCELLED" } })).count,
+      (await tx.whatsAppInbound.deleteMany({ where: { id: ids.A.inb } })).count,
+      (await tx.saasAdjustment.updateMany({ where: { id: ids.A.adj }, data: { description: "otra" } })).count,
+      (await tx.saasAdjustment.deleteMany({ where: { id: ids.A.adj } })).count,
+    ]);
+    expect(counts).toEqual([0, 0, 0, 0, 0, 0]);
+    expect((await prismaOwner.whatsAppAccount.findUniqueOrThrow({ where: { id: ids.A.acc } })).autoReminder).toBe(true);
+    expect((await prismaOwner.whatsAppMessage.findUniqueOrThrow({ where: { id: ids.A.msg } })).status).toBe("QUEUED");
+    expect(await prismaOwner.saasAdjustment.count({ where: { id: ids.A.adj, description: "Crédito de prueba" } })).toBe(1);
+  });
+
+  it("[MIG] WhatsAppCredential (SERVICE_ONLY): la app no la lee, no la escribe y no la borra, ni con el GUC propio", async () => {
+    await expect(
+      runWithRls(A.tenantId, (tx) =>
+        tx.whatsAppCredential.create({ data: { tenantId: A.tenantId, accountId: ids.A.acc, tokenBox: box(), pinBox: box(), keyId: "k1" } })
+      )
+    ).rejects.toThrow(/row-level security/i);
+    const counts = await runWithRls(A.tenantId, async (tx) => [
+      (await tx.whatsAppCredential.updateMany({ where: { id: ids.A.cred }, data: { version: { increment: 1 } } })).count,
+      (await tx.whatsAppCredential.deleteMany({ where: { id: ids.A.cred } })).count,
+      await tx.whatsAppCredential.count({ where: { id: ids.A.cred } }),
+    ]);
+    expect(counts).toEqual([0, 0, 0]);
+    expect((await prismaOwner.whatsAppCredential.findUniqueOrThrow({ where: { id: ids.A.cred } })).version).toBe(1);
+  });
+
+  it("[MIG] ReceptionDisplay (por defecto): B no la crea en A (WITH CHECK) ni la toca (0 filas); A crea, edita y revoca lo propio", async () => {
+    await expect(
+      runWithRls(B.tenantId, (tx) =>
+        tx.receptionDisplay.create({ data: { tenantId: A.tenantId, name: "Intrusa", createdByUserId: B.userId } })
+      )
+    ).rejects.toThrow(/row-level security/i);
+    const fromB = await runWithRls(B.tenantId, async (tx) => [
+      (await tx.receptionDisplay.updateMany({ where: { id: ids.A.display }, data: { theme: "LIGHT" } })).count,
+      (await tx.receptionDisplay.deleteMany({ where: { id: ids.A.display } })).count,
+    ]);
+    expect(fromB).toEqual([0, 0]);
+    // Mudar la propia al tenant de A: el WITH CHECK del UPDATE la rechaza.
+    await expect(
+      runWithRls(B.tenantId, (tx) => tx.receptionDisplay.update({ where: { id: ids.B.display }, data: { tenantId: A.tenantId } }))
+    ).rejects.toThrow(/row-level security/i);
+    expect((await prismaOwner.receptionDisplay.findUniqueOrThrow({ where: { id: ids.A.display } })).theme).toBe("DARK");
+    const own = await runWithRls(A.tenantId, async (tx) => {
+      const d = await tx.receptionDisplay.create({ data: { tenantId: A.tenantId, name: "Planta alta", createdByUserId: A.userId } });
+      await tx.receptionDisplay.update({ where: { id: d.id }, data: { mediaKind: "VIDEO", mediaRef: "dQw4w9WgXcQ" } });
+      await tx.receptionDisplay.update({ where: { id: d.id }, data: { revokedAt: new Date(), revokedByUserId: A.userId } });
+      return d.id;
+    });
+    expect(await runWithRls(B.tenantId, (tx) => tx.receptionDisplay.count({ where: { id: own } }))).toBe(0);
+    expect((await prismaOwner.receptionDisplay.findUniqueOrThrow({ where: { id: own } })).mediaRef).toBe("dQw4w9WgXcQ");
+  });
+
+  it("[MIG] sin GUC (fuera de runWithRls): 0 filas en las 7 tablas y la pantalla no entra", async () => {
+    const app = new PrismaClient();
+    try {
+      expect(await app.receptionDisplay.count({ where: { id: { in: [ids.A.display, ids.B.display] } } })).toBe(0);
+      expect(await app.whatsAppAccount.count({ where: { id: { in: [ids.A.acc, ids.B.acc] } } })).toBe(0);
+      expect(await app.whatsAppCredential.count()).toBe(0);
+      expect(await app.whatsAppTemplate.count({ where: { id: { in: [ids.A.tpl, ids.B.tpl] } } })).toBe(0);
+      expect(await app.whatsAppMessage.count({ where: { id: { in: [ids.A.msg, ids.B.msg] } } })).toBe(0);
+      expect(await app.whatsAppInbound.count({ where: { id: { in: [ids.A.inb, ids.B.inb] } } })).toBe(0);
+      expect(await app.saasAdjustment.count({ where: { id: { in: [ids.A.adj, ids.B.adj] } } })).toBe(0);
+      await expect(
+        app.receptionDisplay.create({ data: { tenantId: A.tenantId, name: "Sin GUC", createdByUserId: A.userId } })
+      ).rejects.toThrow(/row-level security/i);
+    } finally {
+      await app.$disconnect();
+    }
+  });
+});

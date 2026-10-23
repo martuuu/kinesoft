@@ -105,6 +105,15 @@ export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Prom
   // Los cobros que las referencian ya se fueron arriba. BookingPaymentPolicy cascadea de Tenant.
   await db.mpCredential.deleteMany({ where: { tenantId } });
   await db.mpAccount.deleteMany({ where: { tenantId } });
+  // WA M15 (whatsapp_messaging): las 5 tablas son RESTRICT hacia Tenant (el historial no se borra en cascada), el
+  // mensaje es RESTRICT hacia el paciente (FK compuesta) y el entrante y el mensaje hacia la cuenta: van antes que
+  // los pacientes, hijo → padre (entrante → mensaje → plantilla → credencial → cuenta). Sin modo réplica a propósito:
+  // no hay triggers que lo pidan, y con las FKs vivas un orden mal hecho tira en vez de dejar huérfanos.
+  await db.whatsAppInbound.deleteMany({ where: { tenantId } });
+  await db.whatsAppMessage.deleteMany({ where: { tenantId } });
+  await db.whatsAppTemplate.deleteMany({ where: { tenantId } });
+  await db.whatsAppCredential.deleteMany({ where: { tenantId } });
+  await db.whatsAppAccount.deleteMany({ where: { tenantId } });
   // Planes M1: ProgramAuthorization → TreatmentProgram es RESTRICT (FK
   // compuesta): va antes que los planes o el deleteMany de abajo falla con 23503.
   await db.programAuthorization.deleteMany({ where: { tenantId } });
@@ -144,6 +153,14 @@ export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Prom
   // leído (cascadean igual; explícito para que un fallo tire) → hilos.
   // UserSecurityEvent no tiene FK pero es solo inserción (trigger): se limpia en
   // modo réplica como PlatformAuditEvent.
+  // MPS M16 (saas_mp_subscriptions): SaasAdjustment es solo inserción (trigger saas_adjustment_guard rechaza
+  // DELETE y TRUNCATE incluso al owner) y RESTRICT hacia el cargo al que se imputó (FK compuesta) y hacia Tenant:
+  // va antes que los cargos, en modo réplica como PlatformAuditEvent. La auto-referencia splitFromId (ajuste y pago
+  // partidos) es NO ACTION: se chequea al fin de la sentencia, y un solo DELETE por tenant se lleva todo el árbol.
+  await db.$transaction([
+    db.$executeRawUnsafe(`SET LOCAL session_replication_role = replica`),
+    db.$executeRaw`DELETE FROM "SaasAdjustment" WHERE "tenantId" = ${tenantId}`,
+  ]);
   await db.saasPayment.deleteMany({ where: { tenantId } });
   await db.saasCharge.deleteMany({ where: { tenantId } });
   await db.saasSubscription.deleteMany({ where: { tenantId } });
@@ -161,6 +178,8 @@ export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Prom
   // cascadas quedan encoladas antes que el chequeo de la sala borrada: no hace
   // falta borrar nada a mano (lo prueba rooms-m4.test.ts por la cascada real).
   // Booking → Room es RESTRICT y los turnos ya se borraron arriba.
+  // TV M17 (reception_displays): las pantallas cascadean de Tenant y de Location; explícito para que un fallo tire.
+  await db.receptionDisplay.deleteMany({ where: { tenantId } });
   await db.tenant.delete({ where: { id: tenantId } });
   // IAM-1 (M6): un usuario puede ser profesional en VARIOS consultorios.
   // Practitioner → UserProfile es RESTRICT, así que el perfil de quien sigue

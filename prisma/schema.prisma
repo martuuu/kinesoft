@@ -162,6 +162,17 @@ model Tenant {
   mpAccounts              MpAccount[]
   mpCredentials           MpCredential[]
   onlineCharges           OnlineCharge[]
+  // TV M17 (reception_displays): pantallas de la sala de espera (CASCADE, como Location).
+  receptionDisplays       ReceptionDisplay[]
+  // WA M15 (whatsapp_messaging): cuenta de WhatsApp Cloud API, token sellado, plantillas, cola y entrantes
+  // (RESTRICT: el historial de mensajes no se borra en cascada).
+  whatsAppAccounts        WhatsAppAccount[]
+  whatsAppCredentials     WhatsAppCredential[]
+  whatsAppTemplates       WhatsAppTemplate[]
+  whatsAppMessages        WhatsAppMessage[]
+  whatsAppInbounds        WhatsAppInbound[]
+  // MPS M16 (saas_mp_subscriptions): ajustes de la suscripción (solo inserción, RESTRICT).
+  saasAdjustments         SaasAdjustment[]
 
   @@index([slug])
 }
@@ -417,6 +428,15 @@ model Patient {
   diagnosisTitle String?
   diagnosisNote  String?
   archivedAt    DateTime?
+  // WA M15 (C-WA, WA-D17 sin backfill): consentimiento de WhatsApp ANCLADO al número con el que se dio
+  // (`waPhoneE164`, E.164): si cambia `phone`, el consentimiento no viaja solo. NULL = nunca se preguntó.
+  // CHECK Patient_wa_consent_check en la base (drift aceptado): GRANTED exige fecha, origen, versión y número.
+  waConsent              WhatsAppConsentStatus?
+  waConsentAt            DateTime?
+  waConsentSource        WhatsAppConsentSource?
+  waConsentByUserId      String? // sin FK (rastro): quién lo registró si fue el staff
+  waConsentVersion       String?
+  waPhoneE164            String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -438,6 +458,8 @@ model Patient {
   documents      PatientDocument[]
   // TP M18: cobros online (turnero y links), siempre de un paciente. RESTRICT.
   onlineCharges  OnlineCharge[]
+  // WA M15: mensajes de WhatsApp al paciente (FK compuesta por tenant, RESTRICT).
+  whatsAppMessages     WhatsAppMessage[]
 
   // Uniqueness within a tenant. On PostgreSQL a composite UNIQUE treats
   // NULLs as distinct, so these enforce "no duplicate VALUE" while still
@@ -814,14 +836,45 @@ enum SaasPaymentMethod {
 model SaasSubscription {
   tenantId                 String    @id
   customPriceCents         Int? // NULL = el precio del plan
-  anchorDay                Int       @default(1) // 1..28 (CHECK)
+  // MPS M16 (MPS-D7): las suscripciones NUEVAS cobran el día 4 (default 4; las existentes se re-anclan con
+  // scripts/saas-reanchor.ts después del deploy, sin backfill en la migración).
+  anchorDay                Int                   @default(4) // 1..28 (CHECK)
   nextChargeAt             DateTime?
-  autoDebitAllowed         Boolean   @default(false) // lo habilita Plataforma
+  // MPS M16: default true (el débito queda habilitado salvo que Plataforma lo apague).
+  autoDebitAllowed         Boolean               @default(true)
   autoDebitEnabled         Boolean   @default(false)
   mpPreapprovalId          String?   @unique
   mpPreapprovalStatus      String?
   mpPayerEmail             String?
   mpPreapprovalAmountCents Int?
+  // ── MPS M16 (saas_mp_subscriptions, §26.6). CHECKs SaasSubscription_{cancel,pendingPlan,mpPending}_check y los
+  // parciales SaasSubscription_{pendingPlan,cancel}_idx viven solo en la base (drift aceptado, ver el final).
+  // Cómo paga: débito automático (preapproval), «Pagar con Mercado Pago» por cargo o transferencia. NULL = sin elegir.
+  collectionMethod         SaasCollectionMethod?
+  billableFrom             DateTime?             @db.Date // primer día que se factura (alta a mitad de mes)
+  // Baja a fin de período: el cancelAtPeriodEnd exige la fecha efectiva.
+  cancelAtPeriodEnd        Boolean               @default(false)
+  cancelEffectiveOn        DateTime?             @db.Date
+  cancelRequestedAt        DateTime?
+  cancelRequestedById      String? // sin FK (historia)
+  // Bajada de plan PROGRAMADA (los dos o ninguno); `pendingPlanDisableIds` = los usuarios que se desactivan al
+  // aplicarla (≤ 200, vacío si no hay bajada).
+  pendingPlan              SaasPlan?
+  pendingPlanEffectiveOn   DateTime?             @db.Date
+  pendingPlanDisableIds    String[]              @default([])
+  pendingPlanRequestedById String? // sin FK (historia)
+  pendingPlanRequestedAt   DateTime?
+  // Plan al que se le fijó `customPriceCents` (un precio a medida no viaja a otro plan).
+  customPricePlan          SaasPlan?
+  // Preapproval NUEVO aún no autorizado (cambio de monto o de tarjeta): el vigente sigue cobrando hasta que MP
+  // confirme el nuevo; `mpRetiredPreapprovalId` = el reemplazado (sus cobros tardíos se siguen imputando).
+  mpPendingPreapprovalId   String?               @unique
+  mpPendingInitPoint       String?
+  mpPendingPayerEmail      String?
+  mpPendingCreatedAt       DateTime?
+  mpRetiredPreapprovalId   String?
+  mpPreapprovalNextAt      DateTime?
+  mpPreapprovalSyncedAt    DateTime?
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @default(now()) @updatedAt
 
@@ -847,6 +900,13 @@ model SaasCharge {
   statusChangedById      String? // superadmin; sin FK (historia)
   note                   String?
   mpCheckoutPreferenceId String?
+  // MPS M16: desglose (amountCents = base + ajustes; NULL/0 en los cargos previos) y la preferencia de «Pagar con
+  // Mercado Pago» con el monto que se esperaba (los tres juntos o ninguno). CHECKs SaasCharge_{breakdown,checkout}_check
+  // en la base (drift aceptado).
+  baseAmountCents         Int?
+  adjustmentsCents        Int              @default(0)
+  mpCheckoutExpectedCents Int?
+  mpCheckoutCreatedAt     DateTime?
   createdAt              DateTime         @default(now())
   updatedAt              DateTime         @default(now()) @updatedAt
 
@@ -884,15 +944,69 @@ model SaasPayment {
   reviewedById          String?
   reviewedAt            DateTime?
   reviewNote            String?
+  // MPS M16: preapproval por el que entró un MP_AUTO; `splitFromId` = el pago de MP original cuando un pago se
+  // parte entre cargos (el hermano no puede repetir el id UNIQUE de MP: por eso SaasPayment_source_mp_check acepta
+  // splitFromId). `mpPayload` = allow-list del recurso de MP (objeto ≤ 16 KB, CHECK). La FK compuesta
+  // SaasPayment_splitFrom_tenant_fkey vive solo en la base (drift aceptado).
+  mpPreapprovalId       String?
+  splitFromId           String?
+  mpPayload             Json?
   createdAt             DateTime          @default(now())
   updatedAt             DateTime          @default(now()) @updatedAt
 
   tenant Tenant      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   charge SaasCharge? @relation(fields: [chargeId, tenantId], references: [id, tenantId], onDelete: Restrict)
 
+  @@unique([id, tenantId], map: "SaasPayment_id_tenantId_key") // destino de la FK compuesta de splitFromId
   @@index([tenantId, createdAt])
   @@index([chargeId])
   @@index([status, createdAt])
+  @@index([mpPreapprovalId])
+  @@index([splitFromId])
+}
+
+// MPS M16: cómo cobra la suscripción (§26.6).
+enum SaasCollectionMethod {
+  AUTO_DEBIT // débito automático (preapproval de MP), el día 4
+  MP_CHECKOUT // «Pagar con Mercado Pago» cada cargo
+  TRANSFER // transferencia con comprobante
+}
+
+enum SaasAdjustmentKind {
+  PRORATION // proporcional al subir de plan (con días / días del período)
+  CREDIT // a favor del consultorio (único con monto negativo)
+  DEBIT
+  CARRYOVER // saldo que pasa al cargo siguiente
+}
+
+// MPS M16: ajustes de la suscripción, imputados al primer cargo con periodStart >= effectiveOn. TENANT_READONLY
+// (escribe solo lib/saas-adjustments-internal.ts por el canal service). SOLO INSERCIÓN por trigger
+// (saas_adjustment_guard), salvo la imputación appliedChargeId NULL → valor; BYPASSRLS no saltea triggers.
+// `amountCents` con signo: CREDIT < 0, el resto > 0 (CHECK). Las FKs compuestas a SaasCharge y a sí mismo
+// (`splitFromId`) viven solo en la base (drift aceptado, ver el final).
+model SaasAdjustment {
+  id              String             @id @default(cuid())
+  tenantId        String
+  kind            SaasAdjustmentKind
+  amountCents     Int
+  effectiveOn     DateTime           @db.Date
+  description     String // lo ve el consultorio
+  planFrom        SaasPlan?
+  planTo          SaasPlan?
+  days            Int?
+  periodDays      Int?
+  idempotencyKey  String
+  splitFromId     String?
+  appliedChargeId String?
+  appliedAt       DateTime?
+  createdById     String? // sin FK (historia); NULL = sistema
+  createdAt       DateTime           @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, idempotencyKey])
+  @@unique([id, tenantId], map: "SaasAdjustment_id_tenantId_key")
+  @@index([appliedChargeId])
 }
 
 enum SupportThreadKind {
@@ -1974,6 +2088,13 @@ model Booking {
   // nuevas en /agenda, /sala, drawer, Facturación y portal). Lo escribe SOLO el trigger online_charge_sync_booking
   // (que además mueve updatedAt: quien cobra con la versión vieja recibe «stale»). La app NUNCA lo escribe.
   onlineDepositCents Int        @default(0)
+  // WA M15 (WA-D22): respuesta del paciente por WhatsApp («Confirmo» / «Necesito cancelar»). NO mueve `updatedAt`
+  // (no es una edición del staff: no debe dar «stale» a quien tiene el drawer abierto). `patientReplyFor` = el
+  // horario al que respondió: si el turno se movió después, la respuesta es vieja y la agenda no la muestra.
+  // CHECK Booking_patient_reply_check en la base (drift aceptado): sin `patientReplyFor` no hay respuesta.
+  patientConfirmedAt       DateTime?
+  patientCancelRequestedAt DateTime?
+  patientReplyFor          DateTime?
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
@@ -1991,6 +2112,8 @@ model Booking {
   clinicalNotes ClinicalNote[]
   // TP M18: cobros online del turno (a lo sumo uno del turnero y un link vivo: únicos PARCIALES). RESTRICT.
   onlineCharges OnlineCharge[]
+  // WA M15: historial de WhatsApp del turno (SET NULL: borrar el turno no arrastra el rastro).
+  whatsAppMessages WhatsAppMessage[]
 
   @@unique([id, tenantId, patientId], map: "Booking_id_tenantId_patientId_key") // EV2 M9: destino de FK compuesta (la evolución es del paciente de ESE turno)
   @@index([tenantId, scheduledFor])
@@ -2252,6 +2375,256 @@ model OnlineCharge {
 }
 
 // ═════════════════════════════════════════════════════════════════════
+// WA M15 (whatsapp_messaging, §21.6 + §26.5, ADR-029): WhatsApp Cloud API por consultorio.
+// Account/Template/Message/Inbound TENANT_READONLY (escritor único por el canal service, precedente ADR-026);
+// Credential SERVICE_ONLY (RLS FORCE sin policies). Relaciones hacia la cuenta y el paciente = las FKs COMPUESTAS
+// por tenant (`map:` con el nombre exacto del constraint): son las únicas en la base, porque las FK saltean RLS y
+// prod es BYPASSRLS. Sin PHI: la cola no guarda cuerpo (se re-arma de la plantilla) y el teléfono va como HMAC
+// (`toHash`) + máscara; el entrante no guarda texto.
+// ═════════════════════════════════════════════════════════════════════
+enum WhatsAppAccountStatus {
+  SETUP
+  ACTIVE
+  REAUTH_REQUIRED
+  DISCONNECTED
+}
+
+enum WhatsAppSetupStep {
+  TOKEN
+  SUBSCRIBED
+  REGISTERED
+  TEMPLATES
+  DONE
+}
+
+enum WhatsAppTemplateKey {
+  BOOKING_CREATED
+  BOOKING_MOVED
+  BOOKINGS_UPDATED
+  BOOKING_REMINDER
+  DOCUMENT_SHARED
+}
+
+enum WhatsAppTemplateStatus {
+  NOT_SUBMITTED
+  PENDING
+  APPROVED
+  REJECTED
+  PAUSED
+  DISABLED
+}
+
+enum WhatsAppMessageKind {
+  BOOKING_CREATED
+  BOOKING_MOVED
+  BOOKINGS_UPDATED
+  BOOKING_REMINDER
+  DOCUMENT_SHARED
+  TEST
+  REPLY
+}
+
+enum WhatsAppMessageTrigger {
+  AUTO
+  CRON
+  MANUAL
+  INBOUND
+}
+
+enum WhatsAppMessageStatus {
+  QUEUED
+  SENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  SKIPPED
+  CANCELLED
+  EXPIRED
+}
+
+enum WhatsAppInboundKind {
+  CONFIRM
+  CANCEL_REQUEST
+  OPT_OUT
+  OPT_IN
+  TEXT
+  OTHER
+}
+
+enum WhatsAppConsentStatus {
+  GRANTED
+  REVOKED
+}
+
+enum WhatsAppConsentSource {
+  STAFF
+  TURNERO
+  PORTAL
+  WHATSAPP
+}
+
+/// Una cuenta viva por consultorio y un número/WABA vivo en UN consultorio (únicos PARCIALES `*_live_key`, drift:
+/// el webhook rutea por phone_number_id). Lo que manda Meta (nombre, calidad, límite) solo con tope de largo: un
+/// CHECK de valores convertiría el webhook en 500 (lección M18).
+model WhatsAppAccount {
+  id                   String                @id @default(cuid())
+  tenantId             String
+  mode                 String // fake | sandbox | live (CHECK)
+  wabaId               String
+  phoneNumberId        String
+  businessId           String?
+  displayPhone         String?
+  verifiedName         String?
+  nameStatus           String?
+  qualityRating        String?
+  messagingLimit       String?
+  status               WhatsAppAccountStatus @default(SETUP)
+  setupStep            WhatsAppSetupStep     @default(TOKEN)
+  autoBookingNotice    Boolean               @default(true)
+  autoReminder         Boolean               @default(true)
+  autoReplyText        Boolean               @default(true)
+  paymentIssueAt       DateTime?
+  lastErrorCode        String? // `codigo` o `codigo:123` (CHECK), nunca el mensaje de Meta
+  lastErrorAt          DateTime?
+  lastWebhookAt        DateTime?
+  connectedByUserId    String // sin FK: rastro
+  connectedAt          DateTime
+  reauthRequiredAt     DateTime?
+  disconnectedAt       DateTime?
+  disconnectedByUserId String?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+
+  tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  // 1:n solo para Prisma: un 1:1 sobre la FK compuesta exigiría un @@unique([accountId, tenantId]) que la base no
+  // tiene; la base garantiza una credencial por cuenta con WhatsAppCredential_accountId_key.
+  credentials WhatsAppCredential[]
+  templates   WhatsAppTemplate[]
+  messages    WhatsAppMessage[]
+  inbounds    WhatsAppInbound[]
+
+  @@unique([id, tenantId], map: "WhatsAppAccount_id_tenantId_key") // destino de las FKs compuestas
+  @@index([tenantId, status])
+}
+
+/// Token de sistema y PIN de 2 pasos del número, siempre SELLADOS con lib/secret-box.ts (el CHECK de la base
+/// rechaza un valor en claro y exige el mismo keyId en los dos sobres). SERVICE_ONLY.
+model WhatsAppCredential {
+  id             String    @id @default(cuid())
+  tenantId       String
+  accountId      String    @unique
+  tokenBox       String
+  pinBox         String
+  keyId          String
+  tokenExpiresAt DateTime?
+  version        Int       @default(1)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  tenant  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  account WhatsAppAccount @relation(fields: [accountId, tenantId], references: [id, tenantId], onDelete: Cascade, onUpdate: NoAction, map: "WhatsAppCredential_account_tenant_fkey")
+
+  @@index([tenantId])
+}
+
+model WhatsAppTemplate {
+  id             String                 @id @default(cuid())
+  tenantId       String
+  accountId      String
+  key            WhatsAppTemplateKey
+  name           String
+  language       String                 @default("es_AR")
+  specVersion    Int
+  metaTemplateId String?
+  status         WhatsAppTemplateStatus @default(NOT_SUBMITTED)
+  rejectedReason String?
+  submittedAt    DateTime?
+  statusAt       DateTime?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  tenant  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  account WhatsAppAccount @relation(fields: [accountId, tenantId], references: [id, tenantId], onDelete: Cascade, onUpdate: NoAction, map: "WhatsAppTemplate_account_tenant_fkey")
+
+  @@unique([accountId, key])
+  @@index([tenantId])
+}
+
+/// Cola + registro SIN cuerpo. `idempotencyKey` = `<prefijo a-z>:<resto>` (CHECK), única por consultorio;
+/// `bookingScheduledFor` queda aunque el turno se borre (SET NULL en bookingId: el rastro no se arrastra).
+/// `WhatsAppMessage_due_idx` (nextAttemptAt WHERE status IN QUEUED/SENDING) es PARCIAL (drift).
+model WhatsAppMessage {
+  id                  String                 @id @default(cuid())
+  tenantId            String
+  accountId           String
+  kind                WhatsAppMessageKind
+  trigger             WhatsAppMessageTrigger
+  status              WhatsAppMessageStatus  @default(QUEUED)
+  idempotencyKey      String
+  patientId           String?
+  bookingId           String?
+  bookingScheduledFor DateTime?
+  documentId          String? // PatientDocument compartido (sin FK en la base)
+  seriesCount         Int?
+  templateName        String? // NULL solo en REPLY (CHECK)
+  toHash              String // HMAC-SHA256 del E.164 (hex)
+  toMasked            String
+  attempts            Int                    @default(0)
+  nextAttemptAt       DateTime?
+  lockedUntil         DateTime?
+  expiresAt           DateTime
+  wamid               String?                @unique
+  errorCode           String?
+  skipReason          String?
+  createdByUserId     String?
+  sentAt              DateTime?
+  deliveredAt         DateTime?
+  readAt              DateTime?
+  failedAt            DateTime?
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+
+  tenant   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  account  WhatsAppAccount   @relation(fields: [accountId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: NoAction, map: "WhatsAppMessage_account_tenant_fkey")
+  patient  Patient?          @relation(fields: [patientId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: NoAction, map: "WhatsAppMessage_patient_tenant_fkey")
+  booking  Booking?          @relation(fields: [bookingId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  inbounds WhatsAppInbound[]
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, bookingId, createdAt])
+  @@index([tenantId, createdAt])
+  @@index([accountId, createdAt])
+  @@index([patientId])
+  @@index([bookingId])
+}
+
+/// Entrante SIN texto: solo qué fue (`kind`) y qué se hizo (`outcome`). `bookingId` sin FK (rastro).
+model WhatsAppInbound {
+  id           String              @id @default(cuid())
+  tenantId     String
+  accountId    String
+  wamid        String              @unique
+  kind         WhatsAppInboundKind
+  fromHash     String
+  contextWamid String?
+  messageId    String?
+  bookingId    String?
+  outcome      String
+  receivedAt   DateTime
+  createdAt    DateTime            @default(now())
+
+  tenant  Tenant           @relation(fields: [tenantId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  account WhatsAppAccount  @relation(fields: [accountId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: NoAction, map: "WhatsAppInbound_account_tenant_fkey")
+  message WhatsAppMessage? @relation(fields: [messageId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([tenantId, bookingId, receivedAt])
+  @@index([tenantId, createdAt])
+  @@index([accountId])
+  @@index([messageId])
+}
+
+// ═════════════════════════════════════════════════════════════════════
 // Notifications — per-user feed surfaced in the dashboard bell.
 // Created automatically by domain mutations (booking.create / payment.paid
 // / session.due / program.completing).
@@ -2264,6 +2637,10 @@ enum NotificationKind {
   PATIENT_NEW
   PATIENT_SHARED
   SYSTEM
+  // WA M15: el paciente respondió por WhatsApp («Confirmo» / «Necesito cancelar») y avisos de la cuenta de
+  // WhatsApp (reautorizar, pago de Meta). Con WHATSAPP_MODE=off nadie los escribe (rollback seguro del enum).
+  BOOKING_PATIENT_REPLY
+  WHATSAPP_ACCOUNT
 }
 
 model Notification {
@@ -2539,6 +2916,8 @@ model Location {
   programs   TreatmentProgram[]
   // SR M4: salas de la sede (CASCADE por la FK compuesta Room_location_tenant_fkey).
   rooms      Room[]
+  // TV M17: pantallas de la sede (CASCADE; la FK compuesta ReceptionDisplay_location_tenant_fkey es drift).
+  receptionDisplays ReceptionDisplay[]
 
   @@unique([id, tenantId], map: "Location_id_tenantId_key")
   @@index([tenantId])
@@ -2682,6 +3061,73 @@ model Room {
   @@unique([id, tenantId], map: "Room_id_tenantId_key")
   @@unique([id, locationId], map: "Room_id_locationId_key")
   @@index([tenantId, locationId], map: "Room_tenantId_locationId_idx")
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// TV M17 (reception_displays, §21.8 + §22.7 + §26.4, ADR-028): pantallas de la sala de espera (`/tv`).
+// Categoría por defecto del guard: el staff escribe por runWithRls (la policy por tenant es la 2ª barrera); el
+// dispositivo (vincular, lastSeenAt) por prismaService con id + tenantId a mano. Secretos nunca en claro:
+// `pairingCodeHash` = HMAC-SHA256 con clave del server (8 chars Crockford = 40 bits: un sha256 pelado se revierte
+// offline) y `deviceSecretHash` = sha256 de 256 bits aleatorios. `mediaRef` = id canónico de YouTube (nunca la
+// URL: el iframe lo arma lib/youtube.ts). Los enums se espejan como string unions en lib/reception-displays-types.ts.
+// ═════════════════════════════════════════════════════════════════════
+enum DisplayNameMode {
+  SHORT_NAME // shortPatientName (lib/patient-short-name.ts)
+  TURN_TIME // «Turno de las 10:30», sin nombre
+}
+
+enum DisplayTheme {
+  DARK
+  LIGHT
+}
+
+enum DisplayMediaKind {
+  NONE
+  VIDEO
+  LIVE
+  PLAYLIST
+  CHANNEL_LIVE
+}
+
+enum DisplayMediaLayout {
+  SIDE
+  HERO_IDLE
+}
+
+enum DisplayMediaDuringCall {
+  DUCK // baja el volumen DUCK_MS al llamar
+  HIDE
+  KEEP
+}
+
+model ReceptionDisplay {
+  id               String                 @id @default(cuid())
+  tenantId         String
+  locationId       String? // sede que muestra (validada contra el tenant)
+  name             String
+  nameMode         DisplayNameMode        @default(SHORT_NAME)
+  theme            DisplayTheme           @default(DARK)
+  mediaKind        DisplayMediaKind       @default(NONE)
+  mediaRef         String?
+  mediaLayout      DisplayMediaLayout     @default(SIDE)
+  mediaMuted       Boolean                @default(true)
+  mediaDuringCall  DisplayMediaDuringCall @default(DUCK)
+  pairingCodeHash  String?
+  pairingExpiresAt DateTime?
+  deviceSecretHash String?
+  pairedAt         DateTime?
+  lastSeenAt       DateTime?
+  revokedAt        DateTime?
+  createdByUserId  String // sin FK: rastro
+  revokedByUserId  String?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  location Location? @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([locationId])
 }
 
 enum PracticeVisibility {
@@ -2897,3 +3343,51 @@ model PatientChangeRequest {
 //       "OnlineCharge_no_truncate", "OnlineCharge_sync_booking").
 //   • Policies RLS: BookingPaymentPolicy_tenant_isolation, OnlineCharge_tenant_isolation, MpAccount_tenant_read (FOR
 //       SELECT); MpCredential con RLS FORCE y CERO policies.
+
+// ── TV M17: DRIFT ACEPTADO ───────────────────────────────────────────────
+// Estos objetos viven SOLO en prisma/migrations/20261023120000_reception_displays y
+// Prisma no los expresa. Si `migrate dev` / `migrate diff` propone borrarlos, NO
+// se borran (y `migrate dev` está prohibido en este repo):
+//   • Únicos PARCIALES (y de expresión):
+//       ReceptionDisplay_pairingCodeHash_key   ON ReceptionDisplay(pairingCodeHash) WHERE pairingCodeHash IS NOT NULL
+//       ReceptionDisplay_tenant_name_live_key  ON ReceptionDisplay(tenantId, lower(name)) WHERE revokedAt IS NULL
+//   • FK COMPUESTA (las FK saltean RLS y prod es BYPASSRLS):
+//       ReceptionDisplay_location_tenant_fkey  (locationId, tenantId) → Location(id, tenantId)  ON DELETE CASCADE
+//   • CHECKs: ReceptionDisplay_{name,media,pairing,device,revoked}_check.
+//   • Policy RLS: ReceptionDisplay_tenant_isolation.
+
+// ── WA M15: DRIFT ACEPTADO ───────────────────────────────────────────────
+// Estos objetos viven SOLO en prisma/migrations/20261024120000_whatsapp_messaging y
+// Prisma no los expresa. Si `migrate dev` / `migrate diff` propone borrarlos, NO
+// se borran (y `migrate dev` está prohibido en este repo):
+//   • PARCIALES:
+//       WhatsAppAccount_tenant_live_key   ON WhatsAppAccount(tenantId)      WHERE status <> 'DISCONNECTED'
+//       WhatsAppAccount_phone_live_key    ON WhatsAppAccount(phoneNumberId) WHERE status <> 'DISCONNECTED'
+//       WhatsAppAccount_waba_live_key     ON WhatsAppAccount(wabaId)        WHERE status <> 'DISCONNECTED'
+//       WhatsAppMessage_due_idx           ON WhatsAppMessage(nextAttemptAt) WHERE status IN ('QUEUED','SENDING')
+//       Patient_tenantId_waPhoneE164_idx  ON Patient(tenantId, waPhoneE164) WHERE waPhoneE164 IS NOT NULL
+//   • Las FKs COMPUESTAS hacia la cuenta y el paciente SÍ están en el schema (relaciones con `map:`); no hay FKs
+//     simples paralelas a esas (las únicas en la base son las compuestas).
+//   • CHECKs: WhatsAppAccount_{mode,ids,text,status}_check, WhatsAppCredential_box_check, WhatsAppTemplate_check,
+//       WhatsAppMessage_{key,to,refs,state}_check, WhatsAppInbound_check, Patient_wa_consent_check,
+//       Booking_patient_reply_check.
+//   • Policies RLS (FOR SELECT): WhatsApp{Account,Template,Message,Inbound}_tenant_read; WhatsAppCredential con RLS
+//       FORCE y CERO policies.
+
+// ── MPS M16: DRIFT ACEPTADO ──────────────────────────────────────────────
+// Estos objetos viven SOLO en prisma/migrations/20261025120000_saas_mp_subscriptions y
+// Prisma no los expresa. Si `migrate dev` / `migrate diff` propone borrarlos, NO
+// se borran (y `migrate dev` está prohibido en este repo):
+//   • PARCIALES:
+//       SaasSubscription_pendingPlan_idx  ON SaasSubscription(pendingPlanEffectiveOn) WHERE pendingPlan IS NOT NULL
+//       SaasSubscription_cancel_idx       ON SaasSubscription(cancelEffectiveOn)      WHERE cancelAtPeriodEnd
+//       SaasAdjustment_pending_idx        ON SaasAdjustment(tenantId, effectiveOn)    WHERE appliedChargeId IS NULL
+//   • FKs COMPUESTAS (las FK saltean RLS y prod es BYPASSRLS):
+//       SaasPayment_splitFrom_tenant_fkey     (splitFromId, tenantId)     → SaasPayment(id, tenantId)     ON DELETE NO ACTION
+//       SaasAdjustment_charge_tenant_fkey     (appliedChargeId, tenantId) → SaasCharge(id, tenantId)      ON DELETE RESTRICT
+//       SaasAdjustment_splitFrom_tenant_fkey  (splitFromId, tenantId)     → SaasAdjustment(id, tenantId)  ON DELETE NO ACTION
+//   • CHECKs: SaasSubscription_{cancel,pendingPlan,mpPending}_check, SaasCharge_{breakdown,checkout}_check,
+//       SaasPayment_mpPayload_check, SaasPayment_source_mp_check (REEMPLAZADO por uno más laxo: acepta splitFromId),
+//       SaasAdjustment_{sign,applied,proration,text}_check.
+//   • Función saas_adjustment_guard() y sus triggers ("SaasAdjustment_guard", "SaasAdjustment_no_truncate").
+//   • Policy RLS: SaasAdjustment_tenant_read (FOR SELECT).

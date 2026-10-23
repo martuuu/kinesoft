@@ -103,6 +103,10 @@ const SERVICE_ONLY = new Set([
   // canal service los lee (callback OAuth, refresh, webhook, cron de purga); la app no los ve con
   // ningún GUC, ni los del propio consultorio.
   "MpCredential",
+  // WA M15 (whatsapp_messaging, ADR-029): token de sistema y PIN de 2 pasos de Meta SELLADOS
+  // (lib/secret-box.ts). Solo el canal service los abre (alta, envío, plantillas, rotación); la app
+  // no los ve con ningún GUC, ni los del propio consultorio (molde MpCredential).
+  "WhatsAppCredential",
 ]);
 
 // BO0 (M7): tablas con tenantId que el consultorio LEE pero que solo escribe la
@@ -117,7 +121,24 @@ const SERVICE_ONLY = new Set([
 // (a qué cuenta entra la plata, estado, delegación) y el guard de OnlineCharge la consulta sin lock;
 // la escriben solo el callback OAuth, desconectar, la delegación y el cron por el canal service con
 // tenantId e id a mano (precedente ADR-024). Así la app no puede redirigir cobros a otra cuenta.
-const TENANT_READONLY = new Set(["SupportSession", "SaasSubscription", "SaasCharge", "SaasPayment", "MpAccount"]);
+// WA M15 (ADR-029): la cuenta de WhatsApp, sus plantillas, la cola de mensajes y los entrantes. El consultorio
+// los LEE (estado de la cuenta, historial del turno); los escribe solo el canal service (alta, outbox, webhook
+// de Meta, cron) con tenantId a mano: así la app no puede encolar mensajes a un número ni falsear un entrante.
+// MPS M16 (ADR-027): los ajustes de la suscripción (proporcional, crédito, débito, arrastre). El consultorio los
+// ve en «Facturación»; los escribe solo lib/saas-adjustments-internal.ts: la app no se acredita saldo a favor.
+// (ReceptionDisplay, M17, NO va acá: el staff la escribe por runWithRls, categoría por defecto.)
+const TENANT_READONLY = new Set([
+  "SupportSession",
+  "SaasSubscription",
+  "SaasCharge",
+  "SaasPayment",
+  "MpAccount",
+  "WhatsAppAccount",
+  "WhatsAppTemplate",
+  "WhatsAppMessage",
+  "WhatsAppInbound",
+  "SaasAdjustment",
+]);
 
 const RED = (s) => `\x1b[31m${s}\x1b[0m`;
 const GREEN = (s) => `\x1b[32m${s}\x1b[0m`;

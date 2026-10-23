@@ -16,6 +16,8 @@
  * schema, así que el repo de juguete los declara con su RLS): GLOBAL_READONLY `SaasPlanConfig`; SERVICE_ONLY
  * `SaasPlanPriceChange` y las de 2FA (sin tenantId); TENANT_READONLY `SaasSubscription`/`SaasCharge`/`SaasPayment`.
  * TP-M (M18 turnero_cobros_mp) suma SERVICE_ONLY `MpCredential` (tokens sellados) y TENANT_READONLY `MpAccount`.
+ * MIG (T6+T7, X0): M15 suma SERVICE_ONLY `WhatsAppCredential` y TENANT_READONLY `WhatsApp{Account,Template,Message,
+ * Inbound}`; M16 suma TENANT_READONLY `SaasAdjustment`. `ReceptionDisplay` (M17) queda en la categoría por defecto.
  */
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -24,6 +26,16 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const SCRIPT = join(process.cwd(), "scripts/guard-tenant-isolation.mjs");
+
+// MIG (M15/M16): modelos con tenantId del repo de juguete (su RLS va en M15/M16 de abajo).
+const WA_M16_MODELS = [
+  "WhatsAppAccount",
+  "WhatsAppCredential",
+  "WhatsAppTemplate",
+  "WhatsAppMessage",
+  "WhatsAppInbound",
+  "SaasAdjustment",
+];
 
 const SCHEMA = (extra = "") => `
 model Tenant {
@@ -81,6 +93,7 @@ model MpCredential {
   id       String @id
   tenantId String
 }
+${WA_M16_MODELS.map((m) => `model ${m} {\n  id       String @id\n  tenantId String\n}`).join("\n")}
 ${extra}
 `;
 
@@ -157,13 +170,35 @@ CREATE POLICY "${m}_tenant_read" ON "${m}" FOR SELECT USING ("tenantId" = app_cu
   ),
 ].join("\n");
 
+// MIG (M15 whatsapp_messaging + M16 saas_mp_subscriptions): la cola, las plantillas, la cuenta y los entrantes de
+// WhatsApp y los ajustes de la suscripción los LEE el consultorio y los escribe solo el canal service; el token de
+// sistema y el PIN sellados no los ve nadie más que el canal service.
+const M15_SERVICE_ONLY = ["WhatsAppCredential"];
+const M15_TENANT_READONLY = ["WhatsAppAccount", "WhatsAppTemplate", "WhatsAppMessage", "WhatsAppInbound"];
+const M16_TENANT_READONLY = ["SaasAdjustment"];
+const readonlySql = (m: string) => `ALTER TABLE "${m}" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "${m}" FORCE ROW LEVEL SECURITY;
+CREATE POLICY "${m}_tenant_read" ON "${m}" FOR SELECT USING ("tenantId" = app_current_tenant_id());`;
+const M15 = [
+  ...M15_SERVICE_ONLY.map((m) => `ALTER TABLE "${m}" ENABLE ROW LEVEL SECURITY; ALTER TABLE "${m}" FORCE ROW LEVEL SECURITY;`),
+  ...M15_TENANT_READONLY.map(readonlySql),
+].join("\n");
+const M16 = M16_TENANT_READONLY.map(readonlySql).join("\n");
+
 let dirs: string[] = [];
 afterEach(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
   dirs = [];
 });
 
-function runGuard(p: { schemaExtra?: string; m7?: string; m18?: string; extraMigration?: string }) {
+function runGuard(p: {
+  schemaExtra?: string;
+  m7?: string;
+  m18?: string;
+  m15?: string;
+  m16?: string;
+  extraMigration?: string;
+}) {
   const root = mkdtempSync(join(tmpdir(), "guard-iso-"));
   dirs.push(root);
   mkdirSync(join(root, "lib"));
@@ -179,6 +214,8 @@ function runGuard(p: { schemaExtra?: string; m7?: string; m18?: string; extraMig
   mig("20261015180000_pl_accounts_billing", M8);
   mig("20261019120000_public_directory", M11);
   mig("20261022120000_turnero_cobros_mp", p.m18 ?? M18);
+  mig("20261024120000_whatsapp_messaging", p.m15 ?? M15);
+  mig("20261025120000_saas_mp_subscriptions", p.m16 ?? M16);
   if (p.extraMigration) mig("20261016000000_extra", p.extraMigration);
   const r = spawnSync(process.execPath, [SCRIPT], {
     env: { ...process.env, GUARD_ISOLATION_ROOT: root, NO_COLOR: "1" },
@@ -191,13 +228,13 @@ describe("guard de aislamiento · SERVICE_ONLY / TENANT_READONLY (BO0)", () => {
   it("control: el repo de juguete con M7 tal cual pasa", () => {
     const r = runGuard({});
     expect(r.out).toContain("GLOBAL_READONLY (7): ENABLE + FORCE, SELECT-only policies");
-    expect(r.out).toContain("SERVICE_ONLY (8): ENABLE + FORCE, zero policies. TENANT_READONLY (5)");
+    expect(r.out).toContain("SERVICE_ONLY (9): ENABLE + FORCE, zero policies. TENANT_READONLY (10)");
     expect(r.code).toBe(0);
   });
 
   it("[TP-M] MpAccount TENANT_READONLY y MpCredential SERVICE_ONLY en el guard", () => {
     const ok = runGuard({});
-    expect(ok.out).toContain("SERVICE_ONLY (8): ENABLE + FORCE, zero policies. TENANT_READONLY (5)");
+    expect(ok.out).toContain("SERVICE_ONLY (9): ENABLE + FORCE, zero policies. TENANT_READONLY (10)");
     expect(ok.code).toBe(0);
     // La app no escribe cuentas: una policy de escritura en MpAccount rompe el contrato.
     const w = runGuard({
@@ -215,6 +252,33 @@ describe("guard de aislamiento · SERVICE_ONLY / TENANT_READONLY (BO0)", () => {
     const f = runGuard({ m18: M18.replace(`ALTER TABLE "MpCredential" FORCE ROW LEVEL SECURITY;`, "") });
     expect(f.code).toBe(1);
     expect(f.out).toMatch(/MpCredential: RLS not FORCEd/);
+  });
+
+  it("[WA-M] WhatsApp{Account,Template,Message,Inbound} y SaasAdjustment TENANT_READONLY; WhatsAppCredential SERVICE_ONLY", () => {
+    const ok = runGuard({});
+    expect(ok.out).toContain("SERVICE_ONLY (9): ENABLE + FORCE, zero policies. TENANT_READONLY (10)");
+    expect(ok.code).toBe(0);
+    // La app no encola ni marca mensajes: una policy de escritura en la cola rompe el contrato.
+    const w = runGuard({
+      extraMigration: `CREATE POLICY "WhatsAppMessage_w" ON "WhatsAppMessage" FOR INSERT WITH CHECK ("tenantId" = app_current_tenant_id());`,
+    });
+    expect(w.code).toBe(1);
+    expect(w.out).toMatch(/WhatsAppMessage: write policy "WhatsAppMessage_w" \(FOR INSERT\)/);
+    // Ni los ajustes de la suscripción (la app no se acredita saldo a favor).
+    const a = runGuard({
+      extraMigration: `CREATE POLICY "SaasAdjustment_w" ON "SaasAdjustment" USING ("tenantId" = app_current_tenant_id());`,
+    });
+    expect(a.code).toBe(1);
+    expect(a.out).toMatch(/SaasAdjustment: write policy "SaasAdjustment_w" \(FOR ALL\)/);
+    // El token de sistema de Meta no lo ve la app con ningún GUC.
+    const r = runGuard({
+      extraMigration: `CREATE POLICY "WhatsAppCredential_read" ON "WhatsAppCredential" FOR SELECT USING ("tenantId" = app_current_tenant_id());`,
+    });
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/WhatsAppCredential: policy "WhatsAppCredential_read" \(FOR SELECT\)/);
+    const f = runGuard({ m15: M15.replace(`ALTER TABLE "WhatsAppCredential" FORCE ROW LEVEL SECURITY;`, "") });
+    expect(f.code).toBe(1);
+    expect(f.out).toMatch(/WhatsAppCredential: RLS not FORCEd/);
   });
 
   it("[PL-0] falla si una tabla de cobro gana una policy de escritura (la app no puede marcar un pago)", () => {
