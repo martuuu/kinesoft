@@ -45,6 +45,7 @@ import {
 import { isHoldingCapacity } from "@/lib/booking-capacity";
 import { afterBookingsCommitted, type BookingChangeRef } from "@/lib/booking-events-internal";
 import { logger } from "@/lib/logger";
+import { getParticularCopagoCents } from "@/lib/billing-internal";
 import { rateLimit } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
 import { toARDateKey } from "@/lib/datetime-ar";
@@ -248,13 +249,23 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
   // T5 (C-TP8): cobro online con la cuenta del vendedor. Con `MP_CONNECT_MODE=off` o la política en OFF no lee más.
   // WA-S8: la casilla de WhatsApp, en paralelo; con `WHATSAPP_MODE=off` no lee nada (y con la cuenta cacheada, nada
   // en caliente).
-  const [onlinePayment, whatsappNotices] = await Promise.all([
+  const [policyPayment, whatsappNotices] = await Promise.all([
     loadPublicOnlinePayment(
       tenantId,
       pracIds.filter((id) => offering.has(id))
     ),
     turneroWhatsAppActive(tenantId),
   ]);
+  // PEND-a (enmienda C-TP8): el copago de Particular, para que el wizard cotice lo que el server va a cobrar a un
+  // paciente sin obra social (antes cotizaba el precio del servicio, hallazgo «particular-en-cero-cotiza» de T5-Z).
+  // Solo con el cobro online prendido: con modo `off` o la política OFF `policyPayment` es null y no se lee nada.
+  // Serial a propósito: en paralelo con `loadPublicOnlinePayment` sería una lectura más en TODO turnero sin cobro,
+  // para ahorrar un viaje solo en los que cobran. Misma lectura que el submit (`getParticularCopagoCents`, AUDIT §5.5):
+  // la fila Particular aunque esté inactiva, igual que `resolvePublicCopagoCents`.
+  const onlinePayment = policyPayment && {
+    ...policyPayment,
+    particularCopagoCents: await getParticularCopagoCents(tenantId, prisma),
+  };
   const primary = locations.find((l) => l.isPrimary) ?? null;
   const locationOrder = locations.map((l) => l.id);
   // VX2-d1: el nav del turnero decía «lun-sáb 8 a 19hs» fijo. Ahora sale de las franjas de los profesionales
@@ -309,7 +320,8 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
     })),
     locations,
     insurers,
-    // Solo el copy del wizard (cotiza con `quoteOnlineCharge`); cada submit lo decide `decideOnlineCharge` con el copago real.
+    // Solo el copy del wizard (cotiza con `quoteOnlineCharge` sobre `particularCopagoCents`); cada submit lo decide
+    // `decideOnlineCharge` con el copago real.
     onlinePayment,
     whatsappNotices,
   };

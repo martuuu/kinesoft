@@ -7,6 +7,9 @@ import {
   clinicInitials,
   destinationAfterSubmit,
   payNowFor,
+  paymentAmountText,
+  quotedForInterstitial,
+  reservesWithoutOnlinePayment,
   wizardOnlinePaymentFor,
   type WizardOnlinePayment,
   coverageInsurerPrefill,
@@ -273,6 +276,7 @@ describe("[TP-0] checkoutCopyFor", () => {
         cta: "Confirmar turno",
         ctaPending: "Reservando…",
         totalLabel: "Valor del turno",
+        totalCents: 1_500_000,
         showTotal: true,
         note: "Lo pagás en el consultorio.",
         split: null,
@@ -607,5 +611,101 @@ describe("[TP-1] etiquetas de la ventana (pared AR, sin depender del huso del na
     expect(W.dayHeading({ date: "2026-10-19", status: "full", slots: [] })).toBe("Lunes 19 de oct · Completo");
     expect(W.slotAccessibleName("2026-10-19", "09:00")).toBe("Lunes 19 de octubre a las 09:00");
     expect(W.slotAccessibleName("2026-10-19", "09:00", "Centro")).toBe("Lunes 19 de octubre a las 09:00, en Centro");
+  });
+});
+
+// ─── PEND-a · el turnero cotiza con el copago de Particular (enmienda C-TP8, §26.9) ──────────────────────────────
+// Hallazgo «particular-en-cero-cotiza» de T5-Z: el wizard cotizaba con `Service.priceCents` y el server cobra el copago
+// resuelto (lib/copago.ts, AUDIT §5.5). Particular $ 8.000 con un servicio de $ 10.000 prometía $ 10.000 y cobraba
+// $ 8.000; Particular en $ 0 prometía un pago que no existía. La precedencia NO se toca: el wizard solo usa el número
+// de Particular cuando el paciente no declaró obra social (= lo que el server resuelve para un paciente nuevo).
+describe("[PEND-a] cotización con el copago de Particular", () => {
+  const PRICE = 1_000_000; // $ 10.000
+  const PART = "PART";
+  const OS = "OSDE";
+  const base = (over: Partial<NonNullable<PublicClinic["onlinePayment"]>> = {}): PublicClinic => ({
+    ...withPolicy({ mode: "REQUIRED", particularCopagoCents: 800_000, ...over }),
+    insurers: [
+      { id: PART, name: "Particular", isParticular: true },
+      { id: OS, name: "OSDE", isParticular: false },
+    ],
+  });
+
+  it("[PEND-a] Particular $ 8.000 → cotiza $ 8.000 (eligió Particular o no declaró cobertura)", () => {
+    for (const cov of [undefined, { insurerId: PART }, { insurerId: null, coverageInsurer: "  " }]) {
+      const p = wizardOnlinePaymentFor(base(), "A", PRICE, cov);
+      expect(p?.quote, JSON.stringify(cov)).toEqual({ amountCents: 800_000, chargeKind: "FULL" });
+      expect(p?.coverageDependent).toBeFalsy();
+      const c = checkoutCopyFor({ payment: p, priceCents: PRICE });
+      expect(c).toMatchObject({ online: true, totalLabel: "Total a pagar", totalCents: 800_000, split: null });
+      expect(quotedForInterstitial(p, c.online)).toBe(800_000);
+      expect(paymentAmountText(p!)).toMatch(/^\$\s?8\.000$/);
+    }
+    // Sin el campo (payload viejo) o null (sin fila Particular): el precio, como el server.
+    expect(wizardOnlinePaymentFor(base({ particularCopagoCents: undefined }), "A", PRICE)?.quote.amountCents).toBe(PRICE);
+    expect(wizardOnlinePaymentFor(base({ particularCopagoCents: null }), "A", PRICE)?.quote.amountCents).toBe(PRICE);
+  });
+
+  it("[PEND-a] Particular $ 0 → no promete pago y avisa que se reserva sin pago online", () => {
+    const cl = base({ particularCopagoCents: 0 });
+    expect(wizardOnlinePaymentFor(cl, "A", PRICE, { insurerId: PART })).toBeNull();
+    expect(reservesWithoutOnlinePayment(cl, "A", { insurerId: PART })).toBe(true);
+    expect(reservesWithoutOnlinePayment(cl, "A")).toBe(true);
+    const c = checkoutCopyFor({ payment: null, priceCents: PRICE, withoutOnlinePayment: true });
+    expect(c).toMatchObject({ online: false, cta: "Confirmar turno" });
+    expect(c.note).toBe("Este turno se reserva sin pago online: lo pagás en el consultorio.");
+    expect(JSON.stringify(c)).not.toMatch(/Mercado Pago|Pagar/);
+    // Profesional sin cuenta o cobro apagado: no hay nada que avisar (el copy de siempre).
+    expect(reservesWithoutOnlinePayment(cl, "B")).toBe(false);
+    expect(reservesWithoutOnlinePayment({ ...cl, onlinePayment: null }, "A")).toBe(false);
+    expect(reservesWithoutOnlinePayment(base(), "A")).toBe(false);
+    // Con obra social el server puede cobrar su copago: no se avisa «sin pago online».
+    expect(reservesWithoutOnlinePayment(cl, "A", { insurerId: OS })).toBe(false);
+  });
+
+  it("[PEND-a] con obra social: «El monto final depende de tu cobertura», sin número, e interstitial siempre", () => {
+    for (const cov of [{ insurerId: OS }, { insurerId: null, coverageInsurer: "IOMA" }, { insurerId: "otra" }]) {
+      const p = wizardOnlinePaymentFor(base(), "A", PRICE, cov);
+      expect(p?.coverageDependent, JSON.stringify(cov)).toBe(true);
+      const c = checkoutCopyFor({ payment: p, priceCents: PRICE });
+      expect(c).toMatchObject({ online: true, cta: "Pagar y reservar", totalLabel: "Valor del turno", totalCents: PRICE, split: null });
+      expect(c.note).toMatch(/^El monto final depende de tu cobertura/);
+      expect(c.note).toContain("30 minutos");
+      expect(paymentAmountText(p!)).toBe("El monto final depende de tu cobertura");
+      const q = quotedForInterstitial(p, c.online);
+      expect(q).toBe("coverage");
+      // Cualquier monto del server se muestra antes de Mercado Pago; si no cobró, «Tu turno quedó reservado».
+      expect(amountDiffers({ next: "checkout", amountCents: PRICE }, q)).toBe(true);
+      expect(amountDiffers({ next: "reserved", amountCents: null }, q)).toBe(true);
+    }
+    // Con obra social y Particular en $ 0 el cobro sigue posible (copago de la OS): hay pago, sin número.
+    expect(wizardOnlinePaymentFor(base({ particularCopagoCents: 0 }), "A", PRICE, { insurerId: OS })?.coverageDependent).toBe(true);
+    // OPTIONAL «en el consultorio»: sin cotización, el interstitial no aplica.
+    const opt = wizardOnlinePaymentFor(base({ mode: "OPTIONAL" }), "A", PRICE, { insurerId: OS });
+    expect(quotedForInterstitial(opt, checkoutCopyFor({ payment: opt, choice: "later", priceCents: PRICE }).online)).toBeNull();
+  });
+
+  it("[PEND-a] FIXED y PERCENT respetan el monto de la política sobre el copago de Particular", () => {
+    const fixed = wizardOnlinePaymentFor(base({ chargeKind: "FIXED", fixedCents: 300_000 }), "A", PRICE);
+    expect(fixed?.quote).toEqual({ amountCents: 300_000, chargeKind: "DEPOSIT" });
+    expect(checkoutCopyFor({ payment: fixed, priceCents: PRICE })).toMatchObject({
+      totalLabel: "Valor del turno", totalCents: 800_000, split: { nowCents: 300_000, restCents: 500_000 },
+    });
+    expect(paymentAmountText(fixed!)).toMatch(/^Seña de \$\s?3\.000$/);
+    const pct = wizardOnlinePaymentFor(base({ chargeKind: "PERCENT", percentBps: 3000 }), "A", PRICE);
+    expect(pct?.quote).toEqual({ amountCents: 240_000, chargeKind: "DEPOSIT" });
+    expect(checkoutCopyFor({ payment: pct, priceCents: PRICE }).split).toEqual({ nowCents: 240_000, restCents: 560_000 });
+    // Paridad con el server: la misma regla de montos, con el copago de Particular como base.
+    for (const pol of [
+      { chargeKind: "FIXED", fixedCents: 300_000, percentBps: null },
+      { chargeKind: "FIXED", fixedCents: 9_000_000, percentBps: null },
+      { chargeKind: "PERCENT", fixedCents: null, percentBps: 3000 },
+    ] as const) {
+      expect(wizardOnlinePaymentFor(base(pol), "A", PRICE)?.quote).toEqual(
+        quoteOnlineCharge({ policy: { mode: "REQUIRED", ...pol }, servicePriceCents: 800_000 })
+      );
+    }
+    // Seña fija con Particular en $ 0: el server no cobra (base 0) y el wizard tampoco promete.
+    expect(wizardOnlinePaymentFor(base({ chargeKind: "FIXED", fixedCents: 300_000, particularCopagoCents: 0 }), "A", PRICE)).toBeNull();
   });
 });

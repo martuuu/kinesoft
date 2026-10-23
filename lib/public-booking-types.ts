@@ -76,7 +76,8 @@ export type PublicClinic = {
    * T5 (C-TP8, literal; TP-K1): cobro online del turnero con la cuenta del vendedor. null/ausente = sin cobro online
    * (política OFF, `MP_CONNECT_MODE=off` o ningún profesional con cuenta usable): «Confirmar turno» como TP-0.
    * `practitionerIds`: profesionales con cuenta usable (la propia ACTIVE, o la del consultorio con `useClinicAccount`);
-   * para los demás el wizard no ofrece pagar. El wizard COTIZA con `priceCents` (`quoteOnlineCharge`); si el server
+   * para los demás el wizard no ofrece pagar. El wizard COTIZA con el copago de Particular (`particularCopagoCents`,
+   * enmienda PEND-a) o, sin él, con `priceCents` (`quoteOnlineCharge`); con obra social no promete número. Si el server
    * cobra otro monto (copago de obra social), el interstitial lo muestra antes de ir a Mercado Pago (TP-UI-D6).
    * Reemplaza a `onlineCheckout` (TP-0, `TURNERO_CHECKOUT=platform`), que TP-2c sacó: la cuenta de la plataforma ya no
    * cobra turnos (H-TP1).
@@ -91,7 +92,21 @@ export type PublicClinic = {
   whatsappNotices?: boolean;
 };
 
-/** C-TP8: `PublicClinic.onlinePayment`. Nunca trae montos de copago ni nada de la cuenta (es público). */
+/**
+ * C-TP8: `PublicClinic.onlinePayment`. Nunca trae nada de la cuenta (es público) ni copagos de obras sociales.
+ *
+ * Enmienda de C-TP8 (PEND-a, §26.9; decisión por default de Martin §26.1 #5): `particularCopagoCents` = el copago de
+ * Particular (`Insurer.isParticular`, el mismo que lee `getParticularCopagoCents` y que el server usa como base del
+ * cobro de un paciente sin cobertura, AUDIT §5.5). Antes el wizard cotizaba con `Service.priceCents` y el server cobraba
+ * el copago (hallazgo «particular-en-cero-cotiza» de T5-Z): con Particular en $ 8.000 y el servicio en $ 10.000 el botón
+ * prometía $ 10.000; con Particular en $ 0 prometía un pago que no existía. Es el precio de lista para cualquiera que
+ * reserve sin obra social: público por naturaleza (lo mismo que ve quien llama al consultorio).
+ *   - número (incluido 0): hay fila Particular; 0 = el server no cobra online a un particular.
+ *   - null: el consultorio no tiene fila Particular → el server cobra el precio del servicio.
+ *   - ausente: payload viejo (fixtures de T5) → el wizard cotiza con el precio, como antes.
+ * Solo se lee con el cobro online prendido (dentro de `onlinePayment`): con `MP_CONNECT_MODE=off` o la política en OFF
+ * `getPublicClinic` no hace ninguna lectura extra.
+ */
 export type PublicClinicOnlinePayment = {
   mode: "OPTIONAL" | "REQUIRED";
   chargeKind: PaymentPolicyInput["chargeKind"];
@@ -99,6 +114,7 @@ export type PublicClinicOnlinePayment = {
   percentBps: PaymentPolicyInput["percentBps"];
   cancellationNote: PaymentPolicyInput["cancellationNote"];
   practitionerIds: string[];
+  particularCopagoCents?: number | null;
 };
 
 export type PublicLocation = {

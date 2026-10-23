@@ -567,6 +567,8 @@ describe.skipIf(!RUN)("[TP-2t] turnero con cobro online", () => {
       percentBps: 3000,
       cancellationNote: "La seña no se devuelve con menos de 24 h.",
       practitionerIds: [T.practitionerId],
+      // PEND-a (enmienda C-TP8): el copago de Particular, para que el wizard cotice lo que cobra el server.
+      particularCopagoCents: PARTICULAR,
     });
     expect(c1).not.toHaveProperty("onlineCheckout");
     // Sin datos de la cuenta en lo público.

@@ -10,6 +10,8 @@
  * de sede/cobertura) en vez de esconder todo.
  */
 import { addDays, dowOfDayKey, isDayKey } from "@/lib/availability/day";
+// `formatARS` ya está en el first load del turnero (resumen y `payment-choice.tsx`): importarlo acá no suma bytes.
+import { formatARS } from "@/lib/format";
 import type {
   PublicClinic,
   PublicFirstSlot,
@@ -275,26 +277,95 @@ export function nextDayKey(dayKey: string): string {
 
 /**
  * Cobro online que el wizard le ofrece a ESTE turno (C-TP8: `PublicClinic.onlinePayment`). null = sin cobro: política
- * OFF/ausente, el profesional elegido sin cuenta usable (`practitionerIds`) o un monto bajo $1. Se cotiza con el precio
- * del servicio; el server cobra sobre el copago resuelto del paciente y, si da otro monto, el wizard muestra el
- * interstitial antes de ir a Mercado Pago (TP-UI-D6, `amountDiffers`).
+ * OFF/ausente, el profesional elegido sin cuenta usable (`practitionerIds`) o un monto bajo $1.
+ *
+ * PEND-a (enmienda C-TP8, §26.9): la base de la cotización es lo que el server va a cobrar, no el precio de lista.
+ *   - Sin obra social declarada (eligió «Particular» o no dijo nada): `particularCopagoCents ?? priceCents`, la misma
+ *     rama de `resolveBookingCopagoCents` (lib/copago.ts, AUDIT §5.5) para un paciente sin cobertura. Antes se cotizaba
+ *     `priceCents` y el server cobraba el copago de Particular (hallazgo «particular-en-cero-cotiza» de T5-Z).
+ *   - Con obra social: el copago es de su cobertura (que el wizard no conoce: lo público nunca trae copagos de OS), así
+ *     que `coverageDependent` y no se promete un número («El monto final depende de tu cobertura»); `quote` sigue
+ *     calculado sobre el precio solo para el flujo (seña/total) y el interstitial muestra siempre el monto real.
+ *   - Un paciente ya registrado con otra cobertura en su ficha puede igual pagar otro monto: para eso queda el
+ *     interstitial de TP-UI-D6 / TP-ZF2 (`amountDiffers`) como red.
+ * `baseCents` y `coverageDependent` son opcionales solo por los literales de los tests de render (ausente = el precio y
+ * cotización exacta).
  */
 export type WizardOnlinePayment = {
   mode: "OPTIONAL" | "REQUIRED";
   quote: { amountCents: number; chargeKind: "FULL" | "DEPOSIT" };
   cancellationNote: string | null;
+  /** Valor del turno sobre el que se cotizó (copago de Particular o precio). Ausente = `priceCents`. */
+  baseCents?: number;
+  /** true = el paciente declaró obra social: el wizard no promete un monto. */
+  coverageDependent?: boolean;
 };
+
+/**
+ * Lo que el paciente dijo de su cobertura: el select del paso 1 (`WizardFilters.insurerId`) y el campo «Obra social»
+ * de «Tus datos» (`coverageInsurer`, texto libre). Ausente = no dijo nada (= particular para el server si es nuevo).
+ */
+export type WizardCoverage = { insurerId: string | null; coverageInsurer?: string | null };
+
+/**
+ * ¿Declaró obra social? Lo tipeado en «Obra social» manda: el server le crea una `Coverage` con ese texto
+ * (`resolvePublicPatient`) y entonces ya no cobra Particular, aunque arriba haya elegido «Particular». Un id que no está
+ * en `insurers` (cobertura dada de baja con el wizard abierto) cuenta como obra social: mejor no prometer.
+ */
+function declaresObraSocial(clinic: PublicClinic, cov: WizardCoverage | undefined): boolean {
+  if (!cov) return false;
+  if (cov.coverageInsurer?.trim()) return true;
+  if (!cov.insurerId) return false;
+  const ins = (clinic.insurers ?? []).find((i) => i.id === cov.insurerId);
+  return !ins || !ins.isParticular;
+}
+
+function chargingPolicy(clinic: PublicClinic, practitionerId: string | null) {
+  const op = clinic.onlinePayment;
+  return op && practitionerId && op.practitionerIds.includes(practitionerId) ? op : null;
+}
 
 export function wizardOnlinePaymentFor(
   clinic: PublicClinic,
   practitionerId: string | null,
-  priceCents: number
+  priceCents: number,
+  coverage?: WizardCoverage
 ): WizardOnlinePayment | null {
-  const op = clinic.onlinePayment;
-  if (!op || !practitionerId || !op.practitionerIds.includes(practitionerId)) return null;
-  const quote = quoteTurnero(op, priceCents);
-  return quote && { mode: op.mode, quote, cancellationNote: op.cancellationNote?.trim() || null };
+  const op = chargingPolicy(clinic, practitionerId);
+  if (!op) return null;
+  const cancellationNote = op.cancellationNote?.trim() || null;
+  if (declaresObraSocial(clinic, coverage)) {
+    const quote = quoteTurnero(op, priceCents);
+    return quote && { mode: op.mode, quote, cancellationNote, baseCents: priceCents, coverageDependent: true };
+  }
+  const base = op.particularCopagoCents ?? priceCents;
+  const quote = quoteTurnero(op, base);
+  return quote && { mode: op.mode, quote, cancellationNote, baseCents: base };
 }
+
+/**
+ * PEND-a: el consultorio cobra online, este profesional también, pero a un particular el server no le cobraría nada
+ * (Particular en $ 0, o una seña/porcentaje que da < $1 sobre ese copago). El wizard no ofrece pagar
+ * (`wizardOnlinePaymentFor` = null) y lo dice («se reserva sin pago online») en vez de callar: el consultorio anunció
+ * cobro online y el paciente esperaba pagar. Con obra social declarada no aplica: el server puede cobrar su copago.
+ */
+export function reservesWithoutOnlinePayment(
+  clinic: PublicClinic,
+  practitionerId: string | null,
+  coverage?: WizardCoverage
+): boolean {
+  const op = chargingPolicy(clinic, practitionerId);
+  if (!op || op.particularCopagoCents == null || declaresObraSocial(clinic, coverage)) return false;
+  return quoteTurnero(op, op.particularCopagoCents) === null;
+}
+
+/** «$ 8.000», «Seña de $ 3.000» o, con obra social, «El monto final depende de tu cobertura» (sin número). */
+export function paymentAmountText(p: WizardOnlinePayment): string {
+  if (p.coverageDependent) return COVERAGE_DEPENDENT_TEXT;
+  return p.quote.chargeKind === "DEPOSIT" ? `Seña de ${formatARS(p.quote.amountCents)}` : formatARS(p.quote.amountCents);
+}
+
+const COVERAGE_DEPENDENT_TEXT = "El monto final depende de tu cobertura";
 
 /**
  * Copia de la regla de montos de `quoteOnlineCharge` (`lib/online-charge-logic.ts`, TP-P3), con paridad fijada por
@@ -344,6 +415,12 @@ export type CheckoutCopy = {
   cta: string;
   ctaPending: string;
   totalLabel: string;
+  /**
+   * PEND-a: el monto de la fila de total. Con cobro y sin obra social = la base cotizada (copago de Particular): antes el
+   * resumen mostraba `Service.priceCents` bajo «Total a pagar» aunque el botón cobrara el copago. Con obra social o sin
+   * cobro = el precio del servicio («Valor del turno»).
+   */
+  totalCents: number;
   /** Sin cobro y con precio 0 no hay fila de total: antes se leía «$ 0» como si el turno fuera gratis (H-TP2). */
   showTotal: boolean;
   note: string;
@@ -361,24 +438,29 @@ export function checkoutCopyFor(args: {
   payment?: WizardOnlinePayment | null;
   choice?: PayChoice;
   priceCents: number;
+  /** PEND-a: `reservesWithoutOnlinePayment(...)` (Particular en $ 0 con cobro prendido). Solo cambia la nota. */
+  withoutOnlinePayment?: boolean;
 }): CheckoutCopy {
   const p = args.payment ?? null;
   const online = !!p && (p.mode === "REQUIRED" || args.choice === "now");
+  const exact = !!p && !p.coverageDependent;
+  const totalCents = exact ? (p!.baseCents ?? args.priceCents) : args.priceCents;
   if (p && online) {
-    const deposit = p.quote.chargeKind === "DEPOSIT";
+    const deposit = exact && p.quote.chargeKind === "DEPOSIT";
+    const mp =
+      p.mode === "REQUIRED"
+        ? "El pago se hace en Mercado Pago. Tenés 30 minutos para completarlo; si no, el horario se libera."
+        : "El pago se hace en Mercado Pago. Si no se completa, el turno queda reservado y lo pagás en el consultorio.";
     return {
       online: true,
       cta: "Pagar y reservar",
       ctaPending: "Redirigiendo…",
-      totalLabel: deposit ? "Valor del turno" : "Total a pagar",
+      // Con obra social no hay «Total a pagar»: el número de la fila es el valor del servicio, no lo que se cobra.
+      totalLabel: deposit || !exact ? "Valor del turno" : "Total a pagar",
+      totalCents,
       showTotal: true,
-      note:
-        p.mode === "REQUIRED"
-          ? "El pago se hace en Mercado Pago. Tenés 30 minutos para completarlo; si no, el horario se libera."
-          : "El pago se hace en Mercado Pago. Si no se completa, el turno queda reservado y lo pagás en el consultorio.",
-      split: deposit
-        ? { nowCents: p.quote.amountCents, restCents: Math.max(0, args.priceCents - p.quote.amountCents) }
-        : null,
+      note: exact ? mp : `${COVERAGE_DEPENDENT_TEXT}: lo ves antes de ir a pagar. ${mp}`,
+      split: deposit ? { nowCents: p.quote.amountCents, restCents: Math.max(0, totalCents - p.quote.amountCents) } : null,
     };
   }
   return {
@@ -386,10 +468,25 @@ export function checkoutCopyFor(args: {
     cta: "Confirmar turno",
     ctaPending: "Reservando…",
     totalLabel: "Valor del turno",
-    showTotal: args.priceCents > 0,
-    note: p && !args.choice ? "Podés pagar ahora con Mercado Pago o en el consultorio." : "Lo pagás en el consultorio.",
+    totalCents,
+    showTotal: totalCents > 0,
+    note:
+      p && !args.choice
+        ? "Podés pagar ahora con Mercado Pago o en el consultorio."
+        : !p && args.withoutOnlinePayment
+          ? "Este turno se reserva sin pago online: lo pagás en el consultorio."
+          : "Lo pagás en el consultorio.",
     split: null,
   };
+}
+
+/**
+ * PEND-a: lo que el wizard le pasa a `amountDiffers`. null = no prometió cobro (sin cobro u OPTIONAL «en el
+ * consultorio»); `"coverage"` = prometió cobro sin número (obra social): el interstitial va siempre.
+ */
+export function quotedForInterstitial(payment: WizardOnlinePayment | null, online: boolean): number | "coverage" | null {
+  if (!online || !payment) return null;
+  return payment.coverageDependent ? "coverage" : payment.quote.amountCents;
 }
 
 /**
@@ -402,8 +499,13 @@ export function checkoutCopyFor(args: {
  * server no cobró, también hay interstitial (el wizard lo muestra como «Tu turno quedó reservado»). Un `checkout` sin
  * monto no debería pasar y no se trata como diferencia (mostraría «$ 0» antes de Mercado Pago).
  */
-export function amountDiffers(r: { next: "checkout" | "reserved"; amountCents: number | null }, quotedCents: number | null): boolean {
+export function amountDiffers(
+  r: { next: "checkout" | "reserved"; amountCents: number | null },
+  quotedCents: number | "coverage" | null
+): boolean {
   if (r.next !== "checkout") return quotedCents != null;
+  // PEND-a: con obra social el wizard no mostró número: el monto real se muestra siempre antes de Mercado Pago.
+  if (quotedCents === "coverage") return r.amountCents != null;
   return r.amountCents != null && r.amountCents !== quotedCents;
 }
 
