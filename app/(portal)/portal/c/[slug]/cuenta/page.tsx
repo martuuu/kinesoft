@@ -2,7 +2,8 @@ import Link from "next/link";
 import { notFound, permanentRedirect } from "next/navigation";
 import { getPortalAccountPage } from "@/lib/portal-account";
 import { getPortalUser, requirePortalPatient } from "@/lib/portal-identity-internal";
-import { resolveSlugAlias, turneroWhatsAppActive } from "@/lib/public-booking-internal"; // claim-ok: lib/portal-whatsapp-consent.ts:55
+import { resolveSlugAlias } from "@/lib/public-booking-internal";
+import { tenantWhatsAppActiveFor } from "@/lib/whatsapp/active-internal"; // claim-ok: lib/portal-whatsapp-consent.ts:55
 import { getMyWhatsAppConsent } from "@/lib/portal-whatsapp-consent"; // claim-ok: lib/portal-whatsapp-consent.ts:55
 import { whatsappMode } from "@/lib/env"; // claim-ok: lib/portal-whatsapp-consent.ts:55
 import { Tag } from "@/components/ui/tag";
@@ -88,12 +89,12 @@ export default async function PortalAccountPageRoute({ params }: { params: { slu
 
 /**
  * WA-U4. El `tenantId` sale de `getPortalAccountPage` (el mismo vínculo ya resuelto): sin una 2.ª
- * `requirePortalPatient`. Solo con el canal prendido. `turneroWhatsAppActive` no tira. // claim-ok: lib/portal-whatsapp-consent.ts:55
+ * `requirePortalPatient`. Solo con el canal prendido. `tenantWhatsAppActiveFor` no tira; variante «channel»: el consentimiento también vale para documentos y avisos manuales. // claim-ok: lib/portal-whatsapp-consent.ts:55
  */
 async function loadWhatsAppConsent(slug: string, tenantId: string) { // claim-ok: lib/portal-whatsapp-consent.ts:55
   const consent = await getMyWhatsAppConsent(slug); // claim-ok: lib/portal-whatsapp-consent.ts:55
   if (!consent) return null;
-  const canGrant = await turneroWhatsAppActive(tenantId); // claim-ok: lib/portal-whatsapp-consent.ts:55
+  const canGrant = await tenantWhatsAppActiveFor(tenantId, "channel", { logEvent: "portal.whatsapp_account_failed" }); // claim-ok: lib/portal-whatsapp-consent.ts:55
   if (!canGrant && consent.status !== "GRANTED") return null;
   return { consent, canGrant };
 }
