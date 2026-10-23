@@ -59,6 +59,11 @@ export const tags = {
   bookingDays: (tenantId: string) => t(tenantId, "booking-days"),
   practitioners: (tenantId: string) => t(tenantId, "practitioners"),
   conditions: (tenantId: string) => t(tenantId, "conditions"),
+  // WA-S1 (C-WA6): la cuenta de WhatsApp viva del consultorio (`getLiveAccountCached`). La leen en caliente el hook
+  // post-commit de cada turno (C-WA8) y la agenda (flag `whatsapp`, WA-S7): sin cache, cada turno creado sumaría una
+  // sentencia aunque el consultorio no tenga WhatsApp. Lo revalidan, DESPUÉS del commit, conectar, retomar el setup,
+  // desconectar, los switches y `markAccountProblem`.
+  whatsappAccount: (tenantId: string) => t(tenantId, "whatsapp-account"),
 
   // global (non-tenant) — catalog never changes per tenant
   catalog: () => "global:catalog",

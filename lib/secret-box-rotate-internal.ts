@@ -7,6 +7,8 @@ import {
   openSecret,
   sealSecret,
   sealedKid,
+  waCredentialAad,
+  type SecretBoxAad,
   type SecretBoxErrorCode,
 } from "./secret-box";
 
@@ -35,6 +37,13 @@ import {
  *  - **Store inyectable**: `MpCredential` llega con M18 (TP-M, T5b) y el
  *    cliente Prisma de T5a no la conoce; el store real usa SQL crudo con
  *    columnas explícitas y el unit test uno en memoria con la misma semántica.
+ *
+ * WA-S1 (T6, M15): `WhatsAppCredential` (token del system user + PIN del número, propósito `wa-credential`) usa la
+ * misma clave primaria y se rota con el MISMO núcleo (`resealRows`): un solo algoritmo de CAS, dry-run y fallas para
+ * los dos stores, así un arreglo en uno no se olvida en el otro. Mismas reglas: CAS sobre `version` + los dos sobres
+ * sin mover `version` (en WA la sube reconectar: una rotación que corre mientras el Titular reconecta pierde el CAS y
+ * cuenta `conflicts`, la fila ya quedó con la primaria), los dos sobres juntos y con `keyId` (CHECK
+ * `WhatsAppCredential_box_check` de M15), SQL crudo con BYPASSRLS (la tabla es SERVICE_ONLY).
  */
 
 export type MpCredentialBoxRow = {
@@ -74,19 +83,20 @@ export type ResealResult = {
 
 const MAX_FAILURES_LISTED = 50;
 
-export async function resealMpCredentials(opts: {
-  apply: boolean;
-  batchSize?: number;
-  store?: MpCredentialBoxStore;
-}): Promise<ResealResult> {
-  const batchSize = opts.batchSize ?? 100;
-  if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 1000) {
-    throw new Error("[secret-box-rotate] batchSize tiene que ser un entero entre 1 y 1000.");
-  }
-  // Falla temprano (no_keys / bad_keys) antes de leer nada: sellar con qué.
-  sealSecret("probe", mpCredentialAad("probe", "accessToken"));
+/** Lo que el núcleo necesita saber de un store: sus dos sobres, con qué AAD abre cada uno y cómo se arma el CAS. */
+type ResealSpec<Row extends { id: string; keyId: string }, Expected, Next> = {
+  boxes: (row: Row) => [string, string];
+  aads: (row: Row) => [SecretBoxAad, SecretBoxAad];
+  expected: (row: Row) => Expected;
+  next: (keyId: string, boxes: [string, string]) => Next;
+};
 
-  const store = opts.store ?? (await defaultStore());
+async function resealRows<Row extends { id: string; keyId: string }, Expected, Next>(
+  opts: { apply: boolean; batchSize?: number },
+  store: { listAfter(cursorId: string | null, take: number): Promise<Row[]>; casUpdate(e: Expected, n: Next): Promise<boolean> },
+  spec: ResealSpec<Row, Expected, Next>,
+): Promise<ResealResult> {
+  const batchSize = opts.batchSize ?? 100;
   const result: ResealResult = {
     scanned: 0,
     resealed: 0,
@@ -104,21 +114,18 @@ export async function resealMpCredentials(opts: {
     for (const row of rows) {
       result.scanned++;
       result.byKid[row.keyId] = (result.byKid[row.keyId] ?? 0) + 1;
+      const [boxA, boxB] = spec.boxes(row);
       const stale =
-        needsReseal(row.accessTokenBox) ||
-        needsReseal(row.refreshTokenBox) ||
-        sealedKid(row.accessTokenBox) !== row.keyId ||
-        sealedKid(row.refreshTokenBox) !== row.keyId;
+        needsReseal(boxA) || needsReseal(boxB) || sealedKid(boxA) !== row.keyId || sealedKid(boxB) !== row.keyId;
       if (!stale) continue;
       result.pending++;
 
-      let next: Pick<MpCredentialBoxRow, "keyId" | "accessTokenBox" | "refreshTokenBox">;
+      let next: Next;
       try {
-        const access = openSecret(row.accessTokenBox, mpCredentialAad(row.mpAccountId, "accessToken"));
-        const refresh = openSecret(row.refreshTokenBox, mpCredentialAad(row.mpAccountId, "refreshToken"));
-        const accessTokenBox = sealSecret(access, mpCredentialAad(row.mpAccountId, "accessToken"));
-        const refreshTokenBox = sealSecret(refresh, mpCredentialAad(row.mpAccountId, "refreshToken"));
-        next = { keyId: sealedKid(accessTokenBox)!, accessTokenBox, refreshTokenBox };
+        const [aadA, aadB] = spec.aads(row);
+        const a = sealSecret(openSecret(boxA, aadA), aadA);
+        const b = sealSecret(openSecret(boxB, aadB), aadB);
+        next = spec.next(sealedKid(a)!, [a, b]);
       } catch (e) {
         result.failed++;
         if (result.failures.length < MAX_FAILURES_LISTED) {
@@ -127,15 +134,7 @@ export async function resealMpCredentials(opts: {
         continue;
       }
       if (!opts.apply) continue;
-      const ok = await store.casUpdate(
-        {
-          id: row.id,
-          version: row.version,
-          accessTokenBox: row.accessTokenBox,
-          refreshTokenBox: row.refreshTokenBox,
-        },
-        next,
-      );
+      const ok = await store.casUpdate(spec.expected(row), next);
       if (ok) result.resealed++;
       else result.conflicts++;
     }
@@ -143,6 +142,65 @@ export async function resealMpCredentials(opts: {
     if (rows.length < batchSize) break;
   }
   return result;
+}
+
+function checkBatchSize(batchSize: number | undefined): void {
+  const n = batchSize ?? 100;
+  if (!Number.isInteger(n) || n < 1 || n > 1000) {
+    throw new Error("[secret-box-rotate] batchSize tiene que ser un entero entre 1 y 1000.");
+  }
+}
+
+export async function resealMpCredentials(opts: {
+  apply: boolean;
+  batchSize?: number;
+  store?: MpCredentialBoxStore;
+}): Promise<ResealResult> {
+  checkBatchSize(opts.batchSize);
+  // Falla temprano (no_keys / bad_keys) antes de leer nada: sellar con qué.
+  sealSecret("probe", mpCredentialAad("probe", "accessToken"));
+  const store = opts.store ?? (await defaultStore());
+  return resealRows(opts, store, {
+    boxes: (r) => [r.accessTokenBox, r.refreshTokenBox],
+    aads: (r) => [mpCredentialAad(r.mpAccountId, "accessToken"), mpCredentialAad(r.mpAccountId, "refreshToken")],
+    expected: (r) => ({ id: r.id, version: r.version, accessTokenBox: r.accessTokenBox, refreshTokenBox: r.refreshTokenBox }),
+    next: (keyId, [accessTokenBox, refreshTokenBox]) => ({ keyId, accessTokenBox, refreshTokenBox }),
+  });
+}
+
+// ── WhatsApp (WA-S1, M15) ───────────────────────────────────────────────────────────────────────────────────────
+
+export type WaCredentialBoxRow = {
+  id: string;
+  accountId: string;
+  keyId: string;
+  tokenBox: string;
+  pinBox: string;
+  version: number;
+};
+
+export interface WaCredentialBoxStore {
+  listAfter(cursorId: string | null, take: number): Promise<WaCredentialBoxRow[]>;
+  casUpdate(
+    expected: Pick<WaCredentialBoxRow, "id" | "version" | "tokenBox" | "pinBox">,
+    next: Pick<WaCredentialBoxRow, "keyId" | "tokenBox" | "pinBox">,
+  ): Promise<boolean>;
+}
+
+export async function resealWaCredentials(opts: {
+  apply: boolean;
+  batchSize?: number;
+  store?: WaCredentialBoxStore;
+}): Promise<ResealResult> {
+  checkBatchSize(opts.batchSize);
+  sealSecret("probe", waCredentialAad("probe", "token"));
+  const store = opts.store ?? (await defaultWaStore());
+  return resealRows(opts, store, {
+    boxes: (r) => [r.tokenBox, r.pinBox],
+    aads: (r) => [waCredentialAad(r.accountId, "token"), waCredentialAad(r.accountId, "pin")],
+    expected: (r) => ({ id: r.id, version: r.version, tokenBox: r.tokenBox, pinBox: r.pinBox }),
+    next: (keyId, [tokenBox, pinBox]) => ({ keyId, tokenBox, pinBox }),
+  });
 }
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -179,13 +237,42 @@ export function prismaMpCredentialStore(db: Db): MpCredentialBoxStore {
   };
 }
 
+/**
+ * Store real sobre `"WhatsAppCredential"` (M15), SQL crudo con columnas explícitas. Misma exigencia de BYPASSRLS que
+ * el de MP: la tabla es SERVICE_ONLY.
+ */
+export function prismaWaCredentialStore(db: Db): WaCredentialBoxStore {
+  return {
+    async listAfter(cursorId, take) {
+      const rows = cursorId === null
+        ? await db.$queryRaw<WaCredentialBoxRow[]>`
+            SELECT "id", "accountId", "keyId", "tokenBox", "pinBox", "version"
+            FROM "WhatsAppCredential" ORDER BY "id" ASC LIMIT ${take}`
+        : await db.$queryRaw<WaCredentialBoxRow[]>`
+            SELECT "id", "accountId", "keyId", "tokenBox", "pinBox", "version"
+            FROM "WhatsAppCredential" WHERE "id" > ${cursorId} ORDER BY "id" ASC LIMIT ${take}`;
+      return rows.map((r) => ({ ...r, version: Number(r.version) }));
+    },
+    async casUpdate(expected, next) {
+      // `version` NO se toca (ver cabecera): la sube reconectar, no la rotación.
+      const n = await db.$executeRaw`
+        UPDATE "WhatsAppCredential"
+        SET "keyId" = ${next.keyId}, "tokenBox" = ${next.tokenBox}, "pinBox" = ${next.pinBox},
+            "updatedAt" = CURRENT_TIMESTAMP
+        WHERE "id" = ${expected.id} AND "version" = ${expected.version}
+          AND "tokenBox" = ${expected.tokenBox} AND "pinBox" = ${expected.pinBox}`;
+      return n === 1;
+    },
+  };
+}
+
 /** Con un rol sujeto a RLS, `MpCredential` se ve vacía: la rotación exige BYPASSRLS (owner/service). */
 export async function assertResealBypassRls(db: Db): Promise<void> {
   const [role] = await db.$queryRaw<{ bypass: boolean }[]>`
     SELECT (rolbypassrls OR rolsuper) AS bypass FROM pg_roles WHERE rolname = current_user`;
   if (!role?.bypass) {
     throw new Error(
-      "[secret-box-rotate] la conexión no tiene BYPASSRLS: MpCredential es SERVICE_ONLY y se vería vacía (falso \"nada que rotar\"). Usá DIRECT_URL (owner).",
+      "[secret-box-rotate] la conexión no tiene BYPASSRLS: MpCredential y WhatsAppCredential son SERVICE_ONLY y se verían vacías (falso \"nada que rotar\"). Usá DIRECT_URL (owner).",
     );
   }
 }
@@ -195,4 +282,10 @@ async function defaultStore(): Promise<MpCredentialBoxStore> {
   const { prismaService } = await import("./db");
   await assertResealBypassRls(prismaService);
   return prismaMpCredentialStore(prismaService);
+}
+
+async function defaultWaStore(): Promise<WaCredentialBoxStore> {
+  const { prismaService } = await import("./db");
+  await assertResealBypassRls(prismaService);
+  return prismaWaCredentialStore(prismaService);
 }
