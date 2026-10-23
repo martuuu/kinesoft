@@ -1,5 +1,5 @@
 import "server-only";
-import { randomInt, randomUUID } from "node:crypto";
+import { randomInt } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { cookies } from "next/headers";
 import { revalidateTag, unstable_cache } from "next/cache";
@@ -11,7 +11,7 @@ import { env, whatsappMode } from "@/lib/env";
 import { AR_OFFSET, toARDateKey } from "@/lib/datetime-ar";
 import { SecretBoxError, openSecret, sealSecret, sealedKid, waCredentialAad } from "@/lib/secret-box";
 import { getSessionUser } from "@/lib/session-user";
-import { WA_SIGNUP_COOKIE, maskPhone, phoneHash, readSignupState, waSignupCookieOptions } from "@/lib/whatsapp/crypto";
+import { WA_SIGNUP_COOKIE, readSignupState, waSignupCookieOptions } from "@/lib/whatsapp/crypto";
 import {
   GRAPH_TIMEOUT_MS,
   createTemplate,
@@ -20,13 +20,13 @@ import {
   listPhoneNumbers,
   listTemplates,
   registerPhone,
-  sendTemplate,
   subscribeApp,
   templateCreateComponents,
   unsubscribeApp,
   type GraphErr,
 } from "@/lib/whatsapp/graph";
-import { TEMPLATE_SPECS, TEST_TEMPLATE } from "@/lib/whatsapp/templates";
+import { TEMPLATE_SPECS } from "@/lib/whatsapp/templates";
+import { cancelQueuedInTx, sendTest } from "@/lib/whatsapp/outbox-internal";
 import {
   WA_TEMPLATE_KEYS,
   type WaAccountMode,
@@ -70,8 +70,6 @@ export const WA_SETUP_BUDGET_MS = 20_000;
 const SCOPE_MANAGEMENT = "whatsapp_business_management";
 const SCOPE_MESSAGING = "whatsapp_business_messaging";
 const DAY_MS = 86_400_000;
-/** La prueba de envío sale inline: si en 10′ no se resolvió (proceso muerto a mitad), la fila vence. */
-const TEST_LOCK_MS = 10 * 60_000;
 
 const ERROR_CODE_RE = /^[a-z_]{1,40}(:[0-9]{1,7})?$/;
 
@@ -603,10 +601,8 @@ export async function disconnect(o: {
       data: { status: "DISCONNECTED", disconnectedAt: now, disconnectedByUserId: o.byUserId },
     });
     if (n.count === 0) return null; // otra pestaña ganó: nada que auditar
-    const cancelled = await tx.whatsAppMessage.updateMany({
-      where: { tenantId: o.tenantId, accountId: acc.id, status: "QUEUED" },
-      data: { status: "CANCELLED", lockedUntil: null, nextAttemptAt: null },
-    });
+    // La cola es el escritor único de `WhatsAppMessage` (WA-D24): se cancela con su función, en ESTA tx.
+    const cancelled = { count: await cancelQueuedInTx(tx, { tenantId: o.tenantId, accountId: acc.id }, "disconnected") };
     await tx.whatsAppCredential.deleteMany({ where: { tenantId: o.tenantId, accountId: acc.id } });
     await auditInTx(tx, {
       tenantId: o.tenantId,
@@ -869,8 +865,6 @@ export async function testsLeftToday(tenantId: string, now = new Date()): Promis
   return Math.max(0, WA_TEST_DAILY_LIMIT - (await countTestsToday(prismaService, tenantId, now)));
 }
 
-class TestLimit extends Error {}
-
 export type SendTestResult =
   | { ok: true; status: "SENT" | "FAILED"; errorCode: string | null; testsLeftToday: number }
   | { ok: false; error: "no_account" | "limit" | "unavailable" };
@@ -880,10 +874,8 @@ export type SendTestResult =
  * `WhatsAppMessage` TEST/MANUAL (hash + máscara, sin el número en claro) y cuenta para el tope de 5 por día AR, que
  * se decide con la fila de la cuenta `FOR UPDATE` (dos clics a la vez no hacen 6). Se manda inline, FUERA de la tx;
  * `biz_opaque_callback_data` = el id de la fila. Un error de cuenta/pago/token marca el problema de la cuenta.
- *
- * Handoff a WA-S2: la cola (`outbox-internal`, escritor único de `WhatsAppMessage`) puede absorber esto como
- * `enqueue` + `dispatch` inline; mientras no exista, esta es la única fila que se escribe fuera de la cola, junto con
- * el CANCELLED de `disconnect`.
+ * Desde WA-S2 todo eso lo hace la cola (`sendTest` = `enqueueTest` + `dispatch`): este módulo ya no escribe
+ * `WhatsAppMessage` (ni acá ni en `disconnect`, que cancela con `cancelQueuedInTx`).
  */
 export async function sendTestMessage(o: {
   tenantId: string;
@@ -891,75 +883,19 @@ export async function sendTestMessage(o: {
   phoneE164: string;
   now?: Date;
 }): Promise<SendTestResult> {
-  const now = o.now ?? new Date();
   const acc = await prismaService.whatsAppAccount.findFirst({
     where: { tenantId: o.tenantId, status: "ACTIVE" },
-    select: { id: true, mode: true, phoneNumberId: true },
+    select: { id: true, mode: true },
   });
   if (!acc || acc.mode !== whatsappMode()) return { ok: false, error: "no_account" };
-
-  let toHash: string;
-  try {
-    toHash = phoneHash(o.phoneE164); // fuera de la tx (hallazgo 3 de WA-P3)
-  } catch (err) {
-    logger.error("whatsapp.test.hash_failed", { tenantId: o.tenantId, error: (err as Error)?.name });
-    return { ok: false, error: "unavailable" };
-  }
-
-  let msg: { id: string; used: number };
-  try {
-    msg = await prismaService.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT "id" FROM "WhatsAppAccount" WHERE "id" = ${acc.id} AND "tenantId" = ${o.tenantId} FOR UPDATE`;
-      const used = await countTestsToday(tx, o.tenantId, now);
-      if (used >= WA_TEST_DAILY_LIMIT) throw new TestLimit();
-      const row = await tx.whatsAppMessage.create({
-        data: {
-          tenantId: o.tenantId,
-          accountId: acc.id,
-          kind: "TEST",
-          trigger: "MANUAL",
-          status: "SENDING",
-          idempotencyKey: `test:${randomUUID()}`,
-          templateName: TEST_TEMPLATE.name,
-          toHash,
-          toMasked: maskPhone(o.phoneE164),
-          attempts: 1,
-          lockedUntil: new Date(now.getTime() + TEST_LOCK_MS),
-          expiresAt: new Date(now.getTime() + TEST_LOCK_MS),
-          createdByUserId: o.userId,
-        },
-        select: { id: true },
-      });
-      return { id: row.id, used: used + 1 };
-    });
-  } catch (err) {
-    if (err instanceof TestLimit) return { ok: false, error: "limit" };
-    throw err;
-  }
-  const left = Math.max(0, WA_TEST_DAILY_LIMIT - msg.used);
-
-  const cred = await loadCredential(acc.id, o.tenantId);
-  const sent = cred
-    ? await sendTemplate(
-        cred.token,
-        acc.phoneNumberId,
-        { to: o.phoneE164, name: TEST_TEMPLATE.name, language: TEST_TEMPLATE.language, components: [], callbackData: msg.id },
-        { inline: true }
-      )
-    : null;
-  const done = new Date();
-  if (sent?.ok) {
-    await prismaService.whatsAppMessage.updateMany({
-      where: { id: msg.id, tenantId: o.tenantId },
-      data: { status: "SENT", wamid: sent.data.wamid, sentAt: done, lockedUntil: null },
-    });
-    return { ok: true, status: "SENT", errorCode: null, testsLeftToday: left };
-  }
-  const errorCode = sent ? okCode(sent.errorCode, "unknown") : "no_credential";
-  await prismaService.whatsAppMessage.updateMany({
-    where: { id: msg.id, tenantId: o.tenantId },
-    data: { status: "FAILED", failedAt: done, errorCode, lockedUntil: null },
-  });
-  if (sent && !sent.ok) await markAccountProblem(o.tenantId, sent.errorClass, errorCode);
-  return { ok: true, status: "FAILED", errorCode, testsLeftToday: left };
+  // WA-S2: por la cola (escritor único): encola TEST/MANUAL con el tope del día y la despacha inline con el número en
+  // memoria. La cola marca el problema de la cuenta si Meta devuelve un error de token/pago/cuenta.
+  const r = await sendTest({ tenantId: o.tenantId, accountId: acc.id, userId: o.userId, phoneE164: o.phoneE164, now: o.now });
+  if (!r.ok) return { ok: false, error: r.error };
+  const left = Math.max(0, WA_TEST_DAILY_LIMIT - r.used);
+  const res = r.result;
+  if (res.outcome === "sent") return { ok: true, status: "SENT", errorCode: null, testsLeftToday: left };
+  const errorCode =
+    res.outcome === "failed" ? res.errorCode : res.outcome === "skipped" ? (res.reason === "no_account" ? "no_credential" : res.reason) : res.outcome;
+  return { ok: true, status: "FAILED", errorCode: okCode(errorCode, "unknown"), testsLeftToday: left };
 }

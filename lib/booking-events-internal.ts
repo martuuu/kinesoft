@@ -2,6 +2,7 @@ import "server-only";
 import { revalidateTag } from "next/cache";
 import { tags } from "@/lib/cache-tags";
 import { logger } from "@/lib/logger";
+import { whatsappMode } from "@/lib/env";
 import { publishAvailability, publishBookingChanges } from "@/lib/realtime-publisher-internal";
 
 /**
@@ -22,7 +23,9 @@ import { publishAvailability, publishBookingChanges } from "@/lib/realtime-publi
  *      Secretaria marcaba «Llegó» y el profesional no se enteraba. Ahora el
  *      flag apaga SOLO la invalidación;
  *   2. publica los refs (`publishBookingChanges`): 1 POST por commit. Con
- *      `refs` vacío no publica (SV-D12): no hay turno que avisar.
+ *      `refs` vacío no publica (SV-D12): no hay turno que avisar;
+ *   3. (WA-S2) encola y manda los avisos de WhatsApp (`runWhatsAppBookingHook`),
+ *      solo si `WHATSAPP_MODE` no es `off`.
  *
  * Por qué invalidar ANTES de publicar: el cliente que recibe el evento re-pide
  * enseguida; si el publish saliera primero, ese refetch podía leer el cache
@@ -93,6 +96,18 @@ export async function afterBookingsCommitted(
   } catch (e) {
     safeLog(tenantId, refs.length, "publish", e);
   }
+  // 3. WA-S2 (C-WA8, WA-D18): avisos de WhatsApp al paciente, DESPUÉS del publish (la agenda se entera primero; el
+  //    envío inline puede tardar hasta 2,5 s). Con `WHATSAPP_MODE=off` se corta acá, ANTES del import: cero sentencias
+  //    y ni siquiera se carga el módulo (el write path cuesta lo mismo que antes de T6). `import()` dinámico para que
+  //    la cola, Graph y el secret-box no entren al grafo de cada importador del hook. Su propio try: nunca tira.
+  try {
+    if (whatsappMode() !== "off") {
+      const { runWhatsAppBookingHook } = await import("@/lib/whatsapp/booking-hook-internal");
+      await runWhatsAppBookingHook(tenantId, refs);
+    }
+  } catch (e) {
+    safeLog(tenantId, refs.length, "whatsapp", e);
+  }
 }
 
 /**
@@ -130,7 +145,7 @@ export async function afterAvailabilityCommitted(
 }
 
 /** El log tampoco puede tirar: "nunca tira" es el contrato. */
-function safeLog(tenantId: string, refs: number, stage: "invalidate" | "publish", e: unknown): void {
+function safeLog(tenantId: string, refs: number, stage: "invalidate" | "publish" | "whatsapp", e: unknown): void {
   try {
     logger.error("booking.events.after_commit_failed", {
       tenantId,
