@@ -12,6 +12,7 @@
   // INF-S: `scripts/prod-precheck.ts` (pre/post del día del push) y `scripts/qa-tenants.ts` (consultorios QA por plan);
   // sus núcleos ya entran por `scripts/lib/**`. Los dos los corre Martin.
   // WA-S4: `scripts/diagnose-whatsapp.ts` (S1–S13 de WhatsApp Cloud API; simulador por defecto, `--sandbox` solo Martin).
+  // MPS-E: `scripts/diagnose-mp-subscriptions.ts` (S1–S10 de la suscripción con MP; simulador por defecto, `--sandbox` solo Martin).
   // Uso: npx tsc --noEmit -p tsconfig.scripts.json
   "extends": "./tsconfig.json",
   "compilerOptions": {
@@ -20,6 +21,6 @@
   "include": ["scripts/plans-*.ts", "scripts/realtime-verify.ts", "scripts/diagnose-email.ts", "scripts/diagnose-auth.ts",
     "scripts/diagnosis-import.ts", "scripts/secret-box-rotate.ts", "scripts/diagnose-mp-connect.ts", "scripts/saas-reanchor.ts",
     "scripts/prod-precheck.ts", "scripts/qa-tenants.ts", "scripts/diagnose-whatsapp.ts",
-    "scripts/lib/**/*.ts"],
+    "scripts/diagnose-mp-subscriptions.ts", "scripts/lib/**/*.ts"],
   "exclude": ["node_modules"]
 }
