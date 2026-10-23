@@ -16,6 +16,7 @@ import {
   GRAPH_TIMEOUT_MS,
   createTemplate,
   debugToken,
+  documentHeaderSamplePdf,
   exchangeCode,
   listPhoneNumbers,
   listTemplates,
@@ -23,6 +24,7 @@ import {
   subscribeApp,
   templateCreateComponents,
   unsubscribeApp,
+  uploadHeaderSample,
   type GraphErr,
 } from "@/lib/whatsapp/graph";
 import { TEMPLATE_SPECS } from "@/lib/whatsapp/templates";
@@ -483,12 +485,12 @@ function templateStatusOf(s: string | null | undefined): WaTemplateStatus {
  *   - Error definitivo de UNA plantilla → esa queda NOT_SUBMITTED y las otras siguen: un rechazo del alta de
  *     `cs_documento_v1` no puede dejar al consultorio sin avisos de turnos.
  *
- * HALLAZGO 1 de WA-P3 (documentado acá, WA-S1): Meta exige `example.header_handle` (Resumable Upload API,
+ * HALLAZGO 1 de WA-P3 (resuelto en WA-S6): Meta exige `example.header_handle` (Resumable Upload API,
  * `POST /{app_id}/uploads` + `POST /upload:<id>` con los bytes y `file_offset: 0`) para el header DOCUMENT de
- * `cs_documento_v1`. `graphFetch` no manda un cuerpo binario crudo ni el header `file_offset`, así que la subida no se
- * puede hacer sin tocar `lib/whatsapp/graph.ts` (WA-P3): queda como handoff (`uploadHeaderSample`). Hasta entonces, en
- * sandbox/live Meta rechaza el alta de esa sola plantilla → NOT_SUBMITTED y compartir ficha por WhatsApp no sale
- * (`template_pending`); el simulador no exige el handle.
+ * `cs_documento_v1`. Antes de crearla se sube `documentHeaderSamplePdf()` (un PDF de ejemplo sin datos de nadie: Meta lo
+ * guarda y lo ve su equipo de revisión, nunca una ficha real) con `uploadHeaderSample` y el `h` va en el alta. El
+ * simulador ahora lo exige igual que Meta. Si la subida falla en forma retryable se corta el paso (como cualquier
+ * error retryable); si falla definitiva, se intenta el alta igual y Meta la rechaza → NOT_SUBMITTED solo esa plantilla.
  */
 async function submitTemplates(
   tenantId: string,
@@ -511,10 +513,18 @@ async function submitTemplates(
       status = templateStatusOf(found.status);
       rejectedReason = found.rejectedReason;
     } else {
+      let headerHandle: string | undefined;
+      if (spec.header === "DOCUMENT") {
+        const appId = process.env.WHATSAPP_APP_ID?.trim() || env.WHATSAPP_APP_ID || "";
+        const up = await uploadHeaderSample(token, appId, { bytes: documentHeaderSamplePdf(), mimeType: "application/pdf", filename: "documento-de-ejemplo.pdf" }, { timeoutMs });
+        if (!up.ok && up.retryable) return up;
+        if (up.ok) headerHandle = up.data.handle;
+        else logger.warn("whatsapp.setup.header_sample_failed", { tenantId, accountId, template: spec.name, errorCode: up.errorCode });
+      }
       const c = await createTemplate(
         token,
         wabaId,
-        { name: spec.name, language: spec.language, category: spec.category, components: templateCreateComponents(spec) },
+        { name: spec.name, language: spec.language, category: spec.category, components: templateCreateComponents(spec, { headerHandle }) },
         { timeoutMs }
       );
       if (!c.ok) {
@@ -524,7 +534,7 @@ async function submitTemplates(
           accountId,
           template: spec.name,
           errorCode: c.errorCode,
-          needsHeaderHandle: spec.header === "DOCUMENT",
+          needsHeaderHandle: spec.header === "DOCUMENT" && !headerHandle,
         });
         status = "NOT_SUBMITTED";
       } else {

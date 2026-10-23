@@ -64,6 +64,12 @@ export type GraphFetchOptions = GraphCallOptions & {
   query?: Record<string, string | number | undefined>;
   json?: unknown;
   form?: FormData;
+  /** Cuerpo binario crudo (WA-S6: la Resumable Upload API recibe los bytes tal cual, no multipart). */
+  binary?: { bytes: Uint8Array; contentType?: string };
+  /** Headers extra (WA-S6: `file_offset`). Nunca el token: va por `token` + `authScheme`. */
+  headers?: Record<string, string>;
+  /** `Bearer` (default) u `OAuth` (lo que pide `POST /{upload_id}` de la Resumable Upload API). */
+  authScheme?: "Bearer" | "OAuth";
 };
 
 /** URL de la app vigente: los tests la cambian en caliente y `env` se congela al importar. */
@@ -136,10 +142,14 @@ export async function graphFetch(path: string, o: GraphFetchOptions = {}): Promi
   for (const [k, v] of Object.entries(o.query ?? {})) if (v !== undefined) url.searchParams.set(k, String(v));
 
   const headers: Record<string, string> = { accept: "application/json" };
-  if (o.token) headers.authorization = `Bearer ${o.token}`;
+  for (const [k, v] of Object.entries(o.headers ?? {})) if (k.toLowerCase() !== "authorization") headers[k.toLowerCase()] = v;
+  if (o.token) headers.authorization = `${o.authScheme ?? "Bearer"} ${o.token}`;
   let body: BodyInit | undefined;
   if (o.form) body = o.form; // el content-type multipart con boundary lo pone fetch
-  else if (o.json !== undefined) {
+  else if (o.binary) {
+    headers["content-type"] = o.binary.contentType ?? "application/octet-stream";
+    body = new Uint8Array(o.binary.bytes); // copia propia (mismo motivo que en `uploadMedia`)
+  } else if (o.json !== undefined) {
     headers["content-type"] = "application/json";
     body = JSON.stringify(o.json);
   }
@@ -350,6 +360,84 @@ export function templateCreateComponents(spec: WaTemplateSpec, o: { headerHandle
   c.push({ type: "FOOTER", text: spec.footer });
   if (spec.buttons.length) c.push({ type: "BUTTONS", buttons: spec.buttons.map((text) => ({ type: "QUICK_REPLY", text })) });
   return c;
+}
+
+/**
+ * WA-S6 (hallazgo 1 de WA-P3) · Muestra del header DOCUMENT para el ALTA de `cs_documento_v1`. Meta revisa la plantilla
+ * con un ejemplo del documento: es un PDF de una página, generado acá, sin datos de nadie (nunca una ficha real: lo
+ * guarda Meta y lo ve su equipo de revisión). Offsets del xref calculados, así cualquier lector lo abre.
+ */
+export function documentHeaderSamplePdf(): Uint8Array {
+  const text = "Documento de ejemplo";
+  const stream = `BT /F1 18 Tf 72 720 Td (${text}) Tj ET`;
+  const objs = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+  ];
+  let out = "%PDF-1.4\n";
+  const offsets: number[] = [];
+  objs.forEach((o, i) => {
+    offsets.push(out.length);
+    out += `${i + 1} 0 obj\n${o}\nendobj\n`;
+  });
+  const xrefAt = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+  for (const off of offsets) out += `${String(off).padStart(10, "0")} 00000 n \n`;
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xrefAt}\n%%EOF\n`;
+  return new Uint8Array(Buffer.from(out, "latin1"));
+}
+
+/** Id de sesión de la Resumable Upload API: `upload:<base64url>` y, en Meta real, `?sig=<firma>` pegado. */
+const UPLOAD_SESSION_RE = /^upload:[A-Za-z0-9_=+/.%-]{1,1024}(\?sig=[A-Za-z0-9_=+/.%-]{1,1024})?$/;
+const APP_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * WA-S6 (hallazgo 1 de WA-P3) · Resumable Upload API: sube un archivo de ejemplo y devuelve el `h` que va en
+ * `example.header_handle` del alta de una plantilla con header DOCUMENT. Dos pasos (doc de Meta):
+ *   1. `POST /{app_id}/uploads?file_name&file_length&file_type` → `{ id: "upload:…" }` (abre la sesión);
+ *   2. `POST /{upload_id}` con `Authorization: OAuth <token>`, `file_offset: 0` y los bytes crudos → `{ h }`.
+ * El `app_id` es el de la app de KineSoft (no el WABA): la sesión es de la app. Nunca tira (como todo este módulo); el
+ * id de sesión no se loguea (`logPath` corta el `?sig=` y acorta el resto).
+ */
+export async function uploadHeaderSample(
+  token: string,
+  appId: string,
+  f: { bytes: Uint8Array; mimeType: string; filename: string },
+  o: GraphCallOptions = {}
+): Promise<GraphResult<{ handle: string }>> {
+  if (!APP_ID_RE.test(appId)) return { ...fail("off"), errorCode: "app_not_configured" };
+  const startPath = `/${encodeURIComponent(appId)}/uploads`;
+  const start = shape(
+    await graphFetch(startPath, {
+      ...o,
+      token,
+      method: "POST",
+      query: { file_name: f.filename, file_length: f.bytes.byteLength, file_type: f.mimeType },
+    }),
+    startPath,
+    (j) => {
+      const id = str(j.id);
+      return id && UPLOAD_SESSION_RE.test(id) ? id : null;
+    }
+  );
+  if (!start.ok) return start;
+  // Sin `encodeURIComponent`: el id trae `:` y, en Meta, el `?sig=` que tiene que viajar como query tal cual.
+  const sessionPath = `/${start.data}`;
+  const r = await graphFetch(sessionPath, {
+    ...o,
+    token,
+    authScheme: "OAuth",
+    method: "POST",
+    headers: { file_offset: "0" },
+    binary: { bytes: f.bytes, contentType: f.mimeType },
+  });
+  return shape(r, sessionPath, (j) => {
+    const h = str(j.h);
+    return h ? { handle: h } : null;
+  });
 }
 
 export async function createTemplate(

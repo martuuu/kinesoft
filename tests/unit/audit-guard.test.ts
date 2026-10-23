@@ -70,6 +70,8 @@ describe("[PL-A] guard de auditoría y errores", () => {
         "clinicalNote.download",
         "clinicalRecord.download",
         "patientDocument.download",
+        // [WA-S6] T6: el PDF compartido sale por WhatsApp; se audita antes de encolar y, si falla, no se encola.
+        "patientDocument.whatsapp",
       ].sort()
     );
   });

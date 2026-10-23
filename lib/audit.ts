@@ -106,6 +106,10 @@ export const SECURITY_EVENT_ACTIONS = [
   "clinicalNote.download",
   "clinicalRecord.download",
   "patientDocument.download",
+  // WA-S6 (T6, brief §26.5 «Compartir ficha»): el PDF de una ficha sale a WhatsApp (Meta guarda el media y el chat queda
+  // en el teléfono). No hay write propio del envío (la cola es otra conexión, después del commit de compartir): se
+  // audita ANTES de encolar y FALLA CERRADO (audit caído → no se encola ni se manda nada).
+  "patientDocument.whatsapp",
 ] as const;
 export type SecurityEventAction = (typeof SECURITY_EVENT_ACTIONS)[number];
 

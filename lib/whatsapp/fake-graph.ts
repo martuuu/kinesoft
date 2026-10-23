@@ -34,6 +34,9 @@ import {
  *   - `GET  /{waba}/phone_numbers`, `GET /{phone}`, `POST|DELETE|GET /{waba}/subscribed_apps`, `POST /{phone}/register`;
  *   - `POST|GET /{waba}/message_templates` (aprobación automática con webhook o a mano desde el panel);
  *   - `POST /{phone}/media` (verifica que sea un PDF por los magic bytes);
+ *   - Resumable Upload API (WA-S6): `POST /{app_id}/uploads` abre la sesión y `POST /upload:<id>?sig=…` (con
+ *     `Authorization: OAuth`, `file_offset: 0` y los bytes) devuelve el `h`; el alta de una plantilla con header
+ *     DOCUMENT EXIGE ese handle en `example.header_handle` (como Meta: sin él, `cs_documento_v1` no se da de alta);
  *   - `POST /{phone}/messages` (valida plantilla APPROVED, cantidad de params, media del header; el texto libre solo
  *     dentro de las 24 h del último mensaje del paciente) y la cadena sent → delivered → read por webhook firmado,
  *     con `biz_opaque_callback_data`;
@@ -88,6 +91,7 @@ type FakeWaba = { id: string; businessId: string; subscribed: boolean; phoneIds:
 type FakeCode = { wabaId: string; phoneNumberId: string; grant: FakeSignupGrant; expMs: number; used: boolean };
 type FakeToken = { wabaId: string; grant: FakeSignupGrant; revoked: boolean };
 type FakeMedia = { id: string; phoneNumberId: string; size: number; sha256: string; mimeType: string };
+type FakeUploadSession = { sig: string; token: string; length: number; type: string; used: boolean };
 export type FakeGraphMessage = {
   wamid: string;
   wabaId: string;
@@ -126,6 +130,9 @@ type Store = {
   wabas: Map<string, FakeWaba>;
   phones: Map<string, FakePhone>;
   media: Map<string, FakeMedia>;
+  /** Resumable Upload API (WA-S6): sesiones abiertas y handles emitidos (los que acepta `example.header_handle`). */
+  uploads: Map<string, FakeUploadSession>;
+  headerHandles: Set<string>;
   messages: Map<string, FakeGraphMessage>;
   /** `${phoneNumberId}|${from}` → último entrante (ventana de 24 h del texto libre). */
   lastInbound: Map<string, number>;
@@ -145,6 +152,8 @@ function freshStore(gen: number): Store {
     wabas: new Map(),
     phones: new Map(),
     media: new Map(),
+    uploads: new Map(),
+    headerHandles: new Set(),
     messages: new Map(),
     lastInbound: new Map(),
     hooks: [],
@@ -521,6 +530,12 @@ export function fakeGraphGetMessage(wamid: string): FakeGraphMessage | null {
 export function fakeGraphMessages(): FakeGraphMessage[] {
   return [...store().messages.values()];
 }
+/** WA-S6: el media que subió la app (tamaño + sha256 de los bytes que recibió el simulador), para afirmar que el PDF
+ * que salió es exactamente el compartido. */
+export function fakeGraphMedia(id: string): Readonly<FakeMedia> | null {
+  return store().media.get(id) ?? null;
+}
+
 export function fakeGraphMessageByCallback(callbackData: string): FakeGraphMessage | null {
   return fakeGraphMessages().find((m) => m.callbackData === callbackData) ?? null;
 }
@@ -560,6 +575,11 @@ export async function fakeGraphHandle(req: Request): Promise<Response> {
   if (a === "dialog" && b === "signup" && parts.length === 2) return method === "GET" ? signupPage(url) : signupDecide(req);
   if (method === "GET" && a === "oauth" && b === "access_token") return accessToken(url);
   if (method === "GET" && a === "debug_token" && parts.length === 1) return debugToken(req, url);
+
+  // Resumable Upload API (WA-S6). El id de la app no es numérico en el fake (`DEV_WAFAKE_LITERALS`): va antes del ruteo
+  // por id de WABA/número.
+  if (method === "POST" && a === appId() && b === "uploads" && parts.length === 2) return uploadSessionStart(req, url);
+  if (method === "POST" && a?.startsWith("upload:") && parts.length === 1) return uploadSessionData(req, a, url);
 
   if (a && ID_RE.test(a)) {
     const s = store();
@@ -738,6 +758,12 @@ async function createTemplate(req: Request, w: FakeWaba): Promise<Response> {
   if (!body || typeof body.text !== "string") return graphError(400, 100, "Invalid parameter: components (BODY)");
   if (w.templates.has(tplKey(name, language))) return graphError(400, 100, "Message template already exists", 2388024);
   const header = comps.find((c) => c?.type === "HEADER");
+  // WA-S6: como Meta, el header DOCUMENT necesita un ejemplo subido por la Resumable Upload API (el `h` de la sesión).
+  if (header?.format === "DOCUMENT") {
+    const ex = header.example as { header_handle?: unknown } | undefined;
+    const h = Array.isArray(ex?.header_handle) ? ex.header_handle[0] : undefined;
+    if (typeof h !== "string" || !store().headerHandles.has(h)) return graphError(400, 100, "Invalid parameter: example.header_handle is required for DOCUMENT headers");
+  }
   const buttons = comps.find((c) => c?.type === "BUTTONS");
   const t: FakeTemplate = {
     id: nextId("5"),
@@ -798,6 +824,40 @@ async function uploadMedia(req: Request, p: FakePhone): Promise<Response> {
   const id = nextId("4");
   store().media.set(id, { id, phoneNumberId: p.id, size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), mimeType: type });
   return json({ id });
+}
+
+// ── Resumable Upload API (WA-S6) ───────────────────────────────────────────────────────────────────────────────
+
+function uploadSessionStart(req: Request, url: URL): Response {
+  const rec = tokenRec(req);
+  if (!rec) return graphError(401, 190, "Invalid OAuth access token.");
+  const q = url.searchParams;
+  const length = Number(q.get("file_length"));
+  const type = q.get("file_type") ?? "";
+  if (!q.get("file_name") || !Number.isInteger(length) || length <= 0 || !type) return graphError(400, 100, "Invalid parameter: file_name, file_length y file_type");
+  if (!["application/pdf", "image/jpeg", "image/png", "video/mp4"].includes(type)) return graphError(400, 100, "Invalid parameter: file_type");
+  const id = `upload:${rand(18)}`;
+  const sig = rand(12);
+  store().uploads.set(id, { sig, token: bearer(req)!, length, type, used: false });
+  // Como Meta: el id viene con la firma pegada como query.
+  return json({ id: `${id}?sig=${sig}` });
+}
+
+async function uploadSessionData(req: Request, id: string, url: URL): Promise<Response> {
+  const m = /^OAuth\s+(.+)$/i.exec(req.headers.get("authorization") ?? "");
+  const tok = m?.[1].trim() ?? "";
+  const rec = store().tokens.get(tok);
+  if (!rec || rec.revoked) return graphError(401, 190, "Invalid OAuth access token.");
+  const ses = store().uploads.get(id);
+  if (!ses || ses.used || ses.token !== tok || url.searchParams.get("sig") !== ses.sig) return graphError(400, 100, "Invalid upload session");
+  if (req.headers.get("file_offset") !== "0") return graphError(400, 100, "Invalid parameter: file_offset");
+  const bytes = new Uint8Array(await req.arrayBuffer());
+  if (bytes.length !== ses.length) return graphError(400, 100, "Invalid parameter: file_length no coincide con los bytes");
+  if (ses.type === "application/pdf" && Buffer.from(bytes.subarray(0, 5)).toString("latin1") !== "%PDF-") return graphError(400, 100, "Invalid file: not a PDF");
+  ses.used = true;
+  const h = `4:${rand(24)}`;
+  store().headerHandles.add(h);
+  return json({ h });
 }
 
 // ── Mensajes ───────────────────────────────────────────────────────────────────────────────────────────────────

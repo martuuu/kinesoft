@@ -27,8 +27,13 @@ export const PATIENT_DOCUMENT_COPY = {
  * (server-only, costura de WhatsApp en T6), pero `shareClinicalNoteWithPatient` los devuelve al cliente: viven acá
  * para que el diálogo de compartir no tenga que importar un módulo server-only. El `-internal` los re-exporta.
  */
-export type DocumentDeliveryChannel = "email";
-export type DocumentDeliveryOutcome = { channel: DocumentDeliveryChannel; status: "sent" | "skipped" | "failed" | "no-portal-user" };
+export type DocumentDeliveryChannel = "email" | "whatsapp";
+/**
+ * WA-S6: `queued` es solo de WhatsApp (quedó en la cola y sale en el próximo drenado: un timeout o un rate limit de
+ * Meta no es una falla). `no-portal-user` es solo del mail. Por WhatsApp `skipped` = no se encoló (sin cuenta activa,
+ * sin consentimiento, número cambiado, plantilla sin aprobar, tope de avisos o el modo apagado).
+ */
+export type DocumentDeliveryOutcome = { channel: DocumentDeliveryChannel; status: "sent" | "queued" | "skipped" | "failed" | "no-portal-user" };
 
 /**
  * T4Z-M3 · Lo que el diálogo «Compartir con el paciente» muestra ANTES de confirmar: a qué cuenta del portal le va a

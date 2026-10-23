@@ -3,7 +3,8 @@ import "server-only";
 /**
  * FC-2d (T4, C-FC6, brief §24.5) · Aviso al paciente de un documento compartido, y la COSTURA de T6 (WhatsApp con el
  * PDF): `deliverPatientDocument` decide por `channel` y `loadPatientDocumentPdfForDelivery` le da los bytes al canal
- * que los necesite. Hoy el único canal es el mail, que NO lleva el PDF ni nada clínico (decisión 4 de Martin).
+ * que los necesite. El mail NO lleva el PDF ni nada clínico (decisión 4 de Martin); WhatsApp (WA-S6) sí lo lleva, como
+ * media, y vive en `lib/whatsapp/document-internal.ts` (consentimiento, audit que falla cerrado, cola).
  *
  * Contrato: nunca tira y nunca tarda más de `DELIVERY_TIMEOUT_MS`. Corre DESPUÉS del commit de compartir: el documento
  * ya existe y el paciente ya lo ve en su portal; un Resend caído o lento no puede convertir eso en un error ni dejar la
@@ -32,6 +33,8 @@ export async function deliverPatientDocument(input: {
   actorUserId: string;
   channel: DocumentDeliveryChannel;
   replaced: boolean;
+  /** WA-S6: la clave de idempotencia del compartir (arma `doc:<documentId>:<key>` en la cola). Solo canal whatsapp. */
+  shareKey?: string;
 }): Promise<DocumentDeliveryOutcome> {
   const channel = input.channel;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -42,7 +45,7 @@ export async function deliverPatientDocument(input: {
     }, DELIVERY_TIMEOUT_MS);
   });
   try {
-    return await Promise.race([deliverEmail(input), timeout]);
+    return await Promise.race([channel === "whatsapp" ? deliverWhatsApp(input) : deliverEmail(input), timeout]);
   } catch (e) {
     // Ni el mensaje (podría traer el email) ni la pila: el id del documento alcanza para buscarlo.
     logger.warn("patientDocument.delivery_failed", {
@@ -55,6 +58,16 @@ export async function deliverPatientDocument(input: {
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/**
+ * WA-S6. Import dinámico: `lib/whatsapp/document-internal.ts` importa de este módulo (`loadPatientDocumentPdfForDelivery`,
+ * el cupo por paciente); así no hay ciclo estático y el canal mail no carga la cola de WhatsApp.
+ */
+async function deliverWhatsApp(input: { tenantId: string; documentId: string; actorUserId: string; shareKey?: string }): Promise<DocumentDeliveryOutcome> {
+  if (!input.shareKey) return { channel: "whatsapp", status: "skipped" };
+  const { deliverDocumentWhatsApp } = await import("@/lib/whatsapp/document-internal");
+  return deliverDocumentWhatsApp({ tenantId: input.tenantId, documentId: input.documentId, shareKey: input.shareKey, actorUserId: input.actorUserId });
 }
 
 async function deliverEmail(input: {

@@ -1,5 +1,6 @@
 import { runCronRoute, type CronJobName } from "@/lib/cron-jobs-internal";
 import { runWhatsAppCron } from "@/lib/whatsapp/reminders-internal";
+import { prepareWhatsAppDocument } from "@/lib/whatsapp/document-internal";
 
 export const runtime = "nodejs";
 // Nunca estático ni cacheado: un cron que responde desde cache no corre el job.
@@ -23,5 +24,5 @@ const JOB = "whatsapp" as unknown as CronJobName;
  * mantenimiento). Cada etapa es idempotente: un reintento de Vercel o un disparo a mano no duplica recordatorios.
  */
 export function GET(req: Request): Promise<Response> {
-  return runCronRoute(req, JOB, (now) => runWhatsAppCron(now));
+  return runCronRoute(req, JOB, (now) => runWhatsAppCron(now, undefined, { prepareDocument: prepareWhatsAppDocument }));
 }

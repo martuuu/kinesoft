@@ -13,6 +13,13 @@
  *      anular, sin deadlock) → re-gate → relee la versión (cambió → `changed`) → revoca el vivo (`REPLACED`) → crea el
  *      documento → `auditInTx("patientDocument.share")`;
  *   4. después del commit: `revalidatePath` y `deliverPatientDocument` (≤ 5 s, nunca tira).
+ *
+ * WA-S6 (T6, brief §26.5 «Compartir ficha»): con `whatsapp: { attested: true }` (el staff tildó «El paciente pidió
+ * recibirlo por WhatsApp» al confirmar) el PDF también sale por WhatsApp, como media. Mismo permiso que compartir
+ * (FC-D8: la Secretaría no puede, el gate de la tx1 la frena antes de todo). Va después del commit, en paralelo con el
+ * mail y dentro del mismo tope de 5 s: consentimiento + audit `patientDocument.whatsapp` que FALLA CERRADO + cola
+ * (`lib/whatsapp/document-internal.ts`). Comparte el cupo de avisos por paciente con el mail. El mail sigue siendo
+ * solo aviso, sin el PDF. Un replay no vuelve a mandar ninguno de los dos.
  *   Toda salida por error después de subir BORRA el objeto: un PDF de HC sin fila que lo referencie es PHI huérfana en
  *   el bucket, sin forma de encontrarla. 23505 (doble envío concurrente o alguien compartió recién) y P0001 (la ficha
  *   se anuló en el medio) se deciden releyendo en una tx nueva: replay / `raced` / `voided`.
@@ -82,6 +89,8 @@ type ShareData = {
   replacedDocumentId: string | null;
   patientPortal: "linked" | "not-linked";
   delivery: DocumentDeliveryOutcome | null;
+  /** WA-S6: null = no se pidió (o replay). */
+  whatsappDelivery: DocumentDeliveryOutcome | null;
 };
 
 // ─── Actions ─────────────────────────────────────────────────────────────────
@@ -90,6 +99,8 @@ export async function shareClinicalNoteWithPatient(input: {
   noteId: string;
   idempotencyKey: string;
   notify: boolean;
+  /** WA-S6: el staff confirmó «El paciente pidió recibirlo por WhatsApp». Solo `true` literal cuenta. */
+  whatsapp?: { attested: true };
 }): Promise<ActionResult<ShareData>> {
   return withReadOnlyResult(() => shareImpl(input));
 }
@@ -149,7 +160,12 @@ type Prepared = {
   patientPortal: "linked" | "not-linked";
 };
 
-async function shareImpl(input: { noteId: string; idempotencyKey: string; notify: boolean }): Promise<ActionResult<ShareData>> {
+async function shareImpl(input: {
+  noteId: string;
+  idempotencyKey: string;
+  notify: boolean;
+  whatsapp?: { attested: true };
+}): Promise<ActionResult<ShareData>> {
   try {
     const actor = await getActor();
     assertModule(actor, "evoluciones");
@@ -164,6 +180,7 @@ async function shareImpl(input: { noteId: string; idempotencyKey: string; notify
     const noteId = input.noteId;
     const key = input.idempotencyKey;
     const notify = input.notify === true;
+    const whatsapp = input.whatsapp?.attested === true;
     const tenantId = actor.tenantId;
 
     // T4Z-M2: antes de la tx1, el render y Storage. Va por usuario (no por consultorio): un consultorio grande con
@@ -298,6 +315,7 @@ async function shareImpl(input: { noteId: string; idempotencyKey: string; notify
             replacedDocumentId: live?.id ?? null,
             patientPortal: step1.patientPortal,
             delivery: null,
+            whatsappDelivery: null,
           },
         };
       });
@@ -326,23 +344,28 @@ async function shareImpl(input: { noteId: string; idempotencyKey: string; notify
     // ── 4. Después del commit ──
     revalidatePath(`/pacientes/${result.patientId}`);
     revalidatePath(`/portal/c/${actor.tenantSlug}/documentos`);
-    let delivery: DocumentDeliveryOutcome | null = null;
-    // T4Z-M2: el tope de avisos es por PACIENTE (el buzón que se protege), se cuenta solo cuando se pidió avisar y
-    // después del commit: el documento ya está compartido y el paciente lo ve en su portal aunque no llegue el mail.
-    const notifyAllowed = notify && (await rateLimit(patientNotifyRateKey(result.patientId), PATIENT_NOTIFY_RATE_LIMIT)).ok;
-    if (notify && !notifyAllowed) {
-      logger.info("patientDocument.notify_capped", { tenantId, documentId: result.data.document.id });
-      delivery = { channel: "email", status: "skipped" };
-    } else if (notify) {
-      delivery = await deliverPatientDocument({
-        tenantId,
-        documentId: result.data.document.id,
-        actorUserId: actor.userId,
-        channel: "email",
-        replaced: result.data.replacedDocumentId !== null,
-      });
-    }
-    return { ok: true, data: { ...result.data, delivery } };
+    const sharedId = result.data.document.id;
+    const patientId = result.patientId;
+    const replaced = result.data.replacedDocumentId !== null;
+    const emailDelivery = async (): Promise<DocumentDeliveryOutcome | null> => {
+      if (!notify) return null;
+      // T4Z-M2: el tope de avisos es por PACIENTE (el buzón que se protege), se cuenta solo cuando se pidió avisar y
+      // después del commit: el documento ya está compartido y el paciente lo ve en su portal aunque no llegue el mail.
+      if (!(await rateLimit(patientNotifyRateKey(patientId), PATIENT_NOTIFY_RATE_LIMIT)).ok) {
+        logger.info("patientDocument.notify_capped", { tenantId, documentId: sharedId });
+        return { channel: "email", status: "skipped" };
+      }
+      return deliverPatientDocument({ tenantId, documentId: sharedId, actorUserId: actor.userId, channel: "email", replaced });
+    };
+    // WA-S6: el cupo por paciente lo cuenta `deliverDocumentWhatsApp` recién cuando hay a quién mandarle (con
+    // consentimiento y cuenta activa): un paciente sin WhatsApp no le gasta el cupo al mail.
+    const [delivery, whatsappDelivery] = await Promise.all([
+      emailDelivery(),
+      whatsapp
+        ? deliverPatientDocument({ tenantId, documentId: sharedId, actorUserId: actor.userId, channel: "whatsapp", replaced, shareKey: key })
+        : Promise.resolve(null),
+    ]);
+    return { ok: true, data: { ...result.data, delivery, whatsappDelivery } };
   } catch (e) {
     return forbiddenResult(e);
   }
@@ -389,6 +412,7 @@ async function replayInTx(
       replacedDocumentId: replaced?.id ?? null,
       patientPortal: prev.patient.userId ? "linked" : "not-linked",
       delivery: null,
+      whatsappDelivery: null,
     },
   };
 }
