@@ -173,7 +173,7 @@ describe("[INF-DEV] el script por texto", () => {
     expect(s["dev:mpfake"]).toBe("npm run dev:local --");
     expect(s["dev:wafake"]).toBe("npm run dev:local --");
     expect(s["db:prod:precheck"]).toBe("dotenv -e .env.prod.local -- tsx scripts/prod-precheck.ts");
-    expect(s["qa:tenants"]).toBe("tsx scripts/qa-tenants.ts");
+    expect(s["qa:tenants"]).toBe("tsx --conditions=react-server scripts/qa-tenants.ts");
     expect(s["saas:reanchor"]).toBe("tsx scripts/saas-reanchor.ts");
   });
 });

@@ -67,6 +67,11 @@ import {
   billingPaymentRejectedEmail,
   billingPastDueEmail,
   billingPriceChangeEmail,
+  billingDebitActivatedEmail,
+  billingDebitFailedEmail,
+  billingCancelScheduledEmail,
+  billingCancelledEmail,
+  billingPlanChangeEmail,
 } from "../lib/email/templates-billing";
 import {
   supportMessagePlatformEmail,
@@ -161,6 +166,15 @@ function samples(base: string): Record<DiagnosableKind, () => RenderedEmail> {
         effectiveFrom: "2026-12-01",
         url: link("/configuracion?tab=facturacion"),
       }),
+    // MPS-3c (suscripción con Mercado Pago).
+    billing_debit_activated: () => billingDebitActivatedEmail({ tenantName: TENANT, url: link("/configuracion?tab=plan") }),
+    billing_debit_failed: () =>
+      billingDebitFailedEmail({ tenantName: TENANT, amountCents: 2_500_000, dueDate: "2026-12-09", url: link("/configuracion?tab=plan") }),
+    billing_cancel_scheduled: () =>
+      billingCancelScheduledEmail({ tenantName: TENANT, accessUntil: "2026-12-04", url: link("/configuracion?tab=plan") }),
+    billing_cancelled: () => billingCancelledEmail({ tenantName: TENANT, url: link("/configuracion?tab=plan") }),
+    billing_plan_change: () =>
+      billingPlanChangeEmail({ tenantName: TENANT, outcome: "scheduled", planToLabel: "Individual", effectiveOn: "2026-12-04", url: link("/configuracion?tab=plan") }),
     // PL-2d (mensajes y leads).
     support_message_platform: () =>
       supportMessagePlatformEmail({ tenantName: TENANT, subject: "No puedo subir el comprobante", isReply: false, url: link("/plataforma/mensajes/diagnostico") }),

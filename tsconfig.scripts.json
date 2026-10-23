@@ -9,6 +9,8 @@
   // IAM-0b: `scripts/diagnose-email.ts` (prueba del canal de mail).
   // TP-2h: `scripts/diagnose-mp-connect.ts` (S1–S11 de Mercado Pago Connect).
   // MPS-2c: `scripts/saas-reanchor.ts` (re-anclaje de las suscripciones al día 4; lo corre Martin).
+  // INF-S: `scripts/prod-precheck.ts` (pre/post del día del push) y `scripts/qa-tenants.ts` (consultorios QA por plan);
+  // sus núcleos ya entran por `scripts/lib/**`. Los dos los corre Martin.
   // Uso: npx tsc --noEmit -p tsconfig.scripts.json
   "extends": "./tsconfig.json",
   "compilerOptions": {
@@ -16,6 +18,7 @@
   },
   "include": ["scripts/plans-*.ts", "scripts/realtime-verify.ts", "scripts/diagnose-email.ts", "scripts/diagnose-auth.ts",
     "scripts/diagnosis-import.ts", "scripts/secret-box-rotate.ts", "scripts/diagnose-mp-connect.ts", "scripts/saas-reanchor.ts",
+    "scripts/prod-precheck.ts", "scripts/qa-tenants.ts",
     "scripts/lib/**/*.ts"],
   "exclude": ["node_modules"]
 }

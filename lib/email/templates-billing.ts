@@ -5,6 +5,7 @@
  *
  * Usan `compose` de `templates.ts` (exportado en la integración de PL-2): mismo layout que el resto de los mails.
  */
+import { BRAND_NAME } from "@/lib/brand";
 import type { RenderedEmail } from "@/lib/email/types";
 import { compose, plain } from "@/lib/email/templates";
 import { formatARS } from "@/lib/format";
@@ -219,7 +220,7 @@ export function billingDebitActivatedEmail(p: { tenantName: string; url: string 
 export function billingDebitFailedEmail(p: { tenantName: string; amountCents: number; dueDate: string; url: string }): RenderedEmail {
   const tenant = plain(p.tenantName);
   return render({
-    subject: "No pudimos debitar tu cuota de KineSoft",
+    subject: `No pudimos debitar tu cuota de ${BRAND_NAME}`,
     context: tenant,
     title: "No pudimos debitar tu cuota",
     paragraphs: [
@@ -235,7 +236,7 @@ export function billingDebitFailedEmail(p: { tenantName: string; amountCents: nu
 export function billingCancelScheduledEmail(p: { tenantName: string; accessUntil: string; url: string }): RenderedEmail {
   const tenant = plain(p.tenantName);
   return render({
-    subject: "Pediste la baja de KineSoft",
+    subject: `Pediste la baja de ${BRAND_NAME}`,
     context: tenant,
     title: "Pediste la baja",
     paragraphs: [
@@ -251,7 +252,7 @@ export function billingCancelScheduledEmail(p: { tenantName: string; accessUntil
 export function billingCancelledEmail(p: { tenantName: string; url: string }): RenderedEmail {
   const tenant = plain(p.tenantName);
   return render({
-    subject: "Tu suscripción de KineSoft terminó",
+    subject: `Tu suscripción de ${BRAND_NAME} terminó`,
     context: tenant,
     title: "Se aplicó la baja",
     paragraphs: [

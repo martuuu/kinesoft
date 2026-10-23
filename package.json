@@ -30,7 +30,7 @@
     "db:prod:deploy": "dotenv -e .env.prod.local -- prisma migrate deploy",
     "db:prod:backup": "dotenv -e .env.prod.local -- sh -c 'mkdir -p \"$HOME/kinesoft-backups\" && pg_dump -Fc \"$DIRECT_URL\" -f \"$HOME/kinesoft-backups/prod-$(date +%Y%m%d-%H%M%S).dump\" && ls -lh \"$HOME/kinesoft-backups\" | tail -1'",
     "db:prod:precheck": "dotenv -e .env.prod.local -- tsx scripts/prod-precheck.ts",
-    "qa:tenants": "tsx scripts/qa-tenants.ts",
+    "qa:tenants": "tsx --conditions=react-server scripts/qa-tenants.ts",
     "saas:reanchor": "tsx scripts/saas-reanchor.ts",
     "test:tz-ar": "TZ=America/Argentina/Buenos_Aires vitest run",
     "test:integration:owner": "dotenv -e .env.local -- sh -c 'TZ=UTC INTEGRATION=1 DATABASE_URL=\"$DIRECT_URL\" vitest run -c vitest.integration.config.ts \"$@\"' --",
