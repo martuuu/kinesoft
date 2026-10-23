@@ -19,7 +19,6 @@ import { useToast } from "@/components/ui/toast";
 import { addAdjustment } from "@/lib/platform-billing";
 import type { PlatformReanchorPreview } from "@/lib/platform-billing-types";
 import { usePlatformAction } from "@/components/plataforma/reauth-modal";
-import { WarnBox } from "@/components/plataforma/tenants/detail-ui";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
 import { formatARS, formatDateAR } from "@/lib/format";
@@ -515,12 +514,7 @@ export function ReanchorPreviewView({ preview }: { preview: PlatformReanchorPrev
           Los cargos y pagos que ya existen no cambian.
         </p>
       )}
-      {preview.reenablesAutoDebit && (
-        <WarnBox>
-          El débito automático de este consultorio está bloqueado. Re-anclar vuelve a permitir el débito automático: si
-          querés que siga bloqueado, bloquealo de nuevo después.
-        </WarnBox>
-      )}
+      {/* ZF1/ZF3: sin el aviso de «re-anclar vuelve a permitir el débito»: re-anclar ya conserva el bloqueo. */}
     </div>
   );
 }

@@ -22,6 +22,9 @@
   --tv-row: rgba(255, 255, 255, 0.06);
   --tv-num-bg: rgba(255, 255, 255, 0.1);
   --tv-shadow: none;
+  /* ZF3: estado de la conexión como tokens (antes hex sueltos en `.live i`), con contraste propio en cada tema. */
+  --tv-ok: #36b37e;
+  --tv-warn: #e0a32e;
 
   position: fixed;
   inset: 0;
@@ -47,6 +50,8 @@
   --tv-panel-border: rgba(15, 30, 51, 0.07);
   --tv-row: var(--bg-panel);
   --tv-num-bg: var(--sky-100);
+  --tv-ok: #1f8a5b;
+  --tv-warn: #b7791f;
   --tv-shadow: 0 calc(var(--u) * 0.1) calc(var(--u) * 0.2) rgba(15, 30, 51, 0.04),
     0 calc(var(--u) * 1) calc(var(--u) * 2.6) rgba(15, 30, 51, 0.08);
 }
@@ -200,7 +205,7 @@
 }
 .q:first-child .qN { background: var(--lime-300); color: var(--navy-900); }
 .qName { font-size: calc(var(--u) * 2.15); font-weight: 650; letter-spacing: -0.025em; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.qPro { font-size: calc(var(--u) * 1.35); color: var(--tv-muted); white-space: nowrap; }
+.qPro { font-size: calc(var(--u) * 1.7); color: var(--tv-muted); white-space: nowrap; }
 .r {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: var(--u);
   padding: calc(var(--u) * 0.55) calc(var(--u) * 0.2); border-bottom: 1px solid var(--tv-panel-border);
@@ -209,7 +214,7 @@
 .r:last-child { border-bottom: 0; }
 .rName { font-size: calc(var(--u) * 1.75); line-height: 1.25; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rName span { color: var(--tv-muted); font-weight: 500; }
-.rAgo { font-size: calc(var(--u) * 1.2); color: var(--tv-faint); white-space: nowrap; }
+.rAgo { font-size: calc(var(--u) * 1.5); color: var(--tv-faint); white-space: nowrap; }
 .empty { font-size: calc(var(--u) * 1.6); color: var(--tv-muted); padding: var(--u) calc(var(--u) * 0.4); }
 
 /* SIDE: «Recién llamados» en una sola línea bajo el hero. */
@@ -222,14 +227,14 @@
 .main[data-layout="side"] .recent .rName { font-size: calc(var(--u) * 1.5); }
 
 /* ── Pie ─────────────────────────────────────────────────── */
-.foot { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--u) * 2); font-size: calc(var(--u) * 1.3); color: var(--tv-muted); }
+.foot { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--u) * 2); font-size: calc(var(--u) * 1.5); color: var(--tv-muted); }
 .info { display: flex; align-items: center; gap: calc(var(--u) * 0.8); min-width: 0; }
 .foot svg { width: calc(var(--u) * 1.8); height: calc(var(--u) * 1.8); flex: none; }
 .by { display: flex; align-items: center; gap: calc(var(--u) * 1.4); white-space: nowrap; }
 .by b { font-weight: 650; color: var(--tv-fg); }
 .live { display: inline-flex; align-items: center; gap: calc(var(--u) * 0.5); }
-.live i { width: calc(var(--u) * 0.6); height: calc(var(--u) * 0.6); border-radius: 50%; background: #36b37e; }
-.live[data-live="false"] i { background: #e0a32e; }
+.live i { width: calc(var(--u) * 0.6); height: calc(var(--u) * 0.6); border-radius: 50%; background: var(--tv-ok); }
+.live[data-live="false"] i { background: var(--tv-warn); }
 
 /* Aviso de sonido: no tapa la pantalla (una TV que nadie toca igual tiene que leerse entera). */
 .soundHint {

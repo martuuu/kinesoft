@@ -68,8 +68,6 @@ import {
   type WizardSelection,
 } from "@/lib/public-wizard-state";
 import { PractitionerStep } from "./wizard/practitioner-step";
-import { FirstSlotStep } from "./wizard/first-slot-step";
-import { SlotWindowStep } from "./wizard/slot-window-step";
 import { EmptyBox, StepHeader, focusStepHeadingWhenReady, formatWhenAR } from "./wizard/shared";
 import { rememberWaSaved } from "./wa-saved-flag";
 import s from "./public-booking.module.css";
@@ -80,6 +78,15 @@ const loadDataStep = () => import("./wizard/data-step");
 const DataStep = dynamic(() => loadDataStep().then((m) => m.DataStep), { loading: () => <p className={s.loading}>Cargando…</p> });
 const PaymentChoice = dynamic(() => loadDataStep().then((m) => m.PaymentChoice));
 const PaymentInterstitial = dynamic(() => loadDataStep().then((m) => m.PaymentInterstitial));
+// ZF3 (§26.10, turnero 115,9 / 115 kB): «Fecha y hora» (la ventana de 5 días y el primer turno disponible, ~3,7 kB gz)
+// tampoco entra al first load. El wizard arranca SIEMPRE en el paso 0 o 1 (`initialWizardSelection`), así que el SSR
+// no cambia; se precarga desde el paso 1 (efecto de abajo) para que «Continuar» no espere. Descartado mover
+// `checkoutCopyFor` al chunk diferido (idea de ZB): el resumen lo usa desde el primer render del server.
+const loadSlotWindow = () => import("./wizard/slot-window-step");
+const loadFirstSlot = () => import("./wizard/first-slot-step");
+const stepLoading = () => <p className={s.loading}>Cargando…</p>;
+const SlotWindowStep = dynamic(() => loadSlotWindow().then((m) => m.SlotWindowStep), { loading: stepLoading });
+const FirstSlotStep = dynamic(() => loadFirstSlot().then((m) => m.FirstSlotStep), { loading: stepLoading });
 
 export type PatientHC = {
   firstName: string;
@@ -290,6 +297,10 @@ export function PublicBookingWizard({
   // VX-Z: foco al título del paso nuevo al avanzar/retroceder (también «Elegir profesional» desde el primer turno).
   // No en el primer render: robarle el foco a quien recién llega rompe el recorrido normal de la página.
   useEffect(() => {
+    if (step >= 1) {
+      void loadSlotWindow();
+      void loadFirstSlot();
+    }
     if (step >= 2) void loadDataStep();
   }, [step]);
   const cardRef = useRef<HTMLDivElement>(null);

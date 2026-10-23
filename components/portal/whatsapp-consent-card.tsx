@@ -2,7 +2,7 @@
 
 /**
  * WA-U4 (T6, §26.5, C-WA9) · «Avisos por WhatsApp» en la Cuenta del portal: el paciente ve si recibe avisos, los activa
- * con el celular de SU ficha y los da de baja.
+ * con el celular cargado en SUS datos y los da de baja.
  *
  * - El número llega ENMASCARADO del server (`getMyWhatsAppConsent`, WA-S5): esta tarjeta nunca ve el número completo,
  *   así que tampoco lo puede mostrar ni loguear. El paciente no tipea un número acá: cambiarlo es un pedido de «Mis
@@ -36,7 +36,7 @@ export const WA_PORTAL_COPY = {
   activeTitle: "Recibís avisos de tus turnos por WhatsApp",
   offLead: "Te podemos avisar por WhatsApp cuando se agenda o se reprograma un turno, y el día anterior.",
   pausedPhone:
-    "Tus avisos están en pausa: el celular de tu ficha cambió desde que los activaste. Si querés seguir recibiéndolos, volvé a activarlos.",
+    "Tus avisos están en pausa: cambió el celular cargado en tus datos desde que los activaste. Si querés seguir recibiéndolos, volvé a activarlos.",
   pausedText: "Actualizamos el texto de los avisos. Leelo y volvé a activarlos para seguir recibiéndolos.",
   noPhone:
     "El teléfono que tiene cargado el consultorio no es un celular. Pedí el cambio desde «Mis datos» y, cuando lo aprueben, vas a poder activar los avisos.",
@@ -114,11 +114,10 @@ export function WhatsAppConsentCard({
         <p style={{ fontSize: 14, margin: 0, lineHeight: 1.5, color: "var(--navy-500)" }}>{WA_PORTAL_COPY.noPhone}</p>
       )}
 
-      {done && (
-        <p role="status" style={{ fontSize: 14, margin: 0 }}>
-          {done}
-        </p>
-      )}
+      {/* Siempre montada (ZF3): una región viva que aparece junto con su texto no la anuncian varios lectores. */}
+      <p role="status" className={done ? undefined : "k-sr-only"} style={done ? { fontSize: 14, margin: 0 } : undefined}>
+        {done ?? ""}
+      </p>
       {error && (
         <div role="alert" className="k-alert">
           {error}

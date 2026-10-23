@@ -30,7 +30,7 @@ import { lastSentToPatient, openBookingDrawer, runMobile, simulatorReply, waitFo
 
 // Copy de la UI duplicado A PROPÓSITO (los módulos que lo exportan son `.tsx` de cliente con CSS modules: no se importan
 // desde Playwright). Si cambia el copy, la spec cae en el paso que lo usa, no en silencio.
-const SECTION_SEND_REMINDER = "Enviar recordatorio por WhatsApp"; // components/agenda/booking-drawer/whatsapp-section.tsx WA_SECTION_COPY
+const SECTION_SEND_REMINDER = "Enviar recordatorio por WhatsApp"; // lib/whatsapp/copy.ts WA_COPY.sendReminder
 const TURNERO_WA_LABEL = "Quiero recibir avisos de mis turnos por WhatsApp"; // components/booking/wizard/data-step.tsx
 
 let ctx: BrowserContext;

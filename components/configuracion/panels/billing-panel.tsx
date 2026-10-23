@@ -237,7 +237,8 @@ export function BillingPanel({ initial }: { initial: BillingOverview }) {
                         {c.status === "OPEN" && c.paidCents > 0 && ` · faltan ${formatARS(c.remainingCents)}`}
                       </span>
                     </span>
-                    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {/* ZF3: a 390 px monto + estado + «Pagar con Mercado Pago» no entran en una línea: se parte a la derecha. */}
+                    <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                       <span className="k-mono" style={{ fontSize: 14, fontWeight: 600 }}>{formatARS(c.amountCents)}</span>
                       <Tag tone={st.tone}>{st.label}</Tag>
                       {mp && c.status === "OPEN" && c.remainingCents > 0 && (

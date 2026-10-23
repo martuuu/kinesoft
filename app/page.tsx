@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { getPublicPlanCatalog } from "@/lib/saas-plans-public";
-import { env, saasBillingMode } from "@/lib/env";
+import { env, saasBillingMode, saasBillingTransferInfo } from "@/lib/env";
 import { BRAND_NAME } from "@/lib/brand";
 import { SiteHeader } from "@/components/landing/site-header";
 import { Hero } from "@/components/landing/hero";
@@ -60,6 +60,8 @@ export default async function HomePage() {
   const trialDays = plans.find((p) => p.plan === "INDIVIDUAL")?.trialDays ?? null;
   // D-VX17 / MPS-4a: la FAQ «¿Cómo pago?» aparece con `manual` o `mp` y su respuesta depende del modo.
   const billingMode = saasBillingMode();
+  // ZF3: sin datos de transferencia la FAQ no la ofrece (mismo criterio que `collectionChoices`). Solo el booleano.
+  const hasTransfer = saasBillingTransferInfo() !== null;
 
   return (
     <div className={base.page}>
@@ -73,7 +75,7 @@ export default async function HomePage() {
         <Specialty />
         <Steps trialDays={trialDays} />
         <LandingPricing plans={plans} />
-        <Faq trialDays={trialDays} billingMode={billingMode} />
+        <Faq trialDays={trialDays} billingMode={billingMode} hasTransfer={hasTransfer} />
         <LandingContact startedAt={startedAt} />
       </main>
       <SiteFooter />

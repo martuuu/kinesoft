@@ -25,6 +25,7 @@
  * cancelado del modal incluido— se muestran como el resto del panel, en el `role="alert"` de la tarjeta.
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Drawer } from "@/components/ui/drawer";
@@ -34,6 +35,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { StepUpProvider, useStepUpAction } from "@/components/account/step-up-modal";
 import {
+  cancelPendingAutoDebit,
   cancelScheduledPlanChange,
   confirmCheckoutReturn,
   payChargeWithMp,
@@ -101,6 +103,7 @@ function SubscriptionInner({ overview: o, onChanged }: Props) {
   const runStepUp = useStepUpAction();
   const confirm = useConfirm();
   const toast = useToast();
+  const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -117,9 +120,11 @@ function SubscriptionInner({ overview: o, onChanged }: Props) {
     let ret: ReturnType<typeof parseBillingReturn> = null;
     try {
       ret = parseBillingReturn(window.location.search);
-      if (ret) window.history.replaceState(window.history.state, "", stripBillingReturn(window.location.href));
+      // MPS-E: con `history.replaceState` Next volvía a poner la query en la próxima navegación del router (su estado
+      // interno seguía con la URL vieja) y un refresh re-confirmaba. `router.replace` actualiza los dos.
+      if (ret) router.replace(stripBillingReturn(window.location.href), { scroll: false });
     } catch {
-      /* sin history: se procesa igual */
+      /* sin URL parseable: se procesa igual */
     }
     if (!ret || ret.kind === "none") return;
     const r = ret;
@@ -142,7 +147,7 @@ function SubscriptionInner({ overview: o, onChanged }: Props) {
         setBusy(null);
       }
     })();
-  }, [mp, onChanged]);
+  }, [mp, onChanged, router]);
 
   /** Corre una action (con step-up si `stepUp`), muestra su error como el resto del panel y recarga si salió bien. */
   async function run<T>(
@@ -204,10 +209,13 @@ function SubscriptionInner({ overview: o, onChanged }: Props) {
     });
   }
 
-  /** «Cancelar» del débito pendiente: vuelve a la forma de pago que tenía (o transferencia si nunca eligió). */
+  /**
+   * «Cancelar» del débito pendiente (ZF1/ZF3): `cancelPendingAutoDebit` da de baja en MP la autorización que no se
+   * terminó y no toca la forma de pago ni un débito vigente. Antes llamaba a `setCollectionMethod` (con step-up) y el
+   * pendiente seguía vivo en MP, así que la banda «Falta autorizar…» no se iba. Sin step-up: no habilita ni mueve plata.
+   */
   function cancelPendingDebit() {
-    const back: "TRANSFER" | "MP_CHECKOUT" = o.collectionMethod === "MP_CHECKOUT" ? "MP_CHECKOUT" : "TRANSFER";
-    void run("debit:cancel", () => setCollectionMethod({ method: back }), { stepUp: true });
+    void run("debit:cancel", () => cancelPendingAutoDebit(), { success: "Listo: cancelaste la autorización del débito." });
   }
 
   function continuePendingDebit() {
@@ -243,11 +251,16 @@ function SubscriptionInner({ overview: o, onChanged }: Props) {
     <Card style={{ padding: 20, display: "grid", gap: 14 }} data-subscription={o.subscriptionStatus}>
       <EyebrowLabel>Suscripción</EyebrowLabel>
 
-      {notice && (
-        <p role="status" data-billing-notice style={{ ...band, background: "var(--sky-50)", margin: 0 }}>
-          {notice}
-        </p>
-      )}
+      {/* Siempre montada (ZF3): una región viva que aparece junto con su texto no la anuncian varios lectores. Vacía
+          va `k-sr-only` (absoluta) para no sumar un hueco de 14 px en la grilla de la tarjeta. */}
+      <p
+        role="status"
+        data-billing-notice={notice ? "" : undefined}
+        className={notice ? undefined : "k-sr-only"}
+        style={notice ? { ...band, background: "var(--sky-50)", margin: 0 } : undefined}
+      >
+        {notice ?? ""}
+      </p>
 
       {o.pendingPlan && !cancelled && (
         <div data-pending-plan={o.pendingPlan.plan} style={band}>

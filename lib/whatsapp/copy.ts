@@ -93,7 +93,7 @@ export const WA_SKIP_REASON_LABEL: Record<WaSkipReason, string> = {
   template_pending: "La plantilla no estaba aprobada por Meta.",
   mode_changed: "Cambió el modo de WhatsApp del sistema.",
   document_changed: "El documento cambió o se dejó de compartir.",
-  rescheduled: "El turno cambió de horario",
+  rescheduled: "El turno cambió de horario.",
 };
 
 /** Lo que ve el consultorio cuando falla un envío. Nunca el mensaje crudo de Meta. */
@@ -121,31 +121,29 @@ export const WA_REPLY_BADGE = {
   cancelRequested: { text: "Pidió cancelar", ariaLabel: "El paciente avisó por WhatsApp que no puede ir" },
 } as const;
 
+/**
+ * Copy compartido entre pantallas. ZF3 (revisor ZB): se borraron las claves que ninguna pantalla mostraba (`connect`,
+ * `resume`, `sendTest`, `testLimit`, `switches`, `consentCheckboxSelf`: el panel de Configuración tiene su propio copy
+ * en `WA_U1_COPY` y el portal en `WA_PORTAL_COPY`) y los botones dicen «Enviar», como el resto de la UI de WhatsApp.
+ * «Enviar recordatorio por WhatsApp» deja claro que sale solo desde el número del consultorio, a diferencia de
+ * «Compartir por WhatsApp» (el wa.me manual) que vive al lado en el drawer.
+ */
 export const WA_COPY = {
   sectionTitle: "WhatsApp",
-  connect: "Conectar WhatsApp",
   reconnect: "Volver a conectar",
-  resume: "Seguir con la configuración",
   disconnect: "Desconectar WhatsApp",
   disconnectConfirm:
     "Se dejan de mandar avisos y se cancelan los mensajes en cola. El número sigue registrado en Meta y lo podés volver a conectar.",
-  sendTest: "Mandar mensaje de prueba",
-  testLimit: "Podés mandar hasta 5 pruebas por día.",
-  sendReminder: "Mandar recordatorio",
+  sendReminder: "Enviar recordatorio por WhatsApp",
   reminderCooldown: "Ya se mandó un recordatorio hace poco. Probá de nuevo en unos minutos.",
   historyTitle: "Historial de WhatsApp",
   historyEmpty: "Todavía no se mandó nada por WhatsApp para este turno.",
   staleReply: "El paciente respondió a un horario anterior.",
-  dismissReply: "Marcar como visto",
+  dismissReply: "Descartar aviso",
   paymentChecklist: "Cargá un medio de pago en Meta: cada aviso entregado tiene un costo que cobra Meta, no nosotros.",
-  switches: {
-    autoBookingNotice: "Avisar al paciente cuando se agenda o se reprograma un turno",
-    autoReminder: "Mandar un recordatorio el día anterior, con «Confirmo» / «No puedo ir»",
-    autoReplyText: "Responder con los datos de contacto cuando el paciente escribe",
-  },
   consentCheckbox: "El paciente acepta recibir avisos de sus turnos por WhatsApp",
-  consentCheckboxSelf: "Acepto recibir avisos de mis turnos por WhatsApp",
   shareByWhatsApp: "El paciente pidió recibirlo por WhatsApp",
+  /** = `FAKE_META_TITLE` de `fake-graph-html.ts` (el E2E lo busca en el popup); lo fija `tests/unit/render/zf3-t6t7`. */
   simulatorTitle: "Simulador de Meta (solo desarrollo)",
 } as const;
 

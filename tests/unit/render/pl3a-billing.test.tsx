@@ -29,6 +29,7 @@ vi.mock("@/lib/saas-billing-mp", () => ({
   undoCancel: async () => ({ ok: false, error: "x" }),
   reactivateSubscription: async () => ({ ok: false, error: "x" }),
   cancelScheduledPlanChange: async () => ({ ok: false, error: "x" }),
+  cancelPendingAutoDebit: async () => ({ ok: false, error: "x" }),
 }));
 vi.mock("@/lib/two-factor", () => ({ getStepUpOptions: async () => ({ ok: false, error: "x" }) }));
 

@@ -141,11 +141,21 @@ describe("[VX2-c1] landing", () => {
     process.env[ENV_KEY] = "off";
     expect(await render()).not.toContain("¿Cómo pago?");
     process.env[ENV_KEY] = "mp";
+    const prevTransfer = process.env.SAAS_BILLING_TRANSFER_INFO;
+    process.env.SAAS_BILLING_TRANSFER_INFO = "Alias kinesoft.pagos";
     const mp = await render();
     expect(mp).toContain("¿Cómo pago?");
     // INT (handoff de MPS-4a): con `mp` la respuesta ya no es la del pago manual.
     expect(mp).toContain("débito automático o Mercado Pago cada mes, o transferencia informando el comprobante.");
     expect(mp).not.toContain("Con un pago manual");
+    // [ZF3] sin datos para transferir no se promete la transferencia (ni se imprime el alias en la landing).
+    expect(mp).not.toContain("kinesoft.pagos");
+    delete process.env.SAAS_BILLING_TRANSFER_INFO;
+    const noTransfer = await render();
+    expect(noTransfer).toContain("débito automático o Mercado Pago cada mes.");
+    expect(noTransfer).not.toContain("o transferencia");
+    if (prevTransfer === undefined) delete process.env.SAAS_BILLING_TRANSFER_INFO;
+    else process.env.SAAS_BILLING_TRANSFER_INFO = prevTransfer;
     process.env[ENV_KEY] = "manual";
     const html = await render();
     expect(html).toContain("¿Cómo pago?");

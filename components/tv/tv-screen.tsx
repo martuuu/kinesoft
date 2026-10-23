@@ -63,11 +63,14 @@ export function heroModeFor(layout: ScreenLayout, hero: DisplayFeedItem | null, 
   return hero ? "call" : "idle";
 }
 
-/** «Pasá al consultorio 2.» / «Pasá al gimnasio.» / «Pasá a Sala B.» (sin sala: lo dice el profesional o recepción). */
+/**
+ * «Pasá al consultorio 2.» / «Pasá al box A.» / «Pasá a Sala B.» (sin sala: lo dice el profesional o recepción).
+ * Solo la PRIMERA palabra va en minúscula (ZF3): antes se bajaba todo y «Box A» salía «box a».
+ */
 export function destinationPhrase(item: Pick<DisplayFeedItem, "room" | "practitioner">): string {
   if (item.room) {
-    const lower = item.room.toLowerCase();
-    if (/^(consultorio|box|gimnasio|sal[oó]n)\b/.test(lower)) return `Pasá al ${lower}.`;
+    const m = /^(consultorio|box|gimnasio|sal[oó]n)\b/i.exec(item.room);
+    if (m) return `Pasá al ${m[1]!.toLowerCase()}${item.room.slice(m[1]!.length)}.`;
     return `Pasá a ${item.room}.`;
   }
   if (item.practitioner) return `Te espera ${item.practitioner}.`;

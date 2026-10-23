@@ -51,16 +51,12 @@ import type { DrawerBooking } from "./types";
 const actions = () => import("@/lib/whatsapp-booking-actions");
 
 /**
- * Copy propio de la sección. «Enviar recordatorio por WhatsApp» y «Descartar aviso» son los del plan de WA-U2 (el
- * botón vive al lado de «Compartir por WhatsApp», el wa.me manual: «Enviar … por WhatsApp» deja claro que este sale
- * solo, desde el número del consultorio). `WA_COPY.sendReminder` / `dismissReply` («Mandar recordatorio» / «Marcar
- * como visto») quedan para alinear en ZB.
+ * Copy propio de la sección. Los dos botones («Enviar recordatorio por WhatsApp», «Descartar aviso») salen de
+ * `WA_COPY` desde ZF3: antes la sección tenía su copia y `WA_COPY` decía otra cosa.
  */
 export const WA_SECTION_COPY = {
   channelReady: "El paciente recibe avisos de sus turnos por WhatsApp.",
-  sendReminder: "Enviar recordatorio por WhatsApp",
   sending: "Enviando…",
-  dismiss: "Descartar aviso",
   sent: "Recordatorio enviado por WhatsApp",
   queued: "El recordatorio quedó en cola: sale en unos minutos.",
   failed: "No se pudo enviar el recordatorio. Mirá el detalle en el historial.",
@@ -213,7 +209,8 @@ export function WhatsAppSectionBody({
   const showSend = panel.canSendReminder && booking.status === "CONFIRMED";
   const reply = panel.reply;
   const lines = panel.history.map((m) => waHistoryLine(m, booking.scheduledFor));
-  const btn = { ...miniGhostBtn, display: "inline-flex", alignItems: "center", gap: 6 } as const;
+  // ZF3: 44 px de alto (target táctil; la Secretaría también usa la agenda en tablet).
+  const btn = { ...miniGhostBtn, display: "inline-flex", alignItems: "center", gap: 6, minHeight: 44 } as const;
 
   return (
     <section aria-label={WA_COPY.sectionTitle} data-wa-section style={{ ...sectionCard, display: "grid", gap: 10 }}>
@@ -246,7 +243,7 @@ export function WhatsAppSectionBody({
           {panel.canSendReminder && (
             <div>
               <button type="button" style={btn} disabled={pending} onClick={onDismiss}>
-                {WA_SECTION_COPY.dismiss}
+                {WA_COPY.dismissReply}
               </button>
             </div>
           )}
@@ -257,7 +254,7 @@ export function WhatsAppSectionBody({
         <div style={{ display: "grid", gap: 4 }}>
           <div>
             <button type="button" style={btn} disabled={pending || !!blocked || cooling} onClick={onSend}>
-              {pending ? WA_SECTION_COPY.sending : WA_SECTION_COPY.sendReminder}
+              {pending ? WA_SECTION_COPY.sending : WA_COPY.sendReminder}
             </button>
           </div>
           {cooling && <div style={muted}>{WA_COPY.reminderCooldown}</div>}

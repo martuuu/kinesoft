@@ -24,7 +24,7 @@ function sessionStore(): Storage | null {
   }
 }
 
-/** Solo `saved` (el consentimiento quedó anclado al celular tipeado). `invalid_phone`/`unavailable`: nada. */
+/** Solo `saved` (el consentimiento quedó anclado al celular tipeado). `invalid_phone`/`unavailable`/`not_saved`: nada. */
 export function rememberWaSaved(
   bookingId: string,
   outcome: TurneroWaConsentOutcome | undefined,

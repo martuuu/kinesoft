@@ -99,6 +99,9 @@ export function TvPairScreen({
   const error = state && !state.ok ? state.error : null;
   const paired = state?.ok === true;
   const reasonText = pairReasonMessage(reason);
+  // ZF3: con `unavailable` la cookie sigue vigente (consultorio suspendido o sin el módulo) y la pantalla vuelve sola:
+  // ofrecer «Vincular» invitaba a generar un código nuevo que no hace falta. Solo se muestra la pausa y el reintento.
+  const paused = reason === "unavailable";
 
   useEffect(() => {
     if (reason !== "unavailable") return;
@@ -127,72 +130,113 @@ export function TvPairScreen({
         textAlign: "center",
       }}
     >
-      <h1 style={{ fontSize: "clamp(40px, 4.4vw, 88px)", fontWeight: 700, margin: 0, lineHeight: 1.1 }}>
-        Vinculá esta pantalla
+      <h1
+        style={{
+          fontSize: "clamp(40px, 4.4vw, 88px)",
+          fontWeight: 700,
+          margin: 0,
+          lineHeight: 1.1,
+        }}
+      >
+        {paused ? "Pantalla en pausa" : "Vinculá esta pantalla"}
       </h1>
 
       {reasonText && (
-        <p role="status" style={{ fontSize: "clamp(20px, 1.8vw, 36px)", color: C.muted, margin: 0, maxWidth: "32em" }}>
+        <p
+          role="status"
+          style={{
+            fontSize: "clamp(20px, 1.8vw, 36px)",
+            color: C.muted,
+            margin: 0,
+            maxWidth: "32em",
+          }}
+        >
           {reasonText}
         </p>
       )}
 
-      <form
-        action={formAction}
-        style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "clamp(16px, 2.4vh, 36px)" }}
-      >
-        <label htmlFor={inputId} style={{ fontSize: "clamp(22px, 2vw, 40px)", color: C.muted }}>
-          Código de la pantalla
-        </label>
-        <input
-          id={inputId}
-          name="code"
-          value={value}
-          onChange={(e) => setValue(pairInputValue(e.target.value))}
-          // 8 caracteres + el guion de la máscara.
-          maxLength={PAIRING_CODE_LEN + 1}
-          autoFocus
-          autoComplete="off"
-          autoCapitalize="characters"
-          autoCorrect="off"
-          spellCheck={false}
-          inputMode="text"
-          placeholder="ABCD-EFGH"
-          required
-          aria-describedby={`${helpId} ${errorId}`}
-          aria-invalid={error ? true : undefined}
+      {!paused && (
+        <form
+          action={formAction}
           style={{
-            fontSize: "clamp(48px, 6vw, 120px)",
-            fontFamily: "var(--font-mono)",
-            letterSpacing: "0.12em",
-            textAlign: "center",
-            textTransform: "uppercase",
-            width: "9.5ch",
-            padding: "0.15em 0.4em",
-            borderRadius: 24,
-            border: `4px solid ${error ? C.error : C.border}`,
-            background: C.field,
-            color: C.fg,
-            outlineColor: C.focus,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "clamp(16px, 2.4vh, 36px)",
           }}
-        />
-        <p id={helpId} style={{ fontSize: "clamp(20px, 1.8vw, 36px)", color: C.muted, margin: 0 }}>
-          Generá el código en Sala de espera → Pantallas
-        </p>
-        <SubmitButton />
-        {/* Siempre montada: una región viva que aparece junto con su texto no la anuncian varios lectores. */}
-        <p
-          id={errorId}
-          role="alert"
-          aria-live="assertive"
-          style={{ fontSize: "clamp(22px, 2vw, 40px)", color: C.error, margin: 0, minHeight: "1.4em" }}
         >
-          {error}
-        </p>
-      </form>
+          <label htmlFor={inputId} style={{ fontSize: "clamp(22px, 2vw, 40px)", color: C.muted }}>
+            Código de la pantalla
+          </label>
+          <input
+            id={inputId}
+            name="code"
+            value={value}
+            onChange={(e) => setValue(pairInputValue(e.target.value))}
+            // 8 caracteres + el guion de la máscara.
+            maxLength={PAIRING_CODE_LEN + 1}
+            autoFocus
+            autoComplete="off"
+            autoCapitalize="characters"
+            autoCorrect="off"
+            spellCheck={false}
+            inputMode="text"
+            placeholder="ABCD-EFGH"
+            required
+            aria-describedby={`${helpId} ${errorId}`}
+            aria-invalid={error ? true : undefined}
+            style={{
+              fontSize: "clamp(48px, 6vw, 120px)",
+              fontFamily: "var(--font-mono)",
+              letterSpacing: "0.12em",
+              textAlign: "center",
+              textTransform: "uppercase",
+              width: "9.5ch",
+              padding: "0.15em 0.4em",
+              borderRadius: 24,
+              border: `4px solid ${error ? C.error : C.border}`,
+              background: C.field,
+              color: C.fg,
+              outlineColor: C.focus,
+            }}
+          />
+          <p
+            id={helpId}
+            style={{
+              fontSize: "clamp(20px, 1.8vw, 36px)",
+              color: C.muted,
+              margin: 0,
+            }}
+          >
+            Generá el código en Sala de espera → Pantallas
+          </p>
+          <SubmitButton />
+          {/* Siempre montada: una región viva que aparece junto con su texto no la anuncian varios lectores. */}
+          <p
+            id={errorId}
+            role="alert"
+            aria-live="assertive"
+            style={{
+              fontSize: "clamp(22px, 2vw, 40px)",
+              color: C.error,
+              margin: 0,
+              minHeight: "1.4em",
+            }}
+          >
+            {error}
+          </p>
+        </form>
+      )}
 
-      {paired && (
-        <p role="status" style={{ fontSize: "clamp(22px, 2vw, 40px)", color: C.accent, margin: 0 }}>
+      {paired && !paused && (
+        <p
+          role="status"
+          style={{
+            fontSize: "clamp(22px, 2vw, 40px)",
+            color: C.accent,
+            margin: 0,
+          }}
+        >
           Pantalla vinculada. Cargando…
         </p>
       )}

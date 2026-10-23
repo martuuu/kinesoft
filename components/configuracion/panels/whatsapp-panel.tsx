@@ -118,7 +118,8 @@ export const WA_U1_COPY = {
   templatesHint: "Meta revisa cada plantilla antes de que se pueda usar. Las aprobadas son las que salen.",
   rejectedReason: (r: string) => `Motivo de Meta: ${r}`,
   paymentTitle: "Medio de pago en Meta",
-  paymentOk: "Cargado. Si Meta avisa un problema con el cobro, lo vas a ver acá.",
+  // ZF3: no sabemos si el medio de pago está cargado (Meta solo avisa problemas): no se afirma «Cargado».
+  paymentOk: "Meta no avisó problemas con el cobro. Si avisa alguno, lo vas a ver acá.",
   paymentIssue: (date: string) =>
     `Meta avisó un problema con el medio de pago el ${date}. Hasta que lo resuelvas, los avisos pueden no salir.`,
   openManager: "Abrir WhatsApp Manager",
@@ -129,10 +130,10 @@ export const WA_U1_COPY = {
   reminderHint: "A las 18 h del día anterior, con los botones «Confirmo» y «No puedo ir».",
   autoReply: "Respuesta automática",
   autoReplyHint: "Si un paciente escribe, le contestamos con el contacto del consultorio (una vez por día).",
-  testTitle: "Mandar un mensaje de prueba",
+  testTitle: "Enviar un mensaje de prueba",
   testLabel: "Celular",
   testHint: "Te mandamos el mensaje de prueba de Meta a ese número.",
-  testSend: "Mandar prueba",
+  testSend: "Enviar prueba",
   testSent: (left: number) => `Mandamos el mensaje de prueba. ${testsLeftCopy(left)}`,
   disconnectTitle: "¿Desconectar el WhatsApp del consultorio?",
   disconnected: (n: number) =>

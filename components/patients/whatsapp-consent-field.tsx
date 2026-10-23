@@ -130,7 +130,7 @@ export function WhatsAppConsentField({
         <span>{label}</span>
       </label>
       <details style={{ fontSize: 12, color: "var(--navy-500)", paddingLeft: 24 }}>
-        <summary style={{ cursor: "pointer", fontWeight: 600, color: "var(--sky-700)" }}>{WA_CONSENT_UI_COPY.seeText}</summary>
+        <summary style={{ cursor: "pointer", fontWeight: 600, color: "var(--sky-700)", minHeight: 44, display: "flex", alignItems: "center" }}>{WA_CONSENT_UI_COPY.seeText}</summary>
         <p style={{ margin: "6px 0 0", lineHeight: 1.5 }}>{WA_CONSENT_TEXT}</p>
       </details>
     </div>
@@ -191,7 +191,8 @@ export function WhatsAppConsentRow({
                   background: "none",
                   border: 0,
                   padding: "4px 2px",
-                  minHeight: 32,
+                  // ZF3: 44 px de target (la fila se usa también desde tablet en recepción).
+                  minHeight: 44,
                   color: "var(--danger-fg)",
                   fontWeight: 600,
                   fontSize: 13,

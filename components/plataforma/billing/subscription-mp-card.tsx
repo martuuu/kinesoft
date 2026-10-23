@@ -109,7 +109,7 @@ export function MpLiveStatusPanel({ status }: { status: PlatformMpSubscriptionSt
                 : muted("—"),
           ],
           ["Próximo débito", status.nextDebitAt ? instantDayMonthAR(status.nextDebitAt) : muted("—")],
-          ["Último sync", status.syncedAt ? formatDateAR(status.syncedAt, "longDateTime") : muted("Nunca")],
+          ["Última sincronización", status.syncedAt ? formatDateAR(status.syncedAt, "longDateTime") : muted("Nunca")],
           ["Pagador", status.payerEmailMasked ?? muted("—")],
         ]}
       />
@@ -164,7 +164,7 @@ export function SubscriptionMpCardView({
         <span>{autoDebitText(d)}</span>
       </span>,
     ]);
-    if (d.syncedAt) items.push(["Último sync", formatDateAR(d.syncedAt, "longDateTime")]);
+    if (d.syncedAt) items.push(["Última sincronización", formatDateAR(d.syncedAt, "longDateTime")]);
   }
   if (ledger.billableFrom) items.push(["Factura desde", dayMonthAR(ledger.billableFrom)]);
 

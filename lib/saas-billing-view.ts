@@ -384,13 +384,18 @@ export const SUBSCRIPTION_COPY = {
 } as const;
 
 /** Formas de pago que se ofrecen, en el orden del selector. Vacío = no se muestra «Cómo pagás». */
-export function collectionChoices(o: Pick<BillingOverview, "mode" | "subscriptionStatus" | "autoDebit">): SaasCollectionMethod[] {
+export function collectionChoices(
+  o: Pick<BillingOverview, "mode" | "subscriptionStatus" | "autoDebit" | "canSubmitReceipt">
+): SaasCollectionMethod[] {
   // `manual`: la única forma es la transferencia y ya está explicada debajo del saldo; un selector de una opción no
   // tiene función. Dada de baja: primero se reactiva (las actions de MP igual lo permitirían, pero no cobran nada).
   if (o.mode !== "mp" || o.subscriptionStatus === "CANCELLED") return [];
   // MPS-D24: sin suscripción creada (`autoDebit` null) el débito está permitido; Plataforma lo puede bloquear.
   const allowed = o.autoDebit ? o.autoDebit.allowed : true;
-  return allowed ? ["AUTO_DEBIT", "MP_CHECKOUT", "TRANSFER"] : ["MP_CHECKOUT", "TRANSFER"];
+  const all: SaasCollectionMethod[] = allowed ? ["AUTO_DEBIT", "MP_CHECKOUT", "TRANSFER"] : ["MP_CHECKOUT", "TRANSFER"];
+  // ZF3 (revisor ZB, ALTO): sin `SAAS_BILLING_TRANSFER_INFO` el server no da alias/CBU ni deja «Informar pago»
+  // (`canSubmitReceipt` false): elegir «Transferencia» dejaba al consultorio sin forma de pagar.
+  return o.canSubmitReceipt ? all : all.filter((m) => m !== "TRANSFER");
 }
 
 export type AutoDebitBand = { kind: "pending" | "active" | "failed" | "paused"; text: string };

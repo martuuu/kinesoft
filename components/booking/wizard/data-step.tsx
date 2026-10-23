@@ -21,6 +21,8 @@ export { PaymentChoice, PaymentInterstitial } from "./payment-choice";
 type WizardClinic = PublicClinic & { vertical?: TenantVertical | null };
 
 /**
+ * BORRADOR (C-WA9): el texto legal lo revisa Martin antes de pasar WhatsApp a live (igual que `WA_CONSENT_TEXT`).
+ *
  * WA-U4 (§26.5, C-WA9): copia literal de `WA_CONSENT_TEXT` (`lib/whatsapp/copy.ts`), con paridad fijada por
  * `tests/unit/render/wa-u4-turnero.test.tsx`. No se importa: el módulo de copy trae todas las etiquetas de la UI de
  * WhatsApp y el turnero mide 114,3 de 115 kB (TV-I). Si Martin cambia el texto legal, cambia acá también (el test

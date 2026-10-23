@@ -192,7 +192,7 @@ describe("[WA-U2] drawer: cuerpo de la sección WhatsApp", () => {
   it("[WA-U2] canal listo: botón «Enviar recordatorio por WhatsApp» habilitado e historial vacío", () => {
     const html = body(panel());
     expect(html).toContain(WA_SECTION_COPY.channelReady);
-    expect(html).toContain(WA_SECTION_COPY.sendReminder);
+    expect(html).toContain(WA_COPY.sendReminder);
     expect(html).not.toMatch(/<button[^>]*disabled[^>]*>[^<]*Enviar recordatorio/);
     expect(html).toContain(WA_COPY.historyEmpty);
   });
@@ -213,8 +213,8 @@ describe("[WA-U2] drawer: cuerpo de la sección WhatsApp", () => {
   });
 
   it("[WA-U2] sin permiso para mandar (Facturación) o turno no confirmado: no hay botón", () => {
-    expect(body(panel({ canSendReminder: false }))).not.toContain(WA_SECTION_COPY.sendReminder);
-    expect(body(panel(), { booking: { status: "PENDING" } })).not.toContain(WA_SECTION_COPY.sendReminder);
+    expect(body(panel({ canSendReminder: false }))).not.toContain(WA_COPY.sendReminder);
+    expect(body(panel(), { booking: { status: "PENDING" } })).not.toContain(WA_COPY.sendReminder);
   });
 
   it("[WA-U2] historial: enviado, entregado, leído y falló con su etiqueta; salteado con el motivo", () => {
@@ -253,7 +253,7 @@ describe("[WA-U2] drawer: cuerpo de la sección WhatsApp", () => {
     );
     expect(html).toContain(WA_REPLY_BADGE.cancelRequested.text);
     expect(html).toContain("05/10 07:30");
-    expect(html).toContain(WA_SECTION_COPY.dismiss);
+    expect(html).toContain(WA_COPY.dismissReply);
     const ok = body(panel({ reply: { confirmedAt: iso("07:10"), cancelRequestedAt: null, replyFor: B.scheduledFor, stale: false } }));
     expect(ok).toContain(WA_REPLY_BADGE.confirmed.text);
   });
@@ -261,7 +261,7 @@ describe("[WA-U2] drawer: cuerpo de la sección WhatsApp", () => {
   it("[WA-U2] respuesta a otro horario: el aviso de `staleReply` y se puede descartar igual", () => {
     const html = body(panel({ reply: { confirmedAt: iso("07:10"), cancelRequestedAt: null, replyFor: iso("09:00"), stale: true } }));
     expect(html).toContain(WA_COPY.staleReply);
-    expect(html).toContain(WA_SECTION_COPY.dismiss);
+    expect(html).toContain(WA_COPY.dismissReply);
   });
 
   it("[WA-U2] sin permiso para operar: la respuesta se ve pero no hay «Descartar aviso»", () => {
@@ -272,7 +272,7 @@ describe("[WA-U2] drawer: cuerpo de la sección WhatsApp", () => {
       })
     );
     expect(html).toContain(WA_REPLY_BADGE.confirmed.text);
-    expect(html).not.toContain(WA_SECTION_COPY.dismiss);
+    expect(html).not.toContain(WA_COPY.dismissReply);
   });
 
   it("[WA-U2] error de la action: se muestra en un role=alert", () => {
