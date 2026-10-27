@@ -2,10 +2,17 @@ import { ImageResponse } from "next/og";
 import { BRAND_NAME } from "@/lib/brand";
 
 /**
- * [VX2-c1] Imagen para compartir la landing (Open Graph / Twitter). `next/og` no lee variables CSS: los colores van como
- * hex literales (los mismos tokens de globals.css: navy-900, sky-700/500, lime-300). Sin cifras ni claims: el titular
- * y la bajada son los del hero. Se genera estática en el build (no depende de la request).
+ * [VX2-c1 · PV BR-a] Imagen para compartir la landing (Open Graph / Twitter). `next/og` no lee variables CSS: los
+ * colores van como hex literales (los mismos tokens de globals.css: navy-900, sky-700/500/300, lime-300). Sin cifras ni
+ * claims: el titular y la bajada son los del hero. Logo «A · Sello C» (glifo al 80 % de la baldosa, radio 14/48, como
+ * `KineLogo`). Se genera estática en el build (no depende de la request).
+ *
+ * Límite conocido: sin una fuente cargada, `next/og` usa su sans por defecto en un solo peso, así que el 700/500 del
+ * wordmark se ve parejo; el contraste lo da el color de «Online».
  */
+const [BRAND_LEAD, ...BRAND_REST] = BRAND_NAME.split(" ");
+const BRAND_TAIL = BRAND_REST.join(" ");
+
 export const alt = `${BRAND_NAME}: tu consultorio, ordenado de punta a punta`;
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
@@ -31,27 +38,23 @@ export default function OpengraphImage() {
             style={{
               width: 72,
               height: 72,
-              borderRadius: 22,
+              borderRadius: 21,
               background: "linear-gradient(135deg, #1f4fbe, #5e92cc)",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
             }}
           >
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
-              <circle cx="7" cy="6" r="2.5" fill="#ffffff" />
-              <path d="M6 9.5C6 12 7.5 13 8 14.5L6 21" stroke="#ffffff" strokeWidth="2.2" strokeLinecap="round" />
-              <path
-                d="M9 11.5L13 12.5L16 10.5L19 16"
-                stroke="#ffffff"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <circle cx="17.5" cy="6.5" r="1.6" fill="#c8f564" />
+            <svg width="58" height="58" viewBox="0.6 0 48 48" fill="none">
+              <path d="M30.88 14.17 A12 12 0 1 0 30.88 33.83" stroke="#ffffff" strokeWidth="6.5" strokeLinecap="round" />
+              <circle cx="36" cy="24" r="4.4" fill="#c8f564" />
             </svg>
           </div>
-          <div style={{ fontSize: 40, fontWeight: 700, letterSpacing: "-0.02em" }}>{BRAND_NAME}</div>
+          {/* Wordmark como en KineLogo: primera palabra en 700 y el resto en 500 con sky-300 (sobre fondo oscuro). */}
+          <div style={{ display: "flex", fontSize: 43, letterSpacing: "-0.025em" }}>
+            <span style={{ fontWeight: 700 }}>{BRAND_LEAD}</span>
+            {BRAND_TAIL ? <span style={{ fontWeight: 500, color: "#b5cfec", marginLeft: 12 }}>{BRAND_TAIL}</span> : null}
+          </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
           <div style={{ display: "flex", fontSize: 76, fontWeight: 700, lineHeight: 1.05, letterSpacing: "-0.04em" }}>

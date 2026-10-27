@@ -1,17 +1,19 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { jetbrains, onest } from "@/lib/fonts";
-import { BRAND_NAME } from "@/lib/brand";
+import { BRAND_NAME, BRAND_TAGLINE } from "@/lib/brand";
 
 export const metadata: Metadata = {
   // EV1-C2: neutral para las dos verticales (Clínica general y Kinesiología): es la metadata de todo el sitio,
-  // incluidos el turnero y el portal de un consultorio que no es de kinesiología. La marca queda.
-  title: `${BRAND_NAME} — gestión para consultorios de salud`,
+  // incluidos el turnero y el portal de un consultorio que no es de kinesiología.
+  // PV BR-a: cada página pone solo su nombre («Agenda») y el template agrega la marca, así renombrar no es barrer cada
+  // `metadata.title`. Una página con `title: { absolute }` lo saltea a propósito.
+  title: { default: BRAND_NAME, template: `%s · ${BRAND_NAME}` },
   description:
-    "Agenda, turnos online, pacientes, historia clínica y cobros para consultorios de salud. Argentina.",
+    `${BRAND_TAGLINE}: agenda, turnos online, pacientes, historia clínica y cobros. Argentina.`,
   applicationName: BRAND_NAME,
   // MB-0b (C-MB5): iOS «Agregar a inicio» y Safari macOS «Agregar al Dock» abren standalone con este nombre (el ícono
-  // es app/apple-icon.png). `default` = iOS no pone contenido debajo de la barra de estado; con `black-translucent`
+  // lo genera app/apple-icon.tsx). `default` = iOS no pone contenido debajo de la barra de estado; con `black-translucent`
   // habría que correr todo el layout.
   appleWebApp: { capable: true, title: BRAND_NAME, statusBarStyle: "default" },
 };

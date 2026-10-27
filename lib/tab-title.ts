@@ -1,7 +1,7 @@
 /**
  * Contador en el título de la pestaña para los avisos de la sala (SV11b, §18.5).
  *
- * `(1) Llegó María G. · KineSoft`: con la pestaña en segundo plano es lo único
+ * `(1) Llegó María G. · ${BRAND_NAME}` (la marca la pone el template del root layout): con la pestaña en segundo plano es lo único
  * que se ve. Acumula (`(2) …` muestra el último aviso) y se limpia cuando la
  * pestaña vuelve a verse o toma foco. Con la pestaña al frente NO se toca: no
  * habría un `focus` que lo limpie y quedaría el contador colgado.

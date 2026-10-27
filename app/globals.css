@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 /* ─────────────────────────────────────────────────────────────────
-   KineSoft — design tokens (ported from design_source/.../tokens.css)
+   Design tokens de la app (ported from design_source/.../tokens.css)
    ───────────────────────────────────────────────────────────────── */
 :root {
   --sky-50: #f3f8fe;

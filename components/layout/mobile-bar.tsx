@@ -36,6 +36,7 @@ export function MobileBar({
   return (
     <header className={`k-glass ${styles.mobileBar}`} data-mobile-bar>
       <Link href="/dashboard" aria-label="Inicio" style={{ display: "inline-flex", alignItems: "center", minHeight: 44, paddingLeft: 4 }}>
+        {/* PV BR-a: con el wordmark nuevo (~155 px a 22) la barra suma ~275 px con búsqueda y avatar: entra a 320/360. */}
         <KineLogo size={22} />
       </Link>
       <span className={styles.mobileSpacer} />

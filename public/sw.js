@@ -1,4 +1,5 @@
-/* KineSoft SW (MB-0a). Solo instalación + página sin conexión. NO cachea navegaciones, RSC, /api ni actions:
+/* Service worker de la app (MB-0a). El nombre del cache (`VERSION`) NO cambia con la marca: renombrarlo dejaría
+ * cachés huérfanos en cada instalación. Solo instalación + página sin conexión. NO cachea navegaciones, RSC, /api ni actions:
  * en una PC compartida de recepción quedarían datos de pacientes en disco. Los estáticos de /_next/static ya son
  * inmutables y los cachea el navegador: el SW no los toca (cache-first acá = deploys viejos pegados). */
 const VERSION = "ks-sw-v2";

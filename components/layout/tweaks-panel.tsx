@@ -9,7 +9,7 @@ import type { ReceptionLayout } from "@/lib/preferences-constants";
 import { PALETTE_OPTIONS } from "./appearance-options";
 
 /**
- * Panel «Apariencia» (ex «KineSoft · Tweaks»; Martin lo mantiene, §20.18: «se arreglan las opciones que no
+ * Panel «Apariencia» (ex «Tweaks» con la marca; Martin lo mantiene, §20.18: «se arreglan las opciones que no
  * funcionan»). PL-F1c, inventario de lo que queda y quién lo lee (cada una con su test en
  * `tests/unit/render/pl-f1c-tweaks.test.tsx`):
  *   - Paleta → `data-palette` de `<html>` (efecto de `TweaksProvider`) y `UserPreferences.palette` en el server.

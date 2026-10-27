@@ -277,7 +277,9 @@ export function SidebarBody({
           justifyContent: collapsed ? "center" : "flex-start",
         }}
       >
-        <KineLogo size={collapsed ? 32 : 26} markOnly={collapsed} />
+        {/* PV BR-a: 24 y no 26 expandido. El wordmark «Consultorio Online» es ~2× el anterior y a 26 llenaba justo los
+            ~184 px útiles del sidebar de 232; a 24 queda margen (wordmark al 60 % del lado). Colapsado, solo la baldosa. */}
+        <KineLogo size={collapsed ? 32 : 24} markOnly={collapsed} />
       </div>
       {/* IAM-3b (decisión 6: un usuario, varios consultorios): debajo del logo, el consultorio activo. Con 2+ es el
           selector (también colapsado, con las iniciales); con 1, solo el nombre; sin provider, nada. Las opciones

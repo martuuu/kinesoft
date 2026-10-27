@@ -72,7 +72,9 @@ export function TopBar({
         gap: 28,
       }}
     >
-      <KineLogo size={26} />
+      {/* PV BR-a: solo la baldosa. El wordmark nuevo es ~2× el anterior y esta barra ya lleva hasta ~9 pastillas, el
+          buscador (260) y el selector de consultorio (220): con el texto, la nav se apretaba en anchos de notebook. */}
+      <KineLogo size={30} markOnly />
       <nav style={{ display: "flex", gap: 4 }}>
         {links.map((it) => {
           const on = active === it.href;

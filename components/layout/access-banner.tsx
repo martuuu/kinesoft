@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { BRAND_NAME } from "@/lib/brand";
 import type { AccessEnforcement, TenantAccess } from "@/lib/tenant-access";
 import { supportComposeHref } from "@/components/configuracion/panels/support-draft-logic";
 
@@ -86,12 +87,12 @@ export function accessBannerCopy(
             tone: "info",
             text:
               access.daysLeft === 1
-                ? "Hoy es el último día de tu prueba de KineSoft."
+                ? `Hoy es el último día de tu prueba de ${BRAND_NAME}.`
                 : `${left(access.daysLeft)} de prueba.`,
           };
     case "trial_grace":
       return access.daysLeft === null
-        ? withCta("warn", "Tu prueba terminó", "para elegir un plan y seguir usando KineSoft sin cortes", audience)
+        ? withCta("warn", "Tu prueba terminó", `para elegir un plan y seguir usando ${BRAND_NAME} sin cortes`, audience)
         : withCta(
             "warn",
             `Tu prueba terminó. ${left(access.daysLeft)} antes de que el consultorio pase a modo lectura`,

@@ -1,8 +1,8 @@
 import type { MetadataRoute } from "next";
-import { BRAND_NAME } from "@/lib/brand";
+import { BRAND_NAME, BRAND_SHORT_NAME } from "@/lib/brand";
 
 /**
- * [MB-0b · C-MB5] Manifest de la PWA. Next lo sirve en `/manifest.webmanifest` y agrega el `<link rel="manifest">`.
+ * [MB-0b · C-MB5 · PV BR-a] Manifest de la PWA. Next lo sirve en `/manifest.webmanifest` y agrega el `<link rel="manifest">`.
  *
  * - `start_url: "/dashboard"` (MB-D8): el gate de `app/(app)/layout.tsx` manda a login / elegir consultorio /
  *   onboarding como hoy.
@@ -17,7 +17,9 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     id: "/",
     name: BRAND_NAME,
-    short_name: BRAND_NAME,
+    // ≤12 caracteres: es lo que se ve debajo del ícono en la pantalla de inicio y el SO corta lo que sobra. Las PWA ya
+    // instaladas siguen con el nombre viejo hasta reinstalarse (el SO no relee name/short_name).
+    short_name: BRAND_SHORT_NAME,
     description: "Agenda, turnos, pacientes e historia clínica de tu consultorio.",
     lang: "es-AR",
     dir: "ltr",

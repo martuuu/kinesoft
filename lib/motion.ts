@@ -1,5 +1,5 @@
 /**
- * Shared motion vocabulary for KineSoft.
+ * Shared motion vocabulary for the app.
  *
  * One source of truth for easing + durations + variants so every animated
  * surface (modals, drawers, toasts, lists) feels like it
