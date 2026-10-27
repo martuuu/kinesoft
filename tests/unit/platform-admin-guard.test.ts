@@ -194,4 +194,28 @@ describe("[BO2] guard estático de Plataforma (requirePlatformAdmin + sin PHI)",
     expect(findRe.test("await tx.booking\n  .findFirst({})")).toBe(true);
     expect(findRe.test("await prismaService.patient.count({ where: { userId } })")).toBe(false);
   });
+
+  // PV (§27) · TK-S2: «Tomar» y las notas internas escriben por el canal service. Además del guard general, la bandeja
+  // fija que la barrera sea la PRIMERA sentencia (nada se lee ni se parsea antes) y que las escrituras pidan
+  // `inbox.reply`, no `inbox.read` (otro tope de rate limit y otro nivel de riesgo).
+  it("[TK-17] no superadmin rechazado: cada export de lib/platform-inbox.ts arranca con requirePlatformAdmin", () => {
+    const exportsOf = asyncExports(read("lib/platform-inbox.ts"));
+    const keyOf = new Map<string, string | null>();
+    for (const e of exportsOf) {
+      // Primera línea con 2 espacios de sangría = primera sentencia del cuerpo (prettier; la firma va en columna 0 y
+      // puede tener un `{}` por default, como `listInbox(raw: unknown = {})`).
+      const firstStmt = (e.body.split("\n").find((l) => /^ {2}\S/.test(l)) ?? "").trim();
+      const m = firstStmt.match(/^(?:const \w+ = )?await requirePlatformAdmin\("([\w.]+)"\);$/);
+      keyOf.set(e.name, m ? m[1] : null);
+    }
+    expect(Object.fromEntries(keyOf)).toEqual({
+      listInbox: "inbox.read",
+      countInboxUnread: "inbox.read",
+      getInboxThread: "inbox.read",
+      replyInboxThread: "inbox.reply",
+      setInboxThreadStatus: "inbox.reply",
+      takeInboxThread: "inbox.reply",
+      addInboxNote: "inbox.reply",
+    });
+  });
 });

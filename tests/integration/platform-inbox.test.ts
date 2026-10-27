@@ -64,6 +64,8 @@ describe.skipIf(!RUN)("[PL-2d] Bandeja de Plataforma", () => {
         db.$executeRaw`DELETE FROM "PlatformAuditEvent" WHERE "actorId" = ${S} OR "entityId" = ANY(${ids}::text[])`,
       ]);
       await db.emailLog.deleteMany({ where: { OR: [{ entityId: { in: ids } }, { tenantId: A?.tenantId }] } });
+      // M19: `SupportTicketNote` → hilo es FK RESTRICT; las notas primero (las de consultorio las borra A.cleanup).
+      await db.supportTicketNote.deleteMany({ where: { threadId: { in: ids } } });
       await db.supportMessage.deleteMany({ where: { threadId: { in: leads.map((l) => l.id) } } });
       await db.supportThread.deleteMany({ where: { id: { in: leads.map((l) => l.id) } } });
     }

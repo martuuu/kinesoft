@@ -120,7 +120,7 @@ describe("[PL-2d] /plataforma → Mensajes", () => {
   it("bandeja: filtros activos, no leídos, origen, contador de mensajes y «Ver más» con cursor", () => {
     const html = renderToStaticMarkup(
       <InboxList
-        query={{ status: "OPEN", kind: "all", cursor: null }}
+        query={{ stage: "open", source: "all", status: "OPEN", kind: "all", cursor: null }}
         page={{
           rows: [
             {
@@ -213,9 +213,9 @@ describe("[PL-2d] /plataforma → Mensajes", () => {
 
 describe("[PL-2d] lógica pura", () => {
   it("query de la bandeja: default abiertas; ida y vuelta por la URL", () => {
-    expect(parseInboxQuery({})).toEqual({ status: "OPEN", kind: "all", cursor: null });
-    expect(parseInboxQuery({ estado: "todas", origen: "leads", desde: "x" })).toEqual({ status: "all", kind: "LEAD", cursor: "x" });
-    expect(parseInboxQuery({ estado: "basura", origen: "basura" })).toEqual({ status: "OPEN", kind: "all", cursor: null });
+    expect(parseInboxQuery({})).toMatchObject({ status: "OPEN", kind: "all", cursor: null });
+    expect(parseInboxQuery({ estado: "todas", origen: "leads", desde: "x" })).toMatchObject({ status: "all", kind: "LEAD", cursor: "x" });
+    expect(parseInboxQuery({ estado: "basura", origen: "basura" })).toMatchObject({ status: "OPEN", kind: "all", cursor: null });
     for (const q of [
       { status: "OPEN", kind: "all" },
       { status: "CLOSED", kind: "TENANT" },
@@ -223,7 +223,7 @@ describe("[PL-2d] lógica pura", () => {
     ] as const) {
       const href = inboxHref(q, "c|1");
       const sp = Object.fromEntries(new URL(href, "http://x").searchParams);
-      expect(parseInboxQuery(sp)).toEqual({ ...q, cursor: "c|1" });
+      expect(parseInboxQuery(sp)).toMatchObject({ ...q, cursor: "c|1" });
     }
   });
 
