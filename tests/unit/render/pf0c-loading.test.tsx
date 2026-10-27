@@ -13,6 +13,8 @@ import PlanesLoading from "@/app/(app)/planes/loading";
 import SeguimientoLoading from "@/app/(app)/seguimiento/loading";
 import DiagnosticoLoading from "@/app/(app)/diagnostico/loading";
 import BibliotecaLoading from "@/app/(app)/biblioteca/loading";
+import TerapiaManualLoading from "@/app/(app)/terapia-manual/loading";
+import CuentaLoading from "@/app/cuenta/loading";
 import PlataformaLoading from "@/app/(platform)/plataforma/loading";
 import ConsultoriosLoading from "@/app/(platform)/plataforma/consultorios/loading";
 import UsuariosLoading from "@/app/(platform)/plataforma/usuarios/loading";
@@ -23,6 +25,8 @@ import WorkspaceTemplate from "@/app/(app)/template";
  * prefetch de la sidebar en rutas dinámicas). Tienen que renderizar sin datos ni contexto, anunciarse como «cargando»
  * y no arrastrar framer ni un client component (el esqueleto saldría recién al hidratar).
  * PL-F1c: /reportes ya no tiene esqueleto (la página redirige a /dashboard; ver `pl-f1c-dead-ui.test.tsx`).
+ * HD-8: /terapia-manual (misma pantalla que /biblioteca) y /cuenta/* no tenían esqueleto: el click quedaba congelado
+ * hasta que llegaba el RSC.
  */
 const ROOT = resolve(process.cwd());
 const src = (rel: string) => readFileSync(join(ROOT, rel), "utf8");
@@ -37,6 +41,8 @@ const CASES: Array<[string, ComponentType, string]> = [
   ["app/(app)/seguimiento/loading.tsx", SeguimientoLoading, "Cargando el seguimiento"],
   ["app/(app)/diagnostico/loading.tsx", DiagnosticoLoading, "Cargando el diagnóstico"],
   ["app/(app)/biblioteca/loading.tsx", BibliotecaLoading, "Cargando la biblioteca"],
+  ["app/(app)/terapia-manual/loading.tsx", TerapiaManualLoading, "Cargando Terapia Manual"],
+  ["app/cuenta/loading.tsx", CuentaLoading, "Cargando tu cuenta"],
   ["app/(platform)/plataforma/loading.tsx", PlataformaLoading, "Cargando Plataforma"],
   ["app/(platform)/plataforma/consultorios/loading.tsx", ConsultoriosLoading, "Cargando los consultorios"],
   ["app/(platform)/plataforma/usuarios/loading.tsx", UsuariosLoading, "Cargando los usuarios"],
