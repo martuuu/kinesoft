@@ -25,7 +25,7 @@ import type { CookieOptions } from "@supabase/ssr";
  *     sin el `1`, no la ausencia del campo.
  *   - Google/Facebook (OAuth) siempre persistente (pedido de Martin): no pasan por la casilla.
  *   - Límite conocido: Chrome/Edge con «Continuar donde lo dejaste» restauran las cookies de sesión al reabrir. Es
- *     del navegador; el cierre por inactividad para PCs compartidas sigue en el backlog C.
+ *     del navegador; el cierre por inactividad para PCs compartidas lo hace IN (§27, `lib/idle-logout.ts`).
  */
 
 export const SESSION_MODE_COOKIE = "kine_session_mode";

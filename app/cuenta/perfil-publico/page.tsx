@@ -1,4 +1,4 @@
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { AuthShell } from "@/components/auth/auth-shell";
 import { StatusHeading, StatusLink, StatusText } from "@/app/plataforma-mfa/shared";
 import { PublicProfileForm, PublicProfileWithdrawOnly } from "@/components/account/public-profile-form";
@@ -30,6 +30,10 @@ const SELF = "/cuenta/perfil-publico";
  * verificada, y solo los campos de estado.
  */
 export default async function PerfilPublicoPage() {
+  // HD-9 (§27): con el directorio apagado no hay directorio donde aparecer: 404 como `/profesionales` (C-DIR2), antes
+  // de leer la sesión. El menú ya no ofrece la entrada (`publicProfile` del `TenantChoiceProvider`); esto cubre el
+  // link guardado. Lo publicado antes de apagarlo no se ve en ningún lado mientras siga apagado.
+  if (directoryMode() === "off") notFound();
   const snapshot = await getAccessSnapshot();
   if (!snapshot?.profile) redirect(`/login?next=${encodeURIComponent(SELF)}`);
   if (snapshot.profile.disabledAt) redirect("/cuenta-desactivada");

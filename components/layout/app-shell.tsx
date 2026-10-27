@@ -21,6 +21,7 @@ import type { AlertPrefs, AlertViewer } from "@/lib/arrival-alert-state";
 import type { TenantOption } from "@/lib/tenant-choice";
 import { TenantChoiceProvider, type SwitchTenantAction } from "./tenant-switcher";
 import { SwRegister } from "@/components/pwa/sw-register";
+import { IdleLogout } from "./idle-logout";
 
 /**
  * Authenticated workspace shell. Picks chrome (sidebar vs. topbar) based
@@ -69,6 +70,14 @@ import { SwRegister } from "@/components/pwa/sw-register";
  * completo). `.shell` publica su alto en `--k-bottom-nav-h` para que `main`, toast, FAB y Apariencia no queden debajo,
  * y el alto mínimo es `100dvh` (respaldo `100vh`): en Safari iOS y en la PWA standalone `100vh` no es el alto real.
  * `SwRegister` (MB-0a, C-MB5) registra el service worker de instalación solo con sesión (MB-D5).
+ *
+ * IN (§27): `idle` (lo arma el layout con `idleShellState`) prende el cierre por inactividad (`IdleLogout`) para la
+ * sesión «de navegador». null/ausente = sesión persistente: no se monta nada. Este es el ÚNICO lugar que importa
+ * `idle-logout.tsx` (guard `[IN-6]`): `/tv`, el portal y `/plataforma` no están bajo `AppShell`.
+ *
+ * HD-9 (§27): `publicProfile` = el directorio público no está apagado (`directoryMode() !== "off"`, lo calcula el
+ * layout). Viaja por `TenantChoiceProvider` hasta el menú de cuenta y el «Más»: con el directorio apagado, «Mi perfil
+ * público» llevaba a una página de algo que no existe para nadie.
  */
 /** HF-1c: ¿arranca el motor de avisos de llegada? Canal realtime y módulo `salaEspera`, los dos. */
 export function arrivalAlertsLive(realtime: Pick<RealtimeBootstrap, "driver">, modules: readonly TenantModule[]): boolean {
@@ -99,7 +108,13 @@ export function AppShell({
   banner = null,
   userName,
   ownPublicBooking = null,
+  idle = null,
+  publicProfile = false,
 }: {
+  /** IN: cierre por inactividad (sesión «de navegador»). null = persistente, sin cierre. */
+  idle?: { minutes: number; sessionTag: string; serverNowMs: number } | null;
+  /** HD-9: directorio público prendido (preview/public): se ofrece «Mi perfil público». */
+  publicProfile?: boolean;
   /** PL-F1c: nombre visible del usuario (ya sin email, `displayUserName`). */
   userName?: string;
   /** PL-F: ficha propia y su `publicBookingEnabled` para el switch del menú de cuenta del topbar. null = no atiende. */
@@ -147,7 +162,12 @@ export function AppShell({
   }, [useSidebar]);
 
   return (
-    <TenantChoiceProvider options={tenantOptions} activeTenantId={activeTenantId} switchTenant={switchTenantAction}>
+    <TenantChoiceProvider
+      options={tenantOptions}
+      activeTenantId={activeTenantId}
+      switchTenant={switchTenantAction}
+      publicProfile={publicProfile}
+    >
       <TenantModulesProvider modules={modules} vertical={vertical}>
         <RealtimeProvider bootstrap={realtime}>
           <ArrivalAlerts viewer={alertViewer} initialPrefs={initialAlertPrefs} live={arrivalAlertsLive(realtime, modules)}>
@@ -191,6 +211,7 @@ export function AppShell({
               {!t.minimised && <TweaksPanel canReception={caps.includes("agenda.reception")} />}
               <CommandPaletteLauncher />
               <SwRegister />
+              {idle && <IdleLogout minutes={idle.minutes} sessionTag={idle.sessionTag} serverNowMs={idle.serverNowMs} />}
             </div>
           </ArrivalAlerts>
         </RealtimeProvider>

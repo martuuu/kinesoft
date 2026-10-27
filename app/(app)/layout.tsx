@@ -24,6 +24,8 @@ import { decideAppGate } from "@/lib/onboarding-logic";
 import { modulesFor } from "@/lib/tenant-modules";
 import { capabilitiesForActor } from "@/lib/authz";
 import { realtimeBootstrap } from "@/lib/realtime-bootstrap";
+import { idleLoginHref, readIdleShellState } from "@/lib/idle-logout-internal";
+import { directoryMode } from "@/lib/directory-mode";
 
 /**
  * MB-0b (C-MB5, MB-D13): `viewportFit: "cover"` SOLO en el workspace: la barra inferior (C-MB1) necesita que
@@ -60,6 +62,23 @@ export const viewport: Viewport = {
  * Ningún destino está dentro de `(app)`, así que el gate no se puede rebotar a sí mismo.
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
+  // El layout no recibe el pathname: lo lee de `x-pathname`, que el middleware
+  // pisa en cada request. safeNext lo deja pasar solo si es un path propio, así
+  // que un header forjado por el cliente no abre un open redirect.
+  const rawPath = headers().get("x-pathname");
+  const nextPath = rawPath ? safeNext(rawPath, "") || null : null;
+
+  // IN (§27): cierre por inactividad de la sesión «de navegador». PRIMERO, antes del actor, las preferencias y
+  // cualquier loader: con la cookie `kine_idle` de ESTA sesión vencida (gracia de 60 s) se REDIRIGE al login (que pinta
+  // `IdleExpired` y cierra la sesión). Es la PC compartida que Chrome restauró con la pestaña abierta.
+  // Redirect y no `return <IdleExpired/>` (como decía el brief): en Next 14 la página hija se renderiza aparte del
+  // layout (va en el `seedData` del payload RSC, `create-component-tree.js`), así que aunque el layout no pinte
+  // `children`, la página corre sus loaders y su salida viaja en el HTML. `redirect()` corta el render entero, igual
+  // que el gate de abajo. Solo aplica a la carga completa: en una navegación blanda Next no re-renderiza este layout,
+  // y ahí manda `IdleLogout` en el cliente.
+  const idle = await readIdleShellState();
+  if (idle.kind === "expired") redirect(idleLoginHref(nextPath));
+
   const actor = await tryGetActor();
   // PF-0b: las preferencias dependen solo del actor: se piden YA, en paralelo con el gate (antes iban en serie
   // después del gate y del tx de tenant+rol). Si el gate redirige, la lectura se descarta; el `catch` vacío solo
@@ -70,12 +89,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // membresías; las tres salen de esa foto sin queries. null = sin sesión (o actor demo).
   // BO1-A: `block` = usuario deshabilitado / consultorio suspendido o dado de baja.
   const [choice, snapshot, block] = await Promise.all([getTenantChoiceState(), getAccessSnapshot(), getSessionBlock()]);
-
-  // El layout no recibe el pathname: lo lee de `x-pathname`, que el middleware
-  // pisa en cada request. safeNext lo deja pasar solo si es un path propio, así
-  // que un header forjado por el cliente no abre un open redirect.
-  const rawPath = headers().get("x-pathname");
-  const nextPath = rawPath ? safeNext(rawPath, "") || null : null;
 
   // PL-1e: misma foto; con la 2FA pendiente no hay Actor (`resolveActor` corta antes), así que cae en la rama `!actor`.
   const twoFactorRequired = snapshot?.twoFactor.state === "required";
@@ -231,6 +244,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           banner={
             actor.support ? <SupportBanner tenantName={actor.tenantName} endSupportAction={endSupport} /> : null
           }
+          // IN (§27): sesión «de navegador» → `IdleLogout` con minutos, tag de la sesión y hora del server.
+          idle={idle.kind === "on" ? idle.idle : null}
+          // HD-9 (§27): con el directorio apagado, «Mi perfil público» no se ofrece (la página da 404). 0 sentencias.
+          publicProfile={directoryMode() !== "off"}
         >
           {/* BO1-A: prueba por vencer, gracia o solo lectura (modo REAL; visible con `banner`/`enforce`). BO3-F: en
               soporte habla en tercera persona del consultorio (el superadmin no es el titular) y suma suspendido/baja,

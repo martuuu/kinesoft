@@ -8,6 +8,8 @@ import { endSupportSession } from "@/lib/support-session-internal";
 import { logger } from "@/lib/logger";
 import { cookies } from "next/headers";
 import { sessionModeCookie } from "@/lib/supabase/session-mode";
+import { SUPABASE_COOKIE_OPTIONS } from "@/lib/supabase/cookie-options";
+import { IDLE_COOKIE } from "@/lib/idle-logout";
 
 export const runtime = "nodejs";
 
@@ -33,7 +35,33 @@ export async function POST(req: Request) {
     logger.warn("support.end_on_logout_failed", { error: err instanceof Error ? err.name : "unknown" });
   }
   const supabase = getSupabaseServerClient();
-  await supabase.auth.signOut();
+  // HD-2 (§27): con GoTrue caído (`/auth/v1/logout` 5xx, red cortada) supabase-js devuelve `{ error }` y NO borra la
+  // sesión local (`_signOut` solo sigue de largo con 401/403/404): la persona tocaba «Cerrar sesión», llegaba al login
+  // y seguía logueada en esa PC (el refresh token seguía en la cookie). El `.catch` cubre la versión que tira. En ese
+  // caso se borran a mano TODAS las `sb-*` (los chunks `.0`/`.1` del token y el verificador de PKCE) con las mismas
+  // opciones con que se escriben (`cookie-options.ts`: si path o flags no coinciden, el navegador no las pisa). La
+  // sesión puede seguir viva en GoTrue hasta que venza el refresh token, pero ya no queda en este navegador.
+  const { error } = await supabase.auth.signOut().catch((e: unknown) => ({ error: e }));
+  if (error) {
+    const e = error as { status?: unknown; name?: unknown };
+    logger.warn("auth.sign_out_failed", {
+      status: typeof e.status === "number" ? e.status : null,
+      name: typeof e.name === "string" ? e.name : "unknown",
+    });
+    const { path, httpOnly, secure, sameSite } = SUPABASE_COOKIE_OPTIONS;
+    for (const c of cookies().getAll()) {
+      if (c.name.startsWith("sb-")) cookies().set(c.name, "", { path, httpOnly, secure, sameSite, maxAge: 0 });
+    }
+  }
+  // IN (§27): la marca de actividad del cierre por inactividad es de esta sesión. Mismo path y SameSite con que la
+  // escribe el cliente (`components/layout/idle-logout.tsx`); no httpOnly porque la escribe JS (el borrado igual
+  // funciona: lo que tiene que coincidir es nombre + path + dominio).
+  cookies().set(IDLE_COOKIE, "", {
+    path: "/",
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: 0,
+  });
   // IAM-3a: el consultorio elegido es de esta sesión; el próximo login (quizá otra cuenta) arranca sin él.
   clearActiveTenantCookie();
   // PL-2a: las pruebas de 2FA (`kine_2fa`, `kine_stepup`) ya no validarían (van ligadas al `session_id` que se

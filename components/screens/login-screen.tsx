@@ -4,10 +4,16 @@ import { SocialButtons } from "@/components/auth/social-buttons";
 import { AuthSubmit } from "@/components/auth/auth-submit";
 import { Field } from "@/components/ui/field";
 import { PasswordInput } from "@/components/ui/password-input";
-import { IconAlert } from "@/components/ui/icons";
+import { IconAlert, IconClock } from "@/components/ui/icons";
+import { IDLE_DEFAULT_MINUTES } from "@/lib/idle-logout";
 import { BRAND_NAME } from "@/lib/brand";
 import type { OAuthProvider } from "@/lib/oauth-start";
-import { authMethodsSubtitle, loginErrorFeedback, type ConfirmLinkKind } from "@/components/screens/auth-feedback";
+import {
+  authMethodsSubtitle,
+  loginErrorFeedback,
+  loginNotice,
+  type ConfirmLinkKind,
+} from "@/components/screens/auth-feedback";
 import { ResendVerification } from "@/components/screens/resend-verification";
 import st from "./auth-screens.module.css";
 
@@ -26,6 +32,9 @@ const FIELD_ERROR_CODES = new Set(["invalid_credentials", "missing_credentials"]
  * - Sin «Matrícula» (no existe ese ingreso). «Mantenerme conectado» volvió en la tanda B (§22.13) con efecto real:
  *   destildado, la sesión muere al cerrar el navegador (`lib/supabase/session-mode.ts`).
  * - `providers` lo decide la page con `visibleOAuthProviders()` (D-VX16); la bajada se arma con los mismos.
+ * - IN (§27): `reason` (`?reason=idle`, después del cierre por inactividad) pinta un aviso informativo `role="status"`
+ *   (mapa cerrado `loginNotice`); con un error en la misma URL manda el error. El hint de «Mantenerme conectado» dice
+ *   ahora qué pasa al destildarlo (cierre al cerrar el navegador y a los 15 min sin uso).
  */
 export function LoginScreen({
   error,
@@ -33,7 +42,10 @@ export function LoginScreen({
   email,
   linkKind,
   providers = [],
+  reason,
 }: {
+  /** IN: motivo informativo (`?reason=`), p. ej. `idle`. */
+  reason?: string;
   error?: string;
   next?: string;
   email?: string;
@@ -41,6 +53,7 @@ export function LoginScreen({
   providers?: readonly OAuthProvider[];
 } = {}) {
   const feedback = loginErrorFeedback(error, linkKind);
+  const notice = feedback ? null : loginNotice(reason);
   const fieldsInvalid = Boolean(error && FIELD_ERROR_CODES.has(error));
   // `next` ya viene validado por la page (safeNext); acá solo se propaga.
   const q = next ? `?next=${encodeURIComponent(next)}` : "";
@@ -70,6 +83,20 @@ export function LoginScreen({
         <form action={`/api/auth/sign-in${q}`} method="post" className={st.fields}>
           {/* El aviso va DENTRO del form: «Reenviar email de confirmación» lee el email que la persona
               tipeó en este form (IAM-2d), sin pedírselo de nuevo. */}
+          {notice && (
+            // Informativo (no es un error del form): tonos neutros sobre la base de `.k-alert`.
+            <div
+              className="k-alert"
+              role="status"
+              data-testid="login-notice"
+              style={{ background: "var(--sky-50)", color: "var(--navy-700)", borderColor: "var(--sky-100)" }}
+            >
+              <IconClock size={18} />
+              <div className={st.alertBody}>
+                <span>{notice}</span>
+              </div>
+            </div>
+          )}
           {feedback && (
             <div className="k-alert" role="alert" id={LOGIN_ALERT_ID}>
               <IconAlert size={18} />
@@ -132,7 +159,8 @@ export function LoginScreen({
               Mantenerme conectado
             </label>
             <span id="login-remember-help" className={st.small} style={{ color: "var(--navy-500)", paddingLeft: 26 }}>
-              Destildalo en una computadora compartida.
+              Destildalo en una compu compartida: la sesión se cierra al cerrar el navegador o después de{" "}
+              {IDLE_DEFAULT_MINUTES} minutos sin uso.
             </span>
           </div>
 

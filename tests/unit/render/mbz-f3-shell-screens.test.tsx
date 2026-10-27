@@ -99,7 +99,8 @@ describe("[MB-Z-F3 · B2] «Mi perfil público» en «Más» antes del pie de cu
     renderToStaticMarkup(
       <TenantModulesProvider modules={KINE}>
         <ConfirmProvider>
-        <TenantChoiceProvider options={[]} activeTenantId="a" switchTenant={null}>
+        {/* HD-9: directorio prendido (sin `publicProfile` la entrada no se ofrece; ver hd9-public-profile). */}
+        <TenantChoiceProvider options={[]} activeTenantId="a" switchTenant={null} publicProfile>
           <MobileNavDrawer
             open
             onClose={() => {}}

@@ -76,6 +76,20 @@ export function loginErrorFeedback(
   return { message, ctas: [] };
 }
 
+/**
+ * IN (§27): aviso informativo del login según `?reason=` (no es un error: va con `role="status"`, no `alert`). Mapa
+ * cerrado como `LOGIN_ERRORS`: un `reason` desconocido no pinta nada (nunca el valor de la query).
+ * `idle` = el cierre por inactividad (`lib/idle-logout.ts` → `idleSignOutAction`).
+ */
+const LOGIN_NOTICES: Record<string, string> = {
+  idle: "Cerramos tu sesión por inactividad. Ingresá de nuevo para seguir.",
+};
+
+export function loginNotice(reason: string | null | undefined): string | null {
+  if (typeof reason !== "string" || !Object.prototype.hasOwnProperty.call(LOGIN_NOTICES, reason)) return null;
+  return LOGIN_NOTICES[reason];
+}
+
 /** Espera entre reenvíos de un mail (verificación o link de contraseña): evita el doble clic y el spam. */
 export const RESEND_COOLDOWN_S = 60;
 

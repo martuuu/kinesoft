@@ -6,7 +6,7 @@
  * pestaña puede quedar abierta horas en la recepción). A los 15 min sin uso se cierra la sesión.
  *
  * Cookie `kine_idle = "<lastSec>.<minutes>.<tag>"`: la escribe el cliente (no httpOnly) en hora del SERVER, la leen las
- * otras pestañas (sincronización) y el layout `(app)` en el server (si venció, no se renderiza `AppShell` ni datos).
+ * otras pestañas (sincronización) y el layout `(app)` en el server (si venció, redirige a `/login?reason=idle`, que cierra la sesión).
  * `tag` lo calcula el server a partir del `sessionId` (`lib/idle-logout-internal.ts`): una cookie vieja de OTRA sesión
  * (otro login en el mismo navegador) no puede cerrar la actual.
  *

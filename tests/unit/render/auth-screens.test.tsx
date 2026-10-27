@@ -205,7 +205,10 @@ describe("[VX2-a] Login: botones sociales", () => {
     expect(form).toContain('aria-describedby="login-remember-help"');
     expect(form).toMatch(/<label for="login-remember"[^>]*>.*Mantenerme conectado<\/label>/);
     expect(form).toContain('id="login-remember-help"');
-    expect(form).toContain("Destildalo en una computadora compartida.");
+    // IN (§27): el hint dice qué pasa al destildarlo (cierre al cerrar el navegador y por inactividad).
+    expect(form).toContain(
+      "Destildalo en una compu compartida: la sesión se cierra al cerrar el navegador o después de 15 minutos sin uso."
+    );
   });
   it("error OAuth traducido en el aviso (nunca el texto del proveedor)", () => {
     for (const [code, text] of [

@@ -218,7 +218,8 @@ describe("[DIR-3d] entrada «Mi perfil público»", () => {
     const menu = (own: { practitionerId: string; enabled: boolean } | null) =>
       renderToStaticMarkup(
         <TenantModulesProvider modules={Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: true, moduleGrants: [], moduleRevokes: [] }))}>
-          <TenantChoiceProvider options={[]} activeTenantId="a" switchTenant={null}>
+          {/* HD-9: directorio prendido (con `publicProfile` false no se ofrece; ver hd9-public-profile). */}
+          <TenantChoiceProvider options={[]} activeTenantId="a" switchTenant={null} publicProfile>
             <TopbarAccountMenu name="Ana Pérez" defaultOpen ownPublicBooking={own} />
           </TenantChoiceProvider>
         </TenantModulesProvider>

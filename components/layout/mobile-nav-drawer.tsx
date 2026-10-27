@@ -35,8 +35,9 @@ export function MobileNavDrawer({
   caps: readonly Capability[];
   onOpenAppearance?: () => void;
 }) {
-  const { options } = useTenantChoice();
-  const showPublicProfile = showsPublicProfileEntry(caps.includes("clinical.read"), options);
+  const { options, publicProfile } = useTenantChoice();
+  // HD-9: con el directorio apagado no se ofrece (la página da 404).
+  const showPublicProfile = publicProfile && showsPublicProfileEntry(caps.includes("clinical.read"), options);
   return (
     <Drawer open={open} onClose={onClose} title="Menú" width={300}>
       <div className={styles.drawerNav} style={{ display: "flex", flexDirection: "column", gap: 4, paddingTop: 36 }}>

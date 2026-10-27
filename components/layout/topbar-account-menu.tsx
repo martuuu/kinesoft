@@ -76,8 +76,9 @@ export function TopbarAccountMenu({
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const { canSwitch, options } = useTenantChoice();
-  const showPublicProfile = showsPublicProfileEntry(ownPublicBooking !== null, options);
+  const { canSwitch, options, publicProfile } = useTenantChoice();
+  // HD-9: con el directorio apagado (`publicProfile` false) no hay perfil que editar (la página da 404).
+  const showPublicProfile = publicProfile && showsPublicProfileEntry(ownPublicBooking !== null, options);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {

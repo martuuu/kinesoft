@@ -48,26 +48,44 @@ const TenantSwitcherPanel = dynamic(() => loadPanel().then((m) => m.TenantSwitch
  */
 export type SwitchTenantAction = (tenantId: string) => Promise<ActionResult>;
 
-type TenantChoiceValue = { options: readonly TenantOption[]; active: TenantOption | null; switchTenant: SwitchTenantAction | null };
+/**
+ * HD-9 (§27): `publicProfile` = el directorio público está prendido (`directoryMode() !== "off"`, lo calcula el layout
+ * `(app)`). Viaja en este contexto (y no como prop) porque lo leen el menú de cuenta del topbar y el «Más» móvil, que
+ * ya leen las opciones de acá. Default false: un render sin provider (o un layout viejo) no ofrece la entrada.
+ */
+type TenantChoiceValue = {
+  options: readonly TenantOption[];
+  active: TenantOption | null;
+  switchTenant: SwitchTenantAction | null;
+  publicProfile: boolean;
+};
 
-const TenantChoiceContext = createContext<TenantChoiceValue>({ options: [], active: null, switchTenant: null });
+const TenantChoiceContext = createContext<TenantChoiceValue>({
+  options: [],
+  active: null,
+  switchTenant: null,
+  publicProfile: false,
+});
 
 export function TenantChoiceProvider({
   options,
   activeTenantId,
   switchTenant,
+  publicProfile = false,
   children,
 }: {
   options: readonly TenantOption[];
   activeTenantId: string | null;
   /** `switchTenant` de `lib/tenant-switch.ts`. Sin action no hay selector (solo el nombre). */
   switchTenant: SwitchTenantAction | null;
+  /** HD-9: directorio público prendido (preview/public). */
+  publicProfile?: boolean;
   children: ReactNode;
 }) {
   // Clave estable: el layout re-renderiza en cada navegación y el array llega nuevo.
-  const key = JSON.stringify([options, activeTenantId]);
+  const key = JSON.stringify([options, activeTenantId, publicProfile]);
   const value = useMemo<TenantChoiceValue>(
-    () => ({ options, active: options.find((o) => o.tenantId === activeTenantId) ?? null, switchTenant }),
+    () => ({ options, active: options.find((o) => o.tenantId === activeTenantId) ?? null, switchTenant, publicProfile }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [key, switchTenant]
   );

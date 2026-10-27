@@ -30,6 +30,7 @@ import {
   mpReturnNotice,
   toggleOwnDelegation,
 } from "@/components/configuracion/panels/my-mp-panel";
+import { TenantChoiceProvider } from "@/components/layout/tenant-switcher";
 import { TopbarAccountMenu, MY_MP_HREF } from "@/components/layout/topbar-account-menu";
 import { ProfileMenu } from "@/components/global/profile-menu";
 import { TenantModulesProvider } from "@/components/layout/tenant-modules-context";
@@ -208,7 +209,12 @@ describe("[TP-3b] ítem «Mi Mercado Pago» del menú de cuenta (solo con profes
 
   it("[TP-3z] con MP_CONNECT_MODE=off (el layout y el tablero mandan la ficha sin `myMp`) no aparece en ningún menú", () => {
     const off = { practitionerId: "pr-1", enabled: true, myMp: false };
-    const top = inTenant(<TopbarAccountMenu name="Ana Pérez" ownPublicBooking={off} defaultOpen />);
+    // HD-9: «Mi perfil público» además pide el directorio prendido (`publicProfile` del TenantChoiceProvider).
+    const top = inTenant(
+      <TenantChoiceProvider options={[]} activeTenantId={null} switchTenant={null} publicProfile>
+        <TopbarAccountMenu name="Ana Pérez" ownPublicBooking={off} defaultOpen />
+      </TenantChoiceProvider>
+    );
     expect(top).not.toContain("tab=mercado-pago");
     expect(top).toContain("Mi perfil público"); // el resto del menú sigue
     const prof = inTenant(<ProfileMenu name="Ana Pérez" preferences={DEFAULT_PREFERENCES} ownPublicBooking={off} defaultOpen />);
