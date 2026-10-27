@@ -126,13 +126,13 @@ describe("[BO5-C] allowlist de columnas", () => {
 
 describe("[BO5-C] archivo", () => {
   it("nombre con la fecha AR (23:30 AR del 13 = 02:30 UTC del 14 → 13)", () => {
-    expect(exportFilename("mi-consultorio", new Date("2026-10-14T02:30:00Z"))).toBe("kinesoft-mi-consultorio-2026-10-13.json");
-    expect(exportFilename("mi-consultorio", new Date("2026-10-14T03:00:00Z"))).toBe("kinesoft-mi-consultorio-2026-10-14.json");
+    expect(exportFilename("mi-consultorio", new Date("2026-10-14T02:30:00Z"))).toBe("consultorio-online-mi-consultorio-2026-10-13.json");
+    expect(exportFilename("mi-consultorio", new Date("2026-10-14T03:00:00Z"))).toBe("consultorio-online-mi-consultorio-2026-10-14.json");
   });
 
   it("el slug se limpia (va a un header Content-Disposition)", () => {
-    expect(exportFilename('a"b\r\nc/../d', new Date("2026-10-14T15:00:00Z"))).toBe("kinesoft-abcd-2026-10-14.json");
-    expect(exportFilename("", new Date("2026-10-14T15:00:00Z"))).toBe("kinesoft-consultorio-2026-10-14.json");
+    expect(exportFilename('a"b\r\nc/../d', new Date("2026-10-14T15:00:00Z"))).toBe("consultorio-online-abcd-2026-10-14.json");
+    expect(exportFilename("", new Date("2026-10-14T15:00:00Z"))).toBe("consultorio-online-consultorio-2026-10-14.json");
   });
 
   it("los pedazos arman un JSON válido con manifest al final; las fechas salen ISO UTC", () => {

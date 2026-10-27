@@ -38,6 +38,7 @@ import { ToastProvider } from "@/components/ui/toast";
 import { DEFAULT_PREFERENCES } from "@/lib/preferences-constants";
 import { modulesFor } from "@/lib/tenant-modules";
 import { safeNext } from "@/lib/safe-next";
+import { BRAND_NAME } from "@/lib/brand";
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
@@ -95,7 +96,7 @@ describe("[PL-Z M8] «Activarla» vuelve a la pantalla de origen", () => {
 });
 
 describe("[PL-Z B7] actividad de seguridad", () => {
-  it("«El equipo de KineSoft restableció tu verificación» (no «reseteó»)", () => {
+  it(`«El equipo de ${BRAND_NAME} restableció tu verificación» (no «reseteó»)`, () => {
     const html = renderToStaticMarkup(
       <ToastProvider>
         <ConfirmProvider>
@@ -112,7 +113,7 @@ describe("[PL-Z B7] actividad de seguridad", () => {
         </ConfirmProvider>
       </ToastProvider>
     );
-    expect(text(html)).toContain("El equipo de KineSoft restableció tu verificación");
+    expect(text(html)).toContain(`El equipo de ${BRAND_NAME} restableció tu verificación`);
     expect(html).not.toContain("reseteó");
     expect(html).toContain('href="/configuracion?tab=plan"');
   });

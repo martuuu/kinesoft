@@ -10,7 +10,7 @@ import { TERMS_PATH } from "@/lib/legal";
 export const dynamic = "force-static";
 
 export const metadata: Metadata = {
-  title: `Términos y condiciones · ${BRAND_NAME}`,
+  title: "Términos y condiciones",
   description: `Las reglas para usar ${BRAND_NAME}: cuentas, planes y pagos, datos de pacientes, cobros online y soporte.`,
   alternates: { canonical: TERMS_PATH },
 };

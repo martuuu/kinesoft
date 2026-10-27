@@ -2,10 +2,9 @@ import { PageHeader } from "@/components/ui/page-header";
 import { listInbox } from "@/lib/platform-inbox";
 import { InboxList } from "@/components/plataforma/inbox/inbox-list";
 import { parseInboxQuery } from "@/components/plataforma/inbox/inbox-logic";
-import { BRAND_NAME } from "@/lib/brand";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: `Tickets · Plataforma · ${BRAND_NAME}` };
+export const metadata = { title: "Tickets · Plataforma" };
 
 type SearchParams = Record<string, string | string[] | undefined>;
 

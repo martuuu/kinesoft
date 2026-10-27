@@ -29,6 +29,7 @@ import { CHIME, createChime, type ChimeAudioContext } from "@/lib/arrival-chime"
 import { createTabTitle } from "@/lib/tab-title";
 import type { RealtimeAgendaMessage } from "@/lib/realtime-events";
 import { shortPatientName as salaShortPatientName } from "@/lib/sala-board-state";
+import { BRAND_NAME } from "@/lib/brand";
 
 // 10:30 AR = 13:30 UTC. Los tests corren en TZ=UTC y TZ=AR (test:tz-ar).
 const AT_1030 = "2026-10-14T13:30:00.000Z";
@@ -217,16 +218,16 @@ describe("[SV11b] formato", () => {
 
 describe("[SV11b] título de pestaña", () => {
   it("titleWithBadge y stripTitleBadge", () => {
-    expect(titleWithBadge("Agenda · KineSoft", 0, "Llegó María G.")).toBe("Agenda · KineSoft");
-    expect(titleWithBadge("Agenda · KineSoft", 1, "Llegó María G.")).toBe("(1) Llegó María G. · KineSoft");
-    expect(titleWithBadge("Agenda · KineSoft", 2)).toBe("(2) Agenda · KineSoft");
-    expect(stripTitleBadge("(3) Agenda · KineSoft")).toBe("Agenda · KineSoft");
+    expect(titleWithBadge(`Agenda · ${BRAND_NAME}`, 0, "Llegó María G.")).toBe(`Agenda · ${BRAND_NAME}`);
+    expect(titleWithBadge(`Agenda · ${BRAND_NAME}`, 1, "Llegó María G.")).toBe(`(1) Llegó María G. · ${BRAND_NAME}`);
+    expect(titleWithBadge(`Agenda · ${BRAND_NAME}`, 2)).toBe(`(2) Agenda · ${BRAND_NAME}`);
+    expect(stripTitleBadge(`(3) Agenda · ${BRAND_NAME}`)).toBe(`Agenda · ${BRAND_NAME}`);
   });
 
   function fakeDoc(hidden: boolean) {
     const listeners = new Map<string, Array<() => void>>();
     const doc = {
-      title: "Agenda · KineSoft",
+      title: `Agenda · ${BRAND_NAME}`,
       hidden,
       visibilityState: hidden ? "hidden" : "visible",
       hasFocus: () => !doc.hidden,
@@ -244,11 +245,11 @@ describe("[SV11b] título de pestaña", () => {
     const t = createTabTitle({ doc, win: win.doc });
     t.announce("Llegó María G.");
     t.announce("Llegó Juan P.");
-    expect(doc.title).toBe("(2) Llegó Juan P. · KineSoft");
+    expect(doc.title).toBe(`(2) Llegó Juan P. · ${BRAND_NAME}`);
     doc.hidden = false;
     doc.visibilityState = "visible";
     fire("visibilitychange");
-    expect(doc.title).toBe("Agenda · KineSoft");
+    expect(doc.title).toBe(`Agenda · ${BRAND_NAME}`);
     expect(t.count()).toBe(0);
     t.dispose();
   });
@@ -257,7 +258,7 @@ describe("[SV11b] título de pestaña", () => {
     const { doc } = fakeDoc(false);
     const t = createTabTitle({ doc, win: fakeDoc(false).doc });
     t.announce("Llegó María G.");
-    expect(doc.title).toBe("Agenda · KineSoft");
+    expect(doc.title).toBe(`Agenda · ${BRAND_NAME}`);
     t.dispose();
   });
 
@@ -276,11 +277,11 @@ describe("[SV11b] título de pestaña", () => {
       },
     });
     t.announce("Llegó María G.");
-    doc.title = "Sala de espera · KineSoft"; // navegación de Next
+    doc.title = `Sala de espera · ${BRAND_NAME}`; // navegación de Next
     observerCb!();
-    expect(doc.title).toBe("(1) Llegó María G. · KineSoft");
+    expect(doc.title).toBe(`(1) Llegó María G. · ${BRAND_NAME}`);
     win.fire("focus");
-    expect(doc.title).toBe("Sala de espera · KineSoft");
+    expect(doc.title).toBe(`Sala de espera · ${BRAND_NAME}`);
     t.dispose();
     expect(observerCb).toBeNull();
     void fire;

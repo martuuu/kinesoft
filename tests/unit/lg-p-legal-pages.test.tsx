@@ -170,7 +170,10 @@ describe("[LG-3] /terminos y /privacidad", () => {
       [privacidadMod, PRIVACY_PATH],
     ] as const) {
       expect(mod.dynamic).toBe("force-static");
-      expect(String(mod.metadata.title)).toContain(BRAND_NAME);
+      // [BR-6] Solo el nombre de la página: la marca la agrega el template del root (`%s · ${BRAND_NAME}`); repetirla acá
+      // daba «Términos y condiciones · <marca> · <marca>».
+      expect(String(mod.metadata.title)).toBeTruthy();
+      expect(String(mod.metadata.title)).not.toContain(BRAND_NAME);
       expect(mod.metadata.description).toBeTruthy();
       expect(mod.metadata.robots).toBeUndefined();
       expect(mod.metadata.alternates?.canonical).toBe(path);

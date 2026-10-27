@@ -21,7 +21,6 @@ import {
   sessionTicketSub,
 } from "@/lib/tickets-types";
 import { LEAD_PHONE_MAX, SUPPORT_BODY_MAX } from "@/lib/support-threads-types";
-import { BRAND_NAME } from "@/lib/brand";
 import { logger } from "@/lib/logger";
 
 /**
@@ -63,7 +62,7 @@ const first = (v: string | string[] | undefined): string | undefined => (Array.i
 export function generateMetadata({ searchParams }: { searchParams: SearchParams }): Metadata {
   const motivo = first(searchParams.motivo);
   const source = ticketSourceFromMotivo(motivo);
-  const title = `${TICKET_PAGE_COPY[source].title} · ${BRAND_NAME}`;
+  const title = TICKET_PAGE_COPY[source].title;
   // Solo `/contacto` pelado se indexa: las variantes por motivo son entradas desde otras pantallas (o de una sesión
   // bloqueada) y no tienen nada que buscar.
   const isDefault = !motivo && !first(searchParams.plan);

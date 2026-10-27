@@ -3,6 +3,7 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AuthShell } from "@/components/auth/auth-shell";
+import { BRAND_NAME } from "@/lib/brand";
 
 /**
  * [VX F-b1 · C-F4] AuthShell v2 (render sin jsdom, componente real). Se afirma lo observable del markup: children en
@@ -24,7 +25,7 @@ describe("[VX F-b1] AuthShell v2", () => {
       expect(html, variant).toContain('data-testid="child"');
       expect(html, variant).toMatch(/<main id="main"[^>]*>[\s\S]*data-testid="child"[\s\S]*<\/main>/);
       expect(html, variant).toContain(`data-variant="${variant}"`);
-      expect(html, variant).toContain("© 2026 KineSoft");
+      expect(html, variant).toContain(`© 2026 ${BRAND_NAME}`);
     }
   });
 

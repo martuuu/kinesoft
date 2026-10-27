@@ -174,7 +174,11 @@ async function loadRows(): Promise<SaasPlanConfigRow[]> {
   }));
 }
 
-const cachedCatalog = unstable_cache(async () => toPublicPlans(await loadRows()), ["saas-plans:public"], {
+// BR-Z (PV Q5): la marca va en la clave. Los bullets llevan `BRAND_NAME` ya resuelto («Catálogo de ejercicios de …») y
+// la clave de `unstable_cache` es el texto de la función + estas partes: sin la marca, el Data Cache (que en Vercel
+// sobrevive a los deploys) seguía sirviendo la marca vieja en /precios y la landing hasta el `revalidate` de 1 h; el
+// E2E de marca lo vio con el `.next/cache` de un build anterior.
+const cachedCatalog = unstable_cache(async () => toPublicPlans(await loadRows()), ["saas-plans:public", BRAND_NAME], {
   tags: [SAAS_PLANS_TAG],
   revalidate: ttl.long,
 });

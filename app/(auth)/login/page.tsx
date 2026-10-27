@@ -6,7 +6,7 @@ import { BRAND_NAME } from "@/lib/brand";
 import { readIdleShellState } from "@/lib/idle-logout-internal";
 import { IdleExpired } from "@/components/layout/idle-expired";
 
-export const metadata = { title: `Ingresá a ${BRAND_NAME}` };
+export const metadata = { title: { absolute: `Ingresá a ${BRAND_NAME}` } };
 
 /**
  * `?error=` es un CÓDIGO (A3b-S-auth): la pantalla lo traduce con un mapa

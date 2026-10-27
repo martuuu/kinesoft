@@ -60,6 +60,7 @@ import SinAccesoPage from "@/app/sin-acceso/page";
 import SuspendidoPage from "@/app/suspendido/page";
 import CuentaDesactivadaPage from "@/app/cuenta-desactivada/page";
 import MantenimientoPage from "@/app/mantenimiento/page";
+import { BRAND_NAME } from "@/lib/brand";
 import ElegirConsultorioPage from "@/app/elegir-consultorio/page";
 import InvitePage from "@/app/invite/[token]/page";
 import InviteError from "@/app/invite/[token]/error";
@@ -126,7 +127,7 @@ describe("[VX2-b1] /sin-acceso", () => {
     h.snapshot = snap();
     const html = renderToStaticMarkup(await SinAccesoPage());
     expectCenteredPage(html, "Tu acceso está activo");
-    const a = linkFor(html, "Entrar a KineSoft");
+    const a = linkFor(html, `Entrar a ${BRAND_NAME}`);
     expect(a).toMatch(/href="\/dashboard"/);
     expect(a).toMatch(/class="k-btn k-btn-primary k-btn-md k-btn-block"/);
     expect(html).toContain('action="/api/auth/sign-out"');
@@ -177,7 +178,7 @@ describe("[VX2-b1] /cuenta-desactivada", () => {
     h.snapshot = snap();
     const html = renderToStaticMarkup(await CuentaDesactivadaPage());
     expectCenteredPage(html, "Podés volver a entrar");
-    expect(linkFor(html, "Entrar a KineSoft")).toMatch(/href="\/dashboard"/);
+    expect(linkFor(html, `Entrar a ${BRAND_NAME}`)).toMatch(/href="\/dashboard"/);
   });
 });
 

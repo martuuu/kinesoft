@@ -17,6 +17,7 @@ import { TURNERO_PAYMENT_COPY } from "@/lib/online-payments-copy";
 import { PractitionerStep } from "@/components/booking/wizard/practitioner-step";
 import { STEP_HEADING_SELECTOR, focusStepHeading, focusStepHeadingWhenReady } from "@/components/booking/wizard/shared";
 import type { PublicClinic } from "@/lib/public-booking-types";
+import { BRAND_NAME } from "@/lib/brand";
 
 
 const pro = (id: string, extra: object = {}) => ({
@@ -186,12 +187,12 @@ describe("VX-Z · turnero", () => {
     expect(css).toMatch(/\.navLink\s*\{[^}]*min-height:\s*44px/);
   });
 
-  it("marca del consultorio adelante (monograma + nombre) y KineSoft chico en el pie; una sola h1", () => {
+  it(`marca del consultorio adelante (monograma + nombre) y ${BRAND_NAME} chico en el pie; una sola h1`, () => {
     const html = renderToStaticMarkup(<PublicBookingWizard clinic={clinic(1, false)} session={null} prefill={null} />);
     const nav = html.slice(html.indexOf("<header"), html.indexOf("</header>"));
     expect(nav).toContain(">KD<");
     expect(nav).toMatch(/<p[^>]*>Kine Demo<\/p>/);
-    expect(nav).not.toContain("<svg"); // sin el logo de KineSoft en el nav (salvo íconos chicos: el reloj va sin franjas)
+    expect(nav).not.toContain("<svg"); // sin el logo de la app en el nav (salvo íconos chicos: el reloj va sin franjas)
     const foot = html.slice(html.lastIndexOf("<footer"));
     expect(foot).toContain("Turnos online con");
     expect(foot).toMatch(/<a(?=[^>]*href="\/")(?=[^>]*aria-label="[^"]+, inicio")[^>]*>/);

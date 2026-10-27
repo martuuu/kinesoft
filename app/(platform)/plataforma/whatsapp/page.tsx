@@ -1,11 +1,10 @@
 import { PageHeader } from "@/components/ui/page-header";
-import { BRAND_NAME } from "@/lib/brand";
 import { getPlatformWhatsAppOverview } from "@/lib/platform-whatsapp-read";
 import { WhatsAppOverview } from "@/components/plataforma/whatsapp/whatsapp-overview";
 
 // Nunca cacheado: es el modo de ESTE deploy y el estado de las cuentas en este momento.
 export const dynamic = "force-dynamic";
-export const metadata = { title: `WhatsApp · Plataforma · ${BRAND_NAME}` };
+export const metadata = { title: "WhatsApp · Plataforma" };
 
 /**
  * WA-U6 · El guard del layout es UX; la barrera real es el `requirePlatformAdmin` de `getPlatformWhatsAppOverview`.

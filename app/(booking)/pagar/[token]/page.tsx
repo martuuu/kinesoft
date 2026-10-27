@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { getPublicPaymentLink } from "@/lib/public-payment-link";
 import { PayLinkView, type PayLinkReturn } from "@/components/payments/pay-link-view";
-import { BRAND_NAME } from "@/lib/brand";
 
 /**
  * [TP-3i] `/pagar/[token]`: el link de pago que el consultorio le manda al paciente (plan §25.7, C-TP9, TP-D23).
@@ -24,7 +23,7 @@ export const revalidate = 0;
 export const fetchCache = "force-no-store";
 
 export const metadata: Metadata = {
-  title: `Link de pago · ${BRAND_NAME}`,
+  title: "Link de pago",
   robots: { index: false, follow: false },
   referrer: "same-origin",
 };

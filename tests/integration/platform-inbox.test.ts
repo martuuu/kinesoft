@@ -8,7 +8,7 @@
  *  - bandeja: hilos de consultorio y leads, filtros por estado y tipo, no leídos y su contador, orden por último
  *    movimiento; abrir el hilo lo marca leído; nombres sin email;
  *  - responder a un consultorio: mensaje PLATFORM, mail al creador SIN el texto, registro de Plataforma, el consultorio
- *    lo ve como «Equipo de KineSoft» y sin leer; responder un hilo cerrado lo reabre;
+ *    lo ve como «Equipo de <marca>» y sin leer; responder un hilo cerrado lo reabre;
  *  - responder a un lead: mail al lead CON la respuesta y Reply-To a la bandeja;
  *  - cerrar/reabrir idempotente; cerrado, el consultorio no puede responder.
  */

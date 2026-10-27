@@ -403,7 +403,7 @@ describe.skipIf(!RUN)("[BO2-A] alta de consultorio + titular desde Plataforma", 
 
   it("email que ya existe en Auth (staff de otro consultorio) → se reutiliza sin createUser; queda titular de los dos", async () => {
     const ownerEmail = `${other.userId}@test.local`;
-    // Cuenta confirmada y con contraseña: la sembramos con el MISMO id que su perfil de KineSoft.
+    // Cuenta confirmada y con contraseña: la sembramos con el MISMO id que su perfil de la app.
     gotrue.users.set(other.userId, {
       id: other.userId,
       email: ownerEmail,

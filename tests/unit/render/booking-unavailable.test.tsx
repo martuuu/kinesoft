@@ -12,6 +12,7 @@ import { renderToStaticMarkup } from "react-dom/server";
  * consultorio arriba, una sola h1, `<main id="main">`, estilos en CSS Module.
  */
 import { BookingUnavailable, clinicInitials } from "@/components/booking/booking-unavailable";
+import { BRAND_NAME } from "@/lib/brand";
 
 const render = (contact: Partial<Parameters<typeof BookingUnavailable>[0]["contact"]> = {}) =>
   renderToStaticMarkup(
@@ -60,13 +61,14 @@ describe("[EV0-fix] BookingUnavailable (render)", () => {
     expect(html).toContain("Comunicate directamente con el consultorio");
   });
 
-  it("[VX2-d2] marco del turnero: marca del consultorio arriba, una h1, main#main, KineSoft en el pie", () => {
+  it(`[VX2-d2] marco del turnero: marca del consultorio arriba, una h1, main#main, ${BRAND_NAME} en el pie`, () => {
     const html = render();
     expect(html).toContain('data-surface="turnero"');
     expect(html).toMatch(/<header[^>]*>[\s\S]*>CN<\/span>[\s\S]*<p[^>]*>Consultorio Norte<\/p>[\s\S]*<\/header>/);
     expect((html.match(/<h1[\s>]/g) ?? []).length).toBe(1);
     expect(html).toMatch(/<main id="main"/);
     expect(html).toMatch(/<footer[^>]*>[\s\S]*Turnos online con[\s\S]*<\/footer>/);
+    expect(html).toMatch(new RegExp(`<footer[^>]*>[\\s\\S]*aria-label="${BRAND_NAME}, inicio"[\\s\\S]*</footer>`));
     // Sin estilos inline de color/fondo en la card: tokens en el CSS Module.
     const main = html.match(/<main[\s\S]*<\/main>/)?.[0] ?? "";
     expect(main).not.toBe("");

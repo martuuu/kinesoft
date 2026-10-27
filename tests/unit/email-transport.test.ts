@@ -16,6 +16,7 @@ import {
 } from "@/lib/email/transport";
 import { sendViaMailpit, mailpitBaseUrl, MAILPIT_DEFAULT_URL, parseMailbox } from "@/lib/email/mailpit";
 import { makeEmailFetchFake } from "@/tests/helpers/email-fetch-fake";
+import { BRAND_NAME } from "@/lib/brand";
 
 // [IAM-0b] Por dónde sale un mail según el entorno (C-IAM1).
 //
@@ -160,33 +161,33 @@ describe("helpers de hosts", () => {
   });
 });
 
-describe("remitente «Consultorio X vía KineSoft»", () => {
+describe(`remitente «Consultorio X vía ${BRAND_NAME}»`, () => {
   it("sin fromName: el EMAIL_FROM tal cual", () => {
-    expect(composeFrom("KineSoft <no-reply@kinesoft.app>", null)).toBe("KineSoft <no-reply@kinesoft.app>");
+    expect(composeFrom(`${BRAND_NAME} <no-reply@kinesoft.app>`, null)).toBe(`${BRAND_NAME} <no-reply@kinesoft.app>`);
   });
   it("con fromName: nombre + sufijo fijo + la MISMA casilla", () => {
-    expect(composeFrom("KineSoft <no-reply@kinesoft.app>", "Consultorio Ramos")).toBe(
-      "Consultorio Ramos vía KineSoft <no-reply@kinesoft.app>",
+    expect(composeFrom(`${BRAND_NAME} <no-reply@kinesoft.app>`, "Consultorio Ramos")).toBe(
+      `Consultorio Ramos vía ${BRAND_NAME} <no-reply@kinesoft.app>`,
     );
   });
   it("EMAIL_FROM sin nombre también sirve de base", () => {
-    expect(composeFrom("no-reply@kinesoft.app", "Kine Sur")).toBe("Kine Sur vía KineSoft <no-reply@kinesoft.app>");
+    expect(composeFrom("no-reply@kinesoft.app", "Kine Sur")).toBe(`Kine Sur vía ${BRAND_NAME} <no-reply@kinesoft.app>`);
   });
   it("nombre con caracteres especiales del RFC 5322 → display-name entre comillas", () => {
-    expect(composeFrom("KineSoft <no-reply@kinesoft.app>", "Kine S.A., Sede Centro")).toBe(
-      '"Kine S.A., Sede Centro vía KineSoft" <no-reply@kinesoft.app>',
+    expect(composeFrom(`${BRAND_NAME} <no-reply@kinesoft.app>`, "Kine S.A., Sede Centro")).toBe(
+      `"Kine S.A., Sede Centro vía ${BRAND_NAME}" <no-reply@kinesoft.app>`,
     );
   });
   it("saneado: sin comillas, <>, barra invertida ni saltos (inyección de cabeceras)", () => {
     const evil = 'Consultorio "X"\r\nBcc: todos@evil.com <a@b.c>\\';
-    const out = composeFrom("KineSoft <no-reply@kinesoft.app>", evil);
+    const out = composeFrom(`${BRAND_NAME} <no-reply@kinesoft.app>`, evil);
     expect(out).not.toMatch(/[\r\n]/);
     expect(out.match(/</g)?.length).toBe(1);
-    expect(out.endsWith("vía KineSoft <no-reply@kinesoft.app>") || out.endsWith('vía KineSoft" <no-reply@kinesoft.app>')).toBe(true);
+    expect(out.endsWith(`vía ${BRAND_NAME} <no-reply@kinesoft.app>`) || out.endsWith(`vía ${BRAND_NAME}" <no-reply@kinesoft.app>`)).toBe(true);
     expect(sanitizeFromName(evil)).toBe("Consultorio X Bcc: todos@evil.com a@b.c");
   });
   it("nombre vacío o solo basura → remitente de siempre", () => {
-    expect(composeFrom("KineSoft <no-reply@kinesoft.app>", ' "<>" ')).toBe("KineSoft <no-reply@kinesoft.app>");
+    expect(composeFrom(`${BRAND_NAME} <no-reply@kinesoft.app>`, ' "<>" ')).toBe(`${BRAND_NAME} <no-reply@kinesoft.app>`);
   });
   it("nombre largo se corta con «…»", () => {
     const name = sanitizeFromName("A".repeat(200));
@@ -194,14 +195,14 @@ describe("remitente «Consultorio X vía KineSoft»", () => {
     expect(name.endsWith("…")).toBe(true);
   });
   it("fromAddress", () => {
-    expect(fromAddress("KineSoft <no-reply@kinesoft.app>")).toBe("no-reply@kinesoft.app");
+    expect(fromAddress(`${BRAND_NAME} <no-reply@kinesoft.app>`)).toBe("no-reply@kinesoft.app");
     expect(fromAddress(" no-reply@kinesoft.app ")).toBe("no-reply@kinesoft.app");
   });
   it("resolveBaseFrom: default solo fuera de Production; limpia comillas y comas pegadas", () => {
     expect(resolveBaseFrom(DEV)).toBe(DEFAULT_EMAIL_FROM);
-    expect(DEFAULT_EMAIL_FROM).toBe("KineSoft <no-reply@kinesoft.app>");
+    expect(DEFAULT_EMAIL_FROM).toBe(`${BRAND_NAME} <no-reply@kinesoft.app>`);
     expect(resolveBaseFrom({ ...PROD, EMAIL_FROM: undefined })).toBeNull();
-    expect(resolveBaseFrom({ ...DEV, EMAIL_FROM: '"KineSoft <hola@kine.ar>",' })).toBe("KineSoft <hola@kine.ar>");
+    expect(resolveBaseFrom({ ...DEV, EMAIL_FROM: `"${BRAND_NAME} <hola@kine.ar>",` })).toBe(`${BRAND_NAME} <hola@kine.ar>`);
   });
 });
 
@@ -221,7 +222,7 @@ describe("destinatario", () => {
 describe("mailpit (API HTTP, no SMTP)", () => {
   afterEach(() => vi.useRealTimers());
   const MSG = {
-    from: "Consultorio Ramos vía KineSoft <no-reply@kinesoft.app>",
+    from: `Consultorio Ramos vía ${BRAND_NAME} <no-reply@kinesoft.app>`,
     to: "ana@x.com",
     replyTo: "ramos@consultorio.com",
     subject: "Asunto",
@@ -236,7 +237,7 @@ describe("mailpit (API HTTP, no SMTP)", () => {
   });
 
   it("parseMailbox", () => {
-    expect(parseMailbox("Kine Sur vía KineSoft <a@b.com>")).toEqual({ Name: "Kine Sur vía KineSoft", Email: "a@b.com" });
+    expect(parseMailbox(`Kine Sur vía ${BRAND_NAME} <a@b.com>`)).toEqual({ Name: `Kine Sur vía ${BRAND_NAME}`, Email: "a@b.com" });
     expect(parseMailbox('"Kine, S.A." <a@b.com>')).toEqual({ Name: "Kine, S.A.", Email: "a@b.com" });
     expect(parseMailbox("a@b.com")).toEqual({ Email: "a@b.com" });
   });
@@ -247,7 +248,7 @@ describe("mailpit (API HTTP, no SMTP)", () => {
     expect(r).toEqual({ ok: true, id: "mp-1" });
     expect(f.calls[0].url).toBe("http://localhost:8025/api/v1/send");
     expect(f.calls[0].body).toEqual({
-      From: { Name: "Consultorio Ramos vía KineSoft", Email: "no-reply@kinesoft.app" },
+      From: { Name: `Consultorio Ramos vía ${BRAND_NAME}`, Email: "no-reply@kinesoft.app" },
       To: [{ Email: "ana@x.com" }],
       ReplyTo: [{ Email: "ramos@consultorio.com" }],
       Subject: "Asunto",

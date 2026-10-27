@@ -1,5 +1,5 @@
 /**
- * KineSoft — catalog + demo-tenant seed.
+ * Plataforma — catalog + demo-tenant seed.
  *
  * Idempotent (every write is upsert or scoped-then-recreate). Run via
  * `npm run prisma:seed`. The catalog seeded here is production-grade:

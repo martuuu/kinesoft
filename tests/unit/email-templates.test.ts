@@ -17,6 +17,7 @@ import {
   EMAIL_COLORS,
 } from "@/lib/email/templates";
 import type { RenderedEmail } from "@/lib/email/types";
+import { BRAND_NAME } from "@/lib/brand";
 
 // [IAM-0b] Plantillas con marca (C-IAM1). Puras: ni red ni env.
 //
@@ -50,6 +51,11 @@ const ALL: Array<[string, () => RenderedEmail]> = [
   ["supportAccess", () => supportAccessEmail({ tenantName: "Consultorio Ramos", superadminEmail: "soporte@kinesoft.com.ar", startedAt: EXPIRES, url: URL })],
 ];
 
+const reEsc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// «Consultorio» (navy 700) + «Online» (sky 500): dos spans, como el KineLogo. Sale de BRAND_NAME, no del literal.
+const [BRAND_FIRST, ...BRAND_REST] = BRAND_NAME.split(" ");
+const WORDMARK = new RegExp(`>${reEsc(BRAND_FIRST)}</span> <span[^>]*>${reEsc(BRAND_REST.join(" "))}<`);
+
 // Pictográficos + variación: cualquier emoji en asunto, html o texto.
 const EMOJI = /\p{Extended_Pictographic}/u;
 
@@ -64,8 +70,8 @@ describe("estructura de marca, igual en todas", () => {
     expect(m.html).toContain("max-width:600px");
     expect(m.html).toContain('role="presentation"');
     expect(m.html).not.toMatch(/<link\b|<script\b|<img\b|var\(--/);
-    // Wordmark en el encabezado.
-    expect(m.html).toMatch(/>Kine<\/span><span[^>]*>Soft</);
+    // Wordmark en el encabezado (BR): primera palabra de la marca + el resto en otro span, armado con BRAND_NAME.
+    expect(m.html).toMatch(WORDMARK);
     // CTA + link de respaldo.
     expect(m.html).toContain("Copiá y pegá este link");
     expect(m.html).toContain(`href="${URL_HTML}"`);
@@ -84,8 +90,10 @@ describe("estructura de marca, igual en todas", () => {
 describe("copy por plantilla", () => {
   it("staff_invite: quién invita, consultorio, rol, CTA y vencimiento en hora AR", () => {
     const m = staffInviteEmail({ tenantName: "Consultorio Ramos", inviterName: "Laura Ramos", roleLabel: "Profesional", url: URL, expiresAt: EXPIRES });
-    expect(m.text).toContain("Laura Ramos te invitó a sumarte a Consultorio Ramos en KineSoft como Profesional.");
-    expect(m.html).toMatch(/<strong[^>]*>Laura Ramos<\/strong> te invitó a sumarte a <strong[^>]*>Consultorio Ramos<\/strong> en KineSoft como <strong[^>]*>Profesional<\/strong>\./);
+    expect(m.text).toContain(`Laura Ramos te invitó a sumarte a Consultorio Ramos en ${BRAND_NAME} como Profesional.`);
+    expect(m.html).toMatch(
+      new RegExp(`<strong[^>]*>Laura Ramos</strong> te invitó a sumarte a <strong[^>]*>Consultorio Ramos</strong> en ${reEsc(BRAND_NAME)} como <strong[^>]*>Profesional</strong>\\.`),
+    );
     expect(m.html).toContain("Aceptar invitación");
     expect(m.html).toContain("20 de octubre de 2026");
     expect(m.html).toContain("23:30");
@@ -94,7 +102,7 @@ describe("copy por plantilla", () => {
   });
   it("staff_invite sin quien invita: copy impersonal", () => {
     const m = staffInviteEmail({ tenantName: "Consultorio Ramos", inviterName: null, roleLabel: "Secretaria", url: URL, expiresAt: EXPIRES });
-    expect(m.text).toContain("Te invitaron a sumarte a Consultorio Ramos en KineSoft como Secretaria.");
+    expect(m.text).toContain(`Te invitaron a sumarte a Consultorio Ramos en ${BRAND_NAME} como Secretaria.`);
     expect(m.html).not.toContain("null");
     expect(m.text).not.toContain("null");
   });
@@ -127,7 +135,7 @@ describe("copy por plantilla", () => {
   });
   it("account_exists: dos CTAs (Ingresar y Recuperar contraseña) con sus links", () => {
     const m = accountExistsEmail({ loginUrl: "https://app.kinesoft.com.ar/login", resetUrl: "https://app.kinesoft.com.ar/reset" });
-    expect(m.html).toContain("Ya tenés una cuenta en KineSoft con este email.");
+    expect(m.html).toContain(`Ya tenés una cuenta en ${BRAND_NAME} con este email.`);
     expect(m.html).toContain(">Ingresar<");
     expect(m.html).toContain(">Recuperar contraseña<");
     expect(m.html).toContain('href="https://app.kinesoft.com.ar/login"');
@@ -137,17 +145,17 @@ describe("copy por plantilla", () => {
   });
   it("welcome", () => {
     const m = welcomeEmail({ tenantName: "Consultorio Ramos", url: URL });
-    expect(m.text).toContain("Ya sos parte de Consultorio Ramos en KineSoft.");
-    expect(m.html).toContain("Ir a KineSoft");
+    expect(m.text).toContain(`Ya sos parte de Consultorio Ramos en ${BRAND_NAME}.`);
+    expect(m.html).toContain(`Ir a ${BRAND_NAME}`);
   });
 });
 
 describe("plantillas de Plataforma (BO2)", () => {
   it("tenant_activation: titular, CTA, vence en 1 hora y el porqué", () => {
     const m = tenantOwnerActivationEmail({ tenantName: "Consultorio Ramos", url: URL });
-    expect(m.subject).toBe("Tu consultorio Consultorio Ramos ya está en KineSoft");
+    expect(m.subject).toBe(`Tu consultorio Consultorio Ramos ya está en ${BRAND_NAME}`);
     expect(m.text).toContain("Activá tu acceso");
-    expect(m.text).toContain("Te dimos de alta como titular de Consultorio Ramos en KineSoft.");
+    expect(m.text).toContain(`Te dimos de alta como titular de Consultorio Ramos en ${BRAND_NAME}.`);
     expect(m.text).toContain("El link vence en 1 hora y sirve una sola vez.");
     expect(m.text).toContain("Activar mi acceso");
     expect(m.text).toContain("creó el consultorio Consultorio Ramos con este email como titular");
@@ -160,22 +168,22 @@ describe("plantillas de Plataforma (BO2)", () => {
     );
     expect(m.text).toContain("Entrar al consultorio");
     expect(m.text).not.toMatch(/elegir tu contraseña|Activar mi acceso/);
-    expect(m.text).toContain("Te dimos de alta como titular de Consultorio Ramos en KineSoft.");
+    expect(m.text).toContain(`Te dimos de alta como titular de Consultorio Ramos en ${BRAND_NAME}.`);
   });
 
-  it("platform_access_link: activación y recuperación con copy distinto, firmado por soporte de KineSoft", () => {
+  it(`platform_access_link: activación y recuperación con copy distinto, firmado por soporte de ${BRAND_NAME}`, () => {
     const a = platformAccessLinkEmail({ url: URL, purpose: "activation" });
     const r = platformAccessLinkEmail({ url: URL, purpose: "recovery" });
-    expect(a.subject).toBe("Activá tu acceso a KineSoft");
+    expect(a.subject).toBe(`Activá tu acceso a ${BRAND_NAME}`);
     expect(r.subject).not.toBe(a.subject);
     expect(a.text).toContain("Activar mi acceso");
     expect(r.text).toContain("Elegir contraseña nueva");
-    for (const m of [a, r]) expect(m.text).toContain("soporte de KineSoft");
+    for (const m of [a, r]) expect(m.text).toContain(`soporte de ${BRAND_NAME}`);
   });
 
   it("support_access: quién, cuándo (hora AR), sin HC, dónde ver la lista; el motivo tipeado NO viaja", () => {
     const m = supportAccessEmail({ tenantName: "Consultorio Ramos", superadminEmail: "soporte@kinesoft.com.ar", startedAt: EXPIRES, url: URL });
-    expect(m.subject).toBe("Soporte de KineSoft entró a Consultorio Ramos");
+    expect(m.subject).toBe(`Soporte de ${BRAND_NAME} entró a Consultorio Ramos`);
     expect(m.text).toContain("soporte@kinesoft.com.ar");
     expect(m.text).toContain("20 de octubre de 2026");
     // [BO-Z] C8: «… a las HH:MM …» y rol con género neutro.

@@ -10,7 +10,7 @@ import { ContinueForm } from "./continue-form";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: `Confirmando · ${BRAND_NAME}`,
+  title: "Confirmando",
   // El token viaja en la URL de esta página: ni indexarla ni mandarlo como Referer a otro sitio.
   // `same-origin` y NO `no-referrer`: con `no-referrer` Chrome manda `Origin: null` en el POST del form
   // (lo midió Traze: todo link terminaba en «inválido»). A otro sitio no sale nada igual.

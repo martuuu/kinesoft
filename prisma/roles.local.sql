@@ -1,4 +1,4 @@
--- KineSoft — Ola B2b · Rol de aplicación para el Postgres LOCAL (Docker)
+-- Ola B2b · Rol de aplicación para el Postgres LOCAL (Docker)
 -- ---------------------------------------------------------------------------
 -- Por qué: hoy la app conecta como `kinesoft`, que es el POSTGRES_USER del
 -- contenedor = SUPERUSER. Un superuser SIEMPRE hace bypass de RLS (incluso con

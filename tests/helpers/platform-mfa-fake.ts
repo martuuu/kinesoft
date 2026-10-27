@@ -9,6 +9,7 @@
  */
 import type { MfaFactorLite, MfaResult, PlatformMfaPort, TotpEnrollment } from "@/lib/platform-mfa";
 import type { AalLevel, MfaAssurance } from "@/lib/platform-mfa-logic";
+import { BRAND_NAME } from "@/lib/brand";
 
 export class PlatformMfaFake implements PlatformMfaPort {
   readonly calls: { method: keyof PlatformMfaPort; args: unknown[] }[] = [];
@@ -23,7 +24,7 @@ export class PlatformMfaFake implements PlatformMfaPort {
 
   static withVerifiedFactor(level: AalLevel): PlatformMfaFake {
     const f = new PlatformMfaFake();
-    f.factors.push({ id: "factor-ok", type: "totp", status: "verified", friendlyName: "KineSoft Plataforma", createdAt: new Date(0).toISOString() });
+    f.factors.push({ id: "factor-ok", type: "totp", status: "verified", friendlyName: `${BRAND_NAME} Plataforma`, createdAt: new Date(0).toISOString() });
     f.level = level;
     return f;
   }

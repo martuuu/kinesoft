@@ -48,6 +48,7 @@ import {
   type TicketDetail,
 } from "@/lib/support-threads-types";
 import { leadReceivedEmail, leadReplyEmail, supportMessagePlatformEmail, supportReplyTenantEmail } from "@/lib/email/templates-support";
+import { BRAND_NAME } from "@/lib/brand";
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;|&#39;/g, "'").replace(/\s+/g, " ");
 
@@ -107,14 +108,14 @@ describe("[PL-2d] Configuración → Soporte → Mensajes", () => {
       <SupportMessageList
         messages={[
           { id: "m1", authorKind: "TENANT", authorName: "Ana Titular", mine: true, body: "<b>hola</b>\nlinea 2", createdAt: "2026-10-14T16:27:00.000Z" },
-          { id: "m2", authorKind: "PLATFORM", authorName: "Equipo de KineSoft", mine: false, body: "Listo", createdAt: "2026-10-14T17:00:00.000Z" },
+          { id: "m2", authorKind: "PLATFORM", authorName: `Equipo de ${BRAND_NAME}`, mine: false, body: "Listo", createdAt: "2026-10-14T17:00:00.000Z" },
         ]}
       />
     );
     expect(html).toContain("&lt;b&gt;hola&lt;/b&gt;");
     expect(html).not.toContain("<b>hola</b>");
     expect(text(html)).toContain(`Ana Titular · ${messageWhen("2026-10-14T16:27:00.000Z")}`);
-    expect(text(html)).toContain("Equipo de KineSoft");
+    expect(text(html)).toContain(`Equipo de ${BRAND_NAME}`);
   });
 });
 

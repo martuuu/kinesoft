@@ -25,6 +25,7 @@ import { __setAuthAdminForTests } from "@/lib/identity/auth-admin";
 import { healthDigestKey, trialReminderKey } from "@/lib/cron-jobs-logic";
 import { GotrueFake } from "@/tests/helpers/gotrue-fake";
 import { ownerClient, createEphemeralTenant, uniqueSuffix, type EphemeralTenant } from "@/tests/helpers/tenant-factory";
+import { BRAND_NAME } from "@/lib/brand";
 
 const RUN = process.env.INTEGRATION === "1";
 const SECRET = `cron-test-${randomBytes(12).toString("hex")}`;
@@ -177,13 +178,13 @@ describe.skipIf(!RUN)("[BO5-A] cron", () => {
 
     const a = mail.to(emailOf[A.tenantId], "trial_reminder");
     expect(a).toHaveLength(1);
-    expect(a[0].subject).toBe("Tu prueba de KineSoft vence en 3 días");
+    expect(a[0].subject).toBe(`Tu prueba de ${BRAND_NAME} vence en 3 días`);
     expect(a[0].tenantId).toBe(A.tenantId);
     expect(a[0].text).toContain("/configuracion?tab=plan");
 
     const g = mail.to(emailOf[G.tenantId], "trial_reminder");
     expect(g).toHaveLength(1);
-    expect(g[0].subject).toBe("Tu prueba de KineSoft terminó");
+    expect(g[0].subject).toBe(`Tu prueba de ${BRAND_NAME} terminó`);
 
     expect(mail.to(emailOf[S.tenantId])).toHaveLength(0);
     expect(mail.to(emailOf[F.tenantId])).toHaveLength(0);

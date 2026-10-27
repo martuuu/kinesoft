@@ -42,6 +42,11 @@ describe("[PL-1a] getPublicPlanCatalog (C-PL2)", () => {
     expect(cache.calls.some((c) => c.tags?.includes(SAAS_PLANS_TAG))).toBe(true);
   });
 
+  it("[BR-Z] la clave del cache lleva la marca: los bullets la traen resuelta y un rename no sirve la vieja", () => {
+    const c = cache.calls.find((x) => x.tags?.includes(SAAS_PLANS_TAG));
+    expect(c?.keyParts).toEqual(["saas-plans:public", BRAND_NAME]);
+  });
+
   it("en orden (sortOrder), con «Consultá» cuando el precio es null y Libre «A medida» + contacto", async () => {
     db.findMany.mockResolvedValue(M8_ROWS);
     const c = await getPublicPlanCatalog();
@@ -93,7 +98,7 @@ describe("[PL-1a] getPublicPlanCatalog (C-PL2)", () => {
     expect(all("CONSULTORIO")).not.toMatch(/Sala/);
     expect(all("CLINICA")).toMatch(/Sala de espera/);
     expect(c[1].features[1].bullets[0]).toBe("Todo lo del plan Individual");
-    expect(c[1].features[1].bullets.join(" | ")).toMatch(/Catálogo de ejercicios de KineSoft/);
+    expect(c[1].features[1].bullets.join(" | ")).toContain(`Catálogo de ejercicios de ${BRAND_NAME}`);
   });
 });
 

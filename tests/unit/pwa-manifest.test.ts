@@ -14,7 +14,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { getMiddlewareMatchers } from "next/dist/build/analysis/get-page-static-info";
 import manifest from "@/app/manifest";
-import { BRAND_NAME } from "@/lib/brand";
+import { BRAND_NAME, BRAND_SHORT_NAME } from "@/lib/brand";
 import { config as middlewareConfig } from "@/middleware";
 import { GET as iconGET, generateStaticParams, dynamic as iconDynamic } from "@/app/icons/[name]/route";
 
@@ -44,7 +44,8 @@ describe("[MB-0b] app/manifest.ts", () => {
 
   it("nombre de la marca, standalone, es-AR", () => {
     expect(m.name).toBe(BRAND_NAME);
-    expect(m.short_name).toBe(BRAND_NAME);
+    expect(m.short_name).toBe(BRAND_SHORT_NAME);
+    expect(m.short_name!.length).toBeLessThanOrEqual(12);
     expect(m.display).toBe("standalone");
     expect(m.lang).toBe("es-AR");
     expect(m.id).toBe("/");

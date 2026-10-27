@@ -277,7 +277,7 @@ export function SidebarBody({
           justifyContent: collapsed ? "center" : "flex-start",
         }}
       >
-        {/* PV BR-a: 24 y no 26 expandido. El wordmark «Consultorio Online» es ~2× el anterior y a 26 llenaba justo los
+        {/* PV BR-a: 24 y no 26 expandido. El wordmark de dos palabras (BRAND_NAME) es ~2× el anterior y a 26 llenaba justo los
             ~184 px útiles del sidebar de 232; a 24 queda margen (wordmark al 60 % del lado). Colapsado, solo la baldosa. */}
         <KineLogo size={collapsed ? 32 : 24} markOnly={collapsed} />
       </div>

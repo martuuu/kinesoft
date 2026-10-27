@@ -11,7 +11,7 @@ import { verifyAccessHref } from "@/app/verificar-acceso/verify-access-logic";
 import { BRAND_NAME } from "@/lib/brand";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: `Mi perfil público · ${BRAND_NAME}`, robots: { index: false, follow: false } };
+export const metadata = { title: "Mi perfil público", robots: { index: false, follow: false } };
 
 const SELF = "/cuenta/perfil-publico";
 

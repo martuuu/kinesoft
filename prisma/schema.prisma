@@ -1,4 +1,4 @@
-// KineSoft — Prisma schema
+// Prisma schema de la plataforma
 // Multi-tenant SaaS for kinesiology practices.
 // Per-tenant clinical data + a globally shared anatomy/condition/exercise catalog.
 

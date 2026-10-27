@@ -232,7 +232,7 @@ describe.skipIf(!RUN)("IAM-2b activación desde /invite/<token>", () => {
     expect(fake.calls.some((c) => c.method === "updateUserById")).toBe(false);
   });
 
-  it("email con perfil de KineSoft → «ya tenés cuenta» sin llamar a GoTrue", async () => {
+  it("email con perfil en la app → «ya tenés cuenta» sin llamar a GoTrue", async () => {
     const r0 = await invite(B, { email: `${A.userId}@test.local` });
     const r = await activateInvitation(input(r0.raw), { ip: IP });
     expect(r).toMatchObject({ ok: false, code: "account_exists" });

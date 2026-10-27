@@ -5,14 +5,15 @@
  */
 import { describe, it, expect } from "vitest";
 import { platformHealthDigestEmail, trialReminderEmail } from "@/lib/email/templates";
+import { BRAND_NAME } from "@/lib/brand";
 
 const URL = "https://app.kinesoft.com.ar/configuracion?tab=plan";
 
 describe("[BO5-A] trialReminderEmail", () => {
   it("N días: asunto «vence en N días», CTA a Plan y uso y «elegí tu plan» (PL-Z M9)", () => {
     const m = trialReminderEmail({ tenantName: "Kine Centro", daysLeft: 7, expired: false, url: URL });
-    expect(m.subject).toBe("Tu prueba de KineSoft vence en 7 días");
-    expect(m.text).toContain("La prueba de Kine Centro en KineSoft vence en 7 días.");
+    expect(m.subject).toBe(`Tu prueba de ${BRAND_NAME} vence en 7 días`);
+    expect(m.text).toContain(`La prueba de Kine Centro en ${BRAND_NAME} vence en 7 días.`);
     expect(m.text).toContain("Para seguir, elegí tu plan en Configuración → Plan y uso. Tus datos no se pierden.");
     expect(m.text).not.toContain("Escribinos");
     expect(m.text).toContain(URL);
@@ -23,14 +24,14 @@ describe("[BO5-A] trialReminderEmail", () => {
 
   it("último día: «vence hoy»", () => {
     const m = trialReminderEmail({ tenantName: "Kine Centro", daysLeft: 1, expired: false, url: URL });
-    expect(m.subject).toBe("Tu prueba de KineSoft vence hoy");
+    expect(m.subject).toBe(`Tu prueba de ${BRAND_NAME} vence hoy`);
     expect(m.text).toContain("Hoy es el último día de la prueba de Kine Centro");
     expect(m.text).toContain("Si querés seguir sin interrupciones, elegí tu plan hoy.");
   });
 
   it("vencida: avisa la gracia y que se puede seguir consultando la historia clínica", () => {
     const m = trialReminderEmail({ tenantName: "Kine Centro", daysLeft: 7, expired: true, url: URL });
-    expect(m.subject).toBe("Tu prueba de KineSoft terminó");
+    expect(m.subject).toBe(`Tu prueba de ${BRAND_NAME} terminó`);
     expect(m.text).toContain("Tenés 7 días más");
     expect(m.text).toContain("incluida la historia clínica");
     expect(trialReminderEmail({ tenantName: "X", daysLeft: 1, expired: true, url: URL }).text).toContain(
@@ -56,7 +57,7 @@ describe("[BO5-A] platformHealthDigestEmail", () => {
       unavailable: [],
       url: "https://app.kinesoft.com.ar/plataforma/salud",
     });
-    expect(m.subject).toBe("Salud de KineSoft: 4 casos para revisar (14 de octubre de 2026)");
+    expect(m.subject).toBe(`Salud de ${BRAND_NAME}: 4 casos para revisar (14 de octubre de 2026)`);
     expect(m.text).toContain("Consultorios sin titular activo: 1");
     expect(m.text).toContain("Invitaciones vencidas sin anular: 3");
     expect(m.text).not.toContain("No se pudo revisar");

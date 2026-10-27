@@ -1,4 +1,4 @@
-# Catálogo global de KineSoft: datos y fuentes
+# Catálogo global de la plataforma: datos y fuentes
 
 Datos oficiales del catálogo global (prestadoras, planes, especialidades y prácticas) en el formato del
 "Contrato de CSV del catálogo" (B-pre, sesión B1.2). Los importa `scripts/catalog-import.ts` (B1.1): dry-run por

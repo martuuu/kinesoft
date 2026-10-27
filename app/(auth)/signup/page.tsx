@@ -6,9 +6,8 @@ import { signupAssistedMessage } from "@/lib/onboarding-logic";
 import { visibleOAuthProviders } from "@/lib/oauth-providers-public";
 import { getPublicPlanCatalog } from "@/lib/saas-plans-public";
 import { PLAN_DEFAULTS } from "@/lib/saas-plans-logic";
-import { BRAND_NAME } from "@/lib/brand";
 
-export const metadata = { title: `Crear cuenta · ${BRAND_NAME}` };
+export const metadata = { title: "Crear cuenta" };
 export const dynamic = "force-dynamic";
 
 /**

@@ -36,6 +36,7 @@ import { MfaFooter } from "@/app/plataforma-mfa/shared";
 import { OWNER_LOCKED_REASON, disabledReasons } from "@/components/plataforma/team/team-logic";
 import { ONE_TIME_LINK_COPY } from "@/components/plataforma/users/users-logic";
 import { SUPABASE_LINK_TTL_COPY } from "@/lib/email/templates";
+import { BRAND_NAME } from "@/lib/brand";
 
 /** Instante AR («2026-10-14T10:00» = 10:00 en Buenos Aires), sin depender del TZ del host. */
 const ar = (local: string) => new Date(`${local}:00-03:00`);
@@ -101,7 +102,7 @@ describe("[BO-Z B4] canal de soporte", () => {
 
   it("READ_ONLY_MESSAGE (lo ve cualquier rol, sin link): dice quién lo reactiva, sin «Escribinos» pelado", () => {
     expect(READ_ONLY_MESSAGE).not.toMatch(/Escribinos/);
-    expect(READ_ONLY_MESSAGE).toContain("el titular del consultorio tiene que escribirle al equipo de KineSoft");
+    expect(READ_ONLY_MESSAGE).toContain(`el titular del consultorio tiene que escribirle al equipo de ${BRAND_NAME}`);
   });
 });
 
@@ -111,7 +112,7 @@ describe("[BO-Z B5] días de prueba: Plataforma = banda del consultorio = Plan y
     ["2026-10-14T10:00", "Quedan 7 días", "Te quedan 7 días de prueba."],
     ["2026-10-19T23:30", "Quedan 2 días", "Te quedan 2 días de prueba."],
     // 22:00 AR del último día = 01:00 UTC del día siguiente: sigue siendo el último día.
-    ["2026-10-20T22:00", "Último día", "Hoy es el último día de tu prueba de KineSoft."],
+    ["2026-10-20T22:00", "Último día", `Hoy es el último día de tu prueba de ${BRAND_NAME}.`],
   ];
   for (const [now, platform, banner] of cases) {
     it(`${now} AR → Plataforma «${platform}» y banda «${banner}»`, () => {

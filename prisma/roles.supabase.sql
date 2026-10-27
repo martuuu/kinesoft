@@ -1,4 +1,4 @@
--- KineSoft — Ola B2b · Roles de aplicación para Supabase (PRODUCCIÓN)
+-- Ola B2b · Roles de aplicación para Supabase (PRODUCCIÓN)
 -- ---------------------------------------------------------------------------
 -- Por qué: hoy la app conecta como `postgres`. OJO: en Supabase `postgres` NO
 -- es un superuser real, pero SÍ tiene el atributo BYPASSRLS → ignora RLS igual.

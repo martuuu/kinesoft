@@ -4,6 +4,7 @@ import { sendEmail, registerEmailSink, __setEmailTransportForTests } from "@/lib
 import type { SendEmailInput, SendEmailResult } from "@/lib/email/types";
 import { makeEmailFetchFake } from "@/tests/helpers/email-fetch-fake";
 import { emailLogReason } from "@/lib/email/transport";
+import { BRAND_NAME } from "@/lib/brand";
 
 // [IAM-0b] Resend por fetch (sin SDK) y `sendEmail`, el único punto de envío.
 //
@@ -15,7 +16,7 @@ import { emailLogReason } from "@/lib/email/transport";
 // recibe el resultado y el host del link.
 
 const MSG = {
-  from: "KineSoft <no-reply@mail.kinesoft.com.ar>",
+  from: `${BRAND_NAME} <no-reply@mail.kinesoft.com.ar>`,
   to: "ana@x.com",
   subject: "Asunto",
   html: '<a href="https://app.kinesoft.com.ar/x">x</a>',
@@ -179,14 +180,14 @@ describe("sendEmail", () => {
     vi.stubEnv("EMAIL_FROM", "KineSoft <no-reply@mail.kinesoft.com.ar>");
   }
 
-  it("Production: sale por Resend con remitente «X vía KineSoft», replyTo y el sink recibe el host", async () => {
+  it(`Production: sale por Resend con remitente «X vía ${BRAND_NAME}», replyTo y el sink recibe el host`, async () => {
     prod();
     const f = makeEmailFetchFake({ json: { id: "re_9" } });
     vi.stubGlobal("fetch", f.fetch);
     const r = await sendEmail(INPUT);
     expect(r).toEqual({ ok: true, transport: "resend", providerId: "re_9" });
     const body = f.calls[0].body as Record<string, unknown>;
-    expect(body.from).toBe("Consultorio Ramos vía KineSoft <no-reply@mail.kinesoft.com.ar>");
+    expect(body.from).toBe(`Consultorio Ramos vía ${BRAND_NAME} <no-reply@mail.kinesoft.com.ar>`);
     expect(body.to).toEqual(["juana.perez@gmail.com"]);
     expect(body.reply_to).toBe("ramos@consultorio.com");
     expect(sinkCalls).toHaveLength(1);
@@ -265,7 +266,7 @@ describe("sendEmail", () => {
     expect(r).toEqual({ ok: true, transport: "mailpit", providerId: "mp_1" });
     expect(f.calls[0].url).toBe("http://localhost:8025/api/v1/send");
     expect((f.calls[0].body as { From: unknown }).From).toEqual({
-      Name: "Consultorio Ramos vía KineSoft",
+      Name: `Consultorio Ramos vía ${BRAND_NAME}`,
       Email: "no-reply@kinesoft.app",
     });
   });

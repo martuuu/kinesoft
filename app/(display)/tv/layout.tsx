@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
-import { BRAND_NAME } from "@/lib/brand";
 
 /**
  * TV-2u1 (§26.4 C-TV): layout de las pantallas de sala `/tv`.
@@ -16,7 +15,7 @@ import { BRAND_NAME } from "@/lib/brand";
  *   `/dashboard` del manifest de la app. `themeColor` oscuro (TV-D11) para la barra del navegador mientras carga.
  */
 export const metadata: Metadata = {
-  title: `Pantalla de sala · ${BRAND_NAME}`,
+  title: "Pantalla de sala",
   robots: { index: false, follow: false },
   manifest: "/tv/manifest",
   appleWebApp: { capable: true, title: "Sala", statusBarStyle: "black-translucent" },

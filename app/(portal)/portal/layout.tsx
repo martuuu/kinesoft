@@ -21,7 +21,7 @@ import { BRAND_NAME } from "@/lib/brand";
 import { getSessionUser } from "@/lib/session-user";
 import { LegalLinks } from "@/components/legal/legal-links";
 
-export const metadata = { title: `Mi portal · ${BRAND_NAME}` };
+export const metadata = { title: "Mi portal" };
 
 const headerLink: React.CSSProperties = {
   display: "inline-flex",

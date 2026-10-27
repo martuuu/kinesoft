@@ -10,7 +10,7 @@ import { PRIVACY_PATH } from "@/lib/legal";
 export const dynamic = "force-static";
 
 export const metadata: Metadata = {
-  title: `Política de privacidad · ${BRAND_NAME}`,
+  title: "Política de privacidad",
   description: `Qué datos trata ${BRAND_NAME}, para qué, con qué proveedores, cuánto tiempo y cómo ejercer tus derechos.`,
   alternates: { canonical: PRIVACY_PATH },
 };

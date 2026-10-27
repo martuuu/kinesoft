@@ -227,7 +227,7 @@ describe("[VX2-c1] landing", () => {
       const html = renderToStaticMarkup(<SiteFooter />);
       expect(html).toMatch(/¿Dudas\? <a class="k-link" href="\/contacto">Escribinos<\/a>\./);
       expect(html).not.toContain("mailto:");
-      expect(html).not.toContain("equipo de KineSoft");
+      expect(html).not.toContain(`equipo de ${BRAND_NAME}`);
     }
   });
 

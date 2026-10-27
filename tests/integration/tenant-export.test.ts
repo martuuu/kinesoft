@@ -211,7 +211,7 @@ describe.skipIf(!RUN)("[BO5-C] export completo del consultorio", () => {
     asUser(A.userId);
     const res = await exportTenant(new Request(URL_));
     expect(res.status).toBe(200);
-    expect(res.headers.get("content-disposition")).toMatch(new RegExp(`^attachment; filename="kinesoft-${A.slug}-\\d{4}-\\d{2}-\\d{2}\\.json"$`));
+    expect(res.headers.get("content-disposition")).toMatch(new RegExp(`^attachment; filename="consultorio-online-${A.slug}-\\d{4}-\\d{2}-\\d{2}\\.json"$`));
     expect(res.headers.get("cache-control")).toBe("no-store");
     const { text, json } = await body(res);
 

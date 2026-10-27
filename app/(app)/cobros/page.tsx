@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
 import { getActor } from "@/lib/session";
 import { getCapabilities } from "@/lib/authz";
-import { BRAND_NAME } from "@/lib/brand";
 import { displayMemberName } from "@/lib/display-name";
 import { listPractitioners } from "@/lib/bookings";
 import { listOnlineCharges } from "@/lib/online-charges-read";
@@ -11,7 +10,7 @@ import { mpConnectMode } from "@/lib/env";
 import { PageHeader } from "@/components/ui/page-header";
 import { CobrosClient } from "@/components/cobros/cobros-client";
 
-export const metadata = { title: `Cobros · ${BRAND_NAME}` };
+export const metadata = { title: "Cobros" };
 export const dynamic = "force-dynamic";
 
 type SP = Record<string, string | string[] | undefined>;
