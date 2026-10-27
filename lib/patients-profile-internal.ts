@@ -273,10 +273,14 @@ export async function patientBookingsSummaryInTx(
   take = 5
 ) {
   if (!seesBookings(access)) return [];
+  // HD-3 (PV §27): `getPatientBookingsSummary` es un export de `"use server"` (RPC) y le pasa el `take` del cliente tal
+  // cual: sin tope se pedían miles de turnos con su línea de cobro; NaN rompía en Prisma y un negativo lee desde el
+  // final. Los llamadores reales piden 4 (drawer) y 5 (perfil).
+  const cappedTake = Math.min(Math.max(Math.trunc(take) || 5, 1), 50);
   const rows = await tx.booking.findMany({
     where: { patientId, tenantId: actor.tenantId },
     orderBy: { scheduledFor: "desc" },
-    take,
+    take: cappedTake,
     select: {
       id: true,
       scheduledFor: true,

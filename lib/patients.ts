@@ -69,6 +69,7 @@ import {
   PatientAdminUpdate,
   PATIENT_CLINICAL_KEYS,
   CoverageSet,
+  EvaScoreCreate,
   type ActionResult,
   type PatientCreateInput,
   type PatientCreateOptionsInput,
@@ -1055,11 +1056,25 @@ export async function setPatientDiagnosis(...args: Parameters<typeof setPatientD
   return withReadOnlyResult(() => setPatientDiagnosisImpl(...args));
 }
 
+// HD-3 (PV §27): Next expone todo export de un `"use server"` como RPC; el drawer de la agenda no es el único cliente.
+// Sin tope se podía guardar un diagnóstico de megas (viaja a cada turno nuevo como título/descripción) y un no-string
+// rompía en `.trim()` con un TypeError que Next redacta. Const no exportada: `lib/validation.ts` es de LG-S esta ola.
+const PatientDiagnosisSet = z.object({
+  patientId: z.string().min(1).max(64),
+  title: z.string().max(200),
+  note: z.string().max(4000),
+});
+
 async function setPatientDiagnosisImpl(
-  patientId: string,
-  title: string,
-  note: string
+  patientIdArg: string,
+  titleArg: string,
+  noteArg: string
 ): Promise<ActionResult> {
+  const parsed = PatientDiagnosisSet.safeParse({ patientId: patientIdArg, title: titleArg, note: noteArg });
+  if (!parsed.success) {
+    return { ok: false, error: "El diagnóstico es muy largo: hasta 200 caracteres el título y 4000 la nota." };
+  }
+  const { patientId, title, note } = parsed.data;
   const actor = await getActor();
   // ES4 P4.Z (hallazgo S26b `diagnostico-sin-gate-de-modulo`): sin el módulo `diagnostico` (consultorio GENERAL) la UI
   // no muestra el diagnóstico, pero la action se podía invocar por RPC y escribía. Se corta antes de abrir la tx y
@@ -1107,11 +1122,20 @@ export async function recordEvaScore(...args: Parameters<typeof recordEvaScoreIm
   return withReadOnlyResult(() => recordEvaScoreImpl(...args));
 }
 
-async function recordEvaScoreImpl(input: {
+// HD-3 (PV §27): Next expone todo export de un `"use server"` como RPC; sin validar, `{ value: 11 }` o `7.5` quedaban
+// guardados (la columna es Int sin CHECK) y ensuciaban la curva de EVA. Reusa `EvaScoreCreate` (0..10 entero) con el
+// `patientId` acotado a 64 (un cuid tiene 25; el tope evita mandar un string enorme a la query del gate).
+const EvaScoreInput = EvaScoreCreate.extend({ patientId: z.string().min(1).max(64) });
+
+async function recordEvaScoreImpl(raw: {
   patientId: string;
   value: number;
   source?: string;
 }): Promise<ActionResult<{ id: string }>> {
+  // Antes de la tx y antes del actor: entrada inválida no abre conexión ni escribe.
+  const parsed = EvaScoreInput.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: "La EVA va de 0 a 10." };
+  const input = parsed.data;
   // Enmienda EV0 (S22b) tiraba `ForbiddenError` sin el módulo `evaluaciones` (C-EV4). ES4 P4.Z (hallazgo S26b): ahora
   // devuelve `{ok:false}` como el resto de las actions de la ficha (setPatientDiagnosis): en prod Next redacta el
   // mensaje de un throw y el cliente veía un error genérico. Sigue sin escribir.
@@ -1843,10 +1867,19 @@ async function bulkArchivePatientsImpl(input: {
  * archivos, títulos de planes y cambios de diagnóstico: con acceso básico
  * el feed filtraba HC que la ficha misma esconde. Básico/ajeno → `[]`.
  */
+// HD-3 (PV §27): tope del feed. Next expone el export como RPC y `take` iba directo de `opts.limit` a Prisma: sin tope
+// un cliente pedía todo el audit del paciente, y un negativo hace que Prisma lea desde el FINAL (los más viejos).
+// Clamp (no rechazo) como `patientBookingsSummaryInTx`: es una lectura y el llamador real pide 80.
+const ACTIVITY_LIMIT_DEFAULT = 60;
+const ACTIVITY_LIMIT_MAX = 200;
+
 export async function getPatientActivity(
   patientId: string,
   opts: { limit?: number } = {}
 ): Promise<ActivityEvent[]> {
+  if (typeof patientId !== "string" || !patientId || patientId.length > 64) return [];
+  const rawLimit = Math.trunc(Number(opts?.limit)) || ACTIVITY_LIMIT_DEFAULT;
+  const limit = Math.min(Math.max(rawLimit, 1), ACTIVITY_LIMIT_MAX);
   const actor = await getActor();
   const owned = await runWithRls(actor.tenantId, async (tx) => {
     if (await hcAccessError(actor, patientId, tx)) return null;
@@ -1881,7 +1914,7 @@ export async function getPatientActivity(
   const events = await runWithRls(actor.tenantId, (tx) => tx.auditEvent.findMany({
     where: { tenantId: actor.tenantId, OR: orFragments },
     orderBy: { createdAt: "desc" },
-    take: opts.limit ?? 60,
+    take: limit,
   }));
 
   // Resolve actor names in a single round-trip.
