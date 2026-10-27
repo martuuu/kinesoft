@@ -332,7 +332,7 @@ describe.skipIf(!RUN)("[AS-1b] pacientes editados por Secretaria/Admin, portal y
     await addPlanBooking(db, A, { patientId: id, scheduledFor: upcoming });
 
     asUser(sec.userId);
-    const row = (await listPatients({ q: tag })).find((r) => r.id === id);
+    const row = (await listPatients({ q: tag })).rows.find((r) => r.id === id);
     expect(row).toBeDefined();
     expect(row).toMatchObject({
       access: "admin",
@@ -352,7 +352,7 @@ describe.skipIf(!RUN)("[AS-1b] pacientes editados por Secretaria/Admin, portal y
 
     // Control: el titular (full) ve las notas y el plan.
     asUser(A.userId);
-    const full = (await listPatients({ q: tag })).find((r) => r.id === id);
+    const full = (await listPatients({ q: tag })).rows.find((r) => r.id === id);
     expect(full).toMatchObject({ access: "full", notes: "Nota clínica" });
     expect(full!.activePlans).toHaveLength(1);
   });

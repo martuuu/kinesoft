@@ -26,12 +26,16 @@
  * `editAdmin`, así que tampoco baja contactos. El audit suma `adminCount`.
  *
  * `actor` es el que autenticó la ruta (audit). Las filas salen de
- * `listPatients`, que resuelve el MISMO actor de la sesión del request y aplica
- * el scope de tenant + visibilidad; con `ids` se filtra DESPUÉS de ese scope,
+ * `listPatientsDirectory` (la misma lectura que `listPatients`), que resuelve el MISMO actor de la sesión del request
+ * y aplica el scope de tenant + visibilidad; con `ids` se filtra DESPUÉS de ese scope,
  * así que un id de otro tenant nunca aparece.
+ *
+ * HD-10 (PV §27): `listPatients` devuelve una PÁGINA de 50 desde que `/pacientes` pagina; el CSV tiene que seguir
+ * trayendo TODO el directorio, así que lee con `mode: "all"` (sin recorte), una vía `server-only` que ningún cliente
+ * puede pedir por RPC. Misma proyección, mismo orden y misma visibilidad que la página.
  */
 import "server-only";
-import { listPatients } from "@/lib/patients";
+import { listPatientsDirectory } from "@/lib/patients-list-internal";
 import { auditSecurityEvent } from "@/lib/audit";
 import { memberCapabilitiesForActor } from "@/lib/authz";
 import { csvRow } from "@/lib/csv";
@@ -44,8 +48,8 @@ export async function exportPatientsCsv(
   const ids = opts.ids && opts.ids.length > 0 ? opts.ids : undefined;
   const archived = ids ? "include" : (opts.archived ?? "exclude");
   const [active, archivedRows] = await Promise.all([
-    archived === "only" ? Promise.resolve([]) : listPatients({ filter: "all" }),
-    archived === "exclude" ? Promise.resolve([]) : listPatients({ filter: "archived" }),
+    archived === "only" ? Promise.resolve([]) : listPatientsDirectory({ filter: "all" }, "all").then((r) => r.rows),
+    archived === "exclude" ? Promise.resolve([]) : listPatientsDirectory({ filter: "archived" }, "all").then((r) => r.rows),
   ]);
   const caps = await memberCapabilitiesForActor(actor);
   const canSeeContacts = (p: { access: string }) => p.access === "full" || caps.has("patients.editAdmin");

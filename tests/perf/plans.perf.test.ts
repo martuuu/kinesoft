@@ -483,10 +483,27 @@ describe.skipIf(!RUN)("perf ES4 S26s — Planes, Seguimiento, agenda con planes 
   it("listPatients — 1.000 pacientes, 150 con plan (groupBy de S32): techo medido", async () => {
     const r = await bench("p.listPatients", noPrep, () => listPatients(), {
       budget: BUDGET.listPatients,
-      outcome: (x) => `${x.length} filas`,
+      outcome: (x) => `${x.rows.length} de ${x.total} filas`,
     });
-    expect(r.result.length).toBeGreaterThanOrEqual(1000);
+    // HD-10: la página trae 50 filas de un directorio de ≥ 1.000.
+    expect(r.result.total >= 1000 && r.result.rows.length === 50).toBe(true);
     expect(r.statements).toBeLessThanOrEqual(BUDGET.listPatients);
+  });
+
+  // HD-10: «Próximo turno» y «Última visita» ordenan por claves agregadas para TODO el tenant (un `groupBy`, sin N+1
+  // ni un IN de los 1.000 ids) y la página reusa ese agregado: mismo techo que el orden por apellido.
+  it("listPatients — orden «Próximo turno» y «Última visita» sobre 1.000 pacientes: mismo techo", async () => {
+    for (const [scenario, sort] of [
+      ["p.listPatients.upcoming", "upcoming.asc"],
+      ["p.listPatients.lastVisit", "lastVisit.desc"],
+    ] as const) {
+      const r = await bench(scenario, noPrep, () => listPatients({ sort }), {
+        budget: BUDGET.listPatients,
+        outcome: (x) => `${x.rows.length} de ${x.total} filas`,
+      });
+      expect(r.result.total >= 1000 && r.result.rows.length === 50).toBe(true);
+      expect(r.statements).toBeLessThanOrEqual(BUDGET.listPatients);
+    }
   });
 
   // ── Agenda con turnos de plan: ≤ +5 % contra la misma agenda sin planes ────

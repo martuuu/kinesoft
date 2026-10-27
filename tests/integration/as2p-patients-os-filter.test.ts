@@ -88,7 +88,7 @@ describe.skipIf(!RUN)("[AS-2p] /pacientes por obra social + proyección admin pa
   });
 
   const mine = async (insurerKey: string) =>
-    ids(await listPatients({ q: sfx, insurerKey })).sort();
+    ids((await listPatients({ q: sfx, insurerKey })).rows).sort();
 
   it("[AS-2p] por id del catálogo: solo la cobertura vigente matchea (una vieja no)", async () => {
     asUser(kine.userId);
@@ -110,7 +110,7 @@ describe.skipIf(!RUN)("[AS-2p] /pacientes por obra social + proyección admin pa
   it("[AS-2p] filas basic se descartan con el filtro; admin (Secretaria) se conservan", async () => {
     asUser(stranger.userId);
     // Sin filtro el kine sin acceso ve las filas (proyección básica)…
-    expect(ids(await listPatients({ q: sfx }))).toEqual(expect.arrayContaining([pOsde, pNone]));
+    expect(ids((await listPatients({ q: sfx })).rows)).toEqual(expect.arrayContaining([pOsde, pNone]));
     // …pero la obra social no es un oráculo.
     expect(await mine(osde)).toEqual([]);
     expect(await mine("particular")).toEqual([]);

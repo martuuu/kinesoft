@@ -163,7 +163,7 @@ describe.skipIf(!RUN)("S32 · listado de pacientes con planes por disciplina", (
 
   it("[S32] chips por disciplina: uno por plan ACTIVE vivo, con realizadas / sesiones vivas", async () => {
     asUser(K.userId);
-    const rows = await listPatients({ q: sfx });
+    const rows = (await listPatients({ q: sfx })).rows;
     const both = rows.find((r) => r.id === pBoth)!;
     // Más reciente primero (Osteo se creó después), igual que «Plan activo».
     expect(both.activePlans).toEqual([
@@ -181,7 +181,7 @@ describe.skipIf(!RUN)("S32 · listado de pacientes con planes por disciplina", (
 
   it("[S32] `liveProgramWhere`: un plan ACTIVE archivado y un COMPLETED no son plan activo", async () => {
     asUser(K.userId);
-    const rows = await listPatients({ q: sfx });
+    const rows = (await listPatients({ q: sfx })).rows;
     for (const id of [pArchivedActive, pCompleted, pPlain]) {
       const r = rows.find((x) => x.id === id)!;
       expect(r.activePlans).toEqual([]);
@@ -191,8 +191,8 @@ describe.skipIf(!RUN)("S32 · listado de pacientes con planes por disciplina", (
 
   it("[S32] «Con plan» / «Sin plan» usan el mismo predicado que la columna", async () => {
     asUser(K.userId);
-    expect(ids(await listPatients({ q: sfx, filter: "active" })).sort()).toEqual([pBoth, pNoDisc].sort());
-    expect(ids(await listPatients({ q: sfx, filter: "no-program" })).sort()).toEqual(
+    expect(ids((await listPatients({ q: sfx, filter: "active" })).rows).sort()).toEqual([pBoth, pNoDisc].sort());
+    expect(ids((await listPatients({ q: sfx, filter: "no-program" })).rows).sort()).toEqual(
       [pArchivedActive, pCompleted, pPlain].sort()
     );
   });
@@ -210,14 +210,14 @@ describe.skipIf(!RUN)("S32 · listado de pacientes con planes por disciplina", (
       await plan(K, { patientId: p, title: `Plan O${i}`, discipline: "OSTEOPATHY", sessions: [{}] });
     }
     const { result, m: after } = await measure(() => listPatients({ q: sfx }));
-    expect(result.length).toBe(8);
+    expect(result.rows.length).toBe(8);
     expect(after.statements).toBe(before.statements);
     expect(touches("Session")).toHaveLength(1);
   });
 
   it("[S32] fila basic (otro kine sin asignación ni share): sin chips", async () => {
     asUser(other.userId);
-    const row = (await listPatients({ q: sfx })).find((r) => r.id === pBoth)!;
+    const row = (await listPatients({ q: sfx })).rows.find((r) => r.id === pBoth)!;
     expect(row.access).toBe("basic");
     expect(row.activePlans).toEqual([]);
     expect(row.activeProgramTitle).toBeNull();
@@ -226,7 +226,7 @@ describe.skipIf(!RUN)("S32 · listado de pacientes con planes por disciplina", (
   it("[S32] GENERAL (sin `planes`): no consulta planes ni sesiones y no hay chips", async () => {
     asUser(G.userId);
     const { result } = await measure(() => listPatients({}));
-    const row = result.find((r) => r.id === gPatient)!;
+    const row = result.rows.find((r) => r.id === gPatient)!;
     expect(row.activePlans).toEqual([]);
     expect(touches("TreatmentProgram")).toEqual([]);
     expect(touches("Session")).toEqual([]);

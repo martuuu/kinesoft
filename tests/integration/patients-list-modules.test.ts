@@ -102,15 +102,15 @@ describe.skipIf(!RUN)("EV1-B · listPatients por módulos + ILIKE", () => {
 
   it("[EV1-B] GENERAL: «con plan / sin plan» se ignora y devuelve lo mismo que todos", async () => {
     asUser(G.userId);
-    const all = ids(await listPatients({}));
+    const all = ids((await listPatients({})).rows);
     expect(all).toEqual(expect.arrayContaining([g.withPlan, g.plain].sort()));
-    expect(ids(await listPatients({ filter: "active" }))).toEqual(all);
-    expect(ids(await listPatients({ filter: "no-program" }))).toEqual(all);
+    expect(ids((await listPatients({ filter: "active" })).rows)).toEqual(all);
+    expect(ids((await listPatients({ filter: "no-program" })).rows)).toEqual(all);
   });
 
   it("[EV1-B] GENERAL: sin include de programs (plan ACTIVE heredado no aparece)", async () => {
     asUser(G.userId);
-    const row = (await listPatients({})).find((r) => r.id === g.withPlan);
+    const row = (await listPatients({})).rows.find((r) => r.id === g.withPlan);
     expect(row).toBeDefined();
     expect(row!.access).toBe("full");
     expect(row!.activeProgramTitle).toBeNull();
@@ -119,7 +119,7 @@ describe.skipIf(!RUN)("EV1-B · listPatients por módulos + ILIKE", () => {
 
   it("[EV1-B] GENERAL: «última visita» = último turno COMPLETED", async () => {
     asUser(G.userId);
-    const rows = await listPatients({ sort: "lastVisit.desc" });
+    const rows = (await listPatients({ sort: "lastVisit.desc" })).rows;
     const plain = rows.find((r) => r.id === g.plain);
     expect(plain!.lastVisit?.toISOString()).toBe(g.visitAt.toISOString());
     expect(rows[0].id).toBe(g.plain);
@@ -127,32 +127,32 @@ describe.skipIf(!RUN)("EV1-B · listPatients por módulos + ILIKE", () => {
 
   it("[EV1-B] GENERAL: `diagnosisSlug` se ignora", async () => {
     asUser(G.userId);
-    const all = ids(await listPatients({}));
-    expect(ids(await listPatients({ diagnosisSlug: g.condSlug }))).toEqual(all);
-    expect(ids(await listPatients({ diagnosisSlug: "no-existe" }))).toEqual(all);
+    const all = ids((await listPatients({})).rows);
+    expect(ids((await listPatients({ diagnosisSlug: g.condSlug })).rows)).toEqual(all);
+    expect(ids((await listPatients({ diagnosisSlug: "no-existe" })).rows)).toEqual(all);
   });
 
   it("[EV1-B] control Kine: plan y diagnóstico siguen filtrando y el plan se muestra", async () => {
     asUser(K.userId);
-    expect(ids(await listPatients({ filter: "active" }))).toEqual([k.withPlan]);
-    const noProgram = ids(await listPatients({ filter: "no-program" }));
+    expect(ids((await listPatients({ filter: "active" })).rows)).toEqual([k.withPlan]);
+    const noProgram = ids((await listPatients({ filter: "no-program" })).rows);
     expect(noProgram).toContain(k.plain);
     expect(noProgram).not.toContain(k.withPlan);
-    expect(ids(await listPatients({ diagnosisSlug: k.condSlug }))).toEqual([k.withPlan]);
-    const row = (await listPatients({})).find((r) => r.id === k.withPlan);
+    expect(ids((await listPatients({ diagnosisSlug: k.condSlug })).rows)).toEqual([k.withPlan]);
+    const row = (await listPatients({})).rows.find((r) => r.id === k.withPlan);
     expect(row!.activeProgramTitle).toBe("Plan kine");
   });
 
   it("[EV1-B] búsqueda: «%» es literal (no trae todo el directorio)", async () => {
     asUser(K.userId);
-    expect(ids(await listPatients({ q: "%" }))).toEqual([pPct]);
+    expect(ids((await listPatients({ q: "%" })).rows)).toEqual([pPct]);
   });
 
   it("[EV1-B] búsqueda: «_» es literal (no matchea cualquier carácter)", async () => {
     asUser(K.userId);
-    expect(ids(await listPatients({ q: `Ruiz_Diaz ${sfx}` }))).toEqual([pUnderscore]);
+    expect(ids((await listPatients({ q: `Ruiz_Diaz ${sfx}` })).rows)).toEqual([pUnderscore]);
     // Sin comodines la búsqueda sigue siendo "contiene", sin mayúsculas.
-    expect(ids(await listPatients({ q: `ruiz` })).filter((id) => id === pUnderscore || id === pLookalike)).toEqual(
+    expect(ids((await listPatients({ q: `ruiz` })).rows).filter((id) => id === pUnderscore || id === pLookalike)).toEqual(
       [pUnderscore, pLookalike].sort()
     );
   });

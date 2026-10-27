@@ -130,29 +130,29 @@ describe.skipIf(!RUN)("P0.Z · hallazgos del revisor (b) de ES1", () => {
   it("[P0-Z] H-b1 listPatients: diagnóstico y con/sin plan no son oráculo para ASSISTANT, BILLING ni un kine en básico", async () => {
     for (const who of [assistant, billing, other]) {
       asUser(who.userId);
-      expect(ids(await listPatients({ diagnosisSlug: condSlug }))).not.toContain(pDx);
-      expect(ids(await listPatients({ filter: "active" }))).not.toContain(pDx);
+      expect(ids((await listPatients({ diagnosisSlug: condSlug })).rows)).not.toContain(pDx);
+      expect(ids((await listPatients({ filter: "active" })).rows)).not.toContain(pDx);
       // "Sin plan" también delata (por exclusión) quién tiene plan.
-      const noProgram = ids(await listPatients({ filter: "no-program" }));
+      const noProgram = ids((await listPatients({ filter: "no-program" })).rows);
       expect(noProgram).not.toContain(pPlain);
       expect(noProgram).not.toContain(pDx);
     }
     // Sin filtro clínico el directorio sigue mostrando a todos (proyección recortada).
     asUser(other.userId);
-    expect(ids(await listPatients({}))).toEqual(expect.arrayContaining([pDx, pPlain, pSec]));
+    expect(ids((await listPatients({})).rows)).toEqual(expect.arrayContaining([pDx, pPlain, pSec]));
     asUser(assistant.userId);
-    expect(ids(await listPatients({}))).toEqual(expect.arrayContaining([pDx, pPlain, pSec]));
+    expect(ids((await listPatients({})).rows)).toEqual(expect.arrayContaining([pDx, pPlain, pSec]));
 
     // Control: el kine a cargo filtra como siempre.
     asUser(kine.userId);
-    expect(ids(await listPatients({ diagnosisSlug: condSlug }))).toEqual([pDx]);
-    expect(ids(await listPatients({ filter: "active" }))).toContain(pDx);
-    const noProg = ids(await listPatients({ filter: "no-program" }));
+    expect(ids((await listPatients({ diagnosisSlug: condSlug })).rows)).toEqual([pDx]);
+    expect(ids((await listPatients({ filter: "active" })).rows)).toContain(pDx);
+    const noProg = ids((await listPatients({ filter: "no-program" })).rows);
     expect(noProg).toContain(pPlain);
     expect(noProg).not.toContain(pDx);
     // OWNER: full sobre todo.
     asUser(T.userId);
-    expect(ids(await listPatients({ diagnosisSlug: condSlug }))).toEqual([pDx]);
+    expect(ids((await listPatients({ diagnosisSlug: condSlug })).rows)).toEqual([pDx]);
   });
 
   it("[P0-Z] H-b1 listPatients: obra social, edad, última visita y email no filtran filas basic (sí las `admin`, que ven esos datos)", async () => {
@@ -163,18 +163,18 @@ describe.skipIf(!RUN)("P0.Z · hallazgos del revisor (b) de ES1", () => {
       { q: dxEmail },
     ];
     asUser(other.userId);
-    for (const f of masked) expect(ids(await listPatients(f))).not.toContain(pDx);
+    for (const f of masked) expect(ids((await listPatients(f)).rows)).not.toContain(pDx);
     // `admin` (PD-13) ve contacto, cobertura, nacimiento y turnos en el perfil:
     // filtrar por eso no le revela nada nuevo.
     asUser(assistant.userId);
-    for (const f of masked) expect(ids(await listPatients(f))).toContain(pDx);
+    for (const f of masked) expect(ids((await listPatients(f)).rows)).toContain(pDx);
     // Control: el kine a cargo.
     asUser(kine.userId);
-    for (const f of masked) expect(ids(await listPatients(f))).toContain(pDx);
+    for (const f of masked) expect(ids((await listPatients(f)).rows)).toContain(pDx);
     // Nombre y DNI siguen buscando para basic.
     asUser(other.userId);
     const dni = (await db.patient.findUniqueOrThrow({ where: { id: pDx } })).documentId!;
-    expect(ids(await listPatients({ q: dni }))).toContain(pDx);
+    expect(ids((await listPatients({ q: dni })).rows)).toContain(pDx);
   });
 
   // ── H-b2 ─────────────────────────────────────────────────────────────────

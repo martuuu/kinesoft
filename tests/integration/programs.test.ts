@@ -299,7 +299,7 @@ describe.skipIf(!RUN)("programas · server (P0-S02a)", () => {
     // orden físico (el primero insertado) y elegía este.
     await makeProgram(p, { title: "Viejo", createdAt: new Date("2030-01-01T12:00:00Z") });
     await makeProgram(p, { title: "Nuevo", createdAt: new Date("2030-03-01T12:00:00Z") });
-    const rows = await listPatients({ q: lastName });
+    const rows = (await listPatients({ q: lastName })).rows;
     const row = rows.find((r) => r.id === p);
     expect(row?.activeProgramTitle).toBe("Nuevo");
   });

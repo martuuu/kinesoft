@@ -39,6 +39,8 @@ type SP = {
   diagnosisSlug?: string;
   lastVisitFrom?: string;
   lastVisitTo?: string;
+  /** HD-10: página del directorio (1-based); el server la recorta a `[1, pageCount]`. */
+  page?: string;
 };
 
 const SORT_OPTIONS: { value: PatientSort; label: string }[] = [
@@ -79,7 +81,8 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
   // y en paralelo con el resto (encadenada a las capabilities, que ya están en el cache del request).
   const capsP = getCapabilities();
   // WA-U3: casilla de WhatsApp del alta. Con `WHATSAPP_MODE=off`, 0 sentencias; con cuenta, cacheada por tag.
-  const [patients, facets, insurers, caps, actor, assigneeRows, whatsappActive] = await Promise.all([
+  // HD-10: `listPatients` devuelve UNA página (50) con `total` y `totals` calculados sobre todas las filas visibles.
+  const [patientsPage, facets, insurers, caps, actor, assigneeRows, whatsappActive] = await Promise.all([
     listPatients({
       q,
       filter,
@@ -90,6 +93,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
       diagnosisSlug: diagnosisSlug || undefined,
       lastVisitFrom: lastVisitFrom || undefined,
       lastVisitTo: lastVisitTo || undefined,
+      page: searchParams.page ? Number(searchParams.page) : undefined,
     }),
     loadFilterFacets(),
     listInsurers({ onlyActive: true }),
@@ -109,21 +113,11 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
     createMode === "admin"
       ? (assigneeRows ?? []).map((p) => ({ id: p.id, name: displayMemberName(p.user.fullName) }))
       : undefined;
-  // S32: «Con plan» = al menos un plan ACTIVE y vivo (`activePlans`, mismo
-  // predicado que el filtro `active`/`no-program` de `listPatients`), así el
-  // número del pill coincide con la lista que abre. Una fila `basic` sale con
-  // `activePlans: []` (no se le ve el plan) y al filtrar no aparece (H-b1: los
-  // filtros clínicos solo dejan filas `full`), así que «Sin plan» cuenta solo
-  // filas `full` (ES4-Z: antes las contaba y el pill no coincidía con la lista).
+  // S32 / ES4-Z: «Con plan» / «Sin plan» cuentan solo filas `full` con el mismo predicado que el filtro. HD-10: los
+  // calcula el server sobre TODAS las filas visibles (`directoryTotals`), no sobre la página.
   const osOptions = insurers.filter((i) => !i.isParticular).map((i) => ({ id: i.id, name: i.name }));
-  const hasPlan = (p: (typeof patients)[number]) => (p.activePlans?.length ?? 0) > 0;
-  const totals = plansEnabled
-    ? {
-        all: patients.length,
-        withProgram: patients.filter(hasPlan).length,
-        withoutProgram: patients.filter((p) => p.access === "full" && !hasPlan(p)).length,
-      }
-    : { all: patients.length };
+  const patients = patientsPage.rows;
+  const totals = patientsPage.totals;
 
   const baseQS = (override: Record<string, string | undefined>) => {
     const sp = new URLSearchParams();
@@ -155,8 +149,8 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
         eyebrow="Pacientes"
         title={
           <>
-            Directorio · <span style={{ color: "var(--sky-700)" }}>{totals.all}</span>{" "}
-            {totals.all === 1 ? "paciente" : "pacientes"}
+            Directorio · <span style={{ color: "var(--sky-700)" }}>{patientsPage.total}</span>{" "}
+            {patientsPage.total === 1 ? "paciente" : "pacientes"}
           </>
         }
         actions={

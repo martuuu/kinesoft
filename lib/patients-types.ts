@@ -62,6 +62,51 @@ export type PatientSort =
   | "upcoming.asc"
   | "lastVisit.desc";
 
+/**
+ * HD-10 (PV §27): filas por página de `/pacientes` (`?page=`). Vive acá y no en `lib/patients.ts` ("use server": solo
+ * funciones async). Antes la página traía y renderizaba el directorio entero: con 1.000 pacientes, 1.000 filas
+ * hidratadas (cobertura, turnos, planes) por request.
+ */
+export const PATIENTS_PAGE_SIZE = 50;
+
+/** Contadores de los pills, sobre TODAS las filas visibles del filtro (no solo la página). Sin `planes`, solo `all`. */
+export type PatientsTotals = { all: number; withProgram?: number; withoutProgram?: number };
+
+/**
+ * HD-10: una página del directorio. `total` = filas visibles para el actor con estos filtros (= `totals.all`);
+ * `page` ya viene recortada a `[1, pageCount]` y `pageCount` ≥ 1 aunque no haya filas.
+ */
+export type PatientsPage = {
+  rows: PatientRow[];
+  total: number;
+  totals: PatientsTotals;
+  page: number;
+  pageCount: number;
+};
+
+export type ListPatientsOptions = {
+  q?: string;
+  filter?: "all" | "active" | "no-program" | "archived";
+  sort?: PatientSort;
+  /**
+   * T3e-2p (§23.9): obra social VIGENTE, `?os=` de /pacientes. Id del catálogo del tenant (`Insurer.id`) o
+   * `"particular"`. Reemplaza el `insurer` de texto (ILIKE sobre el nombre cacheado de CUALQUIER cobertura): matcheaba
+   * coberturas viejas y nombres parecidos («OSDE» traía «OSDE Binario» y a quien había sido de OSDE).
+   */
+  insurerKey?: string;
+  /** Inclusive age bounds in years (0..130). Translated to dateOfBirth ranges on the AR day. */
+  ageMin?: number;
+  ageMax?: number;
+  /** Last-diagnosis filter (Condition.slug) — patients whose active or
+   * most recent ClinicalCase resolved to this condition. */
+  diagnosisSlug?: string;
+  /** Inclusive last-visit (completed booking) date range, AR `yyyy-mm-dd`. */
+  lastVisitFrom?: string;
+  lastVisitTo?: string;
+  /** HD-10: página pedida (1-based, `?page=`); se recorta a `[1, pageCount]`. */
+  page?: number;
+};
+
 export type ActivityEvent = {
   id: string;
   action: string;
