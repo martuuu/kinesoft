@@ -26,6 +26,8 @@ vi.mock("@/lib/support-threads", () => ({
 vi.mock("@/lib/platform-inbox", () => ({
   replyInboxThread: async () => ({ ok: true, data: { messageId: "m", mail: "sent" } }),
   setInboxThreadStatus: async () => ({ ok: true, data: { changed: true } }),
+  takeInboxThread: async () => ({ ok: true, data: { changed: true } }),
+  addInboxNote: async () => ({ ok: true, data: { noteId: "n" } }),
   countInboxUnread: async () => 0,
 }));
 
@@ -42,8 +44,8 @@ import {
   isUnreadForPlatform,
   isUnreadForTenant,
   messageWhen,
-  type InboxThreadDetail,
   type SupportThreadRow,
+  type TicketDetail,
 } from "@/lib/support-threads-types";
 import { leadReceivedEmail, leadReplyEmail, supportMessagePlatformEmail, supportReplyTenantEmail } from "@/lib/email/templates-support";
 
@@ -116,7 +118,8 @@ describe("[PL-2d] Configuración → Soporte → Mensajes", () => {
   });
 });
 
-describe("[PL-2d] /plataforma → Mensajes", () => {
+// TK-U1 (PV §27): la bandeja pasó a «Tickets» (etapa + origen); los tags y la tarjeta se fijan en `tk-u1-tickets.test.tsx`.
+describe("[PL-2d] /plataforma → Tickets", () => {
   it("bandeja: filtros activos, no leídos, origen, contador de mensajes y «Ver más» con cursor", () => {
     const html = renderToStaticMarkup(
       <InboxList
@@ -134,6 +137,9 @@ describe("[PL-2d] /plataforma → Mensajes", () => {
               lastMessageAt: "2026-10-14T16:27:00.000Z",
               messageCount: 3,
               unread: true,
+              source: "TENANT_SUPPORT",
+              stage: "NEW",
+              takenByName: null,
             },
             {
               id: "b",
@@ -146,6 +152,9 @@ describe("[PL-2d] /plataforma → Mensajes", () => {
               lastMessageAt: "2026-10-14T12:00:00.000Z",
               messageCount: 1,
               unread: false,
+              source: "LANDING",
+              stage: "IN_PROGRESS",
+              takenByName: "Martín N.",
             },
           ],
           nextCursor: "2026-10-14T12:00:00.000Z|b",
@@ -155,19 +164,20 @@ describe("[PL-2d] /plataforma → Mensajes", () => {
     const t = text(html);
     expect(t).toContain("Kine Centro · 3 mensajes");
     expect(t).toContain("Laura · Kinesio Sur · 1 mensaje");
-    expect(t).toContain("Consultorio");
+    // TK-U1: el origen es el de Tickets («Soporte del consultorio» / «Web · contacto»), no «Consultorio» / «Consulta de la web».
+    expect(t).toContain("Soporte del consultorio");
+    expect(t).toContain("Web · contacto");
     // PL-Z: en la UI ya no se dice «Lead».
-    expect(t).toContain("Consulta de la web");
     expect(t).not.toMatch(/\bLeads?\b/);
     expect(html.match(/data-unread="true"/g)).toHaveLength(1);
     expect(html).toContain('href="/plataforma/mensajes/a"');
-    expect(html).toMatch(/aria-current="true"[^>]*>Abiertas</);
-    expect(html).toMatch(/aria-current="true"[^>]*>Todo</);
+    expect(html).toMatch(/aria-current="true"[^>]*>Abiertos</);
     expect(html).toContain(`href="/plataforma/mensajes?desde=${encodeURIComponent("2026-10-14T12:00:00.000Z|b")}"`);
   });
 
-  it("hilo de un lead: datos del lead (email como dato, con mailto), mensajes y responder", () => {
-    const thread: InboxThreadDetail = {
+  it("ticket de un lead: datos del lead (email como dato, con mailto), mensajes y responder", () => {
+    const lead = { name: "Laura", email: "laura@example.com", phone: "11 5555", clinicName: "Kinesio Sur", planInterest: "CLINICA" as const };
+    const thread: TicketDetail = {
       id: "l1",
       kind: "LEAD",
       subject: "Consulta de Laura · Kinesio Sur",
@@ -175,20 +185,27 @@ describe("[PL-2d] /plataforma → Mensajes", () => {
       createdAt: "2026-10-14T12:00:00.000Z",
       closedAt: null,
       tenant: null,
-      lead: { name: "Laura", email: "laura@example.com", phone: "11 5555", clinicName: "Kinesio Sur", planInterest: "CLINICA" },
+      lead,
       messages: [{ id: "m", authorKind: "LEAD", authorName: "Laura", mine: false, body: "¿Precios?", createdAt: "2026-10-14T12:00:00.000Z" }],
+      source: "LANDING",
+      stage: "NEW",
+      takenAt: null,
+      takenByName: null,
+      contact: { ...lead, tenant: null, userId: null },
+      notes: [],
     };
     const html = renderToStaticMarkup(<InboxThreadView thread={thread} />);
     const t = text(html);
-    expect(t).toContain("Email: laura@example.com");
+    // TK-U1: los datos van en la tarjeta «Contacto» (rótulo y valor en un <dl>).
+    expect(t).toContain("Email laura@example.com");
     expect(html).toContain('href="mailto:laura@example.com"');
-    expect(t).toContain("Plan que le interesa: Clínica");
+    expect(t).toContain("Plan que le interesa Clínica");
     expect(t).toContain("Responder a quien consultó (le llega por mail)");
-    expect(t).toContain("Cerrar conversación");
+    expect(t).toContain("Marcar resuelto");
     expect(t).toContain("¿Precios?");
   });
 
-  it("hilo cerrado de consultorio: link al consultorio, «Reabrir» y aviso de que responder reabre", () => {
+  it("ticket resuelto de consultorio: link al consultorio, «Reabrir» y aviso de que responder reabre", () => {
     const html = renderToStaticMarkup(
       <InboxThreadView
         thread={{
@@ -201,13 +218,27 @@ describe("[PL-2d] /plataforma → Mensajes", () => {
           tenant: { id: "ten1", name: "Kine Centro", slug: "kine-centro" },
           lead: null,
           messages: [],
+          source: "TENANT_SUPPORT",
+          stage: "CLOSED",
+          takenAt: null,
+          takenByName: null,
+          contact: {
+            name: null,
+            email: null,
+            phone: null,
+            clinicName: "Kine Centro",
+            planInterest: null,
+            tenant: { id: "ten1", name: "Kine Centro", slug: "kine-centro", phone: null, whatsapp: null },
+            userId: null,
+          },
+          notes: [],
         }}
       />
     );
     const t = text(html);
     expect(html).toContain('href="/plataforma/consultorios/ten1"');
     expect(t).toContain("Reabrir");
-    expect(t).toContain("Si respondés, la conversación se vuelve a abrir.");
+    expect(t).toContain("Si respondés, el ticket se vuelve a abrir.");
   });
 });
 

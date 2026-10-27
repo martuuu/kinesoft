@@ -36,6 +36,8 @@ import { unreadBadgeLabel } from "@/components/plataforma/inbox/inbox-logic";
  *
  * PL-2d: «Mensajes» (bandeja de soporte y leads) va después de Usuarios, con el contador de conversaciones sin leer
  * (`badge: "inbox"`, lo pide `useInboxUnread` en cada cambio de ruta).
+ * PV (§27, TK-U1): pasa a llamarse «Tickets» (todo contacto entra como ticket); la ruta sigue `/plataforma/mensajes`
+ * (D-TK2: hay mails y links guardados que la llevan).
  *
  * PL-3c: «Facturación» (estado contable de los consultorios) y «Precios» (lista de precios de los planes) después de
  * Mensajes. Íconos del set existente (no hay uno de recibo ni de etiqueta de precio; sumar uno es de `icons.tsx`).
@@ -52,7 +54,7 @@ export type PlatformNavItem = {
   match: string;
   exact?: boolean;
   icon: ComponentType<{ size?: number }>;
-  /** PL-2d: contador al lado del label. Hoy solo la bandeja de Mensajes. */
+  /** PL-2d: contador al lado del label. Hoy solo la bandeja de Tickets. */
   badge?: "inbox";
 };
 
@@ -66,7 +68,7 @@ export const PLATFORM_NAV_GROUPS: readonly PlatformNavGroup[] = [
       { href: "/plataforma", label: "Resumen", match: "/plataforma", exact: true, icon: IconChart },
       { href: "/plataforma/consultorios", label: "Consultorios", match: "/plataforma/consultorios", icon: IconHome },
       { href: "/plataforma/usuarios", label: "Usuarios", match: "/plataforma/usuarios", icon: IconUsers },
-      { href: "/plataforma/mensajes", label: "Mensajes", match: "/plataforma/mensajes", icon: IconBell, badge: "inbox" },
+      { href: "/plataforma/mensajes", label: "Tickets", match: "/plataforma/mensajes", icon: IconBell, badge: "inbox" },
       { href: "/plataforma/facturacion", label: "Facturación", match: "/plataforma/facturacion", icon: IconCheck },
       { href: "/plataforma/precios", label: "Precios", match: "/plataforma/precios", icon: IconStar },
       { href: "/plataforma/directorio", label: "Directorio", match: "/plataforma/directorio", icon: IconSearch },

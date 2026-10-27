@@ -39,7 +39,7 @@ describe("[BO3-A] PlatformShell", () => {
       "Resumen",
       "Consultorios",
       "Usuarios",
-      "Mensajes",
+      "Tickets", // PV §27 (TK-U1): antes «Mensajes»; la ruta sigue /plataforma/mensajes (D-TK2).
       "Facturación",
       "Precios",
       "Directorio",

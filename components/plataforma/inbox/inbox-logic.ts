@@ -8,16 +8,21 @@
  *  - `?origen=<slug>` con los slugs de `TICKET_MOTIVO` (los mismos de `/contacto?motivo=`);
  *  - `?desde=<cursor>`.
  * Los de PL-2d (`?estado=abiertas|cerradas|todas`, `?origen=consultorios|leads`) siguen: hay links guardados y mails
- * viejos que los llevan. Por eso la query trae también `status`/`kind` (derivados), que usa la lista de PL-2d hasta
- * que TK-U1 (Q3) la reemplace.
+ * viejos que los llevan. Por eso la query trae también `status`/`kind` (derivados): la lista de Tickets (TK-U1) filtra
+ * por `stage`/`source`, pero `kind` sigue viajando para que `?origen=leads` de un link viejo filtre lo mismo que antes.
  */
-import type {
-  InboxKindFilter,
-  InboxReplyMail,
-  InboxSourceFilter,
-  InboxStageFilter,
-  InboxStatusFilter,
+import {
+  messageWhen,
+  type InboxKindFilter,
+  type InboxReplyMail,
+  type InboxSourceFilter,
+  type InboxStageFilter,
+  type InboxStatusFilter,
+  type TicketDetail,
+  type TicketStage,
 } from "@/lib/support-threads-types";
+import { toArMobileE164 } from "@/lib/phone-e164";
+import { SAAS_PLAN_LABEL } from "@/lib/tenant-modules";
 import {
   SUPPORT_TICKET_SOURCES,
   TICKET_MOTIVO,
@@ -111,6 +116,11 @@ export function inboxHref(q: Partial<Omit<InboxQuery, "cursor">>, cursor?: strin
   return s ? `${INBOX_PATH}?${s}` : INBOX_PATH;
 }
 
+/** Slug de `?estado=` de una etapa, o null para el default («Abiertos»). Lo usa el form GET del select de origen. */
+export function stageSlugOf(stage: InboxStageFilter): string | null {
+  return STAGE_SLUG[stage];
+}
+
 export function inboxThreadHref(id: string): string {
   return `${INBOX_PATH}/${encodeURIComponent(id)}`;
 }
@@ -178,4 +188,91 @@ export function replyMailMessage(kind: "TENANT" | "LEAD", mail: InboxReplyMail):
 export function unreadBadgeLabel(n: number): string | null {
   if (!Number.isFinite(n) || n <= 0) return null;
   return n > 9 ? "9+" : String(Math.floor(n));
+}
+
+// ── Tickets (TK-U1) ──────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Tono del tag de etapa. El tag lleva el texto («Nuevo» / «En curso» / «Resuelto»): el color es un canal más, no el
+ * único. Nuevo en lima (lo que hay que agarrar), En curso en sky, Resuelto apagado.
+ */
+export const STAGE_TAG_TONE: Record<TicketStage, "lime" | "sky" | "soft"> = {
+  NEW: "lime",
+  IN_PROGRESS: "sky",
+  CLOSED: "soft",
+};
+
+/** Copy del confirm de «Marcar resuelto» (brief §A «Copy», literal). */
+export function resolveConfirmMessage(kind: "TENANT" | "LEAD"): string {
+  return kind === "TENANT"
+    ? "El consultorio lo va a ver cerrado. Si vuelve a escribir, entra como ticket nuevo."
+    : "Pasa a Resueltos. Si respondés, se vuelve a abrir.";
+}
+
+export type ContactRow = {
+  label:
+    | "Nombre"
+    | "Email"
+    | "Teléfono"
+    | "WhatsApp"
+    | "Consultorio"
+    | "Usuario"
+    | "Plan que le interesa"
+    | "Origen"
+    | "Recibido"
+    | "Tomado por";
+  value: string;
+  /** `mailto:` / `tel:` / `https://wa.me/` (externos) o una ruta de /plataforma (internos). */
+  href?: string;
+  external?: boolean;
+};
+
+/** `tel:` con solo dígitos y un `+` inicial: los espacios y guiones del dato cargado no van en el URI. */
+function telHref(raw: string): string | null {
+  const t = raw.trim();
+  const digits = t.replace(/\D/g, "");
+  if (digits.length < 6) return null;
+  return `tel:${t.startsWith("+") ? "+" : ""}${digits}`;
+}
+
+/**
+ * Filas de la tarjeta «Contacto» (brief §A): solo las que tienen dato, en el orden del brief. En Plataforma los links
+ * directos están bien (decisión de Martin: «Yo me comunico luego con cada cliente»): email con `mailto:`, teléfono con
+ * `tel:` y WhatsApp con `wa.me` solo si el número es un celular argentino válido (`toArMobileE164`: un fijo en `wa.me`
+ * abre «el número no está en WhatsApp»; ahí va el número como texto).
+ * WhatsApp: el del consultorio (`Tenant.whatsapp`) o, si no hay, el teléfono del contacto cuando es celular. Teléfono:
+ * el del contacto (lead) o el del consultorio. «Usuario» linkea a /plataforma/usuarios (quien abrió el ticket).
+ */
+export function ticketContactRows(t: TicketDetail): ContactRow[] {
+  const c = t.contact;
+  const rows: ContactRow[] = [];
+  if (c.name?.trim()) rows.push({ label: "Nombre", value: c.name.trim() });
+  if (c.email?.trim()) rows.push({ label: "Email", value: c.email.trim(), href: `mailto:${c.email.trim()}`, external: true });
+
+  const phone = c.phone?.trim() || c.tenant?.phone?.trim() || null;
+  if (phone) {
+    const href = telHref(phone);
+    rows.push(href ? { label: "Teléfono", value: phone, href, external: true } : { label: "Teléfono", value: phone });
+  }
+  const tenantWa = c.tenant?.whatsapp?.trim() || null;
+  const waE164 = toArMobileE164(tenantWa ?? phone);
+  if (waE164) {
+    rows.push({ label: "WhatsApp", value: tenantWa ?? phone ?? waE164, href: `https://wa.me/${waE164.replace(/^\+/, "")}`, external: true });
+  } else if (tenantWa) {
+    rows.push({ label: "WhatsApp", value: tenantWa });
+  }
+
+  if (c.tenant) {
+    rows.push({ label: "Consultorio", value: c.tenant.name, href: `/plataforma/consultorios/${encodeURIComponent(c.tenant.id)}` });
+  } else if (c.clinicName?.trim()) {
+    rows.push({ label: "Consultorio", value: c.clinicName.trim() });
+  }
+  if (c.userId) rows.push({ label: "Usuario", value: "Ver en Usuarios", href: `/plataforma/usuarios/${encodeURIComponent(c.userId)}` });
+  if (c.planInterest) rows.push({ label: "Plan que le interesa", value: SAAS_PLAN_LABEL[c.planInterest] });
+  rows.push({ label: "Origen", value: TICKET_SOURCE_LABEL[t.source] });
+  rows.push({ label: "Recibido", value: messageWhen(t.createdAt) });
+  if (t.takenByName) {
+    rows.push({ label: "Tomado por", value: t.takenAt ? `${t.takenByName} · ${messageWhen(t.takenAt)}` : t.takenByName });
+  }
+  return rows;
 }

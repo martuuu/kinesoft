@@ -34,7 +34,7 @@ describe("[BO3-A] PlatformNav", () => {
       ["/plataforma", "Resumen"],
       ["/plataforma/consultorios", "Consultorios"],
       ["/plataforma/usuarios", "Usuarios"],
-      ["/plataforma/mensajes", "Mensajes"],
+      ["/plataforma/mensajes", "Tickets"],
       ["/plataforma/facturacion", "Facturación"],
       ["/plataforma/precios", "Precios"],
       ["/plataforma/directorio", "Directorio"],
@@ -74,8 +74,8 @@ describe("[BO3-A] PlatformNav", () => {
     expect(activeLabels(render("/plataforma/otra"))).toEqual([]);
   });
 
-  it("[PL-2d] Mensajes: se activa por prefijo y muestra el contador de no leídos (9+ desde 10; 0 = sin contador)", () => {
-    expect(activeLabels(render("/plataforma/mensajes/abc"))).toEqual(["Mensajes"]);
+  it("[PL-2d][TK-21] Tickets (antes Mensajes, misma ruta): se activa por prefijo y muestra el contador de no leídos (9+ desde 10; 0 = sin contador)", () => {
+    expect(activeLabels(render("/plataforma/mensajes/abc"))).toEqual(["Tickets"]);
     pathname = "/plataforma";
     const withCount = renderToStaticMarkup(<PlatformNav inboxUnread={3} />);
     expect(withCount).toMatch(/aria-label="3 sin leer"[^>]*>3</);

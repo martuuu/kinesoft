@@ -1,21 +1,28 @@
 /**
- * Lista de la bandeja de /plataforma → Mensajes (PL-2d). Sin "use client": filtros y paginado son links que arma el
- * server con la página que trajo `listInbox` (los filtros viven en la URL, como en Usuarios).
+ * Lista de la bandeja de /plataforma → Tickets (PL-2d; tickets en PV §27, TK-U1). Sin "use client": los filtros de
+ * etapa son links y el de origen un form GET (funcionan sin JS), con la página que trajo `listInbox` (los filtros viven
+ * en la URL, como en Usuarios).
  *
- * No leídos: punto + negrita + fondo (no solo color). Origen con Tag («Consultorio» / «Consulta de la web»). En 360 px cada fila
- * se apila (flex-wrap) en vez de scrollear la página. MB-1f: los chips de filtro y la paginación miden 44 px bajo 768
- * (dos grupos de 3 chips: no hace falta Drawer de filtros).
+ * Cada fila: tag de etapa («Nuevo / En curso / Resuelto», el texto es el canal; el tono acompaña), origen
+ * (`TICKET_SOURCE_LABEL`) y «Tomado por …» si alguien lo tomó. No leídos: punto + negrita + fondo (no solo color). En
+ * 360 px cada fila se apila (flex-wrap) en vez de scrollear la página. MB-1f: chips de filtro y paginación de 44 px
+ * bajo 768. El origen es un select (10 orígenes no entran como chips en 390 px sin un Drawer de filtros).
  */
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
-import { SUPPORT_STATUS_LABEL, messageWhen, type InboxPage } from "@/lib/support-threads-types";
+import { Button } from "@/components/ui/button";
+import { FormField } from "@/components/ui/form-field";
+import { TICKET_STAGE_LABEL, messageWhen, type TicketInboxPage } from "@/lib/support-threads-types";
+import { TICKET_SOURCE_LABEL, motivoOfSource } from "@/lib/support-ticket-sources";
 import {
-  KIND_FILTERS,
-  KIND_LABEL,
-  STATUS_FILTERS,
+  INBOX_PATH,
+  SOURCE_FILTERS,
+  STAGE_FILTERS,
+  STAGE_TAG_TONE,
   inboxHref,
   inboxThreadHref,
+  stageSlugOf,
   type InboxQuery,
 } from "@/components/plataforma/inbox/inbox-logic";
 import table from "@/components/plataforma/responsive-table.module.css";
@@ -59,26 +66,58 @@ function FilterLinks<T extends string>({
   );
 }
 
-export function InboxList({ page, query }: { page: InboxPage; query: InboxQuery }) {
-  const base = { status: query.status, kind: query.kind };
+/**
+ * Select «Origen» por GET: lleva la etapa actual como hidden y nada de cursor (cambiar el filtro vuelve al principio).
+ * «Todos los orígenes» va con valor vacío, que `parseInboxQuery` lee como `all`.
+ */
+function SourceFilter({ query }: { query: InboxQuery }) {
+  const stageSlug = stageSlugOf(query.stage);
+  return (
+    <form
+      method="get"
+      action={INBOX_PATH}
+      aria-label="Filtrar por origen"
+      style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}
+    >
+      {stageSlug && <input type="hidden" name="estado" value={stageSlug} />}
+      <div style={{ minWidth: 220, flex: "1 1 220px" }}>
+        <FormField
+          as="select"
+          label="Origen"
+          name="origen"
+          defaultValue={query.source === "all" ? "" : motivoOfSource(query.source)}
+          options={SOURCE_FILTERS.map((o) => ({ value: o.value === "all" ? "" : motivoOfSource(o.value), label: o.label }))}
+        />
+      </div>
+      <Button type="submit" variant="ghost">
+        Filtrar
+      </Button>
+    </form>
+  );
+}
+
+export function InboxList({ page, query }: { page: TicketInboxPage; query: InboxQuery }) {
+  // `kind` viaja para no perder el filtro de un link viejo (`?origen=leads`) al cambiar de etapa o paginar.
+  const base = { stage: query.stage, source: query.source, kind: query.kind };
   return (
     <Card style={{ padding: 16, display: "grid", gap: 14 }}>
-      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", justifyContent: "space-between" }}>
-        <FilterLinks label="Estado" options={STATUS_FILTERS} current={query.status} hrefOf={(v) => inboxHref({ ...base, status: v })} />
-        <FilterLinks label="Origen" options={KIND_FILTERS} current={query.kind} hrefOf={(v) => inboxHref({ ...base, kind: v })} />
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", justifyContent: "space-between", alignItems: "flex-end" }}>
+        <FilterLinks label="Etapa" options={STAGE_FILTERS} current={query.stage} hrefOf={(v) => inboxHref({ ...base, stage: v })} />
+        <SourceFilter query={query} />
       </div>
 
       {page.rows.length === 0 ? (
         <p style={{ margin: "8px 4px", fontSize: 13.5, color: "var(--navy-500)" }}>
-          {query.cursor ? "No hay más mensajes." : "No hay mensajes con este filtro."}
+          {query.cursor ? "No hay más tickets." : "No hay tickets con este filtro."}
         </p>
       ) : (
-        <ul aria-label="Conversaciones" style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 6 }}>
+        <ul aria-label="Tickets" style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 6 }}>
           {page.rows.map((r) => (
             <li key={r.id}>
               <Link
                 href={inboxThreadHref(r.id)}
                 data-unread={r.unread ? "true" : undefined}
+                data-stage={r.stage}
                 style={{
                   textDecoration: "none",
                   display: "flex",
@@ -107,9 +146,16 @@ export function InboxList({ page, query }: { page: InboxPage; query: InboxQuery 
                   <span style={{ display: "block", fontSize: 12.5, color: "var(--navy-500)", marginTop: 2, overflowWrap: "anywhere" }}>
                     {r.fromLabel} · {r.messageCount === 1 ? "1 mensaje" : `${r.messageCount} mensajes`} · {messageWhen(r.lastMessageAt)}
                   </span>
+                  {r.takenByName && (
+                    <span style={{ display: "block", fontSize: 12.5, color: "var(--navy-700)", marginTop: 2 }}>
+                      Tomado por {r.takenByName}
+                    </span>
+                  )}
                 </span>
-                <Tag tone={r.kind === "LEAD" ? "lime" : "sky"}>{KIND_LABEL[r.kind]}</Tag>
-                <Tag tone="soft">{SUPPORT_STATUS_LABEL[r.status]}</Tag>
+                <span style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  <Tag tone="soft">{TICKET_SOURCE_LABEL[r.source]}</Tag>
+                  <Tag tone={STAGE_TAG_TONE[r.stage]}>{TICKET_STAGE_LABEL[r.stage]}</Tag>
+                </span>
               </Link>
             </li>
           ))}
