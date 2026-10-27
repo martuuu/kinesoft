@@ -55,7 +55,10 @@ export type EmailKind =
   | "billing_debit_failed" // MP rechazó un débito del período
   | "billing_cancel_scheduled" // el consultorio pidió la baja (acceso hasta el fin del período)
   | "billing_cancelled" // la baja se aplicó: solo lectura
-  | "billing_plan_change"; // cambio de plan programado / aplicado / no aplicado / subida
+  | "billing_plan_change" // cambio de plan programado / aplicado / no aplicado / subida
+  // HD-11 (PV): el titular canceló el débito automático desde Mercado Pago. Kind propio: antes se reusaba
+  // `billing_debit_failed` sin fecha (decía «No pudimos debitar», falso) y `buildMail` lo descartaba.
+  | "billing_debit_cancelled";
 
 /**
  * Por dónde salió (o no) un mail:

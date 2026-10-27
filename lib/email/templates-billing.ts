@@ -232,6 +232,26 @@ export function billingDebitFailedEmail(p: { tenantName: string; amountCents: nu
   });
 }
 
+/**
+ * HD-11 (PV): el titular canceló el débito automático desde su cuenta de Mercado Pago (el consumidor del preapproval
+ * apaga el débito y deja el método sin elegir). Sin monto ni fecha: no hubo un cobro rechazado ni cambia el vencimiento,
+ * solo que la próxima cuota ya no sale sola. Antes se mandaba «No pudimos debitar» (falso) y sin fecha no salía nada.
+ */
+export function billingDebitCancelledEmail(p: { tenantName: string; url: string }): RenderedEmail {
+  const tenant = plain(p.tenantName);
+  return render({
+    subject: `Se canceló el débito automático de ${BRAND_NAME}`,
+    context: tenant,
+    title: "Se canceló el débito automático",
+    paragraphs: [
+      `El débito automático de la cuota de ${tenant} se canceló desde Mercado Pago: las próximas cuotas no se debitan solas.`,
+      "Elegí cómo seguir pagando desde Configuración → Facturación.",
+    ],
+    cta: { label: "Ir a Facturación", url: p.url },
+    footer: FOOTER(tenant),
+  });
+}
+
 /** El consultorio pidió la baja: sigue con acceso completo hasta el fin del período pago. */
 export function billingCancelScheduledEmail(p: { tenantName: string; accessUntil: string; url: string }): RenderedEmail {
   const tenant = plain(p.tenantName);

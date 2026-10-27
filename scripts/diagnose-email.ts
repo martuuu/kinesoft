@@ -68,6 +68,7 @@ import {
   billingPastDueEmail,
   billingPriceChangeEmail,
   billingDebitActivatedEmail,
+  billingDebitCancelledEmail,
   billingDebitFailedEmail,
   billingCancelScheduledEmail,
   billingCancelledEmail,
@@ -168,6 +169,7 @@ function samples(base: string): Record<DiagnosableKind, () => RenderedEmail> {
       }),
     // MPS-3c (suscripción con Mercado Pago).
     billing_debit_activated: () => billingDebitActivatedEmail({ tenantName: TENANT, url: link("/configuracion?tab=plan") }),
+    billing_debit_cancelled: () => billingDebitCancelledEmail({ tenantName: TENANT, url: link("/configuracion?tab=plan") }),
     billing_debit_failed: () =>
       billingDebitFailedEmail({ tenantName: TENANT, amountCents: 2_500_000, dueDate: "2026-12-09", url: link("/configuracion?tab=plan") }),
     billing_cancel_scheduled: () =>

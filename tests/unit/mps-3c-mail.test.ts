@@ -14,10 +14,12 @@ import {
   billingCancelledEmail,
   billingChargeCreatedEmail,
   billingDebitActivatedEmail,
+  billingDebitCancelledEmail,
   billingDebitFailedEmail,
   billingPlanChangeEmail,
 } from "@/lib/email/templates-billing";
 import type { RenderedEmail } from "@/lib/email/types";
+import { BRAND_NAME } from "@/lib/brand";
 import { formatARS } from "@/lib/format";
 
 const URL = "https://app.kinesoft.com.ar/configuracion?tab=facturacion";
@@ -106,6 +108,21 @@ describe("[MPS-3c] plantillas de C-MPS12", () => {
     expect(up.text).toContain("Pasaste a Consultorio.");
     expect(up.text).toContain(`En el próximo cargo se suman ${formatARS(123_400)}`);
     for (const m of [sch, app, no, up]) expectNoPhi(m);
+  });
+
+  // HD-11 (PV): mail propio para el débito cancelado desde Mercado Pago. Antes se reusaba «no pudimos debitar» sin
+  // fecha (falso: no hubo ningún rechazo) y `buildMail` lo descartaba por falta de vencimiento.
+  it("[HD-11] débito cancelado desde Mercado Pago: asunto con BRAND_NAME, sin monto ni fecha, sin PHI", () => {
+    const m = billingDebitCancelledEmail({ tenantName: TENANT, url: URL });
+    expect(m.subject).toBe(`Se canceló el débito automático de ${BRAND_NAME}`);
+    expect(m.text).toContain("se canceló desde Mercado Pago: las próximas cuotas no se debitan solas.");
+    expect(m.text).toContain("Elegí cómo seguir pagando desde Configuración → Facturación.");
+    expect(m.text).toContain(URL);
+    // Nada que parezca un rechazo ni un monto o fecha inventados.
+    expect(`${m.subject}\n${m.text}`).not.toMatch(/\$|no pudimos|rechaz|vence|antes del/i);
+    expectNoPhi(m);
+    const evil = billingDebitCancelledEmail({ tenantName: '<img src=x onerror="a">', url: URL });
+    expect(evil.html).not.toContain("<img src=x");
   });
 
   it("[MPS-3c] escapa el nombre del consultorio en el html", () => {
@@ -197,6 +214,19 @@ describe("[MPS-3c] sendSaasBillingMpMail", () => {
     // débito rechazado sin monto: no se arma un mail con «$ 0».
     expect(await sendSaasBillingMpMail("billing_debit_failed", "t1", { entity: "X", entityId: "a", paymentId: "p" })).toEqual({ sent: 0, notSent: 0 });
     expect(claimed.size).toBe(0);
+  });
+
+  it("[HD-11] billing_debit_cancelled: sale sin monto ni fecha, una vez por autorización (billing_debit_cancelled:<preapprovalId>)", async () => {
+    const { sendSaasBillingMpMail } = await import("@/lib/saas-billing-mail-internal");
+    const data = { entity: "SaasSubscription", entityId: "pre-1" };
+    expect(await sendSaasBillingMpMail("billing_debit_cancelled", "t1", data)).toEqual({ sent: 2, notSent: 0 });
+    expect([...claimed]).toEqual(["billing_debit_cancelled:pre-1"]);
+    expect(sent[0]).toMatchObject({ kind: "billing_debit_cancelled", subject: `Se canceló el débito automático de ${BRAND_NAME}` });
+    // El webhook repetido (u otro día) no vuelve a avisar; otra autorización cancelada sí.
+    expect(await sendSaasBillingMpMail("billing_debit_cancelled", "t1", data)).toEqual({ sent: 0, notSent: 0 });
+    expect(await sendSaasBillingMpMail("billing_debit_cancelled", "t1", { ...data, effectiveOn: "2026-12-04" })).toEqual({ sent: 0, notSent: 0 });
+    await sendSaasBillingMpMail("billing_debit_cancelled", "t1", { ...data, entityId: "pre-2" });
+    expect(sent).toHaveLength(4);
   });
 
   it("[MPS-3c] nunca tira", async () => {

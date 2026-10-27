@@ -23,17 +23,19 @@ import {
   billingCancelScheduledEmail,
   billingCancelledEmail,
   billingDebitActivatedEmail,
+  billingDebitCancelledEmail,
   billingDebitFailedEmail,
   billingPlanChangeEmail,
 } from "@/lib/email/templates-billing";
 
-/** Los EmailKind nuevos de C-MPS12 (literales del brief). */
+/** Los EmailKind nuevos de C-MPS12 (literales del brief), más el de HD-11 (débito cancelado desde Mercado Pago). */
 export type SaasBillingMpMailKind =
   | "billing_debit_activated"
   | "billing_debit_failed"
   | "billing_cancel_scheduled"
   | "billing_cancelled"
-  | "billing_plan_change";
+  | "billing_plan_change"
+  | "billing_debit_cancelled";
 
 export const SAAS_BILLING_MP_MAIL_KINDS = [
   "billing_debit_activated",
@@ -41,6 +43,7 @@ export const SAAS_BILLING_MP_MAIL_KINDS = [
   "billing_cancel_scheduled",
   "billing_cancelled",
   "billing_plan_change",
+  "billing_debit_cancelled",
 ] as const satisfies readonly SaasBillingMpMailKind[];
 
 /** Datos del mail (cada plantilla usa los suyos; todo opcional salvo la entidad para el log/idempotencia). */
@@ -81,6 +84,9 @@ const SYSTEM_ACTOR: PlatformActorRef = { userId: null, email: null, homeTenantId
  *    (`lib/saas-billing-mp-internal.ts`) lo pisa con `idempotencyKey = billing_debit_failed:<preapproval>:<período>`
  *    (ZF1): uno por período, porque MP recicla el rechazado varios días y cada intento es otro pago;
  *  - `billing_debit_activated:<preapprovalId>`: un aviso por autorización;
+ *  - `billing_debit_cancelled:<preapprovalId>` (HD-11): un aviso por autorización cancelada desde MP. Sin fecha en la
+ *    clave a propósito: MP repite el aviso (y la conciliación puede volver a verlo otro día) y un preapproval
+ *    cancelado es terminal, así que no hay un «segundo» cancelado legítimo del mismo id;
  *  - `cron.billing_<kind>:<tenant>:<fecha>`: baja programada, baja aplicada y cambio de plan (con el resultado en el
  *    kind, para que «programado» y «aplicado» del mismo día no se pisen).
  */
@@ -92,6 +98,8 @@ export function saasMpMailKey(kind: SaasBillingMpMailKind, tenantId: string, dat
       return `billing_debit_failed:${data.entityId}:${data.paymentId ?? "-"}`;
     case "billing_debit_activated":
       return `billing_debit_activated:${data.entityId}`;
+    case "billing_debit_cancelled":
+      return `billing_debit_cancelled:${data.entityId}`;
     case "billing_plan_change":
       return `cron.billing_plan_change_${normalizeOutcome(data.planChangeOutcome) ?? "unknown"}:${tenantId}:${day}`;
     default:
@@ -113,6 +121,9 @@ function buildMail(kind: SaasBillingMpMailKind, tenantName: string, data: SaasBi
   switch (kind) {
     case "billing_debit_activated":
       return billingDebitActivatedEmail({ tenantName, url });
+    case "billing_debit_cancelled":
+      // Sin monto ni fecha (HD-11): no hubo intento de cobro ni vencimiento nuevo; solo cambia cómo se paga.
+      return billingDebitCancelledEmail({ tenantName, url });
     case "billing_debit_failed":
       if (data.amountCents == null || data.amountCents <= 0 || !data.effectiveOn) return null;
       return billingDebitFailedEmail({ tenantName, amountCents: data.amountCents, dueDate: data.effectiveOn, url });

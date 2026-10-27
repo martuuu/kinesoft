@@ -73,6 +73,9 @@ describe("[MPS-K] contratos de C-MPS5..C-MPS12", () => {
       "billing_cancel_scheduled",
       "billing_cancelled",
       "billing_plan_change",
+      // HD-11 (PV): el titular canceló el débito desde Mercado Pago (antes salía como «no pudimos debitar» sin fecha y
+      // `buildMail` lo descartaba: no llegaba ningún aviso).
+      "billing_debit_cancelled",
     ]);
   });
 });

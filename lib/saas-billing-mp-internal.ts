@@ -615,14 +615,12 @@ export async function consumeSaasPreapproval(preapprovalId: string, opts?: SaasM
       })
     );
   } else if (out.kind === "cancelled_by_mp") {
-    const amountCents = out.amountCents;
+    // HD-11: mail propio. Antes iba `billing_debit_failed` sin `effectiveOn`: `buildMail` lo descartaba (no avisaba
+    // nada) y su copy («No pudimos debitar…, pagalo antes del…») era falso para una cancelación. Sin monto ni fecha;
+    // la clave `billing_debit_cancelled:<preapprovalId>` frena el replay de MP. Solo esta rama (lo canceló el titular
+    // desde MP): las cancelaciones propias caen en `ours` y no avisan.
     await afterCommit("debit_cancelled_by_mp", tenantId, () =>
-      sendMpMail("billing_debit_failed", tenantId, {
-        entity: "SaasSubscription",
-        entityId: preapprovalId,
-        amountCents,
-        reason: "El débito automático se canceló desde Mercado Pago.",
-      })
+      sendMpMail("billing_debit_cancelled", tenantId, { entity: "SaasSubscription", entityId: preapprovalId })
     );
   }
   await afterCommit("sync", tenantId, () => syncAfterCommit(tenantId));
