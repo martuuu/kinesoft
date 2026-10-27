@@ -10,6 +10,7 @@ import { applyStatus, cancelQueuedInTx, drainAccount, type WaStatusInput } from 
 import { handleInboundMessage, type WaInboundMessage, type WaInboundOutcome, type WaRoutedAccount } from "@/lib/whatsapp/reply-internal";
 import { prepareWhatsAppDocument } from "@/lib/whatsapp/document-internal";
 import type { WaTemplateStatus } from "@/lib/whatsapp/types";
+import { readCappedBody as readCappedBodyHttp } from "@/lib/http/capped-body";
 
 /**
  * WA-S3 (T6, C-WA9, brief §26.5) · El cuerpo del webhook de Meta, YA con la firma verificada por la ruta
@@ -63,29 +64,8 @@ export type WaWebhookSummary = {
   outcomes: WaInboundOutcome[];
 };
 
-/**
- * Lee el cuerpo CRUDO con tope: `Content-Length` declarado de más → corta sin leer; sin `Content-Length` (chunked) →
- * lee hasta pasarse y corta. Devuelve los bytes tal cual llegaron (la firma es sobre ellos) o `too_large`.
- */
-export async function readCappedBody(req: Request, max: number = WA_WEBHOOK_MAX_BYTES): Promise<Buffer | "too_large"> {
-  const declared = Number(req.headers.get("content-length") ?? "");
-  if (Number.isFinite(declared) && declared > max) return "too_large";
-  if (!req.body) return Buffer.alloc(0);
-  const reader = req.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > max) {
-      await reader.cancel().catch(() => undefined);
-      return "too_large";
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks);
-}
+/** Cuerpo CRUDO con el tope de WA (la firma es sobre esos bytes). La lectura vive en `lib/http/capped-body.ts` (HD-4). */
+export const readCappedBody = (req: Request, max: number = WA_WEBHOOK_MAX_BYTES) => readCappedBodyHttp(req, max);
 
 type Obj = Record<string, unknown>;
 const isObj = (x: unknown): x is Obj => typeof x === "object" && x !== null && !Array.isArray(x);

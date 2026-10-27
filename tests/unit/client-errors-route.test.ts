@@ -163,6 +163,31 @@ describe("lib/client-error-report", () => {
     );
   });
 
+  it("[HD-5] scrubTokenPaths tapa /pagar/<t> y los valores de ?t= ?token= ?token_hash= ?code=", () => {
+    expect(scrubTokenPaths("GET https://x.app/pagar/Zx9-abc_DEF?x=1 y /pagar/otro")).toBe(
+      "GET https://x.app/pagar/[token]?x=1 y /pagar/[token]"
+    );
+    expect(scrubTokenPaths("/portal/vincular?t=abc123&next=/portal")).toBe("/portal/vincular?t=[token]&next=/portal");
+    expect(scrubTokenPaths("/auth/confirm?type=email&token_hash=pkce_9f8e#top")).toBe(
+      "/auth/confirm?type=email&token_hash=[token]#top"
+    );
+    expect(scrubTokenPaths("fallo en /auth/callback?code=4/0AbCd xyz")).toBe("fallo en /auth/callback?code=[token] xyz");
+    expect(scrubTokenPaths("/x?token=a&t=b&code=c")).toBe("/x?token=[token]&t=[token]&code=[token]");
+    // No tapa parámetros que solo terminan igual (`?at=`, `?zipcode=`) ni el texto sin `?`/`&`.
+    expect(scrubTokenPaths("/agenda?at=10&zipcode=1406 token=libre")).toBe("/agenda?at=10&zipcode=1406 token=libre");
+    // Idempotente: pasar dos veces no rompe el marcador.
+    expect(scrubTokenPaths(scrubTokenPaths("/invite/abc?t=1"))).toBe("/invite/[token]?t=[token]");
+  });
+
+  it("[HD-5] el payload del boundary sale sin el token de /pagar ni el de la query en mensaje y stack", () => {
+    const e = new Error("fetch /pagar/secreto-de-pago falló (?token=xyz)");
+    e.stack = "Error: at /portal/vincular?t=abc&x=1";
+    const p = buildClientErrorPayload(e, "booking", "/pagar/secreto-de-pago");
+    expect(p.message).toBe("fetch /pagar/[token] falló (?token=[token]");
+    expect(p.stack).toBe("Error: at /portal/vincular?t=[token]&x=1");
+    expect(p.path).toBe("/pagar/[token]");
+  });
+
   it("buildClientErrorPayload recorta y no lleva query", () => {
     const e = Object.assign(new Error("boom"), { digest: "d1" });
     e.stack = "s".repeat(10_000);

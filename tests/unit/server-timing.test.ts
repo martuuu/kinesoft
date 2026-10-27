@@ -8,8 +8,10 @@ import {
   __setPerfTimingForTests,
   beginTx,
   mark,
+  perfRoute,
   perfTimingEnabled,
   recordStatement,
+  routeOf,
   serverTimingHeader,
   summaryServerTiming,
   timeAsync,
@@ -123,5 +125,38 @@ describe("server-timing prendido", () => {
       stmtCount: 2, dbMs: 8, roundTrips: 5, marks: {},
     } satisfies TimingSummary;
     expect(summaryServerTiming(s)).toBe("auth;dur=10, actor;dur=15, tx;dur=20, db;dur=8, span;dur=50");
+  });
+});
+
+/**
+ * HD-5 (PV §27.E): la línea `[perf]` salía con `x-pathname` crudo, que el middleware arma con path + query. Con
+ * PERF_TIMING=1 en prod (sigue permitido, para diagnosticar) los logs de Vercel guardaban tokens de invitación, de
+ * pago, del portal y de confirmación de mail. `perfRoute` deja solo la forma de la ruta.
+ */
+describe("[HD-5] perfRoute / routeOf sin tokens ni ids", () => {
+  it("[HD-5] perfRoute saca query y hash, tapa tokens de path y colapsa ids largos", () => {
+    expect(perfRoute("/agenda?d=2026-10-27#x")).toBe("/agenda");
+    expect(perfRoute("/invite/abcDEF123_-xyz")).toBe("/invite/[token]");
+    expect(perfRoute("/pagar/Zx9-abcdefghijklmnopqrstuv")).toBe("/pagar/[token]");
+    expect(perfRoute("/portal/vincular?t=secreto123")).toBe("/portal/vincular");
+    expect(perfRoute("/auth/confirm?token_hash=pkce_abc&type=email")).toBe("/auth/confirm");
+    expect(perfRoute("/pacientes/cmh1a2b3c4d5e6f7g8h9i0jk/fichas")).toBe("/pacientes/[id]/fichas");
+    expect(perfRoute("/api/pacientes/cmh1a2b3c4d5e6f7g8h9i0jk/fichas/cmh0zzzzzzzzzzzzzzzzzzzz/pdf")).toBe(
+      "/api/pacientes/[id]/fichas/[id]/pdf"
+    );
+    // Segmentos cortos (slugs, nombres de pestaña) se conservan: son la forma de la ruta.
+    expect(perfRoute("/c/consultorio-sur")).toBe("/c/consultorio-sur");
+    expect(perfRoute("/planes/kine")).toBe("/planes/kine");
+    // 19 caracteres no se colapsa; 20 sí.
+    expect(perfRoute("/x/" + "a".repeat(19))).toBe("/x/" + "a".repeat(19));
+    expect(perfRoute("/x/" + "a".repeat(20))).toBe("/x/[id]");
+  });
+
+  it("[HD-5] routeOf usa perfRoute para GET y para actions", () => {
+    const h = (o: Record<string, string>) => ({ headers: new Headers(o) });
+    expect(routeOf(h({ "x-pathname": "/invite/tok-secreto-de-invitacion?x=1" }))).toBe("GET /invite/[token]");
+    expect(routeOf(h({ "x-pathname": "/portal/vincular?t=abc", "next-action": "a1b2" }))).toBe("action /portal/vincular");
+    expect(routeOf(h({}))).toBe("GET ?");
+    expect(routeOf({})).toBe("GET ?");
   });
 });

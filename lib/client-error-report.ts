@@ -11,8 +11,8 @@
  *   - **Nunca tira.** Se llama desde un boundary que ya está mostrando un error: si reportar rompe, el
  *     usuario queda sin la pantalla de «Reintentar».
  *   - **Sin dependencias** (ni `lib/redact`, ni zod): va al bundle de cada boundary. La redacción fuerte
- *     la hace el server; acá solo se recorta y se saca lo obvio (query string y token de `/invite/<t>`)
- *     para que ni siquiera viaje.
+ *     la hace el server; acá solo se recorta y se saca lo obvio (query string y tokens de la URL, ver
+ *     `scrubTokenPaths`) para que ni siquiera viaje.
  *   - Lo usa también el route handler (`scrubTokenPaths`, `CLIENT_ERROR_LIMITS`, `CLIENT_ERROR_KINDS`):
  *     un solo lugar para los topes y la lista de `kind`.
  *
@@ -57,11 +57,18 @@ export type ClientErrorPayload = {
 };
 
 /**
- * El token de invitación viaja en el PATH (`/invite/<token>`), no en la query: `redact()` cubre `?token=`
- * pero no un segmento de ruta. Se tapa acá (cliente y server) en paths, mensajes y stacks.
+ * Tokens que viajan en la URL y se tapan acá (cliente y server) en paths, mensajes y stacks:
+ *   - en el PATH: invitación (`/invite/<token>`) y link de pago de la seña (`/pagar/<token>`, T5). `redact()` cubre
+ *     claves de objetos, no segmentos de ruta;
+ *   - en la QUERY (HD-5): `?t=` (vínculo del portal, `/portal/vincular?t=`), `?token=`, `?token_hash=`
+ *     (`/auth/confirm`) y `?code=` (PKCE de `/auth/callback`). Solo el valor: el nombre del parámetro queda para saber
+ *     qué pantalla era. Un `?at=`/`?zipcode=` no matchea (el nombre tiene que empezar justo después de `?`/`&`).
+ * También lo usa `perfRoute` (`lib/server-timing.ts`) para la línea `[perf]`, que puede prenderse en prod.
  */
 export function scrubTokenPaths(s: string): string {
-  return s.replace(/\/invite\/[^/\s?#"'`)]+/g, "/invite/[token]");
+  return s
+    .replace(/\/(invite|pagar)\/[^/\s?#"'`)]+/g, "/$1/[token]")
+    .replace(/([?&](t|token|token_hash|code)=)[^&#\s]+/g, "$1[token]");
 }
 
 /** Solo el pathname, sin query ni hash, con el token tapado y recortado. */

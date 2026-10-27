@@ -27,6 +27,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { requestAsyncStorage } from "next/dist/client/components/request-async-storage.external";
+import { scrubTokenPaths } from "@/lib/client-error-report";
 
 /** Se lee una vez: el flag se fija al arrancar el server (`PERF_TIMING=1 next start`). */
 let PERF_ON = process.env.PERF_TIMING === "1";
@@ -109,10 +110,27 @@ function newAcc(route: string, sink: (s: TimingSummary) => void, auto = true): A
   };
 }
 
-function routeOf(store: { headers?: { get(name: string): string | null } }): string {
+/** Segmento de ≥20 caracteres de id (cuid, uuid sin guiones raros, token base64url): se loguea como `[id]`. */
+const LONG_ID_SEGMENT = /(^|\/)[A-Za-z0-9_-]{20,}(?=\/|$)/g;
+
+/**
+ * HD-5 · la forma de la ruta para la línea `[perf]`, sin datos. `x-pathname` lo arma el middleware con path + QUERY,
+ * así que con PERF_TIMING=1 (que se puede prender en prod para diagnosticar) los logs guardaban tokens de invitación,
+ * del link de pago, del portal (`?t=`) y de confirmación (`?token_hash=`), e ids de pacientes. Orden: se corta la query
+ * y el hash, se tapan los tokens de path con `scrubTokenPaths` (el mismo de los reportes de error del navegador) y los
+ * segmentos largos que parecen id se colapsan a `[id]` (agrupa las líneas por ruta, que es lo que se compara).
+ */
+export function perfRoute(raw: string): string {
+  const bare = raw.split(/[?#]/, 1)[0] ?? "";
+  return scrubTokenPaths(bare).replace(LONG_ID_SEGMENT, "$1[id]");
+}
+
+/** `GET <ruta>` o `action <ruta>` del request en curso (exportada para el test de HD-5). Sin `x-pathname` → `?`. */
+export function routeOf(store: { headers?: { get(name: string): string | null } }): string {
   try {
     const h = store.headers;
-    const path = h?.get("x-pathname") ?? "?";
+    const raw = h?.get("x-pathname");
+    const path = raw == null ? "?" : perfRoute(raw);
     const action = h?.get("next-action");
     return action ? `action ${path}` : `GET ${path}`;
   } catch {

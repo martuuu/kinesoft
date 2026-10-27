@@ -7,8 +7,15 @@ import { logger } from "@/lib/logger";
 import { env } from "@/lib/env";
 import { handleConnectWebhook } from "@/lib/mp-connect/webhook-route";
 import { isSaasTopic } from "@/lib/saas-mp-webhook-route";
+import { readCappedBody } from "@/lib/http/capped-body";
 
 export const runtime = "nodejs";
+
+/**
+ * HD-4: tope del cuerpo. MP manda notificaciones de unos cientos de bytes (`{action, type, data: {id}}`); 64 KiB es un
+ * margen enorme. No se exporta: un `route.ts` de Next solo puede exportar handlers y config de segmento.
+ */
+const MP_WEBHOOK_MAX_BYTES = 64 * 1024;
 
 /**
  * Mercado Pago webhook receiver.
@@ -33,15 +40,32 @@ export async function POST(req: Request) {
     });
   }
 
+  // HD-4: antes eran dos `req.clone().json()` sin tope (un POST anónimo de varios MB se leía entero, dos veces, antes
+  // de la firma). Ahora el cuerpo se lee SOLO si a la query le falta el id o el tipo, una vez, con tope, y se parsea una
+  // vez. Mismos fallbacks que antes (`b?.data?.id ?? b?.id`, `b?.type`; JSON roto = null). Los sub-handlers (`?acct=`,
+  // SaaS) y la firma legada solo leen headers, así que nadie más necesita el cuerpo (AUDIT §5.4: HMAC, anti-replay y
+  // redact intactos).
   const url = new URL(req.url);
-  const dataId =
-    url.searchParams.get("data.id") ??
-    url.searchParams.get("id") ??
-    (await req.clone().json().then((b) => b?.data?.id ?? b?.id ?? null).catch(() => null));
-  const type =
-    url.searchParams.get("type") ??
-    url.searchParams.get("topic") ??
-    (await req.clone().json().then((b) => b?.type ?? null).catch(() => null));
+  const qDataId = url.searchParams.get("data.id") ?? url.searchParams.get("id");
+  const qType = url.searchParams.get("type") ?? url.searchParams.get("topic");
+  let dataId: unknown = qDataId;
+  let type: string | null = qType;
+  if (qDataId === null || qType === null) {
+    const raw = await readCappedBody(req, MP_WEBHOOK_MAX_BYTES);
+    if (raw === "too_large") {
+      logger.warn("mp.webhook.body_too_large", { ip });
+      return NextResponse.json({ ok: false, reason: "too_large" }, { status: 413 });
+    }
+    let b: { data?: { id?: unknown }; id?: unknown; type?: unknown } | null = null;
+    try {
+      // TextDecoder (no `Buffer#toString`) para sacar el BOM como hacía `req.json()`.
+      b = JSON.parse(new TextDecoder().decode(raw));
+    } catch {
+      b = null;
+    }
+    dataId = qDataId ?? b?.data?.id ?? b?.id ?? null;
+    type = qType ?? ((b?.type as string | null | undefined) ?? null);
+  }
 
   // T5 (C-TP6): cobros con la cuenta del vendedor → rama nueva; sin `?acct=` todo sigue igual (AUDIT §5.4).
   const acct = url.searchParams.get("acct");
