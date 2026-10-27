@@ -273,7 +273,7 @@ describe.skipIf(!RUN)("IAM-0a · match de email sin comodines", () => {
     await db.patient.update({ where: { id: pid }, data: { userId: victim } });
     const { raw } = await invitationFor(A, under);
     asUser(under);
-    const r = await acceptInvite(raw);
+    const r = await acceptInvite(raw, true);
     expect(r).toEqual({ ok: true, data: undefined });
     expect(await db.membership.count({ where: { userId: under, tenantId: A.tenantId } })).toBe(1);
   });

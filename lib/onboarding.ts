@@ -49,6 +49,8 @@ import { LocationInput } from "@/lib/locations-schemas";
 import { bootstrapTenant, OpenOnboardingExistsError } from "@/lib/tenant-bootstrap";
 import { getSessionUser, isPortalPatientIdentity, loadMemberships } from "@/lib/onboarding-internal";
 import { OnboardingClinicInput, type ActionResult, type OnboardingClinicInputType } from "@/lib/validation";
+import { LEGAL_ACCEPT_ERROR, legalAcceptedFromForm } from "@/lib/legal";
+import { hasAcceptedCurrentLegal, recordLegalAcceptanceInTx } from "@/lib/legal-acceptance-internal";
 
 /** Copy compartido de BO1-A para un usuario deshabilitado (mismo texto que /cuenta-desactivada). */
 const USER_DISABLED_ERROR = "Tu cuenta está desactivada. Si creés que es un error, escribinos a soporte.";
@@ -83,9 +85,17 @@ async function isUserDisabled(userId: string): Promise<boolean> {
  */
 const OwnerClinicalInput = z.boolean({ invalid_type_error: "Respuesta inválida." }).optional().default(true);
 
-/** Paso 2: alta (o edición, si ya existe) del consultorio del usuario. */
+/**
+ * Paso 2: alta (o edición, si ya existe) del consultorio del usuario.
+ *
+ * PV (§27, LG-S): `acceptLegal` es la casilla de Términos y Privacidad. Opcional en el tipo (la UI llega después) y
+ * obligatoria en runtime PARA QUIEN NO ACEPTÓ la versión vigente: este paso es la puerta común de las altas que no
+ * pasan por el signup por email (Google/Facebook, /login→Google, un signup cuyo evento no se pudo escribir). Quien ya
+ * aceptó (`hasAcceptedCurrentLegal`) no la manda y no se le vuelve a registrar. La UI decide si mostrarla con
+ * `legalAccepted` del contexto (`loadOnboardingContext`).
+ */
 export async function saveOnboardingClinic(
-  raw: OnboardingClinicInputType & { ownerClinical?: boolean }
+  raw: OnboardingClinicInputType & { ownerClinical?: boolean; acceptLegal?: boolean | string }
 ): Promise<ActionResult<{ tenantId: string; created: boolean }>> {
   const user = await getSessionUser();
   if (!user) return { ok: false, error: "Tu sesión expiró. Iniciá sesión de nuevo." };
@@ -98,16 +108,22 @@ export async function saveOnboardingClinic(
   if (await isUserDisabled(user.id)) return { ok: false, error: USER_DISABLED_ERROR };
   if (await twoFactorPending()) return { ok: false, error: TWO_FACTOR_PENDING_ERROR };
 
-  const { ownerClinical: rawOwnerClinical, ...clinicRaw } = raw ?? ({} as typeof raw);
+  const { ownerClinical: rawOwnerClinical, acceptLegal: rawAcceptLegal, ...clinicRaw } = raw ?? ({} as typeof raw);
   const parsed = OnboardingClinicInput.safeParse(clinicRaw);
   const ownerClinicalParsed = OwnerClinicalInput.safeParse(rawOwnerClinical);
-  if (!parsed.success || !ownerClinicalParsed.success) {
+  // LG-S: `recordLegalNow` = no la había aceptado y la tildó ahora → se registra en la tx que crea (o edita) el
+  // consultorio. Sin aceptación previa ni casilla, no se escribe nada.
+  const recordLegalNow = !(await hasAcceptedCurrentLegal(user.id));
+  const legalMissing = recordLegalNow && !legalAcceptedFromForm(rawAcceptLegal);
+  if (!parsed.success || !ownerClinicalParsed.success || legalMissing) {
+    const onlyLegal = parsed.success && ownerClinicalParsed.success;
     return {
       ok: false,
-      error: "Revisá los datos del consultorio.",
+      error: onlyLegal ? LEGAL_ACCEPT_ERROR : "Revisá los datos del consultorio.",
       fieldErrors: {
         ...(parsed.success ? {} : parsed.error.flatten().fieldErrors),
         ...(ownerClinicalParsed.success ? {} : { ownerClinical: ownerClinicalParsed.error.issues.map((i) => i.message) }),
+        ...(legalMissing ? { acceptLegal: [LEGAL_ACCEPT_ERROR] } : {}),
       },
     };
   }
@@ -129,6 +145,15 @@ export async function saveOnboardingClinic(
   // Idempotencia: re-entrar al paso 2 edita el consultorio en alta.
   if (inProgress) {
     const tenantId = inProgress.tenantId;
+    // LG-S: un alta abierta desde antes de la casilla (o creada desde Plataforma con el alta abierta) la acepta al
+    // re-entrar. Va ANTES de guardar y en su propia tx: `runWithRls` corre con el rol de la app y `UserSecurityEvent`
+    // es SERVICE_ONLY, así que no puede ir en la tx de abajo. Registrarla primero no miente: la persona tildó la
+    // casilla y mandó el form; si el guardado de abajo falla, la aceptación sigue siendo cierta.
+    if (recordLegalNow) {
+      await prismaService.$transaction((tx) =>
+        recordLegalAcceptanceInTx(tx, { userId: user.id, via: "onboarding", tenantId })
+      );
+    }
     // EV0 (EV-D5): la vertical se puede corregir mientras el alta siga
     // abierta, y SOLO por el escritor único (C-EV5, source `onboarding`), que
     // re-chequea `onboardingCompletedAt IS NULL` con la fila bloqueada: si un
@@ -237,6 +262,10 @@ export async function saveOnboardingClinic(
           actor: { userId: user.id, homeTenantId: created.tenantId },
         });
         if (!ent.ok) throw new Error(`[onboarding] entitlements: ${ent.reason}`);
+        // LG-S: en la MISMA tx que el consultorio: o nace con la aceptación registrada, o no nace.
+        if (recordLegalNow) {
+          await recordLegalAcceptanceInTx(tx, { userId: user.id, via: "onboarding", tenantId: created.tenantId });
+        }
         return created;
       });
       logger.info("onboarding.tenant_created", { tenantId: r.tenantId, slug: r.slug });

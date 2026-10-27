@@ -24,6 +24,8 @@ import {
   usedAsPortalPatient,
 } from "@/lib/invite-activation-internal";
 import type { ActionResult } from "@/lib/validation";
+import { LEGAL_ACCEPT_ERROR, legalAcceptedFromForm } from "@/lib/legal";
+import { hasAcceptedCurrentLegal } from "@/lib/legal-acceptance-internal";
 
 /**
  * Aceptar una invitación con una sesión que YA existe (alguien con cuenta: un
@@ -45,8 +47,15 @@ import type { ActionResult } from "@/lib/validation";
  *
  * Staff ≠ paciente (AUDIT §5.22) se mantiene: una identidad del portal de
  * pacientes no se suma al equipo.
+ *
+ * PV (§27, LG-S): `acceptLegal` es la casilla de Términos y Privacidad. Se
+ * exige solo si la persona NO aceptó la versión vigente (un kine que ya la
+ * aceptó en su alta no la ve: la página lo decide con
+ * `hasAcceptedCurrentLegal`); si la tildó ahora, la aceptación se registra en
+ * la misma tx de la unión (`joinTenantInTx`, `invite_accept`). Opcional en el
+ * tipo porque la UI llega en otra ola.
  */
-export async function acceptInvite(token: string): Promise<ActionResult> {
+export async function acceptInvite(token: string, acceptLegal?: boolean | string): Promise<ActionResult> {
   // A3a-S-rl: sin límite se podía probar tokens por fuerza bruta (el token es
   // de 192 bits, así que es más contención de carga que de adivinanza) y
   // martillar el canal service. 10 cada 10 min por IP.
@@ -80,6 +89,13 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
     return { ok: false, error: INVITE_MESSAGES.patient_identity };
   }
 
+  // LG-S: después de validar la invitación y la identidad (esos errores ganan: no tiene sentido pedir la casilla
+  // para una invitación vencida) y antes de escribir nada.
+  const recordLegal = !(await hasAcceptedCurrentLegal(user.id));
+  if (recordLegal && !legalAcceptedFromForm(acceptLegal)) {
+    return { ok: false, error: LEGAL_ACCEPT_ERROR, fieldErrors: { acceptLegal: [LEGAL_ACCEPT_ERROR] } };
+  }
+
   try {
     const existing = await prisma.userProfile.findUnique({ where: { id: user.id }, select: { fullName: true } });
     const metaName = user.fullName?.trim() || null;
@@ -93,6 +109,7 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
         avatarUrl: user.avatarUrl,
         now,
         via: "session",
+        recordLegal,
       })
     );
   } catch (err) {

@@ -149,6 +149,8 @@ describe.skipIf(!RUN)("IAM-2b activación desde /invite/<token>", () => {
     lastName: "Pérez",
     password: PASSWORD,
     passwordConfirm: over.password ?? PASSWORD,
+    // PV (§27, LG-S): la casilla de Términos y Privacidad es obligatoria al activar (lg-s-legal-acceptance.test.ts).
+    acceptLegal: true,
     ...over,
   });
 
@@ -398,7 +400,7 @@ describe.skipIf(!RUN)("IAM-2b activación desde /invite/<token>", () => {
     it("un kine de A que acepta B queda en B: profesional de B con agenda, cookie kine_tenant = B y getActor en B", async () => {
       const inv = await invite(B, { email: `${A.userId}@test.local` });
       asUser(A.userId);
-      expect(await acceptInvite(inv.raw)).toEqual({ ok: true, data: undefined });
+      expect(await acceptInvite(inv.raw, true)).toEqual({ ok: true, data: undefined });
       expect(cookies().get(ACTIVE_TENANT_COOKIE)?.value).toBe(B.tenantId);
       const prac = await db.practitioner.findUnique({ where: { tenantId_userId: { tenantId: B.tenantId, userId: A.userId } } });
       expect(prac).not.toBeNull();
@@ -409,7 +411,7 @@ describe.skipIf(!RUN)("IAM-2b activación desde /invite/<token>", () => {
       const ev = await db.auditEvent.findFirst({ where: { entityId: inv.id, action: "invitation.accept" } });
       expect(ev?.payload).toMatchObject({ via: "session" });
       // Ya aceptada: el mismo link no vuelve a escribir.
-      expect(await acceptInvite(inv.raw)).toMatchObject({ ok: false, error: expect.stringContaining("ya fue aceptada") });
+      expect(await acceptInvite(inv.raw, true)).toMatchObject({ ok: false, error: expect.stringContaining("ya fue aceptada") });
     });
 
     it("un link anterior reenviado sirve para aceptar; una anulada no", async () => {
@@ -418,9 +420,9 @@ describe.skipIf(!RUN)("IAM-2b activación desde /invite/<token>", () => {
         const prior = rawToken();
         const inv = await invite(t, { email: `${A.userId}@test.local`, prior });
         asUser(A.userId);
-        expect(await acceptInvite(prior)).toEqual({ ok: true, data: undefined });
+        expect(await acceptInvite(prior, true)).toEqual({ ok: true, data: undefined });
         const rev = await invite(t, { email: `${A.userId}@test.local`, revokedAt: new Date() });
-        expect(await acceptInvite(rev.raw)).toMatchObject({ ok: false, error: expect.stringContaining("anuló") });
+        expect(await acceptInvite(rev.raw, true)).toMatchObject({ ok: false, error: expect.stringContaining("anuló") });
         expect((await db.invitation.findUniqueOrThrow({ where: { id: inv.id } })).acceptedAt).not.toBeNull();
       } finally {
         await t.cleanup();
@@ -435,7 +437,7 @@ describe.skipIf(!RUN)("IAM-2b activación desde /invite/<token>", () => {
       await db.patient.update({ where: { id: pid }, data: { userId: uid } });
       const inv = await invite(B, { email: `${uid}@test.local` });
       asUser(uid);
-      expect(await acceptInvite(inv.raw)).toMatchObject({ ok: false, error: expect.stringContaining("portal de pacientes") });
+      expect(await acceptInvite(inv.raw, true)).toMatchObject({ ok: false, error: expect.stringContaining("portal de pacientes") });
       expect(await db.membership.count({ where: { userId: uid } })).toBe(0);
       await db.patient.update({ where: { id: pid }, data: { userId: null } });
       plantedProfiles.push(uid);

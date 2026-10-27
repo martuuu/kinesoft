@@ -161,6 +161,7 @@ describe.skipIf(!RUN)("[BO1-A] acceso del consultorio y bloqueos de sesión", ()
           fullName: null,
           now: new Date(),
           via: "session",
+          recordLegal: true,
         })
       )
     ).rejects.toBeInstanceOf(UserDisabledError);

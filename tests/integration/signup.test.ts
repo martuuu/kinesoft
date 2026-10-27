@@ -127,7 +127,7 @@ describe.skipIf(!RUN)("signup · forgot · reenviar verificación · reset (IAM-
       const email = fresh("nuevo");
       const before = await counts(email);
 
-      const r = await signUpPractitioner({ fullName: "Camila Rossi", email: email.toUpperCase(), password: "clave1234" });
+      const r = await signUpPractitioner({ fullName: "Camila Rossi", email: email.toUpperCase(), password: "clave1234", acceptLegal: true });
 
       expect(r).toEqual({ ok: true, data: { email, joining: false, message: SIGNUP_SENT } });
       expect(sb.signUp).not.toHaveBeenCalled();
@@ -154,7 +154,7 @@ describe.skipIf(!RUN)("signup · forgot · reenviar verificación · reset (IAM-
       const email = fresh("existe");
       await seed(email, true);
 
-      const r = await signUpPractitioner({ fullName: "Otra Persona", email, password: "clave1234" });
+      const r = await signUpPractitioner({ fullName: "Otra Persona", email, password: "clave1234", acceptLegal: true });
 
       // Misma respuesta que un alta nueva (sin oráculo).
       expect(r).toEqual({ ok: true, data: { email, joining: false, message: SIGNUP_SENT } });
@@ -175,7 +175,7 @@ describe.skipIf(!RUN)("signup · forgot · reenviar verificación · reset (IAM-
       const email = fresh("zombie");
       await seed(email, false);
 
-      const r = await signUpPractitioner({ fullName: "Zom Bie", email, password: "clave1234" });
+      const r = await signUpPractitioner({ fullName: "Zom Bie", email, password: "clave1234", acceptLegal: true });
 
       expect(r).toEqual({ ok: true, data: { email, joining: false, message: SIGNUP_SENT } });
       expect(sent).toHaveLength(1);
@@ -197,7 +197,7 @@ describe.skipIf(!RUN)("signup · forgot · reenviar verificación · reset (IAM-
       });
       const before = await counts(email);
 
-      const r = await signUpPractitioner({ fullName: "Pac Portal", email, password: "clave1234" });
+      const r = await signUpPractitioner({ fullName: "Pac Portal", email, password: "clave1234", acceptLegal: true });
 
       expect(r).toEqual({ ok: true, data: { email, joining: false, message: SIGNUP_SENT } });
       expect(sent).toHaveLength(0);
@@ -238,9 +238,9 @@ describe.skipIf(!RUN)("signup · forgot · reenviar verificación · reset (IAM-
       const email = fresh("rl");
       await seed(email, true);
       for (let i = 0; i < 3; i++) {
-        expect((await signUpPractitioner({ fullName: "R L", email, password: "clave1234" })).ok).toBe(true);
+        expect((await signUpPractitioner({ fullName: "R L", email, password: "clave1234", acceptLegal: true })).ok).toBe(true);
       }
-      const r = await signUpPractitioner({ fullName: "R L", email, password: "clave1234" });
+      const r = await signUpPractitioner({ fullName: "R L", email, password: "clave1234", acceptLegal: true });
       expect(r.ok).toBe(false);
       expect(sent).toHaveLength(3);
     });
@@ -248,14 +248,14 @@ describe.skipIf(!RUN)("signup · forgot · reenviar verificación · reset (IAM-
     it("contraseña que GoTrue rechaza por débil (política del proyecto más estricta) → error de campo, sin mail", async () => {
       const strict = new GotrueFake({ minPasswordLength: 20 });
       __setAuthAdminForTests(strict);
-      const r = await signUpPractitioner({ fullName: "Dé Bil", email: fresh("debil"), password: "clave1234" });
+      const r = await signUpPractitioner({ fullName: "Dé Bil", email: fresh("debil"), password: "clave1234", acceptLegal: true });
       expect(r).toMatchObject({ ok: false, fieldErrors: { password: expect.any(Array) } });
       expect(sent).toHaveLength(0);
     });
 
     it("si el servicio de cuentas falla: error genérico (no depende de si la cuenta existe), sin mail", async () => {
       fake.failNext("error", "findUserByEmail");
-      const r = await signUpPractitioner({ fullName: "Fa Lla", email: fresh("falla"), password: "clave1234" });
+      const r = await signUpPractitioner({ fullName: "Fa Lla", email: fresh("falla"), password: "clave1234", acceptLegal: true });
       expect(r.ok).toBe(false);
       expect(sent).toHaveLength(0);
     });
@@ -265,7 +265,7 @@ describe.skipIf(!RUN)("signup · forgot · reenviar verificación · reset (IAM-
       process.env.SIGNUP_MODE = "assisted";
       try {
         const email = fresh("asistido");
-        const r = await signUpPractitioner({ fullName: "A Sistido", email, password: "clave1234" });
+        const r = await signUpPractitioner({ fullName: "A Sistido", email, password: "clave1234", acceptLegal: true });
         expect(r).toEqual({ ok: false, error: expect.stringContaining("Por ahora damos de alta los consultorios nosotros") });
         expect(fake.calls).toHaveLength(0);
         expect(sent).toHaveLength(0);

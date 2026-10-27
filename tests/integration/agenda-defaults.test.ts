@@ -254,7 +254,7 @@ describe.skipIf(!RUN)("agenda por defecto en las altas (B2.3)", () => {
     const uid = `test-user-inv-${uniqueSuffix()}`;
     const raw = await newInvite(db, A, `${uid}@test.local`);
     asUser(uid);
-    expect(await acceptInvite(raw)).toEqual({ ok: true, data: undefined });
+    expect(await acceptInvite(raw, true)).toEqual({ ok: true, data: undefined });
 
     const prac = await db.practitioner.findUniqueOrThrow({
       where: { tenantId_userId: { tenantId: A.tenantId, userId: uid } },
@@ -284,7 +284,7 @@ describe.skipIf(!RUN)("agenda por defecto en las altas (B2.3)", () => {
 
     const raw = await newInvite(db, A, `${invited.userId}@test.local`);
     asUser(invited.userId);
-    expect(await acceptInvite(raw)).toEqual({ ok: true, data: undefined });
+    expect(await acceptInvite(raw, true)).toEqual({ ok: true, data: undefined });
 
     expect(await snapshot(db, A.tenantId)).toEqual(before);
     expect(await db.practitioner.count({ where: { userId: invited.userId, tenantId: A.tenantId } })).toBe(1);
@@ -296,7 +296,7 @@ describe.skipIf(!RUN)("agenda por defecto en las altas (B2.3)", () => {
     const uid = `test-user-inv-${uniqueSuffix()}`;
     const raw = await newInvite(db, C, `${uid}@test.local`);
     asUser(uid);
-    expect(await acceptInvite(raw)).toEqual({ ok: true, data: undefined });
+    expect(await acceptInvite(raw, true)).toEqual({ ok: true, data: undefined });
     const prac = await db.practitioner.findUniqueOrThrow({
       where: { tenantId_userId: { tenantId: C.tenantId, userId: uid } },
       select: { id: true },
@@ -314,7 +314,7 @@ describe.skipIf(!RUN)("agenda por defecto en las altas (B2.3)", () => {
   it("[IAM-1] acceptInvite de alguien que ya es profesional de OTRO consultorio: queda profesional acá, con su agenda (= backfill)", async () => {
     const raw = await newInvite(db, C, `${invited.userId}@test.local`);
     asUser(invited.userId);
-    expect(await acceptInvite(raw)).toEqual({ ok: true, data: undefined });
+    expect(await acceptInvite(raw, true)).toEqual({ ok: true, data: undefined });
     expect(await db.membership.count({ where: { userId: invited.userId, tenantId: C.tenantId } })).toBe(1);
 
     const pracs = await db.practitioner.findMany({ where: { userId: invited.userId }, select: { id: true, tenantId: true } });

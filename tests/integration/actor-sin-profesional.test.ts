@@ -336,7 +336,7 @@ describe.skipIf(!RUN)("[IAM-4a] Actor sin profesional para roles no clínicos", 
         },
       });
       const r = await activateInvitation(
-        { token: raw, firstName: "Ana", lastName: "Pérez", password: "clave-segura-1", passwordConfirm: "clave-segura-1" },
+        { token: raw, firstName: "Ana", lastName: "Pérez", password: "clave-segura-1", passwordConfirm: "clave-segura-1", acceptLegal: true },
         { ip: "203.0.113.9" }
       );
       expect(r).toMatchObject({ ok: true, tenantId: T.tenantId });

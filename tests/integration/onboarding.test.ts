@@ -129,7 +129,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
   it("sin email verificado no crea tenant", async () => {
     const uid = newIdentity(false);
     const tenantsBefore = await db.tenant.count();
-    const r = await saveOnboardingClinic({ name: "Consultorio Sin Verificar" });
+    const r = await saveOnboardingClinic({ acceptLegal: true, name: "Consultorio Sin Verificar" });
     expect(r.ok).toBe(false);
     expect(await db.tenant.count()).toBe(tenantsBefore);
     expect((await ownedState(uid)).memberships).toHaveLength(0);
@@ -138,6 +138,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
   it("paso 2 crea Tenant + Practitioner + OWNER + Particular atómico, con el alta abierta", async () => {
     const uid = newIdentity();
     const r = await saveOnboardingClinic({
+      acceptLegal: true,
       name: "Centro Kinésico Onboarding",
       phone: "011 4555-1234",
       whatsapp: "+54 9 11 5555-1234",
@@ -171,13 +172,13 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
 
   it("re-ejecutar el paso 2 edita el consultorio: no duplica tenant, membresía ni Particular", async () => {
     const uid = newIdentity();
-    const first = await saveOnboardingClinic({ name: "Primero" });
+    const first = await saveOnboardingClinic({ acceptLegal: true, name: "Primero" });
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     createdTenants.push(first.data.tenantId);
     const tenantsAfterFirst = await db.tenant.count();
 
-    const second = await saveOnboardingClinic({ name: "Nombre Corregido", whatsapp: "11 5555 0000" });
+    const second = await saveOnboardingClinic({ acceptLegal: true, name: "Nombre Corregido", whatsapp: "11 5555 0000" });
     expect(second).toEqual({ ok: true, data: { tenantId: first.data.tenantId, created: false } });
 
     expect(await db.tenant.count()).toBe(tenantsAfterFirst);
@@ -192,8 +193,8 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
   it("dos pedidos simultáneos del paso 2 dejan un solo consultorio", async () => {
     const uid = newIdentity();
     const [a, b] = await Promise.all([
-      saveOnboardingClinic({ name: "Doble Click" }),
-      saveOnboardingClinic({ name: "Doble Click" }),
+      saveOnboardingClinic({ acceptLegal: true, name: "Doble Click" }),
+      saveOnboardingClinic({ acceptLegal: true, name: "Doble Click" }),
     ]);
     expect(a.ok && b.ok).toBe(true);
     if (!a.ok || !b.ok) return;
@@ -211,7 +212,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
       data: { tenantId: A.tenantId, firstName: "P", lastName: "Portal", email: `${uid}@test.local`, userId: uid, documentId: `DNI-${uid}` },
     });
     const tenantsBefore = await db.tenant.count();
-    const r = await saveOnboardingClinic({ name: "No Debería" });
+    const r = await saveOnboardingClinic({ acceptLegal: true, name: "No Debería" });
     expect(r.ok).toBe(false);
     expect(await db.tenant.count()).toBe(tenantsBefore);
   });
@@ -219,7 +220,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
   it("quien ya es miembro de otro consultorio no crea uno nuevo desde el stepper", async () => {
     sb.user = { id: A.userId, email: `${A.userId}@test.local`, email_confirmed_at: new Date(0).toISOString(), user_metadata: {} };
     const tenantsBefore = await db.tenant.count();
-    const r = await saveOnboardingClinic({ name: "Segundo Consultorio" });
+    const r = await saveOnboardingClinic({ acceptLegal: true, name: "Segundo Consultorio" });
     expect(r.ok).toBe(false);
     expect(await db.tenant.count()).toBe(tenantsBefore);
   });
@@ -231,7 +232,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
     await db.userProfile.create({ data: { id: uid, email: `${uid}@test.local` } });
     const old = await db.practitioner.create({ data: { tenantId: A.tenantId, userId: uid } });
     try {
-      const r = await saveOnboardingClinic({ name: "Mi Propio Consultorio" });
+      const r = await saveOnboardingClinic({ acceptLegal: true, name: "Mi Propio Consultorio" });
       expect(r.ok).toBe(true);
       if (!r.ok) return;
       createdTenants.push(r.data.tenantId);
@@ -248,7 +249,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
 
   it("paso 7: exige un servicio, marca onboardingCompletedAt y es idempotente", async () => {
     newIdentity();
-    const r = await saveOnboardingClinic({ name: "Para Completar" });
+    const r = await saveOnboardingClinic({ acceptLegal: true, name: "Para Completar" });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     createdTenants.push(r.data.tenantId);
@@ -271,7 +272,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
     expect((await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } })).onboardingCompletedAt).toEqual(at);
 
     // Con el alta cerrada, el paso 2 ya no edita (la cuenta "ya pertenece").
-    const late = await saveOnboardingClinic({ name: "Tarde" });
+    const late = await saveOnboardingClinic({ acceptLegal: true, name: "Tarde" });
     expect(late.ok).toBe(false);
   });
 
@@ -379,7 +380,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
     catalogPayers.push(payer.id);
 
     // Consultorio: el bootstrap deja sede "Principal" sin dirección y la plantilla.
-    const r = await saveOnboardingClinic({ name: "Agenda Onboarding" });
+    const r = await saveOnboardingClinic({ acceptLegal: true, name: "Agenda Onboarding" });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const tenantId = r.data.tenantId;
@@ -495,7 +496,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
 
   it("sede: sin dirección no escribe; si falta la principal, la crea (mismo id que el alta)", async () => {
     newIdentity();
-    const r = await saveOnboardingClinic({ name: "Sede Faltante" });
+    const r = await saveOnboardingClinic({ acceptLegal: true, name: "Sede Faltante" });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const tenantId = r.data.tenantId;
@@ -538,7 +539,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
   describe("EV-O · vertical en el alta", () => {
     it("alta con vertical GENERAL guarda GENERAL y el turnero nace apagado", async () => {
       newIdentity();
-      const r = await saveOnboardingClinic({ name: "Consultorio General Onb", vertical: "GENERAL" });
+      const r = await saveOnboardingClinic({ acceptLegal: true, name: "Consultorio General Onb", vertical: "GENERAL" });
       expect(r.ok).toBe(true);
       if (!r.ok) return;
       createdTenants.push(r.data.tenantId);
@@ -548,7 +549,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
 
     it("alta sin vertical → KINESIOLOGY, con el turnero apagado (opt-in, EV-D2)", async () => {
       newIdentity();
-      const r = await saveOnboardingClinic({ name: "Kine Por Defecto" });
+      const r = await saveOnboardingClinic({ acceptLegal: true, name: "Kine Por Defecto" });
       expect(r.ok).toBe(true);
       if (!r.ok) return;
       createdTenants.push(r.data.tenantId);
@@ -559,7 +560,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
     it("una vertical fuera del enum no pasa zod ni crea tenant", async () => {
       newIdentity();
       const before = await db.tenant.count();
-      const r = await saveOnboardingClinic({ name: "Vertical Rara", vertical: "DENTAL" as never });
+      const r = await saveOnboardingClinic({ acceptLegal: true, name: "Vertical Rara", vertical: "DENTAL" as never });
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.fieldErrors?.vertical?.[0]).toBeTruthy();
       expect(await db.tenant.count()).toBe(before);
@@ -567,14 +568,14 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
 
     it("la vertical se cambia re-entrando al paso 2 con el alta abierta, y no después (onboarding-closed)", async () => {
       const uid = newIdentity();
-      const r = await saveOnboardingClinic({ name: "Cambia Vertical", vertical: "KINESIOLOGY" });
+      const r = await saveOnboardingClinic({ acceptLegal: true, name: "Cambia Vertical", vertical: "KINESIOLOGY" });
       expect(r.ok).toBe(true);
       if (!r.ok) return;
       const tenantId = r.data.tenantId;
       createdTenants.push(tenantId);
 
       revalidateTagSpy.mockClear();
-      const edit = await saveOnboardingClinic({ name: "Cambia Vertical", vertical: "GENERAL" });
+      const edit = await saveOnboardingClinic({ acceptLegal: true, name: "Cambia Vertical", vertical: "GENERAL" });
       expect(edit).toEqual({ ok: true, data: { tenantId, created: false } });
       expect((await db.tenant.findUniqueOrThrow({ where: { id: tenantId } })).vertical).toBe("GENERAL");
       // Escritor único (C-EV5): audit `tenant.entitlements` en el tenant, misma tx. [BO-Z] El primero es el de la
@@ -589,8 +590,8 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
       for (const tag of tenantEntitlementTags(tenantId)) expect(revalidateTagSpy).toHaveBeenCalledWith(tag);
 
       // Re-entrar sin vertical (o con la misma) no audita de nuevo.
-      expect((await saveOnboardingClinic({ name: "Cambia Vertical" })).ok).toBe(true);
-      expect((await saveOnboardingClinic({ name: "Cambia Vertical", vertical: "GENERAL" })).ok).toBe(true);
+      expect((await saveOnboardingClinic({ acceptLegal: true, name: "Cambia Vertical" })).ok).toBe(true);
+      expect((await saveOnboardingClinic({ acceptLegal: true, name: "Cambia Vertical", vertical: "GENERAL" })).ok).toBe(true);
       expect(await db.auditEvent.count({ where: { tenantId, action: "tenant.entitlements" } })).toBe(2);
       expect((await db.tenant.findUniqueOrThrow({ where: { id: tenantId } })).vertical).toBe("GENERAL");
 
@@ -599,7 +600,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
       expect((await completeOnboarding()).ok).toBe(true);
 
       // Después: el paso 2 ya no entra (la cuenta "ya pertenece") …
-      const late = await saveOnboardingClinic({ name: "Cambia Vertical", vertical: "KINESIOLOGY" });
+      const late = await saveOnboardingClinic({ acceptLegal: true, name: "Cambia Vertical", vertical: "KINESIOLOGY" });
       expect(late.ok).toBe(false);
       // … y el escritor único rechaza la source `onboarding` aunque la llame
       // alguien que se saltee ese chequeo (carrera con completeOnboarding).
@@ -633,7 +634,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
     it("[PL-1a] el alta web nace PRO → nace INDIVIDUAL en TRIALING 14 días", async () => {
       const uid = newIdentity();
       const now = new Date();
-      const r = await saveOnboardingClinic({ name: "Prueba Individual" });
+      const r = await saveOnboardingClinic({ acceptLegal: true, name: "Prueba Individual" });
       expect(r.ok).toBe(true);
       if (!r.ok) return;
       createdTenants.push(r.data.tenantId);
@@ -661,7 +662,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
         await db.saasPlanConfig.update({ where: { plan: "INDIVIDUAL" }, data: { trialDays: 7 } });
         newIdentity();
         const now = new Date();
-        const r = await saveOnboardingClinic({ name: "Prueba Catalogo" });
+        const r = await saveOnboardingClinic({ acceptLegal: true, name: "Prueba Catalogo" });
         if (!r.ok) throw new Error(r.error);
         createdTenants.push(r.data.tenantId);
         const t = await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } });
@@ -671,7 +672,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
         // 0 en el catálogo = sin prueba: nace ACTIVE sin fecha (mismo contrato que el alta desde Plataforma).
         await db.saasPlanConfig.update({ where: { plan: "INDIVIDUAL" }, data: { trialDays: 0 } });
         newIdentity();
-        const r0 = await saveOnboardingClinic({ name: "Sin Prueba" });
+        const r0 = await saveOnboardingClinic({ acceptLegal: true, name: "Sin Prueba" });
         if (!r0.ok) throw new Error(r0.error);
         createdTenants.push(r0.data.tenantId);
         const t0 = await db.tenant.findUniqueOrThrow({ where: { id: r0.data.tenantId } });
@@ -694,7 +695,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
         await db.saasPlanConfig.update({ where: { plan: "INDIVIDUAL" }, data: { trialDays: 7, isPublic: false } });
         newIdentity();
         const now = new Date();
-        const r = await saveOnboardingClinic({ name: "Plan Oculto" });
+        const r = await saveOnboardingClinic({ acceptLegal: true, name: "Plan Oculto" });
         if (!r.ok) throw new Error(r.error);
         createdTenants.push(r.data.tenantId);
         const t = await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } });
@@ -712,7 +713,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
 
     it("[BO-Z] `onboarding` sin `initial` sigue sin poder escribir el plan (allowlist intacta)", async () => {
       const uid = newIdentity();
-      const r = await saveOnboardingClinic({ name: "Allowlist" });
+      const r = await saveOnboardingClinic({ acceptLegal: true, name: "Allowlist" });
       if (!r.ok) throw new Error(r.error);
       createdTenants.push(r.data.tenantId);
       await expect(
@@ -745,10 +746,10 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
 
     it("[PL-1a] ownerClinical: default true (Titular con Practitioner); false nace sin Practitioner; tipo inválido rebota", async () => {
       newIdentity();
-      const bad = await saveOnboardingClinic({ name: "Tipo Malo", ownerClinical: "no" as unknown as boolean });
+      const bad = await saveOnboardingClinic({ acceptLegal: true, name: "Tipo Malo", ownerClinical: "no" as unknown as boolean });
       expect(bad).toMatchObject({ ok: false, fieldErrors: { ownerClinical: expect.any(Array) } });
 
-      const yes = await saveOnboardingClinic({ name: "Atiende" });
+      const yes = await saveOnboardingClinic({ acceptLegal: true, name: "Atiende" });
       if (!yes.ok) throw new Error(yes.error);
       createdTenants.push(yes.data.tenantId);
       const m1 = await db.membership.findFirstOrThrow({ where: { tenantId: yes.data.tenantId, role: "OWNER" } });
@@ -756,7 +757,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
       expect(await db.practitioner.count({ where: { tenantId: yes.data.tenantId, userId: m1.userId } })).toBe(1);
 
       newIdentity();
-      const no = await saveOnboardingClinic({ name: "No Atiende", ownerClinical: false });
+      const no = await saveOnboardingClinic({ acceptLegal: true, name: "No Atiende", ownerClinical: false });
       if (!no.ok) throw new Error(no.error);
       createdTenants.push(no.data.tenantId);
       const m2 = await db.membership.findFirstOrThrow({ where: { tenantId: no.data.tenantId, role: "OWNER" } });
@@ -773,7 +774,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
         if (before) await db.saasPlanConfig.update({ where: { plan: "CONSULTORIO" }, data: { trialDays: 9 } });
         const uid = newIdentity();
         const now = new Date();
-        const r = await saveOnboardingClinic({ name: "Titular Gestor", ownerClinical: false });
+        const r = await saveOnboardingClinic({ acceptLegal: true, name: "Titular Gestor", ownerClinical: false });
         if (!r.ok) throw new Error(r.error);
         createdTenants.push(r.data.tenantId);
         const t = await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } });
@@ -789,7 +790,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
 
         // El que atiende sigue naciendo INDIVIDUAL (no cambia el contrato de PL-1a).
         newIdentity();
-        const yes = await saveOnboardingClinic({ name: "Titular Que Atiende" });
+        const yes = await saveOnboardingClinic({ acceptLegal: true, name: "Titular Que Atiende" });
         if (!yes.ok) throw new Error(yes.error);
         createdTenants.push(yes.data.tenantId);
         expect((await db.tenant.findUniqueOrThrow({ where: { id: yes.data.tenantId } })).saasPlan).toBe("INDIVIDUAL");
@@ -807,7 +808,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
       process.env.SIGNUP_MODE = "assisted";
       const uid = newIdentity();
       const before = await db.tenant.count();
-      const r = await saveOnboardingClinic({ name: "Asistido" });
+      const r = await saveOnboardingClinic({ acceptLegal: true, name: "Asistido" });
       expect(r).toEqual({ ok: false, error: expect.stringContaining("Por ahora damos de alta los consultorios nosotros") });
       expect(await db.tenant.count()).toBe(before);
       expect((await ownedState(uid)).memberships).toHaveLength(0);
@@ -815,11 +816,11 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
 
     it("[BO-Z] SIGNUP_MODE=assisted: un alta abierta (p. ej. creada desde Plataforma) se sigue editando en el paso 2", async () => {
       const uid = newIdentity();
-      const r = await saveOnboardingClinic({ name: "Abierta Antes" });
+      const r = await saveOnboardingClinic({ acceptLegal: true, name: "Abierta Antes" });
       if (!r.ok) throw new Error(r.error);
       createdTenants.push(r.data.tenantId);
       process.env.SIGNUP_MODE = "assisted";
-      const edit = await saveOnboardingClinic({ name: "Abierta Después" });
+      const edit = await saveOnboardingClinic({ acceptLegal: true, name: "Abierta Después" });
       expect(edit).toEqual({ ok: true, data: { tenantId: r.data.tenantId, created: false } });
       expect((await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } })).name).toBe("Abierta Después");
       expect((await ownedState(uid)).memberships).toHaveLength(1);

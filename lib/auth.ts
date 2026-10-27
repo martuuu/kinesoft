@@ -50,6 +50,8 @@ import type { EmailKind, RenderedEmail } from "@/lib/email/types";
 import { logger } from "@/lib/logger";
 import { env, signupMode } from "@/lib/env";
 import { signupAssistedMessage } from "@/lib/onboarding-logic";
+import { LEGAL_ACCEPT_ERROR } from "@/lib/legal";
+import { recordLegalAcceptanceInTx } from "@/lib/legal-acceptance-internal";
 import { z } from "zod";
 import {
   ResetPasswordInput,
@@ -132,12 +134,17 @@ export async function signUpPractitioner(
   // ofrece el form; esto cierra la action, que es un endpoint público). La unión por invitación ya salió arriba.
   if (signupMode() === "assisted") return { ok: false, error: signupAssistedMessage() };
 
+  // PV (§27, LG-S): la casilla de Términos y Privacidad va en el MISMO zod que el resto: sin ella no se llega ni al
+  // rate limit ni a GoTrue, así que no se crea nada ni sale ningún mail. Es un error de formato (no depende de si la
+  // cuenta existe): no abre oráculo.
   const parsed = SignupInput.safeParse(raw);
   if (!parsed.success) {
+    const fieldErrors = parsed.error.flatten().fieldErrors;
+    const onlyLegal = Object.keys(fieldErrors).every((k) => k === "acceptLegal");
     return {
       ok: false,
-      error: "Datos inválidos",
-      fieldErrors: parsed.error.flatten().fieldErrors,
+      error: onlyLegal ? LEGAL_ACCEPT_ERROR : "Datos inválidos",
+      fieldErrors,
     };
   }
   const data = parsed.data;
@@ -210,9 +217,27 @@ export async function signUpPractitioner(
   if (link.userId) {
     const named = await port.updateUserById(link.userId, { fullName: data.fullName });
     if (!named.ok) logger.warn("signup.set_name_failed", { code: named.code });
+    await recordSignupLegalAcceptance(link.userId);
   }
   await sendAuthEmail("email_verification", email, emailVerificationEmail({ url: link.url }));
   return ok;
+}
+
+/**
+ * PV (§27, LG-S): deja la aceptación de Términos y Privacidad (`via: "signup"`) SOLO para la cuenta que este pedido
+ * acaba de crear. Una cuenta existente (confirmada o no) no recibe evento: quien tipeó el email todavía no probó que es
+ * suyo, y registrarle una aceptación a una cuenta ajena sería falso; además la respuesta tiene que ser idéntica.
+ *
+ * Best-effort y sin cambiar la respuesta: si la fila no se escribe, `/onboarding` vuelve a pedir la casilla
+ * (`hasAcceptedCurrentLegal` da false) antes de crear el consultorio, así que nadie llega a cargar pacientes sin
+ * haberla aceptado. Nunca tira.
+ */
+async function recordSignupLegalAcceptance(userId: string): Promise<void> {
+  try {
+    await prisma.$transaction((tx) => recordLegalAcceptanceInTx(tx, { userId, via: "signup" }));
+  } catch (err) {
+    logger.warn("signup.legal_accept_not_recorded", { error: err instanceof Error ? err.name : "unknown" });
+  }
 }
 
 /**

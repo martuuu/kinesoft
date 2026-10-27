@@ -14,6 +14,8 @@ import { auditInTx } from "@/lib/audit";
 import { emailEqualsFilter, normalizeEmail, sameEmail } from "@/lib/email-match";
 import { hashKeyPart, rateLimitAll, rateLimitedMessage } from "@/lib/rate-limit";
 import { NewPassword } from "@/lib/validation";
+import { LEGAL_ACCEPT_ERROR, legalAcceptedFromForm } from "@/lib/legal";
+import { recordLegalAcceptanceInTx } from "@/lib/legal-acceptance-internal";
 import { ACTIVE_TENANT_COOKIE, ACTIVE_TENANT_COOKIE_OPTIONS } from "@/lib/active-tenant-cookie";
 import { isClinicalMember, PRACTITIONER_FOR_ALL_ROLES } from "@/lib/roles";
 import { sendEmail } from "@/lib/email";
@@ -66,12 +68,18 @@ export const ActivateInvitationInput = z
     lastName: z.string().trim().min(1, "Ingresá tu apellido").max(60),
     password: NewPassword,
     passwordConfirm: z.string().max(200),
+    /**
+     * PV (§27, LG-S): casilla de Términos y Privacidad. Opcional en el tipo (la UI llega en otra ola) y obligatoria en
+     * runtime: activar crea una cuenta nueva, así que siempre se pide (no hay aceptación previa que valga). Sin ella
+     * no se toca GoTrue ni la invitación (`invalid_input` sale antes del rate limit).
+     */
+    acceptLegal: z.unknown().refine(legalAcceptedFromForm, LEGAL_ACCEPT_ERROR),
   })
   .refine((d) => d.password === d.passwordConfirm, {
     path: ["passwordConfirm"],
     message: "Las contraseñas no coinciden",
   });
-export type ActivateInvitationInputType = z.input<typeof ActivateInvitationInput>;
+export type ActivateInvitationInputType = z.input<typeof ActivateInvitationInput> & { acceptLegal?: boolean | string };
 
 export type InvitationClosedStatus = "accepted" | "expired" | "revoked";
 
@@ -183,6 +191,10 @@ export async function usedAsPortalPatient(p: { userId?: string | null; email: st
  *  - Agenda por defecto (B2.3, idempotente; regla del backfill: profesional con membresía aceptada), solo si se
  *    creó/reusó el `Practitioner` (rol clínico).
  *  - `invitation.accept` auditado en la misma tx (existe si y solo si existe la unión).
+ *  - PV (§27, LG-S): con `recordLegal`, la aceptación de Términos y Privacidad (`legal.accepted`, via
+ *    `invite_activate` / `invite_accept` según `via`) en la misma tx: si la unión se deshace, la aceptación también.
+ *    Lo decide el caller: la activación siempre (cuenta nueva, la casilla es obligatoria); la aceptación con sesión
+ *    solo si la persona no había aceptado la versión vigente (y entonces la tildó).
  */
 export async function joinTenantInTx(
   tx: Prisma.TransactionClient,
@@ -195,6 +207,8 @@ export async function joinTenantInTx(
     now: Date;
     via: "activation" | "session";
     adopted?: boolean;
+    /** LG-S: registrar `legal.accepted` en esta tx. Obligatorio a propósito: cada caller tiene que decidirlo. */
+    recordLegal: boolean;
   }
 ): Promise<{ practitionerId: string | null }> {
   const { invitation: inv, userId, now } = p;
@@ -281,6 +295,13 @@ export async function joinTenantInTx(
     entityId: inv.id,
     payload: { via: p.via, ...(p.adopted ? { adopted: true } : {}), ...(reactivated ? { reactivated: true } : {}) },
   });
+  if (p.recordLegal) {
+    await recordLegalAcceptanceInTx(tx, {
+      userId,
+      via: p.via === "activation" ? "invite_activate" : "invite_accept",
+      tenantId: inv.tenantId,
+    });
+  }
   return { practitionerId };
 }
 
@@ -412,7 +433,17 @@ async function activate(p: {
 
   try {
     await prismaService.$transaction((tx) =>
-      joinTenantInTx(tx, { invitation: inv, userId, email, fullName, now: p.now, via: "activation", adopted })
+      // LG-S: `acceptLegal` ya pasó el zod (sin él no se llega acá): la cuenta nueva nace con la aceptación.
+      joinTenantInTx(tx, {
+        invitation: inv,
+        userId,
+        email,
+        fullName,
+        now: p.now,
+        via: "activation",
+        adopted,
+        recordLegal: true,
+      })
     );
   } catch (err) {
     // Compensación: solo el usuario creado en ESTE intento. Uno adoptado ya existía (y queda con la clave

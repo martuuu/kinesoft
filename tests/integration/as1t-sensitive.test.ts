@@ -314,7 +314,7 @@ describe.skipIf(!RUN)("[AS-1t] lo delicado de Configuración y las delegaciones 
         });
         asAnonymous();
         const a = await activateInvitation(
-          { token: raw, firstName: "In", lastName: "Vitada", password: "clave-segura-1", passwordConfirm: "clave-segura-1" },
+          { token: raw, firstName: "In", lastName: "Vitada", password: "clave-segura-1", passwordConfirm: "clave-segura-1", acceptLegal: true },
           { ip }
         );
         if (!a.ok) throw new Error(a.error);

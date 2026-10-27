@@ -312,7 +312,7 @@ describe.skipIf(!RUN)("[BO2-B → PL-1c] cupos del plan por tipo (PL-D3)", () =>
     };
     const [a, b] = [await mk(), await mk()]; // sembradas por fuera: las dos «reservaron» (el plan bajó en el medio)
     asAnonymous();
-    const form = (token: string) => ({ token, firstName: "Ana", lastName: "Pérez", password: "clave-segura-1", passwordConfirm: "clave-segura-1" });
+    const form = (token: string) => ({ token, firstName: "Ana", lastName: "Pérez", password: "clave-segura-1", passwordConfirm: "clave-segura-1", acceptLegal: true });
     const rs = await Promise.all([activateInvitation(form(a), { ip: "203.0.113.10" }), activateInvitation(form(b), { ip: "203.0.113.11" })]);
     for (const r of rs) if (r.ok) users.push(r.userId);
     expect(rs.filter((r) => r.ok)).toHaveLength(1);
@@ -389,7 +389,7 @@ describe.skipIf(!RUN)("[BO2-B → PL-1c] cupos del plan por tipo (PL-D3)", () =>
     });
     asAnonymous();
     const a = await activateInvitation(
-      { token: raw, firstName: "Ada", lastName: "Admin", password: "clave-segura-1", passwordConfirm: "clave-segura-1" },
+      { token: raw, firstName: "Ada", lastName: "Admin", password: "clave-segura-1", passwordConfirm: "clave-segura-1", acceptLegal: true },
       { ip: "203.0.113.12" }
     );
     if (!a.ok) throw new Error(a.error);
@@ -421,7 +421,7 @@ describe.skipIf(!RUN)("[BO2-B → PL-1c] cupos del plan por tipo (PL-D3)", () =>
     });
     asAnonymous();
     const a = await activateInvitation(
-      { token: raw, firstName: "Sec", lastName: "Re", password: "clave-segura-1", passwordConfirm: "clave-segura-1" },
+      { token: raw, firstName: "Sec", lastName: "Re", password: "clave-segura-1", passwordConfirm: "clave-segura-1", acceptLegal: true },
       { ip: "203.0.113.13" }
     );
     if (!a.ok) throw new Error(a.error);
@@ -555,7 +555,7 @@ describe.skipIf(!RUN)("[BO2-B → PL-1c] cupos del plan por tipo (PL-D3)", () =>
     await db.tenant.update({ where: { id: t.tenantId }, data: { saasPlan: "INDIVIDUAL", plan: "FREE" } });
     asAnonymous();
     const r = await activateInvitation(
-      { token: raw, firstName: "Ana", lastName: "Pérez", password: "clave-segura-1", passwordConfirm: "clave-segura-1" },
+      { token: raw, firstName: "Ana", lastName: "Pérez", password: "clave-segura-1", passwordConfirm: "clave-segura-1", acceptLegal: true },
       { ip: "203.0.113.9" }
     );
     if (r.ok) users.push(r.userId);

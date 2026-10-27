@@ -5,6 +5,7 @@
 import { z } from "zod";
 import { DISCIPLINES } from "@/lib/plans-constants";
 import { CatalogId } from "@/lib/catalog-schemas";
+import { LEGAL_ACCEPT_ERROR, legalAcceptedFromForm } from "@/lib/legal";
 
 /**
  * Email de paciente normalizado (A2a-S08): trim + minúsculas ANTES de validar
@@ -484,8 +485,14 @@ export const SignupInput = z.object({
   password: NewPassword,
   /** Token CRUDO de `/invite/<token>`: signup de unión (no crea consultorio). */
   inviteToken: z.string().trim().max(200).optional().or(z.literal("")),
+  /**
+   * PV (§27, LG-S): la casilla «Acepto los Términos y la Política de privacidad». Opcional en el TIPO (la UI que la
+   * manda llega en una ola posterior y tiene que compilar antes) pero OBLIGATORIA en runtime: ausente o con cualquier
+   * valor que no sea un «sí» explícito (`legalAcceptedFromForm`: true / "on" / "true" / "1") el alta no crea nada.
+   */
+  acceptLegal: z.unknown().refine(legalAcceptedFromForm, LEGAL_ACCEPT_ERROR),
 });
-export type SignupInputType = z.input<typeof SignupInput>;
+export type SignupInputType = z.input<typeof SignupInput> & { acceptLegal?: boolean | string };
 
 export const ResetPasswordInput = z.object({
   password: NewPassword,

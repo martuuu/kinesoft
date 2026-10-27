@@ -351,7 +351,7 @@ describe.skipIf(!RUN)("[IAM-4c] administración del equipo", () => {
       },
     });
     asUser(kine.userId);
-    expect(await acceptInvite(raw)).toMatchObject({ ok: true });
+    expect(await acceptInvite(raw, true)).toMatchObject({ ok: true });
     const row = await membershipOf(A, kine.userId);
     expect(row.disabledAt).toBeNull();
     expect(row.disabledById).toBeNull();

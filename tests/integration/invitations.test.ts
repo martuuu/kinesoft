@@ -127,7 +127,7 @@ describe.skipIf(!RUN)("invitaciones · re-invitar y staff ≠ paciente", () => {
     });
     asUser(uid);
 
-    const r = await acceptInvite(raw);
+    const r = await acceptInvite(raw, true);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("portal de pacientes");
     expect(await db.membership.count({ where: { userId: uid } })).toBe(0);
@@ -151,7 +151,7 @@ describe.skipIf(!RUN)("invitaciones · re-invitar y staff ≠ paciente", () => {
       },
     });
     asUser(uid);
-    const r = await acceptInvite(raw);
+    const r = await acceptInvite(raw, true);
     expect(r).toEqual({ ok: true, data: undefined });
     expect(await db.membership.count({ where: { userId: uid, tenantId: A.tenantId } })).toBe(1);
   });

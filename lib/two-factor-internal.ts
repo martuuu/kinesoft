@@ -52,7 +52,10 @@ export type UserSecurityEventKind =
   | "two_factor.recovery_generated"
   | "two_factor.recovery_used"
   | "two_factor.email_code_locked"
-  | "two_factor.reset_by_platform";
+  | "two_factor.reset_by_platform"
+  // PV (§27, LG-S): aceptación de Términos y Privacidad, payload `{version, via}`. La escribe solo
+  // `recordLegalAcceptanceInTx` (lib/legal-acceptance-internal.ts), por acá: un solo escritor de la tabla.
+  | "legal.accepted";
 
 type Tx = Prisma.TransactionClient;
 

@@ -20,6 +20,7 @@ import { isCustomSchedule, type OnboardingProgress } from "@/lib/onboarding-logi
 import { agendaDefaultIds } from "@/lib/agenda-defaults";
 import type { LocationRow } from "@/lib/locations-schemas";
 import type { PractitionerScheduleView } from "@/lib/practitioner-schedule-schemas";
+import { hasAcceptedCurrentLegal } from "@/lib/legal-acceptance-internal";
 
 export type SessionUser = {
   id: string;
@@ -136,6 +137,11 @@ export type OnboardingContext =
   | {
       kind: "stepper";
       patientIdentity: boolean;
+      /**
+       * PV (§27, LG-S): ¿aceptó la versión vigente de Términos y Privacidad? false → el paso 2 muestra la casilla y
+       * `saveOnboardingClinic` la exige (`acceptLegal`); true → ni se muestra ni hace falta mandarla.
+       */
+      legalAccepted: boolean;
       user: SessionUser;
       tenant: OnboardingTenant | null;
       /** Sede principal; null sin tenant (o en un tenant viejo sin sede: el paso la crea). */
@@ -208,9 +214,14 @@ export async function loadOnboardingContext(
       const invites = await listPendingInvitesFor(user.email);
       if (invites.length > 0) return { kind: "invites", invites };
     }
+    const [patientIdentity, legalAccepted] = await Promise.all([
+      isPortalPatientIdentity(user),
+      hasAcceptedCurrentLegal(user.id),
+    ]);
     return {
       kind: "stepper",
-      patientIdentity: await isPortalPatientIdentity(user),
+      patientIdentity,
+      legalAccepted,
       user,
       tenant: null,
       location: null,
@@ -352,6 +363,7 @@ export async function loadOnboardingContext(
   return {
     kind: "stepper",
     patientIdentity: false,
+    legalAccepted: await hasAcceptedCurrentLegal(user.id),
     user,
     tenant,
     location: primary

@@ -24,6 +24,10 @@ import {
  *     segundo paso (antes: «Te mandamos un email» que nunca llegaba);
  *  3. `redirect("/dashboard")`.
  *
+ * PV (§27, LG-S): `input.acceptLegal` (la casilla de Términos y Privacidad)
+ * viaja tal cual a `activateInvitation`, que la exige y la registra en la tx de
+ * la unión.
+ *
  * Si el login falla después de activar (no debería: la cuenta nace
  * confirmada) se le dice que la cuenta ya está y que ingrese a mano: nada se
  * deshace, la membresía y la invitación aceptada son correctas.

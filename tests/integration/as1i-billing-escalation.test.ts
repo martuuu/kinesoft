@@ -88,7 +88,7 @@ describe.skipIf(!RUN)("[AS-1i] «Planes y pagos» por default al entrar a ADMIN:
   async function activate(t: EphemeralTenant, rawToken: string) {
     asAnonymous();
     const a = await activateInvitation(
-      { token: rawToken, firstName: "In", lastName: "Vitada", password: "clave-segura-1", passwordConfirm: "clave-segura-1" },
+      { token: rawToken, firstName: "In", lastName: "Vitada", password: "clave-segura-1", passwordConfirm: "clave-segura-1", acceptLegal: true },
       { ip: `203.0.113.${(++ipSeq % 200) + 20}` }
     );
     if (!a.ok) throw new Error(`activateInvitation: ${a.error}`);
