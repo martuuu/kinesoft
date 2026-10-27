@@ -1,16 +1,18 @@
 /**
- * Plantillas de mail con la marca KineSoft (IAM-0b, C-IAM1). PURAS: ni red ni
+ * Plantillas de mail con la marca de `lib/brand.ts` (IAM-0b, C-IAM1). PURAS: ni red ni
  * env ni `server-only` (las importan los tests y el script de diagnóstico).
  * Cada una devuelve `{ subject, html, text }` listo para `sendEmail`.
  *
- * Layout (portado del v2 de Traze, con la paleta de KineSoft):
+ * Layout (portado del v2 de Traze, con la paleta de la app):
  *  - Tabla de 600 px con estilos INLINE: Gmail y Outlook descartan `<style>` en
  *    muchos casos y no leen variables CSS, por eso los colores son los hex
  *    literales de `app/globals.css` (EMAIL_COLORS) y no `var(--sky-700)`.
  *  - Sin imágenes, fuentes web ni píxeles de seguimiento: la marca es un
- *    wordmark en texto («Kine» navy + «Soft» sky, con la «K» en un cuadrado
- *    sky-700 como el `KineLogo`). Se ve igual con las imágenes bloqueadas,
- *    que es el default de muchos clientes corporativos.
+ *    wordmark en texto armado con `BRAND_NAME` (primera palabra navy 700 +
+ *    el resto sky 500, como el `KineLogo` de Q5) y un tile sky-700 con la
+ *    inicial y el punto lima (el «Sello C» del glifo, en texto + CSS inline).
+ *    Se ve igual con las imágenes bloqueadas, que es el default de muchos
+ *    clientes corporativos.
  *  - `color-scheme: light` declarado y fondo explícito en cada celda, para que
  *    la inversión automática del modo oscuro no deje texto navy sobre negro.
  *  - CTA "a prueba de balas" (tabla con bgcolor, no un `<a>` con padding solo:
@@ -35,6 +37,7 @@
  * vencen según "Email OTP Expiration" del proyecto, que por default es 1 hora.
  * Si Martin la cambia en la consola, hay que cambiar `SUPABASE_LINK_TTL_COPY`.
  */
+import { BRAND_NAME, BRAND_TAGLINE } from "@/lib/brand";
 import type { RenderedEmail } from "@/lib/email/types";
 
 /** Hex de los tokens de `app/globals.css` (paleta base, no la reasignada por `[data-palette]`). */
@@ -153,6 +156,23 @@ type LayoutParts = {
   footer: string[];
 };
 
+/**
+ * Q5 (BR): el wordmark del encabezado sale de `BRAND_NAME` y no de un literal, así un cambio de marca es tocar
+ * `lib/brand.ts`. Primera palabra en navy 700 + el resto en sky 500 («Consultorio» + «Online»), como el `KineLogo`;
+ * el tile lleva la inicial y el punto lima del glifo «Sello C». Se calcula una vez: es constante del módulo.
+ */
+const BRAND_MARK = (() => {
+  const [first = "", ...rest] = BRAND_NAME.trim().split(/\s+/);
+  return {
+    initial: escapeHtml(first.charAt(0).toUpperCase()),
+    first: escapeHtml(first),
+    rest: escapeHtml(rest.join(" ")),
+  };
+})();
+
+/** Pie de marca de todos los mails (BR-5): sin la vertical, la marca ya no es solo de kinesiología. */
+export const BRAND_FOOTER = `${BRAND_NAME} · ${BRAND_TAGLINE}`;
+
 function layout(p: LayoutParts): string {
   const pre = escapeHtml(p.preheader.slice(0, 110));
   const ctx = p.context ? escapeHtml(p.context) : "";
@@ -187,8 +207,8 @@ function layout(p: LayoutParts): string {
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
         <td valign="middle" style="font-family:${FONT};">
           <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
-            <td width="30" height="30" align="center" valign="middle" bgcolor="${C.brand}" style="width:30px;height:30px;background-color:${C.brand};border-radius:9px;font-family:${FONT};font-size:17px;line-height:30px;font-weight:800;color:${C.white};">K</td>
-            <td style="padding-left:10px;font-family:${FONT};font-size:20px;line-height:24px;font-weight:700;letter-spacing:-0.02em;"><span style="color:${C.ink};">Kine</span><span style="color:${C.brand};">Soft</span></td>
+            <td width="30" height="30" align="center" valign="middle" bgcolor="${C.brand}" style="width:30px;height:30px;background-color:${C.brand};border-radius:9px;font-family:${FONT};font-size:17px;line-height:30px;font-weight:800;color:${C.white};white-space:nowrap;">${BRAND_MARK.initial}<span style="display:inline-block;width:5px;height:5px;margin-left:1px;vertical-align:middle;background-color:${C.accent};border-radius:50%;font-size:0;line-height:0;">&nbsp;</span></td>
+            <td style="padding-left:10px;font-family:${FONT};font-size:20px;line-height:24px;letter-spacing:-0.02em;"><span style="color:${C.ink};font-weight:700;">${BRAND_MARK.first}</span>${BRAND_MARK.rest ? ` <span style="color:${C.brandSoft};font-weight:500;">${BRAND_MARK.rest}</span>` : ""}</td>
           </tr></table>
         </td>
         ${ctx ? `<td class="ks-ctx" align="right" valign="middle" style="font-family:${FONT};font-size:13px;line-height:18px;color:${C.muted};">${ctx}</td>` : ""}
@@ -200,7 +220,7 @@ function layout(p: LayoutParts): string {
     </td></tr>
     <tr><td class="ks-pad" style="padding:20px 40px 28px;background-color:${C.panel};border-top:1px solid ${C.line};border-radius:0 0 14px 14px;">
       ${p.footer.map((l) => `<p style="${P_SMALL}">${escapeHtml(l)}</p>`).join("\n      ")}
-      <p style="margin:14px 0 0;font-family:${FONT};font-size:12px;line-height:18px;color:${C.muted};"><strong style="color:${C.ink};">KineSoft</strong> · Gestión para consultorios de kinesiología y osteopatía</p>
+      <p style="margin:14px 0 0;font-family:${FONT};font-size:12px;line-height:18px;color:${C.muted};"><strong style="color:${C.ink};">${escapeHtml(BRAND_NAME)}</strong> · ${escapeHtml(BRAND_TAGLINE)}</p>
     </td></tr>
   </table>
 </td></tr>
@@ -218,7 +238,7 @@ type TextParts = {
 
 function textBody(t: TextParts): string {
   const lines = [
-    "KineSoft",
+    BRAND_NAME,
     "",
     t.title,
     "",
@@ -227,7 +247,7 @@ function textBody(t: TextParts): string {
     "--",
     ...t.footer,
     "",
-    "KineSoft · Gestión para consultorios de kinesiología y osteopatía",
+    BRAND_FOOTER,
   ];
   return lines.join("\n");
 }
@@ -293,23 +313,23 @@ export function staffInviteEmail(p: {
   const inviter = plain(p.inviterName);
   const role = plain(p.roleLabel);
   const lead = inviter
-    ? `${inviter} te invitó a sumarte a ${tenant} en KineSoft como ${role}.`
-    : `Te invitaron a sumarte a ${tenant} en KineSoft como ${role}.`;
+    ? `${inviter} te invitó a sumarte a ${tenant} en ${BRAND_NAME} como ${role}.`
+    : `Te invitaron a sumarte a ${tenant} en ${BRAND_NAME} como ${role}.`;
   const leadHtml = inviter
-    ? `${strong(inviter)} te invitó a sumarte a ${strong(tenant)} en KineSoft como ${strong(role)}.`
-    : `Te invitaron a sumarte a ${strong(tenant)} en KineSoft como ${strong(role)}.`;
+    ? `${strong(inviter)} te invitó a sumarte a ${strong(tenant)} en ${BRAND_NAME} como ${strong(role)}.`
+    : `Te invitaron a sumarte a ${strong(tenant)} en ${BRAND_NAME} como ${strong(role)}.`;
   const second = "Aceptá la invitación para crear tu acceso. Vas a poder ver la agenda y trabajar con el resto del equipo.";
   const expiry = formatExpiryAR(p.expiresAt);
   return compose({
-    subject: inviter ? `${inviter} te invitó a ${tenant} en KineSoft` : `Te invitaron a ${tenant} en KineSoft`,
+    subject: inviter ? `${inviter} te invitó a ${tenant} en ${BRAND_NAME}` : `Te invitaron a ${tenant} en ${BRAND_NAME}`,
     preheader: `Aceptá la invitación antes del ${expiry}.`,
     context: tenant,
-    title: "Te invitaron a KineSoft",
+    title: `Te invitaron a ${BRAND_NAME}`,
     paragraphs: [lead, second],
     htmlParagraphs: [leadHtml, escapeHtml(second)],
     ctas: [{ label: "Aceptar invitación", url: p.url }],
     footer: [
-      `Te llegó este mail porque alguien de ${tenant} te invitó a su equipo en KineSoft.`,
+      `Te llegó este mail porque alguien de ${tenant} te invitó a su equipo en ${BRAND_NAME}.`,
       `La invitación vence el ${expiry} (hora de Argentina). Si venció, pedile a ${tenant} que te la reenvíe.`,
       NOT_EXPECTED,
     ],
@@ -347,7 +367,7 @@ export function portalInviteEmail(p: { tenantName: string; url: string; fallback
     htmlParagraphs,
     ctas,
     footer: [
-      `Te llegó este mail porque ${tenant} te registró como paciente en KineSoft.`,
+      `Te llegó este mail porque ${tenant} te registró como paciente en ${BRAND_NAME}.`,
       p.fallbackUrl
         ? `La invitación vale 7 días. Si venció, pedile a ${tenant} que te la reenvíe.`
         : "Por seguridad, el link vence. Si venció, podés pedir uno nuevo desde la pantalla de ingreso del portal.",
@@ -384,14 +404,14 @@ export function portalMagicLinkEmail(p: { tenantName: string | null; url: string
 export function emailVerificationEmail(p: { url: string }): RenderedEmail {
   const ttl = `El link vence en ${SUPABASE_LINK_TTL_COPY}.`;
   return compose({
-    subject: "Confirmá tu email para KineSoft",
+    subject: `Confirmá tu email para ${BRAND_NAME}`,
     preheader: "Un paso más para terminar de crear tu cuenta.",
     context: null,
     title: "Confirmá tu email",
     paragraphs: ["Confirmá tu email para terminar de crear tu cuenta.", "Es un solo clic: después ya podés configurar tu consultorio."],
     ctas: [{ label: "Confirmar mi email", url: p.url }],
     footer: [
-      "Te llegó este mail porque alguien creó una cuenta en KineSoft con este email.",
+      `Te llegó este mail porque alguien creó una cuenta en ${BRAND_NAME} con este email.`,
       `${ttl} Si venció, pedí uno nuevo desde la pantalla de ingreso.`,
       "Si no fuiste vos, ignorá este mail: la cuenta no se activa sin confirmar.",
     ],
@@ -401,7 +421,7 @@ export function emailVerificationEmail(p: { url: string }): RenderedEmail {
 export function passwordResetEmail(p: { url: string }): RenderedEmail {
   const ttl = `El link vence en ${SUPABASE_LINK_TTL_COPY} y sirve una sola vez.`;
   return compose({
-    subject: "Restablecé tu contraseña de KineSoft",
+    subject: `Restablecé tu contraseña de ${BRAND_NAME}`,
     preheader: "Elegí una contraseña nueva para tu cuenta.",
     context: null,
     title: "Restablecé tu contraseña",
@@ -409,7 +429,7 @@ export function passwordResetEmail(p: { url: string }): RenderedEmail {
     ctas: [{ label: "Elegir contraseña nueva", url: p.url }],
     afterCta: ["Si no fuiste vos, ignorá este mail. Tu contraseña actual sigue funcionando."],
     footer: [
-      "Te llegó este mail porque se pidió restablecer la contraseña de la cuenta de KineSoft asociada a este email.",
+      `Te llegó este mail porque se pidió restablecer la contraseña de la cuenta de ${BRAND_NAME} asociada a este email.`,
       `${ttl} Si venció, pedí uno nuevo desde «¿Olvidaste tu contraseña?».`,
     ],
   });
@@ -420,7 +440,7 @@ export function adminPasswordResetEmail(p: { tenantName: string; url: string }):
   const ttl = `El link vence en ${SUPABASE_LINK_TTL_COPY} y sirve una sola vez.`;
   const second = "Tocá el botón para elegir tu contraseña. Nadie del consultorio la ve ni la conoce.";
   return compose({
-    subject: "Creá una contraseña nueva para KineSoft",
+    subject: `Creá una contraseña nueva para ${BRAND_NAME}`,
     preheader: `${tenant} te mandó un link para crear una contraseña nueva.`,
     context: tenant,
     title: "Creá una contraseña nueva",
@@ -428,7 +448,7 @@ export function adminPasswordResetEmail(p: { tenantName: string; url: string }):
     htmlParagraphs: [`${strong(tenant)} te mandó un link para crear una contraseña nueva.`, escapeHtml(second)],
     ctas: [{ label: "Crear contraseña nueva", url: p.url }],
     footer: [
-      `Te llegó este mail porque alguien de ${tenant} pidió restablecer tu acceso a KineSoft.`,
+      `Te llegó este mail porque alguien de ${tenant} pidió restablecer tu acceso a ${BRAND_NAME}.`,
       `${ttl} Si venció, pedile a ${tenant} uno nuevo.`,
       "Si no lo esperabas, ignorá este mail: tu contraseña actual sigue funcionando.",
     ],
@@ -437,12 +457,12 @@ export function adminPasswordResetEmail(p: { tenantName: string; url: string }):
 
 export function accountExistsEmail(p: { loginUrl: string; resetUrl: string }): RenderedEmail {
   return compose({
-    subject: "Ya tenés una cuenta en KineSoft",
+    subject: `Ya tenés una cuenta en ${BRAND_NAME}`,
     preheader: "Ingresá con tu contraseña o recuperala.",
     context: null,
     title: "Ya tenés una cuenta",
     paragraphs: [
-      "Ya tenés una cuenta en KineSoft con este email.",
+      `Ya tenés una cuenta en ${BRAND_NAME} con este email.`,
       "Alguien (probablemente vos) intentó crear una cuenta nueva con esta dirección. No hace falta: ingresá con tu contraseña o, si no te la acordás, recuperala.",
     ],
     ctas: [
@@ -450,7 +470,7 @@ export function accountExistsEmail(p: { loginUrl: string; resetUrl: string }): R
       { label: "Recuperar contraseña", url: p.resetUrl, variant: "secondary" },
     ],
     footer: [
-      "Te llegó este mail porque se intentó crear una cuenta de KineSoft con este email.",
+      `Te llegó este mail porque se intentó crear una cuenta de ${BRAND_NAME} con este email.`,
       "Si no fuiste vos, ignorá este mail: tu cuenta sigue igual y nadie entró.",
     ],
   });
@@ -460,18 +480,18 @@ export function welcomeEmail(p: { tenantName: string; url: string }): RenderedEm
   const tenant = plain(p.tenantName);
   const second = "Ya podés entrar con tu email y tu contraseña.";
   return compose({
-    subject: `Ya sos parte de ${tenant} en KineSoft`,
+    subject: `Ya sos parte de ${tenant} en ${BRAND_NAME}`,
     preheader: "Tu acceso ya está listo.",
     context: tenant,
-    title: "Te damos la bienvenida a KineSoft",
-    paragraphs: [`Ya sos parte de ${tenant} en KineSoft.`, second],
-    htmlParagraphs: [`Ya sos parte de ${strong(tenant)} en KineSoft.`, escapeHtml(second)],
-    ctas: [{ label: "Ir a KineSoft", url: p.url }],
-    footer: [`Te llegó este mail porque activaste tu acceso al equipo de ${tenant} en KineSoft.`],
+    title: `Te damos la bienvenida a ${BRAND_NAME}`,
+    paragraphs: [`Ya sos parte de ${tenant} en ${BRAND_NAME}.`, second],
+    htmlParagraphs: [`Ya sos parte de ${strong(tenant)} en ${BRAND_NAME}.`, escapeHtml(second)],
+    ctas: [{ label: `Ir a ${BRAND_NAME}`, url: p.url }],
+    footer: [`Te llegó este mail porque activaste tu acceso al equipo de ${tenant} en ${BRAND_NAME}.`],
   });
 }
 
-// ── Plataforma (BO2): mails del equipo de KineSoft, no de un consultorio ────────────────────────────────────
+// ── Plataforma (BO2): mails del equipo de la plataforma, no de un consultorio ────────────────────────────────────
 
 /**
  * BO2-A: alta asistida. El superadmin crea el consultorio con este email como titular; el link es de recovery
@@ -489,15 +509,15 @@ export function tenantOwnerActivationEmail(p: { tenantName: string; url: string;
     ? `Tocá el botón para elegir tu contraseña y entrar. ${ttl}`
     : `Tocá el botón para entrar al consultorio. También podés entrar con tu email y tu contraseña de siempre. ${ttl}`;
   return compose({
-    subject: `Tu consultorio ${tenant} ya está en KineSoft`,
+    subject: `Tu consultorio ${tenant} ya está en ${BRAND_NAME}`,
     preheader: needsPassword ? "Elegí tu contraseña para entrar." : "Ya podés entrar a tu consultorio nuevo.",
     context: tenant,
     title: needsPassword ? "Activá tu acceso" : "Tu consultorio nuevo está listo",
-    paragraphs: [`Te dimos de alta como titular de ${tenant} en KineSoft.`, second],
-    htmlParagraphs: [`Te dimos de alta como titular de ${strong(tenant)} en KineSoft.`, escapeHtml(second)],
+    paragraphs: [`Te dimos de alta como titular de ${tenant} en ${BRAND_NAME}.`, second],
+    htmlParagraphs: [`Te dimos de alta como titular de ${strong(tenant)} en ${BRAND_NAME}.`, escapeHtml(second)],
     ctas: [{ label: needsPassword ? "Activar mi acceso" : "Entrar al consultorio", url: p.url }],
     footer: [
-      `Te llegó este mail porque el equipo de KineSoft creó el consultorio ${tenant} con este email como titular. Si el link venció, escribinos y te mandamos otro.`,
+      `Te llegó este mail porque el equipo de ${BRAND_NAME} creó el consultorio ${tenant} con este email como titular. Si el link venció, escribinos y te mandamos otro.`,
       NOT_EXPECTED,
     ],
   });
@@ -506,25 +526,25 @@ export function tenantOwnerActivationEmail(p: { tenantName: string; url: string;
 /**
  * BO2-C: Plataforma → Usuarios → «Mandar link para entrar». `activation` = nunca entró (invitado o alta sin
  * terminar), `recovery` = ya entró alguna vez. Los dos llevan a /reset. Sin nombre de consultorio: lo manda
- * soporte de KineSoft (antes salía `admin_password_reset` con «KineSoft te mandó…» en el lugar del consultorio).
+ * soporte de la plataforma (antes salía `admin_password_reset` con «{marca} te mandó…» en el lugar del consultorio).
  */
 export function platformAccessLinkEmail(p: { url: string; purpose: "activation" | "recovery" }): RenderedEmail {
   const ttl = `El link vence en ${SUPABASE_LINK_TTL_COPY} y sirve una sola vez.`;
   const activation = p.purpose === "activation";
   return compose({
-    subject: activation ? "Activá tu acceso a KineSoft" : "Tu link para volver a entrar a KineSoft",
+    subject: activation ? `Activá tu acceso a ${BRAND_NAME}` : `Tu link para volver a entrar a ${BRAND_NAME}`,
     preheader: activation ? "Elegí tu contraseña para entrar." : "Elegí una contraseña nueva para tu cuenta.",
-    context: "Soporte de KineSoft",
-    title: activation ? "Activá tu acceso" : "Volvé a entrar a KineSoft",
+    context: `Soporte de ${BRAND_NAME}`,
+    title: activation ? "Activá tu acceso" : `Volvé a entrar a ${BRAND_NAME}`,
     paragraphs: [
       activation
-        ? "El equipo de soporte de KineSoft te mandó un link para activar tu acceso."
-        : "El equipo de soporte de KineSoft te mandó un link para que vuelvas a entrar.",
-      "Tocá el botón para elegir tu contraseña. Nadie del equipo de KineSoft la ve ni la conoce.",
+        ? `El equipo de soporte de ${BRAND_NAME} te mandó un link para activar tu acceso.`
+        : `El equipo de soporte de ${BRAND_NAME} te mandó un link para que vuelvas a entrar.`,
+      `Tocá el botón para elegir tu contraseña. Nadie del equipo de ${BRAND_NAME} la ve ni la conoce.`,
     ],
     ctas: [{ label: activation ? "Activar mi acceso" : "Elegir contraseña nueva", url: p.url }],
     footer: [
-      "Te llegó este mail porque el equipo de soporte de KineSoft pidió un link de acceso para la cuenta asociada a este email.",
+      `Te llegó este mail porque el equipo de soporte de ${BRAND_NAME} pidió un link de acceso para la cuenta asociada a este email.`,
       `${ttl} Si venció, escribinos y te mandamos otro.`,
       activation ? NOT_EXPECTED : "Si no lo esperabas, ignorá este mail: tu contraseña actual sigue funcionando.",
     ],
@@ -532,7 +552,7 @@ export function platformAccessLinkEmail(p: { url: string; purpose: "activation" 
 }
 
 /**
- * BO2-E (decisión 3 de Martin): aviso al OWNER cuando el equipo de KineSoft entra a su consultorio «como soporte».
+ * BO2-E (decisión 3 de Martin): aviso al OWNER cuando el equipo de la plataforma entra a su consultorio «como soporte».
  * Motivo GENÉRICO a propósito: el motivo que tipea el superadmin es una nota interna (puede nombrar un paciente o
  * un ticket); el detalle, con quién y cuándo, queda en Configuración → Accesos de soporte, detrás del login.
  */
@@ -548,12 +568,12 @@ export function supportAccessEmail(p: {
   const date = p.startedAt.toLocaleDateString("es-AR", { day: "numeric", month: "long", year: "numeric", timeZone: AR_TZ });
   const time = p.startedAt.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: AR_TZ });
   const when = `${date} a las ${time}`;
-  const lead = `El equipo de soporte de KineSoft (${who}) entró a ${tenant} el ${when} para ayudarte con el consultorio.`;
-  const leadHtml = `El equipo de soporte de KineSoft (${strong(who)}) entró a ${strong(tenant)} el ${escapeHtml(when)} para ayudarte con el consultorio.`;
+  const lead = `El equipo de soporte de ${BRAND_NAME} (${who}) entró a ${tenant} el ${when} para ayudarte con el consultorio.`;
+  const leadHtml = `El equipo de soporte de ${BRAND_NAME} (${strong(who)}) entró a ${strong(tenant)} el ${escapeHtml(when)} para ayudarte con el consultorio.`;
   const second =
     "Mientras dure el acceso, soporte ve lo mismo que un/a Secretario/a (nada de historia clínica) y solo puede cambiar la Configuración. Todo lo que hace queda registrado.";
   return compose({
-    subject: `Soporte de KineSoft entró a ${tenant}`,
+    subject: `Soporte de ${BRAND_NAME} entró a ${tenant}`,
     preheader: "Podés ver el detalle en Configuración → Accesos de soporte.",
     context: tenant,
     title: "Soporte entró a tu consultorio",
@@ -562,7 +582,7 @@ export function supportAccessEmail(p: {
     ctas: [{ label: "Ver accesos de soporte", url: p.url }],
     afterCta: ["Los vas a encontrar en Configuración → Accesos de soporte, con el motivo y cuándo terminó cada uno."],
     footer: [
-      `Te llegó este mail porque sos titular de ${tenant} en KineSoft y el equipo de soporte entró a ayudarte.`,
+      `Te llegó este mail porque sos titular de ${tenant} en ${BRAND_NAME} y el equipo de soporte entró a ayudarte.`,
       "Si no pediste ayuda, respondé este mail y lo revisamos.",
     ],
   });
@@ -588,26 +608,26 @@ export function trialReminderEmail(p: { tenantName: string; daysLeft: number; ex
   let leadHtml: string;
   let second: string;
   if (p.expired) {
-    subject = "Tu prueba de KineSoft terminó";
+    subject = `Tu prueba de ${BRAND_NAME} terminó`;
     title = "Tu prueba terminó";
-    lead = `La prueba de ${tenant} en KineSoft terminó.`;
-    leadHtml = `La prueba de ${strong(tenant)} en KineSoft terminó.`;
+    lead = `La prueba de ${tenant} en ${BRAND_NAME} terminó.`;
+    leadHtml = `La prueba de ${strong(tenant)} en ${BRAND_NAME} terminó.`;
     second =
       (n === 1
         ? "Hoy es el último día para seguir usándolo como hasta ahora."
         : `Tenés ${n} días más para seguir usándolo como hasta ahora.`) +
       " Después, el consultorio puede pasar a modo lectura: vas a poder consultar todo, incluida la historia clínica, pero no cargar datos nuevos.";
   } else if (n === 1) {
-    subject = "Tu prueba de KineSoft vence hoy";
+    subject = `Tu prueba de ${BRAND_NAME} vence hoy`;
     title = "Hoy termina tu prueba";
-    lead = `Hoy es el último día de la prueba de ${tenant} en KineSoft.`;
-    leadHtml = `Hoy es el último día de la prueba de ${strong(tenant)} en KineSoft.`;
+    lead = `Hoy es el último día de la prueba de ${tenant} en ${BRAND_NAME}.`;
+    leadHtml = `Hoy es el último día de la prueba de ${strong(tenant)} en ${BRAND_NAME}.`;
     second = "Si querés seguir sin interrupciones, elegí tu plan hoy.";
   } else {
-    subject = `Tu prueba de KineSoft vence en ${n} días`;
+    subject = `Tu prueba de ${BRAND_NAME} vence en ${n} días`;
     title = "Tu prueba está por terminar";
-    lead = `La prueba de ${tenant} en KineSoft vence en ${n} días.`;
-    leadHtml = `La prueba de ${strong(tenant)} en KineSoft vence en ${strong(`${n} días`)}.`;
+    lead = `La prueba de ${tenant} en ${BRAND_NAME} vence en ${n} días.`;
+    leadHtml = `La prueba de ${strong(tenant)} en ${BRAND_NAME} vence en ${strong(`${n} días`)}.`;
     second = "Hasta entonces podés seguir usando todo como hasta ahora.";
   }
   return compose({
@@ -618,7 +638,7 @@ export function trialReminderEmail(p: { tenantName: string; daysLeft: number; ex
     paragraphs: [lead, second, keep],
     htmlParagraphs: [leadHtml, escapeHtml(second), escapeHtml(keep)],
     ctas: [{ label: "Ver plan y uso", url: p.url }],
-    footer: [`Te llegó este mail porque sos titular de ${tenant} en KineSoft y el consultorio está en período de prueba.`],
+    footer: [`Te llegó este mail porque sos titular de ${tenant} en ${BRAND_NAME} y el consultorio está en período de prueba.`],
   });
 }
 
@@ -647,7 +667,7 @@ export function platformHealthDigestEmail(p: {
   const itemsHtml = p.lines.map((l) => `${escapeHtml(plain(l.label))}: ${strong(String(l.count))}`);
   const missing = p.unavailable.length ? [`No se pudo revisar: ${p.unavailable.map(plain).join(", ")}.`] : [];
   return compose({
-    subject: `Salud de KineSoft: ${total} ${total === 1 ? "caso" : "casos"} para revisar (${date})`,
+    subject: `Salud de ${BRAND_NAME}: ${total} ${total === 1 ? "caso" : "casos"} para revisar (${date})`,
     preheader: "Resumen diario de cuentas y consultorios para revisar.",
     context: "Plataforma",
     title: "Resumen de salud",
@@ -655,7 +675,7 @@ export function platformHealthDigestEmail(p: {
     htmlParagraphs: [escapeHtml(lead), ...itemsHtml, ...missing.map(escapeHtml)],
     ctas: [{ label: "Ver salud de la plataforma", url: p.url }],
     footer: [
-      "Te llegó este mail porque sos superadmin de KineSoft. Sale solo los días en que hay algo para revisar.",
+      `Te llegó este mail porque sos superadmin de ${BRAND_NAME}. Sale solo los días en que hay algo para revisar.`,
     ],
   });
 }
@@ -670,22 +690,22 @@ export function platformHealthDigestEmail(p: {
  */
 export function tenantExportRequestEmail(p: { tenantName: string; url: string }): RenderedEmail {
   const tenant = plain(p.tenantName);
-  const lead = `El equipo de KineSoft te pide que descargues el export de los datos de ${tenant}.`;
-  const leadHtml = `El equipo de KineSoft te pide que descargues el export de los datos de ${strong(tenant)}.`;
+  const lead = `El equipo de ${BRAND_NAME} te pide que descargues el export de los datos de ${tenant}.`;
+  const leadHtml = `El equipo de ${BRAND_NAME} te pide que descargues el export de los datos de ${strong(tenant)}.`;
   // BO-Z (B6): sin «el botón aparece en la pantalla que ves al entrar»: con varios consultorios esa pantalla podía
   // ser la de otro. El botón del mail lleva directo a ESTE consultorio (`&tenant=<id>`, lib/platform-export-request.ts).
   const how = "Tocá el botón para ir directo a Exportar datos de este consultorio (también está en Configuración → Exportar datos).";
-  const what = "El archivo trae pacientes, turnos, pagos, planes e historia clínica: lo descargás vos y el equipo de KineSoft no lo ve.";
+  const what = `El archivo trae pacientes, turnos, pagos, planes e historia clínica: lo descargás vos y el equipo de ${BRAND_NAME} no lo ve.`;
   return compose({
     subject: `Descargá el export de ${tenant}`,
-    preheader: "Descargá vos el export de tus datos: el equipo de KineSoft no lo ve.",
+    preheader: `Descargá vos el export de tus datos: el equipo de ${BRAND_NAME} no lo ve.`,
     context: tenant,
     title: "Descargá el export de tu consultorio",
     paragraphs: [lead, how, what],
     htmlParagraphs: [leadHtml, escapeHtml(how), escapeHtml(what)],
     ctas: [{ label: "Ir a Exportar datos", url: p.url }],
     footer: [
-      `Te llegó este mail porque sos titular de ${tenant} en KineSoft.`,
+      `Te llegó este mail porque sos titular de ${tenant} en ${BRAND_NAME}.`,
       "Si no esperabas este pedido, respondé este mail.",
     ],
   });

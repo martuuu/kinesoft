@@ -31,6 +31,8 @@ import { NotificationKind } from "@prisma/client";
 import { logger } from "@/lib/logger";
 import { formatARS } from "@/lib/format";
 import { isHoldingCapacity } from "@/lib/booking-capacity";
+import { BRAND_NAME } from "@/lib/brand";
+import { statementDescriptorFrom } from "@/lib/mp-connect/preference";
 import { afterBookingsCommitted } from "@/lib/booking-events-internal";
 
 function client() {
@@ -71,7 +73,9 @@ export async function createCheckoutPreference(input: CreatePreferenceInput) {
         pending: `${env.NEXT_PUBLIC_APP_URL}/booking/${input.bookingId}/pending`,
       },
       auto_return: "approved",
-      statement_descriptor: "KineSoft",
+      // Q5 (BR-4): la marca pasada por el mismo saneo que los cobros nuevos (ASCII, ≤22, límite de MP para el resumen
+      // de la tarjeta); la marca de Q5 queda en 18. Antes era el literal de la marca vieja.
+      statement_descriptor: statementDescriptorFrom(BRAND_NAME),
       metadata: { bookingId: input.bookingId },
     },
   });

@@ -7,7 +7,7 @@
  *  1. decide el transporte (`transport.ts`, por entorno; bloquea en Production
  *     cualquier mail con links a localhost),
  *  2. valida el destinatario (UNA dirección: nada de listas ni saltos),
- *  3. arma el remitente «Consultorio X vía KineSoft <EMAIL_FROM>» y el Reply-To,
+ *  3. arma el remitente «Consultorio X vía {BRAND_NAME} <EMAIL_FROM>» y el Reply-To,
  *  4. despacha (Resend, Mailpit o nada),
  *  5. le pasa el resultado al sink registrado (EmailLog, IAM-1) con el host
  *     del primer link — nunca el link, que lleva el token,

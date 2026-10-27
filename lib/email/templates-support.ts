@@ -19,6 +19,7 @@
  * escribe es un usuario de la app (puede ser un profesional con pacientes), así que vale lo mismo que para el
  * consultorio: el texto se lee en la bandeja, no en un mail reenviable.
  */
+import { BRAND_NAME } from "@/lib/brand";
 import type { RenderedEmail } from "@/lib/email/types";
 import { EMAIL_COLORS as C, EMAIL_FONT as FONT, compose, escapeHtml, para, plain, strong } from "@/lib/email/templates";
 import { SUPPORT_TEAM_NAME } from "@/lib/support-threads-types";
@@ -62,7 +63,7 @@ export function supportMessagePlatformEmail(p: {
     ? `${strong(tenant)} respondió en la conversación «${escapeHtml(subj)}».`
     : `${strong(tenant)} te escribió: «${escapeHtml(subj)}».`;
   const more = "Por seguridad el mensaje no viene en este mail: leelo y respondé desde la bandeja de Plataforma.";
-  const footer = ["Te llegó porque tu dirección es la bandeja de soporte de KineSoft.", SUPPORT_EMAIL_NO_PHI];
+  const footer = [`Te llegó porque tu dirección es la bandeja de soporte de ${BRAND_NAME}.`, SUPPORT_EMAIL_NO_PHI];
   return compose({
     subject: withSource(p.sourceLabel, `${p.isReply ? "Respuesta" : "Mensaje"} de ${tenant}: ${subj}`),
     preheader: lead,
@@ -82,7 +83,7 @@ export function supportReplyTenantEmail(p: { tenantName: string; subject: string
   const tenant = plain(p.tenantName);
   const subj = plain(p.subject);
   const title = "Te respondimos";
-  const lead = `El equipo de KineSoft respondió tu mensaje «${subj}».`;
+  const lead = `El equipo de ${BRAND_NAME} respondió tu mensaje «${subj}».`;
   const more = "Entrá a Configuración → Soporte para leer la respuesta y seguir la conversación.";
   const footer = [
     `Te llegó porque escribiste a soporte desde ${tenant || "tu consultorio"}.`,
@@ -129,7 +130,7 @@ export function leadReceivedEmail(p: {
   const factsHtml = facts.map(([k, v]) => `<p style="margin:0 0 6px;font-family:${FONT};font-size:15px;line-height:22px;color:${C.body};">${escapeHtml(k)}: ${strong(v)}</p>`).join("");
   const more = "Respondé desde la bandeja de Plataforma: la respuesta le llega por mail y queda registrada.";
   const hidden = "Por seguridad el mensaje no viene en este mail: leelo en la bandeja de Plataforma.";
-  const footer = ["Te llegó porque tu dirección es la bandeja de soporte de KineSoft.", "El lead no recibió ninguna respuesta automática."];
+  const footer = [`Te llegó porque tu dirección es la bandeja de soporte de ${BRAND_NAME}.`, "El lead no recibió ninguna respuesta automática."];
   return compose({
     subject: withSource(p.sourceLabel, `Consulta de ${name}${p.clinicName ? ` (${plain(p.clinicName)})` : ""}`),
     preheader: includeMessage ? `${name} escribió desde la web.` : `${name} abrió un ticket.`,
@@ -154,11 +155,11 @@ export function leadReplyEmail(p: { name: string; subject: string; body: string 
   const title = "Respuesta a tu consulta";
   const hello = name ? `Hola, ${name}:` : "Hola:";
   const outro = "Si querés seguir la conversación, respondé este mail.";
-  const footer = ["Te llegó porque nos escribiste desde el formulario de contacto de KineSoft."];
+  const footer = [`Te llegó porque nos escribiste desde el formulario de contacto de ${BRAND_NAME}.`];
   return compose({
     subject: `Re: ${plain(p.subject)}`,
-    preheader: "El equipo de KineSoft respondió tu consulta.",
-    context: "KineSoft",
+    preheader: `El equipo de ${BRAND_NAME} respondió tu consulta.`,
+    context: BRAND_NAME,
     title,
     paragraphs: [hello, p.body.trim(), outro, SUPPORT_TEAM_SIGNATURE],
     bodyBlocksHtml: [

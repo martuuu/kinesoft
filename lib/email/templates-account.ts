@@ -15,6 +15,7 @@
  * Copy en voseo, sin emojis, sin nombrar al proveedor.
  */
 import { EMAIL_COLORS as C, EMAIL_MONO as MONO, compose, escapeHtml, formatExpiryAR, para } from "@/lib/email/templates";
+import { BRAND_NAME } from "@/lib/brand";
 import type { RenderedEmail } from "@/lib/email/types";
 
 const NOT_YOU =
@@ -23,14 +24,14 @@ const NOT_YOU =
 export type TwoFactorCodePurpose = "login" | "step_up" | "enroll_email";
 
 const PURPOSE_COPY: Record<TwoFactorCodePurpose, { subject: string; lead: string }> = {
-  login: { subject: "Tu código para entrar a KineSoft", lead: "Usá este código para terminar de entrar a KineSoft." },
+  login: { subject: `Tu código para entrar a ${BRAND_NAME}`, lead: `Usá este código para terminar de entrar a ${BRAND_NAME}.` },
   step_up: {
-    subject: "Tu código para confirmar un cambio en KineSoft",
-    lead: "Usá este código para confirmar el cambio que estás haciendo en KineSoft.",
+    subject: `Tu código para confirmar un cambio en ${BRAND_NAME}`,
+    lead: `Usá este código para confirmar el cambio que estás haciendo en ${BRAND_NAME}.`,
   },
   enroll_email: {
     subject: "Tu código para activar la verificación por email",
-    lead: "Usá este código para activar la verificación en dos pasos por email en tu cuenta de KineSoft.",
+    lead: `Usá este código para activar la verificación en dos pasos por email en tu cuenta de ${BRAND_NAME}.`,
   },
 };
 
@@ -45,7 +46,7 @@ export function twoFactorCodeEmail(p: { code: string; purpose: TwoFactorCodePurp
   const validity = `Vence en ${p.minutes} minutos y sirve una sola vez.`;
   const footer = [
     "Te llegó este mail porque alguien pidió un código de verificación con tu cuenta.",
-    "Nadie de KineSoft te va a pedir este código: no se lo pases a nadie.",
+    `Nadie de ${BRAND_NAME} te va a pedir este código: no se lo pases a nadie.`,
     NOT_YOU,
   ];
   const codeBlock = `<p style="margin:8px 0 20px;padding:16px 20px;background-color:${C.panel};border:1px solid ${C.line};border-radius:10px;font-family:${MONO};font-size:32px;line-height:40px;font-weight:700;letter-spacing:0.2em;color:${C.ink};text-align:center;">${escapeHtml(shown)}</p>`;
@@ -71,28 +72,28 @@ export type TwoFactorChange =
 
 const CHANGE_COPY: Record<TwoFactorChange, { subject: string; lead: string }> = {
   totp_enabled: {
-    subject: "Activaste la app de autenticación en KineSoft",
+    subject: `Activaste la app de autenticación en ${BRAND_NAME}`,
     lead: "Se activó la verificación en dos pasos con app de autenticación en tu cuenta.",
   },
   totp_disabled: {
-    subject: "Desactivaste la app de autenticación en KineSoft",
+    subject: `Desactivaste la app de autenticación en ${BRAND_NAME}`,
     lead: "Se desactivó la verificación en dos pasos con app de autenticación en tu cuenta.",
   },
   email_enabled: {
-    subject: "Activaste la verificación por email en KineSoft",
+    subject: `Activaste la verificación por email en ${BRAND_NAME}`,
     lead: "Se activó la verificación en dos pasos con código por email en tu cuenta.",
   },
   email_disabled: {
-    subject: "Desactivaste la verificación por email en KineSoft",
+    subject: `Desactivaste la verificación por email en ${BRAND_NAME}`,
     lead: "Se desactivó la verificación en dos pasos con código por email en tu cuenta.",
   },
   recovery_regenerated: {
-    subject: "Generaste códigos de recuperación nuevos en KineSoft",
+    subject: `Generaste códigos de recuperación nuevos en ${BRAND_NAME}`,
     lead: "Se generaron códigos de recuperación nuevos para tu cuenta. Los anteriores ya no sirven.",
   },
   reset_by_platform: {
-    subject: "El equipo de KineSoft restableció tu verificación en dos pasos",
-    lead: "A pedido, el equipo de KineSoft desactivó la verificación en dos pasos de tu cuenta y borró tus códigos de recuperación. Para volver a activarla, entrá a Seguridad de la cuenta.",
+    subject: `El equipo de ${BRAND_NAME} restableció tu verificación en dos pasos`,
+    lead: `A pedido, el equipo de ${BRAND_NAME} desactivó la verificación en dos pasos de tu cuenta y borró tus códigos de recuperación. Para volver a activarla, entrá a Seguridad de la cuenta.`,
   },
 };
 
@@ -100,7 +101,7 @@ const CHANGE_COPY: Record<TwoFactorChange, { subject: string; lead: string }> = 
 export function twoFactorChangedEmail(p: { change: TwoFactorChange; at: Date; securityUrl: string }): RenderedEmail {
   const copy = CHANGE_COPY[p.change];
   const when = `Fecha: ${formatExpiryAR(p.at)} (hora de Argentina).`;
-  const footer = ["Te llegó este mail porque cambió la seguridad de tu cuenta de KineSoft.", NOT_YOU];
+  const footer = [`Te llegó este mail porque cambió la seguridad de tu cuenta de ${BRAND_NAME}.`, NOT_YOU];
   return compose({
     subject: copy.subject,
     preheader: copy.lead,
@@ -114,7 +115,7 @@ export function twoFactorChangedEmail(p: { change: TwoFactorChange; at: Date; se
 
 /** Aviso: se usó un código de recuperación (un uso; quedan `remaining`). */
 export function recoveryCodeUsedEmail(p: { remaining: number; at: Date; securityUrl: string }): RenderedEmail {
-  const lead = "Se usó uno de tus códigos de recuperación para entrar a tu cuenta de KineSoft.";
+  const lead = `Se usó uno de tus códigos de recuperación para entrar a tu cuenta de ${BRAND_NAME}.`;
   const left =
     p.remaining > 0
       ? `${p.remaining === 1 ? "Te queda 1 código" : `Te quedan ${p.remaining} códigos`}. Si te quedan pocos, generá códigos nuevos.`
@@ -122,7 +123,7 @@ export function recoveryCodeUsedEmail(p: { remaining: number; at: Date; security
   const when = `Fecha: ${formatExpiryAR(p.at)} (hora de Argentina).`;
   const footer = ["Te llegó este mail porque se usó un código de recuperación de tu cuenta.", NOT_YOU];
   return compose({
-    subject: "Se usó un código de recuperación de tu cuenta de KineSoft",
+    subject: `Se usó un código de recuperación de tu cuenta de ${BRAND_NAME}`,
     preheader: lead,
     context: null,
     title: "Se usó un código de recuperación",

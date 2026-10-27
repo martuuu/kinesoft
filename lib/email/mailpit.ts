@@ -40,7 +40,7 @@ export function mailpitBaseUrl(env: Record<string, string | undefined> = process
   return (env.MAILPIT_URL?.trim() || MAILPIT_DEFAULT_URL).replace(/\/+$/, "");
 }
 
-/** `Kine Sur vía KineSoft <a@b>` / `"Kine, S.A." <a@b>` / `a@b` → el formato de Mailpit. */
+/** `Kine Sur vía {marca} <a@b>` / `"Kine, S.A." <a@b>` / `a@b` → el formato de Mailpit. */
 export function parseMailbox(raw: string): { Email: string; Name?: string } {
   const m = raw.match(/^\s*"?([^"<]*?)"?\s*<\s*([^<>\s]+)\s*>\s*$/);
   if (!m) return { Email: raw.trim() };

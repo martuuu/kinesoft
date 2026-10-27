@@ -22,7 +22,7 @@
  *     scripts/diagnose-email.ts --to vos@ejemplo.com [--kind staff_invite | --all]
  *
  *   # Resend de verdad (probar el dominio; manda un mail REAL):
- *   RESEND_API_KEY=… EMAIL_FROM="KineSoft <no-reply@mail.tudominio>" EMAIL_TRANSPORT=resend \
+ *   RESEND_API_KEY=… EMAIL_FROM="Mi Marca <no-reply@mail.tudominio>" EMAIL_TRANSPORT=resend \
  *     npx tsx --conditions=react-server scripts/diagnose-email.ts \
  *     --to vos@ejemplo.com --url https://tudominio --confirm
  *

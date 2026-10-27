@@ -15,7 +15,7 @@ export type EmailKind =
   | "admin_password_reset"
   | "account_exists"
   | "welcome"
-  // BO2 (back-office de Plataforma): los mails que manda el equipo de KineSoft, no un consultorio.
+  // BO2 (back-office de Plataforma): los mails que manda el equipo de la plataforma, no un consultorio.
   | "tenant_activation" // alta asistida: el titular activa su acceso (BO2-A)
   | "platform_access_link" // Plataforma → Usuarios: link para activar o recuperar el acceso (BO2-C)
   | "support_access" // aviso al OWNER: soporte entró al consultorio (BO2-E, decisión 3)
@@ -77,7 +77,7 @@ export type SendEmailInput = RenderedEmail & {
   tenantId?: string | null; // para EmailLog (IAM-1)
   entity?: string | null; // p. ej. "Invitation"
   entityId?: string | null;
-  fromName?: string | null; // «Consultorio X» → "Consultorio X vía KineSoft <EMAIL_FROM>"
+  fromName?: string | null; // «Consultorio X» → "Consultorio X vía {BRAND_NAME} <EMAIL_FROM>"
   replyTo?: string | null;
   actorId?: string | null;
 };

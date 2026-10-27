@@ -62,7 +62,7 @@ function render(p: {
 }
 
 const FOOTER = (tenant: string) =>
-  `Te llegó este mail porque sos titular de ${tenant} en KineSoft o tenés permiso para ver y cambiar el plan y los pagos.`;
+  `Te llegó este mail porque sos titular de ${tenant} en ${BRAND_NAME} o tenés permiso para ver y cambiar el plan y los pagos.`;
 
 /**
  * PL-Z (A2): a dónde transferir (`SAAS_BILLING_TRANSFER_INFO`, lo pasa quien arma el mail). Texto de la env, que puede
@@ -106,7 +106,7 @@ export function billingChargeCreatedEmail(p: {
               ...transferParagraph(p.transferInfo),
             ];
   return render({
-    subject: `Tu cuota de KineSoft: ${money(p.amountCents)}`,
+    subject: `Tu cuota de ${BRAND_NAME}: ${money(p.amountCents)}`,
     context: tenant,
     title: "Ya está tu cuota del mes",
     paragraphs: [
@@ -158,7 +158,7 @@ export function billingPastDueEmail(p: {
 }): RenderedEmail {
   const tenant = plain(p.tenantName);
   return render({
-    subject: "Tu cuota de KineSoft está vencida",
+    subject: `Tu cuota de ${BRAND_NAME} está vencida`,
     context: tenant,
     title: "Tenés una cuota vencida",
     paragraphs: [

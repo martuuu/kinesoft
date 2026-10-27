@@ -5,7 +5,7 @@
  *
  * Patrón portado de Traze (`app/lib/email/transport.ts`), con la diferencia de
  * que acá Production se reconoce por `VERCEL_ENV` (como `lib/env.ts`) y no por
- * el host de Supabase: KineSoft no tiene un stack local de Supabase, y un
+ * el host de Supabase: la app no tiene un stack local de Supabase, y un
  * `next start` / `next build` local corre con NODE_ENV=production sin ser prod.
  *
  * La matriz, en orden:
@@ -32,6 +32,7 @@
  *     de Traze: el dev mandaba invitaciones reales con links a localhost
  *     porque la key de prod "se colaba" desde `.env`). Si no, `log`.
  */
+import { BRAND_NAME } from "@/lib/brand";
 import type { EmailTransportName, SendEmailResult } from "@/lib/email/types";
 
 /** Variables de entorno como entran (`process.env` o un objeto de test). */
@@ -74,12 +75,17 @@ export type EmailTransportDecision = {
 };
 
 /** Remitente fuera de Production cuando no hay EMAIL_FROM (C-IAM1). En Production no hay default. */
-export const DEFAULT_EMAIL_FROM = "KineSoft <no-reply@kinesoft.app>";
+export const DEFAULT_EMAIL_FROM = `${BRAND_NAME} <no-reply@kinesoft.app>`;
 
 /** Sufijo fijo del nombre visible cuando el mail sale en nombre de un consultorio. Nadie lo puede quitar. */
-export const FROM_NAME_SUFFIX = " vía KineSoft";
+export const FROM_NAME_SUFFIX = ` vía ${BRAND_NAME}`;
 
-/** Techo del nombre del consultorio en el remitente (se corta con «…»). */
+/**
+ * Techo del nombre visible del remitente (se corta con «…»). `sanitizeFromName` lo aplica al nombre suelto y
+ * `composeFrom` además recorta el nombre del consultorio para que «{nombre} vía {marca}» ENTERO entre: con la marca
+ * larga de Q5 el sufijo ocupa 23 de los 64 y un consultorio de 60 caracteres dejaba un display
+ * name de 83 (BR-5).
+ */
 export const FROM_NAME_MAX = 64;
 
 const REQUESTABLE = ["resend", "mailpit", "log"] as const;
@@ -190,7 +196,7 @@ export function decideEmailTransport(
 
 // ── Remitente ────────────────────────────────────────────────────────────────
 
-/** `"KineSoft <a@b>",` → `KineSoft <a@b>`: comillas y comas que se pegan al copiar a Vercel (422 de Resend). */
+/** `"Marca <a@b>",` → `Marca <a@b>`: comillas y comas que se pegan al copiar a Vercel (422 de Resend). */
 function cleanAddr(v: string): string {
   return v.trim().replace(/,+\s*$/, "").replace(/^["']+|["']+$/g, "").trim();
 }
@@ -229,14 +235,16 @@ const RFC_SPECIALS = /[()[\]:;@,.]/;
 
 /**
  * El remitente del envío. Sin `fromName`: EMAIL_FROM tal cual. Con `fromName`
- * (el consultorio): «{nombre} vía KineSoft» con la MISMA casilla. La dirección
- * nunca cambia (SPF/DKIM/DMARC son de KineSoft) y el sufijo lo pone siempre
+ * (el consultorio): «{nombre} vía {BRAND_NAME}» con la MISMA casilla. La dirección
+ * nunca cambia (SPF/DKIM/DMARC son de la plataforma) y el sufijo lo pone siempre
  * este helper, así ningún emisor puede mandar un mail que se lea como del
  * consultorio solo. Las respuestas van al `replyTo` que pasa quien llama.
  */
 export function composeFrom(baseFrom: string, fromName?: string | null): string {
-  const name = sanitizeFromName(fromName);
-  if (!name) return baseFrom;
+  const full = sanitizeFromName(fromName);
+  if (!full) return baseFrom;
+  const room = FROM_NAME_MAX - FROM_NAME_SUFFIX.length;
+  const name = full.length <= room ? full : `${full.slice(0, room - 1).trimEnd()}…`;
   const display = `${name}${FROM_NAME_SUFFIX}`;
   const phrase = RFC_SPECIALS.test(display) ? `"${display}"` : display;
   return `${phrase} <${fromAddress(baseFrom)}>`;
