@@ -10,6 +10,7 @@ import {
 import { E2E_FIXTURE_FILE, E2E_PASSWORD, E2E_STATE_DIR, E2E_USERS_FILE } from "./support/e2e-constants.mjs";
 import type { E2EFixture } from "./support/fixture";
 import { createPlansFixtures, plansUsers } from "./support/plans";
+import { createPvFixtures, pvUsers, sweepPvLeftovers } from "./support/pv";
 
 /**
  * OPS-6 · datos de la corrida: un tenant efímero con la MISMA factory que la integración (tests/helpers/tenant-factory.ts),
@@ -50,6 +51,8 @@ export default async function globalSetup(): Promise<void> {
   const db = ownerClient();
   try {
     await sweepOrphanTestTenants(db);
+    // PV (Q4, sesión E2E): perfiles sin consultorio y tickets LEAD de una corrida cortada (no cuelgan de un tenant).
+    await sweepPvLeftovers(db);
     const t = await createEphemeralTenant(db, { role: "OWNER" });
     const owner = await db.userProfile.findUniqueOrThrow({ where: { id: t.userId }, select: { email: true, fullName: true } });
     const location = await db.location.create({ data: { tenantId: t.tenantId, name: "Principal", isPrimary: true } });
@@ -173,6 +176,9 @@ export default async function globalSetup(): Promise<void> {
     // QA-E (T6+T7, §26.8): 3 consultorios más para `plans-matrix.spec.ts` (Consultorio General con Secretaría, Clínica
     // Kine con salas, Individual Kine en solo lectura). Archivo propio (`plans.json`); sus usuarios van al GoTrue falso.
     const plans = await createPlansFixtures(db);
+    // PV (§27, Q4): superadmin, consultorio suspendido, usuario deshabilitado y consultorio para el cierre por
+    // inactividad (con una invitación pendiente) de tickets/legal/idle.spec.ts. Archivo propio (`pv.json`).
+    const pv = await createPvFixtures(db);
     writeFileSync(E2E_FIXTURE_FILE, JSON.stringify(fixture, null, 2));
     // El GoTrue falso (support/start-server.mjs) lee este archivo en cada request.
     writeFileSync(
@@ -182,6 +188,7 @@ export default async function globalSetup(): Promise<void> {
           { id: t.userId, email: owner.email, password: E2E_PASSWORD, fullName: fixture.owner.fullName },
           { id: portalUserId, email: portalEmail, password: E2E_PASSWORD, fullName: "Ana Portal E2E" },
           ...plansUsers(plans),
+          ...pvUsers(pv),
         ],
         null,
         2
