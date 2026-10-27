@@ -98,7 +98,7 @@ describe("[PL-1a] getPublicPlanCatalog (C-PL2)", () => {
     expect(all("CONSULTORIO")).not.toMatch(/Sala/);
     expect(all("CLINICA")).toMatch(/Sala de espera/);
     expect(c[1].features[1].bullets[0]).toBe("Todo lo del plan Individual");
-    expect(c[1].features[1].bullets.join(" | ")).toContain(`Catálogo de ejercicios de ${BRAND_NAME}`);
+    expect(c[1].features[1].bullets.join(" | ")).toContain("Catálogo de ejercicios incluido");
   });
 });
 
@@ -124,10 +124,10 @@ describe("[VX2-c2] bullet de evoluciones (EV2 ya está)", () => {
     expect(kine.join(" | ")).toMatch(/obra social/);
   });
 
-  it("el catálogo de ejercicios lleva el nombre de la marca (BRAND_NAME, D-VX25)", async () => {
+  it("[PV ZF2 B18] el catálogo de ejercicios dice «incluido» (sin la marca)", async () => {
     db.findMany.mockResolvedValue(M8_ROWS);
     const cons = (await getPublicPlanCatalog()).find((p) => p.plan === "CONSULTORIO")!.features[1].bullets;
-    expect(cons).toContain(`Catálogo de ejercicios de ${BRAND_NAME}`);
+    expect(cons).toContain("Catálogo de ejercicios incluido");
   });
 });
 

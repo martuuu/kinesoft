@@ -6,7 +6,7 @@ import type { SaasPlan } from "@prisma/client";
 import { submitLeadForm } from "@/lib/leads";
 import type { ActionResult } from "@/lib/validation";
 import { Field } from "@/components/ui/field";
-import { Button } from "@/components/ui/button";
+import { Button, ButtonLink } from "@/components/ui/button";
 import { IconAlert, IconCheckCircle } from "@/components/ui/icons";
 import styles from "./contact-form.module.css";
 
@@ -113,6 +113,27 @@ export function ContactForm({
 
   const feedback = contactFeedback(state);
   const err = (f: string) => contactFieldError(state, f);
+
+  // PV ZF2 (M5): en /contacto (`stacked`) el éxito dejaba el form vacío debajo del aviso, y un segundo «Enviar consulta»
+  // abría otro ticket igual en /plataforma. Ahí la página es solo el form: con éxito queda el aviso y la salida. En la
+  // landing (no `stacked`) el form sigue, porque está en medio de la página y el aviso alcanza.
+  if (stacked && feedback?.kind === "success") {
+    return (
+      <div className={`${styles.form} ${styles.stacked}`}>
+        <div ref={messageRef} tabIndex={-1} role="status" className={`k-alert k-alert-success ${styles.message}`}>
+          <IconCheckCircle />
+          <span>
+            <strong>{CONTACT_SUCCESS_TITLE}</strong> {feedback.text}
+          </span>
+        </div>
+        <div>
+          <ButtonLink href="/" variant="ghost" size="md">
+            Volver al inicio
+          </ButtonLink>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <form

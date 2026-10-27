@@ -5,7 +5,8 @@
  *
  * Los links externos (`mailto:`, `tel:`, `wa.me`) en Plataforma están bien: es el superadmin hablando con su cliente,
  * no datos de pacientes. `wa.me` abre en otra pestaña (`noopener`); mail y teléfono los resuelve el sistema.
- * Rótulo y valor en una grilla de 2 columnas que en 390 px se apila (auto-fit), sin scroll horizontal.
+ * Rótulo y valor en una grilla de 2 columnas fijas (rótulo a su ancho, valor con el resto): no se apila, y en 390 px
+ * entra sin scroll horizontal porque el valor parte con `overflowWrap: anywhere` (verificado en la captura de ZB).
  */
 import Link from "next/link";
 import { Card } from "@/components/ui/card";

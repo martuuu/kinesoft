@@ -6,6 +6,7 @@ import { getAccessSnapshot, sessionBlockOf } from "@/lib/session";
 import { exportHref } from "@/components/configuracion/panels/export-panel";
 import { SupportContact } from "@/components/ui/support-contact";
 import { BRAND_NAME } from "@/lib/brand";
+import { contactHref } from "@/lib/support-contact";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Consultorio suspendido" };
@@ -93,6 +94,13 @@ export default async function SuspendidoPage() {
       ) : (
         <StatusText muted>Si trabajás también en otro consultorio, o querés armar el tuyo, podés seguir desde acá.</StatusText>
       )}
+      {/* PV ZF2 (B13): el único camino a soporte era el «escribinos» dentro del párrafo; a quien le suspendieron el
+          consultorio es lo primero que busca, así que también va como botón. Solo para titular/admin (BO-Z B4). */}
+      {canContact ? (
+        <StatusLink href={contactHref("suspendido")} variant="ghost">
+          Escribinos por tu consultorio
+        </StatusLink>
+      ) : null}
       {/* /onboarding con membresías no usables ofrece invitaciones pendientes o el alta: no rebota a la app. */}
       <StatusLink href="/onboarding" variant="ghost">
         Ver invitaciones o crear mi consultorio

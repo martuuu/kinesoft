@@ -55,13 +55,12 @@ function Footer({ links, className }: { links?: AuthShellProps["footerLinks"]; c
   return (
     <footer className={className}>
       <span>© 2026 {BRAND_NAME}</span>
+      {/* PV ZF2 (M3): sin «·» entre items. Con el pie partido en dos líneas el separador quedaba huérfano al principio
+          de la segunda («· Política de privacidad»); la separación la da el `gap` del flex, que no deja restos. */}
       {all.map((l) => (
-        <span key={l.href} className={s.footLink}>
-          <span aria-hidden="true">·</span>
-          <Link href={l.href} className="k-link" prefetch={false}>
-            {l.label}
-          </Link>
-        </span>
+        <Link key={l.href} href={l.href} className="k-link" prefetch={false}>
+          {l.label}
+        </Link>
       ))}
     </footer>
   );

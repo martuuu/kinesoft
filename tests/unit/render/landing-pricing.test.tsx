@@ -50,7 +50,7 @@ describe("[VX2-c2] LandingPricing", () => {
     const h = html(catalog((r) => (r.plan === "CONSULTORIO" ? { ...r, priceCents: 6_400_000 } : r)));
     const indHtml = card(h, "individual")!;
     const ind = text(indHtml);
-    expect(indHtml).toMatch(/<a href="\/contacto\?motivo=precio&amp;plan=INDIVIDUAL" class="k-link" aria-describedby="plan-individual">Pedinos el precio<\/a>/);
+    expect(indHtml).toMatch(/<a href="\/contacto\?motivo=precio&amp;plan=INDIVIDUAL" class="k-link [^"]+" aria-describedby="plan-individual">Pedinos el precio<\/a>/);
     expect(ind).not.toContain("Consultá");
     expect(ind).not.toContain("por mes");
     // Sin el <strong> grande del monto: el link no se lee como un precio.

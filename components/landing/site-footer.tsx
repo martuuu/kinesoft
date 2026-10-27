@@ -40,7 +40,8 @@ export function SiteFooter() {
             </p>
             <p className={s.blurb}>
               ¿Dudas?{" "}
-              <Link href={contactHref()} className="k-link">
+              {/* PV ZF2 (B10): `contactLink` le da 44 px de área táctil (medía 18). */}
+              <Link href={contactHref()} className={`k-link ${s.contactLink}`}>
                 Escribinos
               </Link>
               .

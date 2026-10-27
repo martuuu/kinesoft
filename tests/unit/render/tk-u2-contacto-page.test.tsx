@@ -213,6 +213,8 @@ describe("[TK-20] /contacto con sesión bloqueada o sin consultorio → form de 
     // Un solo consultorio bloqueado: no hay selector.
     expect(html).not.toContain('name="tenantId"');
     expect(html).toMatch(/¿Preferís el mail\? Escribinos a <a href="mailto:soporte@ejemplo\.com"[^>]*>soporte@ejemplo\.com<\/a>\./);
+    // PV ZF2 (B12): «Volver» a la pantalla de bloqueo de la que vino.
+    expect(html).toMatch(/<a[^>]*href="\/suspendido"[^>]*>Volver<\/a>/);
   });
 
   it("titular de dos consultorios bloqueados: elige cuál (tenantId), el suspendido primero", async () => {
@@ -251,6 +253,7 @@ describe("[TK-20] /contacto con sesión bloqueada o sin consultorio → form de 
     expect(text(h1s(html)[0] ?? "")).toBe("Escribinos por tu cuenta");
     expect(text(html)).toContain("Te respondemos a beto@x.test.");
     expect(html).toContain('name="message"');
+    expect(html).toMatch(/<a[^>]*href="\/cuenta-desactivada"[^>]*>Volver<\/a>/);
   });
 
   it("sin consultorio (alta a medio hacer) → «¿Necesitás ayuda con el alta?»", async () => {
@@ -258,6 +261,7 @@ describe("[TK-20] /contacto con sesión bloqueada o sin consultorio → form de 
     const html = await render({ motivo: "onboarding" });
     expect(text(h1s(html)[0] ?? "")).toBe("¿Necesitás ayuda con el alta?");
     expect(html).toContain('name="message"');
+    expect(html).toMatch(/<a[^>]*href="\/onboarding"[^>]*>Volver<\/a>/);
   });
 
   it("[INT-c] sin membresías (paciente del portal) y motivo=privacidad → form de lead con source PRIVACY, no el de alta", async () => {

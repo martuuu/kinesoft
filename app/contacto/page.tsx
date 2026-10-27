@@ -86,6 +86,16 @@ function sessionSourceOf(s: AccessSnapshot): SupportTicketSourceValue {
   return "ONBOARDING";
 }
 
+/**
+ * PV ZF2 (B12): a dónde vuelve «Volver» en el form de sesión. Es la pantalla de bloqueo de la que vino quien escribe
+ * (la misma foto que eligió el copy): sin el link, la única salida era el «atrás» del navegador.
+ */
+const SESSION_BACK_HREF: Partial<Record<SupportTicketSourceValue, string>> = {
+  ACCOUNT_DISABLED: "/cuenta-desactivada",
+  TENANT_SUSPENDED: "/suspendido",
+  ONBOARDING: "/onboarding",
+};
+
 /** Motivos del alta: con sesión y sin consultorio siguen yendo al form de sesión (ticket ONBOARDING con su identidad). */
 const ONBOARDING_SOURCES: ReadonlySet<SupportTicketSourceValue> = new Set(["SIGNUP_ASSISTED", "ONBOARDING"]);
 
@@ -174,6 +184,9 @@ export default async function ContactoPage({ searchParams }: { searchParams: Sea
           {mailAfter}
         </p>
       ) : null}
+      <StatusLink href={SESSION_BACK_HREF[sessionSource] ?? "/onboarding"} variant="ghost">
+        Volver
+      </StatusLink>
     </AuthShell>
   );
 }

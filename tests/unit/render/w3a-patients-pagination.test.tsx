@@ -34,7 +34,7 @@ vi.mock("@/lib/bookings", () => ({ listPractitioners: vi.fn(async () => []) }));
 vi.mock("@/lib/whatsapp-patient-ui-internal", () => ({ tenantWhatsAppActive: vi.fn(async () => false) }));
 
 import PacientesPage from "@/app/(app)/pacientes/page";
-import { PatientsPagination, pageRangeLabel } from "@/components/patients/patients-pagination";
+import { PatientsPageIndicator, PatientsPagination, pageRangeLabel } from "@/components/patients/patients-pagination";
 import {
   BulkActionBar,
   BulkSelectPageCheckbox,
@@ -64,7 +64,9 @@ describe("[HD-10] PatientsPagination", () => {
     const html = renderToStaticMarkup(<PatientsPagination page={1} pageCount={3} total={120} hrefFor={hrefFor} />);
     expect(html).toContain('aria-label="Paginación"');
     expect(html).toMatch(/<span aria-disabled="true"[^>]*>← Anterior/);
-    expect(html.replace(/<!-- -->/g, "")).toMatch(/<span aria-current="page"[^>]*>Página 1 de 3</);
+    // PV ZF2 (B16): «Página N de M» es texto, sin `aria-current` (eso va en un link, no en un span).
+    expect(html.replace(/<!-- -->/g, "")).toMatch(/<span style="[^"]*">Página 1 de 3</);
+    expect(html).not.toContain("aria-current");
     expect(hrefs(html)).toEqual(["/pacientes?sort=lastName.asc&page=2"]);
     expect(html).toContain("Mostrando 1–50 de 120");
     // `k-btn-md` = min-height 44 px (globals.css).
@@ -87,6 +89,20 @@ describe("[HD-10] PatientsPagination", () => {
 
   it("página única: no se muestra", () => {
     expect(renderToStaticMarkup(<PatientsPagination page={1} pageCount={1} total={12} hrefFor={hrefFor} />)).toBe("");
+  });
+
+  it("[PV ZF2 M6] indicador de arriba: «Página N de M ‹ ›» con los mismos href y bordes sin link", () => {
+    const first = renderToStaticMarkup(<PatientsPageIndicator page={1} pageCount={3} hrefFor={hrefFor} />).replace(/<!-- -->/g, "");
+    expect(first).toContain('aria-label="Páginas del directorio"');
+    expect(first).toContain("Página 1 de 3");
+    expect(hrefs(first)).toEqual(["/pacientes?sort=lastName.asc&page=2"]);
+    expect(first).toContain('aria-label="Página siguiente"');
+    expect(first).toMatch(/<span aria-disabled="true"[^>]*>[\s\S]*?Página anterior/);
+    const mid = renderToStaticMarkup(<PatientsPageIndicator page={2} pageCount={3} hrefFor={hrefFor} />);
+    expect(hrefs(mid)).toEqual(["/pacientes?sort=lastName.asc&page=1", "/pacientes?sort=lastName.asc&page=3"]);
+    // k-btn-sm: 40 px en escritorio, 44 px < 768 (globals.css).
+    expect(mid.match(/k-btn-sm/g)?.length).toBe(2);
+    expect(renderToStaticMarkup(<PatientsPageIndicator page={1} pageCount={1} hrefFor={hrefFor} />)).toBe("");
   });
 
   it("rango con separador de miles AR", () => {
@@ -195,7 +211,11 @@ describe("[HD-10] /pacientes: la página no viaja al cambiar filtro u orden", ()
   it("orden, archivados, pills, `?os=` y filtros avanzados no arrastran `page`", async () => {
     const html = await renderPage(SP);
     const nav = html.indexOf('aria-label="Paginación"');
-    const outside = hrefs(html.slice(0, nav)).filter((h) => h.startsWith("/pacientes?"));
+    // PV ZF2 (M6): el indicador de arriba SÍ lleva `page` (es paginación); se saca de lo que «no arrastra page».
+    const top = html.match(/<nav aria-label="Páginas del directorio"[\s\S]*?<\/nav>/)?.[0] ?? "";
+    expect(top).not.toBe("");
+    expect(hrefs(top).map((h) => new URL(h, "http://x").searchParams.get("page"))).toEqual([null, "3"]);
+    const outside = hrefs(html.slice(0, nav).replace(top, "")).filter((h) => h.startsWith("/pacientes?"));
     // 5 órdenes + archivados + 3 pills.
     expect(outside.length).toBeGreaterThanOrEqual(9);
     for (const h of outside) expect(new URL(h, "http://x").searchParams.has("page")).toBe(false);

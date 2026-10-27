@@ -53,7 +53,7 @@ function PriceCard({ plan, featured }: { plan: PublicPlan; featured: boolean }) 
         {plan.priceCents === null ? (
           // aria-describedby: los tres links dicen lo mismo; el lector los distingue por el plan (como el CTA).
           <p className={styles.trial}>
-            <a href={contactHref("precio", plan.plan)} className="k-link" aria-describedby={titleId}>
+            <a href={contactHref("precio", plan.plan)} className={`k-link ${styles.priceLink}`} aria-describedby={titleId}>
               Pedinos el precio
             </a>
           </p>

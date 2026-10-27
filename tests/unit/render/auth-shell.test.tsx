@@ -99,6 +99,20 @@ describe("[VX F-b1] AuthShell v2", () => {
     expect(html).toMatch(/<a[^>]*href="\/login"[^>]*>Volver al login<\/a>/);
   });
 
+  it("[PV ZF2 M3] el pie no lleva «·» entre items (quedaba huérfano al partir la línea): los separa el gap", () => {
+    for (const variant of ["product", "centered", "split"] as const) {
+      const html = renderToStaticMarkup(
+        <AuthShell variant={variant} footerLinks={[{ label: "Conocé más", href: "/" }]}>
+          <p>x</p>
+        </AuthShell>
+      );
+      const foot = html.slice(html.lastIndexOf("<footer"));
+      expect(foot).toContain("Conocé más");
+      expect(foot).toContain("/terminos");
+      expect(foot).not.toContain("·");
+    }
+  });
+
   it("sin filter: blur en el markup ni en los CSS Modules (D-VX9)", () => {
     for (const variant of ["product", "split", "centered"] as const) {
       const html = renderToStaticMarkup(

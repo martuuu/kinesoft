@@ -480,7 +480,16 @@ describe("[VX-Z] signup a 1366×768", () => {
     const { readFileSync } = await import("node:fs");
     const css = readFileSync("components/auth/auth-shell.module.css", "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
     expect(css).toMatch(
-      /@media \(min-width: 1024px\) and \(max-height: 820px\) \{\s*\.splitMain \{\s*padding-block: 8px 24px;\s*\}\s*\}/
+      /@media \(min-width: 1024px\) and \(max-height: 820px\) \{\s*\.splitMain \{\s*padding-block: 8px 24px;\s*\}/
     );
+  });
+
+  it("[PV ZF2 M2] login (product) en el mismo corte: menos aire en el lado del form y pie más chico", async () => {
+    const { readFileSync } = await import("node:fs");
+    const css = readFileSync("components/auth/auth-shell.module.css", "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const block = css.slice(css.indexOf("@media (min-width: 1024px) and (max-height: 820px)"));
+    expect(block).toMatch(/\.productSide \{\s*padding-block: 16px;\s*\}/);
+    expect(block).toMatch(/\.productMain \{\s*padding-block: 8px 12px;\s*\}/);
+    expect(block).toMatch(/\.productFoot \{\s*font-size: 13px;/);
   });
 });

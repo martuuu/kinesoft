@@ -65,7 +65,9 @@ const MODULE_BULLETS: readonly { modules: readonly TenantModule[]; text: string 
   { modules: ["diagnostico", "evaluaciones"], text: "Diagnóstico y evaluaciones" },
   { modules: ["ejercicios"], text: "Biblioteca con tus propios ejercicios" },
   { modules: ["plantillas", "favoritos"], text: "Plantillas de plan y ejercicios favoritos" },
-  { modules: ["ejerciciosGlobales"], text: `Catálogo de ejercicios de ${BRAND_NAME}` },
+  // PV ZF2 (B18): antes «Catálogo de ejercicios de <marca>»; en la tarjeta partía en dos líneas con la marca sola y no
+  // decía nada que «incluido» no diga.
+  { modules: ["ejerciciosGlobales"], text: "Catálogo de ejercicios incluido" },
   { modules: ["salas"], text: "Salas: organizá los turnos por consultorio físico" },
   { modules: ["salaEspera"], text: "Sala de espera con llamado de pacientes" },
 ];
@@ -174,10 +176,11 @@ async function loadRows(): Promise<SaasPlanConfigRow[]> {
   }));
 }
 
-// BR-Z (PV Q5): la marca va en la clave. Los bullets llevan `BRAND_NAME` ya resuelto («Catálogo de ejercicios de …») y
+// BR-Z (PV Q5): la marca va en la clave. Los bullets llevaban `BRAND_NAME` ya resuelto («Catálogo de ejercicios de …») y
 // la clave de `unstable_cache` es el texto de la función + estas partes: sin la marca, el Data Cache (que en Vercel
 // sobrevive a los deploys) seguía sirviendo la marca vieja en /precios y la landing hasta el `revalidate` de 1 h; el
-// E2E de marca lo vio con el `.next/cache` de un build anterior.
+// E2E de marca lo vio con el `.next/cache` de un build anterior. Desde PV ZF2 (B18) ningún bullet lleva la marca; la
+// parte se deja (cambiarla no aporta y vuelve a invalidar el cache de un deploy a otro sin motivo).
 const cachedCatalog = unstable_cache(async () => toPublicPlans(await loadRows()), ["saas-plans:public", BRAND_NAME], {
   tags: [SAAS_PLANS_TAG],
   revalidate: ttl.long,

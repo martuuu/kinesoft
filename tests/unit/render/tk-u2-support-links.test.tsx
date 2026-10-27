@@ -98,6 +98,8 @@ describe("[TK-19] SupportContact → /contacto?motivo=… sin mailto", () => {
     const html = renderToStaticMarkup((await SuspendidoPage()) as ReactElement);
     expect(html).toContain('href="/contacto?motivo=suspendido"');
     expect(html).not.toContain("mailto:");
+    // PV ZF2 (B13): además del «escribinos» del párrafo, un botón ghost (44 px) con el mismo destino.
+    expect(html).toMatch(/<a[^>]*k-btn-ghost k-btn-md[^>]*href="\/contacto\?motivo=suspendido"[^>]*>Escribinos por tu consultorio<\/a>/);
   });
 
   it("/suspendido (miembro sin rol de titular) → «avisale al titular», sin link de contacto", async () => {

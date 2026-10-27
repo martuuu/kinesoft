@@ -73,6 +73,24 @@ export function LoginScreen({
           <p className={st.sub}>{authMethodsSubtitle(providers)}</p>
         </div>
 
+        {/* PV ZF2 (B11): el aviso de inactividad iba dentro del form, debajo de los botones sociales: quien volvía
+            después del cierre lo leía recién a mitad de la card. Es lo primero que tiene que ver, así que va antes de
+            las opciones de ingreso. No necesita estar en el form (no lee el email, a diferencia del de error). */}
+        {notice && (
+          // Informativo (no es un error del form): tonos neutros sobre la base de `.k-alert`.
+          <div
+            className="k-alert"
+            role="status"
+            data-testid="login-notice"
+            style={{ background: "var(--sky-50)", color: "var(--navy-700)", borderColor: "var(--sky-100)" }}
+          >
+            <IconClock size={18} />
+            <div className={st.alertBody}>
+              <span>{notice}</span>
+            </div>
+          </div>
+        )}
+
         {providers.length > 0 && (
           <>
             <SocialButtons providers={providers} next={next} className={st.social} />
@@ -81,22 +99,8 @@ export function LoginScreen({
         )}
 
         <form action={`/api/auth/sign-in${q}`} method="post" className={st.fields}>
-          {/* El aviso va DENTRO del form: «Reenviar email de confirmación» lee el email que la persona
+          {/* El aviso de error va DENTRO del form: «Reenviar email de confirmación» lee el email que la persona
               tipeó en este form (IAM-2d), sin pedírselo de nuevo. */}
-          {notice && (
-            // Informativo (no es un error del form): tonos neutros sobre la base de `.k-alert`.
-            <div
-              className="k-alert"
-              role="status"
-              data-testid="login-notice"
-              style={{ background: "var(--sky-50)", color: "var(--navy-700)", borderColor: "var(--sky-100)" }}
-            >
-              <IconClock size={18} />
-              <div className={st.alertBody}>
-                <span>{notice}</span>
-              </div>
-            </div>
-          )}
           {feedback && (
             <div className="k-alert" role="alert" id={LOGIN_ALERT_ID}>
               <IconAlert size={18} />

@@ -53,7 +53,24 @@ test.describe("[IN-E] cierre por inactividad", () => {
       await page.clock.runFor(6_000);
       const warning = page.getByTestId("idle-warning");
       await expect(warning).toBeVisible();
-      await expect(page.getByRole("dialog", { name: "¿Seguís ahí?" })).toBeVisible();
+      const dialog = page.getByRole("dialog", { name: "¿Seguís ahí?" });
+      await expect(dialog).toBeVisible();
+      // PV ZF2 (M4): `toBeVisible` no mira la opacidad: con el reloj falso el `requestAnimationFrame` de framer también
+      // está congelado y el aviso quedaba en el DOM a opacidad 0 (un aviso invisible pasaba en verde). Se adelanta el
+      // reloj de a poco y se exige que el fondo y el panel terminen opacos. No sirve `reducedMotion: "reduce"` en el
+      // contexto: el `MotionConfig reducedMotion="user"` anula transform/layout, no el fade de opacidad.
+      await expect
+        .poll(
+          async () => {
+            await page.clock.runFor(100);
+            return dialog.evaluate((el) => {
+              const panel = el.querySelector(".k-modal-panel");
+              return [getComputedStyle(el).opacity, panel ? getComputedStyle(panel).opacity : "missing"].join("/");
+            });
+          },
+          { timeout: 5_000 },
+        )
+        .toBe("1/1");
       await expect(page.getByTestId("idle-stay")).toBeFocused();
       const s1 = Number(await page.getByTestId("idle-warning-seconds").textContent());
       expect(s1).toBeGreaterThan(0);

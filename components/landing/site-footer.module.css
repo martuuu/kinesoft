@@ -37,6 +37,12 @@
   font-size: 14px;
   color: var(--navy-500);
 }
+/* PV ZF2 (B10): «Escribinos» en medio de la oración, con el alto mínimo táctil (inline-flex no corta la línea). */
+.contactLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
 .links {
   display: flex;
   gap: 8px 24px;

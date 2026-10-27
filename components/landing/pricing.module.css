@@ -76,6 +76,17 @@
 .for { margin: 0; font-size: 15px; color: var(--navy-500); }
 
 .priceBlock { display: grid; gap: 10px; align-content: start; }
+/* PV ZF2 (B8): la fila de la prueba («14 días gratis…») la tiene solo el plan que ofrece prueba, pero el subgrid le da
+   ese alto a las tres tarjetas: en las otras quedaba un hueco entre «Pedinos el precio» y el CTA. El bloque de precio
+   se apoya abajo de su fila (pegado al CTA en todas); el aire sobrante queda entre el «para quién» y el precio, donde
+   se lee como separación de secciones. Solo con subgrid: el fallback flex de abajo no comparte filas. */
+@supports (grid-template-rows: subgrid) {
+  .priceBlock { align-self: end; }
+}
+/* PV ZF2 (B9): «Pedinos el precio» medía 18 px de alto; en touch, 44 px de área sin cambiar cómo se ve. */
+@media (max-width: 1023px) {
+  .priceLink { display: inline-flex; align-items: center; min-height: 44px; }
+}
 
 /* Fallback sin subgrid (Safari < 16, Chrome < 117): el arreglo de VX-Z. `.for` con alto mínimo de dos líneas y la
    fila de la prueba («14 días gratis…») presente aunque el plan no tenga prueba, para que los tres CTA queden a la

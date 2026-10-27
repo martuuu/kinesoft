@@ -25,7 +25,7 @@ import {
   BulkSelectPageCheckbox,
   BulkSelectProvider,
 } from "@/components/patients/bulk-select";
-import { PatientsPagination } from "@/components/patients/patients-pagination";
+import { PatientsPageIndicator, PatientsPagination } from "@/components/patients/patients-pagination";
 
 /** Separador de miles AR en el conteo del h1 («1.234 pacientes»). */
 const COUNT = new Intl.NumberFormat("es-AR");
@@ -250,6 +250,14 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
         >
           {filter === "archived" ? "Volver a activos" : "Ver archivados"}
         </Link>
+        {/* PV ZF2 (M6): la paginación también arriba, compacta, en la misma fila (ver PatientsPageIndicator). */}
+        {patients.length > 0 && (
+          <PatientsPageIndicator
+            page={patientsPage.page}
+            pageCount={patientsPage.pageCount}
+            hrefFor={(p) => `/pacientes${baseQS({ page: String(p) })}`}
+          />
+        )}
       </div>
 
       <AdvancedPatientFilters

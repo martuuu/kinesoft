@@ -97,8 +97,13 @@ export function TicketNotes({ threadId, notes }: { threadId: string; notes: Tick
           error={error ?? undefined}
         />
         <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
-          <span aria-live="polite" style={{ fontSize: 12, color: body.length >= TICKET_NOTE_MAX ? "var(--danger-fg)" : "var(--navy-500)" }}>
+          {/* PV ZF2 (B14): el contador con `aria-live` se anunciaba en cada tecla y tapaba lo que se dictaba. El visible
+              queda fuera del live (se lee al recorrer); el anuncio es solo al llegar al tope (un único cambio de texto). */}
+          <span style={{ fontSize: 12, color: body.length >= TICKET_NOTE_MAX ? "var(--danger-fg)" : "var(--navy-500)" }}>
             {body.length} / {TICKET_NOTE_MAX}
+          </span>
+          <span className="k-sr-only" aria-live="polite">
+            {body.length >= TICKET_NOTE_MAX ? `Llegaste al máximo de ${TICKET_NOTE_MAX} caracteres.` : ""}
           </span>
           <Button type="submit" variant="ghost" disabled={pending || body.trim() === ""}>
             {pending ? "Guardando…" : "Agregar nota"}

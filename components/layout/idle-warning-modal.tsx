@@ -44,11 +44,12 @@ export function IdleWarningModal({ seconds, onStay }: { seconds: number; onStay:
         </p>
         <ModalActions>
           <form action="/api/auth/sign-out" method="post" style={{ display: "contents" }}>
-            <Button type="submit" variant="ghost" data-testid="idle-signout">
+            {/* PV ZF2 (B17): sin `size` medían 42 px; `md` = 44 px (mínimo táctil de AGENTS.md §5) en todos los anchos. */}
+            <Button type="submit" variant="ghost" size="md" data-testid="idle-signout">
               Cerrar sesión
             </Button>
           </form>
-          <Button type="button" variant="primary" autoFocus onClick={onStay} data-testid="idle-stay">
+          <Button type="button" variant="primary" size="md" autoFocus onClick={onStay} data-testid="idle-stay">
             Seguir conectado
           </Button>
         </ModalActions>

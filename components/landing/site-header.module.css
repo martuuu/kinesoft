@@ -46,6 +46,8 @@
   font-weight: 500;
   color: var(--navy-700);
   text-decoration: none;
+  /* PV ZF2 (M1): a 1024 px «Cómo empezás» y «Probá 14 días gratis» se partían en dos líneas. */
+  white-space: nowrap;
   transition: background-color var(--dur-fast) var(--ease-out);
 }
 .links a:hover {
@@ -55,6 +57,25 @@
 .cta {
   display: flex;
   gap: 8px;
+  flex-shrink: 0;
+}
+.cta a {
+  white-space: nowrap;
+}
+
+/* PV ZF2 (M1): entre 1024 y 1199 px no entran wordmark + 5 links + 2 CTA en una línea; se deja solo la marca gráfica
+   (el link conserva el aria-label con el nombre). Se descartó subir el corte del menú mobile a 1199: en tablets
+   apaisadas el menú completo sí entra sin el wordmark. */
+@media (min-width: 1024px) and (max-width: 1199px) {
+  .logoWord {
+    display: none;
+  }
+  .nav {
+    gap: 16px;
+  }
+  .links a {
+    padding: 0 10px;
+  }
 }
 
 /* ── Menú mobile ─────────────────────────────────────────────── */

@@ -17,7 +17,6 @@ import { RECEIPT_MAX_BYTES, RECEIPT_MIME_TYPES, addDaysKey, cancelEffectiveOnFor
 import { toARDateKey } from "@/lib/datetime-ar";
 import { formatARS } from "@/lib/format";
 import type { BillingOverview, PlanChangeBilling, SaasCollectionMethod } from "@/lib/saas-billing-types";
-import { BRAND_NAME } from "@/lib/brand";
 
 // ── Cupos y estado del plan ───────────────────────────────────────────────────────────────────────────────────────
 
@@ -54,7 +53,8 @@ export const MODULE_UI_LABEL: Record<TenantModule, string | null> = {
   ejercicios: "Biblioteca de ejercicios",
   plantillas: "Plantillas de plan",
   favoritos: "Ejercicios favoritos",
-  ejerciciosGlobales: `Catálogo de ejercicios de ${BRAND_NAME}`,
+  // PV ZF2 (B18): mismo texto que el bullet público (`lib/saas-plans-public.ts`), sin la marca.
+  ejerciciosGlobales: "Catálogo de ejercicios incluido",
 };
 
 /** Etiquetas de módulos, sin repetidos ni los que no se listan, en el orden recibido. */

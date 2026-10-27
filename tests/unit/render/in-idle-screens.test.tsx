@@ -134,9 +134,11 @@ describe("[IN-5] aviso y pantalla de sesión cerrada", () => {
     expect(text(html)).toContain("Tu sesión se va a cerrar en 42 s por inactividad.");
     expect(text(html)).toContain("Si tenés algo sin guardar, tocá “Seguir conectado”.");
     // Botones: «Cerrar sesión» ghost (POST normal, sin reason) y «Seguir conectado» primario con foco.
-    expect(html).toMatch(/<form action="\/api\/auth\/sign-out" method="post"[^>]*><button class="k-btn k-btn-ghost"[^>]*type="submit"[^>]*data-testid="idle-signout">Cerrar sesión<\/button>/);
+    expect(html).toMatch(/<form action="\/api\/auth\/sign-out" method="post"[^>]*><button class="k-btn k-btn-ghost k-btn-md"[^>]*type="submit"[^>]*data-testid="idle-signout">Cerrar sesión<\/button>/);
     const stay = html.match(/<button[^>]*data-testid="idle-stay"[^>]*>/)?.[0] ?? "";
     expect(stay).toContain("k-btn-primary");
+    // PV ZF2 (B17): los dos a 44 px (`k-btn-md`).
+    expect(stay).toContain("k-btn-md");
     expect(stay).toContain('autofocus=""');
     expect(html).toContain(">Seguir conectado<");
     expect(html.indexOf("idle-signout")).toBeLessThan(html.indexOf("idle-stay"));
