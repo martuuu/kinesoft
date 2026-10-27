@@ -52,12 +52,20 @@ type Ctx = {
   selected: Set<string>;
   toggle: (id: string) => void;
   clear: () => void;
+  setMany: (ids: string[], on: boolean) => void;
 };
 
 const BulkCtx = createContext<Ctx | null>(null);
 
-export function BulkSelectProvider({ children }: { children: React.ReactNode }) {
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+export function BulkSelectProvider({
+  children,
+  initialSelected,
+}: {
+  children: React.ReactNode;
+  /** Solo para el render test (SSR no corre `onChange`): la página no lo pasa. */
+  initialSelected?: string[];
+}) {
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(initialSelected ?? []));
   const toggle = (id: string) => {
     setSelected((s) => {
       const next = new Set(s);
@@ -67,7 +75,50 @@ export function BulkSelectProvider({ children }: { children: React.ReactNode }) 
     });
   };
   const clear = () => setSelected(new Set());
-  return <BulkCtx.Provider value={{ selected, toggle, clear }}>{children}</BulkCtx.Provider>;
+  const setMany = (ids: string[], on: boolean) => {
+    setSelected((s) => {
+      const next = new Set(s);
+      for (const id of ids) {
+        if (on) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  };
+  return <BulkCtx.Provider value={{ selected, toggle, clear, setMany }}>{children}</BulkCtx.Provider>;
+}
+
+/**
+ * HD-10 (PV §27): con el directorio paginado (50 por página) la selección es SOLO de la página que se ve: «todos»
+ * nunca puede significar «los 1.234», porque archivar masivo sobre filas que la Secretaría no está viendo es el error
+ * caro. Por eso la casilla y el contador lo dicen («de esta página») y la página remonta el provider por URL (`key`),
+ * así cambiar de página o de filtro arranca sin selección. `ids` = las filas `full` de la página (las básicas no
+ * tienen casilla).
+ */
+export function BulkSelectPageCheckbox({ ids }: { ids: string[] }) {
+  const ctx = useContext(BulkCtx);
+  if (!ctx || ids.length === 0) return null;
+  const count = ids.filter((id) => ctx.selected.has(id)).length;
+  const all = count === ids.length;
+  return (
+    <input
+      type="checkbox"
+      checked={all}
+      ref={(el) => {
+        // Parcial = indeterminado (no es un atributo HTML: solo la propiedad del DOM).
+        if (el) el.indeterminate = count > 0 && !all;
+      }}
+      onChange={() => ctx.setMany(ids, !all)}
+      aria-label="Seleccionar todos los de esta página"
+      title="Seleccionar todos los de esta página"
+      style={{ cursor: "pointer", width: 16, height: 16 }}
+    />
+  );
+}
+
+/** HD-10: contador de la barra, por página. */
+export function bulkSelectionLabel(n: number): string {
+  return n === 1 ? "1 paciente de esta página seleccionado" : `${n} pacientes de esta página seleccionados`;
 }
 
 export function BulkSelectCheckbox({ patientId }: { patientId: string }) {
@@ -145,9 +196,7 @@ export function BulkActionBar({ archivedView = false }: { archivedView?: boolean
         minWidth: 360,
       }}
     >
-      <span style={{ fontSize: 13, fontWeight: 700 }}>
-        {ids.length} {ids.length === 1 ? "paciente" : "pacientes"} seleccionado{ids.length === 1 ? "" : "s"}
-      </span>
+      <span style={{ fontSize: 13, fontWeight: 700 }}>{bulkSelectionLabel(ids.length)}</span>
       <div style={{ flex: 1 }} />
       <button
         type="button"

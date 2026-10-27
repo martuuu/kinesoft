@@ -17,8 +17,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 export function useDebouncedSearchParam(
   paramName: string,
-  delayMs = 300
+  delayMs = 300,
+  // PV W3a: params que una búsqueda nueva tiene que borrar (p. ej. `page` en /pacientes: buscar desde la página 3
+  // dejaba `page=3` y el resultado no arrancaba desde arriba).
+  resetParams: readonly string[] = []
 ): [string, (v: string) => void, () => void] {
+  const resetKey = resetParams.join(",");
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -42,11 +46,12 @@ export function useDebouncedSearchParam(
       const sp = new URLSearchParams(params.toString());
       if (next) sp.set(paramName, next);
       else sp.delete(paramName);
+      for (const k of resetKey ? resetKey.split(",") : []) sp.delete(k);
       lastSyncedFromUrl.current = next;
       const qs = sp.toString();
       router.replace(`${pathname}${qs ? "?" + qs : ""}`, { scroll: false });
     },
-    [params, paramName, pathname, router]
+    [params, paramName, pathname, router, resetKey]
   );
 
   const flushNow = useCallback(() => {

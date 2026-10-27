@@ -22,8 +22,13 @@ import { AdvancedPatientFilters } from "@/components/patients/advanced-filters";
 import { InsurerFilterSelect } from "@/components/patients/insurer-filter-select";
 import {
   BulkActionBar,
+  BulkSelectPageCheckbox,
   BulkSelectProvider,
 } from "@/components/patients/bulk-select";
+import { PatientsPagination } from "@/components/patients/patients-pagination";
+
+/** Separador de miles AR en el conteo del h1 («1.234 pacientes»). */
+const COUNT = new Intl.NumberFormat("es-AR");
 
 export const metadata = { title: "Pacientes · KineSoft" };
 export const dynamic = "force-dynamic";
@@ -119,20 +124,26 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
   const patients = patientsPage.rows;
   const totals = patientsPage.totals;
 
-  const baseQS = (override: Record<string, string | undefined>) => {
+  // HD-10: `page` NO es parte del estado que se arrastra. Solo la paginación la pone (`baseQS({ page })`); cualquier otro
+  // link (orden, archivados) y los forms GET (`preserved` de la OS, `preservedParams` de los avanzados) salen sin ella:
+  // la página 3 de «Apellido A→Z» no es la 3 de «Próximo turno», y un filtro que deja 12 filas caería recortado a la
+  // última página en vez de mostrarse desde arriba.
+  const filterParams: Record<string, string | undefined> = {
+    q,
+    filter,
+    sort,
+    os,
+    ageMin: ageMin?.toString(),
+    ageMax: ageMax?.toString(),
+    diagnosisSlug,
+    lastVisitFrom,
+    lastVisitTo,
+  };
+  const baseQS = (override: Record<string, string | undefined> & { page?: string }) => {
     const sp = new URLSearchParams();
-    const merged: Record<string, string | undefined> = {
-      q,
-      filter,
-      sort,
-      os,
-      ageMin: ageMin?.toString(),
-      ageMax: ageMax?.toString(),
-      diagnosisSlug,
-      lastVisitFrom,
-      lastVisitTo,
-      ...override,
-    };
+    const merged: Record<string, string | undefined> = { ...filterParams, page: undefined, ...override };
+    // La 1 es la URL sin `page` (una sola URL canónica por vista).
+    if (merged.page === "1") merged.page = undefined;
     for (const [k, v] of Object.entries(merged)) {
       if (v) sp.set(k, v);
     }
@@ -149,7 +160,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
         eyebrow="Pacientes"
         title={
           <>
-            Directorio · <span style={{ color: "var(--sky-700)" }}>{patientsPage.total}</span>{" "}
+            Directorio · <span style={{ color: "var(--sky-700)" }}>{COUNT.format(patientsPage.total)}</span>{" "}
             {patientsPage.total === 1 ? "paciente" : "pacientes"}
           </>
         }
@@ -220,16 +231,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
         <InsurerFilterSelect
           value={os}
           insurers={osOptions}
-          preserved={{
-            q,
-            filter,
-            sort,
-            ageMin: ageMin?.toString(),
-            ageMax: ageMax?.toString(),
-            diagnosisSlug,
-            lastVisitFrom,
-            lastVisitTo,
-          }}
+          preserved={{ ...filterParams, os: undefined }}
         />
         <Link
           href={`/pacientes${baseQS({ filter: filter === "archived" ? "all" : "archived" })}`}
@@ -268,13 +270,17 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
           canCreate={canCreateHere}
         />
       ) : (
-        <BulkSelectProvider>
+        // HD-10: `key` por URL = la selección es de ESTA página/vista; cambiar de página o de filtro la vacía (si no, el
+        // provider sobrevive a la navegación suave y «Archivar» se llevaría filas que ya no se ven).
+        <BulkSelectProvider key={baseQS({ page: String(patientsPage.page) })}>
         <Card style={{ padding: 0, overflow: "hidden" }}>
           <div
             className={directory.head}
             style={{ gridTemplateColumns: patientsGridColumns(showPlanColumn) }}
           >
-            <span />
+            <span>
+              <BulkSelectPageCheckbox ids={patients.filter((p) => p.access === "full").map((p) => p.id)} />
+            </span>
             <span>Paciente</span>
             {showPlanColumn && <span>Plan activo</span>}
             <span>Obra social</span>
@@ -287,6 +293,16 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
         </Card>
         <BulkActionBar archivedView={filter === "archived"} />
         </BulkSelectProvider>
+      )}
+
+      {/* HD-10: debajo de la lista; con una sola página no se muestra (el total ya está en el h1). */}
+      {patients.length > 0 && (
+        <PatientsPagination
+          page={patientsPage.page}
+          pageCount={patientsPage.pageCount}
+          total={patientsPage.total}
+          hrefFor={(p) => `/pacientes${baseQS({ page: String(p) })}`}
+        />
       )}
     </div>
   );

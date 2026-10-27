@@ -7,6 +7,9 @@ import { IconSearch } from "@/components/ui/icons";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import styles from "./patients-directory.module.css";
 
+/** HD-10: con el directorio paginado los totales pasan el millar («Todos · 1.234»): separador AR. */
+const COUNT = new Intl.NumberFormat("es-AR");
+
 type Filter = "all" | "active" | "no-program" | "archived";
 
 export function PatientsSearchBar({
@@ -17,7 +20,7 @@ export function PatientsSearchBar({
   /** Sin `planes` la página manda solo `all` (EV1-B). */
   totals: { all: number; withProgram?: number; withoutProgram?: number };
 }) {
-  const [q, setQ, flush] = useDebouncedSearchParam("q", 300);
+  const [q, setQ, flush] = useDebouncedSearchParam("q", 300, ["page"]);
   // EV1-B: sin `planes` (General) los pills «Con plan/Sin plan» no tienen
   // sentido y uno solo («Todos») no filtra nada: se va el grupo entero. El
   // total ya está en el título de la página.
@@ -86,9 +89,9 @@ export function PatientsSearchBar({
       >
         {(
           [
-            ["all", `Todos · ${totals.all}`],
-            ["active", `Con plan · ${totals.withProgram ?? 0}`],
-            ["no-program", `Sin plan · ${totals.withoutProgram ?? 0}`],
+            ["all", `Todos · ${COUNT.format(totals.all)}`],
+            ["active", `Con plan · ${COUNT.format(totals.withProgram ?? 0)}`],
+            ["no-program", `Sin plan · ${COUNT.format(totals.withoutProgram ?? 0)}`],
           ] as const
         ).map(([key, label]) => {
           const on = key === filter;
