@@ -4,7 +4,7 @@ import { getActor } from "@/lib/session";
 import { BibliotecaClient } from "@/components/biblioteca/biblioteca-client";
 import { moduleWall } from "@/lib/module-wall";
 
-export const metadata = { title: "Terapia Manual · KineSoft" };
+export const metadata = { title: "Terapia Manual" };
 export const dynamic = "force-dynamic";
 
 type SP = {

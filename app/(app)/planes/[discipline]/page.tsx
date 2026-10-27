@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 
 export function generateMetadata({ params }: { params: { discipline: string } }) {
   const d = disciplineFromSlug(params.discipline);
-  return { title: d ? `Planes · ${disciplineLabel(d)} · KineSoft` : "Planes · KineSoft" };
+  return { title: d ? `Planes · ${disciplineLabel(d)}` : "Planes" };
 }
 
 /**

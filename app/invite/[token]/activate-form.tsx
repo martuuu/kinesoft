@@ -9,6 +9,7 @@ import { LegalAcceptCheckbox } from "@/components/legal/legal-accept";
 import { activateInvitationAction } from "./activate-action";
 import { inviteLoginHref } from "./invite-state";
 import { InviteNotice } from "./invite-notice";
+import { BRAND_NAME } from "@/lib/brand";
 
 /**
  * Lo que el form le manda a `activateInvitationAction`. Exportado para el render test (sin DOM no hay submit).
@@ -135,7 +136,7 @@ export function ActivateForm({
       </Button>
 
       <p style={{ fontSize: 14, color: "var(--navy-500)", textAlign: "center", margin: 0 }}>
-        ¿Ya tenés cuenta en KineSoft?{" "}
+        ¿Ya tenés cuenta en {BRAND_NAME}?{" "}
         <Link href={inviteLoginHref(token, email)} className="k-link">
           Ingresá para unirte
         </Link>

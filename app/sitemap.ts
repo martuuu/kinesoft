@@ -6,7 +6,7 @@ import { PRIVACY_PATH, TERMS_PATH } from "@/lib/legal";
 
 /**
  * BO1-D — `/sitemap.xml`: las páginas públicas fijas (landing, login, desde LG-P `/terminos` y `/privacidad`, y desde PV `/contacto`). Los turneros `/c/<slug>` quedan afuera a
- * propósito: listarlos es publicar qué consultorios usan KineSoft, y eso es decisión del directorio (opt-in por
+ * propósito: listarlos es publicar qué consultorios usan la app, y eso es decisión del directorio (opt-in por
  * consultorio), no de este archivo.
  *
  * DIR-3b (C-DIR2): con `DIRECTORY_MODE=public` se suman `/profesionales`, cada perfil publicado y cada consultorio del

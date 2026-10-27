@@ -30,7 +30,7 @@ import { PatientsPagination } from "@/components/patients/patients-pagination";
 /** Separador de miles AR en el conteo del h1 («1.234 pacientes»). */
 const COUNT = new Intl.NumberFormat("es-AR");
 
-export const metadata = { title: "Pacientes · KineSoft" };
+export const metadata = { title: "Pacientes" };
 export const dynamic = "force-dynamic";
 
 type SP = {

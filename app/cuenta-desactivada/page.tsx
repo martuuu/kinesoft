@@ -3,9 +3,10 @@ import { AuthShell } from "@/components/auth/auth-shell";
 import { SignOutButton, StatusHeading, StatusLink, StatusText } from "@/app/plataforma-mfa/shared";
 import { getAccessSnapshot, sessionBlockOf } from "@/lib/session";
 import { SupportContact } from "@/components/ui/support-contact";
+import { BRAND_NAME } from "@/lib/brand";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Cuenta desactivada · KineSoft" };
+export const metadata = { title: "Cuenta desactivada" };
 
 /**
  * `/cuenta-desactivada` (BO1-A). Adónde manda el layout de la app a un usuario deshabilitado en la plataforma
@@ -24,7 +25,7 @@ export default async function CuentaDesactivadaPage() {
       <AuthShell variant="centered" introAs="p">
         <StatusHeading eyebrow="Todo en orden" title="Podés volver a entrar" />
         <StatusText last>Tu cuenta está activa: no hay nada bloqueado en tu usuario.</StatusText>
-        <StatusLink href="/dashboard">Entrar a KineSoft</StatusLink>
+        <StatusLink href="/dashboard">Entrar a {BRAND_NAME}</StatusLink>
         <SignOutButton />
       </AuthShell>
     );

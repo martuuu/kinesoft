@@ -15,9 +15,10 @@ import { AcceptInviteButton } from "./accept-button";
 import { ActivateForm } from "./activate-form";
 import { InviteNotice } from "./invite-notice";
 import { invitePageState, inviteLoginHref } from "./invite-state";
+import { BRAND_NAME } from "@/lib/brand";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Invitación · KineSoft" };
+export const metadata = { title: "Invitación" };
 
 /**
  * `/invite/<token>` (IAM-2b). El GET nunca consume nada: solo lee la
@@ -103,7 +104,7 @@ export default async function InvitePage({ params }: { params: { token: string }
         <>
           <StatusHeading eyebrow="Activar tu cuenta" title={`Hola, ${invite.firstName}`} />
           <p style={{ fontSize: 14, color: "var(--navy-700)", margin: "0 0 8px", lineHeight: 1.55 }}>
-            {tenantName} te invitó a su equipo en KineSoft. Elegí una contraseña para entrar. El link vale hasta el{" "}
+            {tenantName} te invitó a su equipo en {BRAND_NAME}. Elegí una contraseña para entrar. El link vale hasta el{" "}
             {expiresLabel}.
           </p>
           {roleLine}
@@ -122,7 +123,7 @@ export default async function InvitePage({ params }: { params: { token: string }
           <StatusHeading eyebrow="Ya tenés cuenta" title={`Ingresá para unirte a ${tenantName}`} />
           {roleLine}
           <InviteNotice tone="info">
-            <strong>{invite.email}</strong> ya tiene una cuenta en KineSoft. Ingresá con tu contraseña y, al
+            <strong>{invite.email}</strong> ya tiene una cuenta en {BRAND_NAME}. Ingresá con tu contraseña y, al
             volver acá, aceptás la invitación.
           </InviteNotice>
           <StatusLink href={loginHref}>Ingresar</StatusLink>
@@ -170,7 +171,7 @@ export default async function InvitePage({ params }: { params: { token: string }
               : "Si es tuya, ingresá con tu email y tu contraseña para entrar al consultorio."}
           </InviteNotice>
           <StatusLink href={state.signedIn ? "/dashboard" : "/login"}>
-            {state.signedIn ? "Ir a KineSoft" : "Ir al login"}
+            {state.signedIn ? `Ir a ${BRAND_NAME}` : "Ir al login"}
           </StatusLink>
         </>
       )}

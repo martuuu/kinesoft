@@ -21,7 +21,7 @@ export const dynamic = "force-dynamic";
  * misma región, 0,9 → 4,5 s cruzado). Una lectura liviana aparte devolvía el esqueleto pero subía el perfil a 4 tx.
  * Además el nombre del paciente ya no queda en la pestaña ni en el historial de una PC de recepción compartida.
  */
-export const metadata = { title: "Paciente · KineSoft" };
+export const metadata = { title: "Paciente" };
 
 /**
  * S22b (ES3): los planes salen de la proyección de `getPatientPlans` / `getPatientPlanBalances` (S14). Solo se piden

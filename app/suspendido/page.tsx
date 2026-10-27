@@ -5,9 +5,10 @@ import { SignOutButton, StatusHeading, StatusLink, StatusText } from "@/app/plat
 import { getAccessSnapshot, sessionBlockOf } from "@/lib/session";
 import { exportHref } from "@/components/configuracion/panels/export-panel";
 import { SupportContact } from "@/components/ui/support-contact";
+import { BRAND_NAME } from "@/lib/brand";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Consultorio suspendido · KineSoft" };
+export const metadata = { title: "Consultorio suspendido" };
 
 /**
  * `/suspendido` (BO1-A). Adónde manda el layout de la app a una sesión cuyo consultorio (o todos los suyos) está
@@ -33,7 +34,7 @@ export default async function SuspendidoPage() {
       <AuthShell variant="centered" introAs="p">
         <StatusHeading eyebrow="Todo en orden" title="Podés volver a entrar" />
         <StatusText last>No hay nada bloqueado en tu acceso.</StatusText>
-        <StatusLink href="/dashboard">Entrar a KineSoft</StatusLink>
+        <StatusLink href="/dashboard">Entrar a {BRAND_NAME}</StatusLink>
         <SignOutButton />
       </AuthShell>
     );

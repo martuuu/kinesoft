@@ -15,10 +15,11 @@ export async function generateMetadata({ params }: { params: { slug: string } })
   if (gate?.state === "moved") return { robots: { index: false, follow: false } };
   if (gate?.state === "closed") {
     // Turnero apagado (EV0): que los buscadores no indexen una página sin reserva.
-    return { title: `Turnos online · ${gate.contact.name}`, robots: { index: false, follow: false } };
+    return { title: { absolute: `Turnos online · ${gate.contact.name}` }, robots: { index: false, follow: false } };
   }
   const clinic = gate ? await getPublicClinic(params.slug) : null;
-  return { title: clinic ? `Reservar turno · ${clinic.name}` : "Reservar turno · KineSoft" };
+  // Absoluto: la vidriera es del consultorio; el template del root («%s · marca») le agregaría la marca al final.
+  return { title: clinic ? { absolute: `Reservar turno · ${clinic.name}` } : "Reservar turno" };
 }
 
 export default async function PublicBookingPage({

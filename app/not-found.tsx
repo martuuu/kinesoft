@@ -2,7 +2,7 @@ import { AuthShell } from "@/components/auth/auth-shell";
 import { StatusHeading, StatusLink, StatusText } from "@/app/plataforma-mfa/shared";
 import { getSessionUser } from "@/lib/session-user";
 
-export const metadata = { title: "Página no encontrada · KineSoft", robots: { index: false, follow: false } };
+export const metadata = { title: "Página no encontrada", robots: { index: false, follow: false } };
 
 /** Tope para leer la sesión: un 404 no puede quedar esperando a GoTrue (el camino lento de `getSessionUser`). */
 const SESSION_TIMEOUT_MS = 1500;

@@ -18,10 +18,10 @@ export const dynamic = "force-dynamic";
 
 export async function generateMetadata({ params }: { params: { sessionId: string } }) {
   const s = await getSessionDetail(params.sessionId);
-  if (!s) return { title: "Sesión · KineSoft" };
+  if (!s) return { title: "Sesión" };
   return {
     // M13: "Sesión n de N" por ordinal; antes salía el `index` crudo.
-    title: `${sessionCounterLabel(s.ordinal, s.totalLive)} · ${s.program.patient.firstName} ${s.program.patient.lastName} · KineSoft`,
+    title: `${sessionCounterLabel(s.ordinal, s.totalLive)} · ${s.program.patient.firstName} ${s.program.patient.lastName}`,
   };
 }
 

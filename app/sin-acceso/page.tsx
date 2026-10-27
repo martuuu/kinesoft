@@ -3,9 +3,10 @@ import { AuthShell } from "@/components/auth/auth-shell";
 import { SignOutButton, StatusHeading, StatusLink, StatusText } from "@/app/plataforma-mfa/shared";
 import { getAccessSnapshot, type AccessMembership } from "@/lib/session";
 import { isUsableMembership } from "@/lib/access-logic";
+import { BRAND_NAME } from "@/lib/brand";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Sin acceso · KineSoft" };
+export const metadata = { title: "Sin acceso" };
 
 /**
  * `/sin-acceso` (IAM-3a). Adónde manda el layout de la app a una sesión que tiene membresías pero NINGUNA usable
@@ -27,7 +28,7 @@ export default async function SinAccesoPage() {
       <AuthShell variant="centered" introAs="p">
         <StatusHeading eyebrow="Todo en orden" title="Tu acceso está activo" />
         <StatusText last>Tu usuario tiene un consultorio disponible.</StatusText>
-        <StatusLink href="/dashboard">Entrar a KineSoft</StatusLink>
+        <StatusLink href="/dashboard">Entrar a {BRAND_NAME}</StatusLink>
         <SignOutButton />
       </AuthShell>
     );

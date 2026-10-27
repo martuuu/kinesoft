@@ -8,7 +8,7 @@ import { maskEmail } from "@/lib/email/transport";
 import { verifyAccessDecision, verifyAccessFallback, verifyAccessNext } from "./verify-access-logic";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Verificá tu acceso · KineSoft" };
+export const metadata = { title: "Verificá tu acceso" };
 
 /**
  * `/verificar-acceso` (PL-2a, C-PL6). La sesión tiene la 2FA prendida y todavía no la pasó: `(app)` y `(platform)`

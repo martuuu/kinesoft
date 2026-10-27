@@ -16,7 +16,7 @@ import { logger } from "@/lib/logger";
 import { moduleWall } from "@/lib/module-wall";
 import { mpConnectMode } from "@/lib/env";
 
-export const metadata = { title: "Sala de espera · KineSoft" };
+export const metadata = { title: "Sala de espera" };
 export const dynamic = "force-dynamic";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));

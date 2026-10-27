@@ -15,7 +15,7 @@ import { ClinicalRecordPrintView } from "./print-view";
  * autor sale de `authorName` (snapshot de `displayUserName`, nunca email).
  */
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Historia clínica · KineSoft" };
+export const metadata = { title: "Historia clínica" };
 
 export default async function PrintClinicalRecordPage({ params }: { params: { id: string } }) {
   const actor = await getActor();

@@ -9,7 +9,7 @@ import { VERTICAL_LABEL } from "@/lib/tenant-modules";
 import { chooseTenantAction } from "./choose-action";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Elegí tu consultorio · KineSoft" };
+export const metadata = { title: "Elegí tu consultorio" };
 
 /**
  * `/elegir-consultorio` (IAM-3a, decisión 6 de Martin del 14-oct): **cada vez que inicia sesión con más de un

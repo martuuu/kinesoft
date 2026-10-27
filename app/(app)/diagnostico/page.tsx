@@ -8,7 +8,7 @@ import type { DiagnosisDoor } from "@/components/diagnostico/assign-plan-modal";
 import { moduleWall } from "@/lib/module-wall";
 import { PageHeader } from "@/components/ui/page-header";
 
-export const metadata = { title: "Diagnóstico · KineSoft" };
+export const metadata = { title: "Diagnóstico" };
 export const dynamic = "force-dynamic";
 
 /**

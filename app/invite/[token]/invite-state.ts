@@ -10,7 +10,7 @@
  *     consumado, igual que `invitationStatus`).
  *  3. con sesión: mismo email → «Unirme a X» (`join`); otro email →
  *     `wrong_email` (cerrar sesión).
- *  4. sin sesión: el email ya tiene cuenta en KineSoft → `has_account` (entrar
+ *  4. sin sesión: el email ya tiene cuenta en la app → `has_account` (entrar
  *     con `next` a la invitación); si no → `activate` (formulario).
  *
  * El GET nunca consume nada: ningún estado escribe.

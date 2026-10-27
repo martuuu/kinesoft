@@ -13,7 +13,7 @@ import { waitingRoomEnabled } from "@/lib/tenant-modules";
 import { loadAgendaPage } from "@/lib/agenda-page-loader";
 import { AgendaFromWire } from "./agenda-from-wire";
 
-export const metadata = { title: "Agenda · KineSoft" };
+export const metadata = { title: "Agenda" };
 export const dynamic = "force-dynamic";
 
 type SP = {

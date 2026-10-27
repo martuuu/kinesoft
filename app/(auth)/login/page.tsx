@@ -12,7 +12,7 @@ export const metadata = { title: `Ingresá a ${BRAND_NAME}` };
  * `?error=` es un CÓDIGO (A3b-S-auth): la pantalla lo traduce con un mapa
  * cerrado (`loginErrorMessage`); antes se pintaba el texto crudo de la query,
  * así cualquiera podía mandar un link `/login?error=Tu cuenta fue suspendida,
- * llamá al 11…` con el dominio de KineSoft. `next` pasa por `safeNext` y se
+ * llamá al 11…` con el dominio de la app. `next` pasa por `safeNext` y se
  * propaga a los forms de login y Google.
  *
  * IAM-2d: `?link=` (signup | recovery, acotado por `parseConfirmLinkKind`) dice de qué era el link que falló

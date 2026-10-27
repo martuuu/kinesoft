@@ -11,7 +11,7 @@ import { twoFactorBypassFor } from "@/lib/two-factor-bypass";
 import { TwoFactorBypassBand } from "@/components/account/two-factor-bypass-band";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Seguridad de la cuenta · KineSoft" };
+export const metadata = { title: "Seguridad de la cuenta" };
 
 const SELF = "/cuenta/seguridad";
 

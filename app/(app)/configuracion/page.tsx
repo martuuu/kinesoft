@@ -20,7 +20,7 @@ function parseMpReturn(raw: string | string[] | undefined): MpConnectReturn | nu
   const v = Array.isArray(raw) ? raw[0] : raw;
   return (MP_CONNECT_RETURNS as readonly string[]).includes(v ?? "") ? (v as MpConnectReturn) : null;
 }
-export const metadata = { title: "Configuración · KineSoft" };
+export const metadata = { title: "Configuración" };
 
 /**
  * /configuracion — panel del consultorio.

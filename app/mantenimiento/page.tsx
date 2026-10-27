@@ -3,9 +3,10 @@ import { AuthShell } from "@/components/auth/auth-shell";
 import { StatusHeading, StatusText } from "@/app/plataforma-mfa/shared";
 import { ReloadButton } from "./reload-button";
 import { maintenanceMessage } from "@/lib/maintenance";
+import { BRAND_NAME } from "@/lib/brand";
 
 export const metadata: Metadata = {
-  title: "En mantenimiento · KineSoft",
+  title: "En mantenimiento",
   // Un buscador que pasa durante el mantenimiento no tiene que guardar esta página en lugar de la landing.
   robots: { index: false, follow: false },
 };
@@ -25,7 +26,7 @@ export default function MantenimientoPage() {
     <AuthShell variant="centered" introAs="p">
       <StatusHeading eyebrow="En mantenimiento" title="Volvé en unos minutos" />
       <StatusText>
-        Estamos actualizando KineSoft. Mientras tanto no se puede entrar a la agenda, a los pacientes ni al turnero.
+        Estamos actualizando {BRAND_NAME}. Mientras tanto no se puede entrar a la agenda, a los pacientes ni al turnero.
       </StatusText>
       {message ? (
         // Texto de React (escapado): el mensaje es público y nunca se interpreta como HTML.

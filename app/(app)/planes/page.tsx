@@ -5,7 +5,7 @@ import { PlanesClient } from "@/components/planes/planes-client";
 import { availableDisciplines, planesHref } from "@/components/planes/planes-model";
 import { moduleWall } from "@/lib/module-wall";
 
-export const metadata = { title: "Planes · KineSoft" };
+export const metadata = { title: "Planes" };
 export const dynamic = "force-dynamic";
 
 /**

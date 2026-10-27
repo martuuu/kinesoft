@@ -4,7 +4,7 @@ import { modulesFor } from "@/lib/tenant-modules";
 import { SeguimientoLanding } from "@/components/seguimiento/seguimiento-landing";
 import { moduleWall } from "@/lib/module-wall";
 
-export const metadata = { title: "Seguimiento · KineSoft" };
+export const metadata = { title: "Seguimiento" };
 export const dynamic = "force-dynamic";
 
 /**

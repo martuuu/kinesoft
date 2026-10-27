@@ -7,7 +7,7 @@ import s from "@/components/directory/directory.module.css";
 
 export const metadata: Metadata = {
   // Mismo título que el 404 del root: con `DIRECTORY_MODE=off` el <title> tampoco delata al directorio.
-  title: "Página no encontrada · KineSoft",
+  title: "Página no encontrada",
   robots: { index: false, follow: false },
 };
 

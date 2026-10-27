@@ -10,7 +10,7 @@ import { getSessionUser, loadOnboardingContext } from "@/lib/onboarding-internal
 import { maxReachableStep, resolveStep, STEP } from "@/lib/onboarding-logic";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Alta del consultorio · KineSoft" };
+export const metadata = { title: "Alta del consultorio" };
 
 /**
  * Stepper de alta self-service (A3c-S-signup). Fuera del grupo `(app)` a
