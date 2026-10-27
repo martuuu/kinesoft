@@ -457,7 +457,8 @@ type PreOutcome =
   | { kind: "pending_cleared" }
   | { kind: "pending_refused" }
   | { kind: "recorded" }
-  | { kind: "cancelled_by_mp"; amountCents: number | null };
+  // Sin monto (PV INT-c): el mail `billing_debit_cancelled` de HD-11 no lo usa.
+  | { kind: "cancelled_by_mp" };
 
 /** Preapproval: `authorized` del pendiente → lo promueve (el viejo a retirado, AUTO_DEBIT); `cancelled` desde MP → apaga el débito + mail. */
 export async function consumeSaasPreapproval(preapprovalId: string, opts?: SaasMpConsumeOpts): Promise<SaasMpConsumeResult> {
@@ -582,7 +583,7 @@ export async function consumeSaasPreapproval(preapprovalId: string, opts?: SaasM
             where: { tenantId },
             data: { ...mirror, autoDebitEnabled: false, collectionMethod: null },
           });
-          return { kind: "cancelled_by_mp", amountCents: sub.mpPreapprovalAmountCents };
+          return { kind: "cancelled_by_mp" };
         }
         // Pausa/reanudación/monto (propios o de MP): se refleja; la conciliación decide si hay que corregirlo.
         await tx.saasSubscription.update({ where: { tenantId }, data: mirror });

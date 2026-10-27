@@ -24,8 +24,10 @@ export const SUBPROCESSORS: { name: string; region: string; what: string }[] = [
   { name: "Resend", region: "EE. UU.", what: "envío de emails (recordatorios, avisos, accesos)" },
   { name: "Mercado Pago", region: "Argentina", what: "cobro de la suscripción y cobros online de los consultorios" },
   {
+    // claim-ok: prisma/schema.prisma:2513 (WA, M15: `WhatsAppAccount` del consultorio; Meta es encargado real)
     name: "Meta WhatsApp Business",
     region: "EE. UU., solo si se conecta",
+    // claim-ok: prisma/schema.prisma:2513
     what: "mensajes por WhatsApp, si el consultorio conecta su número",
   },
   { name: "Sentry", region: "EE. UU.", what: "registro de errores técnicos, sin contenido clínico" },
@@ -42,6 +44,7 @@ const COOKIES: { name: string; what: string }[] = [
   { name: "kine_support", what: "marca un acceso de soporte autorizado (solo la usa el equipo de soporte)." },
   { name: "kine_platform_reauth", what: "verificación extra del equipo que administra la plataforma." },
   { name: "kine_mp_oauth", what: "protege la conexión de una cuenta de Mercado Pago; se borra al terminar." },
+  // claim-ok: lib/whatsapp/crypto.ts:117 (la cookie la firma `startWhatsAppConnect`)
   { name: "kine_wa_signup", what: "protege la conexión de un número de WhatsApp Business; se borra al terminar." },
   { name: "kine_tv", what: "identifica una pantalla de sala de espera vinculada al consultorio." },
   { name: "ks_recovery", what: "permite usar una sola vez el link para restablecer tu contraseña." },
@@ -134,7 +137,7 @@ function sections(entity: EntityData): LegalSection[] {
             <li>Cobrar la suscripción.</li>
             <li>
               Enviar avisos por email (recordatorios de turnos, accesos, avisos de la cuenta) y, solo si el consultorio
-              lo activa, por WhatsApp.
+              lo activa, por WhatsApp.{/* // claim-ok: prisma/schema.prisma:2513 (avisos de WA, M15) */}
             </li>
             <li>Responder tus consultas y tickets de soporte.</li>
           </ul>
@@ -188,7 +191,7 @@ function sections(entity: EntityData): LegalSection[] {
           <li>Conexión cifrada (HTTPS) en todo el sitio.</li>
           <li>Cifrado de los datos guardados, provisto por nuestro proveedor de base de datos.</li>
           <li>Aislamiento por consultorio en la base de datos: un consultorio no puede ver los datos de otro.</li>
-          <li>Credenciales de terceros (Mercado Pago, WhatsApp) guardadas selladas, nunca en texto.</li>
+          <li>Credenciales de terceros (Mercado Pago, WhatsApp) guardadas selladas, nunca en texto.{/* // claim-ok: prisma/schema.prisma:2556 (`WhatsAppCredential`, token sellado) */}</li>
           <li>Verificación en dos pasos para las cuentas de los consultorios.</li>
           <li>Copias de seguridad periódicas.</li>
           <li>Registro de auditoría de las acciones sensibles.</li>

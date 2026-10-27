@@ -270,7 +270,9 @@ describe("[IAM-2d] Signup", () => {
       process.env.SIGNUP_MODE = "assisted";
       process.env.NEXT_PUBLIC_SUPPORT_EMAIL = "soporte@kinesoft.test";
       const html = renderToStaticMarkup(await SignupPage({ searchParams: {} }));
-      expect(html).toContain("Por ahora damos de alta los consultorios nosotros: escribinos a soporte@kinesoft.test");
+      expect(html).toContain("Por ahora las altas son asistidas: escribinos desde la página de contacto y te damos de alta.");
+      expect(html).toContain('href="/contacto?motivo=alta"');
+      expect(html).not.toContain("soporte@kinesoft.test");
       expect(html).not.toContain('name="email"');
       expect(html).not.toContain("Crear cuenta");
       expect(html).not.toContain("k-btn-social");

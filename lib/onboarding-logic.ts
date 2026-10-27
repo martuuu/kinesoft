@@ -8,7 +8,6 @@
 // Solo tipo (se borra al compilar) y relativo: `tenant-bootstrap` lo importa desde un script de tsx.
 import type { AccessState } from "./access-logic";
 // Relativo por lo mismo (script de tsx). `support-contact` es puro: no arrastra nada al script.
-import { supportContactText, supportEmail } from "./support-contact";
 
 // ──────────────────────────────────────────────────────────────────────
 // Slug del consultorio
@@ -184,10 +183,18 @@ export function decideAppGate(i: AppGateInput): string | null {
 
 /**
  * BO-Z (BO-D11): copy de `SIGNUP_MODE=assisted`, el mismo en /signup y en el rechazo del server (alta del consultorio
- * y `signUpPractitioner`). Con el canal de soporte configurado dice a dónde escribir; sin él, a quién.
+ * y `signUpPractitioner`).
+ *
+ * PV (§27, INT-c): antes decía «escribinos a <email>» (o «escribile al equipo» sin `NEXT_PUBLIC_SUPPORT_EMAIL`): un
+ * mail suelto no deja ticket en /plataforma. Ahora apunta a la página de contacto, que con `motivo=alta` abre el
+ * ticket «Alta asistida» (decisión de Martin del 27-oct: todo contacto entra como ticket). Es texto plano porque el
+ * rechazo del server viaja como `error: string`; el link lo pone `SignupAssisted` (`/contacto?motivo=alta`).
  */
-export function signupAssistedMessage(email: string | null = supportEmail()): string {
-  return `Por ahora damos de alta los consultorios nosotros: ${supportContactText({ email })} y lo armamos con vos.`;
+export const SIGNUP_ASSISTED_MESSAGE =
+  "Por ahora las altas son asistidas: escribinos desde la página de contacto y te damos de alta.";
+
+export function signupAssistedMessage(): string {
+  return SIGNUP_ASSISTED_MESSAGE;
 }
 
 /**

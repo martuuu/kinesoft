@@ -218,7 +218,7 @@ describe("[DIR-3a] DIRECTORY_MODE=off", () => {
 
   it("la landing no linkea al directorio (header ni footer)", () => {
     expect(html(<SiteHeader trialDays={14} />)).not.toContain('href="/profesionales"');
-    expect(html(<SiteFooter email={null} />)).not.toContain('href="/profesionales"');
+    expect(html(<SiteFooter />)).not.toContain('href="/profesionales"');
   });
 });
 
@@ -268,7 +268,7 @@ describe("[DIR-3a] metadata según el modo (C-DIR2, C-DIR5)", () => {
   it("public: la landing suma «Buscá un profesional» en header y footer", () => {
     process.env[ENV_KEY] = "public";
     expect(html(<SiteHeader />)).toMatch(/<a href="\/profesionales">Buscá un profesional<\/a>/);
-    expect(html(<SiteFooter email={null} />)).toMatch(/href="\/profesionales"[^>]*>Buscá un profesional<\/a>/);
+    expect(html(<SiteFooter />)).toMatch(/href="\/profesionales"[^>]*>Buscá un profesional<\/a>/);
   });
 });
 

@@ -9,7 +9,6 @@ import { describe, it, expect } from "vitest";
 import {
   planUsageView,
   seatsSummary,
-  subscriptionDetailText,
   subscriptionSummary,
   type TenantPlanUsageInput,
 } from "@/lib/tenant-plan-usage-logic";
@@ -107,13 +106,6 @@ describe("[BO3-F] subscriptionSummary", () => {
     expect(subscriptionSummary(input({ subscriptionStatus: "PAST_DUE" }), ar("2026-10-14T10:00")).tone).toBe("warn");
     const c = subscriptionSummary(input({ subscriptionStatus: "CANCELLED" }), ar("2026-10-14T10:00"));
     expect(c).toEqual({ label: "Cancelada", tone: "warn", detail: "La suscripción no está activa.", contact: "para reactivarla" });
-    // Texto plano completo (con y sin email de soporte).
-    expect(subscriptionDetailText(c, "escribinos a soporte@kinesoft.test")).toBe(
-      "La suscripción no está activa. Escribinos a soporte@kinesoft.test para reactivarla."
-    );
-    expect(subscriptionDetailText(c, "escribile al equipo de KineSoft")).toBe(
-      "La suscripción no está activa. Escribile al equipo de KineSoft para reactivarla."
-    );
   });
 });
 

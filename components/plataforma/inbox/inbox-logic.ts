@@ -125,23 +125,6 @@ export function inboxThreadHref(id: string): string {
   return `${INBOX_PATH}/${encodeURIComponent(id)}`;
 }
 
-/** PL-2d (lista vieja, hasta TK-U1 en Q3). Los de Tickets son `STAGE_FILTERS` / `SOURCE_FILTERS`, abajo. */
-export const STATUS_FILTERS: ReadonlyArray<{ value: InboxStatusFilter; label: string }> = [
-  { value: "OPEN", label: "Abiertas" },
-  { value: "CLOSED", label: "Cerradas" },
-  { value: "all", label: "Todas" },
-];
-
-export const KIND_FILTERS: ReadonlyArray<{ value: InboxKindFilter; label: string }> = [
-  { value: "all", label: "Todo" },
-  { value: "TENANT", label: "Consultorios" },
-  // PL-Z: «Leads» es jerga de marketing; en la UI son «Consultas de la web» (el slug `leads` de la URL queda igual,
-  // así no se rompen links guardados).
-  { value: "LEAD", label: "Consultas de la web" },
-];
-
-export const KIND_LABEL: Record<"TENANT" | "LEAD", string> = { TENANT: "Consultorio", LEAD: "Consulta de la web" };
-
 /** Etapas de Tickets (PV, copy del brief §A «Copy»). «Abiertos» = Nuevos + En curso (default). */
 export const STAGE_FILTERS: ReadonlyArray<{ value: InboxStageFilter; label: string }> = [
   { value: "open", label: "Abiertos" },

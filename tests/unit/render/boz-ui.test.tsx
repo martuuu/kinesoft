@@ -9,7 +9,8 @@
  */
 import { describe, it, expect } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { supportContactText, supportEmail, supportMailto } from "@/lib/support-contact";
+import * as supportContact from "@/lib/support-contact";
+import { supportEmail } from "@/lib/support-contact";
 import { SupportContact } from "@/components/ui/support-contact";
 import {
   AccessBanner,
@@ -49,23 +50,17 @@ describe("[BO-Z B4] canal de soporte", () => {
     expect(supportEmail('x@y.com"><script>')).toBeNull();
   });
 
-  it("mailto con asunto codificado; sin email, nada", () => {
-    expect(supportMailto("soporte@kinesoft.test", "Plan del consultorio")).toBe(
-      "mailto:soporte@kinesoft.test?subject=Plan%20del%20consultorio"
-    );
-    expect(supportMailto(null)).toBeNull();
+  it("[INT-c] sin mailto ni texto «escribinos a <email>»: el módulo solo expone supportEmail y contactHref", () => {
+    // PV INT-c: `supportMailto`, `supportContactText` y `SUPPORT_FALLBACK_TEXT` quedaron sin llamadores cuando todo
+    // contacto pasó a `/contacto` (ticket en Plataforma). Que no vuelvan por un import viejo.
+    expect(Object.keys(supportContact).sort()).toEqual(["contactHref", "supportEmail"]);
   });
 
-  it("texto plano: con email «escribinos a …», sin email «escribile al equipo de KineSoft»", () => {
-    expect(supportContactText({ email: "s@k.test" })).toBe("escribinos a s@k.test");
-    expect(supportContactText({ email: null, capital: true })).toBe("Escribile al equipo de KineSoft");
-  });
-
-  it("SupportContact (TK-U2): link a /contacto, con o sin email (ya no es un mailto)", () => {
-    const withMail = renderToStaticMarkup(<SupportContact email="s@k.test" capital />);
+  it("SupportContact (TK-U2): link a /contacto (ya no es un mailto)", () => {
+    const withMail = renderToStaticMarkup(<SupportContact capital />);
     expect(withMail).toMatch(/^<a href="\/contacto"[^>]*>Escribinos<\/a>$/);
     expect(withMail).not.toContain("mailto:");
-    const bare = renderToStaticMarkup(<SupportContact email={null} motivo="suspendido" />);
+    const bare = renderToStaticMarkup(<SupportContact motivo="suspendido" />);
     expect(bare).toMatch(/^<a href="\/contacto\?motivo=suspendido"[^>]*>escribinos<\/a>$/);
   });
 
@@ -77,7 +72,7 @@ describe("[BO-Z B4] canal de soporte", () => {
 
     const grace = { mode: "grace" as const, reason: "trial_grace", daysLeft: 3 };
     const admin = renderToStaticMarkup(
-      <AccessBanner access={grace} enforcement="banner" audience="admin" supportEmail="s@k.test" />
+      <AccessBanner access={grace} enforcement="banner" audience="admin" />
     );
     // TK-U3: el canal ya no es un mailto sino Configuración → Soporte con borrador «plan».
     expect(admin).toContain("Tu prueba terminó. Te quedan 3 días antes de que el consultorio pase a modo lectura: <a");
@@ -90,7 +85,7 @@ describe("[BO-Z B4] canal de soporte", () => {
     expect(member?.text).toContain(TELL_OWNER);
     expect(member?.contact).toBeUndefined();
     const memberHtml = renderToStaticMarkup(
-      <AccessBanner access={grace} enforcement="banner" audience="member" supportEmail="s@k.test" />
+      <AccessBanner access={grace} enforcement="banner" audience="member" />
     );
     expect(memberHtml).not.toContain("mailto:");
     expect(memberHtml).not.toMatch(/scribinos/);
@@ -98,7 +93,7 @@ describe("[BO-Z B4] canal de soporte", () => {
 
   it("solo lectura con enforce: el llamado arranca oración («Escribinos desde Soporte»)", () => {
     const ro = { mode: "read_only" as const, reason: "cancelled", daysLeft: null };
-    const html = renderToStaticMarkup(<AccessBanner access={ro} enforcement="enforce" supportEmail="s@k.test" />);
+    const html = renderToStaticMarkup(<AccessBanner access={ro} enforcement="enforce" />);
     expect(html).toContain("Escribinos desde Soporte");
     expect(html).toContain('href="/configuracion?tab=soporte&amp;nuevo=soporte"');
     expect(html).toContain("para reactivarlo.");

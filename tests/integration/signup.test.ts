@@ -266,7 +266,7 @@ describe.skipIf(!RUN)("signup · forgot · reenviar verificación · reset (IAM-
       try {
         const email = fresh("asistido");
         const r = await signUpPractitioner({ fullName: "A Sistido", email, password: "clave1234", acceptLegal: true });
-        expect(r).toEqual({ ok: false, error: expect.stringContaining("Por ahora damos de alta los consultorios nosotros") });
+        expect(r).toEqual({ ok: false, error: expect.stringContaining("Por ahora las altas son asistidas: escribinos desde la página de contacto") });
         expect(fake.calls).toHaveLength(0);
         expect(sent).toHaveLength(0);
         const inv = await signUpPractitioner({ fullName: "", email: "", password: "", inviteToken: "tok-asistido" });

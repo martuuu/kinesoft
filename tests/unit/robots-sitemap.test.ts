@@ -76,8 +76,9 @@ describe("robots", () => {
 });
 
 describe("sitemap", () => {
-  it("lista solo la landing y /login, con URLs absolutas", async () => {
+  it("lista la landing, /login, los legales y /contacto (sin parámetros), con URLs absolutas", async () => {
     const urls = (await sitemap()).map((e) => e.url);
-    expect(urls).toEqual([`${BASE}/`, `${BASE}/login`, `${BASE}/terminos`, `${BASE}/privacidad`]);
+    expect(urls).toEqual([`${BASE}/`, `${BASE}/login`, `${BASE}/terminos`, `${BASE}/privacidad`, `${BASE}/contacto`]);
+    expect(urls.some((u) => u.includes("?"))).toBe(false);
   });
 });

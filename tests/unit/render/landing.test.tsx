@@ -64,6 +64,7 @@ beforeEach(() => {
   catalog.plans = [plan("INDIVIDUAL", 14), plan("CONSULTORIO", 0), plan("LIBRE", 0)];
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   if (prevMode === undefined) delete process.env[ENV_KEY];
   else process.env[ENV_KEY] = prevMode;
 });
@@ -221,8 +222,9 @@ describe("[VX2-c1] landing", () => {
   });
 
   it("[TK-U2] footer: «¿Dudas? Escribinos.» va a /contacto, haya o no email de soporte (sin mailto)", () => {
-    for (const email of [null, "soporte@example.com"]) {
-      const html = renderToStaticMarkup(<SiteFooter email={email} />);
+    for (const email of ["", "soporte@example.com"]) {
+      vi.stubEnv("NEXT_PUBLIC_SUPPORT_EMAIL", email);
+      const html = renderToStaticMarkup(<SiteFooter />);
       expect(html).toMatch(/¿Dudas\? <a class="k-link" href="\/contacto">Escribinos<\/a>\./);
       expect(html).not.toContain("mailto:");
       expect(html).not.toContain("equipo de KineSoft");

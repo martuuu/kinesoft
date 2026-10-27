@@ -20,8 +20,7 @@ const LINKS = [
   { href: "/signup", label: "Crear cuenta" },
 ];
 
-/** `email` se acepta y se ignora (PV: el pie ya no arma un mailto); lo saca INT junto con el de `SupportContact`. */
-export function SiteFooter(_props: { email?: string | null } = {}) {
+export function SiteFooter() {
   // DIR-3a: el link al directorio solo con `DIRECTORY_MODE=public` (`directoryNavLinks`), antes de «Ingresar».
   const links = [...LINKS.slice(0, LANDING_NAV.length + 1), ...directoryNavLinks(), ...LINKS.slice(LANDING_NAV.length + 1)];
   return (

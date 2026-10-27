@@ -11,8 +11,8 @@ import type { TicketMotivo } from "@/lib/support-ticket-sources";
  * Soporte o ticket con la identidad de la sesión), así que el link sirve igual en la landing, en las pantallas de
  * bloqueo y adentro de la app, y ya no depende de que haya un email configurado.
  *
- * `subject` y `email` se aceptan y se IGNORAN (contrato de PV: los llamadores de otras sesiones los siguen pasando
- * hasta que INT los saque). El asunto ahora lo pone el origen del ticket (`motivo`).
+ * Ya no recibe `subject` ni `email` (PV INT-c los sacó): el asunto lo pone el origen del ticket (`motivo`) y el link no
+ * es un mailto.
  *
  * Sin "use client" ni hooks: sirve en server components (pantallas de bloqueo) y en client components. `<a>` y no
  * `next/link`: es una navegación a una página que puede redirigir (con consultorio usable → Configuración), y el
@@ -26,10 +26,6 @@ export function SupportContact({
   capital?: boolean;
   /** Slug de `/contacto?motivo=` (decide el título y el origen del ticket). Sin él, el contacto genérico. */
   motivo?: TicketMotivo;
-  /** @deprecated PV: se ignora (el origen del ticket reemplaza al asunto). Lo saca INT. */
-  subject?: string;
-  /** @deprecated PV: se ignora (el link ya no es un mailto). Lo saca INT. */
-  email?: string | null;
 }) {
   return (
     <a

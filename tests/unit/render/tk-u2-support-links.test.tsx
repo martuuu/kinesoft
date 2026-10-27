@@ -82,13 +82,10 @@ describe("[TK-19] SupportContact → /contacto?motivo=… sin mailto", () => {
     expect(contactHref("plan-libre", "LIBRE")).toBe("/contacto?motivo=plan-libre&plan=LIBRE");
   });
 
-  it("link a /contacto con el motivo; `email` y `subject` se aceptan y se ignoran", () => {
-    const html = renderToStaticMarkup(
-      <SupportContact motivo="cuenta" email="s@k.test" subject="Cuenta desactivada" capital />
-    );
+  it("link a /contacto con el motivo (sin mailto)", () => {
+    const html = renderToStaticMarkup(<SupportContact motivo="cuenta" capital />);
     expect(html).toMatch(/^<a href="\/contacto\?motivo=cuenta"[^>]*>Escribinos<\/a>$/);
     expect(html).not.toContain("mailto:");
-    expect(html).not.toContain("s@k.test");
   });
 
   it("sin motivo: /contacto; minúscula por default (fragmento de oración)", () => {
@@ -119,8 +116,9 @@ describe("[TK-19] SupportContact → /contacto?motivo=… sin mailto", () => {
   });
 
   it("footer de la landing → /contacto (con o sin email de soporte) y los links legales", () => {
-    for (const email of [null, "soporte@ejemplo.com"]) {
-      const html = renderToStaticMarkup(<SiteFooter email={email} />);
+    for (const email of ["", "soporte@ejemplo.com"]) {
+      vi.stubEnv("NEXT_PUBLIC_SUPPORT_EMAIL", email);
+      const html = renderToStaticMarkup(<SiteFooter />);
       expect(html).not.toContain("mailto:");
       expect(html).not.toContain('href="#contacto"');
       expect(html).toMatch(/¿Dudas\? <a [^>]*href="\/contacto"[^>]*>Escribinos<\/a>\./);

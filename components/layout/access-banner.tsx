@@ -196,11 +196,6 @@ export function AccessBanner({
   support?: boolean;
   /** BO-Z B4: OWNER/ADMIN vs el resto del equipo (`bannerAudienceFor(role)`). */
   audience?: AccessBannerAudience;
-  /**
-   * @deprecated TK-U3: sin uso (el llamado ya no es un `mailto:`). Se acepta e ignora para no tocar el layout en
-   * paralelo (el layout no lo pasa; solo `tests/unit/render/boz-ui.test.tsx`). INT lo saca.
-   */
-  supportEmail?: string | null;
 }) {
   const copy = support ? supportAccessBannerCopy(access, enforcement) : accessBannerCopy(access, enforcement, audience);
   if (!copy) return null;

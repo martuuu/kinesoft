@@ -180,7 +180,7 @@ describe("[LG-U] alta por email", () => {
   });
 
   it("alta asistida: link a /contacto?motivo=alta, sin mailto", () => {
-    const h = renderToStaticMarkup(<SignupAssisted message="Por ahora damos de alta los consultorios nosotros." />);
+    const h = renderToStaticMarkup(<SignupAssisted message="Por ahora las altas son asistidas." />);
     expect(h).toMatch(/<a[^>]*href="\/contacto\?motivo=alta"/);
     expect(h).not.toContain("mailto:");
   });

@@ -36,6 +36,11 @@ import { logger } from "@/lib/logger";
  *    (uno solo-TENANT, p. ej. `suspendido` con la sesión vencida, cae en LANDING: el CHECK de M19 no lo acepta en LEAD);
  *  - con un consultorio usable → Configuración → Soporte con el borrador (`nuevo=<slug>`): el ticket va como hilo
  *    TENANT con su historia, que el consultorio ve;
+ *  - sin ninguna membresía (`needs_onboarding`) y un motivo que NO es el alta (`alta`/`onboarding`) → el form de lead,
+ *    como sin sesión (PV INT-c). Un paciente del portal con sesión no tiene membresías, igual que un alta a medio hacer:
+ *    antes veía «¿Necesitás ayuda con el alta?» y `submitSessionTicket` abría un LEAD ONBOARDING aunque viniera por
+ *    `privacidad`. La página no distingue paciente de profesional sin consultorio (no hace falta): el motivo dice a qué
+ *    vino, y el form de lead lleva su `source`;
  *  - bloqueada o sin consultorio → `SessionTicketForm`: identidad de la sesión, nunca del form. El destino lo vuelve a
  *    decidir `submitSessionTicket` con la misma foto; acá solo se elige el copy y se evita mostrar un form que la
  *    action va a rechazar (miembro sin rol de titular de un consultorio suspendido).
@@ -82,12 +87,18 @@ function sessionSourceOf(s: AccessSnapshot): SupportTicketSourceValue {
   return "ONBOARDING";
 }
 
+/** Motivos del alta: con sesión y sin consultorio siguen yendo al form de sesión (ticket ONBOARDING con su identidad). */
+const ONBOARDING_SOURCES: ReadonlySet<SupportTicketSourceValue> = new Set(["SIGNUP_ASSISTED", "ONBOARDING"]);
+
 export default async function ContactoPage({ searchParams }: { searchParams: SearchParams }) {
   const source = ticketSourceFromMotivo(first(searchParams.motivo));
   const slug = motivoOfSource(source);
   const snap = await readSnapshot();
 
-  if (!snap) {
+  const block = snap ? sessionBlockOf(snap) : null;
+  const leadForm = !snap || (!block && snap.state.kind === "needs_onboarding" && !ONBOARDING_SOURCES.has(source));
+
+  if (leadForm) {
     const copy = TICKET_PAGE_COPY[source];
     return (
       <AuthShell variant="centered" introAs="p">
@@ -107,7 +118,6 @@ export default async function ContactoPage({ searchParams }: { searchParams: Sea
     );
   }
 
-  const block = sessionBlockOf(snap);
   // Fuera de cualquier try: `redirect` de Next tira para cortar el render.
   if (!block && snap.state.kind === "ok") redirect(`/configuracion?tab=soporte&nuevo=${encodeURIComponent(slug)}`);
 

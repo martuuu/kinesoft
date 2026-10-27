@@ -182,7 +182,7 @@ describe("[TK-U3] banda de acceso sin mailto:", () => {
 
   it("[TK-U3] titular en gracia: link a Configuración → Soporte con nuevo=plan, sin mailto", () => {
     const html = renderToStaticMarkup(
-      <AccessBanner access={{ mode: "grace", reason: "trial_grace", daysLeft: 3 }} enforcement="banner" audience="admin" supportEmail="s@k.test" />
+      <AccessBanner access={{ mode: "grace", reason: "trial_grace", daysLeft: 3 }} enforcement="banner" audience="admin" />
     );
     expect(html).not.toContain("mailto:");
     expect(html).toContain('href="/configuracion?tab=soporte&amp;nuevo=plan"');

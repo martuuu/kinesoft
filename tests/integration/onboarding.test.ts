@@ -809,7 +809,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
       const uid = newIdentity();
       const before = await db.tenant.count();
       const r = await saveOnboardingClinic({ acceptLegal: true, name: "Asistido" });
-      expect(r).toEqual({ ok: false, error: expect.stringContaining("Por ahora damos de alta los consultorios nosotros") });
+      expect(r).toEqual({ ok: false, error: expect.stringContaining("Por ahora las altas son asistidas: escribinos desde la página de contacto") });
       expect(await db.tenant.count()).toBe(before);
       expect((await ownedState(uid)).memberships).toHaveLength(0);
     });

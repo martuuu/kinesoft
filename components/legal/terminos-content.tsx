@@ -128,10 +128,13 @@ function sections(entity: EntityData): LegalSection[] {
       ),
     },
     {
+      // claim-ok: prisma/schema.prisma:2513 (WA, M15: cláusula de WhatsApp Business del consultorio)
       id: "whatsapp",
+      // claim-ok: prisma/schema.prisma:2513
       title: "WhatsApp",
       content: (
         <p>
+          {/* // claim-ok: prisma/schema.prisma:2513 */}
           Si el consultorio conecta su número de WhatsApp Business, los mensajes se envían bajo las condiciones de Meta,
           que el consultorio acepta al conectarlo.
         </p>

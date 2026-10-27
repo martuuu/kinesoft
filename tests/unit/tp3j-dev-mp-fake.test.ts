@@ -47,9 +47,10 @@ function prodLikeParent(): Record<string, string> {
     SECRET_BOX_KEYS: `k1:${PROD}`,
     TURNERO_CHECKOUT: "platform",
     RESEND_API_KEY: `re_${PROD}`,
-    // HD-6: Production completa también trae el remitente (obligatorio allá). No es secreto ni sale nada con
-    // EMAIL_TRANSPORT=log, así que el helper lo deja pasar; no lleva la marca para no confundirse con una fuga.
+    // HD-6: Production completa también trae el remitente (obligatorio allá). PV INT-c: el helper lo tapa con "" (y el
+    // Reply-To), así el dev con simuladores no hereda nada del `.env`; el test de abajo lo fija.
     EMAIL_FROM: "KineSoft <no-reply@mail.kinesoft.com.ar>",
+    EMAIL_REPLY_TO: "soporte@mail.kinesoft.com.ar",
     EMAIL_TRANSPORT: "resend",
     PLATFORM_INBOX_EMAIL: "equipo@prod.example",
     SENTRY_DSN: `https://${PROD}@sentry.io/1`,
@@ -110,7 +111,7 @@ describe("[TP-3j] dev:mpfake · entorno del next dev", () => {
     expect(leaked).toEqual([]);
     for (const k of ["VERCEL", "VERCEL_ENV", "VERCEL_URL"]) expect(k in env).toBe(false);
     // Vacías (no borradas): Next no pisa una clave presente, así que "" tapa la del `.env`.
-    for (const k of ["MP_PUBLIC_KEY", "SECRET_BOX_KEYS", "SAAS_BILLING_TRANSFER_INFO", "MP_MIN_DEBIT_CENTS", "SUPERADMIN_2FA_BYPASS", "WHATSAPP_GRAPH_VERSION", "WHATSAPP_SIGNUP_FEATURE", "RESEND_API_KEY", "SENTRY_DSN", "UPSTASH_REDIS_REST_TOKEN", "SUPABASE_SERVICE_ROLE_KEY"]) {
+    for (const k of ["MP_PUBLIC_KEY", "SECRET_BOX_KEYS", "SAAS_BILLING_TRANSFER_INFO", "MP_MIN_DEBIT_CENTS", "SUPERADMIN_2FA_BYPASS", "WHATSAPP_GRAPH_VERSION", "WHATSAPP_SIGNUP_FEATURE", "RESEND_API_KEY", "EMAIL_FROM", "EMAIL_REPLY_TO", "SENTRY_DSN", "UPSTASH_REDIS_REST_TOKEN", "SUPABASE_SERVICE_ROLE_KEY"]) {
       expect(env[k]).toBe("");
     }
   });

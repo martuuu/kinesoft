@@ -167,20 +167,6 @@ export function subscriptionSummary(
   }
 }
 
-/**
- * La frase completa en texto plano (para tests y lectores sin link): «La prueba terminó. Escribinos a X para elegir
- * un plan.». TK-U3: ningún componente la usa (el panel arma la acción con `planStatusView`); solo la cubre
- * tests/unit/tenant-plan-usage-logic.test.ts. Candidata a borrar en INT.
- */
-export function subscriptionDetailText(
-  sub: TenantPlanUsageView["subscription"],
-  contactText: string
-): string | null {
-  if (!sub.contact) return sub.detail;
-  const cta = `${contactText.charAt(0).toUpperCase()}${contactText.slice(1)} ${sub.contact}.`;
-  return sub.detail ? `${sub.detail} ${cta}` : cta;
-}
-
 const KIND_LABEL: Record<SeatKind | "total", string> = {
   professional: "Profesionales",
   staff: "Secretaría/administración",

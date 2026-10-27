@@ -139,6 +139,10 @@ export function devMpFakeEnv(parentEnv, { port = DEV_MPFAKE_DEFAULT_PORT } = {})
     // Ni mails, ni Sentry, ni Upstash.
     EMAIL_TRANSPORT: "log",
     RESEND_API_KEY: "",
+    // PV INT-c: el remitente y el Reply-To tampoco se heredan del `.env` (que puede ser el de Production, HD-6): con
+    // "" el transporte usa su default de dev (`DEFAULT_EMAIL_FROM`) y el log del mail no muestra datos reales.
+    EMAIL_FROM: "",
+    EMAIL_REPLY_TO: "",
     PLATFORM_INBOX_EMAIL: "",
     SENTRY_DSN: "",
     SENTRY_AUTH_TOKEN: "",

@@ -260,6 +260,33 @@ describe("[TK-20] /contacto con sesión bloqueada o sin consultorio → form de 
     expect(html).toContain('name="message"');
   });
 
+  it("[INT-c] sin membresías (paciente del portal) y motivo=privacidad → form de lead con source PRIVACY, no el de alta", async () => {
+    // Hallazgo TK-U2: un paciente del portal con sesión no tiene membresías (`needs_onboarding`, igual que un alta a
+    // medio hacer) y veía «¿Necesitás ayuda con el alta?»; `submitSessionTicket` abría un LEAD ONBOARDING aunque
+    // viniera por sus datos personales.
+    h.snapshot = snap({ state: { kind: "needs_onboarding" } });
+    const html = await render({ motivo: "privacidad" });
+    expect(text(h1s(html)[0] ?? "")).toBe("Tus datos personales");
+    expect(html).toContain('<input type="hidden" name="source" value="PRIVACY"/>');
+    expect(html).toContain('name="website"'); // honeypot: es el form de lead
+    expect(text(html)).not.toContain("¿Necesitás ayuda con el alta?");
+  });
+
+  it("[INT-c] sin membresías y sin motivo → form de lead LANDING", async () => {
+    h.snapshot = snap({ state: { kind: "needs_onboarding" } });
+    const html = await render();
+    expect(text(h1s(html)[0] ?? "")).toBe("Escribinos");
+    expect(html).toContain('<input type="hidden" name="source" value="LANDING"/>');
+  });
+
+  it("[INT-c] sin membresías y motivo=alta → sigue el form de sesión del alta (identidad de la sesión)", async () => {
+    h.snapshot = snap({ state: { kind: "needs_onboarding" } });
+    const html = await render({ motivo: "alta" });
+    expect(text(h1s(html)[0] ?? "")).toBe("¿Necesitás ayuda con el alta?");
+    expect(html).not.toContain('name="website"');
+    expect(html).toContain('name="message"');
+  });
+
   it("éxito: «Recibimos tu mensaje. Te respondemos a {email}.» y el form ya no está", async () => {
     h.snapshot = snap({ state: { kind: "needs_onboarding" } });
     h.formState = { ok: true, data: { received: true, email: "ana@consultorio.test" } };
