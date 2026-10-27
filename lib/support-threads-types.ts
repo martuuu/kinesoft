@@ -11,6 +11,8 @@
 import type { SaasPlan } from "@prisma/client";
 import { formatDateAR } from "@/lib/format";
 import { toARMinutes } from "@/lib/datetime-ar";
+import { BRAND_NAME } from "@/lib/brand";
+import type { SupportTicketSourceValue } from "@/lib/support-ticket-sources";
 
 // ── Límites (espejo de los CHECK de M8: subject 1..200, body 1..5000, leadName 1..120, leadEmail 3..254,
 //    leadPhone ≤ 40, leadClinicName ≤ 120). El zod de las actions los usa para devolver un error legible en vez de
@@ -47,9 +49,10 @@ export const LEAD_MAX_CLOCK_SKEW_MS = 24 * 60 * 60_000;
 
 /** Aviso en todo lugar donde se escribe (consultorio, Plataforma y landing). */
 export const NO_PATIENT_DATA_COPY = "No incluyas datos de pacientes.";
-export const SUPPORT_TEAM_NAME = "Equipo de KineSoft";
+/** PV (§27): sale de `BRAND_NAME` para que el renombre de Q5 sea cambiar una constante. */
+export const SUPPORT_TEAM_NAME = `Equipo de ${BRAND_NAME}`;
 /** El superadmin «como soporte» no escribe en nombre del consultorio: para eso tiene la bandeja de /plataforma. */
-export const SUPPORT_SESSION_COPY = "Entraste como soporte: los mensajes los escribe el consultorio. Respondé desde /plataforma → Mensajes.";
+export const SUPPORT_SESSION_COPY = "Entraste como soporte: los mensajes los escribe el consultorio. Respondé desde /plataforma → Tickets.";
 export const SUPPORT_THREAD_NOT_FOUND = "No encontramos esa conversación. Recargá la página.";
 export const SUPPORT_THREAD_CLOSED = "Esta conversación está cerrada. Si necesitás algo más, escribinos un mensaje nuevo.";
 export const LEAD_RECEIVED_COPY = "¡Gracias! Recibimos tu consulta y te vamos a responder por mail.";
@@ -212,4 +215,74 @@ export function messageWhen(iso: string): string {
 export const SUPPORT_STATUS_LABEL: Record<SupportThreadStatusValue, string> = {
   OPEN: "Abierta",
   CLOSED: "Cerrada",
+};
+
+// ── Tickets (PV §27, contrato de PV-K) ───────────────────────────────────────────────────────────────────────────
+//
+// Decisión de Martin (27-oct): todo contacto entra como ticket a /plataforma. La etapa NO es un valor de
+// `SupportThreadStatus` (M19 lo explica: el consultorio sigue viendo Abierta/Cerrada y un valor de enum nuevo rompería
+// un rollback del código): «En curso» = OPEN con `platformTakenAt`.
+
+export type TicketStage = "NEW" | "IN_PROGRESS" | "CLOSED";
+
+/** Nuevo = OPEN sin tomar; En curso = OPEN tomado; Resuelto = CLOSED (aunque se haya tomado). */
+export function ticketStageOf(t: {
+  status: SupportThreadStatusValue;
+  platformTakenAt: Date | string | null | undefined;
+}): TicketStage {
+  if (t.status === "CLOSED") return "CLOSED";
+  return t.platformTakenAt ? "IN_PROGRESS" : "NEW";
+}
+
+export const TICKET_STAGE_LABEL: Record<TicketStage, string> = {
+  NEW: "Nuevo",
+  IN_PROGRESS: "En curso",
+  CLOSED: "Resuelto",
+};
+
+/** Espejo del CHECK `SupportTicketNote_body_check` de M19 (1..2000 sin espacios de los bordes). */
+export const TICKET_NOTE_MAX = 2000;
+
+/** `open` (default) = Nuevos + En curso. */
+export type InboxStageFilter = "open" | "NEW" | "IN_PROGRESS" | "CLOSED" | "all";
+export type InboxSourceFilter = "all" | SupportTicketSourceValue;
+
+export type TicketInboxRow = InboxRow & {
+  source: SupportTicketSourceValue;
+  stage: TicketStage;
+  /** Nombre del superadmin que lo tomó (sin email), o null si está libre. */
+  takenByName: string | null;
+};
+
+export type TicketInboxPage = { rows: TicketInboxRow[]; nextCursor: string | null };
+
+/** Nota interna (SupportTicketNote): solo la ve Plataforma. Solo inserción: no hay editar ni borrar. */
+export type TicketNoteView = {
+  id: string;
+  authorName: string;
+  body: string;
+  createdAt: string; // ISO
+  /** La escribió el superadmin que mira. */
+  mine: boolean;
+};
+
+/** Tarjeta «Contacto» del ticket: lo que Martin necesita para comunicarse (lead o consultorio + usuario que escribió). */
+export type TicketContact = {
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  clinicName: string | null;
+  planInterest: SaasPlan | null;
+  tenant: { id: string; name: string; slug: string; phone: string | null; whatsapp: string | null } | null;
+  /** Usuario que abrió el ticket (`createdById`), si lo hay. */
+  userId: string | null;
+};
+
+export type TicketDetail = InboxThreadDetail & {
+  source: SupportTicketSourceValue;
+  stage: TicketStage;
+  takenAt: string | null; // ISO
+  takenByName: string | null;
+  contact: TicketContact;
+  notes: TicketNoteView[];
 };

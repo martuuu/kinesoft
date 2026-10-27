@@ -116,7 +116,6 @@ const ALLOW: Record<string, number> = {
   "lib/platform-mfa-actions.ts": 1,
   "lib/saas-billing-view.ts": 1,
   "lib/support-contact.ts": 4,
-  "lib/support-threads-types.ts": 1,
   "lib/tenant-access.ts": 1,
   "lib/two-factor.ts": 1,
   "scripts/diagnose-auth.ts": 1,
