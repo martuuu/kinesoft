@@ -3,6 +3,7 @@ import { exportPatientsCsv } from "@/lib/patients-export-internal";
 import { tryGetActor } from "@/lib/session";
 import { rateLimit } from "@/lib/rate-limit";
 import { toARDateKey } from "@/lib/datetime-ar";
+import { readIdleShellState } from "@/lib/idle-logout-internal";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,6 +25,12 @@ export const dynamic = "force-dynamic";
  * de `exportPatientsCsv`; acá solo se parsean `ids` y `archived`.
  */
 export async function GET(req: Request) {
+  // PV-Z (ZA M2): cierre por inactividad (IN, §27). Con la cookie `kine_idle` de ESTA sesión vencida (más la gracia)
+  // → 401 ANTES de armar el actor o leer nada: el layout `(app)` ya redirigía al login, pero este GET no pasa por ese
+  // layout y en la PC compartida que Chrome reabrió bajaba el padrón entero con un solo request. Sin cuerpo con datos.
+  if ((await readIdleShellState()).kind === "expired") {
+    return new Response("Unauthorized", { status: 401, headers: { "Cache-Control": "no-store" } });
+  }
   const actor = await tryGetActor();
   if (!actor) {
     return new Response("Unauthorized", { status: 401 });

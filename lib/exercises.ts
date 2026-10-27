@@ -13,6 +13,7 @@ import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import { escapeLike } from "@/lib/email-match";
+import { rateLimit, rateLimitedMessage } from "@/lib/rate-limit";
 import { Prisma, TagKind } from "@prisma/client";
 import { getActor, ForbiddenError, assertWritable, writableError } from "@/lib/session";
 import { modulesFor, MODULE_DENIED_COPY } from "@/lib/tenant-modules";
@@ -45,6 +46,9 @@ const AUTO_TAGS_PER_FIELD = 10;
 const AUTO_TAG_LABEL_MAX = 40;
 
 const ShortFilter = z.string().max(64).optional();
+
+/** `ensureTag` (PV-Z, ZA B3): string, sin espacios en los bordes, 1..AUTO_TAG_LABEL_MAX. */
+const EnsureTagLabel = z.string().trim().min(1).max(AUTO_TAG_LABEL_MAX);
 
 const ListExercisesInput = z.object({
   q: z.string().max(100).optional(),
@@ -333,15 +337,26 @@ export async function ensureTag(
   if (!(TENANT_CREATABLE_TAG_KINDS as readonly TagKind[]).includes(kind)) {
     throw new Error("No se pueden crear etiquetas de ese tipo.");
   }
-  const trimmed = label.trim();
-  if (!trimmed) throw new Error("Tag label empty");
+  // PV-Z (ZA B3): el `label` llega por RPC tal cual lo mande el cliente. Antes no tenía tipo ni tope: un no-string
+  // tiraba en `.trim` y un string de megas quedaba guardado en la tabla GLOBAL de todos los consultorios. Mismo tope
+  // que los auto-tags del texto libre (`AUTO_TAG_LABEL_MAX`, HD-3). Sigue tirando (contrato C-EV4), no `ActionResult`.
+  const parsed = EnsureTagLabel.safeParse(label);
+  if (!parsed.success) {
+    throw new Error(`La etiqueta tiene que tener entre 1 y ${AUTO_TAG_LABEL_MAX} caracteres.`);
+  }
+  const trimmed = parsed.data;
   const slug = slugify(trimmed);
-  if (!slug) throw new Error("Tag label empty");
+  if (!slug) throw new Error("La etiqueta tiene que tener al menos una letra o un número.");
   // Slugs de disciplina reservados: el upsert sin `update` devolvería el tag
   // DISCIPLINE y la UI lo vincularía como si fuera un objetivo.
   if (isReservedTagSlug(slug)) {
     throw new Error("Ese nombre está reservado para las disciplinas.");
   }
+  // PV-Z (ZA B3): rate limit por usuario ANTES de escribir. Con el tope de largo, un script igual podía crear miles de
+  // tags globales por minuto; 30/h sobra para el combo (se crea una etiqueta cada tanto, a mano). Va después de las
+  // validaciones: un intento inválido no escribe y no gasta cupo.
+  const rl = await rateLimit(`exercises:ensure-tag:${actor.userId}`, { limit: 30, windowMs: 3_600_000 });
+  if (!rl.ok) throw new Error(rateLimitedMessage(rl.retryAfterMs));
   const row = await prisma.tag.upsert({
     where: { slug },
     create: { slug, label: trimmed, kind },

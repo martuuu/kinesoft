@@ -127,6 +127,18 @@ describe("[MB-0b] middleware.ts · matcher", () => {
       expect(re.test(p)).toBe(false);
     }
   });
+
+  // [ZF1b] PV-Z (ZA B4): desde BR-a el ícono de iOS es `app/apple-icon.tsx`, que Next sirve en `/apple-icon` (el
+  // `<link>` lleva `?<hash>`, que no es parte del pathname). El matcher excluía solo `apple-icon.png`: `/apple-icon`
+  // pasaba por el middleware y con MAINTENANCE_MODE=on se reescribía a la página de mantenimiento con 503 (el iPhone
+  // guardaba el acceso directo sin ícono); con sesión salía `private, no-store`. Variantes con id
+  // (`generateImageMetadata` → `/apple-icon/<id>`) también afuera. Una ruta que solo EMPIEZA igual sigue pasando.
+  it("[ZF1b] /apple-icon (BR-a, app/apple-icon.tsx) y sus variantes no pasan por el middleware", () => {
+    for (const p of ["/apple-icon", "/apple-icon.png", "/apple-icon/0", "/apple-icon/small"]) {
+      expect(re.test(p), p).toBe(false);
+    }
+    expect(re.test("/apple-iconos")).toBe(true);
+  });
 });
 
 describe("[MB-0b] next.config.mjs · /sw.js y CSP", () => {

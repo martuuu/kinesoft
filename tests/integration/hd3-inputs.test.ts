@@ -10,7 +10,8 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
-import { createExercise, listExercises } from "@/lib/exercises";
+import { createExercise, ensureTag, listExercises } from "@/lib/exercises";
+import { __rateLimitInternals } from "@/lib/rate-limit";
 import { addSessionExercise, reorderSessionExercises } from "@/lib/sessions";
 import { globalSearch } from "@/lib/search";
 import { uploadPatientFile } from "@/lib/files";
@@ -230,6 +231,37 @@ describe.skipIf(!RUN)("[HD-3] zod y topes de entrada (W1c)", () => {
     await expect(getPatientTimeline({ patientId, q: 123 as never })).resolves.not.toBeUndefined();
     const page = await getPatientTimeline({ patientId, q: "q".repeat(5000) });
     expect(page).not.toBeNull();
+  });
+
+  // ── ensureTag (PV-Z, ZA B3) ─────────────────────────────────────────
+  // El combo de etiquetas de la biblioteca crea `Tag` GLOBALES (sin RLS, compartidos por todos los consultorios) con
+  // `ensureTag(label)`. El `label` no tenía tipo ni tope (un no-string tiraba en `.trim`, un string de 4 MB quedaba en
+  // la tabla de todos) ni rate limit. Su contrato es TIRAR (C-EV4; `readonly-residual.test.ts`), no `ActionResult`.
+  it("[ZF1b] ensureTag: label que no es string, vacío o de más de 40 → rechazo con copy sin crear el Tag global", async () => {
+    asUser(A.userId);
+    __rateLimitInternals.reset();
+    const tagsBefore = await tagCount(db);
+    const bad: unknown[] = [123, ["a"], { label: "x" }, null, "   ", `${TOK}${"x".repeat(40)}`, `${TOK}${"y".repeat(5000)}`];
+    for (const label of bad) {
+      await expect(ensureTag(label as never), JSON.stringify(label)?.slice(0, 40)).rejects.toThrow(/etiqueta/i);
+    }
+    expect(await tagCount(db)).toBe(tagsBefore);
+    // Borde: 40 caracteres después del trim pasa (y se guarda recortado).
+    const ok40 = `${TOK}${"z".repeat(40 - TOK.length)}`;
+    const r = await ensureTag(`  ${ok40}  `);
+    expect(r.label).toBe(ok40);
+    expect(await tagCount(db)).toBe(tagsBefore + 1);
+  });
+
+  it("[ZF1b] ensureTag: rate limit por usuario (30/h) → el 31° se rechaza sin crear el Tag", async () => {
+    asUser(A.userId);
+    __rateLimitInternals.reset();
+    const tagsBefore = await tagCount(db);
+    for (let i = 0; i < 30; i++) await ensureTag(`${TOK}rl${i}`);
+    expect(await tagCount(db)).toBe(tagsBefore + 30);
+    await expect(ensureTag(`${TOK}rl30`)).rejects.toThrow(/Demasiados intentos/);
+    expect(await db.tag.count({ where: { slug: `${TOK}rl30` } })).toBe(0);
+    __rateLimitInternals.reset();
   });
 
   // ── media del catálogo ──────────────────────────────────────────────

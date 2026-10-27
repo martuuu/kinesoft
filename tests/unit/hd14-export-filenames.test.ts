@@ -14,6 +14,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const actor = vi.hoisted(() => ({ tenantId: "t-hd14", userId: "u-hd14", support: null as unknown }));
 vi.mock("@/lib/session", () => ({ tryGetActor: async () => actor }));
 vi.mock("@/lib/rate-limit", () => ({ rateLimit: async () => ({ ok: true, retryAfterMs: 0 }) }));
+// [ZF1b] Los exports leen primero el estado de inactividad (cookies). Sin cookies = sesión persistente, como antes.
+vi.mock("next/headers", () => ({ cookies: () => ({ get: () => undefined }), headers: () => new Headers() }));
 vi.mock("@/lib/patients-export-internal", () => ({ exportPatientsCsv: async () => "id,nombre\n" }));
 const icsCalls = vi.hoisted(() => [] as Array<{ from: Date; to: Date }>);
 vi.mock("@/lib/bookings-export-internal", () => ({

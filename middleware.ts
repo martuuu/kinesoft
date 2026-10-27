@@ -238,8 +238,12 @@ export const config = {
   // (strip de x-tenant-*, x-request-id, bypass de webhooks, mantenimiento) sigue igual para todo lo demás.
   // TV-I: `tv/manifest` (el manifest estático de la TV, app/(display)/tv/manifest) por lo mismo: con mantenimiento
   // salía 503. `/tv` sigue pasando (el mantenimiento corta el feed).
+  // PV-Z (ZA B4): desde BR-a el ícono de iOS lo genera `app/apple-icon.tsx` y Next lo sirve en `/apple-icon` (sin
+  // extensión; el `?<hash>` del `<link>` no es parte del pathname). Antes se excluía solo `apple-icon.png` (el archivo
+  // estático de entonces): `/apple-icon` pasaba y en mantenimiento salía 503. Se excluye `/apple-icon`, el `.png`
+  // viejo y las variantes `/apple-icon/<id>`; el ancla `(?:/|$)` deja pasar una ruta que solo empiece igual.
   // Test: tests/unit/pwa-manifest.test.ts compila este matcher con el mismo `getMiddlewareMatchers` del build.
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon.png|sw\\.js|manifest\\.webmanifest|offline\\.html|icons/|tv/manifest).*)",
+    "/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon(?:\\.png)?(?:/|$)|sw\\.js|manifest\\.webmanifest|offline\\.html|icons/|tv/manifest).*)",
   ],
 };

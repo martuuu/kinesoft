@@ -2,6 +2,7 @@ import { exportBookingsIcs } from "@/lib/bookings-export-internal";
 import { tryGetActor } from "@/lib/session";
 import { rateLimit } from "@/lib/rate-limit";
 import { toARDateKey, toARDow, localToARIso } from "@/lib/datetime-ar";
+import { readIdleShellState } from "@/lib/idle-logout-internal";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,6 +30,11 @@ function startOfWeek(d: Date) {
 const MAX_RANGE_MS = 90 * 86_400_000;
 
 export async function GET(req: Request) {
+  // PV-Z (ZA M2): cierre por inactividad (IN, §27). Con la cookie `kine_idle` de ESTA sesión vencida → 401 ANTES de
+  // armar el actor: este GET no pasa por el layout `(app)` (que redirige al login) y bajaba hasta 90 días de agenda.
+  if ((await readIdleShellState()).kind === "expired") {
+    return new Response("Unauthorized", { status: 401, headers: { "Cache-Control": "no-store" } });
+  }
   const actor = await tryGetActor();
   if (!actor) return new Response("Unauthorized", { status: 401 });
   // BO2-E (plan §19.5): soporte nunca baja datos del consultorio. La exportación masiva es la vía más corta para

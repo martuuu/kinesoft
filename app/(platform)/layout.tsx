@@ -8,6 +8,7 @@ import { resolveSupportTarget } from "@/lib/support-session-internal";
 import { endSupport } from "@/lib/platform-support";
 import { verifyPlatformReauth } from "@/lib/platform-mfa-actions";
 import { safeNext } from "@/lib/safe-next";
+import { idleLoginHref, readIdleShellState } from "@/lib/idle-logout-internal";
 import { PlatformShell } from "@/components/plataforma/platform-shell";
 import { UIProviders } from "@/components/providers/ui-providers";
 import { PlatformReauthProvider } from "@/components/plataforma/reauth-modal";
@@ -39,6 +40,16 @@ import { TwoFactorBypassBand } from "@/components/account/two-factor-bypass-band
  * layout es UX y primer filtro, no la única barrera (un layout no corre en las server actions).
  */
 export default async function PlatformLayout({ children }: { children: React.ReactNode }) {
+  // PV-Z (ZA M2): cierre por inactividad (IN, §27). `(platform)` no cuelga de `(app)`, así que el redirect de aquel
+  // layout no lo cubría: con la cookie `kine_idle` de ESTA sesión vencida, el panel del superadmin seguía abierto en la
+  // PC que Chrome reabrió. PRIMERO, antes del guard (que además consulta a GoTrue): redirect al login por inactividad.
+  // Las server actions de Plataforma no pasan por acá (un layout no corre en las actions): ahí manda el cierre del
+  // cliente a T (`IdleLogout`), que es el diseño de IN.
+  if ((await readIdleShellState()).kind === "expired") {
+    const raw = headers().get("x-pathname");
+    redirect(idleLoginHref(raw ? safeNext(raw, "") || null : null));
+  }
+
   let actor: PlatformActor;
   try {
     actor = await requirePlatformAdmin();
