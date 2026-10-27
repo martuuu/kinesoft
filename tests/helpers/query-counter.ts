@@ -38,13 +38,35 @@ const clients = globalThis as unknown as {
   __kineCountedClients?: { prisma: PrismaClient; prismaService: PrismaClient };
 };
 
+const LOCAL_DB_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+/**
+ * HD-17: la URL del `prismaService` contado, con la misma cadena que `lib/db.ts` (`DATABASE_URL_SERVICE` →
+ * `DIRECT_URL` → `DATABASE_URL`), pero FALLA CERRADO si la que gana no es localhost. Motivo: `dotenv -e .env.local` no
+ * pisa una `DATABASE_URL_SERVICE` ya exportada en la shell, y este cliente tiene BYPASSRLS (con una remota, los tests
+ * que cuentan statements escribían en esa base). Ausente o que no parsea también tira: no se puede verificar. El mensaje
+ * nombra la clave, nunca el valor (la URL lleva la contraseña).
+ */
+export function serviceDbUrlForCounter(env: Record<string, string | undefined>): string {
+  const key = (["DATABASE_URL_SERVICE", "DIRECT_URL", "DATABASE_URL"] as const).find((k) => env[k]);
+  if (!key) throw new Error("[query-counter] sin DATABASE_URL_SERVICE / DIRECT_URL / DATABASE_URL: no se puede verificar que sea local");
+  const url = env[key]!;
+  let host: string | null = null;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    host = null;
+  }
+  if (!host || !LOCAL_DB_HOSTS.has(host)) {
+    throw new Error(`[query-counter] ${key} no es localhost/127.0.0.1: los tests de integración solo corren contra el Docker local`);
+  }
+  return url;
+}
+
 export function installQueryCounter() {
   clients.__kineCountedClients ??= {
     prisma: instrumented(process.env.DATABASE_URL, "app"),
-    prismaService: instrumented(
-      process.env.DATABASE_URL_SERVICE ?? process.env.DIRECT_URL ?? process.env.DATABASE_URL,
-      "service",
-    ),
+    prismaService: instrumented(serviceDbUrlForCounter(process.env), "service"),
   };
   return clients.__kineCountedClients;
 }

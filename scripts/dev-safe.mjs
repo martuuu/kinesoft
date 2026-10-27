@@ -9,8 +9,8 @@
  * El comando diario recomendado pasa a ser `npm run dev:local` (simuladores, `scripts/dev-mp-fake.mjs`).
  *
  * Reglas:
- *   - lee los `.env*` SOLO para decidir, y solo cuatro claves (`NEXT_PUBLIC_SUPABASE_URL`, `PROD_SUPABASE_REF`,
- *     `DATABASE_URL`, `DIRECT_URL`); no usa
+ *   - lee los `.env*` SOLO para decidir, y solo cinco claves (`NEXT_PUBLIC_SUPABASE_URL`, `PROD_SUPABASE_REF`,
+ *     `DATABASE_URL`, `DIRECT_URL`, `DATABASE_URL_SERVICE`); no usa
  *     `dotenv` ni `@next/env` y no carga nada al `process.env` (el hijo hereda el entorno del padre tal cual: Next hace
  *     su carga normal);
  *   - NUNCA imprime un valor: los mensajes nombran el archivo de donde salió la URL, no la URL ni el ref;
@@ -27,6 +27,10 @@
  * `DATABASE_URL` y `DIRECT_URL` con el mismo orden y, si alguna efectiva no es localhost, no arranca salvo
  * `ALLOW_DEV_REMOTE_DB=1`. Override APARTE del de Supabase a propósito: querer un Supabase remoto de pruebas no implica
  * querer la base de prod. Los mensajes nombran la clave y el archivo, nunca el valor (la URL lleva la contraseña).
+ *
+ * [HD-17] Y `DATABASE_URL_SERVICE`: `prismaService` (lib/db.ts) la toma ANTES que `DIRECT_URL`, así que con la de
+ * servicio de prod en `.env` y las otras dos locales, el turnero, el webhook y los crons escribían en prod con BYPASSRLS.
+ * Mismo override (`ALLOW_DEV_REMOTE_DB=1`): es la misma base.
  */
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -34,9 +38,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const DEV_ENV_FILES = Object.freeze([".env.development.local", ".env.local", ".env.development", ".env"]);
-const KEYS = ["NEXT_PUBLIC_SUPABASE_URL", "PROD_SUPABASE_REF", "DATABASE_URL", "DIRECT_URL"];
-/** Claves de conexión a Postgres que `next dev` (Prisma) usaría. */
-export const DB_KEYS = Object.freeze(["DATABASE_URL", "DIRECT_URL"]);
+const KEYS = ["NEXT_PUBLIC_SUPABASE_URL", "PROD_SUPABASE_REF", "DATABASE_URL", "DIRECT_URL", "DATABASE_URL_SERVICE"];
+/** Claves de conexión a Postgres que `next dev` (Prisma: `prisma` y `prismaService`) usaría. */
+export const DB_KEYS = Object.freeze(["DATABASE_URL", "DIRECT_URL", "DATABASE_URL_SERVICE"]);
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
 export const DB_BLOCK_MESSAGE =
@@ -96,9 +100,15 @@ export function resolveEffectiveSupabase({ cwd, env }) {
     databaseUrlSource: source.DATABASE_URL ?? null,
     directUrl: found.DIRECT_URL,
     directUrlSource: source.DIRECT_URL ?? null,
+    serviceUrl: found.DATABASE_URL_SERVICE,
+    serviceUrlSource: source.DATABASE_URL_SERVICE ?? null,
     allowRemoteDb: env.ALLOW_DEV_REMOTE_DB,
     /** Solo NOMBRES de origen por clave (se puede mostrar). */
-    dbSources: { DATABASE_URL: source.DATABASE_URL ?? null, DIRECT_URL: source.DIRECT_URL ?? null },
+    dbSources: {
+      DATABASE_URL: source.DATABASE_URL ?? null,
+      DIRECT_URL: source.DIRECT_URL ?? null,
+      DATABASE_URL_SERVICE: source.DATABASE_URL_SERVICE ?? null,
+    },
   };
 }
 
@@ -129,12 +139,21 @@ function dbUrlIsLocal(url) {
   }
 }
 
-/** Bloqueo por la base (o null si las dos efectivas son locales o faltan). Nunca lleva el valor. */
-function decideDb({ databaseUrl, databaseUrlSource = null, directUrl, directUrlSource = null, allowRemoteDb }) {
+/** Bloqueo por la base (o null si las efectivas son locales o faltan). Nunca lleva el valor. */
+function decideDb({
+  databaseUrl,
+  databaseUrlSource = null,
+  directUrl,
+  directUrlSource = null,
+  serviceUrl,
+  serviceUrlSource = null,
+  allowRemoteDb,
+}) {
   if (allowRemoteDb === "1") return null;
   for (const [key, url, src] of [
     ["DATABASE_URL", databaseUrl, databaseUrlSource],
     ["DIRECT_URL", directUrl, directUrlSource],
+    ["DATABASE_URL_SERVICE", serviceUrl, serviceUrlSource],
   ]) {
     if (dbUrlIsLocal(url) === false) {
       return {

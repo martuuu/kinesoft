@@ -256,7 +256,10 @@ export async function setPlatformSuperadmin(raw: unknown): Promise<ActionResult<
         select: { email: true, isPlatformAdmin: true, disabledAt: true },
       });
       if (!target) throw new PlatformUserError(NOT_FOUND);
-      // TODO(BO4): con MFA, la re-verificación TOTP reemplaza a esta confirmación tipeada.
+      // BO4/PL-Z (hecho): `user.superadmin.update` es `high` en `PLATFORM_ACTIONS` (lib/platform-actor.ts), así que
+      // `requirePlatformAdmin` ya exigió la re-verificación TOTP reciente (enforce) o el step-up de la 2FA por usuario
+      // (sin enforce). El email tipeado queda ADEMÁS a propósito: confirma A QUIÉN se le da o quita el poder, que el
+      // código de 2FA no dice.
       if (!confirmEmailMatches(confirmEmail, target.email)) {
         throw new PlatformUserError("Para confirmar, escribí exactamente el email de la persona.");
       }

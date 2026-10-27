@@ -63,14 +63,14 @@ const schema = z.object({
   UPSTASH_REDIS_REST_TOKEN: z.string().optional(),
 
   // Mail transaccional (IAM-0b, C-IAM1). La app manda todos los mails; Supabase
-  // solo emite tokens. Todo opcional: `lib/email/transport.ts` decide por dónde
-  // sale cada mail leyendo `process.env` en cada envío (no este objeto, que se
-  // congela al importar y los tests no podrían cambiarlo); acá se validan la
-  // forma y el aviso de Production.
-  //   RESEND_API_KEY  SERVER-ONLY (nunca NEXT_PUBLIC_). Sin ella, en Production
-  //                   los mails van a log (no salen) y se avisa al boot.
+  // solo emite tokens. Opcional fuera de Production: `lib/email/transport.ts`
+  // decide por dónde sale cada mail leyendo `process.env` en cada envío (no este
+  // objeto, que se congela al importar y los tests no podrían cambiarlo); acá se
+  // valida la forma, y RESEND_API_KEY + EMAIL_FROM están en REQUIRED_IN_PRODUCTION (HD-6).
+  //   RESEND_API_KEY  SERVER-ONLY (nunca NEXT_PUBLIC_). Obligatoria en Production
+  //                   (sin ella los mails irían a log y no saldrían).
   //   EMAIL_FROM      `KineSoft <no-reply@mail.dominio>`. Fuera de Production
-  //                   hay default; en Production sin él tampoco sale nada.
+  //                   hay default; en Production es obligatoria.
   //   EMAIL_TRANSPORT resend|mailpit|log. Solo pesa fuera de Production (dev:
   //                   mailpit o el opt-in de resend); Production lo ignora.
   //   EMAIL_REPLY_TO  default del Reply-To cuando el emisor no pasa uno.
@@ -179,7 +179,7 @@ const schema = z.object({
     z.enum(["scope", "panel"]).default("scope")
   ),
   // PL (C-PL11): buzón del equipo de KineSoft que recibe el aviso de mensajes de consultorios y leads de la landing.
-  // Opcional: sin él los mensajes quedan en /plataforma → Mensajes y no sale el aviso por mail.
+  // Opcional: sin él los mensajes quedan en /plataforma → Tickets y no sale el aviso por mail.
   PLATFORM_INBOX_EMAIL: z.preprocess(emptyAsUndefined, z.string().email().optional()),
 
   // DIR (C-DIR2, plan §20.10/§20.13): directorio público de profesionales y consultorios.
@@ -469,16 +469,12 @@ const REQUIRED_IN_PRODUCTION = [
   "NEXT_PUBLIC_SUPABASE_URL",
   "NEXT_PUBLIC_SUPABASE_ANON_KEY",
   "SUPABASE_SERVICE_ROLE_KEY",
+  // HD-6 (antes IAM-0b §19.9, un aviso): sin estas dos Production no manda NINGÚN mail (invitaciones, reset, portal)
+  // porque `lib/email/transport.ts` cae a log, y el deploy salía verde igual: ahora lo frenan. Antes de prender esto en
+  // Production hay que cargar el dominio de envío en Resend y las dos claves en Vercel. Solo con VERCEL_ENV=production (Preview, CI y el build local siguen sin exigirlas).
+  "RESEND_API_KEY",
+  "EMAIL_FROM",
 ] as const;
-
-/**
- * IAM-0b · §19.9: sin estas dos, Production no manda NINGÚN mail (invitaciones,
- * reset, portal): `lib/email/transport.ts` cae a log. Es un aviso y no un error
- * porque hoy el dominio de envío todavía no está cargado y un deploy no puede
- * caerse por eso; pasan a REQUIRED_IN_PRODUCTION cuando Martin cargue el
- * dominio en Resend (antes de IAM-2).
- */
-const EMAIL_RECOMMENDED_IN_PRODUCTION = ["RESEND_API_KEY", "EMAIL_FROM"] as const;
 
 /** Still owner-pending (bucket C): logged loudly in prod, not fatal yet. */
 const RECOMMENDED_IN_PRODUCTION = [
@@ -503,7 +499,9 @@ const productionSchema = schema.superRefine((e, ctx) => {
     });
   }
   for (const key of REQUIRED_IN_PRODUCTION) {
-    if (!e[key]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: "obligatoria en Production" });
+    // `.trim()`: un valor de solo espacios pegado en la consola de Vercel no es una clave (HD-6; Resend lo rechaza igual
+    // y el mail se pierde en silencio).
+    if (!e[key]?.trim()) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: "obligatoria en Production" });
   }
   if (/localhost|127\.0\.0\.1/.test(e.NEXT_PUBLIC_APP_URL)) {
     ctx.addIssue({
@@ -579,12 +577,6 @@ export function parseEnv(raw: Record<string, string | undefined>): Env {
     const missing = RECOMMENDED_IN_PRODUCTION.filter((k) => !r.data[k]);
     if (missing.length) {
       console.error(`[env] Production sin: ${missing.join(", ")} (tareas del dueño, ver .docs/EXTERNAL-CONFIG.md)`);
-    }
-    const missingEmail = EMAIL_RECOMMENDED_IN_PRODUCTION.filter((k) => !r.data[k]?.trim());
-    if (missingEmail.length) {
-      console.error(
-        `[env] Production sin ${missingEmail.join(", ")}: la app NO manda mails (transporte log). Ver plan §19.9.`
-      );
     }
   }
   return r.data;

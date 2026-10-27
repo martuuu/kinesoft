@@ -14,7 +14,6 @@ import {
   canManageBlocksFor,
   canOperateBooking,
   canWriteClinical,
-  isTenantAdminRole,
   type Capability,
   type PatientAccessLevel,
 } from "@/lib/capabilities";
@@ -86,18 +85,8 @@ describe("capabilitiesFor — matriz", () => {
   });
 });
 
-describe("isTenantAdminRole — mismo criterio que el chequeo OWNER/ADMIN copiado", () => {
-  it.each([
-    ["OWNER", true],
-    ["ADMIN", true],
-    ["PRACTITIONER", false],
-    ["ASSISTANT", false],
-    ["BILLING", false],
-  ] as const)("%s → %s", (role, want) => {
-    expect(isTenantAdminRole(role)).toBe(want);
-  });
-  it("sin membresía → false", () => expect(isTenantAdminRole(null)).toBe(false));
-});
+// HD-17: `isTenantAdminRole` (deprecado en PL-1b, sin call sites) se borró con su describe. Para un actor:
+// `(await capabilitiesForActor(actor)).has("tenant.admin")`.
 
 describe("canManageBlocksFor", () => {
   const me = "prac-me";

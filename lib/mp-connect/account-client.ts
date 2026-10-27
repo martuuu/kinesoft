@@ -153,7 +153,12 @@ async function ensureAccessToken(
   // y el que quedó guardado es el del ganador, que es el vigente para la próxima rotación).
   if (won.count === 0) logger.info("mp_connect.refresh.cas_lost", { accountId: account.id });
   // TP-ZF1 (B5): si otro request marcó REAUTH mientras este refrescaba, el CAS ganador deja la cuenta sana.
-  else await restoreActiveAfterRefresh({ tenantId: account.tenantId, accountId: account.id, credentialVersion: cred.version + 1 }).catch(() => {});
+  // HD-7: best effort (los tokens ya quedaron guardados y el cobro sigue), pero no mudo: si falla, la cuenta queda en
+  // REAUTH sin que nada lo cuente. Solo el NOMBRE del error, como el cron: el mensaje de Prisma puede traer datos.
+  else
+    await restoreActiveAfterRefresh({ tenantId: account.tenantId, accountId: account.id, credentialVersion: cred.version + 1 }).catch(
+      (e) => logger.warn("mp_connect.refresh.restore_active_failed", { accountId: account.id, error: e?.name })
+    );
   return { accessToken: r.accessToken, refreshed: true };
 }
 

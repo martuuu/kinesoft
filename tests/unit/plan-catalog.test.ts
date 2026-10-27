@@ -1,10 +1,10 @@
 /**
  * BO1-C (C-BO7): catálogo de planes. Puro: cupos por plan (BO-D7), trial (BO-D1),
- * override de Plataforma y el conteo de lugares que usa BO2-B al invitar.
+ * override de Plataforma; y los cupos por tipo de PL-1c.
  */
 import { describe, it, expect } from "vitest";
-import type { Role, TenantPlan } from "@prisma/client";
-import { PLAN_CATALOG, seatLimitFor, consumesSeat, seatUsage } from "@/lib/plan-catalog";
+import type { TenantPlan } from "@prisma/client";
+import { PLAN_CATALOG, seatLimitFor } from "@/lib/plan-catalog";
 import { PLAN_LABEL } from "@/lib/tenant-modules";
 
 const PLANS: TenantPlan[] = ["FREE", "STARTER", "PRO", "ENTERPRISE"];
@@ -49,53 +49,7 @@ describe("seatLimitFor", () => {
   });
 });
 
-describe("consumesSeat", () => {
-  it("solo los roles clínicos ocupan lugar; Secretaria y Facturación no", () => {
-    const expected: Record<Role, boolean> = {
-      OWNER: true,
-      ADMIN: false, // §20.17: el Administrador/a nunca atiende (CLINICAL_ROLES = OWNER + PRACTITIONER)
-      PRACTITIONER: true,
-      ASSISTANT: false,
-      BILLING: false,
-    };
-    for (const [role, v] of Object.entries(expected)) expect(consumesSeat(role as Role)).toBe(v);
-  });
-});
-
-describe("seatUsage", () => {
-  it("suma miembros clínicos e invitaciones clínicas pendientes", () => {
-    expect(seatUsage({ clinicalMembers: 2, pendingClinicalInvites: 0 }, 3)).toEqual({
-      used: 2,
-      limit: 3,
-      remaining: 1,
-      full: false,
-    });
-    expect(seatUsage({ clinicalMembers: 2, pendingClinicalInvites: 1 }, 3)).toEqual({
-      used: 3,
-      limit: 3,
-      remaining: 0,
-      full: true,
-    });
-  });
-
-  it("bajar de plan no saca a nadie: used > limit → remaining 0, full", () => {
-    expect(seatUsage({ clinicalMembers: 7, pendingClinicalInvites: 1 }, 3)).toEqual({
-      used: 8,
-      limit: 3,
-      remaining: 0,
-      full: true,
-    });
-  });
-
-  it("sin límite (null) nunca está lleno", () => {
-    expect(seatUsage({ clinicalMembers: 50, pendingClinicalInvites: 3 }, null)).toEqual({
-      used: 53,
-      limit: null,
-      remaining: null,
-      full: false,
-    });
-  });
-});
+// HD-17: `consumesSeat` y `seatUsage` (y sus describe) se borraron: no tenían lectores fuera de este archivo.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PL-1c (C-PL3/4): cupos por tipo

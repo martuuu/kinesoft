@@ -34,9 +34,12 @@ import {
  *    irrecuperables y hay que reconectarlas). Las fallas salen con id y código,
  *    nunca con el sobre ni el token.
  *  - **Keyset por id** en lotes: estable aunque otras filas cambien en el medio.
- *  - **Store inyectable**: `MpCredential` llega con M18 (TP-M, T5b) y el
- *    cliente Prisma de T5a no la conoce; el store real usa SQL crudo con
- *    columnas explícitas y el unit test uno en memoria con la misma semántica.
+ *  - **Store inyectable**: el store real usa SQL crudo con columnas
+ *    explícitas y el unit test uno en memoria con la misma semántica. Nació
+ *    así porque en T5a el cliente Prisma todavía no conocía `MpCredential`
+ *    (llegó con M18); hoy sí la conoce, y el SQL crudo se queda igual: fija
+ *    las columnas que se leen y escriben (nunca otra) y es el mismo patrón
+ *    que `WhatsAppCredential` (M15) abajo.
  *
  * WA-S1 (T6, M15): `WhatsAppCredential` (token del system user + PIN del número, propósito `wa-credential`) usa la
  * misma clave primaria y se rota con el MISMO núcleo (`resealRows`): un solo algoritmo de CAS, dry-run y fallas para

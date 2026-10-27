@@ -44,74 +44,7 @@ export const prismaService =
 
 if (process.env.NODE_ENV !== "production") globalForPrisma.prismaService = prismaService;
 
-const TENANT_SCOPED_MODELS = new Set<string>([
-  "Practitioner",
-  "Patient",
-  "PatientTenantLink",
-  "Service",
-  "Booking",
-  "TreatmentProgram",
-  "Session",
-  "ClinicalCase",
-  "AuditEvent",
-]);
-
-const READ_OPS = new Set<string>([
-  "findFirst",
-  "findFirstOrThrow",
-  "findMany",
-  "findUnique",
-  "findUniqueOrThrow",
-  "count",
-  "aggregate",
-  "groupBy",
-]);
-
-/**
- * Returns a Prisma client scoped to a tenant.
- *
- * - Auto-injects `tenantId` into reads on tenant-scoped models
- *   (defense-in-depth on top of Postgres RLS).
- * - Use this anywhere you're acting on behalf of a logged-in member.
- *   For background jobs / webhooks / seeds use `prisma` directly.
- *
- * **Performance**: the `$extends()` object is memoised per tenantId on
- * the same `globalForPrisma` object that holds the base client. Building
- * a new extension per request adds GC pressure for nothing — the
- * extension closure is pure and tenantId-keyed, so we can hand back the
- * same instance for the lifetime of the process.
- */
-const tenantClients =
-  (globalForPrisma as typeof globalForPrisma & {
-    tenantClients?: Map<string, ReturnType<PrismaClient["$extends"]>>;
-  }).tenantClients ?? new Map<string, ReturnType<PrismaClient["$extends"]>>();
-if (process.env.NODE_ENV !== "production") {
-  (globalForPrisma as typeof globalForPrisma & {
-    tenantClients?: Map<string, ReturnType<PrismaClient["$extends"]>>;
-  }).tenantClients = tenantClients;
-}
-
-export function getTenantPrisma(tenantId: string) {
-  const cached = tenantClients.get(tenantId);
-  if (cached) return cached;
-  const client = prisma.$extends({
-    name: "tenant-scope",
-    query: {
-      $allModels: {
-        $allOperations({ args, query, model, operation }) {
-          if (
-            model &&
-            TENANT_SCOPED_MODELS.has(model) &&
-            READ_OPS.has(operation)
-          ) {
-            const a = args as { where?: Record<string, unknown> };
-            a.where = { ...(a.where ?? {}), tenantId };
-          }
-          return query(args);
-        },
-      },
-    },
-  });
-  tenantClients.set(tenantId, client);
-  return client;
-}
+// HD-17: acá vivía `getTenantPrisma` (un `$extends` que inyectaba `tenantId` en las lecturas de 9 modelos, con su
+// cache `tenantClients`). No tenía ni un call site (AUDIT «gettenantprisma-dead-code») y su lista de modelos
+// había quedado vieja: invitaba a creer que había un backstop que no existía. La barrera real es el `where: { tenantId }`
+// a mano en cada action + `runWithRls` (AGENTS.md §4).

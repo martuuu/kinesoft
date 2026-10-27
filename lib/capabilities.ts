@@ -300,15 +300,6 @@ export function hasCapability(caps: ReadonlySet<Capability>, cap: Capability): b
 }
 
 /**
- * OWNER/ADMIN: el mismo criterio que el chequeo copiado hoy en tenant-settings/services/insurers.
- * @deprecated PL-1b: por rol no ve `grantSettings` (un ADMIN sin «Configuración» da `true`, una Secretaria con
- * ella da `false`). Para un actor: `(await capabilitiesForActor(actor)).has("tenant.admin")`.
- */
-export function isTenantAdminRole(role: Role | null | undefined): boolean {
-  return capabilitiesFor(role).has("tenant.admin");
-}
-
-/**
  * ¿Puede bloquear/candadear la agenda de `targetPractitionerId`? `null` =
  * candado "todos" (decisión 8: una fila con practitionerId null), que alcanza
  * a profesionales ajenos y futuros → exige `agenda.manageBlocks`.

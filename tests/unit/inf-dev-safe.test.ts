@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  DB_KEYS,
   decideDevStart,
   parseEnvFileKeys,
   resolveEffectiveSupabase,
@@ -234,5 +235,39 @@ describe("[ZF1] base de datos efectiva de next dev (DATABASE_URL / DIRECT_URL)",
     expect(decideDevStart(remote)).toMatchObject({ action: "block", reason: "remote-db" });
     const both = resolveEffectiveSupabase({ cwd: dir, env: { ALLOW_DEV_REMOTE_SUPABASE: "1", ALLOW_DEV_REMOTE_DB: "1" } });
     expect(decideDevStart(both).action).toBe("start");
+  });
+});
+
+// HD-17: `prismaService` (lib/db.ts) toma `DATABASE_URL_SERVICE` ANTES que `DIRECT_URL`. Con la de servicio de prod en
+// `.env` (sin pisar en `.env.local`) y la base local en las otras dos, `next dev` arrancaba y el turnero, el webhook y
+// los crons escribían en producción con BYPASSRLS.
+describe("[HD-17] DATABASE_URL_SERVICE también es una base de next dev", () => {
+  const PROD_SVC = "postgresql://kinesoft_service.prodmarcadoabcdefghij:CLAVE-SVC-MARCADA@aws-0-sa-east-1.pooler.supabase.com:5432/postgres";
+  const LOCAL_DB = "postgresql://kinesoft:local@localhost:5433/kinesoft";
+
+  it("[HD-17] DATABASE_URL_SERVICE remota con DATABASE_URL/DIRECT_URL locales → dev se niega salvo ALLOW_DEV_REMOTE_DB=1", () => {
+    expect(DB_KEYS).toContain("DATABASE_URL_SERVICE");
+    const dir = tmpRepo({
+      ".env": `DATABASE_URL_SERVICE=${PROD_SVC}\n`,
+      ".env.local": `DATABASE_URL=${LOCAL_DB}\nDIRECT_URL=${LOCAL_DB}\nNEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321\n`,
+    });
+    const eff = resolveEffectiveSupabase({ cwd: dir, env: {} });
+    const d = decideDevStart(eff);
+    expect(d).toMatchObject({ action: "block", reason: "remote-db" });
+    expect(d.message).toContain("DATABASE_URL_SERVICE sale de .env");
+    const s = JSON.stringify([d, eff.dbSources]);
+    expect(s).not.toContain("CLAVE-SVC-MARCADA");
+    expect(s).not.toContain("pooler.supabase.com");
+    const allowed = resolveEffectiveSupabase({ cwd: dir, env: { ALLOW_DEV_REMOTE_DB: "1" } });
+    expect(decideDevStart(allowed).action).toBe("start");
+    // ALLOW_DEV_REMOTE_SUPABASE no alcanza (es otro override).
+    expect(decideDevStart(resolveEffectiveSupabase({ cwd: dir, env: { ALLOW_DEV_REMOTE_SUPABASE: "1" } })).action).toBe("block");
+  });
+
+  it("[HD-17] DATABASE_URL_SERVICE local (o ausente) no bloquea", () => {
+    const dir = tmpRepo({
+      ".env.local": `DATABASE_URL=${LOCAL_DB}\nDIRECT_URL=${LOCAL_DB}\nDATABASE_URL_SERVICE=${LOCAL_DB}\nNEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321\n`,
+    });
+    expect(decideDevStart(resolveEffectiveSupabase({ cwd: dir, env: {} })).action).toBe("start");
   });
 });

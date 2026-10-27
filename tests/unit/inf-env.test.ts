@@ -19,6 +19,9 @@ const PROD_OK = {
   NEXT_PUBLIC_SUPABASE_ANON_KEY: "anon",
   SUPABASE_SERVICE_ROLE_KEY: "service",
   NEXT_PUBLIC_APP_URL: "https://app.kinesoft.com.ar",
+  // HD-6: obligatorias en Production.
+  RESEND_API_KEY: "re_test",
+  EMAIL_FROM: "KineSoft <no-reply@mail.kinesoft.com.ar>",
 };
 const KEYS = `k1:${Buffer.alloc(32, 7).toString("base64")}`;
 const VERIFY = "v".repeat(32);

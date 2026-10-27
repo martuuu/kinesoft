@@ -13,7 +13,7 @@
  * (`lib/tenant-entitlements-internal.ts`).
  */
 import type { Role, SaasPlan, TenantPlan } from "@prisma/client";
-import { isClinicalMember, isClinicalRole } from "./roles";
+import { isClinicalMember } from "./roles";
 import { PLAN_LABEL } from "./tenant-modules";
 import { PLAN_DEFAULTS, effectiveLimits } from "./saas-plans-logic";
 import type { PlanLimitOverrides, PlanLimits } from "./saas-plans-types";
@@ -118,27 +118,23 @@ export function membersFit(m: { professional: number; staff: number }, l: PlanLi
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LEGADO (BO1-C / BO-D7) — @deprecated desde PL-1c. Lo siguen leyendo Plataforma (alta y edición de consultorio,
-// `components/plataforma/tenants/*`, PL-1d) y sus tests mientras migran al plan SaaS. Lo nuevo usa lo de arriba.
+// LEGADO (BO1-C / BO-D7) — @deprecated desde PL-1c: el cupo por plan del enum viejo `Tenant.plan`. Ningún código de
+// producción lo llama ya (Plataforma pasó a `planLimitsFor` + `seatUsageByKind` en PL-1d); queda porque
+// `seatLimitOverride` sigue en el schema y lo citan sus comentarios (prisma/schema.prisma, M7 y
+// `tenant-entitlements-internal.ts`). HD-17 borró lo que no tenía ni lectores: `consumesSeat`, `seatUsage`, `SeatUsage`
+// y `PlanCatalogEntry`. Lo nuevo usa lo de arriba.
 // ─────────────────────────────────────────────────────────────────────────────
-
-export type PlanCatalogEntry = {
-  label: string;
-  /** Profesionales (roles clínicos) que entran. null = sin límite (Enterprise, a medida). */
-  seats: number | null;
-  /** Días de prueba al dar de alta con este plan. 0 = sin trial. */
-  trialDays: number;
-};
 
 /**
  * BO-D7: Free 1 · Base 3 · PRO 10 · Enterprise a medida (el número real se
  * pacta y se carga como `seatLimitOverride`; mientras no haya, no se limita).
  * BO-D1: el trial es de 14 días con PRO (las altas web arrancan en PRO para
  * probar todo); los demás planes no tienen trial — Free es gratis y Base o
- * Enterprise se dan de alta ya acordados.
+ * Enterprise se dan de alta ya acordados. `seats` = profesionales (roles
+ * clínicos) que entran, null = sin límite; `trialDays` 0 = sin trial.
  */
 /** @deprecated PL-1c: usar `PLAN_DEFAULTS` (lib/saas-plans-logic.ts) y `SaasPlanConfig`. */
-export const PLAN_CATALOG: Record<TenantPlan, PlanCatalogEntry> = {
+export const PLAN_CATALOG: Record<TenantPlan, { label: string; seats: number | null; trialDays: number }> = {
   FREE: { label: PLAN_LABEL.FREE, seats: 1, trialDays: 0 },
   STARTER: { label: PLAN_LABEL.STARTER, seats: 3, trialDays: 0 },
   PRO: { label: PLAN_LABEL.PRO, seats: 10, trialDays: 14 },
@@ -154,43 +150,4 @@ export const PLAN_CATALOG: Record<TenantPlan, PlanCatalogEntry> = {
 export function seatLimitFor(t: { plan: TenantPlan; seatLimitOverride: number | null }): number | null {
   if (t.seatLimitOverride != null) return t.seatLimitOverride;
   return PLAN_CATALOG[t.plan].seats;
-}
-
-/**
- * Ocupan lugar los que atienden: los roles clínicos (`lib/roles.ts`), los
- * mismos que tienen `Practitioner` y son reservables. Secretaria y Facturación
- * no ocupan (BO-D7): si ocuparan, un Free no podría sumar a la Secretaria.
- */
-/** @deprecated PL-1c: todos ocupan lugar; el tipo lo da `seatKindOf`. */
-export function consumesSeat(role: Role): boolean {
-  return isClinicalRole(role);
-}
-
-/** @deprecated PL-1c: usar `SeatCount` / `SeatUsageByKind`. */
-export type SeatUsage = {
-  used: number;
-  limit: number | null;
-  /** null cuando no hay límite. Nunca negativo. */
-  remaining: number | null;
-  full: boolean;
-};
-
-/**
- * Lugares usados = miembros clínicos + invitaciones clínicas pendientes (una
- * invitación reserva el lugar: si no, se podían mandar 10 invitaciones en un
- * Free y aceptarlas todas). El caller cuenta solo miembros activos y roles que
- * `consumesSeat`.
- *
- * Bajar de plan no saca a nadie (BO-D7): `used` puede quedar por encima de
- * `limit`; en ese caso `remaining` es 0 y `full` true — no se puede invitar a
- * otro profesional, pero los que están siguen.
- */
-/** @deprecated PL-1c: usar `seatUsageByKind`. */
-export function seatUsage(
-  counts: { clinicalMembers: number; pendingClinicalInvites: number },
-  limit: number | null,
-): SeatUsage {
-  const used = counts.clinicalMembers + counts.pendingClinicalInvites;
-  if (limit == null) return { used, limit: null, remaining: null, full: false };
-  return { used, limit, remaining: Math.max(0, limit - used), full: used >= limit };
 }

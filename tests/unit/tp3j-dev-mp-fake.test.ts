@@ -47,6 +47,9 @@ function prodLikeParent(): Record<string, string> {
     SECRET_BOX_KEYS: `k1:${PROD}`,
     TURNERO_CHECKOUT: "platform",
     RESEND_API_KEY: `re_${PROD}`,
+    // HD-6: Production completa también trae el remitente (obligatorio allá). No es secreto ni sale nada con
+    // EMAIL_TRANSPORT=log, así que el helper lo deja pasar; no lleva la marca para no confundirse con una fuga.
+    EMAIL_FROM: "KineSoft <no-reply@mail.kinesoft.com.ar>",
     EMAIL_TRANSPORT: "resend",
     PLATFORM_INBOX_EMAIL: "equipo@prod.example",
     SENTRY_DSN: `https://${PROD}@sentry.io/1`,

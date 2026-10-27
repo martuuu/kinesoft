@@ -9,6 +9,9 @@ const PROD_OK = {
   NEXT_PUBLIC_SUPABASE_ANON_KEY: "anon",
   SUPABASE_SERVICE_ROLE_KEY: "service",
   NEXT_PUBLIC_APP_URL: "https://app.kinesoft.com.ar",
+  // HD-6: sin mail Production ya no arranca (antes era un aviso; ver el describe de mail).
+  RESEND_API_KEY: "re_test",
+  EMAIL_FROM: "KineSoft <no-reply@mail.kinesoft.com.ar>",
 };
 
 describe("parseEnv — fail-fast solo en Production", () => {
@@ -91,10 +94,10 @@ describe("parseEnv — REALTIME_DRIVER (SV)", () => {
   });
 });
 
-// [IAM-0b] Mail (C-IAM1): todo opcional. En Production, sin RESEND_API_KEY o
-// EMAIL_FROM la app no manda mails (transporte log), pero el deploy NO se cae:
-// se vuelven obligatorias cuando Martin cargue el dominio de envío (§19.9).
-describe("parseEnv — mail (IAM-0b)", () => {
+// [IAM-0b] Mail (C-IAM1): opcional fuera de Production. [HD-6] En Production RESEND_API_KEY y EMAIL_FROM son
+// obligatorias: hasta acá eran un `console.error` y un deploy sin ellas salía verde sin mandar NINGÚN mail
+// (invitaciones, reset, portal) porque `lib/email/transport.ts` caía a log. Preview, CI y el build local no cambian.
+describe("parseEnv — mail (IAM-0b / HD-6)", () => {
   const quiet = () => vi.spyOn(console, "error").mockImplementation(() => {});
 
   it("local/CI sin nada: todo undefined, sin fallar", () => {
@@ -118,24 +121,29 @@ describe("parseEnv — mail (IAM-0b)", () => {
     expect(parseEnv({ MAILPIT_URL: "http://localhost:8025" }).MAILPIT_URL).toBe("http://localhost:8025");
     expect(() => parseEnv({ MAILPIT_URL: "localhost" })).toThrow(/MAILPIT_URL/);
   });
-  it("Production sin RESEND_API_KEY ni EMAIL_FROM: NO falla, avisa por console.error", () => {
+  it("[HD-6] Production sin RESEND_API_KEY o sin EMAIL_FROM falla", () => {
+    expect(() => parseEnv({ ...PROD_OK, RESEND_API_KEY: undefined })).toThrow(/RESEND_API_KEY: obligatoria en Production/);
+    expect(() => parseEnv({ ...PROD_OK, EMAIL_FROM: undefined })).toThrow(/EMAIL_FROM: obligatoria en Production/);
+    expect(() => parseEnv({ ...PROD_OK, RESEND_API_KEY: undefined, EMAIL_FROM: undefined })).toThrow(
+      /RESEND_API_KEY.*EMAIL_FROM/
+    );
+  });
+  it("[HD-6] Production con RESEND_API_KEY o EMAIL_FROM en blanco (solo espacios) falla", () => {
+    expect(() => parseEnv({ ...PROD_OK, RESEND_API_KEY: "   " })).toThrow(/RESEND_API_KEY/);
+    expect(() => parseEnv({ ...PROD_OK, EMAIL_FROM: " \t" })).toThrow(/EMAIL_FROM/);
+  });
+  it("[HD-6] Production con mail configurado pasa y no lo menciona en ningún aviso", () => {
     const spy = quiet();
     expect(() => parseEnv(PROD_OK)).not.toThrow();
-    const msg = spy.mock.calls.map((c) => String(c[0])).join("\n");
-    expect(msg).toMatch(/RESEND_API_KEY/);
-    expect(msg).toMatch(/EMAIL_FROM/);
-    spy.mockRestore();
-  });
-  it("Production con mail configurado no lo lista entre lo que falta", () => {
-    const spy = quiet();
-    parseEnv({ ...PROD_OK, RESEND_API_KEY: "re_x", EMAIL_FROM: "KineSoft <no-reply@mail.kinesoft.com.ar>" });
     const msg = spy.mock.calls.map((c) => String(c[0])).join("\n");
     expect(msg).not.toMatch(/RESEND_API_KEY|EMAIL_FROM/);
     spy.mockRestore();
   });
-  it("Preview sin mail no avisa (el aviso es solo de Production)", () => {
+  it("[HD-6] Preview, CI y el build local sin mail no fallan ni avisan", () => {
     const spy = quiet();
-    parseEnv({ VERCEL_ENV: "preview" });
+    for (const base of [{ VERCEL_ENV: "preview" }, { NODE_ENV: "production" }, {}]) {
+      expect(() => parseEnv(base)).not.toThrow();
+    }
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
