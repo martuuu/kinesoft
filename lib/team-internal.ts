@@ -733,7 +733,7 @@ async function tenantMailCtx(ctx: TeamActorCtx) {
 
 /**
  * Manda el mail `staff_invite` por `sendEmail` (que nunca tira y registra en EmailLog). Remitente «<Consultorio>
- * vía KineSoft», Reply-To = el email público del consultorio si lo cargó. Ni el token ni la URL se loguean acá:
+ * vía <marca>» (`FROM_NAME_SUFFIX`), Reply-To = el email público del consultorio si lo cargó. Ni el token ni la URL se loguean acá:
  * `sendEmail` solo guarda el host del link.
  */
 async function sendInvitationEmail(

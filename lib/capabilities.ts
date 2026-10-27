@@ -73,7 +73,7 @@ export const CAPABILITIES = [
    */
   "plans.authorize",
   /**
-   * PL-1b (C-PL5, decisión 7): «Planes y pagos» de la CUENTA del consultorio con KineSoft (plan SaaS, débito,
+   * PL-1b (C-PL5, decisión 7): «Planes y pagos» de la CUENTA del consultorio con la plataforma (plan SaaS, débito,
    * comprobantes). La tienen el Titular y quien él delegue (`Membership.grantBilling`). No es `billing.manage`
    * (cobros a pacientes). Soporte nunca.
    */

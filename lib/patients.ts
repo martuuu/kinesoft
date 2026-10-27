@@ -1240,7 +1240,7 @@ async function assignPatientToPractitionerImpl(raw: {
  *     NUESTRO `/auth/confirm`. Sirve igual para la primera vez y para reenviar: si el paciente no tiene
  *     cuenta, GoTrue la crea sin confirmar [S4] (aceptable: la ficha la cargó el consultorio, y la cuenta
  *     solo se confirma al abrir el link desde su buzón); si ya la tiene, es un magiclink común;
- *   - mail `portal_invite` por `sendEmail`, remitente «<Consultorio> vía KineSoft», Reply-To = el email
+ *   - mail `portal_invite` por `sendEmail`, remitente «<Consultorio> vía <marca>» (`FROM_NAME_SUFFIX`), Reply-To = el email
  *     público del consultorio;
  *   - el resultado dice la verdad (como el staff en IAM-2a): `emailSent` = el transporte lo aceptó;
  *     `transport`/`emailStatus`/`emailReason` explican por qué no (entorno sin mails, proveedor, link no

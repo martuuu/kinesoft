@@ -34,6 +34,7 @@ import {
   SeatLimitError,
   SEAT_LIMIT_JOIN_MESSAGE,
 } from "@/lib/team-internal";
+import { BRAND_NAME } from "@/lib/brand";
 
 /**
  * Núcleo de la activación de una cuenta desde `/invite/<token>` y de la unión al consultorio (IAM-2b).
@@ -124,7 +125,7 @@ export const INVITE_MESSAGES = {
   expired: "La invitación venció. Pedile al consultorio que te mande un link nuevo.",
   revoked: "El consultorio anuló esta invitación. Si te siguen esperando, pediles un link nuevo.",
   account_exists:
-    "Ya tenés una cuenta en KineSoft con este email. Ingresá con tu contraseña y aceptá la invitación desde ahí.",
+    `Ya tenés una cuenta en ${BRAND_NAME} con este email. Ingresá con tu contraseña y aceptá la invitación desde ahí.`,
   patient_identity:
     "Esta cuenta se usa en el portal de pacientes. Para sumarte al equipo, pedí la invitación con otro email.",
   weak_password: "La contraseña es demasiado débil. Elegí una más larga y menos previsible.",
@@ -375,7 +376,7 @@ async function activate(p: {
 
   if (await usedAsPortalPatient({ email })) return fail("patient_identity");
 
-  // Una cuenta real de KineSoft (con perfil) entra con su contraseña y acepta con la sesión: no se toca
+  // Una cuenta real de la app (con perfil) entra con su contraseña y acepta con la sesión: no se toca
   // GoTrue. Va antes del createUser para no crear (y tener que borrar) nada.
   const profile = await prismaService.userProfile.findFirst({
     where: { email: emailEqualsFilter(email) },

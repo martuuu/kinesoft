@@ -39,6 +39,7 @@ import { bookingFieldAccess } from "@/lib/booking-field-access";
 import { loadAgendaPlanProjection } from "@/lib/agenda-plan-projection-internal";
 import { disciplineShortLabel } from "@/lib/plan-display";
 import type { Actor } from "@/lib/session";
+import { BRAND_NAME } from "@/lib/brand";
 
 export async function exportBookingsIcs(
   actor: Actor,
@@ -103,7 +104,8 @@ export async function exportBookingsIcs(
   const lines: string[] = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//KineSoft//ES//ES",
+    // PRODID identifica al generador; ASCII imprimible sin barras para no romper el formato `-//Org//Producto//Idioma`.
+    `PRODID:-//${BRAND_NAME.replace(/[^\x20-\x7E]|\//g, "")}//ES//ES`,
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
   ];

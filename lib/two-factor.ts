@@ -35,6 +35,7 @@ import {
   type TwoFactorChange,
 } from "@/lib/email/templates-account";
 import { mfaPort, type MfaFactorLite } from "@/lib/mfa-port";
+import { BRAND_NAME } from "@/lib/brand";
 import { authAdminMfa } from "@/lib/identity/auth-admin";
 import { normalizeTotpCode } from "@/lib/platform-mfa-logic";
 import { EMAIL_CODE_TTL_S, hasAnyTwoFactorMethod } from "@/lib/two-factor-logic";
@@ -186,7 +187,7 @@ export async function startTotpEnrollment(): Promise<ActionResult<TotpEnrollment
       if (!u.ok) logger.warn("two_factor.totp.unenroll_stale_failed", { code: u.code });
     }
   }
-  const e = await port.enrollTotp("KineSoft");
+  const e = await port.enrollTotp(BRAND_NAME);
   if (!e.ok) {
     logger.warn("two_factor.totp.enroll_failed", { code: e.code });
     return { ok: false, error: UNAVAILABLE };

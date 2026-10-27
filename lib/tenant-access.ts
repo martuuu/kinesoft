@@ -20,6 +20,7 @@
 import type { SubscriptionStatus, TenantStatus } from "@prisma/client";
 // Relativo: este módulo lo importa `lib/env.ts`, y los scripts de tsx no resuelven el alias `@/`.
 import { toARDateKey } from "./datetime-ar";
+import { BRAND_NAME } from "./brand";
 
 export type TenantAccessMode = "full" | "grace" | "read_only" | "suspended" | "closed";
 
@@ -140,7 +141,7 @@ export function isTenantBlocked(mode: TenantAccessMode): mode is "suspended" | "
  * quién lo reactiva.
  */
 export const READ_ONLY_MESSAGE =
-  "Tu consultorio está en modo lectura: podés consultar todo, pero no cargar ni modificar datos. Para reactivarlo, el titular del consultorio tiene que escribirle al equipo de KineSoft.";
+  `Tu consultorio está en modo lectura: podés consultar todo, pero no cargar ni modificar datos. Para reactivarlo, el titular del consultorio tiene que escribirle al equipo de ${BRAND_NAME}.`;
 
 /** Escritura de una sesión de soporte fuera de Configuración (BO2-E): no es el consultorio el que está en lectura. */
 export const SUPPORT_READ_ONLY_MESSAGE = "Entraste como soporte: acá solo podés mirar.";

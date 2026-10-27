@@ -7,7 +7,7 @@
  * `?next=` crudo y armaban el destino con `${origin}${next}`. Con
  * `next=@evil.com` eso da `https://app.kinesoft@evil.com` (userinfo + host
  * ajeno) y con `next=//evil.com` un redirect protocol-relative: open redirect
- * clásico, usado para phishing con un link "de KineSoft".
+ * clásico, usado para phishing con un link "de la app".
  */
 
 /** Largo máximo razonable de un path propio; más largo = sospechoso. */

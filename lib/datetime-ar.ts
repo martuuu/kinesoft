@@ -1,7 +1,7 @@
 /**
  * Argentina timezone helpers for datetime-local input handling.
  *
- * KineSoft operates in `America/Argentina/Buenos_Aires` (UTC-3
+ * The app operates in `America/Argentina/Buenos_Aires` (UTC-3
  * year-round — Argentina dropped DST in 2009). HTML
  * `<input type="datetime-local">` returns plain strings like
  * "2026-05-26T14:00" with no timezone info. Submitting that string

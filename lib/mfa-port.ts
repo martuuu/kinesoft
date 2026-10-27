@@ -45,6 +45,7 @@ import { cache } from "react";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
 import type { AalLevel, MfaAssurance } from "@/lib/platform-mfa-logic";
+import { BRAND_NAME } from "@/lib/brand";
 
 export type MfaFactorLite = {
   id: string;
@@ -142,7 +143,9 @@ const realPort: MfaPort = {
       const { data, error } = await getSupabaseServerClient().auth.mfa.enroll({
         factorType: "totp",
         friendlyName,
-        issuer: "KineSoft",
+        // Nombre que muestra la app autenticadora. Solo afecta enrolamientos nuevos: los factores ya enrolados
+        // siguen validando (el secreto no cambia) pero se ven con el nombre con que se dieron de alta.
+        issuer: BRAND_NAME,
       });
       if (error || !data) return { ok: false, code: errCode(error) };
       return {

@@ -17,6 +17,7 @@ import { toARDateKey, toARMinutes } from "@/lib/datetime-ar";
 import { shortPatientName } from "@/lib/patient-short-name";
 import type { AlertMode } from "@/lib/preferences-constants";
 import type { RealtimeAgendaMessage } from "@/lib/realtime-events";
+import { BRAND_NAME } from "@/lib/brand";
 
 export type AlertViewer = {
   /**
@@ -217,15 +218,15 @@ export function formatGroupDescription(items: ReadonlyArray<Announcement>, max =
 }
 
 const BADGE_RE = /^\(\d+\)\s+/;
-const BRAND = "KineSoft";
+const BRAND = BRAND_NAME;
 
 export function stripTitleBadge(title: string): string {
   return title.replace(BADGE_RE, "");
 }
 
 /**
- * Título con contador: `(1) Llegó María G. · KineSoft` (el último aviso es lo
- * que se lee en la pestaña); sin texto, `(2) Agenda · KineSoft`; con 0, el base.
+ * Título con contador: `(1) Llegó María G. · <marca>` (el último aviso es lo
+ * que se lee en la pestaña); sin texto, `(2) Agenda · <marca>`; con 0, el base.
  */
 export function titleWithBadge(base: string, n: number, latest?: string | null): string {
   const clean = stripTitleBadge(base);

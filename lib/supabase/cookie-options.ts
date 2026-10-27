@@ -8,7 +8,7 @@ import type { CookieOptionsWithName } from "@supabase/ssr";
  *
  * - `httpOnly: true`: el default de `@supabase/ssr` 0.5 es `false` (para que
  *   `createBrowserClient` pueda leer la sesión desde `document.cookie`). En
- *   KineSoft ningún código cliente usa el browser client para auth
+ *   la app ningún código cliente usa el browser client para auth
  *   (`lib/supabase/browser.ts` no tiene importadores al 30-sep: login,
  *   Google, sign-out y reset van por route handlers/server actions), así que
  *   la cookie no tiene por qué ser legible desde JS: un XSS ya no se lleva el

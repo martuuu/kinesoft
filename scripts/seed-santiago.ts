@@ -31,7 +31,7 @@ async function main() {
     update: {},
     create: {
       slug: "demo-kinesoft",
-      name: "Consultorio KineSoft Demo",
+      name: "Consultorio Demo",
       plan: TenantPlan.PRO,
     },
   });

@@ -37,6 +37,7 @@
  */
 import { randomBytes, randomUUID } from "node:crypto";
 import { authAdmin, type AuthAdminResult } from "../lib/identity/auth-admin";
+import { BRAND_NAME } from "../lib/brand";
 
 const NAME = "diagnose-auth";
 
@@ -119,7 +120,7 @@ async function main(): Promise<number> {
 
   try {
     // S1/S2 · alta sin confirmar + duplicado
-    const c = await a.createUser({ email, emailConfirm: false, fullName: "Diagnóstico KineSoft" });
+    const c = await a.createUser({ email, emailConfirm: false, fullName: `Diagnóstico ${BRAND_NAME}` });
     if (!c.ok) {
       check("S1a", "createUser sin confirmar", false, show(c));
       return 1;

@@ -69,7 +69,7 @@ const schema = z.object({
   // valida la forma, y RESEND_API_KEY + EMAIL_FROM están en REQUIRED_IN_PRODUCTION (HD-6).
   //   RESEND_API_KEY  SERVER-ONLY (nunca NEXT_PUBLIC_). Obligatoria en Production
   //                   (sin ella los mails irían a log y no saldrían).
-  //   EMAIL_FROM      `KineSoft <no-reply@mail.dominio>`. Fuera de Production
+  //   EMAIL_FROM      `<Marca> <no-reply@mail.dominio>`. Fuera de Production
   //                   hay default; en Production es obligatoria.
   //   EMAIL_TRANSPORT resend|mailpit|log. Solo pesa fuera de Production (dev:
   //                   mailpit o el opt-in de resend); Production lo ignora.
@@ -178,7 +178,7 @@ const schema = z.object({
     (v) => (typeof v === "string" ? emptyAsUndefined(v.trim().toLowerCase()) : v),
     z.enum(["scope", "panel"]).default("scope")
   ),
-  // PL (C-PL11): buzón del equipo de KineSoft que recibe el aviso de mensajes de consultorios y leads de la landing.
+  // PL (C-PL11): buzón del equipo de la plataforma que recibe el aviso de mensajes de consultorios y leads de la landing.
   // Opcional: sin él los mensajes quedan en /plataforma → Tickets y no sale el aviso por mail.
   PLATFORM_INBOX_EMAIL: z.preprocess(emptyAsUndefined, z.string().email().optional()),
 
@@ -281,7 +281,7 @@ const schema = z.object({
   // T5 cobra con la cuenta del vendedor (MP_CONNECT_MODE) y ya no lo lee nadie; `platform` loguea un aviso al boot.
   //   off      = DEFAULT: el turno nace reservado sin pago y se paga en el consultorio. Hoy la ÚNICA cuenta de Mercado
   //              Pago es la de la plataforma (`MP_ACCESS_TOKEN`, AUDIT `turnero-mp-cuenta-plataforma`): cobrar online
-  //              mandaría la plata del paciente a KineSoft y no al profesional. Además el checkout siempre exigía
+  //              mandaría la plata del paciente a la plataforma y no al profesional. Además el checkout siempre exigía
   //              pagar y fallaba con precio $0, así que el turnero no dejaba terminar ninguna reserva.
   //   platform = se cobra con la cuenta de la plataforma (solo para probar o con acuerdo explícito), si además el monto
   //              llega al mínimo y MP está configurado (`decidePublicCheckout`).

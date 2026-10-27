@@ -123,7 +123,7 @@ export async function listThreadsInTx(tx: Tx, tenantId: string, userId: string):
 
 /**
  * Detalle de un hilo del consultorio. Nombres: los mensajes del consultorio con el nombre del miembro (nunca su email,
- * decisión 19; solo perfiles con membresía en ESTE consultorio), los de Plataforma como «Equipo de KineSoft» (el
+ * decisión 19; solo perfiles con membresía en ESTE consultorio), los de Plataforma como «Equipo de <marca>» (`BRAND_NAME`) (el
  * consultorio no ve qué superadmin respondió).
  */
 export async function getThreadInTx(tx: Tx, tenantId: string, userId: string, threadId: string): Promise<SupportThreadDetail | null> {

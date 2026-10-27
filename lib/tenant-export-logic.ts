@@ -20,6 +20,7 @@
  */
 import type { Role } from "@prisma/client";
 import { toARDateKey } from "@/lib/datetime-ar";
+import { BRAND_NAME } from "@/lib/brand";
 
 /** Versión del formato. Se sube si cambia la forma de `data` (no por sumar una columna a la allowlist). */
 export const TENANT_EXPORT_VERSION = 1;
@@ -40,7 +41,7 @@ export const TENANT_EXPORT_RATE_LIMIT = { limit: 3, windowMs: 60 * 60_000 } as c
  * Columnas que salen por entidad. EXCLUIDAS a propósito (y por qué):
  *  - `Tenant.statusReason`, `seatLimitOverride`: notas y cupos internos de Plataforma.
  *  - `Practitioner.userId`, `Patient.userId` (cuenta del portal), `SupportSession.superadminId`: ids de la cuenta
- *    de Auth (Supabase), que no sirven fuera de KineSoft («sin datos de Auth»). Del equipo sale nombre y email (de
+ *    de Auth (Supabase), que no sirven fuera de la app («sin datos de Auth»). Del equipo sale nombre y email (de
  *    `UserProfile`). EXCEPCIÓN: `team.userId` sí sale, porque es lo único que permite saber quién es el `actorId`
  *    de cada fila de `auditEvents`; es un id opaco, no un secreto (nada de contraseñas, proveedores ni sesiones).
  *  - `Booking.idempotencyKey`, `TreatmentProgram.idempotencyKey`, `ClinicalNote.idempotencyKey`: claves internas de
@@ -282,10 +283,16 @@ export function chooseExportTenant(p: {
 
 // ── Archivo ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** `kinesoft-<slug>-<YYYY-MM-DD AR>.json`. El slug ya es [a-z0-9-]; se limpia igual (va a un header). */
+/**
+ * `<marca>-<slug>-<YYYY-MM-DD AR>.json` (`consultorio-online-…`). El slug ya es [a-z0-9-]; se limpia igual (va a un
+ * header). La marca se pasa a la misma forma ASCII (minúsculas, guiones) porque `filename="…"` no admite espacios
+ * ni acentos sin el `filename*` de RFC 5987.
+ */
+const BRAND_FILE_PREFIX = BRAND_NAME.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
 export function exportFilename(slug: string, now: Date): string {
   const safe = slug.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 60) || "consultorio";
-  return `kinesoft-${safe}-${toARDateKey(now)}.json`;
+  return `${BRAND_FILE_PREFIX}-${safe}-${toARDateKey(now)}.json`;
 }
 
 /**

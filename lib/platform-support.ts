@@ -76,7 +76,7 @@ export async function endSupport(): Promise<ActionResult<{ redirectTo: string }>
  * «Accesos de soporte» del consultorio activo, del más reciente al más viejo (las abiertas primero no: por fecha).
  *
  * PL-F1b, decisión de Martin (16-oct, literal: «profesionales también, porque pueden necesitar ayuda con algo»): la ve
- * CUALQUIER miembro activo del consultorio, no solo `tenant.admin`. Es transparencia de quién de KineSoft entró y por
+ * CUALQUIER miembro activo del consultorio, no solo `tenant.admin`. Es transparencia de quién del equipo de la plataforma entró y por
  * qué (el registro que promete el mail al titular), no configuración: el DTO es cerrado y no trae PHI. `getActor()` ya
  * exige membresía aceptada y habilitada en ESTE consultorio; `where: { tenantId }` a mano + RLS de M7.
  * Esta lista es solo lectura para todos. Un acceso termina cuando soporte sale o cierra sesión, o desde el consultorio

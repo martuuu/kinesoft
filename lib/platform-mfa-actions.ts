@@ -25,6 +25,7 @@ import { platformMfa, type MfaFactorLite } from "@/lib/platform-mfa";
 import { setPlatformReauthCookie } from "@/lib/platform-reauth";
 import { normalizeTotpCode, type PlatformMfaEnrollment } from "@/lib/platform-mfa-logic";
 import { logger } from "@/lib/logger";
+import { BRAND_NAME } from "@/lib/brand";
 import type { ActionResult } from "@/lib/validation";
 
 const BAD_CODE = "El código no es correcto o ya venció. Fijate la hora del teléfono y probá con el siguiente.";
@@ -101,7 +102,7 @@ export async function startPlatformMfaEnrollment(): Promise<ActionResult<Platfor
       if (!u.ok) logger.warn("platform.mfa.unenroll_stale_failed", { code: u.code });
     }
   }
-  const e = await port.enrollTotp("KineSoft Plataforma");
+  const e = await port.enrollTotp(`${BRAND_NAME} Plataforma`);
   if (!e.ok) {
     logger.warn("platform.mfa.enroll_failed", { code: e.code, userId: actor.userId });
     return { ok: false, error: UNAVAILABLE };

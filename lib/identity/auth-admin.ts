@@ -89,7 +89,7 @@ const LIST_PER_PAGE = 1000;
 /**
  * Tope de páginas de `findUserByEmail` (100k cuentas). Es un freno contra un
  * bucle infinito si GoTrue devolviera siempre páginas llenas; muy por encima de
- * lo que va a tener KineSoft. Al pasarlo se devuelve `error`, nunca `null`: un
+ * lo que va a tener la app. Al pasarlo se devuelve `error`, nunca `null`: un
  * «no existe» falso haría que el caller cree una cuenta duplicada.
  */
 const LIST_MAX_PAGES = 100;
