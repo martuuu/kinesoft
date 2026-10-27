@@ -14,7 +14,6 @@ import { KineLogo } from "@/components/ui/kine-logo";
 import { BRAND_NAME } from "@/lib/brand";
 import s from "./product-panel.module.css";
 
-
 type Status = "completed" | "attending" | "confirmed" | "pending" | "insala";
 
 /** Profesionales del mock: iniciales + color del avatar (literales del prototipo, no dependen de la paleta). */
@@ -24,18 +23,23 @@ const PROS: { initials: string; color: string }[] = [
   { initials: "JP", color: "#5e92cc" },
 ];
 
-/** [col, inicio en medias horas, duración en medias horas, estado, color del servicio, servicio]. */
+/**
+ * [col, inicio en medias horas, duración en medias horas, estado, color del servicio, servicio].
+ * HD-18: 4 horas (08 a 12) en vez de 5, con filas más altas, y mitad de los turnos de un cupo (30 min): así el mock se
+ * parece a una agenda real de kinesiología, donde la mayoría de los turnos son de un cupo.
+ */
 const APPTS: [number, number, number, Status, string, string][] = [
-  [0, 0, 2, "completed", "#1f4fbe", "Sesión de kinesiología"],
-  [0, 2, 1, "attending", "#8ecc30", "Evaluación inicial"],
-  [0, 4, 2, "confirmed", "#1f4fbe", "Sesión de kinesiología"],
-  [0, 7, 2, "pending", "#5e92cc", "Terapia manual"],
-  [1, 1, 2, "insala", "#3d7010", "Osteopatía"],
-  [1, 4, 1, "confirmed", "#8ecc30", "Evaluación inicial"],
-  [1, 6, 2, "confirmed", "#3d7010", "Osteopatía"],
+  [0, 0, 1, "completed", "#1f4fbe", "Sesión de kinesiología"],
+  [0, 1, 1, "attending", "#8ecc30", "Evaluación inicial"],
+  [0, 3, 2, "confirmed", "#1f4fbe", "Sesión de kinesiología"],
+  [0, 6, 1, "pending", "#5e92cc", "Terapia manual"],
+  [1, 0, 2, "insala", "#3d7010", "Osteopatía"],
+  [1, 2, 1, "confirmed", "#8ecc30", "Evaluación inicial"],
+  [1, 5, 2, "confirmed", "#3d7010", "Osteopatía"],
   [2, 0, 1, "completed", "#5e92cc", "Terapia manual"],
   [2, 2, 2, "confirmed", "#1f4fbe", "Sesión de kinesiología"],
-  [2, 6, 1, "pending", "#8ecc30", "Evaluación inicial"],
+  [2, 5, 1, "pending", "#8ecc30", "Evaluación inicial"],
+  [2, 6, 1, "confirmed", "#5e92cc", "Terapia manual"],
 ];
 
 const STATUS_LABEL: Record<Status, string> = {
@@ -46,8 +50,8 @@ const STATUS_LABEL: Record<Status, string> = {
   insala: "En sala",
 };
 
-/** 08:00 a 12:00. La grilla de product-panel.module.css asume 3 columnas × 5 filas (valores literales). */
-const ROWS = 5;
+/** 08:00 a 11:00 (cuatro filas de una hora). La grilla de product-panel.module.css asume 3 columnas × 4 filas. */
+const ROWS = 4;
 
 function AgendaMock() {
   const hours = Array.from({ length: ROWS }, (_, h) => `${String(8 + h).padStart(2, "0")}:00`);
@@ -80,20 +84,33 @@ function AgendaMock() {
         {PROS.map((p, col) => (
           <div key={p.initials} className={s.agCol}>
             {APPTS.filter(([c, start, dur]) => c === col && start + dur <= ROWS * 2).map(
-              ([, start, dur, status, svc, label]) => (
-                <div
-                  key={`${start}-${label}`}
-                  className={`${s.appt} ${s[`st_${status}`]}${dur === 1 ? ` ${s.short}` : ""}`}
-                  style={{
-                    top: `calc(${(start / (ROWS * 2)) * 100}% + 2px)`,
-                    height: `calc(${(dur / (ROWS * 2)) * 100}% - 4px)`,
-                  }}
-                >
-                  <span className={s.apptSvc} style={{ background: svc }} />
-                  <span className={s.apptT}>{label}</span>
-                  {dur > 1 && <span className={s.apptS}>{STATUS_LABEL[status]}</span>}
-                </div>
-              ),
+              ([, start, dur, status, svc, label]) => {
+                // HD-18: todo turno lleva el avatar del profesional (canal no cromático, AGENTS.md §5) y su estado en
+                // texto, además del fondo. El de un cupo va en una sola línea; el de dos, servicio arriba y
+                // avatar + estado abajo. El texto corta con ellipsis (product-panel.module.css).
+                const meta = (
+                  <span className={s.apptMeta}>
+                    <span className={s.apptAv} style={{ background: p.color }}>
+                      {p.initials}
+                    </span>
+                    <span className={s.apptS}>{STATUS_LABEL[status]}</span>
+                  </span>
+                );
+                return (
+                  <div
+                    key={`${start}-${label}`}
+                    className={`${s.appt} ${s[`st_${status}`]}${dur === 1 ? ` ${s.short}` : ""}`}
+                    style={{
+                      top: `calc(${(start / (ROWS * 2)) * 100}% + 2px)`,
+                      height: `calc(${(dur / (ROWS * 2)) * 100}% - 4px)`,
+                    }}
+                  >
+                    <span className={s.apptSvc} style={{ background: svc }} />
+                    <span className={s.apptT}>{label}</span>
+                    {meta}
+                  </div>
+                );
+              },
             )}
           </div>
         ))}

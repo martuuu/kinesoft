@@ -59,11 +59,7 @@ function PriceCard({ plan, featured }: { plan: PublicPlan; featured: boolean }) 
             {plan.period === "mes" && <span>por mes</span>}
           </p>
         )}
-        {plan.trialDays > 0 && (
-          <p className={styles.trial}>
-            {plan.trialDays} días gratis, sin medio de pago
-          </p>
-        )}
+        {plan.trialDays > 0 && <p className={styles.trial}>{plan.trialDays} días gratis, sin medio de pago</p>}
       </div>
       {/* VX-Z: el CTA va pegado al precio y no al pie. Con Individual cargando 8 bullets y Consultorio/Clínica 2-3, al
           pie quedaba un hueco grande arriba del botón en las dos de la derecha (capturas de VX2.1 a 1366). Así los
@@ -79,32 +75,36 @@ function PriceCard({ plan, featured }: { plan: PublicPlan; featured: boolean }) 
       >
         {plan.trialDays > 0 ? "Empezá gratis" : "Crear cuenta"}
       </ButtonLink>
+      {/* HD-18: separador y lista son las dos últimas filas del subgrid (pricing.module.css): quedan a la misma altura
+          en las tres tarjetas y la lista es la que crece, sin hueco entre el CTA y el separador. */}
       <div className={styles.sep} />
-      <ul className={styles.list} role="list">
-        {common.map((b) => (
-          <li key={b}>
-            <span aria-hidden="true" className={styles.check}>
-              <IconCheck size={20} stroke={1.8} />
-            </span>
-            <span>{b}</span>
-          </li>
-        ))}
-      </ul>
-      {kineExtra.length > 0 && (
-        <div className={styles.extra}>
-          <p className={styles.extraTitle}>Con Kinesiología, además:</p>
-          <ul className={styles.list} role="list">
-            {kineExtra.map((b) => (
-              <li key={b}>
-                <span aria-hidden="true" className={styles.check}>
-                  <IconCheck size={20} stroke={1.8} />
-                </span>
-                <span>{b}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <div className={styles.listArea}>
+        <ul className={styles.list} role="list">
+          {common.map((b) => (
+            <li key={b}>
+              <span aria-hidden="true" className={styles.check}>
+                <IconCheck size={20} stroke={1.8} />
+              </span>
+              <span>{b}</span>
+            </li>
+          ))}
+        </ul>
+        {kineExtra.length > 0 && (
+          <div className={styles.extra}>
+            <p className={styles.extraTitle}>Con Kinesiología, además:</p>
+            <ul className={styles.list} role="list">
+              {kineExtra.map((b) => (
+                <li key={b}>
+                  <span aria-hidden="true" className={styles.check}>
+                    <IconCheck size={20} stroke={1.8} />
+                  </span>
+                  <span>{b}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
     </article>
   );
 }

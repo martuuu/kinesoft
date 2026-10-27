@@ -5,13 +5,18 @@ import s from "./features.module.css";
 /**
  * [VX2-c1] «Funciones» (brief VX §3.1, cada claim con su evidencia en el brief):
  * - Agenda: vistas Día/Semana/Lista (`components/agenda/agenda-toolbar.tsx:16-19`), varios profesionales.
- * - Turnos online: turnero por link con profesional/servicio/horario (`lib/public-booking.ts`). **Sin Mercado Pago**
- *   (VX-Z, decisión de Martin): el cobro del turnero entra a la cuenta MP de la plataforma (`MP_ACCESS_TOKEN`), no a
- *   la del consultorio; prometerle al consultorio «tus pacientes pagan con MP» es falso hasta el bloque D.
+ * - Turnos online: turnero por link con profesional/servicio/horario (`lib/public-booking.ts`).
  * - HC: evoluciones editables 24 h, después enmienda o anulación con motivo (`lib/clinical-notes-logic.ts:150`).
  * - Cobros: copago y obra social (`lib/copago.ts`). Roles: la HC queda para quien atiende (`lib/visibility.ts`).
- * - Clínica: salas y Recepción. **Sin «en vivo» ni «pantalla de la sala»** (D-VX26: realtime está `off` por default y
- *   la pantalla TV es del bloque D).
+ * - Clínica: salas y Recepción. Sin «en vivo» (D-VX26: la sala no depende de realtime para funcionar).
+ *
+ * [HD-18] Dos tiles con flag, que `app/page.tsx` calcula en el render ISR (env del server, no por request):
+ * - `onlinePayments` (`mpConnectMode() !== "off"`): «Cobrá la seña con tu Mercado Pago». Desde T5 el cobro del
+ *   turnero entra a la cuenta MP del profesional o del consultorio (`lib/mp-connect-types.ts:14`, OAuth del vendedor),
+ *   ya no a la de la plataforma: la decisión de VX-Z de no nombrar MP era por eso y deja de aplicar con el flag.
+ * - `tvDisplay` (`env.REALTIME_DRIVER === "supabase"`): «Pantalla para la sala de espera», plan Clínica (módulo
+ *   `salaEspera`, `lib/tenant-modules.ts:80`; la pantalla lo exige en `lib/display-device-internal.ts:133`).
+ * Con los dos apagados (default de prod) la landing queda como antes. WhatsApp no se nombra (`public-claims.test.ts`).
  * Los mocks son decorativos (`aria-hidden`) y sin cifras (D-VX3).
  */
 const svg = (children: ReactNode) => (
@@ -62,6 +67,18 @@ const ICON = {
       <path d="M15.5 14.2a4.5 4.5 0 0 1 5.5 4.3" />
     </>,
   ),
+  card: svg(
+    <>
+      <rect x="2.5" y="5" width="19" height="14" rx="2.5" />
+      <path d="M2.5 9.5h19M6.5 15h4" />
+    </>,
+  ),
+  tv: svg(
+    <>
+      <rect x="2.5" y="4" width="19" height="13" rx="2.5" />
+      <path d="M8 21h8M12 17v4" />
+    </>,
+  ),
   globe: svg(
     <>
       <circle cx="12" cy="12" r="9" />
@@ -97,7 +114,29 @@ function Tile({ className, icon, lime, title, children }: { className: string; i
   );
 }
 
-export function Features() {
+/**
+ * [HD-18] Copy de los tiles con flag, en constantes para que cada claim lleve su evidencia en la misma línea
+ * (`public-claims.test.ts` mira el código sin comentarios y acepta `// claim-ok: <archivo>:<línea>`).
+ */
+const PAY_TITLE = "Cobrá la seña con tu Mercado Pago"; // claim-ok: lib/mp-connect-types.ts:14
+const PAY_BODY =
+  // claim-ok: lib/public-booking-payment.ts:120
+  "Si lo activás, quien reserva por el link paga la seña o el turno completo, y la plata entra a tu cuenta de Mercado Pago.";
+const TV_TITLE = "Pantalla para la sala de espera"; // claim-ok: lib/display-device-internal.ts:133
+const TV_BODY =
+  // claim-ok: components/tv/tv-screen.tsx:70
+  "Un televisor en la sala muestra a quién llaman y a qué consultorio pasa, y se actualiza solo.";
+
+export type FeatureFlags = {
+  /** `mpConnectMode() !== "off"`: el turnero cobra a la cuenta de Mercado Pago del consultorio (T5). */
+  onlinePayments?: boolean;
+  /** `env.REALTIME_DRIVER === "supabase"`: la pantalla de la sala de espera (T7) se actualiza sola. */
+  tvDisplay?: boolean;
+};
+
+export function Features({ onlinePayments = false, tvDisplay = false }: FeatureFlags = {}) {
+  // Con uno solo prendido, el tile ocupa la fila entera (sin hueco en el bento); con los dos, mitad y mitad.
+  const extraSpan = onlinePayments && tvDisplay ? s.half : s.full;
   return (
     <section className={base.section} id="funciones" aria-labelledby="funciones-title">
       <div className="k-container">
@@ -157,6 +196,21 @@ export function Features() {
               quien atiende.
             </p>
           </Tile>
+          {onlinePayments && (
+            <Tile className={extraSpan} icon={ICON.card} title={PAY_TITLE}>
+              <p>{PAY_BODY}</p>
+            </Tile>
+          )}
+          {tvDisplay && (
+            <article className={`${base.card} ${s.tile} ${extraSpan}`}>
+              <div className={s.tileHead}>
+                <span className={base.iconTile}>{ICON.tv}</span>
+                <span className={base.planChip}>Plan Clínica</span>
+              </div>
+              <h3 className={base.h3}>{TV_TITLE}</h3>
+              <p>{TV_BODY}</p>
+            </article>
+          )}
           <article className={`${base.card} ${s.tile} ${s.sala}`}>
             <div className={s.salaCopy}>
               <span className={base.planChip}>Plan Clínica</span>

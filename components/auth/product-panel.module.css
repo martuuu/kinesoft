@@ -67,7 +67,7 @@
 }
 
 /* ── Mock de agenda ─────────────────────────────────────────── */
-/* Alto de fila: 50 px (46 en pantallas bajas). Sin custom properties locales: el guard de tokens
+/* Alto de fila: 68 px por hora, 34 por cupo (60/30 en pantallas bajas; HD-18, eran 50/46 con 5 filas). Sin custom properties locales: el guard de tokens
    (design-tokens.test.ts) exige que toda custom property usada exista en globals.css, así que la grilla va con valores literales
    y los turnos se posicionan en % de la columna. */
 .agenda {
@@ -118,7 +118,7 @@
 .agGrid {
   display: grid;
   grid-template-columns: 48px repeat(3, minmax(0, 1fr));
-  grid-template-rows: auto 250px;
+  grid-template-rows: auto 272px;
 }
 .agCorner,
 .agHead {
@@ -137,7 +137,7 @@
 }
 .agHours {
   display: grid;
-  grid-template-rows: repeat(5, minmax(0, 1fr));
+  grid-template-rows: repeat(4, minmax(0, 1fr));
   font: 500 10px/1 var(--font-mono);
   color: var(--navy-300);
 }
@@ -148,7 +148,10 @@
   position: relative;
   border-left: 1px solid rgba(15, 30, 51, 0.06);
   background-image: linear-gradient(rgba(15, 30, 51, 0.06) 1px, transparent 1px);
-  background-size: 100% 20%;
+  background-size: 100% 25%;
+  /* HD-18: la columna es el contenedor de los turnos; en columnas angostas (login a 1024) el turno de un cupo
+     esconde el estado en texto y queda el fondo, que es el canal del estado en la agenda (AGENTS.md §5). */
+  container-type: inline-size;
 }
 
 .bar {
@@ -174,7 +177,8 @@
   align-content: start;
   /* VX-Z: padding vertical 4 y gap 2 (eran 6 y 4). Un turno de 1 h con dos líneas (servicio + estado) pide
      4 + 13,75 + 2 + 12,5 + 4 ≈ 36 px; con 6/4 pedía 42 y en la fila de 42 px de pantallas bajas el texto quedaba
-     recortado («Sesión de kinesiología», «Terapia manual» en la captura de VX2.1 a 1366×768). */
+     recortado («Sesión de kinesiología», «Terapia manual» en la captura de VX2.1 a 1366×768). HD-18: la segunda
+     línea es avatar (16 px) + estado: 4 + 13,75 + 2 + 16 + 4 ≈ 40 px, y el turno de dos cupos mide 56-64. */
   gap: 2px;
   overflow: hidden;
   padding: 4px 8px 4px 10px;
@@ -190,20 +194,63 @@
   bottom: 0;
   width: 3px;
 }
+/* HD-18: turno de un cupo en una sola línea: [avatar] servicio… estado. `apptMeta` se disuelve (`display: contents`)
+   para que el avatar vaya primero y el estado al final como hermanos flex. */
 .short {
-  padding-block: 0;
-  align-content: center;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 6px 0 9px;
+}
+.short .apptMeta {
+  display: contents;
+}
+.short .apptAv {
+  order: -1;
+}
+.short .apptT {
+  flex: 1 1 auto;
+}
+.short .apptS {
+  flex: 0 1 auto;
 }
 .apptT {
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.apptMeta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.apptAv {
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+}
 .apptS {
+  min-width: 0;
   font-size: 10px;
   font-weight: 500;
   opacity: 0.85;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@container (max-width: 150px) {
+  .short .apptS {
+    display: none;
+  }
 }
 .st_confirmed {
   background: linear-gradient(var(--st-confirmed-bg), var(--st-confirmed-bg)), #fff;
@@ -312,8 +359,9 @@
     gap: 28px;
     padding-block: 20px;
   }
-  /* VX-Z: 46 px por fila (eran 42): el turno de 1 h mide 42 px y entra con sus dos líneas. */
+  /* HD-18: 60 px por hora (30 por cupo). El turno de dos cupos mide 56 px y entra con sus dos líneas (≈ 40 px);
+     el de un cupo, 26 px con su línea de 16. Casi el mismo alto total que antes (230 → 240): 1366×768 sigue entrando sin scroll. */
   .agGrid {
-    grid-template-rows: auto 230px;
+    grid-template-rows: auto 240px;
   }
 }

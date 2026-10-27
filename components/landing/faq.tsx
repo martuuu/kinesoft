@@ -12,8 +12,9 @@ import type { SaasBillingMode } from "@/lib/env";
  * `hasTransfer` (ZF3): sin `SAAS_BILLING_TRANSFER_INFO` Facturación no ofrece «Transferencia» (no hay a dónde
  * transferir), así que la FAQ tampoco la promete. Llega como booleano: el alias/CBU no se imprime en la landing.
  *
- * «¿Cómo reservan turno mis pacientes?» no nombra Mercado Pago (VX-Z, decisión de Martin): el cobro del turnero entra
- * a la cuenta MP de la plataforma (`MP_ACCESS_TOKEN`), no a la del consultorio. Vuelve cuando el bloque D lo resuelva.
+ * «¿Cómo reservan turno mis pacientes?» no nombra Mercado Pago: la FAQ no recibe `mpConnectMode()` y el cobro del
+ * turnero depende de que el consultorio conecte su cuenta (T5, `lib/mp-connect-types.ts:14`). Con el flag prendido lo
+ * cuenta el tile «Cobrá la seña con tu Mercado Pago» de Funciones (HD-18), no esta respuesta.
  */
 export type FaqItem = { q: string; a: string };
 

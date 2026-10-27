@@ -30,6 +30,14 @@
 .roles {
   grid-column: span 3;
 }
+/* [HD-18] Tiles con flag (cobro con MP, pantalla de la sala): con los dos, mitad y mitad; con uno, la fila entera.
+   Así ninguna combinación de flags deja un hueco en el bento. */
+.half {
+  grid-column: span 3;
+}
+.full {
+  grid-column: span 6;
+}
 .sala {
   grid-column: span 6;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
@@ -45,6 +53,13 @@
 .salaCopy {
   display: grid;
   gap: 14px;
+}
+/* [HD-18] Ícono y chip «Plan Clínica» en una fila, como la cabecera de un tile común (el chip a la derecha). */
+.tileHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 .salaTitle {
   font-size: 24px;
@@ -170,8 +185,12 @@
   .online,
   .hc,
   .cobros,
-  .roles {
+  .roles,
+  .half {
     grid-column: span 1;
+  }
+  .full {
+    grid-column: span 2;
   }
   .sala {
     grid-template-columns: 1fr;
@@ -186,7 +205,9 @@
   .online,
   .hc,
   .cobros,
-  .roles {
+  .roles,
+  .half,
+  .full {
     grid-column: auto;
   }
   .week {

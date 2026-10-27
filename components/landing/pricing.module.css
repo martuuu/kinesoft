@@ -50,9 +50,15 @@
 .grid[data-count="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 780px; margin-inline: auto; }
 .grid[data-count="1"] { grid-template-columns: minmax(0, 1fr); max-width: 420px; margin-inline: auto; }
 
+/* HD-18: tarjetas parejas. Cada tarjeta ocupa 5 filas de la grilla y las comparte por subgrid (head, precio, CTA,
+   separador, lista): el separador cae a la misma altura en las tres aunque «para quién» o la prueba ocupen distinto,
+   y la lista (última fila) es la que crece. Antes era flex con `min-height` en `.for` y una fila de prueba vacía para
+   emparejar los CTA a mano, y el aire de las tarjetas cortas quedaba suelto. Sin subgrid: el flex de antes (abajo). */
 .card {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-row: span 5;
+  grid-template-rows: subgrid;
+  align-content: start;
   gap: 20px;
   position: relative;
   min-width: 0;
@@ -67,13 +73,21 @@
 
 .head { display: grid; gap: 8px; }
 .name { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.015em; color: var(--navy-900); }
-.for { margin: 0; font-size: 15px; color: var(--navy-500); min-height: 2.9em; }
+.for { margin: 0; font-size: 15px; color: var(--navy-500); }
 
-.priceBlock { display: grid; gap: 10px; }
-/* VX-Z: con 3 columnas, la fila de la prueba («14 días gratis…») existe aunque el plan no tenga prueba (pista explícita
-   vacía), así los tres CTA quedan a la misma altura. En una columna no hace falta y se libera. */
-@media (min-width: 1024px) {
-  .priceBlock { grid-template-rows: auto minmax(1.45em, auto); }
+.priceBlock { display: grid; gap: 10px; align-content: start; }
+
+/* Fallback sin subgrid (Safari < 16, Chrome < 117): el arreglo de VX-Z. `.for` con alto mínimo de dos líneas y la
+   fila de la prueba («14 días gratis…») presente aunque el plan no tenga prueba, para que los tres CTA queden a la
+   misma altura. */
+@supports not (grid-template-rows: subgrid) {
+  .card { display: flex; flex-direction: column; }
+  .for { min-height: 2.9em; }
+}
+@supports not (grid-template-rows: subgrid) {
+  @media (min-width: 1024px) {
+    .priceBlock { grid-template-rows: auto minmax(1.45em, auto); }
+  }
 }
 .amount { margin: 0; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
 .amount strong {
@@ -94,11 +108,16 @@
 .list li { display: grid; grid-template-columns: 20px 1fr; gap: 10px; align-items: start; color: var(--navy-700); }
 .check { display: inline-flex; color: var(--lime-700); margin-top: 1px; }
 
+/* La última fila del subgrid: lista común + «Con Kinesiología, además:». Arriba siempre (sin centrar ni estirar). */
+.listArea { display: grid; gap: 20px; align-content: start; }
+
 .extra { display: grid; gap: 12px; }
 .extraTitle { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--sky-700); }
 
-/* VX-Z: el CTA sigue al precio (antes `margin-top: auto` al pie dejaba un hueco en las tarjetas con pocos bullets). */
-.cta { margin-top: 4px; }
+/* VX-Z: el CTA sigue al precio (antes `margin-top: auto` al pie dejaba un hueco en las tarjetas con pocos bullets).
+   HD-18: alineado arriba en su fila del subgrid (no se estira si otra tarjeta la hace más alta). */
+.cta { margin-top: 4px; align-self: start; }
+.sep { align-self: start; }
 
 /* Banda Libre */
 .band {

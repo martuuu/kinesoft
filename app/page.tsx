@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { getPublicPlanCatalog } from "@/lib/saas-plans-public";
-import { env, saasBillingMode, saasBillingTransferInfo } from "@/lib/env";
+import { env, mpConnectMode, saasBillingMode, saasBillingTransferInfo } from "@/lib/env";
 import { BRAND_NAME } from "@/lib/brand";
 import { SiteHeader } from "@/components/landing/site-header";
 import { Hero } from "@/components/landing/hero";
@@ -25,6 +25,10 @@ import base from "@/components/landing/landing.module.css";
  * - `trialDays` sale de la fila Individual del catálogo; si el catálogo vino vacío (base caída en el build), `null`:
  *   el copy no promete una cantidad de días que no pudo leer.
  * - Superficie pública (C-F7): sin providers ni framer; lo único cliente es el menú mobile y el form de contacto.
+ * - [HD-18] Flags de «Funciones» (`onlinePayments`, `tvDisplay`): son env del server (`process.env` vía
+ *   `mpConnectMode()` y el `env` parseado al boot), no APIs dinámicas (cookies/headers/searchParams), así que no
+ *   sacan a la página de ISR: se leen en el build y en cada regeneración. Cambiar el env en Vercel implica redeploy,
+ *   que regenera la landing.
  */
 export const revalidate = 3600;
 // DIR-Z (16-oct, default del orquestador): en Next 14.2 el `app/not-found.tsx` raíz se evalúa en cada render RSC y lee
@@ -62,6 +66,10 @@ export default async function HomePage() {
   const billingMode = saasBillingMode();
   // ZF3: sin datos de transferencia la FAQ no la ofrece (mismo criterio que `collectionChoices`). Solo el booleano.
   const hasTransfer = saasBillingTransferInfo() !== null;
+  // HD-18: el tile del cobro con MP solo si el turnero puede cobrar a la cuenta del consultorio (T5), y el de la
+  // pantalla de la sala solo con realtime de Supabase (con `local`/`off` la TV no está en prod).
+  const onlinePayments = mpConnectMode() !== "off";
+  const tvDisplay = env.REALTIME_DRIVER === "supabase";
 
   return (
     <div className={base.page}>
@@ -71,7 +79,7 @@ export default async function HomePage() {
       <SiteHeader trialDays={trialDays} />
       <main id="main">
         <Hero trialDays={trialDays} />
-        <Features />
+        <Features onlinePayments={onlinePayments} tvDisplay={tvDisplay} />
         <Specialty />
         <Steps trialDays={trialDays} />
         <LandingPricing plans={plans} />
