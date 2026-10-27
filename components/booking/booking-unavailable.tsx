@@ -25,7 +25,7 @@ export function clinicInitials(name: string): string {
  * hooks ni "use client"): lo montan este server component, `BookingResult` (cliente) y `app/(booking)/error.tsx`.
  *
  * Arriba va la marca DEL CONSULTORIO (monograma + nombre): el paciente llegó por el link del consultorio y no sabe qué
- * es KineSoft; KineSoft queda chico en el pie. Sin `clinicName` (el error del segmento no lo conoce) va el logo de la
+ * es la de la app; la de la app queda chica en el pie. Sin `clinicName` (el error del segmento no lo conoce) va el logo de la
  * app. Una sola h1 por página: la pone el contenido de la card; el nombre del consultorio es un `<p>`.
  */
 export function BookingFrame({

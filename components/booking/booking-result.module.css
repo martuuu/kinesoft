@@ -1,7 +1,7 @@
 /* [VX2-d2] Marco «centered» propio del turnero: resultado del pago (`/booking/[id]/{ok,pending,failed}`), turnos online
    apagados (`/c/[slug]/booking` cerrado) y el error del segmento `(booking)`.
    Por qué no `AuthShell centered`: el paciente está en el turnero DEL CONSULTORIO; la marca que tiene que ver arriba es
-   la del consultorio (monograma + nombre), no la de KineSoft con «© 2026» y links de la app. KineSoft queda en el pie,
+   la del consultorio (monograma + nombre), no la de la app con «© 2026» y links de la app. La de la app queda en el pie,
    chico. Mismas medidas que `components/auth/auth-shell.module.css` (card de 460-520, `--bg-public`, sin blur: D-VX9)
    para que se lea como la misma familia. */
 
@@ -227,7 +227,7 @@
   overflow-wrap: anywhere;
 }
 
-/* ── Pie: KineSoft chico ─────────────────────────────────────── */
+/* ── Pie: la marca de la app chica ─────────────────────────────────────── */
 .foot {
   display: flex;
   align-items: center;

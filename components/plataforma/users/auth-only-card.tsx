@@ -17,6 +17,7 @@ import { repairDeleteAuthOrphan } from "@/lib/platform-users";
 import { usePlatformAction } from "@/components/plataforma/reauth-modal";
 import type { PlatformAuthOnlyHit } from "@/lib/platform-health-logic";
 import { formatDateTimeAR } from "@/components/plataforma/users/users-logic";
+import { BRAND_NAME } from "@/lib/brand";
 
 export function AuthOnlyCard({ hit }: { hit: PlatformAuthOnlyHit }) {
   const router = useRouter();
@@ -57,7 +58,7 @@ export function AuthOnlyCard({ hit }: { hit: PlatformAuthOnlyHit }) {
             <Tag tone="soft">Solo en Auth</Tag>
           </div>
           <p style={{ fontSize: 12.5, color: "var(--navy-500)", margin: "6px 0 0", lineHeight: 1.45, maxWidth: 560 }}>
-            Tiene cuenta en el servicio de acceso pero no perfil en KineSoft: no puede entrar a nada y deja el email
+            Tiene cuenta en el servicio de acceso pero no perfil en {BRAND_NAME}: no puede entrar a nada y deja el email
             ocupado.
           </p>
           <div style={{ fontSize: 12, color: "var(--navy-300)", marginTop: 6 }}>

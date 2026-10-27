@@ -14,6 +14,7 @@
 import type { Role } from "@prisma/client";
 import { roleLabel } from "@/lib/roles";
 import type { HealthDetector, PlatformHealthReport } from "@/lib/platform-health-logic";
+import { BRAND_NAME } from "@/lib/brand";
 
 export type HealthDetectorKey = Exclude<keyof PlatformHealthReport, "generatedAt">;
 
@@ -42,7 +43,7 @@ export const HEALTH_DETECTORS: readonly HealthDetectorCopy[] = [
   {
     key: "authOrphans",
     title: "Cuentas de acceso sin perfil",
-    description: "Cuentas que existen en el servicio de acceso pero no en KineSoft: dejan el email ocupado para una invitación nueva.",
+    description: `Cuentas que existen en el servicio de acceso pero no en ${BRAND_NAME}: dejan el email ocupado para una invitación nueva.`,
     emptyText: "No hay cuentas sueltas.",
   },
   {

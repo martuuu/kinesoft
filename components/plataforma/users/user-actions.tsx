@@ -34,6 +34,7 @@ import {
   setPlatformUserDisabled,
 } from "@/lib/platform-users";
 import type { PlatformAccessLinkResult, PlatformUserDetail } from "@/lib/platform-health-logic";
+import { BRAND_NAME } from "@/lib/brand";
 import {
   accessLinkBlockReason,
   accessLinkMessage,
@@ -229,8 +230,8 @@ function DisableAction({ user, isSelf }: { user: PlatformUserDetail; isSelf: boo
         user.disabled
           ? user.disabledReason
             ? `Motivo: ${user.disabledReason}`
-            : "No puede entrar a KineSoft."
-          : "Deshabilitarlo le corta el acceso a todo KineSoft, en todos sus consultorios."
+            : `No puede entrar a ${BRAND_NAME}.`
+          : `Deshabilitarlo le corta el acceso a todo ${BRAND_NAME}, en todos sus consultorios.`
       }
       action={
         user.disabled ? (
@@ -261,7 +262,7 @@ function DisableAction({ user, isSelf }: { user: PlatformUserDetail; isSelf: boo
           if (!busy) setOpen(false);
         }}
         title="Deshabilitar usuario"
-        description={`${user.email} no va a poder entrar a KineSoft en ningún consultorio hasta que lo habilites.`}
+        description={`${user.email} no va a poder entrar a ${BRAND_NAME} en ningún consultorio hasta que lo habilites.`}
       >
         <form onSubmit={onDisableSubmit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <FormField
@@ -380,7 +381,7 @@ function SuperadminAction({ user }: { user: PlatformUserDetail }) {
   return (
     <ActionBlock
       title={user.isPlatformAdmin ? "Tiene acceso a Plataforma" : "Sin acceso a Plataforma"}
-      hint={user.isPlatformAdmin ? "Es superadmin: ve y cambia todos los consultorios." : "Plataforma es solo para el equipo de KineSoft."}
+      hint={user.isPlatformAdmin ? "Es superadmin: ve y cambia todos los consultorios." : `Plataforma es solo para el equipo de ${BRAND_NAME}.`}
       action={
         <Button
           variant="ghost"
@@ -541,7 +542,7 @@ function TwoFactorResetAction({ user, isSelf }: { user: PlatformUserDetail; isSe
         <ResultBox
           msg={{
             tone: "warning",
-            title: "Quedó reseteada en KineSoft, pero no pudimos borrar su app del servicio de acceso.",
+            title: `Quedó reseteada en ${BRAND_NAME}, pero no pudimos borrar su app del servicio de acceso.`,
             description: "Ya puede entrar sin el segundo paso. Reintentá para terminar de limpiar.",
           }}
         >

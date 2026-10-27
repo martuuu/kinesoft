@@ -22,6 +22,7 @@ import {
   verifyStepUpTotp,
 } from "@/lib/two-factor";
 import type { TwoFactorMethods } from "@/lib/two-factor-logic";
+import { BRAND_NAME } from "@/lib/brand";
 
 type Mode = "totp" | "email" | "recovery";
 const NETWORK = "No se pudo completar. Revisá la conexión y probá de nuevo.";
@@ -133,7 +134,7 @@ export function TwoFactorChallenge({
           {mode === "totp" && (
             <>
               <legend style={{ fontSize: 14, color: "var(--navy-700)", marginBottom: 10, lineHeight: 1.5 }}>
-                Abrí tu app de autenticación y escribí el código de 6 números de KineSoft.
+                Abrí tu app de autenticación y escribí el código de 6 números de {BRAND_NAME}.
               </legend>
               <TotpCodeInput value={code} onChange={setCode} disabled={pending} error={error} autoFocus />
             </>

@@ -37,6 +37,7 @@ import { useAlertPrefs } from "@/components/providers/arrival-alerts";
 import { AlertModeControl } from "@/components/realtime/alert-prefs-controls";
 import type { PracticeAssetState } from "./practice-asset-field";
 import { HC_VISIBILITY_COPY as VIS_COPY, hcVisibilityChange, hcVisibilityOf, type HcVisibility } from "./fichas-settings-logic";
+import { BRAND_NAME } from "@/lib/brand";
 
 // [FC-3i] El logo baja del chunk de «Mis fichas» (mismo `import()` que configuracion-client): ver
 // `practice-asset-field.tsx` (sin chunk compartido nuevo). Con SSR (default de `dynamic`): la tarjeta sale pintada.
@@ -678,7 +679,7 @@ function FeaturesCard({ tenant }: { tenant: TenantSettings }) {
         )}
         <PrefRow
           label="Tipo de consultorio"
-          hint="Define qué secciones ves en KineSoft. Para cambiarlo, escribinos desde la pestaña Soporte."
+          hint={`Define qué secciones ves en ${BRAND_NAME}. Para cambiarlo, escribinos desde la pestaña Soporte.`}
         >
           <ReadOnlyValue>{VERTICAL_LABEL[tenant.vertical]}</ReadOnlyValue>
         </PrefRow>

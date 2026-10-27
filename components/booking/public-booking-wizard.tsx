@@ -509,7 +509,7 @@ export function PublicBookingWizard({
         />
       </main>
 
-      {/* VX-Z: como `BookingFrame` (booking-unavailable.tsx): adelante la marca del consultorio, KineSoft chico acá. */}
+      {/* VX-Z: como `BookingFrame` (booking-unavailable.tsx): adelante la marca del consultorio, la de la app chica acá. */}
       {/* LG-P: links legales en su propia fila (a 360 px no entran al lado de «Turnos online con»). */}
       <footer className={s.foot} style={{ flexWrap: "wrap" }}>
         <span>Turnos online con</span>
@@ -560,7 +560,7 @@ function Nav({ clinic, session }: { clinic: PublicClinic; session: { email: stri
   return (
     <header className={`k-glass ${s.nav}`}>
       {/* VX-Z: la marca es la DEL CONSULTORIO (monograma + nombre, como `BookingFrame`): el paciente llegó por su link
-          y no sabe qué es KineSoft. KineSoft queda chico en el pie. El nombre es un `<p>`: la única h1 es la del head. */}
+          y no conoce la app. La marca de la app queda chica en el pie. El nombre es un `<p>`: la única h1 es la del head. */}
       <div className={s.navBrand}>
         {initials && (
           <span className={s.navMono} aria-hidden="true">

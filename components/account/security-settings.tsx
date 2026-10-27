@@ -29,6 +29,7 @@ import {
 } from "@/lib/two-factor";
 import type { TotpEnrollmentView } from "@/lib/two-factor-types";
 import type { TwoFactorOverview } from "@/lib/two-factor-internal";
+import { BRAND_NAME } from "@/lib/brand";
 
 const AR_TZ = "America/Argentina/Buenos_Aires";
 const NETWORK = "No se pudo completar. Revisá la conexión y probá de nuevo.";
@@ -41,7 +42,7 @@ const EVENT_LABEL: Record<string, string> = {
   "two_factor.recovery_generated": "Se generaron códigos de recuperación",
   "two_factor.recovery_used": "Se usó un código de recuperación",
   "two_factor.email_code_locked": "Se bloqueó un código por email (demasiados intentos)",
-  "two_factor.reset_by_platform": "El equipo de KineSoft restableció tu verificación",
+  "two_factor.reset_by_platform": `El equipo de ${BRAND_NAME} restableció tu verificación`,
   // PV (§27, LG-S/LG-U): el evento lo escribe `recordLegalAcceptanceInTx` (alta, onboarding o invitación).
   "legal.accepted": "Aceptaste los Términos y la Política de privacidad",
 };
@@ -314,7 +315,7 @@ function TotpSetup({ onEnabled }: { onEnabled: (codes: string[] | null) => void 
     <form onSubmit={submit} style={{ display: "grid", gap: 12 }}>
       {enrollment.existing ? (
         <p style={{ margin: 0, fontSize: 13, color: "var(--navy-700)", lineHeight: 1.5 }}>
-          Ya tenés KineSoft cargado en tu app de autenticación. Escribí el código que muestra para activarla.
+          Ya tenés {BRAND_NAME} cargado en tu app de autenticación. Escribí el código que muestra para activarla.
         </p>
       ) : (
         <div style={{ display: "grid", justifyItems: "center", gap: 10 }}>

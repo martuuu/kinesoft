@@ -365,7 +365,7 @@ export function ConfiguracionClient(props: Props) {
       )}
       {tab === "whatsapp" && can("whatsapp") && whatsapp && <WhatsAppPanel config={whatsapp} support={props.support} />}
       {tab === "soporte" && can("soporte") && (
-        // PL-2d (C-PL11): la pestaña «Soporte» junta los Mensajes con el equipo de KineSoft y los Accesos de soporte.
+        // PL-2d (C-PL11): la pestaña «Soporte» junta los Mensajes con el equipo de la plataforma y los Accesos de soporte.
         // PL-F1b: Mensajes y Accesos para cualquier miembro (antes PL-D20: `tenant.admin || account.billing`).
         <div style={{ display: "grid", gap: 16 }}>
           <SupportMessagesPanel

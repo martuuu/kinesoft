@@ -27,6 +27,7 @@ import { formatARS } from "@/lib/format";
 import { getBillingOverview, getReceiptUrl } from "@/lib/saas-billing";
 import { payChargeWithMp } from "@/lib/saas-billing-mp";
 import { paymentMethodLabel, type BillingOverview } from "@/lib/saas-billing-types";
+import { BRAND_NAME } from "@/lib/brand";
 import {
   balanceView,
   chargeStatusView,
@@ -172,7 +173,7 @@ export function BillingPanel({ initial }: { initial: BillingOverview }) {
 
         {off ? (
           <p data-billing-off style={{ margin: 0, padding: 12, borderRadius: "var(--r-sm)", background: "rgba(15,30,51,0.04)", fontSize: 13.5, color: "var(--navy-700)", lineHeight: 1.5 }}>
-            <strong>{BILLING_OFF_COPY}</strong> Mientras tanto usá KineSoft como siempre: te avisamos por mail cuando se genere
+            <strong>{BILLING_OFF_COPY}</strong> Mientras tanto usá {BRAND_NAME} como siempre: te avisamos por mail cuando se genere
             el primer cargo.
           </p>
         ) : (

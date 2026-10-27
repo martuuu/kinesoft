@@ -632,7 +632,7 @@
   outline: 0;
 }
 
-/* VX-Z: KineSoft chico en el pie (la marca de arriba es la del consultorio), como `BookingFrame`. */
+/* VX-Z: la marca de la app chica en el pie (la marca de arriba es la del consultorio), como `BookingFrame`. */
 .foot {
   display: flex;
   align-items: center;

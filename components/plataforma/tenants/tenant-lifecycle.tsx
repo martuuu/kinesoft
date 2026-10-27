@@ -50,6 +50,7 @@ import {
   typedSlugMatches,
 } from "@/components/plataforma/tenants/labels";
 import { ErrorBox, Facts, Section, WarnBox, muted } from "@/components/plataforma/tenants/detail-ui";
+import { BRAND_NAME } from "@/lib/brand";
 
 type StatusKind = "suspend" | "close";
 
@@ -450,7 +451,7 @@ export function TenantLifecyclePanel({ detail: d }: { detail: PlatformTenantDeta
 
       <Section
         title="Export de datos"
-        description="Le pedimos al titular que descargue él todos los datos del consultorio. El equipo de KineSoft no los ve."
+        description={`Le pedimos al titular que descargue él todos los datos del consultorio. El equipo de ${BRAND_NAME} no los ve.`}
         action={
           <Button type="button" variant="ghost" onClick={() => void askExport()} disabled={pending}>
             Pedir export al titular

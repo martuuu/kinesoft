@@ -2,7 +2,7 @@
 
 /**
  * Configuración → Soporte → «Mensajes» (PL-2d, contrato C-PL11, plan §20.5.7). El consultorio le escribe al equipo de
- * KineSoft y ve las respuestas. Decisión de Martin: el consultorio escribe desde acá, a Martin le llega mail, responde
+ * la plataforma y ve las respuestas. Decisión de Martin: el consultorio escribe desde acá, a Martin le llega mail, responde
  * desde /plataforma, el consultorio ve la respuesta (y le llega mail); abierto/cerrado.
  *
  * - Lista de conversaciones (lo último que se movió, arriba) con «Nueva» si hay respuesta sin leer.
@@ -47,6 +47,7 @@ import {
 } from "@/lib/support-threads-types";
 
 import { supportComposeInput, type AppTicketSourceValue, type SupportDraft } from "./support-draft-logic";
+import { BRAND_NAME } from "@/lib/brand";
 
 const NETWORK_ERROR = "No pudimos conectarnos. Revisá la conexión y probá de nuevo.";
 
@@ -125,7 +126,7 @@ export function SupportMessagesPanel({
         <div>
           <EyebrowLabel>Mensajes con soporte</EyebrowLabel>
           <p style={{ margin: "6px 0 0", fontSize: 13.5, color: "var(--navy-700)", lineHeight: 1.5, maxWidth: 560 }}>
-            Escribile al equipo de KineSoft por dudas de la cuenta, el plan o los pagos. Te avisamos por mail cuando te
+            Escribile al equipo de {BRAND_NAME} por dudas de la cuenta, el plan o los pagos. Te avisamos por mail cuando te
             respondamos. {NO_PATIENT_DATA_COPY}
           </p>
         </div>

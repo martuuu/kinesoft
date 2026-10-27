@@ -12,6 +12,7 @@ import { formatDateAR } from "@/lib/format";
 import { toARMinutes } from "@/lib/datetime-ar";
 import type { SupportSessionRow } from "@/lib/support-session-internal";
 import { endSupportAccessForTenant } from "@/lib/support-session-tenant";
+import { BRAND_NAME } from "@/lib/brand";
 
 /**
  * Configuración → «Accesos de soporte» (BO3-F; decisión 3 de Martin, literal: «Entrar como soporte» abre el
@@ -81,7 +82,7 @@ export function SupportAccessPanel({
           }}
         >
           <li>
-            Cuando nos pedís ayuda, el equipo de KineSoft puede entrar a tu consultorio <strong>como soporte</strong>.
+            Cuando nos pedís ayuda, el equipo de {BRAND_NAME} puede entrar a tu consultorio <strong>como soporte</strong>.
             Cada vez que entra, le avisamos por mail al titular.
           </li>
           <li>
