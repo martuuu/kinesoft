@@ -33,6 +33,9 @@ export const BUNDLE_GROUPS = [
       // TP-3i (§25.2 hallazgo 14): link de pago `/pagar/[token]`. Sin el match caía en `workspace` (180): es la página
       // que el paciente abre desde WhatsApp o el mail, server sin providers ni framer (guard de superficies públicas).
       /^\/pagar\//,
+      // LG-P (PV §27): `/terminos` y `/privacidad`, `force-static` y sin JS propio. Sin el match caían en `workspace`
+      // (180). Anclado con `$`: una ruta futura que empiece con «terminos» no entra acá por accidente.
+      /^\/(terminos|privacidad)$/,
     ],
   },
   { id: "turnero", budget: 135, blocking: true, match: [/^\/c\/\[slug\]\/booking/, /^\/booking\//] },

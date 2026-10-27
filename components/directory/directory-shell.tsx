@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { KineLogo } from "@/components/ui/kine-logo";
 import { ButtonLink } from "@/components/ui/button";
 import { BRAND_NAME } from "@/lib/brand";
+import { LEGAL_LINKS } from "@/lib/legal";
 import s from "./directory.module.css";
 
 /**
@@ -61,6 +62,14 @@ export function DirectoryShell({ children }: { children: ReactNode }) {
                     Ingresar
                   </Link>
                 </li>
+                {/* LG-P (PV §27): Términos y Política de privacidad, con el resto de los links del pie. */}
+                {LEGAL_LINKS.map((l) => (
+                  <li key={l.href}>
+                    <Link href={l.href} prefetch={false}>
+                      {l.label}
+                    </Link>
+                  </li>
+                ))}
               </ul>
             </nav>
           </div>

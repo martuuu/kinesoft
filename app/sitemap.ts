@@ -2,9 +2,10 @@ import type { MetadataRoute } from "next";
 import { env } from "@/lib/env";
 import { directoryMode } from "@/lib/directory-mode";
 import { getDirectorySnapshot } from "@/lib/directory-internal";
+import { PRIVACY_PATH, TERMS_PATH } from "@/lib/legal";
 
 /**
- * BO1-D — `/sitemap.xml`: las páginas públicas fijas (landing y login). Los turneros `/c/<slug>` quedan afuera a
+ * BO1-D — `/sitemap.xml`: las páginas públicas fijas (landing, login y, desde LG-P, `/terminos` y `/privacidad`). Los turneros `/c/<slug>` quedan afuera a
  * propósito: listarlos es publicar qué consultorios usan KineSoft, y eso es decisión del directorio (opt-in por
  * consultorio), no de este archivo.
  *
@@ -27,6 +28,9 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const fixed: MetadataRoute.Sitemap = [
     { url: `${base}/`, changeFrequency: "weekly", priority: 1 },
     { url: `${base}/login`, changeFrequency: "yearly", priority: 0.3 },
+    // LG-P (PV §27): los legales son públicos e indexables (quien evalúa contratar los busca).
+    { url: `${base}${TERMS_PATH}`, changeFrequency: "yearly", priority: 0.2 },
+    { url: `${base}${PRIVACY_PATH}`, changeFrequency: "yearly", priority: 0.2 },
   ];
   if (directoryMode() !== "public") return fixed;
 

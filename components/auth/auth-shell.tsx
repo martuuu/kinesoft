@@ -14,6 +14,7 @@
 import Link from "next/link";
 import { KineLogo } from "@/components/ui/kine-logo";
 import { BRAND_NAME } from "@/lib/brand";
+import { LEGAL_LINKS } from "@/lib/legal";
 import { ProductPanel } from "./product-panel";
 import s from "./auth-shell.module.css";
 
@@ -45,14 +46,19 @@ function Logo({ light = false }: { light?: boolean }) {
   );
 }
 
+/**
+ * LG-P (PV §27): los dos links legales van SIEMPRE al final del pie, después de los propios de cada pantalla. En el
+ * AuthShell están el alta, el login y la invitación: donde se aceptan los términos tienen que estar a mano.
+ */
 function Footer({ links, className }: { links?: AuthShellProps["footerLinks"]; className: string }) {
+  const all = [...(links ?? []), ...LEGAL_LINKS];
   return (
     <footer className={className}>
       <span>© 2026 {BRAND_NAME}</span>
-      {links?.map((l) => (
+      {all.map((l) => (
         <span key={l.href} className={s.footLink}>
           <span aria-hidden="true">·</span>
-          <Link href={l.href} className="k-link">
+          <Link href={l.href} className="k-link" prefetch={false}>
             {l.label}
           </Link>
         </span>

@@ -20,7 +20,7 @@ import sitemap from "@/app/sitemap";
 import { env } from "@/lib/env";
 
 const BASE = env.NEXT_PUBLIC_APP_URL.replace(/\/+$/, "");
-const FIXED = [`${BASE}/`, `${BASE}/login`];
+const FIXED = [`${BASE}/`, `${BASE}/login`, `${BASE}/terminos`, `${BASE}/privacidad`];
 
 const SNAP: DirectorySnapshot = {
   version: 1,

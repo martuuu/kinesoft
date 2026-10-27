@@ -11,11 +11,15 @@
  * VX-Z: «Mi cuenta» (desde ES4-Z, «Mis datos»: el nombre de la pantalla) solo con sesión. Sin sesión llevaba a `/portal/me`, que redirige a `/portal`: un link que vuelve a
  * la misma pantalla. Se lee con `getSessionUser()` (verificación local del token, sin red; memo por request), no con
  * `getPortalAuth()` (consulta las fichas): para decidir un link alcanza con saber si hay sesión.
+ *
+ * LG-P (PV §27): pie chico con los links a los Términos y la Política de privacidad. El paciente entra al portal con
+ * su email: la política (sección «Quién es responsable de cada dato») le dice que el responsable es su consultorio.
  */
 import Link from "next/link";
 import { KineLogo } from "@/components/ui/kine-logo";
 import { BRAND_NAME } from "@/lib/brand";
 import { getSessionUser } from "@/lib/session-user";
+import { LegalLinks } from "@/components/legal/legal-links";
 
 export const metadata = { title: `Mi portal · ${BRAND_NAME}` };
 
@@ -53,9 +57,12 @@ export default async function PortalLayout({ children }: { children: React.React
           )}
         </div>
       </header>
-      <main className="k-container-narrow" style={{ paddingTop: 24, paddingBottom: 48 }}>
+      <main className="k-container-narrow" style={{ paddingTop: 24, paddingBottom: 32 }}>
         {children}
       </main>
+      <footer className="k-container-narrow" style={{ paddingBottom: 24, color: "var(--navy-500)" }}>
+        <LegalLinks />
+      </footer>
     </div>
   );
 }

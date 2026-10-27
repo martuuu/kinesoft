@@ -77,8 +77,10 @@ function publicEntries(): string[] {
     // TV-1c (plan §26.4): pantallas de sala `/tv`. Corren sin Actor en teles de gama baja (grupo de bundle `display`,
     // 125 kB): ni framer, ni toast, ni confirm, ni drawer, ni modal.
     "app/(display)/",
+    // LG-P (PV §27): `/terminos` y `/privacidad` (grupo de bundle `public`): server components estáticos, sin JS.
+    "app/(legal)/",
   ];
-  const SINGLE = ["app/page.tsx", "app/not-found.tsx", "app/global-error.tsx"];
+  const SINGLE = ["app/page.tsx", "app/not-found.tsx", "app/global-error.tsx", "app/error.tsx"];
   return all.filter(
     (f) =>
       SINGLE.includes(f) ||

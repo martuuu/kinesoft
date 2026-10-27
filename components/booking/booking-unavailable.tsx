@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { KineLogo } from "@/components/ui/kine-logo";
 import { IconClock } from "@/components/ui/icons";
 import { BRAND_NAME } from "@/lib/brand";
+import { LegalLinks } from "@/components/legal/legal-links";
 import { cn } from "@/lib/cn";
 import type { PublicClinicContact } from "@/lib/public-booking-internal";
 import s from "./booking-result.module.css";
@@ -60,7 +61,8 @@ export function BookingFrame({
       <main id="main" className={s.main}>
         <div className={cn(s.card, "k-enter", narrow && s.cardNarrow)}>{children}</div>
       </main>
-      <footer className={s.foot}>
+      {/* LG-P: `flex-wrap` para que los links legales (LegalLinks `block`) bajen a su propia fila. */}
+      <footer className={s.foot} style={{ flexWrap: "wrap" }}>
         {clinicName ? (
           <>
             <span>Turnos online con</span>
@@ -71,6 +73,7 @@ export function BookingFrame({
         ) : (
           <span>© 2026 {BRAND_NAME}</span>
         )}
+        <LegalLinks block />
       </footer>
     </div>
   );

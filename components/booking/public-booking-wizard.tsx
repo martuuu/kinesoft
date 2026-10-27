@@ -28,6 +28,7 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { KineLogo } from "@/components/ui/kine-logo";
 import { BRAND_NAME } from "@/lib/brand";
+import { LegalLinks } from "@/components/legal/legal-links";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { IconAlert, IconArrow, IconCheck, IconChevL, IconClock } from "@/components/ui/icons";
@@ -509,11 +510,13 @@ export function PublicBookingWizard({
       </main>
 
       {/* VX-Z: como `BookingFrame` (booking-unavailable.tsx): adelante la marca del consultorio, KineSoft chico acá. */}
-      <footer className={s.foot}>
+      {/* LG-P: links legales en su propia fila (a 360 px no entran al lado de «Turnos online con»). */}
+      <footer className={s.foot} style={{ flexWrap: "wrap" }}>
         <span>Turnos online con</span>
         <Link href="/" className="k-link" aria-label={`${BRAND_NAME}, inicio`}>
           <KineLogo size={18} />
         </Link>
+        <LegalLinks block />
       </footer>
     </div>
   );
