@@ -14,10 +14,19 @@
  * Postgres devuelva primero.
  *
  * `getActor()` real; los dos modos (kinesoft_app con RLS y owner BYPASSRLS).
+ *
+ * PV-W1a (HD-1): `listBookingsInRange` no tiene llamadores de producción pero sigue siendo un endpoint RPC (Next 14
+ * expone todo export de un `"use server"` alcanzable). Recibía `{from, to}` sin validar: un rango de años (o una
+ * fecha inválida) iba directo al `findMany` con el include pesado de cobertura + plan + diagnóstico. Ahora pasa por
+ * `BookingsRangeQuery` (mismos topes que `listAgendaBookings`) y tira ZodError igual que ella. `getDayCounts` e
+ * `isReminderDismissed` no tenían ningún llamador: se borraron para que dejen de ser endpoints.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { PrismaClient } from "@prisma/client";
+import { ZodError } from "zod";
 import { listBookingsInRange } from "@/lib/bookings";
+import * as bookingsModule from "@/lib/bookings";
+import * as notificationsModule from "@/lib/notifications";
 import { localToARIso } from "@/lib/datetime-ar";
 import {
   ownerClient,
@@ -177,5 +186,31 @@ describe.skipIf(!RUN)("S07k · listBookingsInRange: PHI y plan activo determiní
       patientCondition: null,
       patientAccess: "none",
     });
+  });
+
+  it("[HD-1] listBookingsInRange rechaza rango > 62 días / fecha inválida", async () => {
+    asUser(A.userId);
+    const from = ar(DAY, "00:00");
+    // 63 días: uno más que AGENDA_BOOKINGS_MAX_DAYS.
+    await expect(listBookingsInRange({ from, to: new Date(from.getTime() + 63 * 86_400_000) })).rejects.toBeInstanceOf(
+      ZodError
+    );
+    // Fecha inválida (por RPC llega cualquier cosa; `new Date("x")` es Invalid Date).
+    await expect(listBookingsInRange({ from: new Date("no-es-fecha"), to: range.to })).rejects.toBeInstanceOf(ZodError);
+    // Rango vacío / invertido.
+    await expect(listBookingsInRange({ from: range.to, to: range.from })).rejects.toBeInstanceOf(ZodError);
+    // practitionerId fuera de forma (> 64).
+    await expect(listBookingsInRange({ ...range, practitionerId: "x".repeat(65) })).rejects.toBeInstanceOf(ZodError);
+    // Control: 62 días exactos y una semana (el escenario de perf `a.listBookingsInRange.week`) siguen andando.
+    await expect(listBookingsInRange({ from, to: new Date(from.getTime() + 62 * 86_400_000) })).resolves.toBeInstanceOf(
+      Array
+    );
+    const week = await listBookingsInRange({ from, to: new Date(from.getTime() + 7 * 86_400_000) });
+    expect(week.map((r) => r.id).sort()).toEqual([withPatientId, guestId].sort());
+  });
+
+  it("[HD-1] getDayCounts e isReminderDismissed ya no son actions", () => {
+    expect(Object.keys(bookingsModule)).not.toContain("getDayCounts");
+    expect(Object.keys(notificationsModule)).not.toContain("isReminderDismissed");
   });
 });

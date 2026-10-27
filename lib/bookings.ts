@@ -4,9 +4,8 @@
  * Booking domain — server-only queries + Server Actions used by the
  * Agenda calendar.
  *
- * `listBookingsInRange` is the workhorse for week/day views — returns
- * everything between [from, to) for the active tenant with patient info
- * joined. Mutations are intentionally narrow: create, reschedule, change
+ * `listAgendaBookings` es la proyección de la agenda; `listBookingsInRange` (completa, sin llamadores de
+ * producción) queda para tests y perf, validada por `BookingsRangeQuery` (PV HD-1). Mutations are intentionally narrow: create, reschedule, change
  * status (confirm / cancel / mark no-show / complete).
  */
 import { revalidatePath, unstable_cache } from "next/cache";
@@ -125,7 +124,13 @@ import {
   type BookingUpdateInput,
 } from "@/lib/validation";
 
-import { AgendaBookingsQuery, ReceptionActionInput, type AgendaBookingsQueryInput } from "@/lib/bookings-schemas";
+import {
+  AgendaBookingsQuery,
+  BookingsRangeQuery,
+  ReceptionActionInput,
+  type AgendaBookingsQueryInput,
+  type BookingsRangeQueryInput,
+} from "@/lib/bookings-schemas";
 import {
   BOOKING_ONLINE_CHARGE_PATIENT_ERROR,
   patientReplyOf,
@@ -142,12 +147,11 @@ import type { ReceptionAction } from "@/lib/reception-state";
 import { bookablePractitionerWhere, isActorPractitioner } from "@/lib/practitioner-scope";
 import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 
-export async function listBookingsInRange(opts: {
-  from: Date;
-  to: Date;
-  practitionerId?: string;
-}): Promise<BookingRow[]> {
+export async function listBookingsInRange(raw: BookingsRangeQueryInput): Promise<BookingRow[]> {
   const actor = await getActor();
+  // PV-W1a (HD-1): validada como `listAgendaBookings` (tira ZodError): por RPC llega cualquier cosa, y sin tope un
+  // rango de años recorría todo el tenant con el include pesado de abajo.
+  const opts = BookingsRangeQuery.parse(raw);
   // Sprint 16: agenda shows every booking in the tenant; per-row access
   // tier is resolved below. The diagnosis chip is hidden when the actor
   // only has BASIC access to that booking's patient.
@@ -556,28 +560,6 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
       patientReply: patientReplyOf(b),
     };
   });
-}
-
-export async function getDayCounts(opts: { from: Date; to: Date }) {
-  const actor = await getActor();
-  // Day-strip dots show every booking in the tenant — counts don't leak
-  // PHI so no access gating needed here.
-  const rows = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
-    where: {
-      tenantId: actor.tenantId,
-      scheduledFor: { gte: opts.from, lt: opts.to },
-      status: { not: "CANCELLED" },
-    },
-    select: { scheduledFor: true },
-  }));
-  const counts = new Map<string, number>();
-  for (const r of rows) {
-    // Bucket by the AR calendar day, not the UTC slice — otherwise a late-night
-    // turno lands on the wrong day's dot on a UTC host (Vercel).
-    const k = toARDateKey(r.scheduledFor);
-    counts.set(k, (counts.get(k) ?? 0) + 1);
-  }
-  return counts;
 }
 
 export async function listServices() {
@@ -2491,7 +2473,7 @@ async function createBookingsBatchImpl(
 
   // Una carga para todo el rango (loader del motor): franjas, excepciones,
   // bloqueos y los turnos que pueden chocar — del profesional (cupo) o del
-  // paciente (solape propio / duplicado), con 240 min hacia atrás.
+  // paciente (solape propio / duplicado), con `BOOKING_LOOKBACK_MIN` (480) hacia atrás.
   const last = dates[dates.length - 1];
   const now = new Date();
   // SR (SR-D7): la sala de cada fecha (la elegida o la de la franja de ESE

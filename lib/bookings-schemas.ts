@@ -33,6 +33,26 @@ export const AgendaBookingsQuery = z
   });
 export type AgendaBookingsQueryInput = z.input<typeof AgendaBookingsQuery>;
 
+/**
+ * PV-W1a (HD-1): entrada de `listBookingsInRange` (`lib/bookings.ts`). No tiene llamadores de producción (la agenda usa
+ * `listAgendaBookings` desde B4.1) pero sigue siendo un endpoint RPC: Next 14 expone todo export de un `"use server"`
+ * alcanzable. Recibía `{from, to}` sin validar, así que un rango de años (o un Invalid Date) iba directo al
+ * `findMany` con el include pesado de cobertura + plan activo + diagnóstico. Mismos topes y mensajes que
+ * `AgendaBookingsQuery` (≤ `AGENDA_BOOKINGS_MAX_DAYS`): una semana —el escenario de perf `a.listBookingsInRange.week`—
+ * entra holgada.
+ */
+export const BookingsRangeQuery = z
+  .object({
+    from: z.coerce.date(),
+    to: z.coerce.date(),
+    practitionerId: z.string().min(1).max(64).optional(),
+  })
+  .refine((q) => q.to.getTime() > q.from.getTime(), { message: "Rango inválido." })
+  .refine((q) => q.to.getTime() - q.from.getTime() <= AGENDA_BOOKINGS_MAX_DAYS * 86_400_000, {
+    message: `El rango no puede superar ${AGENDA_BOOKINGS_MAX_DAYS} días.`,
+  });
+export type BookingsRangeQueryInput = z.input<typeof BookingsRangeQuery>;
+
 export const ReceptionActionInput = z.object({
   bookingId: z.string().min(1).max(64),
   action: z.enum(RECEPTION_ACTIONS),

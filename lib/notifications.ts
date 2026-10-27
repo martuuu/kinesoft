@@ -9,21 +9,42 @@
  * endpoints (every async export in a "use server" file becomes one).
  */
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import type { ActionResult } from "@/lib/validation";
 import type { NotificationRow } from "@/lib/notifications-types";
+
+/*
+ * PV-W1a (HD-3): cada export de este archivo es un endpoint RPC y recibe lo que mande el cliente, no lo que tipa TS.
+ * Sin validar, `listNotifications(10_000)` traía todas las filas del usuario, `dismissReminder` guardaba una key de
+ * cualquier largo y `hours: 1e9` dejaba `dismissedUntil` en el año 100.000+ (o un Invalid Date → 500 de Prisma).
+ * Topes: la campana pide 20 filas; las keys reales son `near-discharge:<año>-W<semana>` (~25 chars); la UI pospone
+ * 24 × 7 horas. Schemas como `const` NO exportadas (un `"use server"` exporta solo funciones async).
+ */
+const NOTIFICATIONS_LIMIT_MAX = 50;
+const NotificationsLimit = z.number().int().min(1).max(NOTIFICATIONS_LIMIT_MAX);
+const ReminderKey = z.string().min(1).max(100);
+const ReminderDismiss = z.object({
+  key: ReminderKey,
+  /** 1 h a 30 días. Sin valor → 24 h (el default de siempre). */
+  hours: z.number().int().min(1).max(720).optional(),
+});
+const INVALID_REMINDER = "Recordatorio inválido.";
 
 export async function listNotifications(limit = 20): Promise<{
   rows: NotificationRow[];
   unread: number;
 }> {
   const actor = await getActor();
+  // Rechazo (no clamp): el único llamador (la campana) pide 20; algo fuera de 1..50 no viene de la UI.
+  const take = NotificationsLimit.safeParse(limit);
+  if (!take.success) return { rows: [], unread: 0 };
   const [rows, unread] = await Promise.all([
     runWithRls(actor.tenantId, (tx) => tx.notification.findMany({
       where: { tenantId: actor.tenantId, userId: actor.userId },
       orderBy: { createdAt: "desc" },
-      take: limit,
+      take: take.data,
     })),
     runWithRls(actor.tenantId, (tx) => tx.notification.count({
       where: { tenantId: actor.tenantId, userId: actor.userId, readAt: null },
@@ -78,11 +99,14 @@ export async function markAllNotificationsRead(): Promise<ActionResult> {
 
 // ── Dismissable reminders ────────────────────────────────────────────
 
-export async function dismissReminder(input: {
+export async function dismissReminder(raw: {
   key: string;
   hours?: number;
 }): Promise<ActionResult> {
   const actor = await getActor();
+  const parsed = ReminderDismiss.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: INVALID_REMINDER };
+  const input = parsed.data;
   const dismissedUntil = new Date(Date.now() + (input.hours ?? 24) * 3_600_000);
   await runWithRls(actor.tenantId, (tx) => tx.dismissedReminder.upsert({
     where: {
@@ -104,8 +128,11 @@ export async function dismissReminder(input: {
   return { ok: true, data: undefined };
 }
 
-export async function restoreReminder(key: string): Promise<ActionResult> {
+export async function restoreReminder(rawKey: string): Promise<ActionResult> {
   const actor = await getActor();
+  const parsed = ReminderKey.safeParse(rawKey);
+  if (!parsed.success) return { ok: false, error: INVALID_REMINDER };
+  const key = parsed.data;
   await runWithRls(actor.tenantId, (tx) => tx.dismissedReminder.deleteMany({
     where: {
       tenantId: actor.tenantId,
@@ -115,18 +142,4 @@ export async function restoreReminder(key: string): Promise<ActionResult> {
   }));
   revalidatePath("/dashboard");
   return { ok: true, data: undefined };
-}
-
-export async function isReminderDismissed(key: string): Promise<boolean> {
-  const actor = await getActor();
-  const row = await runWithRls(actor.tenantId, (tx) => tx.dismissedReminder.findUnique({
-    where: {
-      tenantId_userId_reminderKey: {
-        tenantId: actor.tenantId,
-        userId: actor.userId,
-        reminderKey: key,
-      },
-    },
-  }));
-  return !!row && row.dismissedUntil > new Date();
 }

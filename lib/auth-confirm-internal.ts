@@ -1,3 +1,4 @@
+import "server-only";
 /**
  * `/auth/confirm` resistente a escáneres (IAM-2c): la lógica pura del GET → `/auth/confirm/continuar` → POST.
  * Sin `next/*`, sin Supabase ni env: lo testea `tests/unit/auth-confirm.test.ts` y lo comparten el route
@@ -11,6 +12,10 @@
  *  - la página muestra «Confirmando…» y manda un form POST sola (con botón visible de respaldo);
  *  - POST: chequea el origen y recién ahí canjea.
  * Un escáner que solo abre la URL no llega a canjear. Patrón de Traze `app/auth/confirm/**` (SR-W2).
+ *
+ * `server-only` (PV-W1a): todo `-internal.ts` de lib/ lo lleva (lo exige `tests/unit/server-surface-guard.test.ts`)
+ * para que un componente cliente no lo arrastre al bundle. Este era el único sin él; sus dos importadores
+ * (`app/auth/confirm/route.ts` y la page server de `continuar/`) son de servidor.
  */
 import { isAllowedOrigin, safeNextFromUrl, unwrapConfirmNext } from "@/lib/safe-next";
 
