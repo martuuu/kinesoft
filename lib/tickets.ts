@@ -26,8 +26,9 @@
  * `tenantBlocks` (membresía aceptada y habilitada, rol OWNER/ADMIN) antes de escribir.
  *
  * Topes: 5 por hora en el limitador (`ticket:user:<hash>`) y 5 cada 24 h en la base por `createdById`
- * (`SESSION_TICKET_LIMIT`; el limitador es en memoria por isolate si no hay Upstash y la base es una sola). Cada ticket
- * le manda un mail a Martin.
+ * (`SESSION_TICKET_LIMIT`; el limitador es en memoria por isolate si no hay Upstash y la base es una sola). El de la
+ * base se cuenta bajo un advisory lock por usuario en la misma tx que el insert (ZF1a, ZA B5). Cada ticket le manda
+ * un mail a Martin.
  *
  * Mail a `PLATFORM_INBOX_EMAIL` DESPUÉS del commit: un mail que no sale no deshace el ticket (`sendEmail` nunca tira,
  * `[TK-5]`). Sin el texto del mensaje: quien escribe es un usuario de la app (puede pegar un dato de un paciente).
@@ -37,6 +38,7 @@
  * con la contraseña sola es escribirle a Plataforma, no leer nada.
  */
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { prismaService } from "@/lib/db";
 import { getVerifiedSessionUser } from "@/lib/session-user";
 import { getAccessSnapshot, sessionBlockOf, type AccessSnapshot } from "@/lib/session";
@@ -61,6 +63,28 @@ const TICKET_HOUR_LIMIT = { limit: 5, windowMs: 60 * 60_000 } as const;
 
 /** Orígenes que abre esta action: el tope diario en la base cuenta solo estos (no los de Configuración → Soporte). */
 const SESSION_SOURCES = ["TENANT_SUSPENDED", "ACCOUNT_DISABLED", "ONBOARDING"] as const satisfies readonly SupportTicketSourceValue[];
+
+/**
+ * ZF1a (ZA B5): clave del advisory lock del tope diario, por usuario. El tope se contaba y después se insertaba sin
+ * lock: ocho envíos simultáneos leían todos «4 < 5» y escribían todos (lo reprodujo `tk-s1-ticket-cap-race.test.ts`:
+ * 8 de 8). Con `pg_advisory_xact_lock` tomado ANTES del count y en la MISMA tx que el insert, el segundo espera al
+ * COMMIT del primero y, en READ COMMITTED, su count ya ve la fila nueva. Un lock por usuario: solo se serializan los
+ * envíos de la misma persona. Namespace `kinesoft:*`: no se renombra con la marca (pv-common, «Extra PV»).
+ */
+const ticketUserLockKey = (userId: string) => `kinesoft:ticket-user:${userId}`;
+
+/** Señal interna para cortar la tx cuando el tope ya está lleno (se traduce al copy `dailyCap`). */
+class DailyCapReached extends Error {}
+
+/** Lock por usuario + tope de 24 h, dentro de la tx que inserta. Tira `DailyCapReached` si ya no entra otro. */
+async function holdDailyCapInTx(tx: Prisma.TransactionClient, userId: string, now: Date): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${ticketUserLockKey(userId)}, 0))`;
+  const since = new Date(now.getTime() - SESSION_TICKET_LIMIT.windowMs);
+  const recent = await tx.supportThread.count({
+    where: { createdById: userId, createdAt: { gte: since }, source: { in: [...SESSION_SOURCES] } },
+  });
+  if (recent >= SESSION_TICKET_LIMIT.limit) throw new DailyCapReached();
+}
 
 const blankToUndef = (v: unknown) => (v == null || (typeof v === "string" && v.trim() === "") ? undefined : v);
 
@@ -150,12 +174,8 @@ export async function submitSessionTicket(_prev: SessionTicketState, formData: F
   }
   const name = (snap.profile?.fullName ?? user.fullName ?? "").trim().slice(0, LEAD_NAME_MAX).trim() || replyTo.slice(0, LEAD_NAME_MAX);
 
-  const since = new Date(Date.now() - SESSION_TICKET_LIMIT.windowMs);
-  const recent = await prismaService.supportThread.count({
-    where: { createdById: user.id, createdAt: { gte: since }, source: { in: [...SESSION_SOURCES] } },
-  });
-  if (recent >= SESSION_TICKET_LIMIT.limit) return { ok: false, error: TICKET_ERROR_COPY.dailyCap };
-
+  // El tope diario en la base (respaldo del limitador: otro isolate o el limitador reiniciado) se chequea DENTRO de la
+  // tx de cada rama, bajo el lock por usuario (`holdDailyCapInTx`, ZA B5).
   const now = new Date();
   if (dest.kind === "TENANT") {
     // Un hilo TENANT no tiene columnas de lead (CHECK de M8): el teléfono va como última línea del mensaje.
@@ -166,11 +186,13 @@ export async function submitSessionTicket(_prev: SessionTicketState, formData: F
     const subject = ticketSubject("TENANT_SUSPENDED", name);
     let threadId: string;
     try {
-      const out = await prismaService.$transaction((tx) =>
-        createThreadInTx(tx, { tenantId: dest.tenantId, userId: user.id, subject, body, now, source: "TENANT_SUSPENDED" })
-      );
+      const out = await prismaService.$transaction(async (tx) => {
+        await holdDailyCapInTx(tx, user.id, now);
+        return createThreadInTx(tx, { tenantId: dest.tenantId, userId: user.id, subject, body, now, source: "TENANT_SUSPENDED" });
+      });
       threadId = out.threadId;
     } catch (e) {
+      if (e instanceof DailyCapReached) return { ok: false, error: TICKET_ERROR_COPY.dailyCap };
       if (e instanceof SupportThreadError) return { ok: false, error: e.copy };
       throw e;
     }
@@ -198,27 +220,34 @@ export async function submitSessionTicket(_prev: SessionTicketState, formData: F
   }
 
   const subject = ticketSubject(dest.source, name);
-  const thread = await prismaService.$transaction(async (tx) => {
-    const t = await tx.supportThread.create({
-      data: {
-        kind: "LEAD",
-        tenantId: null,
-        subject,
-        status: "OPEN",
-        createdById: user.id,
-        leadName: name,
-        leadEmail: replyTo,
-        leadPhone: d.phone ?? null,
-        source: dest.source,
-      },
-      select: { id: true },
+  let thread: { id: string };
+  try {
+    thread = await prismaService.$transaction(async (tx) => {
+      await holdDailyCapInTx(tx, user.id, now);
+      const t = await tx.supportThread.create({
+        data: {
+          kind: "LEAD",
+          tenantId: null,
+          subject,
+          status: "OPEN",
+          createdById: user.id,
+          leadName: name,
+          leadEmail: replyTo,
+          leadPhone: d.phone ?? null,
+          source: dest.source,
+        },
+        select: { id: true },
+      });
+      // authorUserId NULL: lo exige el CHECK de M8 para autor LEAD. Quién fue queda en `createdById` del hilo.
+      await tx.supportMessage.create({
+        data: { threadId: t.id, tenantId: null, authorKind: "LEAD", authorUserId: null, body: d.message, createdAt: now },
+      });
+      return t;
     });
-    // authorUserId NULL: lo exige el CHECK de M8 para autor LEAD. Quién fue queda en `createdById` del hilo.
-    await tx.supportMessage.create({
-      data: { threadId: t.id, tenantId: null, authorKind: "LEAD", authorUserId: null, body: d.message, createdAt: now },
-    });
-    return t;
-  });
+  } catch (e) {
+    if (e instanceof DailyCapReached) return { ok: false, error: TICKET_ERROR_COPY.dailyCap };
+    throw e;
+  }
   const to = platformInboxEmail();
   if (to) {
     await sendEmail({

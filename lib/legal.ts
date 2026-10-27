@@ -33,8 +33,17 @@ export const LEGAL_ENTITY: { name: string | null; cuit: string | null; address: 
 
 export const LEGAL_ACCEPT_ERROR = "Para seguir, aceptá los Términos y la Política de privacidad.";
 
-/** Por dónde se aceptó (va al payload del evento). */
-export type LegalAcceptVia = "signup" | "onboarding" | "invite_activate" | "invite_accept";
+/**
+ * Pantalla de aceptación suelta (ZF1a, ZA M1): la usa el titular dado de alta desde /plataforma, que no pasa por
+ * ninguna de las otras puertas (el link de activación lo encadena: `/reset` → acá → `/dashboard`). Fuera de `(app)`.
+ */
+export const LEGAL_ACCEPT_PATH = "/aceptar-terminos";
+
+/**
+ * Por dónde se aceptó (va al payload del evento). `platform_activation` = `/aceptar-terminos` (ZF1a): el titular de un
+ * alta asistida, después de elegir su contraseña.
+ */
+export type LegalAcceptVia = "signup" | "onboarding" | "invite_activate" | "invite_accept" | "platform_activation";
 
 /**
  * Valor de la casilla → aceptó. Un checkbox HTML tildado manda `"on"` (sin `value`); los clientes JS mandan `true` o

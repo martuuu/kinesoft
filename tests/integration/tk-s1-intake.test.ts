@@ -187,6 +187,36 @@ describe.skipIf(!RUN)("[TK-S1] intake de tickets", () => {
     });
   });
 
+  // ZA B1: ACCOUNT_DISABLED y ONBOARDING son orígenes de SESIÓN (los pone `submitSessionTicket` con la identidad
+  // verificada). Si el form público los aceptaba, cualquiera abría un «Cuenta desactivada · <nombre>» con el email de
+  // otra persona y el soporte lo trataba como un pedido de la dueña de la cuenta (ingeniería social).
+  it("[ZF1a] el form público no puede abrir un ticket con origen de sesión: ACCOUNT_DISABLED u ONBOARDING → LANDING", async () => {
+    for (const sessionOnly of ["ACCOUNT_DISABLED", "ONBOARDING"]) {
+      __rateLimitInternals.reset();
+      const viaJs = validLead({ source: sessionOnly });
+      expect(await submitLead(viaJs)).toEqual({ ok: true, data: { received: true } });
+      expect(await db.supportThread.findFirstOrThrow({ where: { leadEmail: viaJs.email } })).toMatchObject({
+        kind: "LEAD",
+        createdById: null,
+        source: "LANDING",
+        subject: "Consulta de Paula Gómez",
+      });
+      __rateLimitInternals.reset();
+      const e = email();
+      const r = await submitLeadForm(
+        null,
+        fd({ name: "Form", email: e, message: "Hola", website: "", startedAt: String(Date.now() - 5_000), source: sessionOnly })
+      );
+      expect(r).toEqual({ ok: true, data: { received: true } });
+      expect(await db.supportThread.findFirstOrThrow({ where: { leadEmail: e } })).toMatchObject({ source: "LANDING" });
+    }
+    // Los orígenes públicos siguen pasando (PRIVACY incluido: un pedido ARCO puede venir de alguien sin cuenta).
+    __rateLimitInternals.reset();
+    const arco = validLead({ source: "PRIVACY" });
+    expect((await submitLead(arco)).ok).toBe(true);
+    expect(await db.supportThread.findFirstOrThrow({ where: { leadEmail: arco.email } })).toMatchObject({ source: "PRIVACY" });
+  });
+
   it("[TK-5] transporte falla → el hilo existe y la action da ok", async () => {
     mail.fail = true;
     const lead = validLead({ source: "PRICING" });

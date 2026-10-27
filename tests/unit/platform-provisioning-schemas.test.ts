@@ -107,4 +107,21 @@ describe("[BO2-A] activationNextFor", () => {
     expect(activationNextFor({ needsPassword: false, onboardingCompleted: true })).toBe("/dashboard");
     expect(activationNextFor({ needsPassword: false, onboardingCompleted: false })).toBe("/onboarding");
   });
+
+  // ZA M1: el titular que nace en esta alta nunca aceptó los Términos (el alta por email, el onboarding y las
+  // invitaciones los piden; esta puerta no). Tras elegir la contraseña pasa por /aceptar-terminos y recién ahí al panel.
+  // Cuentas que ya existían: igual que antes (decisión: no se les pide).
+  it("[ZF1a] titular creado en esta alta → /reset → /aceptar-terminos → /dashboard; los existentes, igual", () => {
+    const chain = (next: string) => {
+      const u = new URL(next, "http://x");
+      return { path: u.pathname, next: u.searchParams.get("next") };
+    };
+    for (const onboardingCompleted of [true, false]) {
+      const first = chain(activationNextFor({ needsPassword: true, onboardingCompleted, createdNow: true }));
+      expect(first).toEqual({ path: "/reset", next: "/aceptar-terminos?next=/dashboard" });
+      expect(chain(first.next!)).toEqual({ path: "/aceptar-terminos", next: "/dashboard" });
+    }
+    expect(activationNextFor({ needsPassword: true, onboardingCompleted: true, createdNow: false })).toBe("/reset");
+    expect(activationNextFor({ needsPassword: false, onboardingCompleted: true, createdNow: false })).toBe("/dashboard");
+  });
 });

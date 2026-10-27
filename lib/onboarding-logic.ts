@@ -31,6 +31,8 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
   "suspendido", "cuenta-desactivada",
   // PL-1e (C-PL6): verificación en dos pasos y ajustes de la cuenta (fuera de `(app)`; las páginas son de PL-2a).
   "verificar-acceso", "cuenta",
+  // ZF1a (ZA M1): aceptación de los Términos del titular de un alta asistida (fuera de `(app)`).
+  "aceptar-terminos",
 ]);
 
 export function isValidSlug(slug: string): boolean {

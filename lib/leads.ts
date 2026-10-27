@@ -20,9 +20,10 @@
  * formData)` con la forma de `useFormState` para que el formulario funcione también SIN JS (progressive enhancement).
  *
  * PV (§27, TK-S1): cada lead es un ticket de /plataforma con ORIGEN (`source`, M19): `/contacto?motivo=<slug>` pone el
- * origen en un hidden (Web · contacto, Web · precios, Plan Libre, Alta asistida…). Un origen viejo, inválido o de
- * consultorio cae a LANDING en silencio (`.catch(undefined)`): un link mal armado nunca le muestra un error a quien
- * quiere escribirnos, y el CHECK de M19 solo acepta orígenes de lead en un hilo LEAD. El asunto lleva el prefijo del
+ * origen en un hidden (Web · contacto, Web · precios, Plan Libre, Alta asistida…). Un origen viejo, inválido, de
+ * consultorio o de sesión (ZF1a: `PUBLIC_LEAD_SOURCES`) cae a LANDING en silencio (`.catch(undefined)`): un link mal
+ * armado nunca le muestra un error a quien quiere escribirnos, y el CHECK de M19 solo acepta orígenes de lead en un
+ * hilo LEAD. El asunto lleva el prefijo del
  * origen («Precio · Consulta de Ana»), salvo LANDING (el de siempre).
  */
 import { headers } from "next/headers";
@@ -36,7 +37,7 @@ import { sendEmail } from "@/lib/email";
 import "@/lib/email/log";
 import { leadReceivedEmail } from "@/lib/email/templates-support";
 import { ticketSubject } from "@/lib/support-threads-internal";
-import { LEAD_TICKET_SOURCES, TICKET_SOURCE_LABEL } from "@/lib/support-ticket-sources";
+import { TICKET_SOURCE_LABEL, type LeadTicketSourceValue } from "@/lib/support-ticket-sources";
 import { SAAS_PLAN_LABEL } from "@/lib/tenant-modules";
 import { logger } from "@/lib/logger";
 import type { ActionResult } from "@/lib/validation";
@@ -61,6 +62,21 @@ const PLANS = ["INDIVIDUAL", "CONSULTORIO", "CLINICA", "LIBRE"] as const satisfi
 /** "" → undefined: el formulario manda campos vacíos para los opcionales. */
 const blankToUndef = (v: unknown) => (v == null || (typeof v === "string" && v.trim() === "") ? undefined : v);
 
+/**
+ * ZF1a (ZA B1): orígenes que puede traer el form PÚBLICO (`/contacto`, landing, precios). `ACCOUNT_DISABLED` y
+ * `ONBOARDING` también son orígenes LEAD (el CHECK de M19 los acepta), pero los pone SOLO `submitSessionTicket`
+ * (lib/tickets.ts) con la identidad de la sesión verificada. Si el form público los aceptaba, cualquiera abría un
+ * «Cuenta desactivada · Ana» con el email de otra persona y en la bandeja se leía como un pedido de la dueña de la
+ * cuenta (ingeniería social: «reactivame», «cambiame el mail»). Lo demás cae a LANDING por el `.catch` del zod.
+ */
+const PUBLIC_LEAD_SOURCES = [
+  "LANDING",
+  "PRICING",
+  "PLAN_LIBRE",
+  "SIGNUP_ASSISTED",
+  "PRIVACY",
+] as const satisfies readonly LeadTicketSourceValue[];
+
 const LeadInput = z
   .object({
     name: z.string().trim().min(1, "Decinos tu nombre.").max(LEAD_NAME_MAX, `Hasta ${LEAD_NAME_MAX} caracteres.`),
@@ -84,7 +100,8 @@ const LeadInput = z
       return typeof n === "number" && Number.isFinite(n) ? n : undefined;
     }, z.number().optional()),
     // PV (TK-S1): origen del ticket. Basura → undefined → LANDING (nunca un error que la persona no puede arreglar).
-    source: z.preprocess(blankToUndef, z.enum(LEAD_TICKET_SOURCES).optional()).catch(undefined),
+    // ZF1a (ZA B1): solo los orígenes PÚBLICOS; uno de sesión también cae a LANDING.
+    source: z.preprocess(blankToUndef, z.enum(PUBLIC_LEAD_SOURCES).optional()).catch(undefined),
   })
   .strict();
 

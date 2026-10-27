@@ -12,7 +12,7 @@
  *    servicios iniciales de la vertical; doble audit `platform.tenant.create` (consultorio
  *    nuevo + registro global) y NADA en el consultorio «casa» del superadmin;
  *  - el titular nuevo se crea en Auth sin contraseña y sin confirmar (AUDIT §5.26) y recibe un
- *    link de recovery a /reset; uno existente se reutiliza sin `createUser`;
+ *    link de recovery a /reset (y de ahí a /aceptar-terminos, ZF1a); uno existente se reutiliza sin `createUser`;
  *  - doble submit con el mismo `idempotencyKey` → un solo consultorio y el resultado del primero;
  *  - slug reservado / inválido / ocupado / alias; P2002 de slug derivado → reintento; slug pedido
  *    que otra alta toma en el medio → error y la cuenta de Auth creada en el intento se borra;
@@ -245,7 +245,8 @@ describe.skipIf(!RUN)("[BO2-A] alta de consultorio + titular desde Plataforma", 
     expect(JSON.stringify(global[0].payload)).not.toContain(i.ownerEmail);
     expect(await homePlatformAudits()).toBe(before);
 
-    // Activación: recovery a /reset (no tiene contraseña) y un mail con el nombre del consultorio.
+    // Activación: recovery a /reset (no tiene contraseña) y un mail con el nombre del consultorio. Titular creado en
+    // esta alta: /reset sigue a /aceptar-terminos antes del panel (ZF1a, ZA M1; lo cubre lg-s-platform-activation).
     const recov = gotrue.calls.filter((c) => c.method === "generateLink");
     expect(recov).toHaveLength(1);
     expect(recov[0].args[0]).toMatchObject({ type: "recovery", email: i.ownerEmail });
@@ -255,7 +256,7 @@ describe.skipIf(!RUN)("[BO2-A] alta de consultorio + titular desde Plataforma", 
     expect(sent.text).toContain(i.clinicName);
     const url = /https?:\/\/\S+\/auth\/confirm\?\S+/.exec(sent.text)?.[0] ?? "";
     expect(new URL(url).searchParams.get("type")).toBe("recovery");
-    expect(new URL(url).searchParams.get("next")).toBe("/reset");
+    expect(new URL(url).searchParams.get("next")).toBe("/reset?next=%2Faceptar-terminos%3Fnext%3D%2Fdashboard");
     const log = await db.emailLog.findFirstOrThrow({ where: { tenantId, entity: "Tenant", entityId: tenantId } });
     expect(log).toMatchObject({ status: "sent", kind: "tenant_activation" });
   });

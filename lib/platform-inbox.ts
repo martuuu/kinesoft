@@ -25,8 +25,11 @@
  *    consultorio no las ve con ningún GUC). Solo inserción: no hay editar ni borrar.
  *  - Sin PHI: Plataforma lee los mensajes que el consultorio le escribió a ella (el formulario dice «No incluyas datos
  *    de pacientes»), nunca tablas clínicas.
- *  - Registro: responder, cerrar/reabrir, tomar y anotar van al registro de Plataforma (`auditPlatformInTx` para un
- *    hilo de consultorio, que deja también la fila en el log del consultorio; `auditPlatformGlobalInTx` para un lead).
+ *  - Registro: responder, cerrar/reabrir, tomar y anotar van al registro de Plataforma. Responder y cerrar/reabrir
+ *    de un hilo de consultorio van por `auditPlatformInTx`, que deja también la fila en el log del consultorio (es algo
+ *    que el consultorio ve: la respuesta, el estado); tomar y anotar van SOLO por `auditPlatformGlobalInTx` con el
+ *    `tenantId` de referencia (ZF1a, ZA B2: son trabajo interno y el log del consultorio sale en su export). Un lead,
+ *    siempre `auditPlatformGlobalInTx`.
  *    El payload no lleva el texto (ni de la respuesta ni de la nota) ni el email del lead.
  *
  * Mails, después del commit (`sendEmail` nunca tira): hilo de consultorio → `support_reply_tenant` a quien lo abrió (si
@@ -626,8 +629,10 @@ export async function takeInboxThread(raw: unknown): Promise<ActionResult<{ chan
         entityId: t.id,
         payload: { kind: t.kind },
       };
-      if (t.tenantId) await auditPlatformInTx(tx, { ...auditBase, affectedTenantId: t.tenantId });
-      else await auditPlatformGlobalInTx(tx, auditBase);
+      // ZF1a (ZA B2): SOLO el registro de Plataforma, con el consultorio como referencia (`tenantId`). Con
+      // `auditPlatformInTx` quedaba también un `AuditEvent` del consultorio, que sale en el export del Titular: el
+      // trabajo interno de soporte (quién tomó su ticket) no es parte de sus datos.
+      await auditPlatformGlobalInTx(tx, { ...auditBase, tenantId: t.tenantId });
       return true;
     });
     if (changed) revalidatePath("/plataforma/mensajes", "layout");
@@ -668,8 +673,10 @@ export async function addInboxNote(raw: unknown): Promise<ActionResult<{ noteId:
         entityId: t.id,
         payload: { kind: t.kind, noteId: note.id, length: body.length },
       };
-      if (t.tenantId) await auditPlatformInTx(tx, { ...auditBase, affectedTenantId: t.tenantId });
-      else await auditPlatformGlobalInTx(tx, auditBase);
+      // ZF1a (ZA B2): como «Tomar», solo en el registro de Plataforma. En el `AuditEvent` del consultorio el
+      // `{noteId, length}` salía en el export del Titular: le contaba que Plataforma anotó algo sobre su ticket y
+      // cuánto, y la nota es solo de Plataforma (por eso vive en `SupportTicketNote`, SERVICE_ONLY).
+      await auditPlatformGlobalInTx(tx, { ...auditBase, tenantId: t.tenantId });
       return note.id;
     });
     revalidatePath("/plataforma/mensajes", "layout");

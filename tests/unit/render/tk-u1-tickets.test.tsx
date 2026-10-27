@@ -135,9 +135,11 @@ describe("[TK-21] tags y tarjeta", () => {
     expect(html).not.toMatch(/<option(?=[^>]*value="precio")(?=[^>]*selected="")/);
   });
 
-  it("contacto de un LEAD: nombre, email (mailto), teléfono (tel), WhatsApp (wa.me), consultorio, plan, origen, recibido; sin Usuario ni Tomado por", () => {
+  it("contacto de un LEAD: nombre, email (mailto), teléfono (tel), WhatsApp (wa.me), consultorio, identidad, plan, origen, recibido; sin Usuario ni Tomado por", () => {
     const rows = ticketContactRows(LEAD);
-    expect(rows.map((r) => r.label)).toEqual(["Nombre", "Email", "Teléfono", "WhatsApp", "Consultorio", "Plan que le interesa", "Origen", "Recibido"]);
+    expect(rows.map((r) => r.label)).toEqual([
+      "Nombre", "Email", "Teléfono", "WhatsApp", "Consultorio", "Identidad", "Plan que le interesa", "Origen", "Recibido",
+    ]);
     const html = renderToStaticMarkup(<TicketContactCard thread={LEAD} />);
     const t = text(html);
     expect(t).toContain("Contacto");
@@ -166,7 +168,22 @@ describe("[TK-21] tags y tarjeta", () => {
   });
 
   it("contacto sin datos opcionales: solo Origen y Recibido", () => {
-    expect(ticketContactRows(detail({})).map((r) => r.label)).toEqual(["Origen", "Recibido"]);
+    expect(ticketContactRows(detail({ kind: "TENANT" })).map((r) => r.label)).toEqual(["Origen", "Recibido"]);
+  });
+
+  // ZA B1: un LEAD sin `userId` salió del formulario web: el nombre, el email y el origen los tipeó quien sea. Que la
+  // tarjeta lo diga, para que nadie trate «Cuenta desactivada · Ana» de la web como un pedido de la dueña de la cuenta.
+  it("[ZF1a] LEAD sin usuario: fila «Identidad: Sin verificar (formulario web)»; LEAD de sesión y TENANT, sin ella", () => {
+    const rows = ticketContactRows(LEAD);
+    expect(rows.map((r) => r.label)).toEqual([
+      "Nombre", "Email", "Teléfono", "WhatsApp", "Consultorio", "Identidad", "Plan que le interesa", "Origen", "Recibido",
+    ]);
+    expect(rows.find((r) => r.label === "Identidad")).toEqual({ label: "Identidad", value: "Sin verificar (formulario web)" });
+    expect(text(renderToStaticMarkup(<TicketContactCard thread={LEAD} />))).toContain("Sin verificar (formulario web)");
+    expect(ticketContactRows(detail({})).map((r) => r.label)).toEqual(["Identidad", "Origen", "Recibido"]);
+    const sessionLead = detail({ source: "ACCOUNT_DISABLED", contact: { ...LEAD.contact, userId: "u-9" } });
+    expect(ticketContactRows(sessionLead).some((r) => r.label === "Identidad")).toBe(false);
+    expect(ticketContactRows(TENANT).some((r) => r.label === "Identidad")).toBe(false);
   });
 
   it("notas internas: hint, vacío, lista con «Vos» en las propias, contador y botón", () => {

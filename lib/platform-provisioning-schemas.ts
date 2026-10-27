@@ -16,6 +16,7 @@ import type { SaasPlan, SubscriptionStatus } from "@prisma/client";
 import { RESERVED_SLUGS, SLUG_RE } from "@/lib/onboarding-logic";
 import { PLAN_DEFAULTS } from "@/lib/saas-plans-logic";
 import { toARDateKey } from "@/lib/datetime-ar";
+import { LEGAL_ACCEPT_PATH } from "@/lib/legal";
 import { SAAS_PLAN_VALUES, TENANT_VERTICAL_VALUES, trialEndsOnToDate } from "@/lib/platform-tenants-schemas";
 
 /**
@@ -144,6 +145,13 @@ export function initialSubscriptionFor(
 }
 
 /**
+ * ZF1a (ZA M1): destino del titular CREADO en el alta: `/reset` (contraseña) → `/aceptar-terminos` → `/dashboard`.
+ * Cada salto lee su `next` con `safeNext`; el de adentro viaja codificado como VALOR del de afuera (`URLSearchParams`),
+ * así `/reset` lee `/aceptar-terminos?next=/dashboard` entero y no lo parte en dos parámetros.
+ */
+export const PLATFORM_ACTIVATION_NEXT = `/reset?${new URLSearchParams({ next: `${LEGAL_ACCEPT_PATH}?next=/dashboard` })}`;
+
+/**
  * Adónde lleva el link de activación (recovery) después de canjearlo en `/auth/confirm`.
  *
  * Titular SIN contraseña (cuenta creada por esta alta, o una que nunca confirmó): a `/reset`,
@@ -152,8 +160,15 @@ export function initialSubscriptionFor(
  * Con `next=/onboarding` directo, el link abría la sesión pero nadie le pedía definir una
  * contraseña: al cerrar sesión no podía volver a entrar.
  * Titular que YA tiene cuenta confirmada: directo a donde tiene que trabajar.
+ *
+ * ZF1a (ZA M1): la cuenta CREADA en esta alta (`createdNow`) nunca aceptó los Términos: el alta por email, el
+ * onboarding y las invitaciones los piden, esta puerta no, y con `onboardingCompleted` (el default) entraba al panel
+ * sin ningún consentimiento registrado. Pasa por `/aceptar-terminos` entre la contraseña y el panel
+ * (`PLATFORM_ACTIVATION_NEXT`); si el alta quedó abierta, el gate la lleva después al stepper, que ya no vuelve a pedir
+ * la casilla (`hasAcceptedCurrentLegal`). Las cuentas que ya existían quedan como estaban (decisión: no se les pide).
  */
-export function activationNextFor(p: { needsPassword: boolean; onboardingCompleted: boolean }): string {
+export function activationNextFor(p: { needsPassword: boolean; onboardingCompleted: boolean; createdNow?: boolean }): string {
+  if (p.createdNow) return PLATFORM_ACTIVATION_NEXT;
   if (p.needsPassword) return "/reset";
   return p.onboardingCompleted ? "/dashboard" : "/onboarding";
 }

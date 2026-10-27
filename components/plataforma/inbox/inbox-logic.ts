@@ -200,6 +200,7 @@ export type ContactRow = {
     | "WhatsApp"
     | "Consultorio"
     | "Usuario"
+    | "Identidad"
     | "Plan que le interesa"
     | "Origen"
     | "Recibido"
@@ -224,7 +225,8 @@ function telHref(raw: string): string | null {
  * `tel:` y WhatsApp con `wa.me` solo si el número es un celular argentino válido (`toArMobileE164`: un fijo en `wa.me`
  * abre «el número no está en WhatsApp»; ahí va el número como texto).
  * WhatsApp: el del consultorio (`Tenant.whatsapp`) o, si no hay, el teléfono del contacto cuando es celular. Teléfono:
- * el del contacto (lead) o el del consultorio. «Usuario» linkea a /plataforma/usuarios (quien abrió el ticket).
+ * el del contacto (lead) o el del consultorio. «Usuario» linkea a /plataforma/usuarios (quien abrió el ticket); un
+ * lead sin usuario lleva «Identidad: Sin verificar (formulario web)» en su lugar.
  */
 export function ticketContactRows(t: TicketDetail): ContactRow[] {
   const c = t.contact;
@@ -251,6 +253,10 @@ export function ticketContactRows(t: TicketDetail): ContactRow[] {
     rows.push({ label: "Consultorio", value: c.clinicName.trim() });
   }
   if (c.userId) rows.push({ label: "Usuario", value: "Ver en Usuarios", href: `/plataforma/usuarios/${encodeURIComponent(c.userId)}` });
+  // ZF1a (ZA B1): un LEAD sin usuario salió del formulario web: nombre, email y origen los tipeó cualquiera. Se dice
+  // explícito para que un «Cuenta desactivada · Ana» de la web no se atienda como un pedido de la dueña de la cuenta
+  // (los de sesión traen `userId`: los abre `submitSessionTicket` con la identidad verificada).
+  else if (t.kind === "LEAD") rows.push({ label: "Identidad", value: "Sin verificar (formulario web)" });
   if (c.planInterest) rows.push({ label: "Plan que le interesa", value: SAAS_PLAN_LABEL[c.planInterest] });
   rows.push({ label: "Origen", value: TICKET_SOURCE_LABEL[t.source] });
   rows.push({ label: "Recibido", value: messageWhen(t.createdAt) });

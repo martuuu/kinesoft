@@ -27,8 +27,11 @@ import st from "./auth-screens.module.css";
  *
  * VX-Z FX-auth: `useFormState(resetFormAction)` con la action directa (anda sin JS; el «no coinciden» ahora lo chequea
  * la action, antes vivía en el cliente). Con JS, tras guardar se va solo al panel; sin JS queda el link «Ir a tu panel».
+ *
+ * ZF1a (ZA M1): `next` (ya saneado por la page) reemplaza al panel fijo. El titular de un alta asistida sigue a
+ * `/aceptar-terminos`; sin `next`, `/dashboard` como siempre.
  */
-export function ResetScreen({ mode }: { mode: "recovery" | "change" | "expired" }) {
+export function ResetScreen({ mode, next = "/dashboard" }: { mode: "recovery" | "change" | "expired"; next?: string }) {
   const router = useRouter();
   const [state, formAction] = useFormState<ResetFormState, FormData>(resetFormAction, null);
   const done = state?.status === "done";
@@ -40,9 +43,9 @@ export function ResetScreen({ mode }: { mode: "recovery" | "change" | "expired" 
     if (!done) return;
     doneRef.current?.focus();
     // Pausa breve para que se lea la confirmación; después, al panel.
-    const t = setTimeout(() => router.replace("/dashboard"), 1200);
+    const t = setTimeout(() => router.replace(next), 1200);
     return () => clearTimeout(t);
-  }, [done, router]);
+  }, [done, router, next]);
 
   if (mode === "expired") {
     return (
@@ -85,7 +88,7 @@ export function ResetScreen({ mode }: { mode: "recovery" | "change" | "expired" 
             <IconCheckCircle size={18} />
             <span>
               Contraseña actualizada. Te llevamos a tu panel…{" "}
-              <Link href="/dashboard" className="k-link">
+              <Link href={next} className="k-link">
                 Ir a tu panel
               </Link>
             </span>

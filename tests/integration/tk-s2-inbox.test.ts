@@ -190,8 +190,8 @@ describe.skipIf(!RUN)("[TK-S2] Tickets en /plataforma", () => {
     expect(ev).toHaveLength(1);
     expect(ev[0]).toMatchObject({ actorId: S, entity: "SupportThread", tenantId: A.tenantId });
     expect(JSON.stringify(ev[0].payload)).not.toContain(t1.subject);
-    // Hilo de consultorio: también queda en el registro del consultorio (auditPlatformInTx).
-    expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "platform.support.take", entityId: id } })).toBe(1);
+    // Hilo de consultorio: SOLO en el registro de Plataforma (ZF1a, ZA B2: el log del consultorio sale en su export).
+    expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "platform.support.take", entityId: id } })).toBe(0);
 
     // La bandeja y el detalle lo muestran «En curso» y por quién (nombre, nunca el email).
     const row = (await allRows({ stage: "IN_PROGRESS" })).find((r) => r.id === id);
@@ -226,6 +226,28 @@ describe.skipIf(!RUN)("[TK-S2] Tickets en /plataforma", () => {
 
   // ── [TK-14] ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
+  // ZA B2: el export del Titular lleva su `AuditEvent` (lib/tenant-export-internal.ts). Si «Tomar» y la nota interna
+  // dejaban ahí `{noteId, length}`, el consultorio veía que Plataforma anotó algo sobre su ticket (y cuánto escribió):
+  // la nota es solo de Plataforma. El rastro queda en `PlatformAuditEvent` con el consultorio como referencia.
+  it("[ZF1a] tomar y anotar quedan SOLO en el registro de Plataforma (con tenantId), no en el AuditEvent del consultorio", async () => {
+    const id = await tenantThread();
+    expect(await takeInboxThread({ threadId: id })).toEqual({ ok: true, data: { changed: true } });
+    expect((await addInboxNote({ threadId: id, body: `Nota ${SECRET}` })).ok).toBe(true);
+
+    for (const action of ["platform.support.take", "platform.support.note"]) {
+      const ev = await events(id, action);
+      expect(ev).toHaveLength(1);
+      expect(ev[0]).toMatchObject({ actorId: S, entity: "SupportThread", entityId: id, tenantId: A.tenantId });
+      expect(JSON.stringify(ev[0].payload)).not.toContain(SECRET);
+    }
+    expect((await events(id, "platform.support.note"))[0].payload).toMatchObject({ length: `Nota ${SECRET}`.length });
+    expect(
+      await db.auditEvent.count({
+        where: { tenantId: A.tenantId, entityId: id, action: { in: ["platform.support.take", "platform.support.note"] } },
+      })
+    ).toBe(0);
+  });
+
   it("[TK-14] la nota solo se ve desde Plataforma", async () => {
     const id = await tenantThread();
     const body = `Lo llamé por WhatsApp el 30/10, quedó en mandar los datos ${SECRET}`;
@@ -234,13 +256,13 @@ describe.skipIf(!RUN)("[TK-S2] Tickets en /plataforma", () => {
     const rows = await db.supportTicketNote.findMany({ where: { threadId: id } });
     expect(rows.map((n) => [n.body, n.authorUserId])).toEqual([[body, S]]);
 
-    // Registro: sin el texto, en Plataforma y en el log del consultorio.
+    // Registro: sin el texto, SOLO en Plataforma (ZF1a, ZA B2: nada en el log del consultorio, que sale en su export).
     const ev = await events(id, "platform.support.note");
     expect(ev).toHaveLength(1);
+    expect(ev[0].tenantId).toBe(A.tenantId);
     expect(JSON.stringify(ev[0].payload)).not.toContain(SECRET);
     const tev = await db.auditEvent.findMany({ where: { tenantId: A.tenantId, action: "platform.support.note", entityId: id } });
-    expect(tev).toHaveLength(1);
-    expect(JSON.stringify(tev[0])).not.toContain(SECRET);
+    expect(tev).toHaveLength(0);
 
     // Plataforma la ve; `mine` según quién mira. Anotar no toma el ticket.
     const d = await getInboxThread(id);

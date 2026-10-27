@@ -42,7 +42,8 @@ import "server-only";
  *     con el mismo email pudo haberla adoptado.
  *  6. Después del commit: link de activación (`issueAccessLink` recovery: Supabase solo
  *     emite el token; el mail lo manda la app) + mail. Si el mail no sale, el resultado
- *     trae el link para copiarlo; si salió, el link no viaja al navegador.
+ *     trae el link para copiarlo; si salió, el link no viaja al navegador. Titular creado en
+ *     esta alta: el link encadena `/reset` → `/aceptar-terminos` → `/dashboard` (ZF1a, ZA M1).
  */
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
@@ -373,7 +374,8 @@ export async function provisionTenantWithOwner(
   // 6. Activación (después del commit: un mail no se des-manda si la tx se revierte).
   const needsPassword = createdNow || owner.emailConfirmedAt === null;
   const neverActivated = createdNow || (owner.emailConfirmedAt === null && owner.lastSignInAt === null);
-  const next = activationNextFor({ needsPassword, onboardingCompleted: d.onboardingCompleted });
+  // ZF1a (ZA M1): `createdNow` = cuenta nacida en esta alta → pasa por /aceptar-terminos antes del panel.
+  const next = activationNextFor({ needsPassword, onboardingCompleted: d.onboardingCompleted, createdNow });
   const link = await issueAccessLink({ email, kind: "recovery", next });
   if (!link.ok) {
     // El consultorio ya existe: no se revierte por el link. El superadmin lo reenvía desde
