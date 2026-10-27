@@ -88,6 +88,9 @@ const ROLE_EQ_ALLOW: Record<string, number> = {
   // PV TK-S1: un consultorio suspendido no tiene Actor ni capabilities; quién escribe por él (Titular o Admin) sale
   //   del rol de `tenantBlocks`, igual que `app/suspendido/page.tsx`.
   "lib/tickets.ts": 2,
+  // PV TK-U2: /contacto ofrece el form de sesión solo a Titular/Admin de un consultorio bloqueado (misma regla que
+  //   lib/tickets.ts, sin Actor).
+  "app/contacto/page.tsx": 2,
   // T3a-0z2: `isClinicalMember` (OWNER con `clinical`) se mudó a roles-core.
   "lib/roles-core.ts": 1,
   // PL-1c (misma ola) sumó 7 en team-internal y 1 en invite-activation, revisadas en PL-1b: miran el rol del
