@@ -15,6 +15,7 @@
  * cambia nada para ella y se corta el caso ambiguo.
  */
 import { z } from "zod";
+import { SessionExerciseUpdate } from "@/lib/validation";
 
 /** Ids cuid/uuid: acotados para no aceptar basura arbitraria por RPC. */
 const Id = z.string().min(1).max(64);
@@ -74,3 +75,28 @@ export const BulkAddSessionExercisesInput = z.object({
   ]),
 });
 export type BulkAddSessionExercisesInputT = z.input<typeof BulkAddSessionExercisesInput>;
+
+// PV · HD-3: `addSessionExercise` y `reorderSessionExercises` no validaban nada. Next expone todo export de un
+// "use server" como RPC, así que sets/reps negativos o enormes y notas de megas llegaban a la fila, y el reorden
+// aceptaba listas de cualquier largo (el filtro `known.has` descartaba el relleno en silencio, pero recorría
+// todo). Se reusan los topes de `SessionExerciseUpdate` (`lib/validation.ts`, que esta ola no se edita) para que
+// agregar y editar un ejercicio de la sesión acepten lo mismo.
+export const SessionExerciseAdd = z.object({
+  sessionId: Id,
+  exerciseId: Id,
+  sets: SessionExerciseUpdate.shape.sets,
+  reps: SessionExerciseUpdate.shape.reps,
+  notes: SessionExerciseUpdate.shape.notes,
+});
+export type SessionExerciseAddT = z.input<typeof SessionExerciseAdd>;
+
+/** Una sesión real tiene pocas decenas de ejercicios; 200 deja margen sin aceptar listas arbitrarias. */
+export const SESSION_EXERCISE_REORDER_MAX = 200;
+
+export const SessionExerciseReorder = z.object({
+  sessionId: Id,
+  orderedIds: z
+    .array(Id)
+    .max(SESSION_EXERCISE_REORDER_MAX, `Demasiados ejercicios (máx. ${SESSION_EXERCISE_REORDER_MAX}).`),
+});
+export type SessionExerciseReorderT = z.input<typeof SessionExerciseReorder>;

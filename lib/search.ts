@@ -26,7 +26,10 @@ import type { SearchHit } from "@/lib/search-types";
 // y un consultorio General veía "Diagnóstico"/"Seguimiento"/"Biblioteca".
 
 export async function globalSearch(q: string): Promise<SearchHit[]> {
-  const term = q.trim();
+  // PV · HD-3: Next expone todo export de un "use server" como RPC, así que `q` puede llegar como cualquier cosa
+  // (un no-string tiraba en `q.trim`) y de hasta 4.5mb (límite de body), que terminaba en cuatro ILIKE. Un
+  // no-string cuenta como búsqueda vacía (los atajos) y el término se acota a 100 caracteres.
+  const term = (typeof q === "string" ? q : "").slice(0, 100).trim();
   const actor = await getActor();
   const modules = modulesFor(actor.entitlements);
   const shortcuts = shortcutsFor(modules);

@@ -28,6 +28,13 @@ import { auditPlatformGlobalInTx } from "@/lib/audit";
 import { tags as cacheTags } from "@/lib/cache-tags";
 import { isStorageConfigured, storageRemove, storageUpload } from "@/lib/storage-internal";
 import { EXERCISE_MEDIA_BUCKET as BUCKET, youtubeId } from "@/lib/exercise-media-internal";
+import { z } from "zod";
+
+/** HD-3: const NO exportada (este archivo es "use server"). */
+const ReorderMediaInput = z.object({
+  exerciseId: z.string().min(1).max(64),
+  orderedIds: z.array(z.string().min(1).max(64)).max(100),
+});
 import type { ActionResult } from "@/lib/validation";
 
 const SAFE_EXT_RE = /^[a-z0-9]{1,5}$/;
@@ -158,6 +165,10 @@ export async function reorderExerciseMedia(
   orderedIds: string[],
 ): Promise<ActionResult> {
   const actor = await requirePlatformAdmin("catalog.write");
+  // PV · HD-3: export de "use server" = RPC; sin tope, una lista de miles de ids eran miles de UPDATE en una tx.
+  // Un ejercicio real tiene un puñado de medios: 100 ids de ≤64 alcanzan de sobra.
+  const parsed = ReorderMediaInput.safeParse({ exerciseId, orderedIds });
+  if (!parsed.success) return { ok: false, error: "Lista de medios inválida." };
   const ex = await prismaService.exercise.findFirst({
     where: { id: exerciseId, tenantId: null },
     select: { slug: true },

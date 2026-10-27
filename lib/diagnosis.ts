@@ -259,6 +259,9 @@ export async function searchPatientsForAssignment(
   if (!hasDiagnosis(actor)) return [];
   const v = await visibilityForActor(actor);
   if (v.adminView) return [];
+  // PV · HD-3: export de "use server" = RPC; un no-string tiraba en `q.trim` y un `q` de megas iba a tres ILIKE.
+  // Entrada inválida → [] (mismo contrato que "sin resultados"); ningún nombre/DNI/email útil pasa de 100.
+  if (typeof q !== "string" || q.length > 100) return [];
   const term = q.trim();
   // EV1-E1: Prisma no escapa los comodines de `contains` (ILIKE `'%' || term || '%'`): «_» o «%» matcheaban
   // cualquier paciente visible. `escapeLike` (lib/email-match.ts).

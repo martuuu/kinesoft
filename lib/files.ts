@@ -172,7 +172,11 @@ export async function uploadPatientFile(
   const category: PatientFileCategory = (ALLOWED_CATEGORIES.has(rawCategory)
     ? rawCategory
     : "OTHER") as PatientFileCategory;
-  const description = (formData.get("description") as string | null) || undefined;
+  // PV · HD-3: Next expone todo export de un "use server" como RPC; `formData.get` puede devolver un File (el cast
+  // `as string` lo dejaba pasar a Prisma) o un string de megas (límite de body 4.5mb). Solo string, trim, ≤500.
+  const rawDescription = formData.get("description");
+  const description =
+    typeof rawDescription === "string" ? rawDescription.trim().slice(0, 500) || undefined : undefined;
   if (!(file instanceof File) || file.size === 0) {
     return { ok: false, error: "Adjuntá un archivo." };
   }
@@ -211,7 +215,8 @@ export async function uploadPatientFile(
         tenantId: actor.tenantId,
         patientId,
         uploaderId: actor.userId ?? undefined,
-        name: file.name,
+        // HD-3: el nombre lo elige el cliente; se guarda acotado (la extensión de la clave sale de `safeExt`).
+        name: file.name.slice(0, 255),
         mime,
         sizeBytes: file.size,
         storageKey,

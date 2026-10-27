@@ -8,6 +8,7 @@
  * for the tag-combobox create-on-the-fly flow.
  */
 import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
+import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
@@ -26,6 +27,58 @@ import type {
 } from "@/lib/exercises-types";
 import { TENANT_CREATABLE_TAG_KINDS, isReservedTagSlug } from "@/lib/exercises-types";
 import { DISCIPLINE_TAG_SLUGS } from "@/lib/plans-constants";
+
+// ──────────────────────────────────────────────────────────────────────
+// PV · HD-3: schemas de entrada (const NO exportadas: este archivo es "use server").
+//
+// Next expone todo export de un "use server" como RPC: lo que llega no es lo que manda la UI, es lo que
+// quiera mandar un cliente. Sin topes, `createExercise` creaba un `Tag` GLOBAL (tabla compartida por todos
+// los consultorios, sin RLS) por cada etiqueta separada por coma del texto libre — miles por llamada —,
+// `listExercises` devolvía la tabla entera sin `take` y cualquier string podía pesar hasta el límite de
+// body de 4.5mb. Un tipo inesperado (`q` como array) tiraba la action en `q.trim`.
+// ──────────────────────────────────────────────────────────────────────
+
+/** Tope de filas de `listExercises` (hoy el catálogo global + propios está muy por debajo). */
+const EXERCISE_LIST_MAX = 1000;
+/** Auto-tags del texto libre (grupo muscular / equipamiento): como mucho 10 por campo, de ≤40 caracteres. */
+const AUTO_TAGS_PER_FIELD = 10;
+const AUTO_TAG_LABEL_MAX = 40;
+
+const ShortFilter = z.string().max(64).optional();
+
+const ListExercisesInput = z.object({
+  q: z.string().max(100).optional(),
+  difficulty: z.number().int().min(1).max(5).optional(),
+  muscleGroup: ShortFilter,
+  equipment: ShortFilter,
+  conditionSlug: ShortFilter,
+  favouritesOnly: z.boolean().optional(),
+  privateOnly: z.boolean().optional(),
+  kind: z.enum(["EXERCISE", "MANUAL_THERAPY", "all"]).optional(),
+  disciplineSlug: ShortFilter,
+});
+
+/** Los números se clampean abajo como siempre; acá solo se exige que sean finitos (NaN/Infinity → rechazo). */
+const FiniteNumber = z.number().finite().optional();
+
+const CreateExerciseInput = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, "Nombre requerido.")
+    .max(120, "El nombre puede tener hasta 120 caracteres."),
+  description: z.string().max(2000, "La descripción puede tener hasta 2000 caracteres.").optional(),
+  difficulty: FiniteNumber,
+  defaultSets: FiniteNumber,
+  defaultReps: FiniteNumber,
+  equipment: z.string().max(200, "El equipamiento puede tener hasta 200 caracteres.").optional(),
+  muscleGroups: z.string().max(200, "El grupo muscular puede tener hasta 200 caracteres.").optional(),
+  cues: z.string().max(2000, "Las indicaciones pueden tener hasta 2000 caracteres.").optional(),
+  instructions: z.string().max(4000, "Las instrucciones pueden tener hasta 4000 caracteres.").optional(),
+  tagSlugs: z.array(z.string().min(1).max(64)).max(20, "Podés elegir hasta 20 etiquetas.").optional(),
+  kind: z.enum(["EXERCISE", "MANUAL_THERAPY"]).optional(),
+  visibility: z.literal("private").optional(),
+});
 
 /**
  * Planes P2 (S13x): fragmento `where` del filtro por disciplina. Con ese tag
@@ -53,8 +106,12 @@ async function disciplineWhere(
   };
 }
 
-export async function listExercises(f: ExerciseFilters = {}): Promise<ExerciseRow[]> {
+export async function listExercises(input: ExerciseFilters = {}): Promise<ExerciseRow[]> {
   const actor = await getActor();
+  // HD-3: una lectura con filtros inválidos devuelve vacío (no tira): mismo contrato que un filtro sin resultados.
+  const parsed = ListExercisesInput.safeParse(input ?? {});
+  if (!parsed.success) return [];
+  const f: ExerciseFilters = parsed.data;
   const gate = await gatingForActor();
   const q = f.q?.trim();
   const qLike = q ? escapeLike(q) : q;
@@ -104,6 +161,8 @@ export async function listExercises(f: ExerciseFilters = {}): Promise<ExerciseRo
   const rows = await runWithRls(actor.tenantId, (tx) => tx.exercise.findMany({
     where,
     orderBy: [{ difficulty: "asc" }, { name: "asc" }],
+    // HD-3: antes sin `take` (la tabla entera por RPC).
+    take: EXERCISE_LIST_MAX,
     include: {
       conditions: {
         include: { condition: { select: { slug: true, name: true } } },
@@ -350,7 +409,7 @@ export async function createExercise(...args: Parameters<typeof createExerciseIm
   return withReadOnlyResult(() => createExerciseImpl(...args));
 }
 
-async function createExerciseImpl(input: {
+async function createExerciseImpl(raw: {
   name: string;
   description?: string;
   difficulty?: number;
@@ -379,8 +438,15 @@ async function createExerciseImpl(input: {
   // lectura escribiría tags globales antes de que la tx del ejercicio falle.
   const readOnly = writableError(actor);
   if (readOnly) return { ok: false, error: readOnly };
-  const name = input.name.trim();
-  if (!name) return { ok: false, error: "Nombre requerido." };
+  // HD-3: zod ANTES de los upserts de `Tag` (tabla global): una entrada fuera de tope no deja ninguna fila.
+  const parsed = CreateExerciseInput.safeParse(raw);
+  if (!parsed.success) {
+    const fieldErrors = parsed.error.flatten().fieldErrors;
+    const first = Object.values(fieldErrors).flat().find(Boolean);
+    return { ok: false, error: first ?? "Datos inválidos.", fieldErrors };
+  }
+  const input = parsed.data;
+  const name = input.name;
 
   const baseSlug = slugify(name);
   // Append a short suffix until unique.
@@ -399,7 +465,14 @@ async function createExerciseImpl(input: {
     [input.muscleGroups, "MUSCLE_GROUP"],
     [input.equipment, "EQUIPMENT"],
   ] as const) {
-    for (const label of (text ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
+    // HD-3: como mucho AUTO_TAGS_PER_FIELD etiquetas por campo y de ≤AUTO_TAG_LABEL_MAX caracteres; el resto
+    // queda solo en el texto libre (que se guarda completo). Sin esto, "a,b,c,…" creaba un Tag global por ítem.
+    const labels = (text ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter((l) => l && l.length <= AUTO_TAG_LABEL_MAX)
+      .slice(0, AUTO_TAGS_PER_FIELD);
+    for (const label of labels) {
       const s = slugify(label);
       // S13x: "Kinesiología" escrito como grupo muscular no crea ni vincula el
       // tag de disciplina (mismo motivo que en `ensureTag`).
@@ -408,7 +481,10 @@ async function createExerciseImpl(input: {
       if (!autoTagSlugs.includes(s)) autoTagSlugs.push(s);
     }
   }
-  const allTagSlugs = [...new Set([...(input.tagSlugs ?? []), ...autoTagSlugs])];
+  // HD-3: los slugs elegidos tampoco pueden vincular un tag de disciplina (el combo nunca los ofrece; por RPC sí
+  // llegaban y el ejercicio quedaba filtrado como Kine/Osteo).
+  const pickedTagSlugs = (input.tagSlugs ?? []).filter((s) => !isReservedTagSlug(s));
+  const allTagSlugs = [...new Set([...pickedTagSlugs, ...autoTagSlugs])];
 
   try {
     const ex = await runWithRls(actor.tenantId, (tx) => tx.exercise.create({

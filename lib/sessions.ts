@@ -91,6 +91,10 @@ import {
   BulkAddSessionExercisesInput,
   LoadSessionEvolutionInput,
   RescheduleSessionInput,
+  SessionExerciseAdd,
+  SessionExerciseReorder,
+  type SessionExerciseAddT,
+  type SessionExerciseReorderT,
 } from "@/lib/sessions-schemas";
 import {
   BookingUpdate,
@@ -1148,13 +1152,17 @@ export async function reorderSessionExercises(...args: Parameters<typeof reorder
   return withReadOnlyResult(() => reorderSessionExercisesImpl(...args));
 }
 
-async function reorderSessionExercisesImpl(input: {
-  sessionId: string;
-  orderedIds: string[];
-}): Promise<ActionResult> {
+async function reorderSessionExercisesImpl(raw: SessionExerciseReorderT): Promise<ActionResult> {
   const actor = await getActor();
   const off = sessionsModuleOff(actor);
   if (off) return off;
+  // HD-3 (lib/sessions-schemas.ts): tope de 200 ids de ≤64 antes de abrir la tx.
+  const parsed = SessionExerciseReorder.safeParse(raw);
+  if (!parsed.success) {
+    const fieldErrors = parsed.error.flatten().fieldErrors;
+    return { ok: false, error: fieldErrors.orderedIds?.[0] ?? "Datos inválidos.", fieldErrors };
+  }
+  const input = parsed.data;
   const res = await denied(() => runWithRls(actor.tenantId, async (tx) => {
     const g = await sessionForWrite(tx, actor, input.sessionId);
     const exercises = await tx.sessionExercise.findMany({
@@ -1186,16 +1194,16 @@ export async function addSessionExercise(...args: Parameters<typeof addSessionEx
   return withReadOnlyResult(() => addSessionExerciseImpl(...args));
 }
 
-async function addSessionExerciseImpl(input: {
-  sessionId: string;
-  exerciseId: string;
-  sets?: number;
-  reps?: number;
-  notes?: string;
-}): Promise<ActionResult<{ id: string }>> {
+async function addSessionExerciseImpl(raw: SessionExerciseAddT): Promise<ActionResult<{ id: string }>> {
   const actor = await getActor();
   const off = sessionsModuleOff(actor);
   if (off) return off;
+  // HD-3 (lib/sessions-schemas.ts): mismos topes que `updateSessionExercise` (sets/reps 0..200, notas ≤1000).
+  const parsed = SessionExerciseAdd.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, error: "Datos inválidos.", fieldErrors: parsed.error.flatten().fieldErrors };
+  }
+  const input = parsed.data;
   // Gate by plan — a FREE tenant can't sneak a PRO-only exercise by
   // POSTing its id directly.
   const gate = await gatingForActor();

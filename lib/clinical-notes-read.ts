@@ -79,7 +79,10 @@ export async function getPatientTimeline(input: {
   );
   // Cursor inválido → primera página (decodeTimelineCursor ya devuelve null para cualquier forma rara).
   const cursor = decodeTimelineCursor(input.cursor);
-  const q = normalizeTimelineQuery(input.q);
+  // PV · HD-3: export de "use server" = RPC; un `q` no-string tiraba en `normalizeTimelineQuery` (`q.replace`). El
+  // tope de 100 ya lo aplica `normalizeTimelineQuery` (TIMELINE_QUERY_MAX): un `q` largo se acota, no se rechaza
+  // (null acá significa «sin acceso» para la UI).
+  const q = normalizeTimelineQuery(typeof input.q === "string" ? input.q : null);
   const withSessions = modulesFor(actor.entitlements).has("sesiones");
   const now = new Date();
 
