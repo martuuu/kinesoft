@@ -400,7 +400,7 @@ describe("[MPS-4b] re-anclar al 4", () => {
       { label: "Día de cobro", before: "El 15", after: "El 4" },
       { label: "Próximo cobro", before: "15/11", after: "4/12" },
     ]);
-    expect(reanchorStubText(preview())).toMatch(/proporcional de \$\s?34\.833 \(19 de 30 días, hasta el 4\/12\)/);
+    expect(reanchorStubText(preview())).toMatch(/proporcional de \$\s?34\.833,33 \(19 de 30 días, hasta el 4\/12\)/);
     expect(reanchorStubText(preview({ stubCents: 0 }))).toContain("No hay proporcional");
   });
 

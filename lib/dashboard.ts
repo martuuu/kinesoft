@@ -19,7 +19,8 @@ import { planSessionOrdinals } from "@/lib/plan-display";
 import { getUserPreferences } from "@/lib/preferences";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
 import { tags, ttl } from "@/lib/cache-tags";
-import { toARDateKey, toARDow, localToARIso } from "@/lib/datetime-ar";
+import { toARDateKey, toARDow, localToARIso, arIsoWeekKey } from "@/lib/datetime-ar";
+import { formatARS } from "@/lib/format";
 import type { KpiKey, Preferences } from "@/lib/preferences-constants";
 import { RevenueRangeSchema } from "@/lib/preferences-schemas";
 import {
@@ -501,12 +502,9 @@ const _loadDashboardCounts = unstable_cache(
               particularCopago,
               servicePriceCents: b.service.priceCents,
             });
-            const copago = (copagoCents / 100).toLocaleString("es-AR", {
-              style: "currency",
-              currency: "ARS",
-              minimumFractionDigits: 0,
-              maximumFractionDigits: 0,
-            });
+            // HD-14: el formatter compartido (como la agenda), no un `toLocaleString` propio: con centavos muestra
+            // «$ 1.500,50» y no el redondeo a pesos (HD-15).
+            const copago = formatARS(copagoCents);
             return [b.service.name, obraSocial, copago].filter(Boolean).join(" - ");
           })(),
         })),
@@ -523,24 +521,6 @@ const _loadDashboardCounts = unstable_cache(
   // saltea (next 14.2 `unstable-cache.js`), así que el tag de afuera manda.
   { revalidate: ttl.micro }
 );
-
-/** ISO-week token; rolls over Monday at 00:00 — matches the dismissal key. */
-function isoWeekKey(d: Date): string {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  x.setDate(x.getDate() + 3 - ((x.getDay() + 6) % 7));
-  const week1 = new Date(x.getFullYear(), 0, 4);
-  return (
-    x.getFullYear() +
-    "-W" +
-    String(
-      1 +
-        Math.round(
-          ((x.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7
-        )
-    ).padStart(2, "0")
-  );
-}
 
 /** Lo que recibe `DashboardScreen`: los datos, las preferencias y los días con turnos del mes AR en curso. */
 export type DashboardPageData = {
@@ -624,14 +604,16 @@ async function loadDashboard(
   );
   // Per-user bits computed outside the cache — preferences / reminder
   // dismissal differ per practitioner and would explode cache cardinality.
-  const reminderKey = `near-discharge:${isoWeekKey(now)}`;
+  // HD-14: semana ISO del día AR (lunes 00:00 AR), no la del host: en Vercel (UTC) el domingo 21:00 AR ya era lunes.
+  const reminderKey = `near-discharge:${arIsoWeekKey(now)}`;
   const practitionerId = actor.practitionerId;
   const [arYear, arMonth] = dayKey.split("-").map(Number);
   const tenantId = actor.tenantId;
 
   const page = await runWithRls(tenantId, async (tx) => {
     const accessMap = await bulkPatientAccess(actor, patientIds, tx);
-    // Mismo criterio que `isReminderDismissed` (lib/notifications.ts), con la tx de la página.
+    // Recordatorio pospuesto: fila de DismissedReminder con dismissedUntil > ahora (lo escribe dismissReminder de
+    // lib/notifications.ts), con la tx de la página.
     const dismissed = await tx.dismissedReminder.findUnique({
       where: { tenantId_userId_reminderKey: { tenantId, userId: actor.userId, reminderKey } },
       select: { dismissedUntil: true },
@@ -1049,11 +1031,26 @@ async function bookingDaysInTx(tx: DbClient, tenantId: string, y: number, m: num
   return Array.from(days).sort((a, b) => a - b);
 }
 
+function isValidMonth(year: unknown, monthIndex0: unknown): boolean {
+  return (
+    Number.isInteger(year) &&
+    Number.isInteger(monthIndex0) &&
+    (year as number) >= 2000 &&
+    (year as number) <= 2100 &&
+    (monthIndex0 as number) >= 0 &&
+    (monthIndex0 as number) <= 11
+  );
+}
+
 export async function getMonthBookingDays(
   year: number,
   monthIndex0: number
 ): Promise<number[]> {
   const actor = await getActor();
+  // HD-3: es una action (llamable con cualquier valor por RPC) y la clave de cache lleva `String(year)` /
+  // `String(monthIndex0)`: sin validar, cada valor basura abría un slot nuevo por tenant y un mes fuera de rango
+  // llegaba a Prisma como `Invalid Date`. Se valida ANTES de armar `unstable_cache`: entrada inválida → `[]` sin clave.
+  if (!isValidMonth(year, monthIndex0)) return [];
   const fetcher = unstable_cache(
     async (tenantId: string, y: number, m: number): Promise<number[]> =>
       runWithRls(tenantId, (tx) => bookingDaysInTx(tx, tenantId, y, m)),

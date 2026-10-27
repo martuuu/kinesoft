@@ -65,7 +65,9 @@ export async function GET(req: Request) {
   }
 
   const body = await exportBookingsIcs(actor, { from, to });
-  const filename = `agenda-${from.toISOString().slice(0, 10)}.ics`;
+  // HD-14: el día AR de `from`. Hoy `from` es siempre una medianoche AR (03:00 UTC) y el `toISOString` daba lo mismo
+  // por casualidad; con `toARDateKey` el nombre no depende de eso.
+  const filename = `agenda-${toARDateKey(from)}.ics`;
   return new Response(body, {
     headers: {
       "Content-Type": "text/calendar; charset=utf-8",

@@ -117,6 +117,25 @@ export function toARMinutes(d: Date | string): number {
   return p.hour * 60 + p.minute;
 }
 
+/**
+ * Semana ISO 8601 (`"2026-W44"`, lunes a domingo) del día AR de `d`.
+ *
+ * HD-14: la clave del aviso «próximos a alta» (`near-discharge:<semana>`, `lib/dashboard.ts`) se armaba con
+ * `setHours`/`getDay`/`getFullYear` del host. En Vercel (UTC) el domingo desde las 21:00 AR ya era el lunes: la
+ * semana cambiaba tres horas antes y el aviso descartado volvía a aparecer. Acá el día sale de `toARDateKey` y toda la
+ * aritmética va en UTC puro (`Date.UTC`/`getUTC*`), sin depender del TZ del proceso. El año es el ISO (el del jueves
+ * de esa semana): el lunes 29-dic-2025 es `2026-W01` y el domingo 3-ene-2027 es `2026-W53`.
+ */
+export function arIsoWeekKey(d: Date | string): string {
+  const [y, m, day] = toARDateKey(d).split("-").map(Number);
+  const thursday = new Date(Date.UTC(y, m - 1, day));
+  // Lunes = 0 … domingo = 6; el jueves de la semana define el año ISO.
+  thursday.setUTCDate(thursday.getUTCDate() + 3 - ((thursday.getUTCDay() + 6) % 7));
+  const isoYear = thursday.getUTCFullYear();
+  const week = 1 + Math.floor((thursday.getTime() - Date.UTC(isoYear, 0, 1)) / (7 * 86_400_000));
+  return `${isoYear}-W${String(week).padStart(2, "0")}`;
+}
+
 /** Day-of-week (0=Sun…6=Sat) in Argentina time. */
 export function toARDow(d: Date | string): number {
   return arParts(typeof d === "string" ? new Date(d) : d).dow;

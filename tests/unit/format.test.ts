@@ -74,3 +74,22 @@ describe("formatDateAR", () => {
     expect(formatDateAR("2026-10-14T17:05:00Z", "compact")).toBe("14/10/26, 14:05");
   });
 });
+
+// [HD-15] `formatARS` tiraba los centavos siempre (`maximumFractionDigits: 0`): un copago de $1.500,50 se veía
+// «$ 1.501» (redondeo de Intl) y el total de una lista con centavos no cerraba contra las filas. Los enteros no
+// cambian (la mayoría de los montos de la app): solo un valor con fracción usa el formatter de 2 decimales.
+describe("[HD-15] formatARS con centavos", () => {
+  it("[HD-15] 150050 → «1.500,50»; 150000 sin decimales; negativos", () => {
+    expect(strip(formatARS(150050))).toContain("1.500,50");
+    expect(strip(formatARS(150005))).toContain("1.500,05");
+    expect(strip(formatARS(150000))).toContain("1.500");
+    expect(strip(formatARS(150000))).not.toContain(",");
+    expect(strip(formatARS(-150050))).toContain("1.500,50");
+    expect(strip(formatARS(-150050))).toMatch(/^-/);
+    expect(strip(formatARS(-150000))).not.toContain(",");
+    expect(strip(formatARS(-150000))).toContain("1.500");
+    // `fromCents:false` sigue la misma regla sobre el valor en pesos.
+    expect(strip(formatARS(1500.5, { fromCents: false }))).toContain("1.500,50");
+    expect(strip(formatARS(1500, { fromCents: false }))).not.toContain(",");
+  });
+});

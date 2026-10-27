@@ -72,15 +72,26 @@ export function formatDateAR(
 }
 
 /**
- * Format an ARS cents amount as `$1.234`. Drops the decimals because
- * Argentine consumer pricing is integer pesos for this product. Cap
- * value at `Number.MAX_SAFE_INTEGER` because the JIT inlines a much
- * uglier code path otherwise.
+ * Format an ARS cents amount as `$1.234`, or `$1.234,50` when there are
+ * cents. Whole pesos (the vast majority: prices and copagos are integer
+ * pesos) keep the no-decimals look.
+ *
+ * HD-15: antes era SIEMPRE `maximumFractionDigits: 0`, así que un monto con
+ * centavos (`150050`, un copago de $1.500,50 cargado con `MoneyInput`, o una
+ * seña con centavos de Mercado Pago) se mostraba REDONDEADO por Intl
+ * («$ 1.501») y una lista no cerraba contra su total. Con fracción se usa el
+ * formatter de 2 decimales («$ 1.500,50»); los enteros no cambian.
  */
 const ARS = new Intl.NumberFormat("es-AR", {
   style: "currency",
   currency: "ARS",
   maximumFractionDigits: 0,
+});
+const ARS_CENTS = new Intl.NumberFormat("es-AR", {
+  style: "currency",
+  currency: "ARS",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
 });
 
 export function formatARS(
@@ -89,7 +100,9 @@ export function formatARS(
 ): string {
   if (cents == null || Number.isNaN(cents)) return "";
   const value = opts.fromCents === false ? cents : cents / 100;
-  return ARS.format(value);
+  // `cents / 100` de un entero múltiplo de 100 es exacto en binario, así que un
+  // monto entero nunca cae por error en la rama de centavos.
+  return value % 1 !== 0 ? ARS_CENTS.format(value) : ARS.format(value);
 }
 
 /**

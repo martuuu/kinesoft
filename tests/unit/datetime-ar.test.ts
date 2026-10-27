@@ -6,6 +6,7 @@ import {
   toARMinutes,
   toARDow,
   isoToARLocalInput,
+  arIsoWeekKey,
 } from "@/lib/datetime-ar";
 
 // These helpers are the correctness spine of the agenda: every wall-clock
@@ -82,5 +83,30 @@ describe("medianoche AR (00:00 = 03:00 UTC)", () => {
   });
   it("isoToARLocalInput a medianoche → T00:00 (no T24:00)", () => {
     expect(isoToARLocalInput(midnight)).toBe("2026-05-27T00:00");
+  });
+});
+
+// [HD-14] La semana ISO del aviso «próximos a alta» (`near-discharge:<semana>` en `lib/dashboard.ts`) se armaba con
+// `setHours`/`getDay` del host: en Vercel (UTC) el domingo desde las 21:00 AR ya era el lunes y el descarte de la
+// semana se perdía tres horas antes. Corre en TZ=UTC (`npm test`) y TZ=AR (`npm run test:tz-ar`).
+describe("[HD-14] arIsoWeekKey", () => {
+  it("[HD-14] domingo 22:00 AR sigue en la semana anterior; el lunes 00:00 AR abre la nueva", () => {
+    expect(arIsoWeekKey(new Date("2026-10-25T22:00:00-03:00"))).toBe("2026-W43"); // lunes 01:00 UTC
+    expect(arIsoWeekKey(new Date("2026-10-25T23:59:00-03:00"))).toBe("2026-W43");
+    expect(arIsoWeekKey(new Date("2026-10-26T00:00:00-03:00"))).toBe("2026-W44");
+    expect(arIsoWeekKey(new Date("2026-10-19T00:30:00-03:00"))).toBe("2026-W43"); // lunes 03:30 UTC
+    expect(arIsoWeekKey("2026-10-27T23:30:00-03:00")).toBe("2026-W44");
+  });
+  it("[HD-14] cambio de año: la semana ISO puede ser del año anterior o del siguiente", () => {
+    // 2026 arranca jueves → el lunes 29-dic-2025 ya es 2026-W01 y 2026 tiene W53.
+    expect(arIsoWeekKey(new Date("2025-12-28T22:00:00-03:00"))).toBe("2025-W52"); // domingo, 01:00 UTC del 29
+    expect(arIsoWeekKey(new Date("2025-12-29T00:00:00-03:00"))).toBe("2026-W01");
+    expect(arIsoWeekKey(new Date("2026-01-01T12:00:00-03:00"))).toBe("2026-W01");
+    expect(arIsoWeekKey(new Date("2026-12-31T23:30:00-03:00"))).toBe("2026-W53"); // 02:30 UTC del 1-ene
+    expect(arIsoWeekKey(new Date("2027-01-03T22:00:00-03:00"))).toBe("2026-W53"); // domingo
+    expect(arIsoWeekKey(new Date("2027-01-04T00:00:00-03:00"))).toBe("2027-W01");
+    // 2021-01-03 (domingo) es 2020-W53; 2024-12-31 (martes) es 2025-W01.
+    expect(arIsoWeekKey(new Date("2021-01-03T21:30:00-03:00"))).toBe("2020-W53");
+    expect(arIsoWeekKey(new Date("2024-12-31T22:00:00-03:00"))).toBe("2025-W01");
   });
 });

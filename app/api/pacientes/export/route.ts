@@ -2,6 +2,7 @@ import { headers } from "next/headers";
 import { exportPatientsCsv } from "@/lib/patients-export-internal";
 import { tryGetActor } from "@/lib/session";
 import { rateLimit } from "@/lib/rate-limit";
+import { toARDateKey } from "@/lib/datetime-ar";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,7 +51,8 @@ export async function GET(req: Request) {
   const a = url.searchParams.get("archived");
   const archived = a === "include" || a === "only" ? a : "exclude";
   const csv = await exportPatientsCsv(actor, ids && ids.length ? { ids } : { archived });
-  const filename = `pacientes-${new Date().toISOString().slice(0, 10)}.csv`;
+  // HD-14: el día AR, no el del host: en Vercel (UTC) un export de las 21:00-23:59 AR salía con la fecha de mañana.
+  const filename = `pacientes-${toARDateKey(new Date())}.csv`;
   return new Response(csv, {
     status: 200,
     headers: {

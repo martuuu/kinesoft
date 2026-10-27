@@ -412,8 +412,8 @@ describe("[MPS-4a] drawer de cambio de plan con la plata", () => {
 
   it("[MPS-4a] cambio inmediato en el primer período: el mes completo más los días del alta con el precio nuevo", () => {
     const html = review({ kind: "immediate", effectiveOn: "2026-10-21", prorationCents: 0, days: 0, periodDays: 0 }, { billableFrom: "2026-10-21", nextChargeOn: "2026-11-04" });
-    // 14 de 31 días de $60.000 = $27.097 (half-up).
-    expect(html).toContain("El 4/11 se cobra el mes completo más $ 27.097 por los días del 21/10 al 3/11.");
+    // 14 de 31 días de $60.000 = $27.096,77 (half-up en centavos; HD-15 muestra los centavos).
+    expect(html).toContain("El 4/11 se cobra el mes completo más $ 27.096,77 por los días del 21/10 al 3/11.");
   });
 
   it("[MPS-4a] sin `billing` (preview viejo) se mantiene el copy de antes", () => {
