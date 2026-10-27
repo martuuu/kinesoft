@@ -7,22 +7,22 @@
 
 ---
 
-## Estado y orden vigente (23-oct-2026) — **manda sobre todo lo de abajo**
+## Estado y orden vigente (27-oct-2026) — **manda sobre todo lo de abajo**
 
 > **Checklist del día del push: [PUSH-DIA.md](PUSH-DIA.md)** (el único; [GO-LIVE-PASO-A-PASO.md](GO-LIVE-PASO-A-PASO.md)
 > quedó superado). Esta sección y las «Mxx en prod» son la referencia técnica de cada migración.
 
 - **Prod:** `main` (`3159539`, 18-oct) trae hasta **M11** (`20261019120000_public_directory`) = **40 migraciones**; el
-  build de Production las aplicó (go-live incremental del 14-oct y ventana M8 → M11 del 16-oct). **Local: 46.**
-- **Pendientes en prod: 6**, en el orden que aplica `migrate deploy` (el del timestamp, no el del número):
-  **M12 → M14 → M18 → M17 → M15 → M16**. Todas aditivas y compatibles con el código que hoy corre en prod, así que van
+  build de Production las aplicó (go-live incremental del 14-oct y ventana M8 → M11 del 16-oct). **Local: 47.**
+- **Pendientes en prod: 7**, en el orden que aplica `migrate deploy` (el del timestamp, no el del número):
+  **M12 → M14 → M18 → M17 → M15 → M16 → M19**. Todas aditivas y compatibles con el código que hoy corre en prod, así que van
   **todas antes del push**, en una sola ventana.
 - **Sin staging y sin reset** (decisiones del 14-oct): **precheck de solo lectura → backup → `db:prod:deploy` →
   postcheck → push**. Lo corre Martin; el agente verifica la salida que él pega.
 - **Prechecks y postchecks automatizados:** `KINESOFT_CONFIRM_PROD=<ref> npm run db:prod:precheck -- --pre` y
   `… -- --post --booking-relfilenode=<el del --pre>` (`scripts/prod-precheck.ts`, lógica en
   `scripts/lib/prod-precheck-core.ts`, una tx READ ONLY, tabla PASS/WARN/FAIL sin secretos, exit 1 si hay FAIL). Corre
-  los prechecks de las 6 migraciones de abajo, los locks y tx largas sobre Booking/Patient/Tenant, la Data API, los
+  los prechecks de las 7 migraciones de abajo (M19 incluida: `pre.M19.absent` / `post.M19.*`), los locks y tx largas sobre Booking/Patient/Tenant, la Data API, los
   buckets, `pg_dump` local vs. server y el rol. El `--post` compara los objetos, los md5 de las 5 funciones y el checksum
   de cada migración contra el sha256 del repo. Las queries de cada «Mxx en prod» quedan para correrlas a mano si hace
   falta.
@@ -40,8 +40,8 @@ SELECT relname, relrowsecurity, has_table_privilege('anon', oid, 'UPDATE')
 FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind='r';
 ```
 
-**Las 6 pendientes, por tanda** (todas commiteadas en `develop`, sin push; aplicadas y verificadas objeto por objeto
-solo en el Docker local):
+**Las 7 pendientes, por tanda** (M12-M16 commiteadas en `develop`, M19 de la tanda PV; ninguna con push; aplicadas y
+verificadas objeto por objeto solo en el Docker local):
 
 | Orden | Migración | Tanda / commit | Detalle |
 |---|---|---|---|
@@ -51,6 +51,7 @@ solo en el Docker local):
 | 4 | **M17** `20261023120000_reception_displays` | T7 (`b019d7c`) | «M17 en prod» |
 | 5 | **M15** `20261024120000_whatsapp_messaging` | T6 (`b019d7c`) | «M15 en prod» |
 | 6 | **M16** `20261025120000_saas_mp_subscriptions` | T6 (`b019d7c`) | «M16 en prod» (después: `saas-reanchor`) |
+| 7 | **M19** `20261027120000_support_tickets` | PV (TK-M, Q0) | «M19 en prod» |
 
 El deploy sale con `WHATSAPP_MODE`, `SAAS_BILLING_MODE`, `MP_CONNECT_MODE` y `DIRECTORY_MODE` en `off`
 ([PUSH-DIA.md](PUSH-DIA.md) paso B).
@@ -79,6 +80,7 @@ El deploy sale con `WHATSAPP_MODE`, `SAAS_BILLING_MODE`, `MP_CONNECT_MODE` y `DI
 | `20261023120000_reception_displays` (**M17**) | MIG (X0, las tres en un commit) | **commiteada (`b019d7c`, sin push), aplicada solo en el Docker local (22-oct)**. sha256 de `migration.sql` = `af7426dc3334f6aaa2fb1a9529d4acefc2e27b57f586212f2fffadd52748f430`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill, no toca tablas existentes. Objetos: 5 enums `Display*`; tabla `ReceptionDisplay` (RLS normal + `_tenant_isolation`), 5 CHECK, FK compuesta a `Location(id, tenantId)`, 2 parciales (`_pairingCodeHash_key`, `_tenant_name_live_key`). Drift aceptado: parciales, FK compuesta, CHECKs, policy. ADR-028. Orden: «M17 en prod» |
 | `20261024120000_whatsapp_messaging` (**M15**) | MIG (X0, las tres en un commit) | **commiteada (`b019d7c`, sin push), aplicada solo en el Docker local (22-oct)**. sha256 de `migration.sql` = `e8637727af84b64b38c303be5dc0d762006baa402fdcd989bace81674471cf0d`. Aditiva, sin backfill (WA-D17), `lock_timeout` 5 s; los 2 `ADD VALUE` de `NotificationKind` van **fuera** de la tx. Objetos: 10 enums `WhatsApp*`; `WhatsAppAccount`/`Template`/`Message`/`Inbound` (TENANT_READONLY) y `WhatsAppCredential` (SERVICE_ONLY); 5 parciales; FKs compuestas; 6 columnas `wa*` en `Patient` y 3 de respuesta en `Booking` (NULL sin DEFAULT) con sus CHECK. Hallazgo A de MIG: `seriesCount IS NOT NULL` explícito. En Prisma `WhatsAppAccount.credentials` es 1:n; la base garantiza 1:1 (`WhatsAppCredential_accountId_key`). Drift aceptado. ADR-029. Orden: «M15 en prod» |
 | `20261025120000_saas_mp_subscriptions` (**M16**) | MIG (X0, las tres en un commit) | **commiteada (`b019d7c`, sin push), aplicada solo en el Docker local (22-oct)**. sha256 de `migration.sql` = `b235454f0ceceef95394d752f1fe879ec2ec0baf6b7f052ae3e253e47f207798`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill (lo hace `scripts/saas-reanchor.ts` después del deploy). Objetos: 2 enums; 19 columnas + 3 CHECK + 2 parciales en `SaasSubscription` (`anchorDay` default 4, `autoDebitAllowed` default true), 4 columnas + 2 CHECK en `SaasCharge`, 3 columnas + CHECK + FK compuesta en `SaasPayment`, `SaasPayment_source_mp_check` recreado más laxo; tabla `SaasAdjustment` (TENANT_READONLY, solo inserción) con `saas_adjustment_guard()` (md5 `fd8790f4959e9f56ea743dead6bb6d2b`) y 2 triggers. Hallazgo A de MIG: `IS NOT NULL` explícito en breakdown/proration. Drift aceptado. ADR-027. Orden: «M16 en prod» |
+| `20261027120000_support_tickets` (**M19**) | TK-M (PV, ola Q0, sola) | **escrita y aplicada solo en el Docker local (27-oct), sin commit todavía**. sha256 de `migration.sql` = `7ac440677f5f80098b6245f1de70b556cc7ea9d4aeeb923b2c6eb9825803f7a2`. Aditiva, una tx, `lock_timeout` 5 s, con backfill de `source` en la misma tx (sin tocar `updatedAt`: no hay trigger). Objetos: enum `SupportTicketSource` (10 valores); `SupportThread.source` / `platformTakenAt` / `platformTakenById` (NULL sin DEFAULT) + CHECKs `SupportThread_source_check` (origen atado al kind; NULL tolerado) y `SupportThread_taken_check` (tomado ⇔ con superadmin); tabla `SupportTicketNote` (notas internas de Plataforma, **SERVICE_ONLY**: ENABLE + FORCE, 0 policies; FK RESTRICT al hilo, CHECK de body 1..2000, índice `(threadId, createdAt)`). «En curso» = OPEN + `platformTakenAt`, sin `ALTER TYPE`. Drift aceptado: CHECKs, ENABLE/FORCE. Verificada objeto por objeto (consulta al catálogo + `tests/integration/m19-support-tickets.test.ts`, 2 roles); `migrate status` al día (47); `guard:isolation` OK (SERVICE_ONLY 10). Orden: «M19 en prod» |
 
 **M6 en prod (IAM-1).** Prod conserva sus datos (decisiones del 14-oct: sin reset y sin staging), así que M6 se aplica
 sobre la base viva:
@@ -849,6 +851,45 @@ CHECK nuevos las recorren). No toca Booking/Patient/Tenant salvo la FK a Tenant 
    la palanca es `DROP TRIGGER "SaasAdjustment_guard" ON "SaasAdjustment"` (decide Martin; se recrea con el cuerpo
    literal de M16 y el md5 vuelve a dar `fd8790f4…`). Sacar M16 = migración nueva con DROP (backup del paso 2).
 
+**M19 en prod (TK-M, PV · tickets en /plataforma).** ⚠️ **Migración nueva** (`20261027120000_support_tickets`, tanda
+PV, sin push). sha256 de `migration.sql` = `7ac440677f5f80098b6245f1de70b556cc7ea9d4aeeb923b2c6eb9825803f7a2`.
+Aditiva, una tx, `lock_timeout` 5 s. Va **última** (después de M16, por timestamp) y **antes** del deploy: el código
+viejo no lee nada nuevo, y si inserta un hilo sin `source` entre M19 y el deploy, el CHECK lo tolera (NULL se lee como
+TENANT_SUPPORT / LANDING en `ticketSourceOf`). Decisión de Martin: todos los contactos de formularios y consultas a
+soporte entran como tickets en /plataforma.
+Objetos: enum `SupportTicketSource` (LANDING, PRICING, PLAN_LIBRE, SIGNUP_ASSISTED, ONBOARDING, TENANT_SUPPORT,
+PLAN_CHANGE, TENANT_SUSPENDED, ACCOUNT_DISABLED, PRIVACY); `SupportThread`: `source`, `platformTakenAt`,
+`platformTakenById` (NULL, sin DEFAULT, `platformTakenById` sin FK) + backfill `source` (TENANT → TENANT_SUPPORT, LEAD →
+LANDING) + CHECKs `SupportThread_source_check` y `SupportThread_taken_check`; tabla `SupportTicketNote` (FK
+`SupportTicketNote_threadId_fkey` RESTRICT, CHECK `SupportTicketNote_body_check` 1..2000, índice
+`SupportTicketNote_threadId_createdAt_idx`, RLS ENABLE + FORCE **sin policies** = SERVICE_ONLY). Sin `ALTER TYPE`: «En
+curso» = OPEN + `platformTakenAt`. Sin GRANT: DEFAULT PRIVILEGES. Drift aceptado: CHECKs y ENABLE/FORCE.
+**Locks:** `ALTER TABLE "SupportThread"` (ACCESS EXCLUSIVE; tabla chica, los 2 CHECK la recorren y el UPDATE la reescribe
+una vez). No toca Booking/Patient/Tenant. `prod-precheck` todavía no conoce M19 (`T6T7_MIGRATIONS` de
+`scripts/lib/prod-precheck-core.ts`): hasta sumarla, su `--pre` marca FAIL `pre.migrations.pending` («pendientes que NO
+son de esta tanda: 20261027120000_support_tickets») y las queries de M19 van a mano.
+1. Precheck de solo lectura:
+   ```sql
+   SELECT kind, count(*) FROM "SupportThread" GROUP BY 1;                               -- informativo: filas a backfillear
+   SELECT 1 FROM pg_type WHERE typname = 'SupportTicketSource';                         -- 0 filas
+   SELECT to_regclass('public."SupportTicketNote"');                                    -- NULL
+   ```
+2. Backup y `npm run db:prod:deploy` (misma corrida que M12-M16; es la última de las 7).
+3. Postcheck de solo lectura:
+   ```sql
+   SELECT count(*) FROM "SupportThread" WHERE source IS NULL;                           -- 0
+   SELECT kind, source, count(*) FROM "SupportThread" GROUP BY 1, 2 ORDER BY 1, 2;      -- TENANT/TENANT_SUPPORT y LEAD/LANDING
+   SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'SupportTicketNote';    -- t, t
+   SELECT count(*) FROM pg_policies WHERE tablename = 'SupportTicketNote';             -- 0
+   SELECT conname FROM pg_constraint WHERE conname IN ('SupportThread_source_check','SupportThread_taken_check',
+     'SupportTicketNote_body_check','SupportTicketNote_threadId_fkey');                -- 4
+   SELECT indexname FROM pg_indexes WHERE indexname = 'SupportTicketNote_threadId_createdAt_idx';  -- 1
+   SELECT checksum FROM _prisma_migrations WHERE migration_name = '20261027120000_support_tickets';  -- el sha256 de arriba
+   ```
+4. Rollback: revertir el código sin tocar M19 (columnas NULL y tabla sin lector son inocuas; `SupportThreadStatus` no
+   cambió, así que el código viejo lee todos los hilos). Sacar M19 = migración nueva con DROP de la tabla, los CHECKs, las
+   columnas y el tipo (backup del paso 2).
+
 **Deploy de BO** (código de `0d058bb`..`c60014f`, después de M7). Las variables nuevas nacen en su default seguro, así
 que el deploy no cambia el comportamiento de nadie salvo lo que se describe abajo.
 1. **Antes del deploy (solo lectura):**
@@ -1054,9 +1095,10 @@ de abajo (el `--pre` del precheck lo confirma contra `_prisma_migrations`):
 | 29 | `20261023120000_reception_displays` | M17: pantallas de TV de la sala (`ReceptionDisplay`: vínculo por código hasheado, secreto del dispositivo, medio de YouTube por id canónico), 5 enums | MIG (T7) — **ver «M17 en prod»** · ⏳ pendiente en prod |
 | 30 | `20261024120000_whatsapp_messaging` | M15: WhatsApp por consultorio (cuenta, credencial sellada, plantillas, cola de mensajes sin cuerpo, entrantes sin texto), consentimiento en `Patient`, respuesta del paciente en `Booking`, `NotificationKind` += 2 | MIG (T6) — **ver «M15 en prod»** · ⏳ pendiente en prod |
 | 31 | `20261025120000_saas_mp_subscriptions` | M16: suscripción con débito / MP / transferencia (`anchorDay` default 4, bajada y baja programadas, preapproval pendiente), desglose del cargo, `SaasAdjustment` solo inserción con guard, `SaasPayment_source_mp_check` más laxo | MIG (T6) — **ver «M16 en prod»** · ⏳ pendiente en prod |
+| 32 | `20261027120000_support_tickets` | M19: tickets de soporte en /plataforma: origen del ticket (`SupportThread.source`, enum `SupportTicketSource`, backfill TENANT → TENANT_SUPPORT / LEAD → LANDING), «Tomar» (`platformTakenAt/ById`), notas internas `SupportTicketNote` (SERVICE_ONLY) | TK-M (PV) — **ver «M19 en prod»** · ⏳ pendiente en prod |
 
-**#1-#25 están aplicadas en prod** (más las 15 de base de [DEPLOYMENT.md](DEPLOYMENT.md): 40 en total); **#26-#31 son
-las 6 del push**. Local: 46 (`migrate status` al día).
+**#1-#25 están aplicadas en prod** (más las 15 de base de [DEPLOYMENT.md](DEPLOYMENT.md): 40 en total); **#26-#32 son
+las 7 del push**. Local: 47 (`migrate status` al día).
 
 ⚠️ La #7 además crea políticas RLS (`ENABLE`/`FORCE` + `SELECT` en las dos tablas nuevas).
 ⚠️ La #3 falla si ya existieran dos turnos activos del **mismo paciente en el mismo instante**

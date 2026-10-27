@@ -1025,6 +1025,23 @@ enum SupportAuthorKind {
   LEAD
 }
 
+// M19 (PV · TK): de dónde entró el ticket. El CHECK `SupportThread_source_check` ata cada valor a su kind
+// (TENANT_SUPPORT/PLAN_CHANGE/TENANT_SUSPENDED en TENANT; los de la web, el alta y la cuenta desactivada en
+// LEAD; PRIVACY en los dos). Sin DEFAULT a propósito: NULL = fila de un INSERT del código viejo entre M19 y el
+// deploy; se lee con `ticketSourceOf(kind, source)` (NULL → TENANT_SUPPORT / LANDING).
+enum SupportTicketSource {
+  LANDING
+  PRICING
+  PLAN_LIBRE
+  SIGNUP_ASSISTED
+  ONBOARDING
+  TENANT_SUPPORT
+  PLAN_CHANGE
+  TENANT_SUSPENDED
+  ACCOUNT_DISABLED
+  PRIVACY
+}
+
 // Mensajes con Plataforma (C-PL11). RLS de tenant: SELECT por consultorio e INSERT
 // solo kind TENANT (los leads, tenantId NULL, son invisibles para la app). Sin
 // UPDATE/DELETE por la app: cerrar y `platformReadAt` van por el canal service.
@@ -1046,10 +1063,19 @@ model SupportThread {
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @default(now()) @updatedAt
 
+  // M19 (PV · TK, tickets en /plataforma). `source`: origen del ticket (ver el enum; NULL tolerado).
+  // «En curso» NO es un valor de SupportThreadStatus: es OPEN + `platformTakenAt` (si se vuelve atrás el código,
+  // Prisma revienta al leer un valor de enum desconocido; y el consultorio sigue viendo Abierta/Cerrada).
+  // CHECK `SupportThread_taken_check`: tomado ⇔ con superadmin. `platformTakenById` sin FK (historia).
+  source            SupportTicketSource?
+  platformTakenAt   DateTime?
+  platformTakenById String?
+
   tenant         Tenant?             @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   messages       SupportMessage[]    @relation("SupportMessageThread")
   tenantMessages SupportMessage[]    @relation("SupportMessageThreadTenant")
   reads          SupportThreadRead[]
+  notes          SupportTicketNote[]
 
   @@unique([id, tenantId])
   @@index([tenantId, createdAt])
@@ -1075,6 +1101,23 @@ model SupportMessage {
 
   @@index([threadId, createdAt])
   @@index([tenantId])
+}
+
+// M19 (PV · TK): notas internas de Plataforma sobre un ticket («Lo llamé por WhatsApp el 30/10…»). SERVICE_ONLY
+// (ENABLE + FORCE, CERO policies): el consultorio no las ve con ningún GUC. Por eso son tabla aparte y no columnas
+// de SupportThread, cuyo SELECT es del tenant y devuelve todas sus columnas. Solo inserción (el código no las
+// edita); body 1..2000 (CHECK). `authorUserId` = superadmin, sin FK (historia, como SupportMessage). RESTRICT
+// hacia el hilo: deleteTenantDeep borra las notas antes que los hilos.
+model SupportTicketNote {
+  id           String   @id @default(cuid())
+  threadId     String
+  authorUserId String
+  body         String
+  createdAt    DateTime @default(now())
+
+  thread SupportThread @relation(fields: [threadId], references: [id], onDelete: Restrict)
+
+  @@index([threadId, createdAt])
 }
 
 // Marca de leído del CONSULTORIO por usuario (markSupportThreadRead hace upsert).

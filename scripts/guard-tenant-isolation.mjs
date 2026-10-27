@@ -107,6 +107,11 @@ const SERVICE_ONLY = new Set([
   // (lib/secret-box.ts). Solo el canal service los abre (alta, envío, plantillas, rotación); la app
   // no los ve con ningún GUC, ni los del propio consultorio (molde MpCredential).
   "WhatsAppCredential",
+  // M19 (PV · TK, support_tickets): notas internas de Plataforma sobre un ticket (sin tenantId: cuelgan del
+  // hilo, que puede ser de un lead). El consultorio NO las ve con ningún GUC: por eso son tabla aparte y no
+  // columnas de SupportThread (cuyo SELECT es del tenant). Las escribe y lee solo lib/platform-inbox.ts por el
+  // canal service, detrás de requirePlatformAdmin.
+  "SupportTicketNote",
 ]);
 
 // BO0 (M7): tablas con tenantId que el consultorio LEE pero que solo escribe la

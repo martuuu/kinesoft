@@ -18,6 +18,7 @@
  * TP-M (M18 turnero_cobros_mp) suma SERVICE_ONLY `MpCredential` (tokens sellados) y TENANT_READONLY `MpAccount`.
  * MIG (T6+T7, X0): M15 suma SERVICE_ONLY `WhatsAppCredential` y TENANT_READONLY `WhatsApp{Account,Template,Message,
  * Inbound}`; M16 suma TENANT_READONLY `SaasAdjustment`. `ReceptionDisplay` (M17) queda en la categoría por defecto.
+ * TK-M (M19 support_tickets) suma SERVICE_ONLY `SupportTicketNote` (notas internas de Plataforma, sin tenantId).
  */
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -92,6 +93,10 @@ model MpAccount {
 model MpCredential {
   id       String @id
   tenantId String
+}
+model SupportTicketNote {
+  id       String @id
+  threadId String
 }
 ${WA_M16_MODELS.map((m) => `model ${m} {\n  id       String @id\n  tenantId String\n}`).join("\n")}
 ${extra}
@@ -185,6 +190,10 @@ const M15 = [
 ].join("\n");
 const M16 = M16_TENANT_READONLY.map(readonlySql).join("\n");
 
+// TK-M (M19 support_tickets): las notas internas de un ticket no las ve la app con ningún GUC (SERVICE_ONLY).
+const M19 = `ALTER TABLE "SupportTicketNote" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "SupportTicketNote" FORCE ROW LEVEL SECURITY;`;
+
 let dirs: string[] = [];
 afterEach(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
@@ -197,6 +206,7 @@ function runGuard(p: {
   m18?: string;
   m15?: string;
   m16?: string;
+  m19?: string;
   extraMigration?: string;
 }) {
   const root = mkdtempSync(join(tmpdir(), "guard-iso-"));
@@ -216,6 +226,7 @@ function runGuard(p: {
   mig("20261022120000_turnero_cobros_mp", p.m18 ?? M18);
   mig("20261024120000_whatsapp_messaging", p.m15 ?? M15);
   mig("20261025120000_saas_mp_subscriptions", p.m16 ?? M16);
+  mig("20261027120000_support_tickets", p.m19 ?? M19);
   if (p.extraMigration) mig("20261016000000_extra", p.extraMigration);
   const r = spawnSync(process.execPath, [SCRIPT], {
     env: { ...process.env, GUARD_ISOLATION_ROOT: root, NO_COLOR: "1" },
@@ -228,13 +239,13 @@ describe("guard de aislamiento · SERVICE_ONLY / TENANT_READONLY (BO0)", () => {
   it("control: el repo de juguete con M7 tal cual pasa", () => {
     const r = runGuard({});
     expect(r.out).toContain("GLOBAL_READONLY (7): ENABLE + FORCE, SELECT-only policies");
-    expect(r.out).toContain("SERVICE_ONLY (9): ENABLE + FORCE, zero policies. TENANT_READONLY (10)");
+    expect(r.out).toContain("SERVICE_ONLY (10): ENABLE + FORCE, zero policies. TENANT_READONLY (10)");
     expect(r.code).toBe(0);
   });
 
   it("[TP-M] MpAccount TENANT_READONLY y MpCredential SERVICE_ONLY en el guard", () => {
     const ok = runGuard({});
-    expect(ok.out).toContain("SERVICE_ONLY (9): ENABLE + FORCE, zero policies. TENANT_READONLY (10)");
+    expect(ok.out).toContain("SERVICE_ONLY (10): ENABLE + FORCE, zero policies. TENANT_READONLY (10)");
     expect(ok.code).toBe(0);
     // La app no escribe cuentas: una policy de escritura en MpAccount rompe el contrato.
     const w = runGuard({
@@ -256,7 +267,7 @@ describe("guard de aislamiento · SERVICE_ONLY / TENANT_READONLY (BO0)", () => {
 
   it("[WA-M] WhatsApp{Account,Template,Message,Inbound} y SaasAdjustment TENANT_READONLY; WhatsAppCredential SERVICE_ONLY", () => {
     const ok = runGuard({});
-    expect(ok.out).toContain("SERVICE_ONLY (9): ENABLE + FORCE, zero policies. TENANT_READONLY (10)");
+    expect(ok.out).toContain("SERVICE_ONLY (10): ENABLE + FORCE, zero policies. TENANT_READONLY (10)");
     expect(ok.code).toBe(0);
     // La app no encola ni marca mensajes: una policy de escritura en la cola rompe el contrato.
     const w = runGuard({
@@ -279,6 +290,21 @@ describe("guard de aislamiento · SERVICE_ONLY / TENANT_READONLY (BO0)", () => {
     const f = runGuard({ m15: M15.replace(`ALTER TABLE "WhatsAppCredential" FORCE ROW LEVEL SECURITY;`, "") });
     expect(f.code).toBe(1);
     expect(f.out).toMatch(/WhatsAppCredential: RLS not FORCEd/);
+  });
+
+  it("[TK-M] SupportTicketNote SERVICE_ONLY: cualquier policy o la falta de FORCE rompe el contrato", () => {
+    const ok = runGuard({});
+    expect(ok.out).toContain("SERVICE_ONLY (10): ENABLE + FORCE, zero policies. TENANT_READONLY (10)");
+    expect(ok.code).toBe(0);
+    // Las notas internas no las ve el consultorio con ningún GUC: ni una policy de lectura.
+    const r = runGuard({
+      extraMigration: `CREATE POLICY "SupportTicketNote_read" ON "SupportTicketNote" FOR SELECT USING (true);`,
+    });
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/SupportTicketNote: policy "SupportTicketNote_read" \(FOR SELECT\)/);
+    const f = runGuard({ m19: M19.replace(`ALTER TABLE "SupportTicketNote" FORCE ROW LEVEL SECURITY;`, "") });
+    expect(f.code).toBe(1);
+    expect(f.out).toMatch(/SupportTicketNote: RLS not FORCEd/);
   });
 
   it("[PL-0] falla si una tabla de cobro gana una policy de escritura (la app no puede marcar un pago)", () => {

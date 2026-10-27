@@ -66,8 +66,8 @@ describe.skipIf(!RUN)("[INF-S] prod-precheck (núcleo) contra el Docker local", 
     }
   });
 
-  it("[INF-S] --pre en local: las 6 figuran YA aplicadas (no pendientes) y sus prechecks se saltean", () => {
-    expect(T6T7_MIGRATIONS.map((m) => m.key)).toEqual(["M12", "M14", "M18", "M17", "M15", "M16"]);
+  it("[INF-S] --pre en local: las 7 figuran YA aplicadas (no pendientes) y sus prechecks se saltean", () => {
+    expect(T6T7_MIGRATIONS.map((m) => m.key)).toEqual(["M12", "M14", "M18", "M17", "M15", "M16", "M19"]);
     const pending = pre.rows.find((r) => r.id === "pre.migrations.pending");
     expect(pending?.status).toBe("PASS");
     expect(pending?.detail).toMatch(/0 pendientes/);

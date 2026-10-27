@@ -1,7 +1,7 @@
 /**
  * INF-S · núcleo de `scripts/prod-precheck.ts` (plan §26.7, decisión 1 de Martin del 22-oct): prechecks y postchecks
  * de SOLO LECTURA del día del push, para las 6 migraciones que todavía no están en prod (orden de timestamp
- * M12 → M14 → M18 → M17 → M15 → M16).
+ * M12 → M14 → M18 → M17 → M15 → M16 → M19).
  *
  * Por qué existe: hasta T5 cada migración tenía su bloque de SQL suelto en el RUNBOOK y Martin lo copiaba a mano en el
  * SQL editor de Supabase, uno por uno, comparando a ojo contra el comentario («-- 0 filas», «-- = el md5 de M9»). Con
@@ -43,6 +43,8 @@ export const T6T7_MIGRATIONS = [
   { key: "M17", name: "20261023120000_reception_displays", sha256: "af7426dc3334f6aaa2fb1a9529d4acefc2e27b57f586212f2fffadd52748f430" },
   { key: "M15", name: "20261024120000_whatsapp_messaging", sha256: "e8637727af84b64b38c303be5dc0d762006baa402fdcd989bace81674471cf0d" },
   { key: "M16", name: "20261025120000_saas_mp_subscriptions", sha256: "b235454f0ceceef95394d752f1fe879ec2ec0baf6b7f052ae3e253e47f207798" },
+  // PV (27-oct): tickets de Plataforma. Sumada a la misma tanda porque va en el mismo push (decisión de Martin).
+  { key: "M19", name: "20261027120000_support_tickets", sha256: "7ac440677f5f80098b6245f1de70b556cc7ea9d4aeeb923b2c6eb9825803f7a2" },
 ] as const;
 type MigKey = (typeof T6T7_MIGRATIONS)[number]["key"];
 
@@ -440,6 +442,9 @@ const M15_PARTIAL = [
 ] as const;
 
 const M16_TYPES = ["SaasCollectionMethod", "SaasAdjustmentKind"] as const;
+// M19 (PV · tickets): RUNBOOK «M19 en prod».
+const M19_TYPES = ["SupportTicketSource"] as const;
+const M19_COLUMNS = ["SupportThread.source", "SupportThread.platformTakenAt", "SupportThread.platformTakenById"] as const;
 const M16_COLUMNS = [
   ...[
     "collectionMethod", "billableFrom", "cancelAtPeriodEnd", "cancelEffectiveOn", "cancelRequestedAt", "cancelRequestedById",
@@ -570,7 +575,7 @@ async function preChecks(c: Collector, tx: Tx, o: PrecheckOptions, ms: MigState)
   });
 
   const expected = new Set<string>(T6T7_MIGRATIONS.map((m) => m.name));
-  await c.check("pre.migrations.pending", "base", "Pendientes = las de la tanda (M12 → M14 → M18 → M17 → M15 → M16)", async () => {
+  await c.check("pre.migrations.pending", "base", "Pendientes = las de la tanda (M12 → M14 → M18 → M17 → M15 → M16 → M19)", async () => {
     const unexpected = ms.pending.filter((n) => !expected.has(n));
     if (unexpected.length > 0) {
       return fail(`pendientes que NO son de esta tanda (revisar antes de deployar): ${list(unexpected)}`);
@@ -584,7 +589,7 @@ async function preChecks(c: Collector, tx: Tx, o: PrecheckOptions, ms: MigState)
 
   await c.check("pre.repo.checksums", "base", "Repo: migration.sql de la tanda = el sha256 verificado en local", async () => {
     const bad = T6T7_MIGRATIONS.filter((m) => fileSha256(o.migrationsDir, m.name) !== m.sha256).map((m) => m.key);
-    return bad.length === 0 ? pass("los 6 sha256 coinciden con el RUNBOOK y el handoff de MIG") : fail(`migration.sql cambiado: ${bad.join(", ")}`);
+    return bad.length === 0 ? pass("los 7 sha256 coinciden con el RUNBOOK y el handoff de MIG") : fail(`migration.sql cambiado: ${bad.join(", ")}`);
   });
 
   for (const m of T6T7_MIGRATIONS) {
@@ -697,6 +702,9 @@ async function preChecks(c: Collector, tx: Tx, o: PrecheckOptions, ms: MigState)
   await gate("pre.M16.absent", "M16", "M16: SaasAdjustment, enums, columnas y guard no existen", () =>
     absent(tx, { tables: ["SaasAdjustment"], types: M16_TYPES, columns: M16_COLUMNS, procs: ["saas_adjustment_guard"] })
   );
+  await gate("pre.M19.absent", "M19", "M19: SupportTicketNote, SupportTicketSource y las columnas de ticket no existen", () =>
+    absent(tx, { tables: ["SupportTicketNote"], types: M19_TYPES, columns: M19_COLUMNS })
+  );
   await gate("pre.M16.chargeUnique", "M16", "M16: SaasCharge(id, tenantId) único (destino de la FK compuesta)", async () => {
     const n = await scalar(tx, `SELECT count(*) AS n FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'SaasCharge_id_tenantId_key'`);
     return n === 1 ? pass("SaasCharge_id_tenantId_key presente (M8)") : fail("falta SaasCharge_id_tenantId_key: la FK de SaasAdjustment no se puede crear");
@@ -807,7 +815,7 @@ async function postChecks(c: Collector, tx: Tx, o: PrecheckOptions, ms: MigState
       if (!r) bad.push(`${m.key} sin aplicar`);
       else if (r.checksum !== m.sha256 || fileSha256(o.migrationsDir, m.name) !== m.sha256) bad.push(`${m.key} checksum distinto`);
     }
-    return bad.length === 0 ? pass("M12, M14, M18, M17, M15 y M16 con el checksum verificado") : fail(list(bad));
+    return bad.length === 0 ? pass("M12, M14, M18, M17, M15, M16 y M19 con el checksum verificado") : fail(list(bad));
   });
 
   await c.check("post.grants.app", "base", "Rol de la app: SELECT sobre las 15 tablas nuevas (DEFAULT PRIVILEGES)", async () => {
@@ -1009,6 +1017,21 @@ async function postChecks(c: Collector, tx: Tx, o: PrecheckOptions, ms: MigState
     return a === "4" && b === "true" ? pass("anchorDay 4, autoDebitAllowed true") : fail(`anchorDay ${a ?? "null"}, autoDebitAllowed ${b ?? "null"}`);
   });
 
+  // M19 (PV · tickets): las notas internas son SERVICE_ONLY (ENABLE + FORCE, cero policies): el consultorio no las ve.
+  await c.check("post.M19.objects", "M19", "M19: SupportTicketNote, SupportTicketSource y 3 columnas en SupportThread", () =>
+    present(tx, { tables: ["SupportTicketNote"], types: M19_TYPES, columns: M19_COLUMNS })
+  );
+  await c.check("post.M19.rls", "M19", "M19: SupportTicketNote con RLS ENABLE + FORCE y ninguna policy", () =>
+    rlsAndPolicies(tx, { SupportTicketNote: [] })
+  );
+  await c.check("post.M19.checks", "M19", "M19: CHECKs de origen y de «tomado» + cuerpo de la nota", () =>
+    constraintsByName(tx, ["SupportThread_source_check", "SupportThread_taken_check", "SupportTicketNote_body_check"], "c")
+  );
+  await c.check("post.M19.backfill", "M19", "M19: ningún hilo sin origen", async () => {
+    const n = await scalar(tx, `SELECT count(*) AS n FROM "SupportThread" WHERE "source" IS NULL`);
+    return n === 0 ? pass("0 hilos con source NULL") : warn(`${n} hilos con source NULL (los escribió el código viejo entre M19 y el deploy; se leen con COALESCE)`);
+  });
+
 }
 
 // ─── entrada ────────────────────────────────────────────────────────────────
@@ -1028,7 +1051,7 @@ export async function runProdPrecheck(o: PrecheckOptions): Promise<PrecheckResul
 /** Tabla de texto para pegar en el chat (sin colores: se copia tal cual). */
 export function formatPrecheckTable(r: PrecheckResult): string {
   const lines: string[] = [];
-  // Agrupado por bloque (Base y después M12 → M16 en orden de aplicación), estable dentro de cada uno: los chequeos
+  // Agrupado por bloque (Base y después M12 → M19 en orden de aplicación), estable dentro de cada uno: los chequeos
   // se ejecutan en el orden que conviene a la tx, pero se leen por migración.
   const rank = (g: string) => (g === "base" ? 0 : 1 + T6T7_MIGRATIONS.findIndex((m) => m.key === g));
   const sorted = r.rows.map((row, i) => ({ row, i })).sort((a, b) => rank(a.row.group) - rank(b.row.group) || a.i - b.i);

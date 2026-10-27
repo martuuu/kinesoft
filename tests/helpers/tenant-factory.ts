@@ -166,6 +166,9 @@ export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Prom
   await db.saasSubscription.deleteMany({ where: { tenantId } });
   await db.supportMessage.deleteMany({ where: { OR: [{ tenantId }, { thread: { tenantId } }] } });
   await db.supportThreadRead.deleteMany({ where: { tenantId } });
+  // TK-M (M19): las notas internas de Plataforma son RESTRICT hacia el hilo y no tienen tenantId (se filtran por
+  // el hilo): van antes que los hilos.
+  await db.supportTicketNote.deleteMany({ where: { thread: { tenantId } } });
   await db.supportThread.deleteMany({ where: { tenantId } });
   await db.$transaction([
     db.$executeRawUnsafe(`SET LOCAL session_replication_role = replica`),

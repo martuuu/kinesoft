@@ -5,7 +5,7 @@
 > (decisión 1 del 22-oct, plan §26.1). En cada paso marcado con 📋 **pegás la salida en el chat** y el agente la verifica
 > antes de que sigas. Si algo da FAIL, frenás ahí.
 >
-> Detalle técnico de cada migración: [MIGRACIONES-RUNBOOK.md](MIGRACIONES-RUNBOOK.md) («M12 en prod» … «M16 en prod»).
+> Detalle técnico de cada migración: [MIGRACIONES-RUNBOOK.md](MIGRACIONES-RUNBOOK.md) («M12 en prod» … «M16 en prod» y «M19 en prod»).
 > Variables: [DEPLOYMENT.md «Variables de entorno»](DEPLOYMENT.md). Consolas: [EXTERNAL-CONFIG.md](EXTERNAL-CONFIG.md).
 > Sin staging y sin reset: **precheck → backup → deploy de la base → push**.
 
@@ -16,10 +16,10 @@
 ## A · Local (antes de tocar nada)
 
 - [ ] Gate verde del cierre de T6+T7 (tsc, unit en TZ=UTC y AR, integración con los dos roles, E2E, `next build`
-      aislado, `migrate deploy` en local = 46 migraciones).
+      aislado, `migrate deploy` en local = 47 migraciones).
 - [ ] `git status` limpio y todo commiteado en `develop`.
 - [ ] `git log --oneline main..develop | wc -l` → anotá cuántos commits salen (el 23-oct eran 185).
-- [ ] `git diff --name-only main..develop -- prisma/migrations | grep migration.sql` → **exactamente estas 6**, en este
+- [ ] `git diff --name-only main..develop -- prisma/migrations | grep migration.sql` → **exactamente estas 7**, en este
       orden (el que aplica `migrate deploy`, por timestamp):
 
   | # | Carpeta | Qué |
@@ -30,6 +30,7 @@
   | M17 | `20261023120000_reception_displays` | Pantallas de TV de la sala |
   | M15 | `20261024120000_whatsapp_messaging` | Avisos por WhatsApp |
   | M16 | `20261025120000_saas_mp_subscriptions` | Suscripción con débito / Mercado Pago / transferencia, día 4 |
+  | M19 | `20261027120000_support_tickets` | Tickets de soporte en /plataforma (origen, «Tomar», notas internas) |
 
   Todas aditivas y compatibles con el código que hoy está en prod: van **antes** del push.
 
@@ -85,7 +86,7 @@ nuevo las valida al arrancar: un typo frena el deploy). Tabla completa en [DEPLO
   KINESOFT_CONFIRM_PROD=<ref> npm run db:prod:precheck -- --pre
   ```
 
-  Tiene que terminar en `0 FAIL`. **Anotá el `relfilenode` de Booking** que imprime (`pre.M18.relfilenode`): lo usás en
+  Tiene que terminar en `0 FAIL` (el script ya incluye M19: `pre.M19.absent`). **Anotá el `relfilenode` de Booking** que imprime (`pre.M18.relfilenode`): lo usás en
   D4. Los WARN esperables: `pre.M16.customPrice` (si hay precios a medida) y la distribución de `anchorDay`.
 - [ ] **D2 · Backup:**
 
@@ -93,10 +94,10 @@ nuevo las valida al arrancar: un typo frena el deploy). Tabla completa en [DEPLO
   npm run db:prod:backup       # → ~/kinesoft-backups/prod-<fecha>.dump (lista el archivo al final)
   ```
 
-- [ ] **D3 · Deploy de la base** (aplica las 6 en orden M12 → M14 → M18 → M17 → M15 → M16):
+- [ ] **D3 · Deploy de la base** (aplica las 7 en orden M12 → M14 → M18 → M17 → M15 → M16 → M19):
 
   ```bash
-  npm run db:prod:status       # → 6 pendientes
+  npm run db:prod:status       # → 7 pendientes
   npm run db:prod:deploy
   npm run db:prod:status       # → "Database schema is up to date!"
   ```
@@ -109,7 +110,7 @@ nuevo las valida al arrancar: un typo frena el deploy). Tabla completa en [DEPLO
   KINESOFT_CONFIRM_PROD=<ref> npm run db:prod:precheck -- --post --booking-relfilenode=<el de D1>
   ```
 
-  `0 FAIL`: objetos de las 6, md5 de `clinical_note_guard`, `patient_document_guard`, `online_charge_guard`,
+  `0 FAIL` (incluye `post.M19.*`): objetos de las 7, md5 de `clinical_note_guard`, `patient_document_guard`, `online_charge_guard`,
   `online_charge_sync_booking` y `saas_adjustment_guard`, RLS/FORCE y policies, checksums y `migrate status` al día.
 
 ## E · Push y verificación
@@ -175,7 +176,7 @@ nuevo las valida al arrancar: un typo frena el deploy). Tabla completa en [DEPLO
 
 ## H · Rollback
 
-- **Las 6 migraciones son aditivas:** el código viejo convive con ellas. Volver atrás el código **no** pide tocar la
+- **Las 7 migraciones son aditivas:** el código viejo convive con ellas. Volver atrás el código **no** pide tocar la
   base. Sacar una migración = migración nueva con DROP (decide Martin; se pierde lo escrito desde el push; el backup de
   D2 es la red).
 - **Código:** Vercel → Deployments → el deploy anterior → «Promote to Production» (inmediato), y después `git revert` del
