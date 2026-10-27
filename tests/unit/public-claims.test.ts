@@ -52,6 +52,20 @@ const FORBIDDEN: { id: string; re: RegExp }[] = [
  */
 const LEGIT: { file: string; id: string; why: string }[] = [
   // VX2-d2: el WhatsApp DEL CONSULTORIO de `booking-unavailable.tsx` pasó a `// claim-ok: prisma/schema.prisma:58`.
+  // TK-U2 (PV §27) sumó los legales de LG-P al alcance. Ahí WhatsApp no es una promesa de la landing sino un
+  // encargado/cookie/cláusula que existe (WA, M15: `WhatsAppAccount` en prisma/schema.prisma:169, cookie
+  // `kine_wa_signup`): la Política de privacidad TIENE que nombrarlo. Van acá y no como `claim-ok` en el archivo porque
+  // son de LG-P (ya commiteados); su dueño puede pasarlos a `// claim-ok:` y borrar estas dos filas.
+  {
+    file: "components/legal/privacidad-content.tsx",
+    id: "whatsapp",
+    why: "encargado (Meta), cookie kine_wa_signup y credenciales selladas de WA (M15, prisma/schema.prisma:169)",
+  },
+  {
+    file: "components/legal/terminos-content.tsx",
+    id: "whatsapp",
+    why: "cláusula de WhatsApp Business del consultorio (M15, prisma/schema.prisma:169)",
+  },
 ];
 
 /**
@@ -95,6 +109,9 @@ export function publicCopyFiles(): string[] {
     "app/verificar-acceso/",
     "app/elegir-consultorio/",
     "app/(directory)/",
+    // PV (§27): LG-P (`/terminos`, `/privacidad`) y TK-U2 (`/contacto`) son copy público.
+    "app/(legal)/",
+    "app/contacto/",
   ];
   const fromApp = appAll.filter(
     (f) =>
@@ -107,6 +124,8 @@ export function publicCopyFiles(): string[] {
     ...walk("components/auth"),
     ...walk("components/booking"),
     ...walk("components/directory"),
+    ...walk("components/legal"),
+    ...walk("components/contact"),
     ...["login", "signup", "forgot", "reset"].flatMap((n) => walk(`components/screens/${n}-screen.tsx`)),
     ...walk("lib/portal-copy.ts"),
   ].map(rel);

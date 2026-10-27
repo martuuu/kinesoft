@@ -62,7 +62,9 @@ export default async function SuspendidoPage() {
           : "Mientras esté suspendido no se puede entrar a la agenda ni a los pacientes. Si creés que es un error, "}
         {canContact ? (
           <>
-            <SupportContact subject={`Consultorio ${block.tenantName}`} />.
+            {/* PV (TK-U2): `/contacto?motivo=suspendido` abre un ticket TENANT en este consultorio con la identidad de la
+                sesión (antes, un mailto que no dejaba rastro en /plataforma). */}
+            <SupportContact motivo="suspendido" />.
           </>
         ) : (
           "avisale al titular del consultorio."

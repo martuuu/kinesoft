@@ -34,10 +34,10 @@ export default async function CuentaDesactivadaPage() {
     <AuthShell variant="centered" introAs="p">
       <StatusHeading eyebrow="Cuenta desactivada" title="Tu cuenta está desactivada" />
       <StatusText last>
-        {/* BO-Z B4: con el canal real (mailto o «escribile al equipo de KineSoft»); antes «escribinos a soporte» sin
-            decir a dónde. */}
+        {/* PV (TK-U2): `/contacto?motivo=cuenta` abre el ticket con el email de la SESIÓN (antes un mailto, y por eso
+            «desde el email de tu cuenta»: era la única forma de saber quién escribía). */}
         Mientras esté desactivada no podés entrar a ningún consultorio. Si creés que es un error,{" "}
-        <SupportContact subject="Cuenta desactivada" /> desde el email de tu cuenta.
+        <SupportContact motivo="cuenta" />.
       </StatusText>
       <SignOutButton variant="primary" />
     </AuthShell>

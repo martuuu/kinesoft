@@ -1,25 +1,27 @@
 import Link from "next/link";
 import { KineLogo } from "@/components/ui/kine-logo";
-import { SupportContact } from "@/components/ui/support-contact";
-import { supportEmail } from "@/lib/support-contact";
+import { LegalLinks } from "@/components/legal/legal-links";
+import { contactHref } from "@/lib/support-contact";
 import { BRAND_NAME } from "@/lib/brand";
 import { LANDING_NAV, directoryNavLinks } from "./site-header";
 import s from "./site-footer.module.css";
 
 /**
  * [VX2-c1] Footer (brief VX §3.1). Repite las anclas del header: sin JS el menú mobile no abre, y acá quedan a mano.
- * El contacto de soporte sale de `SupportContact` (mailto si hay `NEXT_PUBLIC_SUPPORT_EMAIL`). Sin email (VX-Z): el
- * texto neutro de `SupportContact` («Escribile al equipo de KineSoft») dejaba al visitante sin a dónde ir, y en la
- * landing el formulario de `#contacto` está en la misma página: «¿Dudas? Escribinos.» con link ahí.
+ *
+ * PV (§27, TK-U2): «Contacto» y «¿Dudas? Escribinos.» van a `/contacto` (la entrada única que abre un ticket en
+ * /plataforma), con o sin `NEXT_PUBLIC_SUPPORT_EMAIL`. Antes eran un `mailto:` (con email) o el ancla `#contacto`
+ * (sin email): el mail no dejaba rastro en /plataforma. Los links legales (LG-P) cierran el pie, al lado del ©.
  */
 const LINKS = [
   ...LANDING_NAV,
-  { href: "#contacto", label: "Contacto" },
+  { href: contactHref(), label: "Contacto" },
   { href: "/login", label: "Ingresar" },
   { href: "/signup", label: "Crear cuenta" },
 ];
 
-export function SiteFooter({ email = supportEmail() }: { email?: string | null } = {}) {
+/** `email` se acepta y se ignora (PV: el pie ya no arma un mailto); lo saca INT junto con el de `SupportContact`. */
+export function SiteFooter(_props: { email?: string | null } = {}) {
   // DIR-3a: el link al directorio solo con `DIRECTORY_MODE=public` (`directoryNavLinks`), antes de «Ingresar».
   const links = [...LINKS.slice(0, LANDING_NAV.length + 1), ...directoryNavLinks(), ...LINKS.slice(LANDING_NAV.length + 1)];
   return (
@@ -39,13 +41,9 @@ export function SiteFooter({ email = supportEmail() }: { email?: string | null }
             </p>
             <p className={s.blurb}>
               ¿Dudas?{" "}
-              {email ? (
-                <SupportContact capital email={email} subject={`Consulta desde la web de ${BRAND_NAME}`} />
-              ) : (
-                <a href="#contacto" className="k-link">
-                  Escribinos
-                </a>
-              )}
+              <Link href={contactHref()} className="k-link">
+                Escribinos
+              </Link>
               .
             </p>
           </div>
@@ -61,6 +59,7 @@ export function SiteFooter({ email = supportEmail() }: { email?: string | null }
         </div>
         <div className={s.base}>
           <span>© 2026 {BRAND_NAME}</span>
+          <LegalLinks />
         </div>
       </div>
     </footer>

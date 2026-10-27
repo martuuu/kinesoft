@@ -1,6 +1,7 @@
 import type { PublicPlan } from "@/lib/saas-plans-public";
 import { ButtonLink, buttonClassName } from "@/components/ui/button";
 import { IconArrow, IconCheck } from "@/components/ui/icons";
+import { contactHref } from "@/lib/support-contact";
 import styles from "./pricing.module.css";
 
 /**
@@ -9,9 +10,12 @@ import styles from "./pricing.module.css";
  * bullets por vertical): no hay una lista de marketing aparte que se desincronice con lo que la app habilita.
  *
  * - Individual, Consultorio y Clínica (los de CTA `signup`) van como tarjetas; Libre NO es tarjeta sino la banda
- *   «¿Hospital o clínica grande? Hablemos» → `#contacto` (D-VX9 / D-VX18), y la banda está siempre, aunque el catálogo
+ *   «¿Hospital o clínica grande? Hablemos» (D-VX9 / D-VX18), y la banda está siempre, aunque el catálogo
  *   venga sin Libre o vacío.
- * - Precio `null` → «Pedinos el precio», link a `#contacto` y SIN el estilo de monto (PL-D19: los precios nacen NULL
+ * - PV (§27, TK-U2): «Pedinos el precio» → `/contacto?motivo=precio&plan=<plan>` y la banda → `/contacto?motivo=
+ *   plan-libre&plan=LIBRE` (antes `#contacto`): cada pedido llega a /plataforma como ticket con su origen (Web ·
+ *   precios / Plan Libre) y el plan ya elegido en el form.
+ * - Precio `null` → «Pedinos el precio» como link (no botón) y SIN el estilo de monto (PL-D19: los precios nacen NULL
  *   hasta que Martin los cargue). VX-Z: antes iba «Consultá» en el `<strong>` grande del precio y se leía como un
  *   precio raro, no como algo que se puede pedir. Nada de «Precio de ejemplo» (era de la maqueta; lo prohíbe el guard).
  * - `[]` (la base no respondió en el build ISR, riesgo 5 del brief): sin tarjetas, la banda y «Escribinos y te pasamos
@@ -49,7 +53,7 @@ function PriceCard({ plan, featured }: { plan: PublicPlan; featured: boolean }) 
         {plan.priceCents === null ? (
           // aria-describedby: los tres links dicen lo mismo; el lector los distingue por el plan (como el CTA).
           <p className={styles.trial}>
-            <a href="#contacto" className="k-link" aria-describedby={titleId}>
+            <a href={contactHref("precio", plan.plan)} className="k-link" aria-describedby={titleId}>
               Pedinos el precio
             </a>
           </p>
@@ -149,7 +153,7 @@ export function LandingPricing({ plans }: { plans: PublicPlan[] }) {
             <h3 className={styles.bandTitle}>¿Hospital o clínica grande? Hablemos.</h3>
             <p>Si necesitás más de {clinicaMax} usuarios, armamos el plan Libre a la medida de tu equipo.</p>
           </div>
-          <a className={buttonClassName({ variant: "lime", size: "lg" })} href="#contacto">
+          <a className={buttonClassName({ variant: "lime", size: "lg" })} href={contactHref("plan-libre", "LIBRE")}>
             Escribinos
             <span aria-hidden="true" className={styles.arrow}>
               <IconArrow size={18} stroke={1.8} />

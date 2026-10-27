@@ -10,6 +10,9 @@
 /* Honeypot fuera de pantalla: no `display: none` (algunos bots lo saltean) y fuera del orden de tab. */
 .hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
 
+/* PV (TK-U2): en la card angosta de `/contacto` (AuthShell centered, 460 px) los pares van uno abajo del otro. */
+.stacked .two { grid-template-columns: minmax(0, 1fr); }
+
 @media (max-width: 639px) {
   .two { grid-template-columns: minmax(0, 1fr); }
 }

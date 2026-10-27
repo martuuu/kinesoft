@@ -36,6 +36,9 @@ export const BUNDLE_GROUPS = [
       // LG-P (PV §27): `/terminos` y `/privacidad`, `force-static` y sin JS propio. Sin el match caían en `workspace`
       // (180). Anclado con `$`: una ruta futura que empiece con «terminos» no entra acá por accidente.
       /^\/(terminos|privacidad)$/,
+      // TK-U2 (PV §27): `/contacto`, la entrada única de contacto (lead o ticket de sesión). Sin el match caía en
+      // `workspace` (180). Anclado con `$`, como los legales.
+      /^\/contacto$/,
     ],
   },
   { id: "turnero", budget: 135, blocking: true, match: [/^\/c\/\[slug\]\/booking/, /^\/booking\//] },

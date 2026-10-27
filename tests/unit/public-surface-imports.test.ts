@@ -79,6 +79,9 @@ function publicEntries(): string[] {
     "app/(display)/",
     // LG-P (PV §27): `/terminos` y `/privacidad` (grupo de bundle `public`): server components estáticos, sin JS.
     "app/(legal)/",
+    // TK-U2 (PV §27): `/contacto`, la entrada pública única de contacto (grupo de bundle `public`). Lo ven visitantes sin
+    // sesión y usuarios bloqueados: forms planos con `useFormState`, sin providers.
+    "app/contacto/",
   ];
   const SINGLE = ["app/page.tsx", "app/not-found.tsx", "app/global-error.tsx", "app/error.tsx"];
   return all.filter(

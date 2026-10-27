@@ -23,6 +23,10 @@ import styles from "./contact-form.module.css";
  * - Estados: éxito con `role="status"`, error con `role="alert"`; al cambiar el estado el foco va al mensaje
  *   (`tabIndex={-1}`) para que quien usa teclado o lector no quede abajo del botón sin enterarse.
  * - Sin framer (C-F3: la landing es superficie pública).
+ * - PV (§27, TK-U2): lo monta también `/contacto` (sin sesión). Ahí suma `source` oculto (el origen del ticket en
+ *   /plataforma: Web · precios, Plan Libre…; `submitLeadForm` ignora uno inválido y cae en LANDING), el plan del link
+ *   preseleccionado (`defaultPlan`), un `title` para nombrar el form (allá no está la `h2#contacto-title` de la
+ *   landing) y `stacked` (una columna: la card de `AuthShell centered` mide 460 px y dos campos por fila no entran).
  */
 
 export type PlanOption = { value: SaasPlan; label: string };
@@ -75,10 +79,20 @@ export function ContactForm({
   startedAt,
   planOptions,
   limits,
+  source,
+  defaultPlan,
+  title,
+  stacked = false,
 }: {
   startedAt: number;
   planOptions: PlanOption[];
   limits: ContactFormLimits;
+  /** Origen LEAD del ticket (`LEAD_TICKET_SOURCES`); sin él, el server usa LANDING. */
+  source?: string;
+  defaultPlan?: SaasPlan;
+  /** Nombre accesible del form cuando no está en la landing (allá lo nombra `#contacto-title`). */
+  title?: string;
+  stacked?: boolean;
 }) {
   const [state, formAction] = useFormState(submitLeadForm, null);
   const [shownAt, setShownAt] = useState(startedAt);
@@ -101,7 +115,12 @@ export function ContactForm({
   const err = (f: string) => contactFieldError(state, f);
 
   return (
-    <form ref={formRef} action={formAction} className={styles.form} aria-labelledby="contacto-title">
+    <form
+      ref={formRef}
+      action={formAction}
+      className={stacked ? `${styles.form} ${styles.stacked}` : styles.form}
+      {...(title ? { "aria-label": title } : { "aria-labelledby": "contacto-title" })}
+    >
       {feedback?.kind === "success" && (
         <div ref={messageRef} tabIndex={-1} role="status" className={`k-alert k-alert-success ${styles.message}`}>
           <IconCheckCircle />
@@ -150,7 +169,7 @@ export function ContactForm({
       </div>
 
       <Field id="contact-plan" label="Plan que te interesa" optional error={err("planInterest")}>
-        <select className="k-input k-input-lg" name="planInterest" defaultValue="">
+        <select className="k-input k-input-lg" name="planInterest" defaultValue={defaultPlan ?? ""}>
           <option value="">Todavía no sé</option>
           {planOptions.map((p) => (
             <option key={p.value} value={p.value}>
@@ -169,6 +188,7 @@ export function ContactForm({
         <input id="contact-website" name="website" type="text" tabIndex={-1} autoComplete="off" defaultValue="" />
       </div>
       <input type="hidden" name="startedAt" value={String(shownAt)} />
+      {source && <input type="hidden" name="source" value={source} />}
 
       <div>
         <SubmitButton />

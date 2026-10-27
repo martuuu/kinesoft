@@ -220,17 +220,13 @@ describe("[VX2-c1] landing", () => {
     for (const i of faqItems({ trialDays: 14, billingMode: "manual" })) expect(i.a).not.toMatch(/mercado\s*pago/i);
   });
 
-  it("[VX-Z] footer sin email de soporte: «¿Dudas? Escribinos.» con link a #contacto", () => {
-    const html = renderToStaticMarkup(<SiteFooter email={null} />);
-    expect(html).toMatch(/¿Dudas\? <a href="#contacto" class="k-link">Escribinos<\/a>\./);
-    expect(html).not.toContain("mailto:");
-    expect(html).not.toContain("equipo de KineSoft");
-  });
-
-  it("[VX-Z] footer con email de soporte: mailto", () => {
-    const html = renderToStaticMarkup(<SiteFooter email="soporte@example.com" />);
-    expect(html).toMatch(/¿Dudas\? Escribinos a <a href="mailto:soporte@example.com\?subject=/);
-    expect(html).not.toContain('href="#contacto" class="k-link"');
+  it("[TK-U2] footer: «¿Dudas? Escribinos.» va a /contacto, haya o no email de soporte (sin mailto)", () => {
+    for (const email of [null, "soporte@example.com"]) {
+      const html = renderToStaticMarkup(<SiteFooter email={email} />);
+      expect(html).toMatch(/¿Dudas\? <a class="k-link" href="\/contacto">Escribinos<\/a>\./);
+      expect(html).not.toContain("mailto:");
+      expect(html).not.toContain("equipo de KineSoft");
+    }
   });
 
   it("[VX-Z] vistas de la agenda (Día/Semana/Lista) como lista de chips, no tabs ni botones", async () => {

@@ -61,12 +61,12 @@ describe("[BO-Z B4] canal de soporte", () => {
     expect(supportContactText({ email: null, capital: true })).toBe("Escribile al equipo de KineSoft");
   });
 
-  it("SupportContact: mailto si hay email; texto sin link si no", () => {
+  it("SupportContact (TK-U2): link a /contacto, con o sin email (ya no es un mailto)", () => {
     const withMail = renderToStaticMarkup(<SupportContact email="s@k.test" capital />);
-    expect(withMail).toContain("Escribinos a ");
-    expect(withMail).toMatch(/<a href="mailto:s@k\.test"[^>]*>s@k\.test<\/a>/);
-    const bare = renderToStaticMarkup(<SupportContact email={null} />);
-    expect(bare).toBe("escribile al equipo de KineSoft");
+    expect(withMail).toMatch(/^<a href="\/contacto"[^>]*>Escribinos<\/a>$/);
+    expect(withMail).not.toContain("mailto:");
+    const bare = renderToStaticMarkup(<SupportContact email={null} motivo="suspendido" />);
+    expect(bare).toMatch(/^<a href="\/contacto\?motivo=suspendido"[^>]*>escribinos<\/a>$/);
   });
 
   it("banda: titular/admin ven el canal; el resto «Avisale al titular del consultorio.»", () => {
@@ -79,8 +79,11 @@ describe("[BO-Z B4] canal de soporte", () => {
     const admin = renderToStaticMarkup(
       <AccessBanner access={grace} enforcement="banner" audience="admin" supportEmail="s@k.test" />
     );
-    expect(admin).toContain("Tu prueba terminó. Te quedan 3 días antes de que el consultorio pase a modo lectura: escribinos a ");
-    expect(admin).toContain('href="mailto:s@k.test"');
+    // TK-U3: el canal ya no es un mailto sino Configuración → Soporte con borrador «plan».
+    expect(admin).toContain("Tu prueba terminó. Te quedan 3 días antes de que el consultorio pase a modo lectura: <a");
+    expect(admin).toContain('href="/configuracion?tab=soporte&amp;nuevo=plan"');
+    expect(admin).toContain("escribinos desde Soporte");
+    expect(admin).not.toContain("mailto:");
     expect(admin).toContain("para elegir un plan.");
 
     const member = accessBannerCopy(grace, "banner", "member");
@@ -93,10 +96,11 @@ describe("[BO-Z B4] canal de soporte", () => {
     expect(memberHtml).not.toMatch(/scribinos/);
   });
 
-  it("solo lectura con enforce: el llamado arranca oración («Escribinos a …»)", () => {
+  it("solo lectura con enforce: el llamado arranca oración («Escribinos desde Soporte»)", () => {
     const ro = { mode: "read_only" as const, reason: "cancelled", daysLeft: null };
     const html = renderToStaticMarkup(<AccessBanner access={ro} enforcement="enforce" supportEmail="s@k.test" />);
-    expect(html).toContain("no cargar ni modificar datos. Escribinos a ");
+    expect(html).toContain("Escribinos desde Soporte");
+    expect(html).toContain('href="/configuracion?tab=soporte&amp;nuevo=soporte"');
     expect(html).toContain("para reactivarlo.");
   });
 

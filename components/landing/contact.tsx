@@ -1,13 +1,6 @@
 import { IconBuilding, IconHelp, IconTag } from "@/components/ui/icons";
-import { SAAS_PLAN_LABEL } from "@/lib/tenant-modules";
-import {
-  LEAD_CLINIC_MAX,
-  LEAD_EMAIL_MAX,
-  LEAD_NAME_MAX,
-  LEAD_PHONE_MAX,
-  SUPPORT_BODY_MAX,
-} from "@/lib/support-threads-types";
-import { ContactForm, type ContactFormLimits, type PlanOption } from "./contact-form";
+import { CONTACT_LIMITS, CONTACT_PLAN_OPTIONS } from "@/components/contact/contact-options";
+import { ContactForm } from "./contact-form";
 import styles from "./contact.module.css";
 
 /**
@@ -16,25 +9,12 @@ import styles from "./contact.module.css";
  * `startedAt` lo pasa `app/page.tsx` (VX2-c1) con `Date.now()` del render ISR; el form lo pone en un hidden y lo
  * reemplaza al montar. Sin él `leadBotVerdict` descarta el lead como bot (PL-Z a4#2), así que es obligatorio.
  *
- * Las etiquetas de plan y los topes de largo se resuelven acá (server) y viajan como props: así el bundle público no
- * arrastra la matriz de módulos ni `lib/support-threads-types` (que importa formato de fechas), y los largos siguen
- * siendo el espejo de los CHECK de M8 en un solo lugar.
+ * Las etiquetas de plan y los topes de largo se resuelven en el server (`components/contact/contact-options.ts`,
+ * compartido con `/contacto`) y viajan como props: así el bundle público no arrastra la matriz de módulos ni
+ * `lib/support-threads-types`.
  *
  * Copy de §3.1. Sin «te llega un mail» (PL-D15: no hay respuesta automática al lead).
  */
-const PLAN_OPTIONS: PlanOption[] = (["INDIVIDUAL", "CONSULTORIO", "CLINICA", "LIBRE"] as const).map((value) => ({
-  value,
-  label: SAAS_PLAN_LABEL[value],
-}));
-
-const LIMITS: ContactFormLimits = {
-  name: LEAD_NAME_MAX,
-  email: LEAD_EMAIL_MAX,
-  phone: LEAD_PHONE_MAX,
-  clinicName: LEAD_CLINIC_MAX,
-  message: SUPPORT_BODY_MAX,
-};
-
 export function LandingContact({ startedAt }: { startedAt: number }) {
   return (
     <section id="contacto" aria-labelledby="contacto-title" className={styles.section}>
@@ -71,7 +51,7 @@ export function LandingContact({ startedAt }: { startedAt: number }) {
             </ul>
           </div>
           <div className={styles.card}>
-            <ContactForm startedAt={startedAt} planOptions={PLAN_OPTIONS} limits={LIMITS} />
+            <ContactForm startedAt={startedAt} planOptions={CONTACT_PLAN_OPTIONS} limits={CONTACT_LIMITS} />
           </div>
         </div>
       </div>

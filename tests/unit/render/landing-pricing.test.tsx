@@ -34,7 +34,7 @@ describe("[VX2-c2] LandingPricing", () => {
     expect(h.match(/<h1/g)).toBeNull();
   });
 
-  it("Individual, Consultorio y Clínica son tarjetas; Libre es la banda «Hablemos» → #contacto", () => {
+  it("Individual, Consultorio y Clínica son tarjetas; Libre es la banda «Hablemos» → /contacto?motivo=plan-libre (TK-U2)", () => {
     const h = html(catalog());
     expect(card(h, "individual")).not.toBeNull();
     expect(card(h, "consultorio")).not.toBeNull();
@@ -43,14 +43,14 @@ describe("[VX2-c2] LandingPricing", () => {
     expect(h.match(/<article/g)).toHaveLength(3);
     expect(text(h)).toContain("¿Hospital o clínica grande? Hablemos.");
     expect(text(h)).toContain("Si necesitás más de 10 usuarios, armamos el plan Libre a la medida de tu equipo.");
-    expect(h).toMatch(/<a class="[^"]*k-btn-lime[^"]*" href="#contacto">Escribinos/);
+    expect(h).toMatch(/<a class="[^"]*k-btn-lime[^"]*" href="\/contacto\?motivo=plan-libre&amp;plan=LIBRE">Escribinos/);
   });
 
-  it("[VX-Z] precio null → «Pedinos el precio» como link a #contacto, sin estilo de monto ni «por mes»; cargado → formatARS + «por mes»", () => {
+  it("[VX-Z] precio null → «Pedinos el precio» como link a /contacto?motivo=precio (TK-U2), sin estilo de monto ni «por mes»; cargado → formatARS + «por mes»", () => {
     const h = html(catalog((r) => (r.plan === "CONSULTORIO" ? { ...r, priceCents: 6_400_000 } : r)));
     const indHtml = card(h, "individual")!;
     const ind = text(indHtml);
-    expect(indHtml).toMatch(/<a href="#contacto" class="k-link" aria-describedby="plan-individual">Pedinos el precio<\/a>/);
+    expect(indHtml).toMatch(/<a href="\/contacto\?motivo=precio&amp;plan=INDIVIDUAL" class="k-link" aria-describedby="plan-individual">Pedinos el precio<\/a>/);
     expect(ind).not.toContain("Consultá");
     expect(ind).not.toContain("por mes");
     // Sin el <strong> grande del monto: el link no se lee como un precio.
