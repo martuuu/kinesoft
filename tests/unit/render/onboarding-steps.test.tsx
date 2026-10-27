@@ -54,7 +54,7 @@ afterEach(() => {
 
 describe("[VX2-e] paso Consultorio", () => {
   it("al crear pregunta «¿Atendés pacientes?» con las dos opciones, «Sí» por default y la ayuda de §3.3", () => {
-    const h = html(<StepClinic tenant={null} patientIdentity={false} />);
+    const h = html(<StepClinic tenant={null} patientIdentity={false} legalAccepted />);
     const t = text(h);
     expect(t).toContain("¿Atendés pacientes?");
     expect(t).toContain("Sí, atiendo");
@@ -79,7 +79,7 @@ describe("[VX2-e] paso Consultorio", () => {
   });
 
   it("re-entrando (con tenant) no se pregunta: el paso no lo cambia", () => {
-    const t = text(html(<StepClinic tenant={TENANT} patientIdentity={false} />));
+    const t = text(html(<StepClinic tenant={TENANT} patientIdentity={false} legalAccepted />));
     expect(t).not.toContain("¿Atendés pacientes?");
   });
 
@@ -87,7 +87,7 @@ describe("[VX2-e] paso Consultorio", () => {
     const t = text(
       html(
         <OnboardingShell current={STEP.clinic} ownerClinical={false}>
-          <StepClinic tenant={TENANT} patientIdentity={false} />
+          <StepClinic tenant={TENANT} patientIdentity={false} legalAccepted />
         </OnboardingShell>
       )
     );
@@ -109,21 +109,20 @@ describe("[VX2-e] paso Consultorio", () => {
   });
 
   it("placeholders neutros (sin datos de demo)", () => {
-    const h = html(<StepClinic tenant={null} patientIdentity={false} />);
+    const h = html(<StepClinic tenant={null} patientIdentity={false} legalAccepted />);
     expect(h).not.toMatch(/movare|camila/i);
     expect(h).toContain('placeholder="Nombre de tu consultorio"');
   });
 
-  it("«escribinos» con SupportContact: mailto con el canal configurado, sin link si no hay", () => {
-    vi.stubEnv("NEXT_PUBLIC_SUPPORT_EMAIL", "soporte@ejemplo.com");
-    const withEmail = html(<StepClinic tenant={null} patientIdentity={false} />);
-    expect(withEmail).toMatch(/<a href="mailto:soporte@ejemplo\.com\?subject=[^"]+"[^>]*data-support-mailto/);
-    expect(text(withEmail)).not.toContain("escribinos a soporte.");
-
-    vi.stubEnv("NEXT_PUBLIC_SUPPORT_EMAIL", "");
-    const without = html(<StepClinic tenant={null} patientIdentity={false} />);
-    expect(without).not.toContain("data-support-mailto");
-    expect(text(without)).toContain("Después, escribile al equipo de KineSoft");
+  it("[LG-U] «escribinos» va al form de contacto (`/contacto?motivo=onboarding`), haya o no canal de mail", () => {
+    // Antes (VX2-e) era un `SupportContact` con link de mail; PV §27 (LG-U): todo contacto entra como ticket.
+    for (const email of ["soporte@ejemplo.com", ""]) {
+      vi.stubEnv("NEXT_PUBLIC_SUPPORT_EMAIL", email);
+      const h = html(<StepClinic tenant={null} patientIdentity={false} legalAccepted />);
+      expect(h).toMatch(/<a[^>]*href="\/contacto\?motivo=onboarding"[^>]*>escribinos<\/a>/);
+      expect(h).not.toContain("mailto:");
+      expect(h).not.toContain("data-support-mailto");
+    }
   });
 });
 

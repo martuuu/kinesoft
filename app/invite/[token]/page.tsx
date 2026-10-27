@@ -8,6 +8,7 @@ import { AuthShell } from "@/components/auth/auth-shell";
 import { SignOutButton, StatusHeading, StatusLink } from "@/app/plataforma-mfa/shared";
 import { Tag } from "@/components/ui/tag";
 import { findInvitationByRawToken } from "@/lib/invitations-internal";
+import { hasAcceptedCurrentLegal } from "@/lib/legal-acceptance-internal";
 import { emailEqualsFilter, sameEmail } from "@/lib/email-match";
 import { roleLabel } from "@/lib/roles";
 import { AcceptInviteButton } from "./accept-button";
@@ -58,6 +59,11 @@ export default async function InvitePage({ params }: { params: { token: string }
     sessionEmail,
     hasAccount,
   });
+
+  // PV (§27, LG-U): solo en `join` (con sesión del mismo email) importa si ya aceptó la versión vigente de los Términos
+  // y la Privacidad: si no, el botón muestra la casilla y `acceptInvite` la exige. En `activate` la cuenta todavía no
+  // existe (la casilla va siempre) y en el resto no hay nada que aceptar.
+  const legalAccepted = state.kind === "join" && user ? await hasAcceptedCurrentLegal(user.id) : true;
 
   if (!invite || state.kind === "not_found") {
     return (
@@ -137,7 +143,7 @@ export default async function InvitePage({ params }: { params: { token: string }
             <InviteNotice tone="success">
               Vas a sumarte como <strong>{role}</strong> con tu cuenta <strong>{sessionEmail}</strong>.
             </InviteNotice>
-            <AcceptInviteButton token={token} tenantName={tenantName} />
+            <AcceptInviteButton token={token} tenantName={tenantName} legalAccepted={legalAccepted} />
           </div>
         </>
       )}

@@ -42,6 +42,8 @@ const EVENT_LABEL: Record<string, string> = {
   "two_factor.recovery_used": "Se usó un código de recuperación",
   "two_factor.email_code_locked": "Se bloqueó un código por email (demasiados intentos)",
   "two_factor.reset_by_platform": "El equipo de KineSoft restableció tu verificación",
+  // PV (§27, LG-S/LG-U): el evento lo escribe `recordLegalAcceptanceInTx` (alta, onboarding o invitación).
+  "legal.accepted": "Aceptaste los Términos y la Política de privacidad",
 };
 
 function formatWhen(iso: string): string {

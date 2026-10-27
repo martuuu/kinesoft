@@ -22,7 +22,9 @@ import {
 
 export async function signupFormAction(_prev: SignupFormState, fd: FormData): Promise<SignupFormState> {
   const values = { fullName: formText(fd, "fullName"), email: formText(fd, "email") };
-  const r = await signUpPractitioner({ ...values, password: formText(fd, "password"), inviteToken: "" });
+  // PV (§27, LG-U): la casilla de Términos y Privacidad (`name="acceptLegal"`, tildada = "on") viaja cruda: el zod de
+  // `SignupInput` decide (`legalAcceptedFromForm`) y, sin ella, devuelve `fieldErrors.acceptLegal` sin crear nada.
+  const r = await signUpPractitioner({ ...values, password: formText(fd, "password"), inviteToken: "", acceptLegal: formText(fd, "acceptLegal") });
   // Contrato de IAM-2c: `redirectTo` solo con invitación (no llega desde este form, que manda ""). Si llegara, se
   // sigue y NO se muestra «te mandamos un email» (el bug del QA del 14-oct, §19.1 #4). `redirect` anda con y sin JS.
   if (r.ok && r.data.redirectTo) redirect(r.data.redirectTo);

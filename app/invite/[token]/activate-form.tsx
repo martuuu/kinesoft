@@ -5,9 +5,28 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { PasswordInput } from "@/components/ui/password-input";
+import { LegalAcceptCheckbox } from "@/components/legal/legal-accept";
 import { activateInvitationAction } from "./activate-action";
 import { inviteLoginHref } from "./invite-state";
 import { InviteNotice } from "./invite-notice";
+
+/**
+ * Lo que el form le manda a `activateInvitationAction`. Exportado para el render test (sin DOM no hay submit).
+ *
+ * PV (§27, LG-U): `acceptLegal` = la casilla de Términos y Privacidad (tildada = "on" → true). Siempre visible acá:
+ * la cuenta nace en esta activación, así que nunca hay una aceptación previa; el server la exige y la registra en la
+ * misma tx de la unión (`invite_activate`).
+ */
+export function activationInputFrom(token: string, fd: FormData) {
+  return {
+    token,
+    firstName: String(fd.get("firstName") ?? ""),
+    lastName: String(fd.get("lastName") ?? ""),
+    password: String(fd.get("password") ?? ""),
+    passwordConfirm: String(fd.get("passwordConfirm") ?? ""),
+    acceptLegal: fd.get("acceptLegal") === "on",
+  };
+}
 
 /**
  * «Activar tu cuenta» (IAM-2b). Reemplaza el CTA «Crear mi cuenta» que mandaba
@@ -40,13 +59,7 @@ export function ActivateForm({
     setError(null);
     setFieldErrors({});
     start(async () => {
-      const r = await activateInvitationAction({
-        token,
-        firstName: String(fd.get("firstName") ?? ""),
-        lastName: String(fd.get("lastName") ?? ""),
-        password: String(fd.get("password") ?? ""),
-        passwordConfirm: String(fd.get("passwordConfirm") ?? ""),
-      });
+      const r = await activateInvitationAction(activationInputFrom(token, fd));
       // Éxito = la action redirige (no vuelve nada).
       if (!r) return;
       setError({ code: r.code, message: r.error });
@@ -98,7 +111,9 @@ export function ActivateForm({
         <PasswordInput name="passwordConfirm" required autoComplete="new-password" large />
       </Field>
 
-      {error && (
+      <LegalAcceptCheckbox id="invite-legal" error={fieldErrors.acceptLegal?.[0]} />
+
+      {error && error.message !== fieldErrors.acceptLegal?.[0] && (
         <InviteNotice tone="error" role="alert">
           {error.message}
           {needsLogin && (

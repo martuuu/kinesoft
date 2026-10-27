@@ -3,7 +3,6 @@ import { SignupScreen } from "@/components/screens/signup-screen";
 import { getSessionUser } from "@/lib/onboarding-internal";
 import { signupMode } from "@/lib/env";
 import { signupAssistedMessage } from "@/lib/onboarding-logic";
-import { supportEmail, supportMailto } from "@/lib/support-contact";
 import { visibleOAuthProviders } from "@/lib/oauth-providers-public";
 import { getPublicPlanCatalog } from "@/lib/saas-plans-public";
 import { PLAN_DEFAULTS } from "@/lib/saas-plans-logic";
@@ -35,9 +34,10 @@ export default async function SignupPage({
   if (user) redirect("/dashboard");
 
   // BO-Z (BO-D11): con SIGNUP_MODE=assisted no se ofrece el form (el server igual lo rechaza): el consultorio lo da de
-  // alta el equipo. El copy y el mailto se arman acá, del lado del server, con el mismo canal que el rechazo.
+  // alta el equipo. El copy se arma acá, del lado del server, con el mismo texto que el rechazo; el «Escribinos» va al
+  // form de contacto con `motivo=alta` (PV §27, LG-U: todo contacto entra como ticket en Plataforma).
   if (signupMode() === "assisted") {
-    return <SignupScreen assisted={{ message: signupAssistedMessage(), mailto: supportMailto(supportEmail(), "Alta de consultorio") }} />;
+    return <SignupScreen assisted={{ message: signupAssistedMessage() }} />;
   }
   // VX2-a: los días de prueba del plan Individual salen del catálogo público (`SaasPlanConfig`, lo edita Plataforma);
   // sin base (`[]`, el catálogo nunca tira) caen al default del código, que es el mismo con el que nace la prueba.

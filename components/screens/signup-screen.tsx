@@ -4,11 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import { useFormState } from "react-dom";
 import Link from "next/link";
 import { AuthShell } from "@/components/auth/auth-shell";
-import { SocialButtons } from "@/components/auth/social-buttons";
+import { SocialButtons, SocialLegalNote } from "@/components/auth/social-buttons";
 import { AuthSubmitStatus } from "@/components/auth/auth-submit";
 import { signupFormAction } from "@/components/auth/auth-form-actions";
 import type { SignupFormState } from "@/components/auth/auth-form-state";
-import { Button } from "@/components/ui/button";
+import { ButtonLink } from "@/components/ui/button";
+import { LegalAcceptCheckbox } from "@/components/legal/legal-accept";
 import { Field } from "@/components/ui/field";
 import { PasswordInput } from "@/components/ui/password-input";
 import { IconAlert, IconArrow, IconCheckCircle } from "@/components/ui/icons";
@@ -42,7 +43,7 @@ export function SignupScreen({
   providers = [],
   trialDays = PLAN_DEFAULTS.INDIVIDUAL.trialDays,
 }: {
-  assisted?: { message: string; mailto: string | null };
+  assisted?: { message: string };
   providers?: readonly OAuthProvider[];
   trialDays?: number;
 } = {}) {
@@ -54,7 +55,7 @@ export function SignupScreen({
     // BO-Z (BO-D11): sin form ni sociales (el server rechaza el alta igual): una card centrada con el canal.
     return (
       <AuthShell variant="centered" footerLinks={[{ label: "Ingresar", href: "/login" }]}>
-        <SignupAssisted message={assisted.message} mailto={assisted.mailto} />
+        <SignupAssisted message={assisted.message} />
       </AuthShell>
     );
   }
@@ -64,6 +65,10 @@ export function SignupScreen({
   const failed = state?.status === "error" ? state : null;
   const draft = state?.values ?? { fullName: "", email: "" };
   const fieldErrors = failed?.fieldErrors ?? {};
+  // LG-U: si lo único que falta es la casilla, el server devuelve el mismo texto como error general y como error del
+  // campo; se muestra una sola vez, al lado de la casilla (dos avisos iguales confunden al lector de pantalla).
+  const legalError = fieldErrors.acceptLegal?.[0];
+  const generalError = failed && failed.error !== legalError ? failed.error : null;
 
   return (
     <AuthShell
@@ -91,16 +96,18 @@ export function SignupScreen({
               <>
                 {/* Alta con Google/Facebook: el callback crea la cuenta ya verificada y sigue al onboarding. */}
                 <SocialButtons providers={providers} next="/onboarding" className={st.social} />
+                {/* LG-U: el alta social no pasa por la casilla del form: se avisa acá qué se acepta. */}
+                <SocialLegalNote providers={providers} />
                 <div className="k-divider">o con tu email</div>
               </>
             )}
 
             {/* `key`: tras un error o un «Volver» el form se vuelve a montar con lo tipeado como defaultValue. */}
             <form key={state ? draft.email + draft.fullName : "new"} action={formAction} className={st.fields}>
-              {failed && (
+              {generalError && (
                 <div className="k-alert" role="alert">
                   <IconAlert size={18} />
-                  <span>{failed.error}</span>
+                  <span>{generalError}</span>
                 </div>
               )}
               <Field id="signup-name" label="Nombre y apellido" error={fieldErrors.fullName?.[0]}>
@@ -137,6 +144,9 @@ export function SignupScreen({
               >
                 <PasswordInput name="password" autoComplete="new-password" required minLength={8} large />
               </Field>
+
+              {/* PV (§27, LG-U): sin tildar por defecto; el server la exige (`signUpPractitioner` → fieldErrors). */}
+              <LegalAcceptCheckbox id="signup-legal" error={legalError} />
 
               <AuthSubmitStatus label="Crear cuenta" busyLabel="Creando tu cuenta…" />
             </form>
@@ -187,27 +197,21 @@ function SignupPoints({ firstPoint }: { firstPoint: string }) {
  * BO-Z (BO-D11): `SIGNUP_MODE=assisted`. Sin form: el consultorio lo damos de alta nosotros desde Plataforma. Quien
  * tiene una invitación entra por el link del mail (`/invite/<token>`, que no pasa por acá) y quien ya tiene cuenta,
  * por /login. Exportado para el render test.
+ *
+ * PV (§27, LG-U): «Escribinos» va al form de `/contacto?motivo=alta` (abre un ticket en Plataforma con origen «Alta
+ * asistida»), no a un link de mail: decisión de Martin del 27-oct, todo contacto entra como ticket. Es un link (no un
+ * botón con `window.location`): anda sin JS y el lector lo anuncia como lo que es.
  */
-export function SignupAssisted({ message, mailto }: { message: string; mailto: string | null }) {
+export function SignupAssisted({ message }: { message: string }) {
   return (
     <div className={st.stack}>
       <div className={st.head}>
         <h1 className={st.title}>Escribinos para sumar tu consultorio</h1>
         <p className={st.sub}>{message}</p>
       </div>
-      {mailto && (
-        <Button
-          variant="primary"
-          size="lg"
-          block
-          type="button"
-          onClick={() => {
-            window.location.href = mailto;
-          }}
-        >
-          Escribinos <IconArrow size={16} />
-        </Button>
-      )}
+      <ButtonLink href="/contacto?motivo=alta" variant="primary" size="lg" block>
+        Escribinos <IconArrow size={16} />
+      </ButtonLink>
       <p className={`k-hint ${st.small}`} style={{ margin: 0 }}>
         ¿Te invitaron a sumarte a un equipo? Abrí el link del mail de invitación: desde ahí creás tu cuenta.
       </p>

@@ -48,7 +48,14 @@ describe("signupFormAction", () => {
   it("lee el form, nunca manda invitación y devuelve «enviado» con lo tipeado", async () => {
     calls.signup.mockResolvedValue({ ok: true, data: { email: "ana@x.test", joining: false, message: "Te mandamos un email." } });
     const s = await signupFormAction(null, fd({ fullName: "Ana", email: "ana@x.test", password: "abc12345", inviteToken: "tok" }));
-    expect(calls.signup).toHaveBeenCalledWith({ fullName: "Ana", email: "ana@x.test", password: "abc12345", inviteToken: "" });
+    // LG-U: sin la casilla en el FormData, `acceptLegal` va vacío (el zod del server lo rechaza: lo cubre lg-u-*).
+    expect(calls.signup).toHaveBeenCalledWith({
+      fullName: "Ana",
+      email: "ana@x.test",
+      password: "abc12345",
+      inviteToken: "",
+      acceptLegal: "",
+    });
     expect(s).toEqual({
       status: "sent",
       email: "ana@x.test",

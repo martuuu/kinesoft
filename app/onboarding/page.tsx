@@ -85,7 +85,7 @@ export default async function OnboardingPage({
     // Hasta dónde se puede saltar desde el riel: lo ya recorrido según el estado.
     <OnboardingShell current={step} maxReachable={maxReachableStep(progress)} ownerClinical={ownerClinical}>
       {step === STEP.clinic || !ctx.tenant ? (
-        <StepClinic tenant={ctx.tenant} patientIdentity={ctx.patientIdentity} />
+        <StepClinic tenant={ctx.tenant} patientIdentity={ctx.patientIdentity} legalAccepted={ctx.legalAccepted} />
       ) : step === STEP.location ? (
         <StepLocation location={ctx.location} />
       ) : step === STEP.hours ? (

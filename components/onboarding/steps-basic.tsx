@@ -12,7 +12,7 @@ import { FormField } from "@/components/ui/form-field";
 import { IconCheck } from "@/components/ui/icons";
 import { useFormDirty } from "@/components/ui/use-form-dirty";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { SupportContact } from "@/components/ui/support-contact";
+import { LegalAcceptCheckbox } from "@/components/legal/legal-accept";
 import { saveOnboardingClinic, completeOnboarding } from "@/lib/onboarding";
 import { setBusinessHours } from "@/lib/tenant-settings";
 import { BUSINESS_HOUR_MAX, BUSINESS_HOUR_MIN, AGENDA_SLOT_OPTIONS } from "@/lib/tenant-settings-constants";
@@ -66,6 +66,10 @@ export const OWNER_CLINICAL_HELP =
  * Lo que el paso Consultorio le manda a `saveOnboardingClinic`. Exportado para el render test (el submit no se puede
  * disparar sin DOM). `ownerClinical` va solo al CREAR: re-entrando el server lo ignora, y mandarlo daría a entender
  * que el paso lo cambia.
+ *
+ * PV (§27, LG-U): `acceptLegal` = la casilla de Términos y Privacidad (checkbox nativo: tildada = "on"). Va siempre:
+ * el server la exige solo si la persona no aceptó la versión vigente (alta con Google/Facebook, o /login→Google sin
+ * cuenta) y la ignora si ya la aceptó; la casilla se muestra solo en el primer caso.
  */
 export function clinicInputFrom(
   fd: FormData,
@@ -78,15 +82,19 @@ export function clinicInputFrom(
     publicEmail: String(fd.get("publicEmail") ?? ""),
     vertical: o.vertical,
     ...(o.creating ? { ownerClinical: o.ownerClinical } : {}),
+    acceptLegal: fd.get("acceptLegal") === "on",
   };
 }
 
 export function StepClinic({
   tenant,
   patientIdentity,
+  legalAccepted,
 }: {
   tenant: OnboardingTenant | null;
   patientIdentity: boolean;
+  /** LG-U: `OnboardingContext.legalAccepted` (¿aceptó la versión vigente?). false → se muestra la casilla. */
+  legalAccepted: boolean;
 }) {
   const { go, refresh, label } = useStepNav();
   const flow = useOnboardingFlow();
@@ -181,7 +189,13 @@ export function StepClinic({
               })}
             </div>
             <p className={css.note}>
-              Lo podés cambiar hasta terminar el alta. Después, <SupportContact subject="Cambiar el tipo de consultorio" />.
+              {/* PV (§27, LG-U): a `/contacto?motivo=onboarding` (ticket en Plataforma, origen «Alta en curso»), no a un
+                  link de mail: decisión de Martin del 27-oct, todo contacto entra como ticket. */}
+              Lo podés cambiar hasta terminar el alta. Después,{" "}
+              <Link href="/contacto?motivo=onboarding" className="k-link">
+                escribinos
+              </Link>
+              .
             </p>
             {fieldErrors.vertical?.[0] && <InlineError>{fieldErrors.vertical[0]}</InlineError>}
           </fieldset>
@@ -227,7 +241,14 @@ export function StepClinic({
               Los turnos online arrancan apagados. Activalos en <strong>Configuración → General</strong>.
             </p>
           )}
-          {error && <InlineError>{error}</InlineError>}
+          {(!legalAccepted || fieldErrors.acceptLegal) && (
+            // PV (§27, LG-U): quien llegó por Google/Facebook (o /login→Google) nunca vio la casilla del alta por
+            // email; `saveOnboardingClinic` la exige y la registra (`via: "onboarding"`). Quien ya aceptó no la ve,
+            // salvo que el server la pida igual (versión nueva de los textos con la página ya abierta): sin esto el
+            // error quedaba sin casilla para tildar.
+            <LegalAcceptCheckbox id="onb-legal" error={fieldErrors.acceptLegal?.[0]} />
+          )}
+          {error && error !== fieldErrors.acceptLegal?.[0] && <InlineError>{error}</InlineError>}
           <StepFooter primaryType="submit" primaryLabel={tenant ? "Guardar y seguir" : "Crear consultorio"} pending={pending} />
         </form>
       )}
