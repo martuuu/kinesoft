@@ -22,7 +22,8 @@ import { arHourKeyOf } from "@/lib/availability/interval-cap";
  * Por qué por día AR y no por instante: dos turnos se pisan aunque arranquen a
  * horas distintas (10:00 de 60 min vs 10:30). Si se solapan, comparten al
  * menos un día AR de los que cubren, así que lockeando TODOS los días que toca
- * [start, end) (dos como mucho: la duración tope es 240 min) cualquier par que
+ * [start, end) (dos como mucho: la duración tope es 480 min, `Service.durationMin`;
+ * la clave no depende del lookback del conteo, `BOOKING_LOOKBACK_MIN`) cualquier par que
  * compita por el cupo se serializa. El costo es serializar altas del mismo
  * profesional + servicio en el mismo día, que no compiten en volumen.
  *

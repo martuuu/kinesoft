@@ -78,10 +78,21 @@ export const NEXT_FREE_HORIZON_DAYS = 14;
 export const PUBLIC_SLOT_STEP_MIN = 45;
 export const PUBLIC_DEFAULT_MIN_LEAD_MINUTES = 60;
 
-/** El loader trae los turnos que arrancaron hasta 240 min ANTES de la ventana
- *  pedida: un turno largo que empezó antes sigue ocupando cupo (mismo margen que
- *  `countCapacityOverlaps` y `batchLoadSpan`). */
-export const BOOKING_LOOKBACK_MIN = 240;
+/** Cuánto antes de la ventana pedida se traen turnos: uno largo que empezó antes
+ *  sigue ocupando cupo. Lo usan el loader (`lib/availability-loader.ts`),
+ *  `countCapacityOverlaps` / `countAgendaOccupancy` y `checkPatientOverlap`
+ *  (`lib/bookings-core.ts`).
+ *
+ *  480 = tope de `Service.durationMin` (`lib/validation.ts`, `ServiceInput`), el
+ *  mismo margen que `ROOM_LOOKBACK_MIN` y `MAX_BOOKING_MIN` de `time-blocks.ts`.
+ *  HD-13 (PV, AUDIT «Hallazgo B cupo-lookback-240»): con 240, un turno de 6 h
+ *  que arrancó a las 08:00 no entraba en el conteo de un alta a las 12:30 y un
+ *  servicio de cupo 1 aceptaba dos turnos a la vez sin pedir sobreturno. Solo
+ *  cambia la cota `gte` de las mismas queries (0 sentencias nuevas); las claves
+ *  de lock son por día AR y no dependen de este número. El oráculo
+ *  `lib/booking-schedule.ts` (`batchLoadSpan`, 240 literal) NO se toca (§5.27):
+ *  la paridad compara contra él con los turnos ya recortados a su ventana. */
+export const BOOKING_LOOKBACK_MIN = 480;
 
 /** Red de seguridad (permanente): profesional sin franjas → horario del tenant
  *  lun-sáb. Es la regla de hoy (suggest + turnero: domingo cerrado). */

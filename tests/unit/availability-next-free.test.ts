@@ -11,7 +11,7 @@
  * con un caso explícito: el suggest viejo cargaba solo turnos con
  * `scheduledFor ≥ from + 15 min`, así que un turno EN CURSO (arrancó antes y
  * sigue) no ocupaba cupo y podía sugerir un hueco ocupado. `nextFreeSlot` ve
- * todos los turnos que recibe (el loader trae 240 min hacia atrás,
+ * todos los turnos que recibe (el loader trae 480 min hacia atrás,
  * `BOOKING_LOOKBACK_MIN`). Por eso la matriz de paridad le pasa al motor nuevo
  * los turnos ya recortados a la ventana vieja; con la ventana completa solo
  * puede diferir en ese caso, y el test lo comprueba.
@@ -190,10 +190,10 @@ function block(startLocal: string, endLocal: string, extra: Partial<TimeBlockInp
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("constantes del contrato = las del suggest (handoff de B2.0)", () => {
-  it("paso 15, horizonte 14, lookback 240", () => {
+  it("paso 15, horizonte 14, lookback 480 (HD-13: tope de Service.durationMin)", () => {
     expect(NEXT_FREE_STEP_MIN).toBe(SUGGEST_STEP_MIN);
     expect(NEXT_FREE_HORIZON_DAYS).toBe(SUGGEST_HORIZON_DAYS);
-    expect(BOOKING_LOOKBACK_MIN).toBe(240);
+    expect(BOOKING_LOOKBACK_MIN).toBe(480);
   });
 });
 
@@ -337,7 +337,7 @@ describe("paridad nextFreeSlot ↔ suggest ef3281f ↔ findNextFreeSlot (plantil
             const input = nf({ from, durationMin, cap, rangesFor: fallbackRanges(hs, he), bookings: oldWindow });
             // Paridad: mismos turnos que veía el suggest viejo.
             expect(nextFreeSlot(input)).toBe(want);
-            // Con la carga nueva (240 min hacia atrás) solo puede moverse a un
+            // Con la carga nueva (`BOOKING_LOOKBACK_MIN` hacia atrás) solo puede moverse a un
             // hueco igual o posterior, y solo por un turno en curso.
             const lookback = rows.filter((b) => b.scheduledFor.getTime() >= from.getTime() - BOOKING_LOOKBACK_MIN * 60_000);
             const full = nextFreeSlot({ ...input, bookings: lookback });
@@ -359,7 +359,7 @@ describe("paridad nextFreeSlot ↔ suggest ef3281f ↔ findNextFreeSlot (plantil
     totalInProgressDiffs += inProgressDiffs;
   });
 
-  it("con la carga de 240 min hacia atrás la matriz SÍ difiere en algún caso (turnos en curso)", () => {
+  it("con la carga de `BOOKING_LOOKBACK_MIN` hacia atrás la matriz SÍ difiere en algún caso (turnos en curso)", () => {
     // Anti-false-green de la diferencia intencional: si nunca difiriera, el
     // lookback no estaría llegando al motor.
     expect(totalInProgressDiffs).toBeGreaterThan(0);

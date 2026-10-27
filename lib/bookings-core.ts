@@ -46,6 +46,7 @@ import {
   nextFreeSlot,
   resolvePractitionerService,
   scheduledRanges,
+  BOOKING_LOOKBACK_MIN,
   NEXT_FREE_HORIZON_DAYS,
   NO_LOCATION_ID,
   type AvailabilityInput,
@@ -295,8 +296,13 @@ export function acceptClientKey(k: unknown): string | null {
  * Cuántos turnos del MISMO profesional + servicio se superponen con
  * [start, end) y todavía sostienen el cupo (`isHoldingCapacity`: una reserva
  * pública impaga vencida ya no cuenta). Trae los candidatos de la ventana de
- * 240 min hacia atrás (una sesión larga previa igual puede superponerse) y
- * cuenta los solapes reales — un findFirst podía perderlos.
+ * `BOOKING_LOOKBACK_MIN` (480) hacia atrás (una sesión larga previa igual puede
+ * superponerse) y cuenta los solapes reales — un findFirst podía perderlos.
+ *
+ * HD-13 (PV, enmienda de AUDIT §5.27): la ventana era 240 y `Service.durationMin`
+ * llega a 480, así que un turno de 6 h de las 08:00 no se contaba contra un alta
+ * de las 12:30 (cupo 1 → dos turnos a la vez sin sobreturno). Cambia SOLO el
+ * número de la cota `gte`: mismo where, mismo select, misma sentencia.
  */
 export async function countCapacityOverlaps(
   tx: Tx,
@@ -322,12 +328,12 @@ export async function countCapacityOverlaps(
  * puede ser una query aparte.
  *
  *   - Sin `cap` (null/ausente): la query de `countCapacityOverlaps` byte a byte (mismo where con `serviceId`, misma
- *     ventana de 240' hacia atrás, mismo select) e `intervalStarts = 0`.
+ *     ventana de `BOOKING_LOOKBACK_MIN` = 480' hacia atrás, mismo select) e `intervalStarts = 0`.
  *   - Con `cap`: el where PIERDE `serviceId` (el tope cruza servicios) y la ventana llega hasta el fin del intervalo
  *     AR del inicio (un turno de 10:00 de 5' con intervalo de 60 tiene que ver el de las 10:40). `overlap` se
  *     filtra en JS con el predicado LITERAL de antes más `serviceId` (paridad: test de `overlap ===
  *     countCapacityOverlaps`), e `intervalStarts` = `intervalStartsUsed` (el mismo puro que el motor y el turnero)
- *     sobre las mismas filas. La cota de abajo (inicio − 240') ya contiene al inicio del intervalo (≤ 59' antes).
+ *     sobre las mismas filas. La cota de abajo (inicio − 480') ya contiene al inicio del intervalo (≤ 59' antes).
  *
  * `excludeId` / `excludeKey` valen para los dos conteos: el turno editado (o el reintento idempotente) no se cuenta
  * contra sí mismo ni en el cupo ni en el tope.
@@ -356,7 +362,7 @@ export async function countAgendaOccupancy(
       status: { notIn: ["CANCELLED"] },
       scheduledFor: {
         lt: intervalEnd && intervalEnd > o.end ? intervalEnd : o.end,
-        gte: new Date(o.start.getTime() - 240 * 60_000),
+        gte: new Date(o.start.getTime() - BOOKING_LOOKBACK_MIN * 60_000),
       },
       ...(o.excludeId ? { id: { not: o.excludeId } } : {}),
       // Un reintento idempotente (misma key) no choca consigo mismo.
@@ -411,8 +417,9 @@ export function intervalCapVerdict(used: number, cap: IntervalCap | null, when: 
 /**
  * Guard a nivel PACIENTE, ortogonal al cupo del profesional. Mira los turnos
  * no cancelados del paciente (de cualquier profesional) en el día AR del nuevo
- * turno UNIDO a 240 min hacia atrás, así una sesión larga que cruza la
- * medianoche AR igual se detecta. Lo usan createBooking y (desde A2a-S06)
+ * turno UNIDO a `BOOKING_LOOKBACK_MIN` (480) hacia atrás, así una sesión larga
+ * que cruza la medianoche AR igual se detecta (HD-13: con 240, uno de 6 h de las
+ * 20:30 no se veía desde un alta a la 01:00 del día siguiente). Lo usan createBooking y (desde A2a-S06)
  * updateBooking, que antes reprogramaba o cambiaba de paciente sin mirarlo.
  *
  *   - `sameInstant`: arranca exactamente a la misma hora → el índice único
@@ -437,7 +444,7 @@ export async function checkPatientOverlap(
   // `${dayKey}T03:00:00Z` (medianoche AR a mano); ahora el único puente día ↔
   // instante del motor (`dayWindow`, sobre `lib/datetime-ar.ts`).
   const { start: dayStart, end: dayEnd } = dayWindow(dayKeyOf(o.start));
-  const windowStart = new Date(Math.min(dayStart.getTime(), o.start.getTime() - 240 * 60_000));
+  const windowStart = new Date(Math.min(dayStart.getTime(), o.start.getTime() - BOOKING_LOOKBACK_MIN * 60_000));
   // Hasta el fin del día AR o del turno nuevo (un turno de 23:30 que cruza la
   // medianoche también puede pisar uno del día siguiente).
   const windowEnd = new Date(Math.max(dayEnd.getTime(), o.end.getTime()));

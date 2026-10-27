@@ -24,9 +24,11 @@ export const PLAN_MAX_SESSIONS = 60;
 
 /**
  * Duración efectiva de una sesión de plan (override ?? PS ?? Service), en
- * minutos. Es el rango de `BookingCreate`/`BookingUpdate` (15..240) y el
- * lookback del loader (240): un turno más largo no lo vería el motor. El CHECK
- * `TreatmentProgram_duration_check` de M1 usa los mismos números.
+ * minutos. Es el rango de `BookingCreate`/`BookingUpdate` (15..240). Ya no lo
+ * ata el lookback: el loader y el cupo traen 480 min hacia atrás
+ * (`BOOKING_LOOKBACK_MIN`, HD-13), así que subir este tope es decisión de
+ * producto, no del motor. El CHECK `TreatmentProgram_duration_check` de M1 usa
+ * los mismos números.
  */
 export const PLAN_MIN_DURATION = 15;
 export const PLAN_MAX_DURATION = 240;

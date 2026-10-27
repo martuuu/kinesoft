@@ -5,7 +5,7 @@
  *   1. Contrato de equivalencia: para una lista de días sueltos, el resultado
  *      es el de la ventana contigua `loadAvailabilityInputs(min..max)` con
  *      excepciones, bloqueos y turnos filtrados a los que tocan algún día
- *      pedido (turnos con el lookback de 240 min). Plantillas, servicios,
+ *      pedido (turnos con el lookback de `BOOKING_LOOKBACK_MIN`). Plantillas, servicios,
  *      reglas y coberturas idénticos. Se compara contra el símbolo real de la
  *      ventana, no contra una copia de la regla.
  *   2. Costo: un plan mensual ×20 (≈ 20 meses) hace la MISMA cantidad de
@@ -149,10 +149,10 @@ describe.skipIf(!RUN)("loadAvailabilityInputsForDays (P0.1 S07L)", () => {
     ids.bOffDay = await booking(A, { patientId: patientA, scheduledFor: ar("2028-01-20T10:00") });
     // 120 min antes del 10/02 00:00 AR: entra por el lookback del tramo.
     ids.bLookIn = await booking(A, { patientId: patientA, scheduledFor: ar("2028-02-09T22:00") });
-    // Justo en el borde del lookback (240 min): entra, igual que la ventana.
-    ids.bLookEdge = await booking(A, { patientId: null, scheduledFor: ar("2028-02-09T20:00") });
-    // 300 min antes: afuera.
-    ids.bLookOut = await booking(A, { patientId: patientA, scheduledFor: ar("2028-02-09T19:00") });
+    // Justo en el borde del lookback (`BOOKING_LOOKBACK_MIN`, 480 desde HD-13): entra, igual que la ventana.
+    ids.bLookEdge = await booking(A, { patientId: null, scheduledFor: new Date(ar("2028-02-10T00:00").getTime() - BOOKING_LOOKBACK_MIN * 60_000) });
+    // 60 min más atrás que el borde: afuera.
+    ids.bLookOut = await booking(A, { patientId: patientA, scheduledFor: new Date(ar("2028-02-10T00:00").getTime() - (BOOKING_LOOKBACK_MIN + 60) * 60_000) });
     // Fin del día pedido = exclusivo.
     ids.bNextMidnight = await booking(A, { patientId: null, scheduledFor: ar("2028-01-11T00:00") });
     ids.bCancelled = await booking(A, { patientId: patientA, scheduledFor: ar("2028-04-10T10:00"), status: "CANCELLED" });

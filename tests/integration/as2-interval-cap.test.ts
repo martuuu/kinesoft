@@ -401,7 +401,7 @@ describe.skipIf(!RUN)("[AS-2w] tope de turnos por intervalo (C-AS3)", () => {
     const PX = await addPractitioner(db, T, "PRACTITIONER");
     const day = "2027-11-11";
     const now = new Date();
-    // Cualquier servicio, solapes largos que vienen de antes (≤ 240'), un cancelado, una reserva pública impaga
+    // Cualquier servicio, solapes largos que vienen de antes (≤ 480'), un cancelado, una reserva pública impaga
     // vencida (no retiene cupo) y una que cruza la medianoche AR.
     const fixtures: { when: string; svc: string; dur: number; status?: "CANCELLED" | "PENDING"; pub?: boolean }[] = [
       { when: `${day}T07:30`, svc: svcA, dur: 180 },

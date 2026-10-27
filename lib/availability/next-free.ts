@@ -21,7 +21,7 @@
  * cargaba turnos con `scheduledFor ≥ from + 15`, así que un turno EN CURSO no
  * ocupaba cupo y podía sugerir un hueco ocupado (el write lo frenaba después).
  * Acá cuentan todos los turnos que se reciben: el loader los trae desde
- * `from − BOOKING_LOOKBACK_MIN` (240). La paridad excluye ese caso a propósito
+ * `from − BOOKING_LOOKBACK_MIN` (480). La paridad excluye ese caso a propósito
  * y lo fija con un test explícito.
  *
  * Sin anticipación mínima ni `maxLeadDays`: igual que el suggest, `from` es la

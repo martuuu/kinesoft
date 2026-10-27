@@ -212,7 +212,7 @@ describe.skipIf(!RUN)("[P4-S24d] «Mis datos» del portal", () => {
       await db.userProfile.create({ data: { id, email: `${id}@test.local` } });
       profiles.push(id);
       await db.membership.create({
-        data: { userId: id, tenantId: open.tenantId, role, disabledAt: disabled ? new Date() : null },
+        data: { userId: id, tenantId: open.tenantId, role, acceptedAt: new Date(), disabledAt: disabled ? new Date() : null },
       });
       return id;
     };

@@ -15,7 +15,7 @@ import type { AvailabilityBooking, RoomBlock, RoomOccupancy } from "@/lib/availa
  * en el loader de la agenda (decisión del orquestador): la query de sala va por
  * `Booking_tenantId_roomId_scheduledFor_idx` y una sala tiene pocos turnos por
  * día, así que duplicar la ventana hacia atrás no cambia el costo; el cupo y el
- * loader siguen con 240 (`BOOKING_LOOKBACK_MIN`). Las claves de sala son por
+ * loader también usan 480 desde HD-13 (`BOOKING_LOOKBACK_MIN`); `ROOM_LOOKBACK_MIN` queda igual a propósito. Las claves de sala son por
  * día AR y cubren el día siguiente si el turno cruza la medianoche
  * (`roomKeysForWindow`), así que un turno largo que arrancó el día anterior
  * comparte clave con el alta: el conteo bajo lock sigue sin TOCTOU.

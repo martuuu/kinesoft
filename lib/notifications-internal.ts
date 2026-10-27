@@ -54,6 +54,15 @@ export async function notify(p: {
  * act on it. Used when a webhook (no actor context) needs to reach the
  * right practitioner — we notify the booking's practitioner + every
  * OWNER / ADMIN of the tenant.
+ *
+ * HD-12 (PV): solo miembros ACTIVOS. Antes el rol era el único filtro de
+ * titulares, así que una membresía suspendida (`Membership.disabledAt`), una
+ * invitación sin aceptar (`acceptedAt` null) o un usuario deshabilitado en
+ * Plataforma (`UserProfile.disabledAt`, BO0) seguían recibiendo avisos con montos
+ * y nombres de pacientes de un consultorio al que ya no entran; y
+ * `alsoPractitionerId` iba por `findUnique` sin tenant ni estado. `ACTIVE_MEMBER`
+ * es el mismo criterio en los cuatro caminos; son filtros de las mismas
+ * sentencias (0 nuevas: el webhook de MP y el turnero tienen techo).
  */
 export async function notifyTenantOwners(p: {
   tenantId: string;
@@ -77,28 +86,36 @@ export async function notifyTenantOwners(p: {
 }) {
   try {
     const recipients = new Set<string>();
+    // Membresía usable: no suspendida en el consultorio, invitación aceptada y usuario no deshabilitado en Plataforma.
+    const ACTIVE_MEMBER = { disabledAt: null, acceptedAt: { not: null }, user: { disabledAt: null } } as const;
     if (p.alsoPractitionerId) {
-      const prac = await runWithRls(p.tenantId, (tx) => tx.practitioner.findUnique({
-        where: { id: p.alsoPractitionerId },
+      // `findFirst` con `tenantId`: el id viene de un turno/cobro, pero las FK saltean RLS (AGENTS.md §4) y en prod la
+      // conexión tiene BYPASSRLS; sin el tenant, un id ajeno avisaba a un profesional de otro consultorio.
+      const prac = await runWithRls(p.tenantId, (tx) => tx.practitioner.findFirst({
+        where: {
+          id: p.alsoPractitionerId,
+          tenantId: p.tenantId,
+          user: { disabledAt: null, memberships: { some: { tenantId: p.tenantId, disabledAt: null, acceptedAt: { not: null } } } },
+        },
         select: { userId: true },
       }));
       if (prac?.userId) recipients.add(prac.userId);
     }
     const memberships = await runWithRls(p.tenantId, (tx) => tx.membership.findMany({
-      where: { tenantId: p.tenantId, role: { in: ["OWNER", "ADMIN"] } },
+      where: { tenantId: p.tenantId, role: { in: ["OWNER", "ADMIN"] }, ...ACTIVE_MEMBER },
       select: { userId: true },
     }));
     for (const m of memberships) recipients.add(m.userId);
     if (p.alsoAgendaOperators) {
       const operators = await runWithRls(p.tenantId, (tx) => tx.membership.findMany({
-        where: { tenantId: p.tenantId, disabledAt: null, role: { notIn: ["OWNER", "ADMIN"] } },
+        where: { tenantId: p.tenantId, role: { notIn: ["OWNER", "ADMIN"] }, ...ACTIVE_MEMBER },
         select: { userId: true, ...MEMBER_ACCESS_SELECT },
       }));
       for (const m of operators) if (capabilitiesForMember(m).has("agenda.operateAll")) recipients.add(m.userId);
     }
     if (p.alsoUserId && !recipients.has(p.alsoUserId)) {
       const member = await runWithRls(p.tenantId, (tx) => tx.membership.findFirst({
-        where: { tenantId: p.tenantId, userId: p.alsoUserId, disabledAt: null },
+        where: { tenantId: p.tenantId, userId: p.alsoUserId, ...ACTIVE_MEMBER },
         select: { userId: true },
       }));
       if (member) recipients.add(member.userId);

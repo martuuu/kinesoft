@@ -81,13 +81,6 @@ export function publicSlotStepFor(durationMin: number): number {
 /** Anticipación mínima por defecto para reservar online: 1 h desde `now`
  *  (`minLeadMinutes ?? 60` del motor; un PractitionerService puede cambiarla). */
 export const PUBLIC_MIN_LEAD_MS = PUBLIC_DEFAULT_MIN_LEAD_MINUTES * 60_000;
-/**
- * Cuánto antes del inicio del día hay que traer turnos para contar solapes:
- * un turno largo que arrancó antes de medianoche AR puede pisar el primer slot.
- * Lo usan las queries de `listPublicSlots` y del submit.
- */
-export const PUBLIC_OVERLAP_LOOKBACK_MS = 4 * 60 * 60_000;
-
 /** Turno existente tal como lo necesita la grilla (ya sin CANCELLED). */
 export type PublicSlotBooking = {
   scheduledFor: Date;
