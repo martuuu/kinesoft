@@ -6,7 +6,7 @@ import { PlanPricesEditor, PriceHistoryList } from "@/components/plataforma/bill
 import { BILLING_PATH } from "@/components/plataforma/billing/billing-logic";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Precios · Plataforma · KineSoft" };
+export const metadata = { title: "Precios · Plataforma" };
 
 /**
  * /plataforma/precios — precios de lista de los planes SaaS en ARS, con vigencia e historial (PL-3c, PL-D8/PL-D19).

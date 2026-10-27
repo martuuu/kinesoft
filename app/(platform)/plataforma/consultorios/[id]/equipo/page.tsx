@@ -4,7 +4,7 @@ import { loadTenantDetail } from "@/components/plataforma/tenants/load-detail";
 import { PlatformTeamPanel } from "@/components/plataforma/team/team-panel";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Equipo · Consultorio · Plataforma · KineSoft" };
+export const metadata = { title: "Equipo · Consultorio · Plataforma" };
 
 /**
  * /plataforma/consultorios/[id]/equipo (BO3-C). Pestaña «Equipo» del detalle: se renderiza dentro del layout con

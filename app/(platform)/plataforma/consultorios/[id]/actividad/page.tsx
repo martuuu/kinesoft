@@ -3,7 +3,7 @@ import { getPlatformTenantActivity } from "@/lib/platform-tenants-read";
 import { TenantActivityView } from "@/components/plataforma/tenants/tenant-activity";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Actividad · Consultorio · Plataforma · KineSoft" };
+export const metadata = { title: "Actividad · Consultorio · Plataforma" };
 
 type SearchParams = Record<string, string | string[] | undefined>;
 

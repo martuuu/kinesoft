@@ -5,7 +5,7 @@ import { healthSummary } from "@/components/plataforma/health/health-logic";
 import { formatDateTimeAR } from "@/components/plataforma/users/users-logic";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Salud · Plataforma · KineSoft" };
+export const metadata = { title: "Salud · Plataforma" };
 
 /**
  * /plataforma/salud — detectores de cuentas y consultorios rotos con su reparación (BO3-D, plan §19.5; absorbe la

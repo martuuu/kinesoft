@@ -4,7 +4,7 @@ import { normalizeAuditFilters } from "@/lib/platform-audit-logic";
 import { AuditView } from "@/components/plataforma/audit/audit-view";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Auditoría · Plataforma · KineSoft" };
+export const metadata = { title: "Auditoría · Plataforma" };
 
 type SearchParams = Record<string, string | string[] | undefined>;
 

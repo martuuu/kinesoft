@@ -3,7 +3,7 @@ import { getPlatformOverview } from "@/lib/platform-tenants-read";
 import { PlatformOverviewView } from "@/components/plataforma/tenants/tenant-overview";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Resumen · Plataforma · KineSoft" };
+export const metadata = { title: "Resumen · Plataforma" };
 
 /**
  * /plataforma — Resumen (EV0 · EV-P3, plan §15.4). Antes de EV0 `/plataforma`

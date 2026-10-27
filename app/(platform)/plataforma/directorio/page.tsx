@@ -10,7 +10,7 @@ import {
 } from "@/components/plataforma/directory/directory-lists";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Directorio · Plataforma · KineSoft" };
+export const metadata = { title: "Directorio · Plataforma" };
 
 type SearchParams = Record<string, string | string[] | undefined>;
 

@@ -4,7 +4,7 @@ import { getPlatformUser } from "@/lib/platform-users-read";
 import { UserDetailView } from "@/components/plataforma/users/user-detail";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Usuario · Plataforma · KineSoft" };
+export const metadata = { title: "Usuario · Plataforma" };
 
 /**
  * /plataforma/usuarios/[id] — detalle y acciones (BO3-D). `requirePlatformAdmin` acá solo para saber quién mira

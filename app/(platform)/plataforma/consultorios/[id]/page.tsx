@@ -4,7 +4,7 @@ import { getTenantTeamForPlatform } from "@/lib/platform-team-read";
 import { TenantSummaryView } from "@/components/plataforma/tenants/tenant-detail";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Consultorio · Plataforma · KineSoft" };
+export const metadata = { title: "Consultorio · Plataforma" };
 
 /**
  * /plataforma/consultorios/[id] — pestaña «Resumen» (BO3-B; antes, EV0 · EV-P3, era la página entera). El header y

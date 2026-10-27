@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { BRAND_NAME } from "@/lib/brand";
 import { AuthShell } from "@/components/auth/auth-shell";
 import { verifyPlatformMfaLogin } from "@/lib/platform-mfa-actions";
 import { platformMfaRedirect } from "@/lib/platform-mfa-logic";
@@ -7,7 +8,7 @@ import { MfaVerifyForm } from "../mfa-forms";
 import { MfaFooter, MfaGoButton, MfaHeading, MfaText } from "../shared";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Ingresá el código · KineSoft" };
+export const metadata = { title: "Ingresá el código" };
 
 /**
  * `/plataforma-mfa/verificar` (BO4). Superadmin con factor TOTP y sesión AAL1 (entró con contraseña o Google): pide el
@@ -33,7 +34,7 @@ export default async function VerificarMfaPage({ searchParams }: { searchParams:
   return (
     <AuthShell variant="centered" introAs="p">
       <MfaHeading eyebrow="Seguridad" title="Ingresá el código" />
-      <MfaText>Abrí tu app de autenticación y escribí el código de 6 números de KineSoft.</MfaText>
+      <MfaText>Abrí tu app de autenticación y escribí el código de 6 números de {BRAND_NAME}.</MfaText>
       <MfaVerifyForm next={next} verifyAction={verifyPlatformMfaLogin} />
       <MfaFooter hasHome={actor.homeTenantId !== null} />
     </AuthShell>

@@ -5,7 +5,7 @@ import { TenantLedgerView } from "@/components/plataforma/billing/ledger-view";
 import { BillingModeNotice } from "@/components/plataforma/billing/billing-mode-notice";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Facturación · Consultorio · Plataforma · KineSoft" };
+export const metadata = { title: "Facturación · Consultorio · Plataforma" };
 
 /**
  * /plataforma/consultorios/[id]/facturacion — ledger del consultorio (PL-3c): cargos y pagos, comprobantes a revisar,

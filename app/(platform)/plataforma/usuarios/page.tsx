@@ -1,10 +1,11 @@
 import { PageHeader } from "@/components/ui/page-header";
+import { BRAND_NAME } from "@/lib/brand";
 import { searchPlatformUsers } from "@/lib/platform-users-read";
 import { UserList } from "@/components/plataforma/users/user-list";
 import { parseUsersQuery } from "@/components/plataforma/users/users-logic";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Usuarios · Plataforma · KineSoft" };
+export const metadata = { title: "Usuarios · Plataforma" };
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -24,7 +25,7 @@ export default async function PlataformaUsuariosPage({ searchParams }: { searchP
         title="Usuarios"
         description={
           <>
-            Todas las cuentas de KineSoft: equipos de los consultorios y pacientes del portal. Buscá por email o nombre
+            Todas las cuentas de {BRAND_NAME}: equipos de los consultorios y pacientes del portal. Buscá por email o nombre
             para ver su acceso, mandarle un link o deshabilitarla.
           </>
         }

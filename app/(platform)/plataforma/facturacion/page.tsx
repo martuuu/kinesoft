@@ -12,7 +12,7 @@ import {
 } from "@/components/plataforma/billing/billing-logic";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Facturación · Plataforma · KineSoft" };
+export const metadata = { title: "Facturación · Plataforma" };
 
 type SearchParams = Record<string, string | string[] | undefined>;
 

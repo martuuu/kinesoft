@@ -7,7 +7,7 @@ import { MfaSetupForm } from "../mfa-forms";
 import { MfaFooter, MfaGoButton, MfaHeading, MfaText } from "../shared";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Verificación en dos pasos · KineSoft" };
+export const metadata = { title: "Verificación en dos pasos" };
 
 /**
  * `/plataforma-mfa/configurar` (BO4, BO-D6). Adónde manda el layout de `(platform)` a un superadmin sin factor TOTP

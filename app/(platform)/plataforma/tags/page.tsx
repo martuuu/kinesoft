@@ -3,7 +3,7 @@ import { listTagsForAdmin } from "@/lib/tags-admin";
 import { TagAdminPanel } from "@/components/plataforma/tag-admin-panel";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Categorías · Plataforma · KineSoft" };
+export const metadata = { title: "Categorías · Plataforma" };
 
 /**
  * /plataforma/tags — platform-superadmin tag (category) authoring.

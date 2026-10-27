@@ -1,11 +1,12 @@
 import { PageHeader } from "@/components/ui/page-header";
+import { BRAND_NAME } from "@/lib/brand";
 import { listPlatformTenants } from "@/lib/platform-tenants-read";
 import { PlatformTenantListQuery } from "@/lib/platform-tenants-schemas";
 import { TenantList } from "@/components/plataforma/tenants/tenant-list";
 import { NewTenantDrawer } from "@/components/plataforma/tenants/new-tenant-drawer";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Consultorios · Plataforma · KineSoft" };
+export const metadata = { title: "Consultorios · Plataforma" };
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -40,7 +41,7 @@ export default async function PlataformaConsultoriosPage({ searchParams }: { sea
       <PageHeader
         eyebrow="Plataforma"
         title="Consultorios"
-        description="Todos los consultorios de KineSoft. Entrá a uno para ver su uso, su suscripción, su equipo y su ciclo de vida."
+        description={`Todos los consultorios de ${BRAND_NAME}. Entrá a uno para ver su uso, su suscripción, su equipo y su ciclo de vida.`}
         actions={<NewTenantDrawer />}
       />
       <TenantList page={page} query={query} />

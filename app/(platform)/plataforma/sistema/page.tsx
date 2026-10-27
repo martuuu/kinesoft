@@ -4,7 +4,7 @@ import { SystemView } from "@/components/plataforma/system/system-view";
 
 // Nunca cacheado: es el estado de ESTE deploy y de la base en este momento.
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Sistema · Plataforma · KineSoft" };
+export const metadata = { title: "Sistema · Plataforma" };
 
 /** BO3-E · El guard del layout es UX; la barrera real es el `requirePlatformAdmin` de `getPlatformSystemStatus`. */
 export default async function PlataformaSistemaPage() {
