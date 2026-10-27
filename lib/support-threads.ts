@@ -22,6 +22,11 @@
  * `PLATFORM_INBOX_EMAIL` DESPUÉS del commit (un mail que no sale no deshace el mensaje; `sendEmail` nunca tira).
  *
  * Sin audit: un mensaje a soporte no es seguridad, plata ni HC (recorte PL-A, §20.5.9); la fila ES el registro.
+ *
+ * PV (§27, TK-S1): cada hilo es un ticket de /plataforma con origen (`source`, M19). Desde la app el consultorio
+ * solo puede abrir TENANT_SUPPORT (default), PLAN_CHANGE («Elegir plan») o PRIVACY; TENANT_SUSPENDED lo escribe
+ * `lib/tickets.ts` (un consultorio suspendido no tiene Actor) y los de lead, `lib/leads.ts`. Cualquier otro valor
+ * se rechaza en el zod: el origen no lo inventa el cliente.
  */
 import { z } from "zod";
 import { getActor, ForbiddenError, type Actor } from "@/lib/session";
@@ -33,6 +38,7 @@ import { env, platformInboxEmail } from "@/lib/env";
 import { sendEmail } from "@/lib/email";
 import "@/lib/email/log";
 import { supportMessagePlatformEmail } from "@/lib/email/templates-support";
+import { TICKET_SOURCE_LABEL, type TenantTicketSourceValue } from "@/lib/support-ticket-sources";
 import { logger } from "@/lib/logger";
 import type { ActionResult } from "@/lib/validation";
 import {
@@ -60,10 +66,18 @@ const Body = z
   .trim()
   .min(1, "Escribí tu mensaje.")
   .max(SUPPORT_BODY_MAX, `Hasta ${SUPPORT_BODY_MAX} caracteres.`);
+/**
+ * Orígenes que el consultorio puede elegir desde la app. TENANT_SUSPENDED no: un consultorio que llega acá tiene
+ * Actor, o sea que no está suspendido (ese ticket lo abre `submitSessionTicket`).
+ */
+const APP_SOURCES = ["TENANT_SUPPORT", "PLAN_CHANGE", "PRIVACY"] as const satisfies readonly TenantTicketSourceValue[];
+type AppTicketSource = (typeof APP_SOURCES)[number];
+
 const CreateInput = z
   .object({
     subject: z.string().trim().min(1, "Poné un asunto.").max(SUPPORT_SUBJECT_MAX, `Hasta ${SUPPORT_SUBJECT_MAX} caracteres.`),
     body: Body,
+    source: z.enum(APP_SOURCES, { errorMap: () => ({ message: "Ese motivo no es válido. Recargá la página." }) }).optional(),
   })
   .strict();
 const ReplyInput = z.object({ threadId: Id, body: Body }).strict();
@@ -104,8 +118,17 @@ function appUrl(path: string): string {
   return `${env.NEXT_PUBLIC_APP_URL.replace(/\/+$/, "")}${path}`;
 }
 
-/** Aviso a Plataforma. Sin `PLATFORM_INBOX_EMAIL` no sale (queda en la bandeja igual). Nunca tira. */
-async function notifyPlatform(actor: Actor, threadId: string, subject: string, isReply: boolean): Promise<void> {
+/**
+ * Aviso a Plataforma. Sin `PLATFORM_INBOX_EMAIL` no sale (queda en la bandeja igual). Nunca tira. `source` solo en el
+ * alta y solo si no es el de siempre (TENANT_SUPPORT): el asunto del mail dice «Elegir plan · …» / «Privacidad · …».
+ */
+async function notifyPlatform(
+  actor: Actor,
+  threadId: string,
+  subject: string,
+  isReply: boolean,
+  source?: AppTicketSource
+): Promise<void> {
   const to = platformInboxEmail();
   if (!to) {
     logger.info("support.notify_skipped", { reason: "no_inbox_email", threadId });
@@ -123,6 +146,7 @@ async function notifyPlatform(actor: Actor, threadId: string, subject: string, i
       subject,
       isReply,
       url: appUrl(`/plataforma/mensajes/${encodeURIComponent(threadId)}`),
+      sourceLabel: source && source !== "TENANT_SUPPORT" ? TICKET_SOURCE_LABEL[source] : null,
     }),
   });
 }
@@ -150,7 +174,11 @@ export async function getSupportThread(threadId: string): Promise<ActionResult<S
 
 // ── Escrituras (allowlist de solo lectura: `ACCOUNT_WRITABLE_ACTIONS`) ──────────────────────────────────────────────
 
-export async function createSupportThread(input: { subject: string; body: string }): Promise<ActionResult<{ threadId: string }>> {
+export async function createSupportThread(input: {
+  subject: string;
+  body: string;
+  source?: AppTicketSource;
+}): Promise<ActionResult<{ threadId: string }>> {
   return withReadOnlyResult(() =>
     withAccountWritable("lib/support-threads.ts#createSupportThread", () =>
       asResult(async () => {
@@ -160,10 +188,11 @@ export async function createSupportThread(input: { subject: string; body: string
         const limited = await underWriteLimit(actor.userId);
         if (limited) return limited;
         const { subject, body } = parsed.data;
+        const source = parsed.data.source ?? "TENANT_SUPPORT";
         const out = await runWithRls(actor.tenantId, (tx) =>
-          createThreadInTx(tx, { tenantId: actor.tenantId, userId: actor.userId, subject, body, now: new Date() })
+          createThreadInTx(tx, { tenantId: actor.tenantId, userId: actor.userId, subject, body, now: new Date(), source })
         );
-        await notifyPlatform(actor, out.threadId, subject, false);
+        await notifyPlatform(actor, out.threadId, subject, false, source);
         return { ok: true, data: { threadId: out.threadId } };
       })
     )

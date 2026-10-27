@@ -106,7 +106,7 @@ const ALLOW: Record<string, number> = {
   "lib/bookings-export-internal.ts": 1,
   "lib/email/templates-account.ts": 16,
   "lib/email/templates-billing.ts": 3,
-  "lib/email/templates-support.ts": 7,
+  "lib/email/templates-support.ts": 6,
   "lib/email/templates.ts": 66,
   "lib/email/transport.ts": 7,
   "lib/email/types.ts": 2,

@@ -43,6 +43,8 @@ const ALLOWLIST: Record<string, string> = {
   "lib/patients.ts#getPatientCore": "PF2-b: el perfil del paciente usa patientCoreInTx desde su loader; la action queda para tests. Gate patientAccessFor (none → null) y escribe el audit patient.read.",
   "lib/patients.ts#getPatientEvaScores": "PF2-b: la curva EVA la carga el loader del perfil en su tx; la action queda para tests. Gate módulo evaluaciones + patientAccessFor full.",
   "lib/plans-adopt.ts#adoptBookingSeries": "Adoptar una serie de turnos a un plan (todo o nada): motor listo y testeado, su UI no llegó. Gate getActor + safeParse + capacidades del actor en la tx (adoptSeriesInTx), withReadOnlyResult.",
+  "lib/platform-inbox.ts#addInboxNote": "PV TK-S2: notas internas de la bandeja de Tickets; su UI llega en Q3 (TK-U1). Barrera requirePlatformAdmin(inbox.reply).",
+  "lib/platform-inbox.ts#takeInboxThread": "PV TK-S2: «Tomar» de la bandeja de Tickets; su UI llega en Q3 (TK-U1). Barrera requirePlatformAdmin(inbox.reply).",
   "lib/platform-support.ts#listSupportSessionsForTenant": "PF2-d: la pestaña «Accesos de soporte» la carga configuracion-page-loader en su tx única; la action queda para tests. Gate getActor, rechaza soporte.",
   "lib/portal-vincular.ts#linkPortalByInvite": "Contrato §3.4 del portal (devuelve el slug); la página usa submitPortalInvite. Gate token firmado + getPortalUser no-staff + rate limit 10/h (linkByInvite).",
   "lib/practitioner-schedule.ts#getPractitionerScheduleSummary": "PF2-d: el resumen de horarios lo arma configuracion-page-loader en su tx única; la action queda para tests. Gate requireCapability agenda.viewAll.",
@@ -54,6 +56,7 @@ const ALLOWLIST: Record<string, string> = {
   "lib/services.ts#listServicesWithCounts": "PF2-d: /configuracion lee los servicios con conteos en su tx única (services-read); la action queda con su cache por tag para tests. Gate getActor.",
   "lib/sessions.ts#substituteSessionExercise": "Reemplazar un ejercicio de una sesión: sin UI hoy (solo sessions.test). Gate getActor + módulo + sessionExerciseForWrite + ejercicio asignable, withReadOnlyResult.",
   "lib/tenant-settings.ts#getTenantSettings": "PF2-d: /configuracion lee estos datos en su tx única (configuracion-page-loader); la action queda para tests. Gate getActor, where id = tenant del actor.",
+  "lib/tickets.ts#submitSessionTicket": "UI /contacto en Q3 (TK-U2): SessionTicketForm. Gate getVerifiedSessionUser + zod strict + rate limit 5/h y tope 5/24h en base; destino solo de la foto de la sesión (tenantBlocks OWNER/ADMIN), nunca del form.",
   "lib/time-blocks.ts#deleteTimeBlock": "Borrado soft de un bloqueo o su grupo: la agenda solo usa createTimeBlock y el bloqueo de día (removeDayLock); sin botón. safeParse + permiso por fila (todas o ninguna), withReadOnlyResult.",
   "lib/time-blocks.ts#listTimeBlocks": "Lista de bloqueos sin UI (la agenda los lee por availability-loader); la usan los tests de time-blocks. Gate requireCapability agenda.viewAll + safeParse.",
 };

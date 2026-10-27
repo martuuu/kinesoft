@@ -16,7 +16,14 @@ import "server-only";
 import type { Prisma } from "@prisma/client";
 import { displayUserName } from "@/lib/display-name";
 import {
+  TICKET_SOURCE_LABEL,
+  isTicketSourceAllowed,
+  type SupportTicketSourceValue,
+  type TenantTicketSourceValue,
+} from "@/lib/support-ticket-sources";
+import {
   SUPPORT_MESSAGES_MAX,
+  SUPPORT_SUBJECT_MAX,
   SUPPORT_TEAM_NAME,
   SUPPORT_THREADS_LIST_MAX,
   isUnreadForTenant,
@@ -33,6 +40,31 @@ export class SupportThreadError extends Error {
     super(copy);
     this.name = "SupportThreadError";
   }
+}
+
+/** PV (TK-S1): un origen que el CHECK de M19 no acepta para un hilo TENANT. Se corta antes de escribir. */
+export const SUPPORT_SOURCE_INVALID = "No pudimos abrir la conversación con ese motivo. Recargá la página.";
+
+/**
+ * PV (TK-S1): prefijo del asunto por origen, para que Martin distinga en la bandeja y en el mail de qué entrada vino
+ * sin abrir el ticket («Precio · Consulta de Ana»). LANDING (el form de contacto de siempre) y los hilos que el
+ * consultorio titula él mismo (TENANT_SUPPORT, PLAN_CHANGE, PRIVACY desde Configuración) no llevan prefijo: el asunto
+ * de un lead viejo no cambia y el del consultorio es el que escribió la persona.
+ */
+const SUBJECT_PREFIX: Partial<Record<SupportTicketSourceValue, string>> = {
+  PRICING: "Precio",
+  PLAN_LIBRE: "Plan Libre",
+  SIGNUP_ASSISTED: "Alta asistida",
+  ONBOARDING: TICKET_SOURCE_LABEL.ONBOARDING,
+  ACCOUNT_DISABLED: TICKET_SOURCE_LABEL.ACCOUNT_DISABLED,
+  TENANT_SUSPENDED: TICKET_SOURCE_LABEL.TENANT_SUSPENDED,
+};
+
+/** Asunto con el prefijo del origen, recortado al CHECK de M8 (1..200) con «…» en vez de reventar. */
+export function ticketSubject(source: SupportTicketSourceValue, base: string): string {
+  const prefix = SUBJECT_PREFIX[source];
+  const full = prefix ? `${prefix} · ${base}` : base;
+  return full.length <= SUPPORT_SUBJECT_MAX ? full : `${full.slice(0, SUPPORT_SUBJECT_MAX - 1).trimEnd()}…`;
 }
 
 /** Hilos del consultorio con su último movimiento y si ESTE usuario tiene respuestas sin leer. Tres sentencias. */
@@ -146,13 +178,23 @@ export async function markReadInTx(tx: Tx, tenantId: string, userId: string, thr
   return true;
 }
 
-/** Hilo nuevo + primer mensaje (autor TENANT, siempre) + marca de leído de quien lo abrió. */
+/**
+ * Hilo nuevo + primer mensaje (autor TENANT, siempre) + marca de leído de quien lo abrió.
+ *
+ * PV (TK-S1, M19): `source` es el origen del ticket (default TENANT_SUPPORT = Configuración → Soporte). Se escribe
+ * SIEMPRE (NULL solo lo deja el código viejo entre M19 y el deploy) y se valida contra el CHECK
+ * `SupportThread_source_check` ANTES de escribir: un LANDING en un hilo TENANT sería un 23514 que aborta la tx con un
+ * error genérico. Lo llaman `createSupportThread` (canal de la app, dentro de `runWithRls`) y `submitSessionTicket`
+ * (canal service, Titular/Admin de un consultorio bloqueado: TENANT_SUSPENDED).
+ */
 export async function createThreadInTx(
   tx: Tx,
-  p: { tenantId: string; userId: string; subject: string; body: string; now: Date }
+  p: { tenantId: string; userId: string; subject: string; body: string; now: Date; source?: TenantTicketSourceValue }
 ): Promise<{ threadId: string; messageId: string }> {
+  const source = p.source ?? "TENANT_SUPPORT";
+  if (!isTicketSourceAllowed("TENANT", source)) throw new SupportThreadError(SUPPORT_SOURCE_INVALID);
   const thread = await tx.supportThread.create({
-    data: { kind: "TENANT", tenantId: p.tenantId, subject: p.subject, createdById: p.userId, status: "OPEN" },
+    data: { kind: "TENANT", tenantId: p.tenantId, subject: p.subject, createdById: p.userId, status: "OPEN", source },
     select: { id: true },
   });
   const msg = await tx.supportMessage.create({

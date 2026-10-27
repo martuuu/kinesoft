@@ -18,6 +18,12 @@
  *
  * Contrato para la landing (C-PL2, la consume VX): `submitLead(input)` para llamarla desde JS, y `submitLeadForm(prev,
  * formData)` con la forma de `useFormState` para que el formulario funcione también SIN JS (progressive enhancement).
+ *
+ * PV (§27, TK-S1): cada lead es un ticket de /plataforma con ORIGEN (`source`, M19): `/contacto?motivo=<slug>` pone el
+ * origen en un hidden (Web · contacto, Web · precios, Plan Libre, Alta asistida…). Un origen viejo, inválido o de
+ * consultorio cae a LANDING en silencio (`.catch(undefined)`): un link mal armado nunca le muestra un error a quien
+ * quiere escribirnos, y el CHECK de M19 solo acepta orígenes de lead en un hilo LEAD. El asunto lleva el prefijo del
+ * origen («Precio · Consulta de Ana»), salvo LANDING (el de siempre).
  */
 import { headers } from "next/headers";
 import { z } from "zod";
@@ -29,6 +35,8 @@ import { env, platformInboxEmail } from "@/lib/env";
 import { sendEmail } from "@/lib/email";
 import "@/lib/email/log";
 import { leadReceivedEmail } from "@/lib/email/templates-support";
+import { ticketSubject } from "@/lib/support-threads-internal";
+import { LEAD_TICKET_SOURCES, TICKET_SOURCE_LABEL } from "@/lib/support-ticket-sources";
 import { SAAS_PLAN_LABEL } from "@/lib/tenant-modules";
 import { logger } from "@/lib/logger";
 import type { ActionResult } from "@/lib/validation";
@@ -75,6 +83,8 @@ const LeadInput = z
       const n = typeof v === "string" && v.trim() !== "" ? Number(v) : v;
       return typeof n === "number" && Number.isFinite(n) ? n : undefined;
     }, z.number().optional()),
+    // PV (TK-S1): origen del ticket. Basura → undefined → LANDING (nunca un error que la persona no puede arreglar).
+    source: z.preprocess(blankToUndef, z.enum(LEAD_TICKET_SOURCES).optional()).catch(undefined),
   })
   .strict();
 
@@ -85,6 +95,12 @@ function subjectFor(name: string, clinicName: string | undefined): string {
   return base.length <= SUPPORT_SUBJECT_MAX ? base : `${base.slice(0, SUPPORT_SUBJECT_MAX - 1).trimEnd()}…`;
 }
 
+/**
+ * PV (TK-S1): `SubmitLeadInput` (contrato C-PL2, en `support-threads-types.ts`) todavía no tiene `source`; se acepta
+ * acá como string suelto porque el zod lo normaliza (inválido → LANDING).
+ */
+type SubmitLeadWithSource = SubmitLeadInput & { source?: string | null };
+
 function callerIp(): string {
   try {
     return clientIp(headers());
@@ -94,7 +110,7 @@ function callerIp(): string {
   }
 }
 
-export async function submitLead(input: SubmitLeadInput): Promise<ActionResult<{ received: true }>> {
+export async function submitLead(input: SubmitLeadWithSource): Promise<ActionResult<{ received: true }>> {
   const parsed = LeadInput.safeParse(input ?? {});
   if (!parsed.success) {
     const fieldErrors = parsed.error.flatten().fieldErrors as Record<string, string[]>;
@@ -131,7 +147,8 @@ export async function submitLead(input: SubmitLeadInput): Promise<ActionResult<{
   }
   if (byEmail >= LEAD_EMAIL_LIMIT.limit) return { ok: false, error: LEAD_EMAIL_CAP_COPY };
 
-  const subject = subjectFor(d.name, d.clinicName);
+  const source = d.source ?? "LANDING";
+  const subject = ticketSubject(source, subjectFor(d.name, d.clinicName));
   const thread = await prismaService.$transaction(async (tx) => {
     const t = await tx.supportThread.create({
       data: {
@@ -144,6 +161,7 @@ export async function submitLead(input: SubmitLeadInput): Promise<ActionResult<{
         leadPhone: d.phone ?? null,
         leadClinicName: d.clinicName ?? null,
         leadPlanInterest: d.planInterest ?? null,
+        source,
       },
       select: { id: true },
     });
@@ -168,6 +186,7 @@ export async function submitLead(input: SubmitLeadInput): Promise<ActionResult<{
         clinicName: d.clinicName ?? null,
         planLabel: d.planInterest ? SAAS_PLAN_LABEL[d.planInterest] : null,
         message: d.message,
+        sourceLabel: source === "LANDING" ? null : TICKET_SOURCE_LABEL[source],
         url: `${env.NEXT_PUBLIC_APP_URL.replace(/\/+$/, "")}/plataforma/mensajes/${encodeURIComponent(thread.id)}`,
       }),
     });
@@ -199,5 +218,6 @@ export async function submitLeadForm(
     message: str("message") ?? "",
     website: str("website") ?? "",
     startedAt: str("startedAt"),
+    source: str("source"),
   });
 }

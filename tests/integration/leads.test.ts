@@ -64,6 +64,8 @@ describe.skipIf(!RUN)("[PL-2d] Leads de la web pública", () => {
       const rows = await db.supportThread.findMany({ where: { kind: "LEAD", leadEmail: { startsWith: MARK } }, select: { id: true } });
       const ids = rows.map((r) => r.id);
       await db.emailLog.deleteMany({ where: { entityId: { in: ids } } });
+      // TK-M (M19): las notas internas son RESTRICT hacia el hilo; van antes que los hilos.
+      await db.supportTicketNote.deleteMany({ where: { threadId: { in: ids } } });
       await db.supportMessage.deleteMany({ where: { threadId: { in: ids } } });
       await db.supportThread.deleteMany({ where: { id: { in: ids } } });
     }

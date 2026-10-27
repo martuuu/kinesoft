@@ -12,13 +12,27 @@
  *    detrás) y Martin lo tiene que poder evaluar desde el celular. Va escapado.
  *  - `lead_reply` lleva la respuesta entera: el lead no tiene cuenta, el mail ES el canal. Nunca hay respuesta
  *    automática al lead (PL-D15): este mail sale solo cuando Martin responde desde /plataforma.
+ *
+ * PV (§27, TK-S1): todo contacto es un ticket con origen (M19). `sourceLabel` (opcional, `TICKET_SOURCE_LABEL`) va
+ * delante del asunto («Web · precios · Consulta de Ana») para que Martin lo clasifique desde la lista de mails. Los
+ * tickets de SESIÓN que entran como lead (cuenta desactivada, alta en curso) pasan `includeMessage: false`: quien
+ * escribe es un usuario de la app (puede ser un profesional con pacientes), así que vale lo mismo que para el
+ * consultorio: el texto se lee en la bandeja, no en un mail reenviable.
  */
 import type { RenderedEmail } from "@/lib/email/types";
 import { EMAIL_COLORS as C, EMAIL_FONT as FONT, compose, escapeHtml, para, plain, strong } from "@/lib/email/templates";
+import { SUPPORT_TEAM_NAME } from "@/lib/support-threads-types";
 
 /** Copy fijo del pie de los mails de soporte (C-PL11). */
 export const SUPPORT_EMAIL_NO_PHI = "No incluyas datos de pacientes en los mensajes a soporte.";
-const SUPPORT_TEAM_SIGNATURE = "Equipo de KineSoft";
+/** PV (§27): de `BRAND_NAME` vía `SUPPORT_TEAM_NAME`; un literal acá se saltearía el renombre de Q5. */
+const SUPPORT_TEAM_SIGNATURE = SUPPORT_TEAM_NAME;
+
+/** «Origen · asunto» si hay origen. */
+function withSource(sourceLabel: string | null | undefined, subject: string): string {
+  const label = plain(sourceLabel ?? "");
+  return label ? `${label} · ${subject}` : subject;
+}
 
 /** Texto multilínea escapado, con los saltos como `<br>` (el cuerpo de un mensaje). */
 function multiline(s: string): string {
@@ -37,6 +51,8 @@ export function supportMessagePlatformEmail(p: {
   subject: string;
   isReply: boolean;
   url: string;
+  /** PV (TK-S1): origen del ticket (`TICKET_SOURCE_LABEL`) para el asunto; null/omitido = sin prefijo. */
+  sourceLabel?: string | null;
 }): RenderedEmail {
   const tenant = plain(p.tenantName) || "Un consultorio";
   const subj = plain(p.subject);
@@ -48,7 +64,7 @@ export function supportMessagePlatformEmail(p: {
   const more = "Por seguridad el mensaje no viene en este mail: leelo y respondé desde la bandeja de Plataforma.";
   const footer = ["Te llegó porque tu dirección es la bandeja de soporte de KineSoft.", SUPPORT_EMAIL_NO_PHI];
   return compose({
-    subject: `${p.isReply ? "Respuesta" : "Mensaje"} de ${tenant}: ${subj}`,
+    subject: withSource(p.sourceLabel, `${p.isReply ? "Respuesta" : "Mensaje"} de ${tenant}: ${subj}`),
     preheader: lead,
     context: "Soporte",
     title,
@@ -94,9 +110,14 @@ export function leadReceivedEmail(p: {
   planLabel: string | null;
   message: string;
   url: string;
+  /** PV (TK-S1): origen del ticket (`TICKET_SOURCE_LABEL`); null/omitido = el form de contacto de siempre. */
+  sourceLabel?: string | null;
+  /** PV (TK-S1): false para los tickets de sesión (ver la cabecera). Default true (lead de la web). */
+  includeMessage?: boolean;
 }): RenderedEmail {
   const name = plain(p.name);
-  const title = "Consulta nueva desde la web";
+  const includeMessage = p.includeMessage ?? true;
+  const title = includeMessage ? "Consulta nueva desde la web" : "Ticket nuevo de un usuario";
   const facts: Array<[string, string]> = [
     ["Nombre", name],
     ["Email", plain(p.email)],
@@ -104,16 +125,22 @@ export function leadReceivedEmail(p: {
     ...(p.clinicName ? ([["Consultorio", plain(p.clinicName)]] as Array<[string, string]>) : []),
     ...(p.planLabel ? ([["Plan que le interesa", plain(p.planLabel)]] as Array<[string, string]>) : []),
   ];
+  if (p.sourceLabel && plain(p.sourceLabel)) facts.push(["Origen", plain(p.sourceLabel)]);
   const factsHtml = facts.map(([k, v]) => `<p style="margin:0 0 6px;font-family:${FONT};font-size:15px;line-height:22px;color:${C.body};">${escapeHtml(k)}: ${strong(v)}</p>`).join("");
   const more = "Respondé desde la bandeja de Plataforma: la respuesta le llega por mail y queda registrada.";
+  const hidden = "Por seguridad el mensaje no viene en este mail: leelo en la bandeja de Plataforma.";
   const footer = ["Te llegó porque tu dirección es la bandeja de soporte de KineSoft.", "El lead no recibió ninguna respuesta automática."];
   return compose({
-    subject: `Consulta de ${name}${p.clinicName ? ` (${plain(p.clinicName)})` : ""}`,
-    preheader: `${name} escribió desde la web.`,
+    subject: withSource(p.sourceLabel, `Consulta de ${name}${p.clinicName ? ` (${plain(p.clinicName)})` : ""}`),
+    preheader: includeMessage ? `${name} escribió desde la web.` : `${name} abrió un ticket.`,
     context: "Leads",
     title,
-    paragraphs: [...facts.map(([k, v]) => `${k}: ${v}`), "Mensaje:", p.message.trim(), more],
-    bodyBlocksHtml: [`<div style="margin:0 0 16px;">${factsHtml}</div>`, quote(multiline(p.message)), para(escapeHtml(more))],
+    paragraphs: includeMessage
+      ? [...facts.map(([k, v]) => `${k}: ${v}`), "Mensaje:", p.message.trim(), more]
+      : [...facts.map(([k, v]) => `${k}: ${v}`), hidden, more],
+    bodyBlocksHtml: includeMessage
+      ? [`<div style="margin:0 0 16px;">${factsHtml}</div>`, quote(multiline(p.message)), para(escapeHtml(more))]
+      : [`<div style="margin:0 0 16px;">${factsHtml}</div>`, para(escapeHtml(hidden)), para(escapeHtml(more))],
     ctas: [{ label: "Responder", url: p.url }],
     footer,
   });
