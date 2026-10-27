@@ -1,5 +1,6 @@
+import Link from "next/link";
 import type { AccessEnforcement, TenantAccess } from "@/lib/tenant-access";
-import { SupportContact } from "@/components/ui/support-contact";
+import { supportComposeHref } from "@/components/configuracion/panels/support-draft-logic";
 
 /**
  * Banda de acceso del consultorio (BO1-A; BO3-F le suma la variante de soporte). La monta `app/(app)/layout.tsx` arriba del contenido.
@@ -15,9 +16,11 @@ export type AccessBannerCopy = {
   tone: "info" | "warn";
   text: string;
   /**
-   * [BO-Z B4] Llamado a escribir a soporte, que va DESPUÉS de `text` con el canal real (`SupportContact`: mailto o
-   * «escribile al equipo de KineSoft»). `action` = para qué («para elegir un plan»); `capital` = `text` terminó en
-   * punto y el llamado arranca oración. Solo para titular/admin: el resto del equipo no puede elegir plan.
+   * [BO-Z B4] Llamado a escribir a soporte, que va DESPUÉS de `text`. `action` = para qué («para elegir un plan»);
+   * `capital` = `text` terminó en punto y el llamado arranca oración. Solo para titular/admin: el resto del equipo no
+   * puede elegir plan. PV (TK-U3): el canal ya no es un `mailto:` sino Configuración → Soporte con el borrador del
+   * motivo (`accessBannerMotivo`): el mensaje entra como ticket de /plataforma y el consultorio ve la respuesta ahí.
+   * Crear el hilo funciona en solo lectura (`createSupportThread` está en `ACCOUNT_WRITABLE_ACTIONS`).
    */
   contact?: { action: string; capital: boolean };
 };
@@ -49,6 +52,23 @@ function withCta(
 ): AccessBannerCopy {
   if (audience === "member") return { tone, text: `${head}. ${TELL_OWNER}` };
   return { tone, text: `${head}:`, contact: { action, capital: false } };
+}
+
+/**
+ * PV (TK-U3): motivo del borrador al que lleva el llamado. Prueba vencida o impago → `plan` (entra como «Elegir plan»);
+ * el resto (hoy solo la suscripción cancelada, «para reactivarla») → `soporte` genérico, que en Plataforma se ve como
+ * «Soporte del consultorio».
+ */
+export function accessBannerMotivo(reason: TenantAccess["reason"]): "plan" | "soporte" {
+  switch (reason) {
+    case "trial_grace":
+    case "trial_expired":
+    case "past_due_grace":
+    case "past_due":
+      return "plan";
+    default:
+      return "soporte";
+  }
 }
 
 /** Lógica pura del copy (exportada para el test de render). null = no se muestra nada. */
@@ -169,7 +189,6 @@ export function AccessBanner({
   enforcement,
   support = false,
   audience = "admin",
-  supportEmail,
 }: {
   access: TenantAccess;
   enforcement: AccessEnforcement;
@@ -177,7 +196,10 @@ export function AccessBanner({
   support?: boolean;
   /** BO-Z B4: OWNER/ADMIN vs el resto del equipo (`bannerAudienceFor(role)`). */
   audience?: AccessBannerAudience;
-  /** Solo para el render test; si no, `NEXT_PUBLIC_SUPPORT_EMAIL`. */
+  /**
+   * @deprecated TK-U3: sin uso (el llamado ya no es un `mailto:`). Se acepta e ignora para no tocar el layout en
+   * paralelo (el layout no lo pasa; solo `tests/unit/render/boz-ui.test.tsx`). INT lo saca.
+   */
   supportEmail?: string | null;
 }) {
   const copy = support ? supportAccessBannerCopy(access, enforcement) : accessBannerCopy(access, enforcement, audience);
@@ -202,7 +224,14 @@ export function AccessBanner({
       {copy.contact && (
         <>
           {" "}
-          <SupportContact capital={copy.contact.capital} email={supportEmail} /> {copy.contact.action}.
+          <Link
+            href={supportComposeHref(accessBannerMotivo(access.reason))}
+            data-support-compose
+            style={{ color: "inherit", fontWeight: 700, textDecoration: "underline" }}
+          >
+            {copy.contact.capital ? "Escribinos desde Soporte" : "escribinos desde Soporte"}
+          </Link>{" "}
+          {copy.contact.action}.
         </>
       )}
     </div>

@@ -95,6 +95,8 @@ export function libreDraft(currentLabel: string, usersNow: number | null): Suppo
       `Hola, quiero consultar por el plan Libre para nuestro consultorio (hoy tenemos el plan ${currentLabel}` +
       (usersNow != null ? ` y somos ${usersNow} ${usersNow === 1 ? "usuario" : "usuarios"}` : "") +
       ").\n\nLo que necesitaríamos: ",
+    // TK-U3: entra a /plataforma → Tickets como «Elegir plan» (PLAN_CHANGE), no como soporte genérico.
+    source: "PLAN_CHANGE",
   };
 }
 

@@ -50,8 +50,9 @@ export type TenantPlanUsageView = {
     tone: PlanUsageTone;
     detail: string | null;
     /**
-     * BO-Z B4: para qué escribir a soporte («para elegir un plan»). El panel lo cierra con el canal real
-     * (`SupportContact`: mailto o «escribile al equipo de KineSoft»); acá no hay email (puro, sin env).
+     * BO-Z B4: para qué escribir a soporte («para elegir un plan»). Puro, sin canal: el panel lo traduce a una acción
+     * (`planStatusView` en lib/saas-billing-view.ts: «Cambiar de plan», Facturación o «Escribinos desde Soporte»; el
+     * plan Libre abre Soporte con borrador «Elegir plan», TK-U3). Nada de `mailto:`.
      */
     contact: string | null;
   };
@@ -168,7 +169,8 @@ export function subscriptionSummary(
 
 /**
  * La frase completa en texto plano (para tests y lectores sin link): «La prueba terminó. Escribinos a X para elegir
- * un plan.». El panel arma lo mismo con el `mailto:`.
+ * un plan.». TK-U3: ningún componente la usa (el panel arma la acción con `planStatusView`); solo la cubre
+ * tests/unit/tenant-plan-usage-logic.test.ts. Candidata a borrar en INT.
  */
 export function subscriptionDetailText(
   sub: TenantPlanUsageView["subscription"],

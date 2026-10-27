@@ -157,6 +157,11 @@ type Props = {
   support?: boolean;
   /** `?tab=` de la URL (el mail de soporte abre «Accesos de soporte»). */
   initialTab?: string;
+  /**
+   * PV (TK-U3): `?nuevo=<motivo>` ya resuelto por la página (`supportDraftFromNuevo`, server): abre «Nuevo mensaje» en
+   * Soporte con asunto sugerido y origen. Objeto plano para no sumar lógica al JS inicial de /configuracion.
+   */
+  initialSupportDraft?: SupportDraft | null;
   /** BO-Z B6: consultorios bloqueados de los que es titular (export desde acá). */
   exportBlocked?: ExportBlockedTenant[];
   /** BO-Z B6: `?tenant=` de la URL (link del mail de pedido de export). */
@@ -223,8 +228,8 @@ export function ConfiguracionClient(props: Props) {
   // cambiar de pestaña (volver no lo vuelve a mostrar). Sacarlo de la URL (que un refresh no lo repita) lo hacen las
   // dos pestañas de Mercado Pago al montar (`useDropMpReturnParam`, TP-ZF3): acá era una copia en el JS inicial.
   const [mpReturn, setMpReturn] = useState<MpConnectReturn | null>(props.mpReturn ?? null);
-  // PL-3a: «Consultanos» del plan Libre abre Soporte con un mensaje prellenado.
-  const [supportDraft, setSupportDraft] = useState<SupportDraft | null>(null);
+  // PL-3a: «Consultanos» del plan Libre abre Soporte con un mensaje prellenado. TK-U3: también `?nuevo=`.
+  const [supportDraft, setSupportDraft] = useState<SupportDraft | null>(props.initialSupportDraft ?? null);
   const confirm = useConfirm();
   const setTab = useCallback(
     async (t: Tab) => {
@@ -363,7 +368,23 @@ export function ConfiguracionClient(props: Props) {
         // PL-2d (C-PL11): la pestaña «Soporte» junta los Mensajes con el equipo de KineSoft y los Accesos de soporte.
         // PL-F1b: Mensajes y Accesos para cualquier miembro (antes PL-D20: `tenant.admin || account.billing`).
         <div style={{ display: "grid", gap: 16 }}>
-          <SupportMessagesPanel support={props.support} draft={supportDraft} onDraftUsed={() => setSupportDraft(null)} />
+          <SupportMessagesPanel
+            support={props.support}
+            draft={supportDraft}
+            onDraftUsed={() => {
+              setSupportDraft(null);
+              // TK-U3: el borrador ya está en el Drawer; sin `nuevo` en la URL un refresh no lo vuelve a abrir.
+              try {
+                const url = new URL(window.location.href);
+                if (url.searchParams.has("nuevo")) {
+                  url.searchParams.delete("nuevo");
+                  window.history.replaceState(window.history.state, "", url);
+                }
+              } catch {
+                /* sin history: el borrador vale igual */
+              }
+            }}
+          />
           {supportAccessVisible && (
             // T3d-1g (#27): terminar un acceso es `tenant.sensitive`; el soporte (que lo tiene en `SUPPORT_CAPS`) no se
             // termina a sí mismo desde acá (la action también lo corta: sale con «Salir de soporte»).

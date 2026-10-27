@@ -11,6 +11,9 @@
  *   de Plataforma) y se ofrece escribir una nueva.
  * - Con `support` (superadmin «como soporte») no se carga nada: el server igual lo rechaza, y su bandeja es /plataforma.
  * - `?hilo=<id>` en la URL (link del mail `support_reply_tenant`) abre esa conversación al montar.
+ * - PV (TK-U3): `?nuevo=<motivo>` llega armado como `draft` desde la página (`supportDraftFromNuevo`, server) y abre
+ *   «Nuevo mensaje» con el asunto sugerido y el ORIGEN del ticket (`source`: Elegir plan, Privacidad o Soporte). Es el
+ *   destino de lo que antes era un `mailto:` (banda de acceso, «Consultanos» de Libre) y de `/contacto` con sesión.
  *
  * `initialThreads` lo puede pasar la página (server) para no esperar la primera carga; sin él, se piden al montar. Las
  * actions devuelven `ActionResult` (también los permisos y el modo soporte), así que acá no hay `try/catch` de
@@ -43,10 +46,12 @@ import {
   type SupportThreadRow,
 } from "@/lib/support-threads-types";
 
+import { supportComposeInput, type AppTicketSourceValue, type SupportDraft } from "./support-draft-logic";
+
 const NETWORK_ERROR = "No pudimos conectarnos. Revisá la conexión y probá de nuevo.";
 
-/** PL-3a: mensaje prellenado (p. ej. «Consultanos» del plan Libre en el drawer de cambio de plan). */
-export type SupportDraft = { subject: string; body: string };
+/** PL-3a: mensaje prellenado (p. ej. «Consultanos» del plan Libre). Vive en `support-draft-logic.ts` (puro, TK-U3). */
+export type { SupportDraft };
 
 export function SupportMessagesPanel({
   support = false,
@@ -230,11 +235,15 @@ function ComposeDrawer({
 }) {
   const [subject, setSubject] = useState(seed?.subject ?? "");
   const [body, setBody] = useState(seed?.body ?? "");
+  // TK-U3: el origen del ticket viene del borrador y NO se edita (no hay selector): «Nuevo mensaje» a mano es
+  // TENANT_SUPPORT (sin clave: el default del server). Se limpia con el resto al cerrar o mandar.
+  const [source, setSource] = useState<AppTicketSourceValue | undefined>(seed?.source);
   // Un borrador nuevo (otro «Consultanos») pisa lo cargado: es lo que se acaba de pedir.
   useEffect(() => {
     if (!seed) return;
     setSubject(seed.subject);
     setBody(seed.body);
+    setSource(seed.source);
   }, [seed]);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -243,6 +252,7 @@ function ComposeDrawer({
   function reset() {
     setSubject("");
     setBody("");
+    setSource(undefined);
     setError(null);
   }
 
@@ -252,7 +262,7 @@ function ComposeDrawer({
     setPending(true);
     setError(null);
     try {
-      const r = await createSupportThread({ subject, body });
+      const r = await createSupportThread(supportComposeInput(subject, body, source));
       if (!r.ok) {
         setError(r.error);
         return;
@@ -277,7 +287,7 @@ function ComposeDrawer({
       dirty={dirty}
       dirtyMessage="Tenés un mensaje sin enviar. Si cerrás, se pierde."
     >
-      <form onSubmit={onSubmit} style={{ display: "grid", gap: 14 }}>
+      <form onSubmit={onSubmit} data-ticket-source={source} style={{ display: "grid", gap: 14 }}>
         <p style={{ margin: 0, fontSize: 13, color: "var(--navy-500)", lineHeight: 1.5 }}>
           {NO_PATIENT_DATA_COPY} Si la consulta es sobre un turno o una ficha, describí el caso sin nombres ni documentos.
         </p>

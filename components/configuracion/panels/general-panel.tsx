@@ -35,7 +35,6 @@ import { TENANT_BASICS_STALE_ERROR } from "../config-copy";
 import styles from "../configuracion.module.css";
 import { useAlertPrefs } from "@/components/providers/arrival-alerts";
 import { AlertModeControl } from "@/components/realtime/alert-prefs-controls";
-import { supportContactText } from "@/lib/support-contact";
 import type { PracticeAssetState } from "./practice-asset-field";
 import { HC_VISIBILITY_COPY as VIS_COPY, hcVisibilityChange, hcVisibilityOf, type HcVisibility } from "./fichas-settings-logic";
 
@@ -679,7 +678,7 @@ function FeaturesCard({ tenant }: { tenant: TenantSettings }) {
         )}
         <PrefRow
           label="Tipo de consultorio"
-          hint={`Define qué secciones ves en KineSoft. Para cambiarlo, ${supportContactText()}.`}
+          hint="Define qué secciones ves en KineSoft. Para cambiarlo, escribinos desde la pestaña Soporte."
         >
           <ReadOnlyValue>{VERTICAL_LABEL[tenant.vertical]}</ReadOnlyValue>
         </PrefRow>

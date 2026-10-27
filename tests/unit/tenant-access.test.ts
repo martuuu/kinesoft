@@ -220,12 +220,13 @@ describe("[BO1-A] banda de acceso", () => {
   });
 
   it("gracia (trial e impago) avisa los días que quedan antes del modo lectura", () => {
-    // BO-Z B4: el llamado a escribir lleva el canal real (acá, sin NEXT_PUBLIC_SUPPORT_EMAIL: el texto de respaldo).
-    expect(html({ mode: "grace", reason: "trial_grace", daysLeft: 3 }, "banner")).toContain(
-      "Tu prueba terminó. Te quedan 3 días antes de que el consultorio pase a modo lectura: escribile al equipo de KineSoft para elegir un plan."
+    // BO-Z B4: el llamado a escribir lleva el canal real. TK-U3: es el link a Configuración → Soporte (sin tags acá).
+    const plain = (h: string) => h.replace(/<[^>]+>/g, "");
+    expect(plain(html({ mode: "grace", reason: "trial_grace", daysLeft: 3 }, "banner"))).toContain(
+      "Tu prueba terminó. Te quedan 3 días antes de que el consultorio pase a modo lectura: escribinos desde Soporte para elegir un plan."
     );
-    expect(html({ mode: "grace", reason: "past_due_grace", daysLeft: 1 }, "enforce")).toContain(
-      "Te queda 1 día antes de que el consultorio pase a modo lectura: escribile al equipo de KineSoft para regularizarlo."
+    expect(plain(html({ mode: "grace", reason: "past_due_grace", daysLeft: 1 }, "enforce"))).toContain(
+      "Te queda 1 día antes de que el consultorio pase a modo lectura: escribinos desde Soporte para regularizarlo."
     );
   });
 

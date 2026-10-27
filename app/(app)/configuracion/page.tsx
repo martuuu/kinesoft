@@ -7,6 +7,7 @@ import { canWrite, effectiveMode } from "@/lib/tenant-access";
 import { tenantAccessEnforcement } from "@/lib/env";
 import { ConfiguracionClient } from "@/components/configuracion/configuracion-client";
 import type { PlanChoice } from "@/components/configuracion/panels/plan-change-drawer";
+import { supportDraftFromNuevo } from "@/components/configuracion/panels/support-draft-logic";
 import { MP_CONNECT_RETURNS, type MpConnectReturn } from "@/lib/mp-connect-types";
 
 export const dynamic = "force-dynamic";
@@ -36,7 +37,7 @@ export const metadata = { title: "Configuración · KineSoft" };
 export default async function ConfiguracionPage({
   searchParams,
 }: {
-  searchParams?: { tab?: string | string[]; tenant?: string | string[]; mp?: string | string[] };
+  searchParams?: { tab?: string | string[]; tenant?: string | string[]; mp?: string | string[]; nuevo?: string | string[] };
 }) {
   const actor = await getActor();
   // B1.7: rol desde `lib/authz` (cacheado por request) y criterio de `lib/capabilities`.
@@ -105,6 +106,12 @@ export default async function ConfiguracionPage({
     limitsLabel: p.limitsLabel,
   }));
 
+  // PV (TK-U3): `?nuevo=<motivo>` (banda de acceso, «Consultanos», `/contacto` con sesión) → «Nuevo mensaje» con
+  // borrador y origen. Siempre en Soporte aunque falte `tab=soporte` (es lo único que `nuevo` puede querer decir). El
+  // superadmin «como soporte» no escribe a Plataforma: sin borrador (el panel tampoco lo abriría).
+  const supportDraft = actor.support ? null : supportDraftFromNuevo(searchParams?.nuevo);
+  const rawTab = Array.isArray(searchParams?.tab) ? searchParams?.tab[0] : searchParams?.tab;
+
   return (
     <ConfiguracionClient
       role={uiRole}
@@ -112,7 +119,8 @@ export default async function ConfiguracionPage({
       // T3 (C-AS1): `sensitive` = `tenant.sensitive` (lo delicado de Configuración) para que la UI se lo esconda a la
       // Secretaria con «Configuración» (T3d-1g; el server ya se lo niega).
       access={{ tenantAdmin, billing, team: team !== null && pending !== null, sensitive }}
-      initialTab={Array.isArray(searchParams?.tab) ? searchParams?.tab[0] : searchParams?.tab}
+      initialTab={supportDraft ? "soporte" : rawTab}
+      initialSupportDraft={supportDraft}
       planUsage={planUsage}
       billingOverview={billingOverview}
       planChoices={planChoices}
