@@ -166,13 +166,15 @@ describe("[IN-6] quién carga el cierre por inactividad", () => {
     expect(src("components/layout/idle-warning-modal.tsx")).not.toMatch(/from\s+["'][^"']*idle-logout["']/);
   });
 
+  // ZF1b: Plataforma SÍ consulta el chequeo de SERVER (`lib/idle-logout-internal`, redirect con la sesión vencida); lo
+  // que no puede cargar es el cliente (`components/layout/idle-logout`), el modal ni el AppShell.
   it("[IN-6] (display) (/tv), portal y Plataforma no lo importan (ni AppShell)", () => {
     const outside = SOURCES.map(rel).filter(
       (f) => f.startsWith("app/(display)/") || f.startsWith("app/(portal)/") || f.startsWith("app/(platform)/")
     );
     expect(outside.length).toBeGreaterThan(0);
     for (const f of outside) {
-      expect(importsOf(join(ROOT, f), /idle-logout|idle-warning-modal|layout\/app-shell$/), f).toBe(false);
+      expect(importsOf(join(ROOT, f), /layout\/idle-logout$|idle-warning-modal|layout\/app-shell$/), f).toBe(false);
     }
   });
 
