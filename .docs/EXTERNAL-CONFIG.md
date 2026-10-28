@@ -507,6 +507,35 @@ Smart TV: el **spike en una TV real** va al QA después del push (PUSH-DIA G8).
 5. **Derechos de exhibición:** pasar música o video en una sala de espera es comunicación pública. Los derechos (SADAIC
    / AADI-CAPIF si hay música) son **del consultorio**; la app lo avisa en el formulario de la pantalla.
 
+### <a id="marca-pv"></a>0.16 PV — Marca «Consultorio Online», legales y mails obligatorios (27-oct-2026) 🔴
+
+**Con migración M19** (`support_tickets`, [RUNBOOK «M19 en prod»](MIGRACIONES-RUNBOOK.md)), que no pide consola. Plan
+§27.6; orden del día en [PUSH-DIA](PUSH-DIA.md) B y B2. El código ya dice «Consultorio Online» (`lib/brand.ts:10`);
+lo que queda son las consolas, que muestran el nombre que tengan cargado:
+
+1. **Vercel Production: `RESEND_API_KEY` + `EMAIL_FROM` obligatorias** (HD-6, `lib/env.ts:69`): sin ellas el build de
+   Production falla. `EMAIL_FROM` = `Consultorio Online <no-reply@mail.<dominio>>`; los mails de un consultorio salen
+   como «<Consultorio> vía Consultorio Online» con la misma casilla (`lib/email/transport.ts`, `FROM_NAME_SUFFIX`). El
+   dominio verificado en Resend sigue en §0.4 / §0.9.
+2. **Google OAuth** (Google Cloud → OAuth consent screen): nombre de la app «Consultorio Online», logo (Sello C,
+   `app/icon.svg`), dominio autorizado y los links **Política de privacidad** = `https://<dominio>/privacidad`
+   y **Términos** = `https://<dominio>/terminos` (Google los pide para publicar la pantalla de consentimiento).
+3. **Mercado Pago:** nombre visible de la app de MP Connect (§0.12) y de la cuenta de la plataforma. El
+   `statement_descriptor` de los cobros de la plataforma (suscripción y checkout legado) ahora es **«Consultorio
+   Online»** (ASCII, ≤ 22: `lib/mercadopago-saas.ts:417`, `lib/mercadopago.ts:78`). Los cobros online de un consultorio
+   siguen con el nombre del consultorio (`lib/mp-connect/preference.ts:14`).
+4. **Meta:** nombre de la app de Login (Facebook, §0.6) y de la de WhatsApp / Tech Provider (§0.13). Las plantillas de
+   WhatsApp **no** se renombran (`[BR-9]`): ya aprobadas, cambiarles el nombre es volver a mandarlas.
+5. **2FA:** las apps de autenticación ya enroladas siguen mostrando «KineSoft» (el issuer quedó en el alta); los códigos
+   funcionan. Las nuevas salen como «Consultorio Online» (`lib/two-factor.ts:190`).
+6. **Legales:** completar `LEGAL_ENTITY` (`lib/legal.ts:27`: razón social, CUIT, domicilio; en `null` la línea no se
+   muestra) y la revisión del abogado (transferencias internacionales, registro de la base en la AAIP, consumo,
+   retención). Versión vigente `LEGAL_VERSION="2026-10-31"` (`lib/legal.ts:12`): cambiar el texto de fondo = subir la
+   versión (las cuentas existentes no reciben el pedido de volver a aceptar; decisión de PV, ver AUDIT «Ronda PV»).
+7. **Identificadores que NO cambian** (`tests/unit/br-brand.test.tsx:213`): cookies `kine_*`/`ks_*`, claves
+   `kinesoft:*` (locks, HMAC, secret-box), roles `kinesoft_*`, envs `KINESOFT_*`, dominio `kinesoft.app`, plantillas de
+   WhatsApp y migraciones. No hay nada que renombrar en Supabase ni en Vercel.
+
 ### 1. Hosting / plataforma de despliegue — Vercel
 - **Qué configura:** proyecto en Vercel (región `gru1` ya fijada en `vercel.json`); env vars de prod;
   branch protection en `main` exigiendo el check de CI como required; `KINESOFT_ALLOW_DEMO_ACTOR`
@@ -692,10 +721,11 @@ prod `supabase` + redeploy. Volver atrás = `REALTIME_DRIVER=off` + redeploy.
 - **Qué configura:** Resend con dominio propio (subdominio `mail.<dominio>`, SPF/DKIM/DMARC) para invitaciones,
   verificación de signup, recuperación de contraseña, reset por admin y portal. La app lo llama por `fetch`
   (`lib/email/resend.ts`); Supabase no manda nada. Detalle en **§0.4**.
-- **Bloquea:** que los mails lleguen en prod. Sin `RESEND_API_KEY`/`EMAIL_FROM`, Production cae a `log` (aviso al
-  boot) y la UI de invitaciones ofrece copiar el link.
+- **Bloquea:** el build de Production. Desde HD-6 (PV) `RESEND_API_KEY` y `EMAIL_FROM` son obligatorias con
+  `VERCEL_ENV=production` (§0.16): sin ellas el build falla. Con las dos pero el dominio sin verificar, Resend rechaza y
+  la UI de invitaciones ofrece copiar el link.
 - **Responsable:** dueño.
-- **Estado:** 🔴 (dominio + Resend pendientes).
+- **Estado:** 🔴 (dominio + Resend pendientes; las variables, antes del push).
 - **Gate de activación:** `RESEND_API_KEY` + `EMAIL_FROM` en Vercel (Production) con el dominio verificado.
 - **Si Resend rechaza:** `scripts/diagnose-email.ts --from-name "" --expect-domain <dominio>` y la tarjeta «Últimos
   mails que no salieron» de `/plataforma/sistema` (**§0.9**).
@@ -737,14 +767,17 @@ prod `supabase` + redeploy. Volver atrás = `REALTIME_DRIVER=off` + redeploy.
 - **Bloquea:** corte E2 (signup público). Mitigado: desde A2 (30-sep-2026) no existe el borrado
   definitivo de pacientes, solo Archivar.
 - **Responsable:** asesor legal / decisión de negocio.
-- **Estado:** 🔴
+- **Estado:** 🟡 desde PV (27-oct): `/terminos` y `/privacidad` publicadas (`app/(legal)/`, textos AAIP Disp. 10/2008,
+  subencargados) con casilla obligatoria en el alta, el onboarding, las invitaciones y el alta asistida
+  (ARCHITECTURE ADR-030/031 «Legales»). Falta `LEGAL_ENTITY` y la revisión del abogado (§0.16).
 - **Gate de activación:** revisión legal completada.
 
 ### 12. Marca — bucket E
 - **Qué configura:** dominio de marca, favicons, `manifest`/PWA, assets. La landing se trabaja aparte.
 - **Bloquea:** corte E2 (sin datos fabricados / assets en su lugar).
 - **Responsable:** dueño / diseño.
-- **Estado:** 🔴
+- **Estado:** 🟡 desde PV: marca «Consultorio Online» con logo Sello C, íconos, OG y manifest en código
+  (`lib/brand.ts`, `app/icon.svg`, `app/apple-icon.tsx`, `app/opengraph-image.tsx`, `app/manifest.ts`). Faltan las consolas (§0.16) y el dominio de marca.
 - **Gate de activación:** assets entregados.
 
 ### 13. Mensajería — WhatsApp Business (Cloud API de Meta)

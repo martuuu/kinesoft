@@ -154,8 +154,8 @@ contraseñas.
 
 | Variable | Scope | Default seguro | Quién | Secreta | Nota |
 | --- | --- | --- | --- | --- | --- |
-| `RESEND_API_KEY` | P | sin setear (= mails a log, aviso al boot) | Martin | **sí** | [EXTERNAL-CONFIG §0.4](EXTERNAL-CONFIG.md) |
-| `EMAIL_FROM` | P | sin setear (= log) | Martin | no | `KineSoft <no-reply@mail.<dominio>>` |
+| `RESEND_API_KEY` | P | **obligatoria en Production** desde PV HD-6 (sin ella el build falla; fuera de Production, mails a log) | Martin | **sí** | [EXTERNAL-CONFIG §0.4 y §0.16](EXTERNAL-CONFIG.md#marca-pv) |
+| `EMAIL_FROM` | P | **obligatoria en Production** desde PV HD-6 (fuera de Production, default) | Martin | no | `Consultorio Online <no-reply@mail.<dominio>>` |
 | `EMAIL_REPLY_TO` | P | sin setear | Martin | no | Reply-To por defecto |
 | `EMAIL_TRANSPORT` | **L** | — | dev | no | `mailpit`/`resend`/`log`; Production lo ignora. **No cargar en P** |
 | `MAILPIT_URL` | **L** | `http://localhost:8025` | dev | no | Solo local |

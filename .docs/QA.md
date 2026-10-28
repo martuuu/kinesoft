@@ -359,14 +359,14 @@
 - «Llegó» de Recepción y WhatsApp manual con el celular normalizado (`recepcion.spec.ts`) ·
   cobro manual con medio (`cobro.spec.ts`) · alta de paciente (`pacientes.spec.ts`) · plan con sus turnos
   (`plan.spec.ts`) · portal con el turno de mañana (`portal.spec.ts`) · turnero de 5 días sin cobro (`turnero.spec.ts`)
-  · fichas: alta a 390, edición en 24 h, enmienda, anulación, PDF/Word, respaldo, importar .docx y compartir
+  · tickets, legales, inactividad y marca de PV (`tickets`, `legal`, `idle`, `brand.spec.ts`) · fichas: alta a 390, edición en 24 h, enmienda, anulación, PDF/Word, respaldo, importar .docx y compartir
   (`fichas*.spec.ts`, `ficha-*.spec.ts`) · turnero con seña y REQUIRED, link de pago y «Mi Mercado Pago»
   (`turnero-cobro`, `payment-link`, `mp-connect`) · matriz por plan (`plans-matrix.spec.ts`) · TV, WhatsApp y
   suscripción (§3).
 
 ---
 
-## §3 · Vigente por tanda (T3 a T7)
+## §3 · Vigente por tanda (T3 a T7 y PV)
 
 ## T3 · Agenda, Secretaria, cobros y módulos (19-oct-2026)
 
@@ -732,3 +732,66 @@
   nada que re-anclar.» (`components/plataforma/billing/ledger-dialogs.tsx:483`, `:537-547`). El re-anclaje no
   reactiva un débito bloqueado (ZF1).
 - [ ] «Bajada programada.» → «Anular bajada»; «Baja programada.» → «Deshacer baja» («Baja deshecha»).
+
+## PV · Antes de vender (27-oct-2026)
+
+Plan §27, commits `f9099b1`..`dcec562`, **con migración M19** (`support_tickets`, solo local). Diseño en ARCHITECTURE
+ADR-030 / ADR-031; hallazgos en [AUDIT «Ronda PV»](AUDIT.md#ronda-pv). Los E2E `tickets`, `legal`, `idle` y
+`brand.spec.ts` cubren el camino feliz: esto es lo que piden ojos. Mails en Mailpit (`localhost:8025`).
+
+### 🔴 P0 · Tickets (`/contacto` → Plataforma «Tickets»)
+- [ ] Anónimo: `/contacto`, `?motivo=precio` («Pedinos el precio»), `?motivo=plan-libre`, `?motivo=alta`,
+  `?motivo=privacidad` → form de lead → «Volver al inicio» sin el form debajo (sin doble envío). Un `?motivo=cuenta` o
+  `?motivo=onboarding` anónimo **no** abre un ticket «Cuenta desactivada» / «Alta en curso»: el origen queda «Web · contacto».
+- [ ] Con consultorio usable: `/contacto?motivo=plan` redirige a Configuración → Soporte con el borrador del motivo.
+- [ ] Titular de un consultorio **suspendido**, usuario con **cuenta desactivada** y usuario **en alta** (sin
+  consultorio): `/contacto` muestra el form con su email (no se puede cambiar) y «Volver»; el ticket sale con la
+  identidad de la sesión. Paciente del portal sin membresías → form de lead.
+- [ ] Más de 5 tickets por día con el mismo usuario → error de tope; dos envíos simultáneos no pasan el tope.
+- [ ] `/plataforma/mensajes` dice «Tickets»: el ticket aparece en **Nuevos** con su **origen** y la tarjeta de contacto;
+  un lead del formulario web dice «Identidad: Sin verificar».
+- [ ] «Tomar» → **En curso** con tu nombre; otro superadmin que toma el mismo ve que ya está tomado.
+- [ ] Nota interna → aparece en la lista; el consultorio **no** la ve en su Soporte ni en su export de auditoría.
+- [ ] Responder (también toma) → el consultorio ve la respuesta; «Marcar resuelto» con confirmación → **Resuelto**;
+  «Reabrir» → vuelve a **En curso**. Filtro por origen y por etapa; el consultorio sigue viendo Abierta / Cerrada.
+- [ ] Con Resend apagado el ticket igual queda creado.
+
+### 🔴 P0 · Legales (casilla «Acepto los Términos y condiciones y la Política de privacidad.»)
+- [ ] Alta por email: sin tildar no avanza («Para seguir, aceptá los Términos y la Política de privacidad.»).
+- [ ] Alta con Google: la casilla aparece en el paso del onboarding que crea el consultorio.
+- [ ] Invitación: activar (cuenta nueva) y aceptar con sesión (cuenta existente sin aceptación) piden la casilla.
+- [ ] Alta asistida desde Plataforma: el titular nuevo hace `/reset` → **`/aceptar-terminos`** → `/dashboard`; sin tildar
+  vuelve con el error. (Hueco conocido: el reenvío del link y «Olvidé mi contraseña» no pasan por ahí.)
+- [ ] Cuenta → Seguridad muestra «Aceptaste los Términos y la Política de privacidad».
+- [ ] `/terminos` y `/privacidad` a 390 y a 1366; links en el pie de AuthShell, landing, portal, turnero y directorio
+  (abren en pestaña nueva desde la casilla). Sin `LEGAL_ENTITY` no aparece ninguna línea «CUIT: …».
+
+### 🔴 P0 · Cierre por inactividad (ingresar con «Mantenerme conectado» **destildado**)
+- [ ] 14 min sin tocar nada → «¿Seguís ahí?» con la cuenta regresiva; «Seguir conectado» lo cierra y reinicia.
+- [ ] Dejar vencer → «Tu sesión se cerró por inactividad» → `/login?reason=idle` con «Cerramos tu sesión por
+  inactividad. Ingresá de nuevo para seguir.» (arriba de los botones sociales); al volver a entrar, vuelve al path.
+- [ ] Dos pestañas: usar una mantiene viva la otra; cuando una cierra, la otra también.
+- [ ] Cerrar Chrome con «Continuar donde lo dejaste», esperar > 16 min y reabrir → login, **sin** datos de pacientes en
+  la pantalla ni en el HTML (también en `/cuenta` y `/plataforma`).
+- [ ] Con la sesión vencida, `GET /api/pacientes/export` y `/api/agenda/export` → **401**.
+- [ ] Con «Mantenerme conectado» tildado no aparece nunca el aviso. `/tv` y el portal no se cierran.
+
+### Marca «Consultorio Online»
+- [ ] Sidebar y MobileBar a 360 px: logo Sello C sin cortes; topbar (a 1366 desborda desde antes: backlog ZB M7).
+- [ ] Landing a 1024: cabecera sin partir links ni CTA; login a 1366×768 sin scroll y pie legal sin «·» sueltos.
+- [ ] Pestañas: «Agenda · Consultorio Online» (sin marca duplicada). Manifest (`/manifest.webmanifest`, `short_name`
+  «Consultorio»), ícono de PWA instalada y `/apple-icon`; vista previa OG al pegar el link en WhatsApp.
+- [ ] Mails en Mailpit: remitente «<Consultorio> vía Consultorio Online» y pie sin «kinesiología y osteopatía».
+- [ ] 2FA nueva sale como «Consultorio Online»; una ya enrolada sigue con el nombre viejo y sus códigos funcionan.
+
+### `/pacientes` paginado (con más de 50 pacientes)
+- [ ] 50 por página, `?page=`, indicador arriba y paginación abajo; los totales de los pills son de todo el directorio.
+- [ ] Orden (próximo turno, última visita) estable entre páginas; filtro de obra social (`?os=`) pagina sobre lo filtrado.
+- [ ] Secretaría ve la proyección admin paginada igual; una búsqueda nueva vuelve a la página 1.
+- [ ] El export CSV trae **todos**, no solo la página.
+
+### Plata y webhook
+- [ ] Montos con centavos solo cuando no son cero ($ 1.500,50; $ 1.500). Proporcional de una subida de plan con centavos.
+- [ ] Webhook de MP con body de más de 64 KiB → **413** (`curl -X POST --data-binary @grande.json`); uno normal sigue 200.
+- [ ] Débito cancelado desde MP (simulador) → mail «débito cancelado» en Mailpit.
+

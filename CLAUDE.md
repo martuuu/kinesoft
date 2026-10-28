@@ -120,6 +120,13 @@
     orden, que es **M12 → M14 → M18 → M17 → M15 → M16** (timestamp). ADR-027 = MPS, ADR-028 = TV, ADR-029 = WA. «S1..S13»
     de `scripts/diagnose-whatsapp.ts` y «S1..S10» de `scripts/diagnose-mp-subscriptions.ts` no son los del fake de GoTrue
     ni los S1..S11 de T5. «Pantalla» / «TV» es `ReceptionDisplay` (`/tv`), no la vista Recepción de la agenda.
+  - **§27 del plan (27-oct; «PV» = tanda antes de vender):** olas «Q0..Q5» y «Z». Bloques «TK» (tickets), «LG»
+    (legales), «IN» (inactividad) y «BR» (renombre a «Consultorio Online»). Sesiones «PV-K», «W1a..W1j», «W2a», «W3a»,
+    «TK-M/S1/S2/U1/U2/U3», «LG-S/P/U», «IN-S», «BR-a/b/c1/c2/d1/d2/Z», «INT-c»; cierre «ZA/ZB» (revisores) y
+    «ZF1a/ZF1b/ZF2» (fixers: no son los ZF1..ZF5 de T4, ni los ZF1..ZF3 de T6/T7, ni TP-ZF). «HD-1..18» son ítems de
+    endurecimiento de PV (no los H1-H6). «M19» = `support_tickets`; ADR-030 = tickets, ADR-031 = inactividad.
+    Decisiones con default «D-TK*», «D-LG*», «D-IN*», «D-BR*», «D-HD*» (§27.7). «M1..M7» y «B1..B18» de ZA/ZB son
+    hallazgos de los revisores (AUDIT «Ronda PV»), no migraciones. «Tickets» es la etiqueta de `/plataforma/mensajes`.
   - «Plan» choca en tres sentidos: plan de tratamiento, plan SaaS del tenant y plan de la obra social.
   - «Vertical» (`Tenant.vertical`: General / Kinesiología) es el tipo de consultorio: no es la «disciplina» de un
     servicio o plan (Kine / Osteo) ni el plan SaaS (`Tenant.plan`). «Kine PRO» = vertical Kinesiología + plan PRO.

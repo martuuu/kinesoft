@@ -208,6 +208,9 @@ Pre-Sprint 11, the webhook bypassed signature verification in non-prod
 environments. The new model (`lib/mercadopago.ts` +
 `app/api/webhooks/mercadopago/route.ts`):
 
+- **Body cap (PV HD-4, 27-oct):** the body is read once, only when the query lacks `data.id`/`type`, with
+  `readCappedBody` (`lib/http/capped-body.ts:13`) and a 64 KiB cap → **413** without consuming
+  (`app/api/webhooks/mercadopago/route.ts:18,54-57`). AUDIT §5.4 «Enmienda HD-4».
 - **Signature is required** when `MP_WEBHOOK_SECRET` is configured. No
   prod-only carve-out. Stale timestamps (>5 min) are rejected to defeat
   replay.
@@ -398,7 +401,7 @@ what makes a missed wrap fail loudly instead of leaking.
 
 **Defense in depth stands.** The app-layer `tenantId` filter (`getActor()` +
 a hand-written `where: { tenantId }` in every query) is applied everywhere.
-(`getTenantPrisma()` is dead code — no call sites.) RLS is the net under it,
+(`getTenantPrisma()` was dead code and was deleted in PV HD-17, `lib/db.ts:47`.) RLS is the net under it,
 not a replacement for it. Note that **FK checks bypass RLS**: an input id from
 another tenant is persisted unless the action validates it against the tenant
 first. For bookings this is closed since A2a (§1.1); every new action must do
@@ -1281,8 +1284,57 @@ guarda por Vercel y no por `NODE_ENV` porque el E2E corre `next start`. `WHATSAP
 `SECRET_BOX_KEYS` frena el boot.
 
 **`npm run dev` seguro.** `scripts/dev-safe.mjs` lee solo cuatro claves de los `.env*` (`NEXT_PUBLIC_SUPABASE_URL`,
-`PROD_SUPABASE_REF`, `DATABASE_URL`, `DIRECT_URL`; `:12-13,37`), no imprime valores y no arranca si el Supabase efectivo
+`PROD_SUPABASE_REF`, `DATABASE_URL`, `DIRECT_URL` y, desde PV, `DATABASE_URL_SERVICE`; `:41`), no imprime valores y no arranca si el Supabase efectivo
 no es local o coincide con `PROD_SUPABASE_REF` (salvo `ALLOW_DEV_REMOTE_SUPABASE=1`) ni si la base no es localhost
-(salvo `ALLOW_DEV_REMOTE_DB=1`, `:25-28`). El comando diario es `npm run dev:local`: dotenv-cli trae solo la DB de `.env.local`,
+(salvo `ALLOW_DEV_REMOTE_DB=1`, `:25-28`). Desde PV (HD-17) también lee y frena `DATABASE_URL_SERVICE` remota
+(`prismaService` la toma antes que `DIRECT_URL`; `:31-41`). El comando diario es `npm run dev:local`: dotenv-cli trae solo la DB de `.env.local`,
 el script verifica que sea localhost y pisa con literales de prueba todo lo que tiene efecto externo, con los dos
 simuladores prendidos (`scripts/dev-mp-fake.mjs:8-12`).
+
+## 26. Antes de vender (PV, 27-oct-2026; local, sin push)
+
+Diseño en [ARCHITECTURE.md ADR-030 / ADR-031 y «Legales y renombre»](ARCHITECTURE.md); hallazgos en
+[AUDIT «Ronda PV»](AUDIT.md#ronda-pv). El relevamiento (§27.0 del plan) no encontró críticos ni altos en el código.
+
+**Superficie RPC.** Todo export de un archivo `"use server"` es un endpoint POST que cualquiera con sesión puede llamar.
+`tests/unit/server-surface-guard.test.ts` exige que cada export tenga un llamador o figure en `ALLOWLIST` con un motivo
+de ≥ 20 caracteres (25 al cierre de PV; una entrada que ganó llamador o cuyo export ya no existe falla), y que todo
+`*-internal.ts` lleve `import "server-only"`. HD-1: `listBookingsInRange` valida con zod (≤ 62 días; antes se podía pedir
+la agenda entera), y se borraron `getDayCounts` e `isReminderDismissed`. HD-3: zod y topes en EVA, diagnóstico,
+ejercicios (sin upsert masivo de `Tag` global ni slugs reservados), sesiones, búsqueda, archivos y media; `ensureTag`
+con label ≤ 40 y rate limit (ZA B3).
+
+**Tickets (ADR-030).** `submitSessionTicket` (`lib/tickets.ts:142`) toma identidad y consultorio **siempre** de la
+sesión (`getAccessSnapshot` + `sessionBlockOf`), nunca del form; escribe por `prismaService` porque el usuario bloqueado
+no tiene Actor. Topes 5/h (limitador) y 5/24 h en la base bajo `pg_advisory_xact_lock` por usuario (`:81`). El form
+público (`lib/leads.ts:72`) no acepta orígenes de sesión (ACCOUNT_DISABLED, ONBOARDING) y el lead sin usuario se ve en
+la bandeja como «Identidad: Sin verificar (formulario web)» (ZA B1: ingeniería social del tipo «reactivame»). Todo
+export de `lib/platform-inbox.ts` arranca con `requirePlatformAdmin`. **`SupportTicketNote` es SERVICE_ONLY** (M19:
+ENABLE + FORCE, cero policies): invisible para `kinesoft_app` con cualquier GUC. Tomar y anotar auditan solo en el
+registro global de Plataforma (`auditPlatformGlobalInTx`, `:635,679`) y sin el texto: antes el `{noteId, length}` salía
+en el export del Titular (ZA B2).
+
+**Legales.** La aceptación es una fila `legal.accepted` en `UserSecurityEvent` (`{version, via}`), escrita solo por
+`recordUserSecurityEventInTx` vía `recordLegalAcceptanceInTx` (`lib/legal-acceptance-internal.ts:27`), en la misma tx
+que el alta, el onboarding o la invitación (el server rechaza sin la casilla: `LEGAL_ACCEPT_ERROR`). El alta asistida
+pasa por `/aceptar-terminos` (`lib/legal-accept-action.ts:32`, `next` por `safeNext`). Hueco conocido: el reenvío del
+link y «Olvidé mi contraseña» no pasan por esa pantalla (AUDIT `pv za-M1 reenvio-sin-aceptar`).
+
+**Cierre por inactividad (ADR-031).** Solo con «Mantenerme conectado» destildado. `kine_idle` lleva un tag derivado del
+`session_id` (no el id crudo, porque la cookie la lee JS; `lib/idle-logout-internal.ts:13-19`), así que una cookie de
+otra sesión no cierra la actual, y los minutos se acotan 5..480 al leerla. El server, con la cookie de esa sesión vencida
+(+ 60 s de gracia), redirige antes de cualquier loader en `(app)`, `/cuenta` y `/plataforma`, y los exports
+`/api/{pacientes,agenda}/export` responden **401** antes de leer datos. Las server actions no la chequean. **Límite:** la
+cookie no es httpOnly; protege contra el uso casual de una PC compartida, no contra quien edita cookies. HD-2: con
+GoTrue caído el sign-out expira a mano las `sb-*` (`app/api/auth/sign-out/route.ts:38-53`).
+
+**Webhook de MP y logs.** Tope de body de 64 KiB → 413 (HD-4, §4 arriba). HD-5: `scrubTokenPaths`
+(`lib/client-error-report.ts:68`) limpia `/invite/<t>`, `/pagar/<t>` y `?t=` / `token=` / `token_hash=` / `code=` en
+`PERF_TIMING` (`lib/server-timing.ts`) y en los beacons de errores del cliente. HD-12: los avisos a titulares y admins
+excluyen a deshabilitados y no aceptados, y `alsoPractitionerId` ya no se busca sin `tenantId` (era cross-tenant bajo
+BYPASSRLS). HD-6: sin `RESEND_API_KEY`/`EMAIL_FROM` el build de Production falla (`lib/env.ts:69`).
+
+**Renombre sin tocar secretos.** Las claves `kinesoft:*` de HMAC, locks y secret-box, las cookies `kine_*`/`ks_*` y los
+roles `kinesoft_*` no cambian (`[BR-9]`, `tests/unit/br-brand.test.tsx:213`): renombrarlas rompería secretos sellados,
+códigos de vínculo y sesiones.
+

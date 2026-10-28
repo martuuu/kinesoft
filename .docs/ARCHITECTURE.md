@@ -1954,6 +1954,119 @@ locales: nada contra Meta, Mercado Pago ni una TV reales. «Preservar»: AUDIT �
 | `lib/saas-billing-schedule-internal.ts` · `lib/saas-adjustments-internal.ts` · `lib/saas-reanchor-internal.ts` | Bajadas, bajas y subidas; ajustes solo-inserción; re-anclaje al 4 |
 | `scripts/{saas-reanchor,diagnose-whatsapp,diagnose-mp-subscriptions,prod-precheck,qa-tenants,dev-safe}` | Scripts que corre Martin (re-anclar, sandbox, precheck/postcheck de prod, consultorios QA) y `npm run dev` seguro |
 
+## PV (27-oct-2026): antes de vender
+
+Plan §27 (brief `wip-20/brief-pv.md`; olas Q0..Q5 y Z). Commits `f9099b1` (Q0, M19) .. `dcec562` (ZF2), **local, sin
+push**. Una migración: **M19** `20261027120000_support_tickets`, aditiva y **antes** del deploy, última del orden M12 →
+M14 → M18 → M17 → M15 → M16 → M19 ([PUSH-DIA](PUSH-DIA.md), [RUNBOOK «M19 en prod»](MIGRACIONES-RUNBOOK.md)).
+Hallazgos y enmiendas de §5.4 / §5.27 en [AUDIT «Ronda PV»](AUDIT.md#ronda-pv).
+
+### ADR-030 — Tickets: todo contacto y soporte entra a Plataforma (status: ACCEPTED, PV/TK, 27-oct-2026)
+
+**Contexto.** Decisión de Martin (27-oct): «que todos los contactos de formularios y consultas a soporte vayan a la parte
+de /plataforma de Superadmin, y se abran como "tickets" para resolver desde ahí». Antes había `mailto:` sueltos (alta
+asistida, suspendido, cuenta desactivada, banner de acceso, onboarding, footer) y el mail se perdía si Resend rechazaba.
+
+**Decisión.**
+- **Una entrada pública, `/contacto?motivo=<slug>`** (`app/contacto/page.tsx:102`), que decide **por la sesión**, no
+  por el link: anónimo (o paciente del portal sin membresías) → form de lead (`lib/leads.ts`); consultorio usable →
+  redirect a Configuración → Soporte `?tab=soporte&nuevo=<slug>` (`:132`); suspendido, desactivado o en alta → form con
+  la identidad sacada de la sesión (`components/contact/session-ticket-form.tsx`). Los slugs y el mapa slug ↔ origen
+  son puros (`lib/support-ticket-sources.ts:93`, desconocido → LANDING). Se borraron los `mailto:` públicos de soporte.
+- **`submitSessionTicket`** (`lib/tickets.ts:142`): destino e identidad **siempre** de `getAccessSnapshot` +
+  `sessionBlockOf`, nunca del form. Escribe por `prismaService`: es una superficie sin Actor (`getActor` tira
+  justamente para el usuario bloqueado). Suspendido → hilo TENANT de ese consultorio (D-TK5). El ticket existe aunque
+  falle el mail.
+- **Triage en `/plataforma/mensajes`** con la etiqueta «Tickets» (D-TK2; la ruta no cambia): etapas Nuevo / En curso /
+  Resuelto, filtro por origen, tarjeta de contacto, «Tomar», notas internas. Responder también toma. Todo export de
+  `lib/platform-inbox.ts` arranca con `requirePlatformAdmin` (`:189`, `:610` `takeInboxThread`, `:653` `addInboxNote`);
+  se siguen aceptando los params viejos de la URL.
+- **M19 sin `ALTER TYPE`:** columnas `source`, `platformTakenAt`, `platformTakenById` en `SupportThread` + enum
+  `SupportTicketSource` (10 valores) + CHECK origen ↔ kind (tolera NULL mientras convive el código viejo) y CHECK
+  tomado ⇔ autor. **«En curso» = OPEN + `platformTakenAt`**: el consultorio sigue viendo Abierta / Cerrada y el código
+  viejo lee todos los hilos. `ticketSourceOf(kind, null)` cubre las filas sin origen.
+- **`SupportTicketNote` es SERVICE_ONLY** (ENABLE + FORCE, cero policies; FK RESTRICT; cuerpo 1..2000): el consultorio
+  nunca la ve, ni con `kinesoft_app`. Solo-inserción.
+- **Audit:** responder y cambiar estado van por `auditPlatformInTx` (el consultorio los ve); **tomar y anotar van solo
+  por `auditPlatformGlobalInTx`** con `tenantId` en la fila global (`lib/platform-inbox.ts:635,679`), y el payload no
+  lleva el texto de la nota (ZA B2: antes salía en el export del consultorio).
+- **Topes:** 5 por hora en el limitador (`ticket:user:<hash>`) y 5 cada 24 h en la base por `createdById`; el conteo
+  diario va bajo `pg_advisory_xact_lock` por usuario en la misma tx que el insert (`lib/tickets.ts:81`, ZA B5; test
+  `tk-s1-ticket-cap-race`).
+- **El form público no acepta orígenes de sesión** (`PUBLIC_LEAD_SOURCES`, `lib/leads.ts:72`: sin ACCOUNT_DISABLED ni
+  ONBOARDING; ZA B1) y el lead sin usuario se muestra con «Identidad: Sin verificar (formulario web)»
+  (`components/plataforma/inbox/inbox-logic.ts`): nadie se hace pasar por la dueña de una cuenta desde la landing.
+
+**Descartado.** Estado nuevo en el enum (rompe el código viejo entre M19 y el deploy); mail a soporte como canal
+principal (se pierde con Resend caído); ruta nueva `/plataforma/tickets` (rompe links guardados sin ganar nada).
+
+### ADR-031 — Cierre por inactividad en la PC compartida (status: ACCEPTED, PV/IN, 27-oct-2026)
+
+**Contexto.** «Mantenerme conectado» destildado (H-SESS, cookies de sesión sin `maxAge`) no alcanza: Chrome «Continuar
+donde lo dejaste» las restaura y la pestaña de la recepción queda abierta horas (AUDIT `sesion-restaurada-por-chrome`).
+
+**Decisión.**
+- **Solo con «Mantenerme conectado» destildado** (`kine_session_mode=ephemeral`; `idlePolicyFor`,
+  `lib/idle-logout.ts:39`). La sesión persistente sigue como siempre (D-IN1).
+- **15 min sin uso, aviso «¿Seguís ahí?» 60 s antes** (`lib/idle-logout.ts:19,21`; `components/layout/idle-warning-modal.tsx`).
+- **Cookie `kine_idle = "<lastSec>.<minutes>.<tag>"`**, escrita por el cliente (`components/layout/idle-logout.tsx`)
+  como mucho cada 5 s **en hora del server** (el layout le pasa `serverNowMs`), con minutos acotados 5..480 al leerla.
+  `tag` = hash del `session_id` de GoTrue (`idleSessionTag`, `lib/idle-logout-internal.ts:19`): una cookie vieja de otro
+  login en el mismo navegador no cierra la sesión actual (`isIdleExpiredOnServer` con tag distinto → false). La
+  cookie sincroniza las pestañas; `BroadcastChannel("kine-idle")` solo acelera.
+- **El server redirige a `/login?reason=idle` antes de cualquier loader** (`app/(app)/layout.tsx:79-80`, gracia de
+  60 s, `IDLE_SERVER_GRACE_MS`), y el login pinta `IdleExpired` y cierra la sesión. **Por qué redirect y no un aviso en
+  el layout** (lo que decía el brief): en Next 14 la página hija se renderiza aparte del layout (va en el `seedData`
+  del payload RSC), así que aunque el layout no pinte `children` la página corre sus loaders y su salida viaja en el
+  HTML. `redirect()` corta el render entero.
+- **Alcance:** todo `(app)` incluida `/sala` (D-IN3), más (ZF1b, ZA M2) `app/cuenta/layout.tsx:20` y
+  `app/(platform)/layout.tsx:44` (redirigen) y los exports `GET /api/pacientes/export` y `/api/agenda/export` (**401**
+  antes de leer datos). `/plataforma` no monta el temporizador del cliente: solo bloquea si la cookie de esa sesión ya
+  venció. Quedan afuera `/tv` y el portal.
+- **Server actions:** no chequean la cookie; dependen de que el cliente cierre en T (en navegación blanda Next no
+  re-renderiza el layout y manda `IdleLogout`). Aceptado como diseño.
+- **Sign-out con GoTrue caído** (HD-2, `app/api/auth/sign-out/route.ts:38-53`): si `signOut()` devuelve `{ error }`
+  se expiran a mano todas las `sb-*` y se loguea; el cierre por inactividad no queda a medias.
+
+**Límite.** La cookie la escribe JS (no es httpOnly): quien tenga la PC puede editarla y estirar la sesión. Es
+protección contra el uso casual de una PC compartida, no contra alguien con acceso a la consola del navegador; para eso
+está el cierre explícito y la sesión persistente apagada.
+
+### Legales y renombre (PV/LG y PV/BR, 27-oct-2026)
+
+- **Legales.** `app/(legal)/{terminos,privacidad}` estáticas, versión `LEGAL_VERSION = "2026-10-31"`
+  (`lib/legal.ts:12`), textos AAIP (Disp. 10/2008) y subencargados; el consultorio es responsable de los datos de sus
+  pacientes y la plataforma encargada (art. 25). `LEGAL_ENTITY` (`lib/legal.ts:27`) lo completa Martin; en `null` la
+  línea no se muestra. **La aceptación es una fila `legal.accepted` en `UserSecurityEvent`** (M8, sin migración) con
+  `{version, via}`, escrita por `recordLegalAcceptanceInTx` (`lib/legal-acceptance-internal.ts:27`) a través de
+  `recordUserSecurityEventInTx`, que sigue siendo el único escritor. **Puertas** (`LegalAcceptVia`, `lib/legal.ts:46`):
+  signup por email, el paso de onboarding que crea el consultorio (cubre OAuth, D-LG5), activación y aceptación de
+  invitaciones, y **`/aceptar-terminos`** para el titular creado en el alta asistida de Plataforma (`/reset` →
+  `/aceptar-terminos` → `/dashboard`, `lib/platform-provisioning-schemas.ts:148`, `lib/legal-accept-action.ts:32`; ZA M1).
+  Las cuentas existentes no reciben el pedido. Links en AuthShell, landing, portal, turnero y directorio
+  (`components/legal/legal-links.tsx`).
+- **Renombre a «Consultorio Online».** Una sola fuente: `BRAND_NAME` / `BRAND_SHORT_NAME = "Consultorio"`
+  (`lib/brand.ts:10,13`). Cada página pone solo su nombre y el template agrega la marca
+  (`app/layout.tsx:11`, `%s · Consultorio Online`). Logo Sello C (el símbolo `KineLogo` no se renombra, D-BR2), icon,
+  `app/apple-icon.tsx`, OG y manifest; mails con `FROM` «X vía Consultorio Online»; descriptor de MP en ASCII ≤ 22.
+  **Identificadores preservados** (test `[BR-9]`, `tests/unit/br-brand.test.tsx:213`): cookies `kine_*`/`ks_*`, claves
+  `kinesoft:*` de locks, HMAC y secret-box (romperían secretos sellados y códigos), roles `kinesoft_*`, claves de
+  localStorage, envs, dominios, plantillas de WhatsApp y migraciones. Guard `tests/unit/brand-literal.test.ts`:
+  «KineSoft» = 0 en el código que corre y el literal nuevo solo en `lib/brand.ts`.
+
+### Módulos nuevos de PV
+
+| Módulo | Qué es |
+| --- | --- |
+| `lib/support-ticket-sources.ts` · `lib/tickets-types.ts` · `lib/tickets.ts` | Orígenes y motivos (puro), copy y topes, `submitSessionTicket` |
+| `lib/platform-inbox.ts` · `components/plataforma/inbox/*` | Bandeja «Tickets»: etapas, origen, contacto, tomar, notas |
+| `app/contacto/page.tsx` · `components/contact/*` | Entrada única de contacto |
+| `lib/legal.ts` · `lib/legal-acceptance-internal.ts` · `lib/legal-accept-action.ts` · `app/(legal)/**` · `app/aceptar-terminos` · `components/legal/*` | Legales y aceptación |
+| `lib/idle-logout{,-internal}.ts` · `components/layout/idle-{logout,warning-modal,expired}.tsx` | Cierre por inactividad |
+| `lib/http/capped-body.ts` | Lectura de body con tope (webhooks de MP y WhatsApp) |
+| `lib/patients-list-{internal,logic}.ts` · `components/patients/patients-pagination.tsx` | `/pacientes` paginado (HD-10) |
+| `lib/brand.ts` · `app/{icon.svg,apple-icon.tsx,opengraph-image.tsx,manifest.ts}` | Marca |
+
 ## Cache & cookies (what is implemented — updated 30-sep-2026)
 
 **Data cache** — `unstable_cache` in 9 loaders, **every key carries the

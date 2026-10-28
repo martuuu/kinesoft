@@ -14,7 +14,7 @@
 > 3. **Etapa 3 — Productiva final.** Guía de diagnóstico completa, planes, IA local, módulo
 >    contable, features Pro.
 
-## ⭐ Plan vigente (18-oct): §22.13 (T3 en §23, T4 en §24, T5 en §25, T6/T7 en §26) · ✅ ejecutado, falta el push
+## ⭐ Plan vigente (18-oct): §22.13 (T3 en §23, T4 en §24, T5 en §25, T6/T7 en §26) + PV (§27) · ✅ ejecutado, falta el push
 
 > **Manda sobre §20 y §21 donde choque.** Feedback del 17-oct del cliente principal (turnero que no dejaba terminar,
 > agenda que nunca entraba en vivo, «Llegó», 2FA, ventana de 5 días, cobro de turnos por profesional, video en la TV).
@@ -31,21 +31,28 @@
 | 5 | **T5** | TP (§25): el turnero cobra online con la cuenta de Mercado Pago **de cada profesional** (OAuth + PKCE; la del consultorio solo el Titular con 2FA), política OFF/OPTIONAL/REQUIRED con valor del turno, seña fija o %, links de pago a nombre de un paciente (WhatsApp/email, página pública `/pagar`), seña descontada del cobro a mano y de Ingresos, comprobante, `/cobros`, reintegros desde MP, Mercado Pago falso local (`npm run dev:mpfake`). Antes, T4-Y (`6f56c03`: aviso al paciente al anular una ficha compartida) | **M18** `turnero_cobros_mp` | ✅ **local, sin push** (`a31337c`..`92c600c` + el commit de docs TP-ZD, T5a → T5-Z); **M18 solo en el Docker local**, a prod al final del planning ([RUNBOOK «M18 en prod»](MIGRACIONES-RUNBOOK.md); consola de MP, sandbox S1-S11 y `live` en [EXTERNAL-CONFIG §0.12](EXTERNAL-CONFIG.md)). Hallazgos en [AUDIT «Ronda T5»](AUDIT.md), QA en [QA «T5»](QA.md), diseño en ARCHITECTURE ADR-026 |
 | 6 | **T7** | TV (§26.4): `/tv` para la sala con código de vínculo de un uso, cookie de dispositivo, feed sin PHI, llamado en vivo con el token del staff, video de YouTube nocookie, kiosco; «Pantallas» en `/sala`; CSP **enforced** en `/tv` y `.com.ar` en el Report-Only | **M17** `reception_displays` | ✅ **local, sin push** (`b019d7c`..`609da3c`, olas X0-X9 junto con T6); **M17 solo en el Docker local**. Diseño en ARCHITECTURE ADR-028; falta el spike en una TV real (QA) |
 | 7 | **T6** | WA (§26.5): WhatsApp Cloud API por consultorio con simulador de Meta (alta embebida, plantillas, turno agendado/movido, recordatorio de las 18:00 con «Confirmo»/«No puedo ir», BAJA/ALTA, compartir ficha, consentimiento) · MPS (§26.6): débito automático, «Pagar con Mercado Pago» o transferencia, cobro el día 4, subida con proporcional, bajada programada, baja a fin de período, ajustes · INF (PUSH-DIA, precheck de prod, `dev` seguro) · QA-P (consultorios QA, matriz por plan) · PEND de T5 | **M15** `whatsapp_messaging`, **M16** `saas_mp_subscriptions` | ✅ **local, sin push** (mismos commits); **M15 y M16 solo en el Docker local**, todo apagado por flag. Diseño en ADR-027 (MPS) y ADR-029 (WA); hallazgos en [AUDIT «Ronda T6/T7»](AUDIT.md) |
+| 8 | **PV** | Antes de vender (§27, 27-oct): **TK** tickets (`/contacto` decide por sesión, sin `mailto:`; «Tickets» en `/plataforma/mensajes` con etapas, origen, «Tomar» y notas internas; ADR-030) · **LG** `/terminos` y `/privacidad` + casilla en alta, onboarding, invitaciones y alta asistida · **IN** cierre por inactividad con «Mantenerme conectado» destildado (ADR-031) · **BR** renombre a «Consultorio Online» (logo Sello C, títulos, mails, MP) · **HD-1..18** endurecimiento (guard RPC, webhook MP con tope, Resend obligatorio, lookback 480, `/pacientes` paginado, centavos, limpieza) | **M19** `support_tickets` | ✅ commits `f9099b1`..`dcec562`, sin push |
 
-- **Prod:** las Tandas A y B no tenían migración (pusheadas por Martin el 19-oct). Lo que no está en prod son **seis
-  migraciones**, en orden de timestamp: **M12 → M14 → M18 → M17 → M15 → M16**, todas aditivas y **antes** del deploy.
+- **Prod:** las Tandas A y B no tenían migración (pusheadas por Martin el 19-oct). Lo que no está en prod son **siete
+  migraciones**, en orden de timestamp: **M12 → M14 → M18 → M17 → M15 → M16 → M19**, todas aditivas y **antes** del deploy.
   Van juntas el día del push, con [PUSH-DIA](PUSH-DIA.md): `db:prod:precheck -- --pre` → `db:prod:backup` (pg_dump ≥ 17)
   → `db:prod:deploy` → `db:prod:precheck -- --post`, sin staging. Los corre Martin; el agente verifica la salida.
 - **Lo que sigue, en orden:**
   1. **Push** `develop → main` con [PUSH-DIA](PUSH-DIA.md) (env de Production con los defaults seguros:
      `WHATSAPP_MODE=off`, `SAAS_BILLING_MODE=off`, `MP_CONNECT_MODE=off`, `DIRECTORY_MODE=off`, `SECRET_BOX_KEYS`,
-     `PROD_SUPABASE_REF`, `CRON_SECRET`); después, `saas-reanchor` (dry → apply) y `qa-tenants`.
+     `PROD_SUPABASE_REF`, `CRON_SECRET`, y desde PV **`RESEND_API_KEY` + `EMAIL_FROM` obligatorias o el build falla**);
+     después, `saas-reanchor` (dry → apply) y `qa-tenants`. Antes de vender: `LEGAL_ENTITY` (`lib/legal.ts:27`), consolas
+     de marca ([EXTERNAL-CONFIG §0.16](EXTERNAL-CONFIG.md#marca-pv)) y el QA manual de [QA «PV»](QA.md).
   2. **QA fuerte por plan en prod demo** (decisión 2 de §26.1): una tarjeta por consultorio QA × rol en
      [QA.md](QA.md), con los `--state` de bloqueo. Pagos y WhatsApp se prueban en local con los simuladores.
   3. **Activaciones**, de a una: Resend → Upstash → Sentry (2 semanas → CSP enforce global) → Google OAuth →
      `SAAS_BILLING_MODE=manual` (precios + datos de transferencia) → sandbox S1-S10 → `mp` → MP Connect sandbox S1-S11
      → `live` → Meta (verificación del negocio, Tech Provider) → sandbox WA S1-S13 → `live` → spike de TV real → roles
      RLS (OPS-3) y staging (OPS-0), opcionales. Consola en [EXTERNAL-CONFIG](EXTERNAL-CONFIG.md).
+- **PV · backlog** ([AUDIT «Ronda PV»](AUDIT.md#ronda-pv)): reenvío del link y «Olvidé mi contraseña» del alta asistida
+  sin pasar por `/aceptar-terminos` (ZA M1, media) · topbar a 1366 y en `/agenda` (ZB M7) · `getOnlinePaymentsSettings` a
+  server-only · `EvaScoreCreate` coerce a 0 · tag-combobox sin catch · `/opengraph-image` por el middleware · índice
+  `SupportThread(createdById, createdAt)` · `seatLimitFor`/`PLAN_CATALOG` solo en tests · fake de MP sin notificar en el PUT.
 - **Para Martin (decide):** re-basar los topes de bundle de `/configuracion` (142,0), `/sala` (156,1) y `/agenda`
   (172,4); el trade-off de `not_saved` en el turnero; los textos de las plantillas de WhatsApp, del consentimiento y de
   las respuestas automáticas; desbloquear el débito de las suscripciones de antes de M16; confirmar los defaults TV-D*,

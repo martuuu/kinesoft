@@ -1064,9 +1064,13 @@ antes de sumar y mover a chunk diferido lo que no sea de la primera pintura) · 
 **Ronda 32 · T3 (19-oct-2026):** agenda, Secretaria, cobros y módulos (plan §23; C-AS1..3). **Con migración M12**
 (`20261020120000_agenda_secretaria_config`, solo en local; orden para prod en RUNBOOK «M12 en prod»). Commits
 `fd5e6af`..`d25c5a7` sobre `3159539` (T3a bundle, T3b M12 + contratos, T3c server, T3d write paths y UI, T3e tope,
-OS y Ocupación), **sin push**. Tabla «Ronda T3» en §2; §5.27, §5.28, §5.35 y §5.40 enmendados. Abiertos: Hallazgo B
+OS y Ocupación), **sin push**. Tabla «Ronda T3» en §2; §5.27, §5.28, §5.35 y §5.40 enmendados. Abiertos: Hallazgo B (cerrado en PV, HD-13)
 (lookback 240 vs 480, C1), invitar como ADMIN sin step-up y contacto sin audit (deciden Martin). El gate de T3-Z (suite
 completa, bundle final de `/agenda`) se anota al cerrarlo.
+
+**Rondas 33-35** (T4, T5, T6/T7): tablas en §2. **Ronda 36 · PV (27-oct-2026):** antes de vender (plan §27). **Con
+migración M19** (`20261027120000_support_tickets`, solo en local). Tickets, legales, cierre por inactividad, renombre a
+«Consultorio Online» y HD-1..18; tabla [«Ronda PV»](#ronda-pv) en §2; §5.4 y §5.27 enmendados.
 
 ## Cómo leer la severidad
 
@@ -1260,8 +1264,8 @@ el ROADMAP.
 - **Clase:** C-DB · **Bucket:** B · **Severidad:** alta → **media**
 - **Descripción:** `runWithRls` solo se usa en `patients.ts`/`bookings.ts`. Si se corrige el rol
   (F-B3) sin migrar el resto, esas queries verían `app.current_tenant_id = NULL` → toda policy
-  evalúa `FALSE` → cero filas / escrituras bloqueadas. `getTenantPrisma` (backstop app-layer) es
-  además **código muerto** (menor `gettenantprisma-dead-code`). La aislación en dos capas es
+  evalúa `FALSE` → cero filas / escrituras bloqueadas. `getTenantPrisma` (backstop app-layer) era
+  además **código muerto** (menor `gettenantprisma-dead-code`; borrado en PV HD-17). La aislación en dos capas es
   estructuralmente inalcanzable en el estado actual.
 - **Acción:** plegar el `SET LOCAL app.current_tenant_id` en un único cliente tenant-scoped por
   request y enrutar **todos** los módulos de dominio. → sesión `cliente-tenant-unico-guc` (Ola 2.2).
@@ -1459,7 +1463,7 @@ nuevos de A2/A3 están en la tabla "Hallazgos de la auditoría 23-sep y de A2/A3
 | m3-no-apm | media | — | ⏸ | gate: ≥5 tenants o incidente p95 |
 | l2-no-virus-scan | baja | lib/files.ts:33 | ⏸ | gate: antes de upload de pacientes |
 | public-slots-ratelimit-vacio | media | lib/public-booking.ts:95 | 🟢 | fix-public-booking-tz (Ronda 1) |
-| gettenantprisma-dead-code | media | lib/db.ts:76 | 🔴 | cliente-tenant-unico-guc — `getTenantPrisma` sigue definido (lib/db.ts:108) y sin ningún call site |
+| gettenantprisma-dead-code | media | lib/db.ts:47 | 🟢 | PV HD-17 `60a0483`: `getTenantPrisma` borrado (no tenía call sites; la barrera sigue siendo `where: { tenantId }` + RLS) |
 | rls-coverage-gaps | media | policies.sql:32 | 🟢 | cerrado junto con `tenant-tables-sin-rls-ni-filtro` (Ronda 4, re-verificado 2026-09-29) |
 | sin-test-tripwire-aislamiento | media | schema.prisma:19 | 🟢 | Ronda 4 — `tests/integration/rls-isolation.test.ts` (4 casos, cross-tenant INSERT rechazado) |
 
@@ -1575,7 +1579,7 @@ Evidencia en §Ronda 13. Ninguno bloquea el deploy de B-pre.
 | statustag-fmtmoney-duplicados | baja | B | components/ui/status-tag.tsx · components/agenda/booking-drawer/billing-rows.tsx:4,68 | 🟢 | P0-S04b (un `StatusTag`, `formatARS` en `billing-rows`); cierre formal en P3.Z (Ronda 18) |
 | booking-body-css-regla-muerta | baja | C | app/globals.css | 🔴 | C — regla `.booking-body` (≤1024 px) |
 | turnero-texto-fijo-lun-sab | baja | C | nav del turnero público | 🟢 | **VX2-d1** — horario real por `lib/opening-hours-summary.ts` (puro, sobre `PractitionerSchedule` con `validFrom/validUntil` en `lib/datetime-ar.ts`; tests UTC y AR); DTO `openingSummary`, afirmado en `tests/integration/public-booking.test.ts` |
-| public-overlap-lookback-sin-uso | baja | C | lib/public-booking* | 🔴 | C — `PUBLIC_OVERLAP_LOOKBACK_MS` sin uso |
+| public-overlap-lookback-sin-uso | baja | C | lib/public-booking-slots.ts | 🟢 | PV HD-13 `501e5e2`: `PUBLIC_OVERLAP_LOOKBACK_MS` borrada; todo usa `BOOKING_LOOKBACK_MIN` (480) |
 | agenda-listpatients-in-1000 | baja | C1 | app/(app)/agenda/page.tsx | 🟢 PF2-c | Cierra también `agenda-loads-full-patient-directory`: `/agenda` no lee el directorio; el picker busca en el server y `?patient=` se lee por id |
 | secretaria-sin-practitioner | media | C0 | lib/session.ts · lib/access-logic.ts | 🟢 | **IAM-4a** (Ronda 21) — `isUsableMembership` solo exige `Practitioner` a roles clínicos; `Actor.practitionerId` null + `ownPatientsWhere`/`isActorPractitioner` + guard `actor-practitioner-guard.test.ts`; la activación ya no le crea profesional |
 | catalogo-siglas-ambiguas | baja | catálogo | prisma/catalog/payers.csv (`aliases`) · lib/catalog/normalize.ts `matchKey` | 🔴 | curado en Plataforma — 37 siglas ambiguas sin alias (p. ej. OSPA no se encuentra por sigla) |
@@ -2325,9 +2329,9 @@ cerraron en su tabla de origen («DIR y MB», «SV»).
 | bell-doble-en-dashboard | baja | C | components/dashboard · topbar (`NotificationsBell`) | 🔴 | En el dashboard hay **2** `NotificationsBell` montadas: con AS-0c son dos pollers de 60 s y dos suscripciones. Dejar una sola (o compartir el estado) |
 | bell-sin-barra-superior | baja | C | app-shell / Apariencia «Barra lateral» | 🔴 | Con la Apariencia «Barra lateral» no hay campana fuera del dashboard: los avisos en vivo no se ven en agenda ni pacientes |
 | emaillog-status-createdat-idx | baja | C/PF | prisma/schema.prisma (`EmailLog`) | 🔴 | La tarjeta de Sistema filtra por `status` y ordena por `createdAt` sin índice. Con pocos mails da igual; sumar `EmailLog(status, createdAt)` en la próxima migración de PF |
-| env-service-url-heredada-local | media | OPS/C1 | `.env` (Prisma lo lee siempre) · `DATABASE_URL_SERVICE` | 🟡 latente | Si `.env` tiene la `DATABASE_URL_SERVICE` de prod y `.env.local` no la define, Prisma la hereda en local (carga `.env` además de `.env.local`): un test o script del canal service escribiría en prod. Hoy latente: ninguno de los dos la define (verificado solo por nombre de clave). Fix: guard en `lib/env.ts` o en los scripts que falle si local apunta a un host remoto |
+| env-service-url-heredada-local | media | OPS/C1 | `.env` (Prisma lo lee siempre) · `DATABASE_URL_SERVICE` | 🟡 parcial (PV) | Si `.env` tiene la `DATABASE_URL_SERVICE` de prod y `.env.local` no la define, Prisma la hereda en local (carga `.env` además de `.env.local`): un test o script del canal service escribiría en prod. Hoy latente: ninguno de los dos la define (verificado solo por nombre de clave). Fix: guard en `lib/env.ts` o en los scripts que falle si local apunta a un host remoto. **PV HD-17:** `npm run dev` ya frena con `DATABASE_URL_SERVICE` remota (`scripts/dev-safe.mjs:31-41`); los scripts sueltos y los tests todavía no |
 | server-action-import-dinamico | baja | C (convención) | components/agenda/booking-drawer/share-actions.tsx | 🟢 `b1272b8` (regla) | `import()` dinámico de un módulo `"use server"` desde un client component falla en build («Failed to find Server Action»). **Regla:** las server actions se importan estático; diferir el componente, no la action |
-| sesion-restaurada-por-chrome | baja | C | navegador | 🟡 límite conocido | Chrome/Edge con «Continuar donde lo dejaste» restauran las cookies de sesión: «Mantenerme conectado» destildado no cierra la sesión ahí. Cierre por inactividad para PCs compartidas en backlog C |
+| sesion-restaurada-por-chrome | baja | C | navegador · lib/idle-logout.ts · app/(app)/layout.tsx:79 | 🟢 PV IN-S `df444a2` + ZF1b | Cierre por inactividad (15 min + aviso 60 s) con «Mantenerme conectado» destildado; el server redirige a `/login?reason=idle` antes de cualquier loader (ARCHITECTURE ADR-031) |
 
 ### Ronda T3 (19-oct): agenda, Secretaria, cobros y módulos
 
@@ -2363,7 +2367,7 @@ y 40. Revisores de T3-Z: (a) seguridad/plata/concurrencia, (b) UX/copy/a11y; sus
 
 | Slug | Sev | Bloque | Ubicación | Estado | Detalle / destino |
 |---|---|---|---|---|---|
-| Hallazgo B cupo-lookback-240 | media | **C1** | lib/availability/types.ts:84 (`BOOKING_LOOKBACK_MIN = 240`) · lib/services.ts (duración ≤ 480) | 🔴 abierto | El loader trae turnos que empezaron hasta 240' antes de la ventana, pero un servicio puede durar 480': un turno de más de 4 h que arrancó antes de la ventana no entra al conteo de cupo ni al de solapes. Fix en C1 con su test de paridad (el oráculo no se edita, §5.27) |
+| Hallazgo B cupo-lookback-240 | media | **C1** | lib/availability/types.ts:95 (`BOOKING_LOOKBACK_MIN = 480`) | 🟢 PV HD-13 `501e5e2` | Lookback 240 → 480 (= tope de `Service.durationMin`) en loader, cupo y solape del paciente; oráculo sin editar (enmienda §5.27, «Ronda PV»). Test `hd13-long-booking-lookback` |
 | t3z-a1 email-autovinculo-portal | alta | B | lib/patients.ts (`updatePatientImpl`, rama admin) | ⚪ revertido por decisión de Martin 19-oct (T3-Y) | T3-Z `9f0c8f3` rechazaba en la rama admin cambiar o vaciar el email de una ficha **sin** portal vinculado (el auto-vínculo del portal es por email). Martin (19-oct, plan §24.17): «Justamente es labor de la secretaria poder cargar y modificar emails». T3-Y lo revierte: la rama admin vuelve a la lista cerrada `PatientAdminUpdate` con email (normalizado), sin `PATIENT_EMAIL_LOCKED_COPY` ni `portalLinked`; el drawer lo deja editable. La red es PD-15: el auto-vínculo exige email **verificado** y **exactamente una** ficha (`linkPortalPatientOnCallback`, lib/portal-link-internal.ts) |
 | t3z-m2 compartir-reasignar-con-admin | media | B | lib/patients.ts (`requireShareAuthority`, `assignPatientToPractitioner`) | 🟢 fix T3-Z `9f0c8f3` (default, confirma Martin) | Compartir y reasignar pacientes colgaban de `tenant.admin`: una Secretaria con Configuración decidía quién ve la HC de un paciente. Default: `tenant.sensitive`; `createPatient` con `assignTo` sigue igual |
 | t3z-m1 export-csv-contactos | media | C1 | lib/patients-export-internal.ts:39-75,89 | 🟢 `9f0c8f3` | El CSV de la Secretaria traía email/teléfono de las filas `admin` y el audit `basicCount` no las contaba. Fix: contactos solo con `full` o `patients.editAdmin` (Facturación sin contactos) y audit con `adminCount` |
@@ -2543,8 +2547,8 @@ B4, `facturacion-percibido-de-mas`, `particular-en-cero-cotiza` y `copy-no-la-ci
 
 | Slug | Sev | Bloque | Ubicación | Estado | Detalle / destino |
 |---|---|---|---|---|---|
-| t6t7 mail-debito-cancelado-mp | baja | C | lib/saas-billing-mp-internal.ts:617-626 | 🔴 abierto | El mail «El débito automático se canceló desde Mercado Pago» se arma sin `effectiveOn`; como en el rechazado (ZF1), sin la fecha la plantilla no se arma y **nunca sale** |
-| t6t7 hook-wa-cancelled | baja | C | lib/whatsapp/booking-hook-internal.ts:80-118 · lib/whatsapp/outbox-internal.ts:342-343 | 🔴 abierto | Cuando un turno pasa a CANCELLED el hook no hace nada propio: no cancela lo que ya estaba encolado para ese turno ni avisa la cancelación. Hoy lo salva el re-chequeo de `dispatch` (`eligibility` exige CONFIRMED, `lib/whatsapp/logic.ts:113` → SKIPPED `not_confirmed`), pero ningún test de integración lo fija |
+| t6t7 mail-debito-cancelado-mp | baja | C | lib/saas-billing-mp-internal.ts · lib/email/templates-billing.ts | 🟢 PV HD-11 `02d1668` | Mail propio `billing_debit_cancelled` (antes no salía nunca y la plantilla reusada decía algo falso) |
+| t6t7 hook-wa-cancelled | baja | C | tests/integration/hd16-wa-cancelled.test.ts | 🟢 PV HD-16 `74c92ff` | Test de integración (con `createBooking` real) fija que un turno cancelado no manda lo encolado: el re-chequeo de `dispatch` (`eligibility` exige CONFIRMED) queda cubierto |
 | t6t7-bundle-rebase | — | PF | /configuracion · /sala · /agenda | 🟡 **decide Martin** | Build seguro final: `/configuracion` **142,0** (tope 141,8), `/sala` **156,1** (155,6), `/agenda` **172,4** (172,1). El copy de WhatsApp no está en el first load; diferir «Pantallas» ahorra 0,2-0,3. Recomendado: re-basar a lo medido ([PERF «T6/T7»](PERF.md)) |
 | t6t7 not-saved-privacidad | baja | — | lib/public-booking-types.ts:257-262 | 🟡 **decide Martin** | `not_saved` deja ver que ese DNI tiene ficha con otro celular o con baja. Se eligió no prometer avisos que no van a salir. Alternativa: devolver `saved` sin escribir (promete de más) |
 | t6t7 debito-bloqueado-pre-m16 | media | OPS | lib/saas-reanchor-internal.ts:17-20 | 🟡 Martin | Las suscripciones de antes de M16 nacieron con `autoDebitAllowed = false` y re-anclar ya no lo cambia: se desbloquean desde Plataforma («Permitir débito») antes de prender `mp` |
@@ -2555,6 +2559,84 @@ B4, `facturacion-percibido-de-mas`, `particular-en-cero-cotiza` y `copy-no-la-ci
 | t6t7 duplicado-tras-timeout | baja | — | lib/whatsapp/outbox-internal.ts:441 | 🟡 aceptado | Un timeout de Graph cuyo estado no llega antes de que venza el lock (10′) se reenvía: el paciente puede recibir el aviso dos veces. Graph no deja preguntar por el `biz_opaque_callback_data` |
 | t6t7 sin-precio-sin-debito | — | Martin | lib/saas-mp-sync-internal.ts | 🟡 Martin | Con `SaasPlanConfig.priceCents` en null el débito solo funciona con precio a medida (queda pausado, `no_price`). Cargar precios antes de `manual` |
 | t6t7 wa-guard-fuera-de-isolation | baja | C | tests/unit/whatsapp-guard.test.ts · package.json:26 | 🔴 abierto | El guard de WhatsApp corre en la unit, no dentro de `npm run guard:isolation` |
+
+### <a id="ronda-pv"></a>Ronda PV (27-oct): antes de vender (tickets M19, legales, inactividad, renombre y HD-1..18)
+
+Ronda 36. Plan §27 (brief `wip-20/brief-pv.md`; olas Q0..Q5 y Z), commits `f9099b1` (Q0, M19) .. `dcec562` (ZF2),
+**local, sin push**. M19 `20261027120000_support_tickets` aplicada solo en el Docker local, última del orden M12 → M14 →
+M18 → M17 → M15 → M16 → M19 ([PUSH-DIA](PUSH-DIA.md), [RUNBOOK «M19 en prod»](MIGRACIONES-RUNBOOK.md)). Diseño en
+ARCHITECTURE ADR-030 (tickets), ADR-031 (inactividad) y «Legales y renombre»; §5.4 y §5.27 enmendados (abajo). El
+relevamiento de §27.0 no encontró críticos ni altos en el código (SQL injection, cache por tenant, firmas de webhooks y
+crons, `safeNext`: limpios). Revisores de solo lectura **ZA** (seguridad, plata, PHI, concurrencia, tickets, legales) y
+**ZB** (UI, a11y, copy, mobile 390 / 1024×768 / 1366×768); fixers ZF1a, ZF1b y ZF2.
+
+**Cerrado por PV (filas de arriba):** `sesion-restaurada-por-chrome` (IN, ADR-031), `gettenantprisma-dead-code` y la
+mención de F-B4 (HD-17, `lib/db.ts:47`), `public-overlap-lookback-sin-uso` y «Hallazgo B cupo-lookback-240» (HD-13),
+`t6t7 mail-debito-cancelado-mp` (HD-11) y `t6t7 hook-wa-cancelled` (HD-16, test). `env-service-url-heredada-local`
+pasa a 🟡: `npm run dev` ya frena con `DATABASE_URL_SERVICE` remota (HD-17), los scripts sueltos no.
+
+**Endurecimiento HD-1..18 (Q1-Q4)**
+
+| ID | Sev | Ubicación | Estado | Cierre |
+|---|---|---|---|---|
+| HD-1 superficie-rpc | media | lib/bookings.ts · lib/bookings-schemas.ts · tests/unit/server-surface-guard.test.ts | 🟢 W1a `a54a204` + Q3 `4d148c1` | `listBookingsInRange` con zod (`BookingsRangeQuery`, ≤ 62 días); `getDayCounts` e `isReminderDismissed` borradas; zod en notificaciones. Guard: todo export de `"use server"` tiene llamador o motivo en el allowlist (25 al cierre) y todo `*-internal.ts` lleva `server-only` |
+| HD-2 sign-out-gotrue-caido | media | app/api/auth/sign-out/route.ts:38-53 | 🟢 IN-S `df444a2` | Con `{ error }` de `signOut()` se expiran a mano las `sb-*` y se loguea (test `hd2-sign-out`, POST real) |
+| HD-3 zod-y-topes | baja | lib/patients.ts · lib/patients-profile-internal.ts · lib/exercises.ts · lib/sessions{,-schemas}.ts · lib/search.ts · lib/files.ts · lib/diagnosis.ts · lib/clinical-notes-read.ts · lib/exercise-media.ts · lib/notifications.ts · lib/dashboard.ts | 🟢 W1c `6c654da` · W1h `368f9e3` · W1a | EVA 0..10, diagnóstico, `take` de perfil y actividad, `createExercise` sin upsert masivo de `Tag` global ni slugs reservados (vinculaba el tag de disciplina), `listExercises` ≤ 1000, sesiones, `dismissReminder`, `getMonthBookingDays`, `globalSearch` (`?q=a&q=b` tiraba `/biblioteca`), archivo y descripción de `uploadPatientFile`, búsquedas de diagnóstico, timeline y media |
+| HD-4 webhook-mp-body | media | app/api/webhooks/mercadopago/route.ts:18,54-57 · lib/http/capped-body.ts:13 | 🟢 W1b `4cc2018` | Body leído una vez con tope de 64 KiB → 413. Enmienda §5.4 (abajo); `mp-webhook.test.ts` sin tocar |
+| HD-5 tokens-en-logs | baja | lib/client-error-report.ts:68 · lib/server-timing.ts | 🟢 W1b | `scrubTokenPaths` cubre `/invite/<t>`, `/pagar/<t>` y `?t=` / `token=` / `token_hash=` / `code=` en `PERF_TIMING` y en los beacons |
+| HD-6 resend-obligatorio | media | lib/env.ts:69 | 🟢 W1g `60a0483` | `RESEND_API_KEY` + `EMAIL_FROM` en `REQUIRED_IN_PRODUCTION` (solo `VERCEL_ENV=production`). **Martin las carga antes del push o el build falla** ([PUSH-DIA](PUSH-DIA.md) B) |
+| HD-7 catch-mudo | baja | lib/mp-connect/account-client.ts:156 | 🟢 W1g | El `.catch(()=>{})` loguea |
+| HD-8 error-boundary-raiz | baja | app/error.tsx · app/(app)/terapia-manual/loading.tsx · app/cuenta/loading.tsx | 🟢 W1i `27aefc3` | `/cuenta`, `/sin-acceso`, `/suspendido`, `/verificar-acceso`, `/elegir-consultorio` y la landing tenían solo `global-error` sin CSS |
+| HD-9 perfil-publico-off | baja | app/cuenta/perfil-publico/page.tsx · components/layout/* | 🟢 IN-S + W1i | Con `DIRECTORY_MODE=off` «Mi perfil público» se oculta y la página da 404 |
+| HD-10 pacientes-paginado | media | lib/patients-list-internal.ts:68,323 · lib/patients-types.ts:70 · components/patients/patients-pagination.tsx | 🟢 W2a `795fd9a` + W3a `74c92ff` | 50 por página (`?page=`), dos fases en una tx (liviana → acceso/visibilidad/orden con `groupBy`; hidratación de ≤ 50). Conserva la proyección `admin`, `?os=`, totales y el export completo. `listPatients` sigue en 10 sentencias ([PERF «PV»](PERF.md)) |
+| HD-11 mail-debito-cancelado | baja | lib/email/templates-billing.ts · lib/saas-billing-mp-internal.ts · lib/saas-billing-mail-internal.ts | 🟢 W1e `02d1668` | Kind nuevo `billing_debit_cancelled` (EmailLog String, sin migración). Antes no salía nada (`billing.mp_mail_incomplete`) y la plantilla vieja decía algo falso |
+| HD-12 avisos-cross-tenant | media | lib/notifications-internal.ts | 🟢 W1d `501e5e2` | Avisos a titulares/admins solo a miembros activos y aceptados. `alsoPractitionerId` iba por `findUnique` sin `tenantId` (cross-tenant bajo BYPASSRLS): cerrado |
+| HD-13 lookback-480 | media | lib/availability/types.ts:95 · lib/bookings-core.ts · lib/booking-cap-lock.ts | 🟢 W1d | `BOOKING_LOOKBACK_MIN` 240 → 480 (= tope de `Service.durationMin`). Enmienda §5.27 (abajo); test `hd13-long-booking-lookback` |
+| HD-14 fechas-host | baja | lib/dashboard.ts · lib/datetime-ar.ts · app/api/{agenda,pacientes}/export/route.ts · lib/patients-list-logic.ts | 🟢 W1f `a9487d7` + W2a | Semana ISO del dashboard, edad y última visita, nombres de export en hora AR |
+| HD-15 centavos | baja | lib/format.ts:97 | 🟢 W1f | `formatARS` muestra centavos solo si no son cero ($ 1.500,50; proporcionales de MPS $ 27.096,77) |
+| HD-16 wa-cancelado | baja | tests/integration/hd16-wa-cancelled.test.ts | 🟢 W3a | Fija que un turno cancelado no manda el WhatsApp encolado (`createBooking` real) |
+| HD-17 limpieza | baja | lib/db.ts:47 · lib/plan-catalog.ts · lib/capabilities.ts · scripts/dev-safe.mjs:31-41 · tests/helpers/query-counter.ts | 🟢 W1g | Borrados `getTenantPrisma`, legado de `plan-catalog` e `isTenantAdminRole`; `dev-safe` frena `DATABASE_URL_SERVICE` remota; `query-counter` falla cerrado |
+| HD-18 landing-login | baja | components/landing/{pricing,features}.tsx · components/auth/product-panel.tsx · app/page.tsx | 🟢 W1j `69560ba` | Tarjetas parejas, mock del login sin cortes; tiles de cobros con MP y de la pantalla solo con su flag; WhatsApp no se menciona |
+
+**Revisores (ZA / ZB) → fixers ZF1a `0f6ddc7`, ZF1b `01586fa`, ZF2 `dcec562`**
+
+| Slug | Sev | Ubicación | Estado | Cierre |
+|---|---|---|---|---|
+| za M1 alta-asistida-sin-legales | media | lib/platform-provisioning-schemas.ts:148 · app/aceptar-terminos/page.tsx · lib/legal-accept-action.ts:32 | 🟢 ZF1a (parcial, ver backlog) | El titular creado en el alta de Plataforma pasa por `/reset` → `/aceptar-terminos` → `/dashboard` (`via: "platform_activation"`) |
+| za M2 idle-fuera-de-app | media | app/api/{pacientes,agenda}/export/route.ts · app/cuenta/layout.tsx:20 · app/(platform)/layout.tsx:44 | 🟢 ZF1b | Exports → 401 y `/cuenta` y `/plataforma` redirigen con la `kine_idle` de esa sesión vencida |
+| za B1 lead-con-origen-de-sesion | baja | lib/leads.ts:72 · components/plataforma/inbox/inbox-logic.ts | 🟢 ZF1a | El form público no acepta ACCOUNT_DISABLED / ONBOARDING; lead sin usuario = «Identidad: Sin verificar (formulario web)» |
+| za B2 nota-en-audit-del-consultorio | baja | lib/platform-inbox.ts:635,679 | 🟢 ZF1a | Tomar y anotar solo por `auditPlatformGlobalInTx` (antes salían en el export del Titular) |
+| za B3 ensuretag-sin-tope | baja | lib/exercises.ts | 🟢 ZF1b | Label ≤ 40 y rate limit por usuario |
+| za B4 matcher-apple-icon | baja | middleware.ts:246 | 🟢 ZF1b | El matcher excluía `apple-icon.png`; ahora es `/apple-icon` (BR-a) |
+| za B5 tope-diario-no-atomico | baja | lib/tickets.ts:81 | 🟢 ZF1a | `pg_advisory_xact_lock` por usuario antes del count, en la tx del insert (`tk-s1-ticket-cap-race`) |
+| zb M1-M6, B8-B18 | media/baja | components/landing/site-header.module.css · components/auth/auth-shell.{tsx,module.css} · components/landing/contact-form.tsx · app/(app)/pacientes/page.tsx · app/contacto/page.tsx · app/suspendido/page.tsx · components/layout/idle-warning-modal.tsx · components/patients/patients-pagination.tsx · components/plataforma/inbox/* · lib/saas-plans-public.ts | 🟢 ZF2 | Cabecera de la landing a 1024 sin partir; login 1366×768 sin scroll y pie legal sin «·» huérfano; éxito del lead sin doble envío; paginación también arriba; objetivos de 44 px; aviso idle arriba de los sociales; «Volver» en `/contacto` con sesión; StatusLink en `/suspendido`; `aria-live` y `aria-current` corregidos; copy «Catálogo de ejercicios incluido»; `idle.spec` espera opacidad 1 |
+
+**Decisiones con default de PV** (§27.7; rigen si Martin no dice otra cosa): D-TK1 M19 · D-TK2 `/plataforma/mensajes`
+«Tickets» · D-TK3 mail de soporte solo como segunda opción en `/contacto` · D-TK5 suspendido = hilo TENANT · D-LG2/3
+CABA, export 90 días, logs 12 meses · D-LG4 sin banner «borrador» · D-LG5 OAuth acepta en el onboarding · D-IN1/2/3
+ligada a «Mantenerme conectado», 15 min + 60 s, todo `(app)` · D-BR1/2 `short_name` «Consultorio», `KineLogo` sin
+renombrar · D-HD1 480 · D-HD2 centavos si no son cero · D-HD3 MP y TV con su flag · D-HD4/5/6 · D-HD7 50 por página.
+Más dos de LG-S: **las cuentas existentes nunca reciben el pedido de aceptar** (rec.: dejar así) y el evento del signup
+queda ligado a una cuenta sin confirmar (rec.: aceptar). De W1j: el tile de TV va con `REALTIME_DRIVER=supabase`
+aunque la TV también anda con polling, y el chip «Plan Clínica» (sala de espera = Clínica y Libre).
+
+**Pendiente (backlog de PV)**
+
+| Slug | Sev | Bloque | Ubicación | Estado | Detalle / destino |
+|---|---|---|---|---|---|
+| pv za-M1 reenvio-sin-aceptar | media | C0 | lib/platform-provisioning-internal.ts · app/(auth)/forgot | 🔴 abierto | ZF1a cubre el primer `/reset` del alta asistida. El reenvío del link desde Plataforma y «Olvidé mi contraseña» no pasan por `/aceptar-terminos`: el titular puede entrar sin aceptar. Fix: chequear `hasAcceptedCurrentLegal` en el gate de `(app)` para titulares de alta asistida |
+| pv zb-M7 topbar-1366 | baja | VX | components/layout/topbar* | 🔴 abierto | La topbar desborda a 1366 (pre-PV); en `/agenda` también |
+| pv online-payments-settings-rpc | baja | C | lib/mp-connect-actions.ts:181 · lib/booking-payment-policy.ts:157 | 🔴 abierto | `getOnlinePaymentsSettings` exportada desde `"use server"` sin llamador de cliente (en el allowlist RPC). Mover a `lib/online-payments-settings-internal.ts` (server-only); la usan `pf2-config-budget`, `authz-matrix`, `tp2o` (esfuerzo alto) |
+| pv eva-coerce | baja | C | lib/validation.ts:323 (`EvaScoreCreate`) | 🔴 abierto | `""` / `null` se coercen a EVA 0 |
+| pv tag-combobox-sin-catch | baja | C | components/exercises/tag-combobox · create-exercise-drawer | 🔴 abierto | No atrapan el error de `ensureTag` (> 40 / rate limit): `maxLength` 40 + try/catch con toast |
+| pv og-por-middleware | baja | C | middleware.ts:246 | 🔴 abierto | `/opengraph-image` pasa por el middleware: con mantenimiento prendido el 503 rompe la vista previa |
+| pv idx-supportthread-createdby | baja | C/PF | prisma/schema.prisma (`SupportThread`) | 🔴 abierto | El tope diario cuenta por `(createdById, createdAt)` sin índice. Pocas filas hoy; sumar en la próxima migración |
+| pv seatlimit-solo-tests | baja | C | lib/plan-catalog.ts (`seatLimitFor`, `PLAN_CATALOG`) | 🔴 abierto | Solo los usan tests: limpiable |
+| pv fake-mp-put | baja | C (tests) | lib/mp-connect/fake-mp-saas.ts | 🔴 abierto | El simulador no notifica en el PUT de cancelación (MP real sí): HD-11 se probó llamando al consumidor |
+| pv amountcents-cancelled | — | C | lib/saas-billing-mp-internal.ts:460,583 | 🔴 cosmético | `amountCents` sin uso en `cancelled_by_mp` |
+| pv server-actions-sin-idle | — | — | server actions | 🟡 aceptado | No chequean `kine_idle`; dependen de que el cliente cierre a T (ADR-031) |
+| pv legal-entity | — | Martin | lib/legal.ts:27 | 🟡 Martin | Razón social, CUIT, domicilio + revisión del abogado antes de vender ([EXTERNAL-CONFIG §0.16](EXTERNAL-CONFIG.md#marca-pv)) |
+| pv 2fa-nombre-viejo | — | Martin | lib/two-factor.ts:190 | 🟡 aviso | Las apps ya enroladas siguen mostrando «KineSoft»; los códigos funcionan |
 
 ### Resumen del checklist (al 2026-09-29)
 
@@ -2652,6 +2734,12 @@ era intencional.
    `consumeWebhook` suma dos líneas: un pago con referencia `saas:` delega en el consumidor SaaS (`lib/mercadopago.ts:261`)
    y, con el MP falso, el SDK no sale a api.mercadopago.com (`:257`; `fakeMpAllowed()` es false en Vercel). Sin `saas:`
    y fuera del simulador, el legado sigue byte a byte (`mp-webhook.test.ts` sin cambios).
+   **Enmienda HD-4 (PV, 27-oct):** el cuerpo del webhook de MP ya no se lee con `req.clone().json()`. Se lee una sola
+   vez, y solo si a la query le falta `data.id`/`id` o `type`/`topic`, con `readCappedBody` (`lib/http/capped-body.ts`,
+   compartido con el webhook de WhatsApp) y un tope de 64 KiB (`MP_WEBHOOK_MAX_BYTES`; Content-Length declarado de más
+   o chunked que se pasa → 413 sin consumir). Mismos fallbacks; JSON inválido = null. Siguen iguales: HMAC con
+   `MP_WEBHOOK_SECRET`, anti-replay 5', redact, orden rate limit → query → `?acct=` → SaaS → legado;
+   `mp-webhook.test.ts` sin tocar. Test: `tests/unit/hd4-mp-webhook-cap.test.ts`.
 5. **`lib/copago.ts`** (re-exportado por `lib/billing-internal.ts`) — `resolveBookingCopagoCents` con precedencia estricta nullable
    (`Booking.copagoCents` → `Coverage.copagoCents` → insurer → Particular → service); 0 es
    intencional. Fuente única de copago. No duplicar el cálculo.
@@ -2777,7 +2865,7 @@ era intencional.
     de `runWithRls` o `prismaService` en el turnero) y `where: { tenantId }` a mano en cada query. El contrato es
     `lib/availability/types.ts`: `classifyInstant`/`nextFreeSlot` reciben **`scheduledRanges`** (no
     `workingRanges`); `RecurrenceInput.daysOfWeek` es 0=Lun y `dow` es 0=Dom; mensual = mismo día ajustado al
-    último del mes; paso 15 / 14 días; turnos cargados desde 240 min atrás. **Paridad:** con el backfill aplicado
+    último del mes; paso 15 / 14 días; turnos cargados desde 480 min atrás (240 hasta PV, ver enmienda HD-13). **Paridad:** con el backfill aplicado
     la salida es idéntica a la de ef3281f (`tests/unit/availability-*.test.ts` contra el oráculo congelado
     `lib/booking-schedule.ts`, más `tests/unit/public-slots.test.ts` sin cambios). Un cambio de comportamiento
     va al motor con su propio test de paridad, nunca editando el oráculo. **ES1 (aditivo, sin cambiar la paridad):**
@@ -2788,9 +2876,14 @@ era intencional.
     `publicSlotStepFor(d) = clamp(ceil15(d), 15, 60)` (`lib/public-booking-slots.ts:66-79`: 15→15, 20→30, 50→60, 90→60);
     el paso fijo `PUBLIC_SLOT_STEP_MIN = 45` queda solo para `buildPublicSlots` (envoltorio de A2b, oráculo de paridad,
     `:56`) y `public-booking-engine.test.ts` se reescribió
-    con el paso nuevo. El paso del staff sigue en 15 y el lookback en 240 (Hallazgo B, «Ronda T3»). **T3 (aditivo):**
+    con el paso nuevo. El paso del staff sigue en 15. **T3 (aditivo):**
     `SlotUnavailableReason`/`InstantClass` suman `"tope-intervalo"` y `BuildSlotsInput.intervalCap?`; sin tope la salida
     es la de antes.
+    **Enmienda PV (HD-13, W1d):** lookback 240→480 (`BOOKING_LOOKBACK_MIN`, `lib/availability/types.ts`) = tope
+    `Service.durationMin`; lo comparten loader, `countCapacityOverlaps`/`countAgendaOccupancy` y `checkPatientOverlap`;
+    en el preservado §5 solo cambia la cota `gte` (misma sentencia; perf `f.createBooking` 31/5, lote 182/22, agenda 12).
+    Locks por día AR. Oráculo `booking-schedule.ts` (240) NO se edita. Cierra «Hallazgo B cupo-lookback-240» y
+    `public-overlap-lookback-sin-uso`. Test `hd13-long-booking-lookback`.
 28. **Orden de locks en escrituras de agenda (B-pre).** Siempre **cupo → sedes (compartido) → filas**: (1)
     `lockCapacityWindow` (`lib/booking-cap-lock.ts`: `pg_advisory_xact_lock` por tenant + profesional + servicio
     + **día AR**, todos los días que toca el turno, en orden ascendente), (2) `lockTenantLocationsShared` y

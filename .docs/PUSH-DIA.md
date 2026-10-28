@@ -1,6 +1,6 @@
-# Día del push · checklist único (23-oct-2026)
+# Día del push · checklist único (23-oct-2026; PV, 27-oct)
 
-> **El único checklist del día del push** de T3 → T7 a producción. Reemplaza a [GO-LIVE-PASO-A-PASO.md](GO-LIVE-PASO-A-PASO.md)
+> **El único checklist del día del push** de T3 → T7 + PV (§27) a producción. Reemplaza a [GO-LIVE-PASO-A-PASO.md](GO-LIVE-PASO-A-PASO.md)
 > (14-oct, queda como historia). Todo lo que toca prod **lo corrés vos**: el agente nunca ejecuta nada contra prod
 > (decisión 1 del 22-oct, plan §26.1). En cada paso marcado con 📋 **pegás la salida en el chat** y el agente la verifica
 > antes de que sigas. Si algo da FAIL, frenás ahí.
@@ -15,7 +15,7 @@
 
 ## A · Local (antes de tocar nada)
 
-- [ ] Gate verde del cierre de T6+T7 (tsc, unit en TZ=UTC y AR, integración con los dos roles, E2E, `next build`
+- [ ] Gate verde del cierre de PV (ZG; tsc, unit en TZ=UTC y AR, integración con los dos roles, E2E, `next build`
       aislado, `migrate deploy` en local = 47 migraciones).
 - [ ] `git status` limpio y todo commiteado en `develop`.
 - [ ] `git log --oneline main..develop | wc -l` → anotá cuántos commits salen (el 23-oct eran 185).
@@ -52,6 +52,11 @@ nuevo las valida al arrancar: un typo frena el deploy). Tabla completa en [DEPLO
 - [ ] `REALTIME_DRIVER=supabase` (ya está; confirmá que siga y que estén `SUPABASE_JWT_SECRET`,
       `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_URL` y `_ANON_KEY`: con `supabase` el boot las exige).
 - [ ] `NEXT_PUBLIC_APP_URL` = el dominio de prod (nunca localhost: el boot lo rechaza).
+- [ ] **`RESEND_API_KEY` y `EMAIL_FROM` cargadas. Obligatorias desde HD-6 (PV): sin alguna de las dos el build de
+      Production falla** (`REQUIRED_IN_PRODUCTION`, `lib/env.ts:69`; solo con `VERCEL_ENV=production`, Preview no).
+      `EMAIL_FROM` con el nombre visible nuevo (`Consultorio Online <no-reply@mail.<dominio>>`; los mails salen como
+      «<Consultorio> vía Consultorio Online»). Que estén no garantiza que salgan: el dominio verificado en Resend es G1.
+      Mientras no esté verificado, `SIGNUP_MODE=assisted`.
 
 **Lo que NO tiene que estar en Production** (borralo si aparece):
 
@@ -61,6 +66,16 @@ nuevo las valida al arrancar: un typo frena el deploy). Tabla completa en [DEPLO
 - [ ] `EMAIL_TRANSPORT`, `MAILPIT_URL`, `ALLOW_DEV_REMOTE_SUPABASE`, `ALLOW_DEV_REMOTE_DB`, `PERF_TIMING` (son de local).
 - [ ] Cualquier literal de los simuladores (`dev-mpfake-…`, `FAKE-…`, `127.0.0.1`).
 - [ ] `SUPERADMIN_2FA_BYPASS`, salvo que lo estés usando a propósito con fecha (falla cerrado, pero se borra al terminar).
+
+## B2 · Antes de vender (PV, no frena el push)
+
+- [ ] **`LEGAL_ENTITY`** en `lib/legal.ts:27` (razón social, CUIT, domicilio). Mientras estén en `null`, `/terminos` y
+      `/privacidad` no muestran esa línea. Es un cambio de código: va en un commit antes del push o en uno después.
+      Más la revisión del abogado (transferencias internacionales, registro de la base en la AAIP, consumo, retención).
+- [ ] **Aviso de 2FA a quienes ya la enrolaron** (vos y el cliente vivo): la app de autenticación sigue mostrando la
+      entrada con el nombre viejo («KineSoft»); los códigos funcionan igual. Las enrolaciones nuevas salen como
+      «Consultorio Online» (`lib/two-factor.ts:190`). Si molesta, desenrolar y volver a enrolar desde Cuenta → Seguridad.
+- [ ] Consolas de marca (Google OAuth, apps de MP y Meta): [EXTERNAL-CONFIG «Consolas de marca»](EXTERNAL-CONFIG.md#marca-pv).
 
 ## C · Consola mínima (Supabase de prod)
 
@@ -127,6 +142,8 @@ nuevo las valida al arrancar: un typo frena el deploy). Tabla completa en [DEPLO
   - [ ] `curl -s -o /dev/null -w '%{http_code}\n' https://<dominio>/api/cron/daily` → `401` (y lo mismo con
         `/api/cron/whatsapp`); `503` = falta `CRON_SECRET`.
   - [ ] `/plataforma/sistema`: `CRON_SECRET` presente y «Cobros online (Mercado Pago)» en `off`.
+  - [ ] PV: `/terminos` y `/privacidad` cargan; `/contacto` anónimo deja un ticket en `/plataforma/mensajes` («Tickets»);
+        la pestaña dice «… · Consultorio Online».
 
 ## F · Scripts post-deploy (prod, los corrés vos)
 
@@ -161,7 +178,7 @@ nuevo las valida al arrancar: un typo frena el deploy). Tabla completa en [DEPLO
 
 ## G · Activaciones posteriores (en este orden, cada una con su redeploy)
 
-1. [ ] **Resend:** diagnóstico del rechazo (`scripts/diagnose-email.ts --from-name "" --expect-domain <dominio>`) y la
+1. [ ] **Resend** (las variables ya están desde B; acá se verifica que salgan): diagnóstico del rechazo (`scripts/diagnose-email.ts --from-name "" --expect-domain <dominio>`) y la
        tarjeta «Últimos mails que no salieron» ([EXTERNAL-CONFIG §0.4 y §0.9](EXTERNAL-CONFIG.md)).
 2. [ ] **Upstash** (`UPSTASH_REDIS_REST_URL/_TOKEN`, §4).
 3. [ ] **Sentry** (`SENTRY_DSN`, §5) → **2 semanas** de reportes de CSP → CSP enforce global (hoy solo `/tv` es enforce).

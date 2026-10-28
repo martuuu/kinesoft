@@ -530,6 +530,18 @@ Lectura:
 - Crudo: `ttfb-same.json` / `ttfb-x.json` del scratchpad de PF-Z (no versionado; se regenera con el script, que hace
   su propio `next build` con las URLs del GoTrue falso: con `--no-build` sobre un build normal todas las rutas dan 307).
 
+## PV · `/pacientes` paginado y lookback 480 (27-oct-2026, W2a / W1d)
+
+- **`listPatients` paginado (HD-10, `lib/patients-list-internal.ts:68`):** 50 filas por página (`PATIENTS_PAGE_SIZE`,
+  `lib/patients-types.ts:70`), en **1 tx y ≤ 10 sentencias**, el mismo techo de antes (`BUDGET.listPatients = 10`,
+  `tests/perf/plans.perf.test.ts:93`). Dos fases dentro de la tx: consulta liviana de todo el directorio → acceso,
+  visibilidad y orden con `groupBy` sobre el tenant (sin N+1 ni un `IN` de 1.000 ids) → recorte e hidratación de ≤ 50.
+  Escenarios nuevos `p.listPatients.upcoming` y `p.listPatients.lastVisit` (orden por «Próximo turno» y «Última
+  visita» sobre 1.000 pacientes) con el mismo techo. El export CSV (`mode: "all"`) sigue trayendo todo.
+- **Lookback 240 → 480 (HD-13):** solo cambia la cota `gte` de la misma sentencia; **sin cambio de sentencias** en
+  `f.createBooking` (31 / 5 tx), el lote de 20 (182 / 22) ni la agenda (12).
+- Gate ZG: `compare.ts` con `PERF_OUT_DIR`, los estrictos tienen que seguir sin cambio.
+
 ## Qué confirman o refutan estos números (hallazgos de la auditoría del 23-sep)
 
 | Hallazgo | Veredicto con datos | Destino |

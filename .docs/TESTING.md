@@ -398,6 +398,27 @@ su alcance queda vacío (anti falso verde).
   (suite completa, gate) en la Mac: `caffeinate -i npm run test:e2e` (si la Mac se duerme, el `next start` y el GoTrue
   falso se cortan y la corrida falla a mitad).
 
+### Patrones nuevos de PV (antes de vender, 27-oct-2026)
+
+- **Tests primero por ID:** `[TK-1..21]`, `[LG-1..8]`, `[IN-1..6]`, `[BR-1..9]`, `[HD-1..16]` arrancaron como `it.fails` y
+  se dieron vuelta. Símbolos reales: el POST del sign-out (`hd2-sign-out`), el del webhook de MP (`hd4-mp-webhook-cap`),
+  `createBooking` en HD-13 y HD-16, `listPatients` y `exportPatientsCsv` en `hd10-patients-pagination`.
+- **Carreras con advisory lock:** `tk-s1-ticket-cap-race` lanza envíos simultáneos del mismo usuario y afirma que el
+  tope diario no se pasa (ZA B5).
+- **`m19-support-tickets`** verifica los objetos de M19 en los dos roles (SERVICE_ONLY de `SupportTicketNote`
+  invisible para `kinesoft_app`).
+- **E2E con reloj falso:** `idle.spec` usa `page.clock`; para afirmar un `Modal` visible hay que esperar opacidad 1.
+- **Guards nuevos en la unit:**
+  - `tests/unit/server-surface-guard.test.ts` (HD-1): todo export de un `"use server"` tiene llamador (o auto-llamada
+    desde otro export del mismo módulo) o está en `ALLOWLIST` con motivo ≥ 20 caracteres (25 al cierre); una entrada
+    que ganó llamador o cuyo export ya no existe falla; todo `*-internal.ts` lleva `import "server-only"`.
+  - `tests/unit/brand-literal.test.ts` **estricto** desde BR-Z: «KineSoft» / «Kinesoft» = 0 en `app`, `components`,
+    `lib`, `hooks`, `scripts`, `public` y los `.ts`/`.mjs` de la raíz; el literal nuevo solo en `lib/brand.ts`;
+    allowlist vacía. Los identificadores en minúscula o mayúscula sostenida no cuentan.
+  - `[BR-9]` (`tests/unit/br-brand.test.tsx:213`): los identificadores preservados (cookies `kine_*`/`ks_*`, claves
+    `kinesoft:*`, roles, cache del SW, UID del ICS) **siguen existiendo** con la grafía vieja.
+  - `zf1b-idle-surfaces` fija que exports, `/cuenta` y `/plataforma` chequean `kine_idle`.
+
 ### Build local (`next build`) — siempre con el env local explícito
 
 Dos problemas. `.env.local` define `NODE_ENV`, y `next build` con ese valor falla en el prerender. Y, más grave, `next build`
@@ -539,6 +560,10 @@ E2E_KEEP_DATA=1 npm run test:e2e    # no borra el tenant al final (para mirar un
 | `subscription` | (T6) débito autorizado en el MP falso → «Débito activo»; débito aprobado → cargo Pagado; «Pagar con Mercado Pago»; baja → banda con la fecha → «Deshacer baja»; subida con el proporcional en la vista previa |
 | `whatsapp` | (T6) conectar con el Meta falso; consentimiento en el alta; «Turno agendado» hasta «Leído»; recordatorio → «Confirmo» → badge; «No puedo ir» → campana sin cancelar; BAJA; ALTA → compartir ficha; turnero a 390 con la casilla destildada; desconectar |
 | `plans-matrix` | (QA-E) menú por plan; muros por URL directa; Secretaría sin HC y cobrando con medio; Clínica con `/sala` y «Pantallas»; solo lectura según el modo; cupo lleno al invitar; General sin módulos Kine |
+| `tickets` | (PV) lead de precios → «Web · precios» → Tomar → nota → Marcar resuelto → Reabrir con filtros; `/contacto?motivo=plan` con consultorio usable → Soporte con borrador; suspendido y deshabilitado abren su ticket con el email de la sesión; sin `mailto:` en la landing |
+| `legal` | (PV) `/terminos` y `/privacidad` (versión, AAIP, subencargados); links legales en login, turnero y landing; alta por email sin casilla no crea nada; activación de invitación con la casilla obligatoria |
+| `idle` | (PV, `page.clock`) sin «Mantenerme conectado»: aviso a T−60 s, «Seguir conectado», cierre a T y reingreso al path; el server corta recién a T+60 s con la cookie de la misma sesión; tildado no avisa nunca. Espera opacidad 1 del `Modal` (ZB M4: `toBeVisible` no mira opacidad) |
+| `brand` | (PV) pestaña y wordmark de landing y login sin la marca vieja ni duplicada; template «X · Consultorio Online»; manifest (`short_name` «Consultorio»); sidebar expandido sin desborde y topbar solo con la baldosa |
 
 Fuera por ahora: «informar pago». El rate limit del turnero es 5 reservas cada 5' por IP: un spec nuevo que reserve tiene
 que contar con eso. `tv.spec` falló una vez en la suite completa (Server Action con id viejo): si vuelve, subir
@@ -575,6 +600,8 @@ Corren en CI **sin levantar DB ni server**, parseando el repo. Sesión `ci-pipel
   estático `auth.admin.` solo en el puerto y `auth.getUser()` solo en `getVerifiedSessionUser` (AUDIT
   `guard-auth-admin-y-getuser`, BO).
 - **Guards de T6/T7** — en la unit: `whatsapp-guard`, `tv-csp`, `inf-dev-safe` (ver «Patrones nuevos de T6/T7»).
+- **Guards de PV** — en la unit: `server-surface-guard` (superficie RPC), `brand-literal` estricto y `[BR-9]` (ver
+  «Patrones nuevos de PV»).
 - **Guards de la cara pública (VX)** — también en la unit: `public-surface-imports`, `public-claims`, `ui-ratchets`,
   `tokens-contract`, `bundle-groups`, `module-wall-page-cut` (ver «Patrones nuevos de VX»). El presupuesto de bundle
   corre después del build (`check-bundle-budget.mjs`).
