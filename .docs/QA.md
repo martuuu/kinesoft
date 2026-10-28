@@ -767,6 +767,8 @@ ADR-030 / ADR-031; hallazgos en [AUDIT «Ronda PV»](AUDIT.md#ronda-pv). Los E2E
   (abren en pestaña nueva desde la casilla). Sin `LEGAL_ENTITY` no aparece ninguna línea «CUIT: …».
 
 ### 🔴 P0 · Cierre por inactividad (ingresar con «Mantenerme conectado» **destildado**)
+- [ ] **Verificar a ojo en Chrome y Safari que el aviso «¿Seguís ahí?» se VE (opaco, con fondo)**: el E2E lo afirma
+  con el reloj falso de Playwright, que no deja terminar el fade de framer (la opacidad no se puede afirmar ahí).
 - [ ] 14 min sin tocar nada → «¿Seguís ahí?» con la cuenta regresiva; «Seguir conectado» lo cierra y reinicia.
 - [ ] Dejar vencer → «Tu sesión se cerró por inactividad» → `/login?reason=idle` con «Cerramos tu sesión por
   inactividad. Ingresá de nuevo para seguir.» (arriba de los botones sociales); al volver a entrar, vuelve al path.

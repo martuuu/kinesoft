@@ -407,7 +407,7 @@ su alcance queda vacío (anti falso verde).
   tope diario no se pasa (ZA B5).
 - **`m19-support-tickets`** verifica los objetos de M19 en los dos roles (SERVICE_ONLY de `SupportTicketNote`
   invisible para `kinesoft_app`).
-- **E2E con reloj falso:** `idle.spec` usa `page.clock`; para afirmar un `Modal` visible hay que esperar opacidad 1.
+- **E2E con reloj falso:** `idle.spec` usa `page.clock`; bajo el reloj falso el fade de framer no termina (ni con `clock.resume()`), así que `toBeVisible` es lo máximo que se puede afirmar de un `Modal`: la opacidad se verifica a mano (QA.md «PV»).
 - **Guards nuevos en la unit:**
   - `tests/unit/server-surface-guard.test.ts` (HD-1): todo export de un `"use server"` tiene llamador (o auto-llamada
     desde otro export del mismo módulo) o está en `ALLOWLIST` con motivo ≥ 20 caracteres (25 al cierre); una entrada
@@ -562,7 +562,7 @@ E2E_KEEP_DATA=1 npm run test:e2e    # no borra el tenant al final (para mirar un
 | `plans-matrix` | (QA-E) menú por plan; muros por URL directa; Secretaría sin HC y cobrando con medio; Clínica con `/sala` y «Pantallas»; solo lectura según el modo; cupo lleno al invitar; General sin módulos Kine |
 | `tickets` | (PV) lead de precios → «Web · precios» → Tomar → nota → Marcar resuelto → Reabrir con filtros; `/contacto?motivo=plan` con consultorio usable → Soporte con borrador; suspendido y deshabilitado abren su ticket con el email de la sesión; sin `mailto:` en la landing |
 | `legal` | (PV) `/terminos` y `/privacidad` (versión, AAIP, subencargados); links legales en login, turnero y landing; alta por email sin casilla no crea nada; activación de invitación con la casilla obligatoria |
-| `idle` | (PV, `page.clock`) sin «Mantenerme conectado»: aviso a T−60 s, «Seguir conectado», cierre a T y reingreso al path; el server corta recién a T+60 s con la cookie de la misma sesión; tildado no avisa nunca. Espera opacidad 1 del `Modal` (ZB M4: `toBeVisible` no mira opacidad) |
+| `idle` | (PV, `page.clock`) sin «Mantenerme conectado»: aviso a T−60 s, «Seguir conectado», cierre a T y reingreso al path; el server corta recién a T+60 s con la cookie de la misma sesión; tildado no avisa nunca. La opacidad del `Modal` no se puede afirmar con `page.clock` (ZB M4): va al QA manual |
 | `brand` | (PV) pestaña y wordmark de landing y login sin la marca vieja ni duplicada; template «X · Consultorio Online»; manifest (`short_name` «Consultorio»); sidebar expandido sin desborde y topbar solo con la baldosa |
 
 Fuera por ahora: «informar pago». El rate limit del turnero es 5 reservas cada 5' por IP: un spec nuevo que reserve tiene
