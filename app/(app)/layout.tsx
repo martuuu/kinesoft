@@ -26,6 +26,8 @@ import { capabilitiesForActor } from "@/lib/authz";
 import { realtimeBootstrap } from "@/lib/realtime-bootstrap";
 import { idleLoginHref, readIdleShellState } from "@/lib/idle-logout-internal";
 import { directoryMode } from "@/lib/directory-mode";
+import { hasAcceptedCurrentLegalCached } from "@/lib/legal-gate-internal";
+import { legalGateFor } from "@/lib/legal-gate";
 
 /**
  * MB-0b (C-MB5, MB-D13): `viewportFit: "cover"` SOLO en el workspace: la barra inferior (C-MB1) necesita que
@@ -59,6 +61,8 @@ export const viewport: Viewport = {
  *     o dado de baja sin otro usable → `/suspendido` (con otro usable entra a ese).
  *   - PL-1e (C-PL6): 2FA prendida y sin pasar en esta sesión → `/verificar-acceso?next=<path>`
  *     (sin Actor: `getActor` tira `two_factor`; el estado sale de la misma foto, sin queries).
+ *   - LG-G (§27): con Actor y sin la versión vigente de los Términos aceptada → `/aceptar-terminos?next=<path>&via=app_gate`
+ *     (después de todo lo anterior; soporte de Plataforma y actor demo exentos; lógica pura en `legalGateFor`).
  * Ningún destino está dentro de `(app)`, así que el gate no se puede rebotar a sí mismo.
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -89,6 +93,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // membresías; las tres salen de esa foto sin queries. null = sin sesión (o actor demo).
   // BO1-A: `block` = usuario deshabilitado / consultorio suspendido o dado de baja.
   const [choice, snapshot, block] = await Promise.all([getTenantChoiceState(), getAccessSnapshot(), getSessionBlock()]);
+  // LG-G (§27): ¿aceptó la versión vigente de los Términos? Se pide YA (en paralelo con el tx de soporte de abajo) y se
+  // espera recién después del gate de sesión/acceso, que manda primero (un deshabilitado va a /cuenta-desactivada, un
+  // titular con el alta abierta al onboarding, que ya pide la casilla). Una sentencia (índice `userId` de M8),
+  // memoizada por request. Ni soporte ni el actor demo (sin foto): no se consulta. Mismo `catch` vacío que `prefsP`.
+  const legalP = actor && snapshot && !actor.support ? hasAcceptedCurrentLegalCached(actor.userId) : null;
+  legalP?.catch(() => {});
 
   // PL-1e: misma foto; con la 2FA pendiente no hay Actor (`resolveActor` corta antes), así que cae en la rama `!actor`.
   const twoFactorRequired = snapshot?.twoFactor.state === "required";
@@ -145,6 +155,21 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }
   if (gate) redirect(gate);
   if (!actor) redirect("/login");
+
+  // LG-G (§27) · decisión de Martin (27-oct): «Cuentas que ya existían: si, da igual. Tenemos que resetar.» → TODO
+  // usuario que entra al workspace sin haber aceptado la versión vigente de los Términos y la Política de privacidad
+  // va a `/aceptar-terminos` (fuera de `(app)`: no se rebota a sí mismo, y ahí está «Cerrar sesión»). Cierra el hueco
+  // de ZF1a: el reenvío del link de acceso, «olvidé mi contraseña» y entrar a `/dashboard` a mano después de `/reset`
+  // llegaban al panel sin consentimiento. Redirect ANTES de los loaders del shell (mismo motivo que el de inactividad:
+  // `redirect()` corta también el render de la página hija). Solo en la carga completa: una navegación blanda no
+  // re-renderiza este layout, pero para llegar a ella hubo una carga completa que ya pasó por acá.
+  const legalGate = legalGateFor({
+    hasSession: !!snapshot,
+    support: !!actor.support,
+    accepted: legalP ? await legalP : true,
+    nextPath,
+  });
+  if (legalGate) redirect(legalGate);
 
   // PL-F (handoff 8): con la barra superior el dashboard esconde su `ProfileMenu`, así que el switch «Aparezco en el
   // turnero online» del propio profesional también va en el menú de cuenta del topbar. Se lee una vez acá, solo si

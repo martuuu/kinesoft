@@ -69,6 +69,12 @@ nuevo las valida al arrancar: un typo frena el deploy). Tabla completa en [DEPLO
 
 ## B2 · Antes de vender (PV, no frena el push)
 
+> **Decisión de Martin (27-oct): prod se RESETEA antes de vender** (cuentas viejas y 2FA dan igual). Este documento
+> todavía describe el camino incremental (migraciones M12 → … → M19 sobre la base actual): el procedimiento de reset
+> (backup, base vacía, `migrate deploy` desde cero, roles, catálogo, superadmin, bootstrap) se planifica aparte con Martin
+> antes del push. El gate legal de la app (LG-G) pide la casilla a todos al entrar.
+
+
 - [ ] **`LEGAL_ENTITY`** en `lib/legal.ts:27` (razón social, CUIT, domicilio). Mientras estén en `null`, `/terminos` y
       `/privacidad` no muestran esa línea. Es un cambio de código: va en un commit antes del push o en uno después.
       Más la revisión del abogado (transferencias internacionales, registro de la base en la AAIP, consumo, retención).

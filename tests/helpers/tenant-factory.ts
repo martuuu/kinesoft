@@ -8,6 +8,7 @@ import {
   type TenantVertical,
 } from "@prisma/client";
 import { LEGACY_PLAN_OF, SAAS_PLAN_OF_LEGACY } from "@/lib/saas-plans-logic";
+import { LEGAL_VERSION } from "@/lib/legal";
 
 /**
  * Ephemeral-tenant factory for integration tests (.docs/TESTING.md capa 3).
@@ -41,6 +42,26 @@ export function ownerClient(): PrismaClient {
 }
 
 export type TenantRole = Role;
+
+/**
+ * LG-G (§27, decisión de Martin del 27-oct): el layout de `(app)` manda a `/aceptar-terminos` a todo usuario sin la
+ * versión vigente de los Términos aceptada. Los usuarios de staff de la factory nacen CON la aceptación (como quien se
+ * dio de alta por la UI, que la pide en cada puerta): si no, todos los E2E del workspace y cualquier test que corra el
+ * layout real terminarían en esa pantalla. `acceptLegal: false` = el usuario sin aceptar (los tests de LG-S/LG-G que
+ * prueban que se pide la casilla).
+ *
+ * Inserción directa con el cliente owner y no `recordLegalAcceptanceInTx`: ese módulo es `server-only` (no se importa
+ * fuera de Next, y la factory la usa también el global-setup de Playwright). La fila es la misma que escribe la app
+ * (`kind` `legal.accepted`, payload `{version, via}`, `tenantId` null como la del alta por email); sin ip ni user-agent.
+ * `deleteTenantDeep` ya la borra (modo réplica, por `userId`).
+ */
+export type LegalFixtureOpts = { acceptLegal?: boolean };
+
+export async function acceptLegalFor(prisma: PrismaClient, userId: string): Promise<void> {
+  await prisma.userSecurityEvent.create({
+    data: { userId, kind: "legal.accepted", payload: { version: LEGAL_VERSION, via: "signup" } },
+  });
+}
 
 export interface EphemeralTenant {
   tenantId: string;
@@ -246,7 +267,7 @@ export async function createEphemeralTenant(
     seatLimitOverride?: number | null;
     /** BO0 (M7): el UserProfile del OWNER nace deshabilitado a nivel plataforma. */
     disabled?: boolean;
-  } = {}
+  } & LegalFixtureOpts = {}
 ): Promise<EphemeralTenant> {
   const s = uniqueSuffix();
   const slug = `test-${s}`;
@@ -276,6 +297,7 @@ export async function createEphemeralTenant(
       ...(opts.disabled ? { disabledAt: new Date(), disabledReason: "Deshabilitado por el test" } : {}),
     },
   });
+  if (opts.acceptLegal !== false) await acceptLegalFor(prisma, userId);
   const practitioner = await prisma.practitioner.create({
     data: {
       tenantId: tenant.id,
@@ -319,11 +341,13 @@ export async function createEphemeralTenant(
 export async function addPractitioner(
   prisma: PrismaClient,
   t: EphemeralTenant,
-  role: TenantRole = "PRACTITIONER"
+  role: TenantRole = "PRACTITIONER",
+  opts: LegalFixtureOpts = {}
 ): Promise<{ userId: string; practitionerId: string }> {
   const s = uniqueSuffix();
   const userId = `test-user-${s}`;
   await prisma.userProfile.create({ data: { id: userId, email: `${userId}@test.local`, fullName: `Kine ${s}` } });
+  if (opts.acceptLegal !== false) await acceptLegalFor(prisma, userId);
   // PL-0 (M8): prendido en el turnero como el titular de la factory (ver createEphemeralTenant).
   const p = await prisma.practitioner.create({
     data: { tenantId: t.tenantId, userId, specialty: "Test", publicBookingEnabled: true },
@@ -348,11 +372,13 @@ export async function addStaff(
   prisma: PrismaClient,
   t: EphemeralTenant,
   role: TenantRole,
-  grants: { grantSettings?: boolean; grantBilling?: boolean } = {}
+  grants: { grantSettings?: boolean; grantBilling?: boolean } = {},
+  opts: LegalFixtureOpts = {}
 ): Promise<{ userId: string; membershipId: string }> {
   const s = uniqueSuffix();
   const userId = `test-user-${s}`;
   await prisma.userProfile.create({ data: { id: userId, email: `${userId}@test.local`, fullName: `Staff ${role} ${s}` } });
+  if (opts.acceptLegal !== false) await acceptLegalFor(prisma, userId);
   const m = await prisma.membership.create({
     data: {
       userId,

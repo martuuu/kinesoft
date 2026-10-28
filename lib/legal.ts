@@ -34,16 +34,30 @@ export const LEGAL_ENTITY: { name: string | null; cuit: string | null; address: 
 export const LEGAL_ACCEPT_ERROR = "Para seguir, aceptá los Términos y la Política de privacidad.";
 
 /**
- * Pantalla de aceptación suelta (ZF1a, ZA M1): la usa el titular dado de alta desde /plataforma, que no pasa por
- * ninguna de las otras puertas (el link de activación lo encadena: `/reset` → acá → `/dashboard`). Fuera de `(app)`.
+ * Pantalla de aceptación suelta, fuera de `(app)`. ZF1a (ZA M1): el titular dado de alta desde /plataforma (el link de
+ * activación la encadena: `/reset` → acá → `/dashboard`). LG-G: además, el gate del layout de `(app)` manda acá a todo
+ * usuario sin la versión vigente aceptada (`lib/legal-gate.ts`).
  */
 export const LEGAL_ACCEPT_PATH = "/aceptar-terminos";
 
 /**
- * Por dónde se aceptó (va al payload del evento). `platform_activation` = `/aceptar-terminos` (ZF1a): el titular de un
- * alta asistida, después de elegir su contraseña.
+ * Por dónde se aceptó (va al payload del evento). `/aceptar-terminos` registra una de dos (`LEGAL_PAGE_VIAS`):
+ *  - `platform_activation` (ZF1a): el titular de un alta asistida, después de elegir su contraseña (el link de
+ *    activación no lleva `via`: es el default, así los links ya mandados siguen registrando lo mismo);
+ *  - `app_gate` (LG-G): cualquier usuario que entró al workspace `(app)` sin haber aceptado la versión vigente (el gate
+ *    del layout lo manda con `&via=app_gate`).
  */
-export type LegalAcceptVia = "signup" | "onboarding" | "invite_activate" | "invite_accept" | "platform_activation";
+export type LegalAcceptVia =
+  | "signup"
+  | "onboarding"
+  | "invite_activate"
+  | "invite_accept"
+  | "platform_activation"
+  | "app_gate";
+
+/** Vías que puede registrar `/aceptar-terminos` (enum cerrado del zod de la action). La primera es el default. */
+export const LEGAL_PAGE_VIAS = ["platform_activation", "app_gate"] as const;
+export type LegalPageVia = (typeof LEGAL_PAGE_VIAS)[number];
 
 /**
  * Valor de la casilla → aceptó. Un checkbox HTML tildado manda `"on"` (sin `value`); los clientes JS mandan `true` o

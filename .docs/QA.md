@@ -761,7 +761,9 @@ ADR-030 / ADR-031; hallazgos en [AUDIT «Ronda PV»](AUDIT.md#ronda-pv). Los E2E
 - [ ] Alta con Google: la casilla aparece en el paso del onboarding que crea el consultorio.
 - [ ] Invitación: activar (cuenta nueva) y aceptar con sesión (cuenta existente sin aceptación) piden la casilla.
 - [ ] Alta asistida desde Plataforma: el titular nuevo hace `/reset` → **`/aceptar-terminos`** → `/dashboard`; sin tildar
-  vuelve con el error. (Hueco conocido: el reenvío del link y «Olvidé mi contraseña» no pasan por ahí.)
+  vuelve con el error.
+- [ ] Gate de la app (LG-G): un usuario sin aceptación (p. ej. entró por «Olvidé mi contraseña» o el reenvío del link)
+  que abre `/agenda` cae en `/aceptar-terminos`; tilda → vuelve a `/agenda`; «Cerrar sesión» funciona desde ahí.
 - [ ] Cuenta → Seguridad muestra «Aceptaste los Términos y la Política de privacidad».
 - [ ] `/terminos` y `/privacidad` a 390 y a 1366; links en el pie de AuthShell, landing, portal, turnero y directorio
   (abren en pestaña nueva desde la casilla). Sin `LEGAL_ENTITY` no aparece ninguna línea «CUIT: …».

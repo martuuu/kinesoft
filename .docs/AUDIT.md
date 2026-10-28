@@ -2602,7 +2602,7 @@ pasa a 🟡: `npm run dev` ya frena con `DATABASE_URL_SERVICE` remota (HD-17), l
 
 | Slug | Sev | Ubicación | Estado | Cierre |
 |---|---|---|---|---|
-| za M1 alta-asistida-sin-legales | media | lib/platform-provisioning-schemas.ts:148 · app/aceptar-terminos/page.tsx · lib/legal-accept-action.ts:32 | 🟢 ZF1a (parcial, ver backlog) | El titular creado en el alta de Plataforma pasa por `/reset` → `/aceptar-terminos` → `/dashboard` (`via: "platform_activation"`) |
+| za M1 alta-asistida-sin-legales | media | lib/platform-provisioning-schemas.ts:148 · app/aceptar-terminos/page.tsx · lib/legal-accept-action.ts:32 | 🟢 ZF1a + LG-G | El titular creado en el alta de Plataforma pasa por `/reset` → `/aceptar-terminos` → `/dashboard` (`via: "platform_activation"`) |
 | za M2 idle-fuera-de-app | media | app/api/{pacientes,agenda}/export/route.ts · app/cuenta/layout.tsx:20 · app/(platform)/layout.tsx:44 | 🟢 ZF1b | Exports → 401 y `/cuenta` y `/plataforma` redirigen con la `kine_idle` de esa sesión vencida |
 | za B1 lead-con-origen-de-sesion | baja | lib/leads.ts:72 · components/plataforma/inbox/inbox-logic.ts | 🟢 ZF1a | El form público no acepta ACCOUNT_DISABLED / ONBOARDING; lead sin usuario = «Identidad: Sin verificar (formulario web)» |
 | za B2 nota-en-audit-del-consultorio | baja | lib/platform-inbox.ts:635,679 | 🟢 ZF1a | Tomar y anotar solo por `auditPlatformGlobalInTx` (antes salían en el export del Titular) |
@@ -2624,7 +2624,7 @@ aunque la TV también anda con polling, y el chip «Plan Clínica» (sala de esp
 
 | Slug | Sev | Bloque | Ubicación | Estado | Detalle / destino |
 |---|---|---|---|---|---|
-| pv za-M1 reenvio-sin-aceptar | media | C0 | lib/platform-provisioning-internal.ts · app/(auth)/forgot | 🔴 abierto | ZF1a cubre el primer `/reset` del alta asistida. El reenvío del link desde Plataforma y «Olvidé mi contraseña» no pasan por `/aceptar-terminos`: el titular puede entrar sin aceptar. Fix: chequear `hasAcceptedCurrentLegal` en el gate de `(app)` para titulares de alta asistida |
+| pv za-M1 reenvio-sin-aceptar | media | C0 | lib/platform-provisioning-internal.ts · app/(auth)/forgot | 🟢 LG-G | Cerrado con un gate para TODOS en `app/(app)/layout.tsx` (decisión de Martin 27-oct: prod se resetea, no hay cuentas viejas que cuidar): sin la aceptación vigente → `/aceptar-terminos?next=…&via=app_gate` (`lib/legal-gate.ts`, `lib/legal-gate-internal.ts`). Exentos: acceso de soporte y actor demo. +1 sentencia por carga completa (`UserSecurityEvent_userId_createdAt_idx`). Límite: server actions y API routes no pasan por el layout |
 | pv zb-M7 topbar-1366 | baja | VX | components/layout/topbar* | 🔴 abierto | La topbar desborda a 1366 (pre-PV); en `/agenda` también |
 | pv online-payments-settings-rpc | baja | C | lib/mp-connect-actions.ts:181 · lib/booking-payment-policy.ts:157 | 🔴 abierto | `getOnlinePaymentsSettings` exportada desde `"use server"` sin llamador de cliente (en el allowlist RPC). Mover a `lib/online-payments-settings-internal.ts` (server-only); la usan `pf2-config-budget`, `authz-matrix`, `tp2o` (esfuerzo alto) |
 | pv eva-coerce | baja | C | lib/validation.ts:323 (`EvaScoreCreate`) | 🔴 abierto | `""` / `null` se coercen a EVA 0 |

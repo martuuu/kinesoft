@@ -20,6 +20,8 @@ import { blockExternal } from "./plans";
  *  - `idle`: consultorio propio para el cierre por inactividad. Propio y no el del fixture principal: el spec hace 4
  *    logins con el mismo email (rate limit por email: 10 / 15', `app/api/auth/sign-in/route.ts`) y avanza el reloj.
  *    Lleva además una invitación PENDIENTE a un email sin cuenta (LG: la activación muestra la casilla).
+ *  - `legalGate` (LG-G): Individual cuyo Titular NO aceptó los Términos (`acceptLegal: false`; el resto de los usuarios
+ *    de la factory nacen con la aceptación): entra a `/agenda` → `/aceptar-terminos?…&via=app_gate` → tilda → vuelve.
  *  - `leadEmailPrefix`: los leads que manda el spec usan `pv-lead-…@test.local`; el teardown borra esos hilos.
  *
  * Ids a `pv.json` (no a `fixture.json`, cuyo tipo es de otra sesión). Los usuarios se suman al `users.json` del GoTrue
@@ -34,6 +36,7 @@ export type PvFixture = {
   suspended: { tenantId: string; tenantName: string; owner: User };
   disabled: User;
   idle: { tenantId: string; owner: User; invite: { token: string; email: string; firstName: string } };
+  legalGate: { tenantId: string; owner: User };
   leadEmailPrefix: string;
 };
 
@@ -120,11 +123,19 @@ export async function createPvFixtures(db: PrismaClient): Promise<PvFixture> {
     },
   });
 
+  const legal = await createEphemeralTenant(db, {
+    role: "OWNER",
+    saasPlan: "INDIVIDUAL",
+    vertical: "KINESIOLOGY",
+    acceptLegal: false,
+  });
+
   const fx: PvFixture = {
     superadmin: await userOf(db, superadminId),
     suspended: { tenantId: sus.tenantId, tenantName: susTenant.name, owner: await userOf(db, sus.userId) },
     disabled: await userOf(db, disabledId),
     idle: { tenantId: idle.tenantId, owner: await userOf(db, idle.userId), invite: { token, email: inviteEmail, firstName: "Inés" } },
+    legalGate: { tenantId: legal.tenantId, owner: await userOf(db, legal.userId) },
     leadEmailPrefix: LEAD_PREFIX,
   };
   writeFileSync(E2E_PV_FILE, JSON.stringify(fx, null, 2));
@@ -132,7 +143,7 @@ export async function createPvFixtures(db: PrismaClient): Promise<PvFixture> {
 }
 
 export function pvUsers(fx: PvFixture): User[] {
-  return [fx.superadmin, fx.suspended.owner, fx.disabled, fx.idle.owner];
+  return [fx.superadmin, fx.suspended.owner, fx.disabled, fx.idle.owner, ...(fx.legalGate ? [fx.legalGate.owner] : [])];
 }
 
 export function readPvFixture(): PvFixture {
@@ -143,7 +154,8 @@ export async function deletePvFixtures(db: PrismaClient): Promise<void> {
   await deletePvLeadThreads(db);
   if (!existsSync(E2E_PV_FILE)) return;
   const fx = readPvFixture();
-  for (const id of [fx.suspended.tenantId, fx.idle.tenantId]) await deleteTenantDeep(db, id);
+  // `legalGate` puede faltar en un `pv.json` de una corrida de antes de LG-G (el sweep de huérfanos igual lo barre).
+  for (const id of [fx.suspended.tenantId, fx.idle.tenantId, fx.legalGate?.tenantId]) if (id) await deleteTenantDeep(db, id);
   await deletePvLooseProfiles(db, [fx.superadmin.id, fx.disabled.id]);
   for (const u of pvUsers(fx)) rmSync(pvSessionFile(u), { force: true });
   rmSync(E2E_PV_FILE, { force: true });

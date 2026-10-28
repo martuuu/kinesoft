@@ -1,8 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import { ownerClient, uniqueSuffix } from "../helpers/tenant-factory";
-import { LEGAL_ACCEPT_ERROR, LEGAL_VERSION_LABEL } from "../../lib/legal";
+import { LEGAL_ACCEPT_ERROR, LEGAL_VERSION, LEGAL_VERSION_LABEL } from "../../lib/legal";
 import { readFixture } from "./support/fixture";
-import { readPvFixture } from "./support/pv";
+import { freshContext, readPvFixture, submitLogin } from "./support/pv";
 
 // Superficies públicas: sin la sesión del staff.
 test.use({ storageState: { cookies: [], origins: [] } });
@@ -15,7 +15,9 @@ test.use({ storageState: { cookies: [], origins: [] } });
  *  - alta por email: sin la casilla el navegador no envía (`required`) y, si se fuerza el POST, el server responde
  *    `LEGAL_ACCEPT_ERROR` al lado de la casilla y no crea nada; con la casilla, el alta sigue (con el GoTrue falso el
  *    alta no llega a crear la cuenta: lo que se afirma es que la casilla ya no frena);
- *  - la activación de una invitación muestra la casilla (sin tildar, obligatoria).
+ *  - la activación de una invitación muestra la casilla (sin tildar, obligatoria);
+ *  - LG-G: un usuario de staff SIN aceptación que entra a `/agenda` va a `/aceptar-terminos` (via=app_gate), tilda y
+ *    vuelve a `/agenda`; queda el evento `{version, via:"app_gate"}`.
  */
 
 async function expectLegalLinks(page: Page, scope = page.locator("body")) {
@@ -119,5 +121,41 @@ test.describe("legales", () => {
     const label = page.locator('label[for="invite-legal"]');
     await expect(label.locator('a[href="/terminos"]')).toHaveAttribute("target", "_blank");
     await expect(label.locator('a[href="/privacidad"]')).toHaveAttribute("target", "_blank");
+  });
+
+  test("LG-G: staff sin aceptación → /agenda pide los Términos, tilda y vuelve a /agenda", async ({ browser }) => {
+    const pv = readPvFixture();
+    const u = pv.legalGate.owner;
+    const ctx = await freshContext(browser);
+    const db = ownerClient();
+    try {
+      const page = await ctx.newPage();
+      await page.goto(`/login?next=${encodeURIComponent("/agenda")}`);
+      await submitLogin(page, u);
+      // El gate del layout de (app) corta antes del shell.
+      await page.waitForURL((url) => url.pathname === "/aceptar-terminos");
+      const url = new URL(page.url());
+      expect(url.searchParams.get("next")).toBe("/agenda");
+      expect(url.searchParams.get("via")).toBe("app_gate");
+      await expect(page.getByRole("heading", { name: "Términos y privacidad" })).toBeVisible();
+      // Desde acá se puede salir (la pantalla está fuera de (app): sin bucle).
+      await expect(page.getByRole("button", { name: "Cerrar sesión" })).toBeVisible();
+
+      const box = page.getByRole("checkbox", { name: /Acepto los Términos y condiciones y la Política de privacidad/ });
+      await expect(box).not.toBeChecked();
+      await box.check();
+      await page.getByRole("button", { name: "Continuar" }).click();
+      await page.waitForURL((url) => url.pathname === "/agenda");
+
+      const ev = await db.userSecurityEvent.findMany({ where: { userId: u.id, kind: "legal.accepted" } });
+      expect(ev.map((e) => e.payload)).toEqual([{ version: LEGAL_VERSION, via: "app_gate" }]);
+
+      // Ya aceptó: volver a entrar no la pide.
+      await page.goto("/dashboard");
+      await expect(page).toHaveURL(/\/dashboard/);
+    } finally {
+      await db.$disconnect();
+      await ctx.close();
+    }
   });
 });

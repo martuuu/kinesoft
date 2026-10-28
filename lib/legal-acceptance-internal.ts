@@ -5,8 +5,9 @@ import "server-only";
  * Sin migración (decisión de §27): la aceptación es una fila `legal.accepted` en `UserSecurityEvent` (M8), con payload
  * `{ version, via }`. La tabla es solo inserción (trigger de M8) y SERVICE_ONLY (ENABLE + FORCE sin policies): se
  * escribe por `recordUserSecurityEventInTx` (`lib/two-factor-internal.ts`, el único escritor de la tabla, que suma
- * ip y user-agent del request) dentro de una tx de `prismaService`, y se lee por `prismaService`. Ningún caller tiene
- * Actor todavía (alta, onboarding, invitación): el filtro es el `userId` de la sesión verificada o el recién creado.
+ * ip y user-agent del request) dentro de una tx de `prismaService`, y se lee por `prismaService`. Los que escriben no
+ * tienen Actor todavía (alta, onboarding, invitación, `/aceptar-terminos`): el filtro es el `userId` de la sesión
+ * verificada o el recién creado. El gate de `(app)` (LG-G) lee con el `userId` del Actor.
  *
  * Por qué un evento y no un flag en `UserProfile`: (1) en el alta por email todavía NO hay `UserProfile` (lo crea
  * `/auth/confirm`), y el evento no tiene FK; (2) cambiar el texto = nueva `LEGAL_VERSION` = se vuelve a pedir, sin
@@ -49,3 +50,4 @@ export async function hasAcceptedCurrentLegal(userId: string, version: string = 
   });
   return !!row;
 }
+
