@@ -112,6 +112,38 @@ SELECT count(*) FROM pg_policies WHERE schemaname = 'realtime';   -- 0
 Storage → buckets `patient-files`, `patient-documents`, `billing-receipts` → seleccionar todo → Delete. Los buckets
 quedan (privados). Si en A0 decidiste no conservar la biblioteca, vaciá también `exercise-media`.
 
+### B4 · Permisos de los roles de la app (ANTES de C)
+`DROP SCHEMA public` se lleva los permisos que `prisma/roles.supabase.sql` les había dado a `kinesoft_app` y
+`kinesoft_service` (USAGE del schema y los DEFAULT PRIVILEGES). Si `DATABASE_URL` o `DATABASE_URL_SERVICE` usan esos
+roles, la app quedaría sin poder leer ninguna tabla. Re-darlos ANTES de migrar hace que cada tabla nueva nazca con
+permiso. Es seguro correrlo aunque las URLs usen `postgres` (si el rol no existe, no hace nada). SQL Editor:
+
+```sql
+DO $$
+DECLARE r text;
+BEGIN
+  FOREACH r IN ARRAY ARRAY['kinesoft_app', 'kinesoft_service'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
+      EXECUTE format('GRANT USAGE ON SCHEMA public TO %I', r);
+      EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', r);
+      EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO %I', r);
+      RAISE NOTICE 'permisos re-dados a %', r;
+    END IF;
+  END LOOP;
+END $$;
+SELECT rolname, rolbypassrls FROM pg_roles WHERE rolname LIKE 'kinesoft%';
+```
+
+Después de C, verificá (tiene que dar `t` en cada rol que exista):
+
+```sql
+SELECT r.rolname, has_table_privilege(r.rolname, '"Tenant"', 'SELECT,INSERT,UPDATE,DELETE') AS tablas,
+       has_sequence_privilege(r.rolname, (SELECT oid FROM pg_class WHERE relkind = 'S' AND relnamespace = 'public'::regnamespace LIMIT 1), 'USAGE') AS secuencias
+  FROM pg_roles r WHERE r.rolname LIKE 'kinesoft%';
+```
+
+(Si no hay secuencias en `public`, la segunda columna sale NULL: está bien.)
+
 ---
 
 ## C · Migraciones desde cero (terminal)
