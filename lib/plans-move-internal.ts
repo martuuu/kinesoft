@@ -13,9 +13,12 @@ import "server-only";
  * después del commit y fuera de la tx (enmienda Realtime).
  *
  * Orden de locks (C2 / tabla C4 "Este y los siguientes / re-planificar",
- * literal: paciente → cupos → sedes → Booking asc → Session):
+ * literal: paciente → cupos → días del profesional (CF) → sedes → Booking asc
+ * → Session):
  *   (0) `lockPlanPatient` primero, después del gate (el gate solo lee).
- *   (1) Cupos: UNA `lockCapacityMany` con el SUPERCONJUNTO de las claves que
+ *   (1) Cupos + días del profesional (CF, enmienda C2 (1d)): UNA
+ *       `lockAgendaKeysMany({ cap, pday: pdayKeysFromCapacityKeys(cap) })`
+ *       con el SUPERCONJUNTO de las claves de cupo que
  *       después piden el motor (profesional/servicio del plan en cada destino)
  *       y el core (profesional/servicio de CADA turno en su destino). El motor
  *       vuelve a pedir las suyas dentro de `reclassifyOrThrowStaleInTx`, pero
@@ -32,6 +35,13 @@ import "server-only";
  *       ESE cupo sin tener ninguna hora (`locks-hour-writes.test.ts`). Si algún
  *       día Planes tuviera que BLOQUEAR por tope, las horas van acá, en la
  *       misma `lockAgendaKeysMany` que el cupo y después de él.
+ *       CF (C2 (1d), CF-D12): el día (`kinesoft:pday:…`) SÍ va, porque el core
+ *       con `capLocksHeld` igual chequea «no atiende servicios distintos a la
+ *       vez» y la clave de cupo lleva el servicio: sin el día, la serie y un
+ *       alta suelta de otro servicio a la misma hora no se veían. Va después de
+ *       TODO el cupo y antes de cualquier hora (orden total cupo < día < hora <
+ *       sala): el alta espera el día con su cupo tomado y sin hora del plan en
+ *       juego, así que tampoco hay ciclo (`cf-pl-plans.test.ts` [CF-PL3]).
  *   (2) `lockTenantLocationsShared` una vez (el motor y el core lo re-piden
  *       compartido: reentrante).
  *   (3) Booking `FOR UPDATE` id asc de TODOS los turnos que se tocan (los de la
@@ -62,7 +72,12 @@ import { auditInTx } from "@/lib/audit";
 import type { Capability } from "@/lib/capabilities";
 import { assertPlanManageInTx, assertPlanScheduleInTx } from "@/lib/plan-authz-internal";
 import { lockPlanPatient } from "@/lib/plan-lock";
-import { capacityKeysForWindow, lockCapacityMany, type CapacityLockKey } from "@/lib/booking-cap-lock";
+import {
+  capacityKeysForWindow,
+  lockAgendaKeysMany,
+  pdayKeysFromCapacityKeys,
+  type CapacityLockKey,
+} from "@/lib/booking-cap-lock";
 import { lockTenantLocationsShared } from "@/lib/location-lock";
 import { assertProgramInvariantsInTx } from "@/lib/plan-invariants-internal";
 import { bookingHasMoney } from "@/lib/plan-pricing";
@@ -429,7 +444,8 @@ export async function moveSeriesInTx(
     const b = bookedById.get(r.bookingId);
     if (b) keys.push(...keysFor(tenantId, b.practitionerId, b.serviceId, dest, b.durationMin));
   }
-  await lockCapacityMany(tx, keys);
+  // CF (C2 (1d)): + el día de cada (profesional, día) del superconjunto, misma sentencia, sin hora.
+  await lockAgendaKeysMany(tx, { cap: keys, pday: pdayKeysFromCapacityKeys(keys) });
   // (2) sedes, una vez.
   await lockTenantLocationsShared(tx, tenantId);
   // (3) filas Booking id asc.
@@ -461,7 +477,11 @@ export async function moveSeriesInTx(
   if (!same) throw new StalePlanPreview(null, "write-conflict");
 
   const byIndex = new Map(rc.classifications.map((c) => [c.index, c]));
-  type Step = { row: MoveSeriesRow; dest: Date; force: { allowOverbooking?: boolean; allowOutOfHours?: boolean; allowPatientOverlap?: boolean } };
+  type Step = {
+    row: MoveSeriesRow;
+    dest: Date;
+    force: { allowOverbooking?: boolean; allowOtherService?: boolean; allowOutOfHours?: boolean; allowPatientOverlap?: boolean };
+  };
   const steps: Step[] = [];
   for (const row of fresh.rows) {
     const c = byIndex.get(indexOf.get(row.sessionId)!)!;
@@ -474,7 +494,10 @@ export async function moveSeriesInTx(
       row,
       dest: new Date(c.at),
       force: {
-        ...(r?.force?.capacity || c.overbooked ? { allowOverbooking: true } : {}),
+        // CF-D4: en Planes «otro servicio» va plegado en el sobreturno (`force.capacity`, `PlanForceFlags` no cambia).
+        // El core lo chequea igual con `capLocksHeld` (CF-D12) y tiene flag propio: sin `allowOtherService` la fila
+        // forzada moría en `MoveSeriesConflict(…, "other-service")` aunque el staff ya hubiera aceptado el sobreturno.
+        ...(r?.force?.capacity || c.overbooked ? { allowOverbooking: true, allowOtherService: true } : {}),
         ...(r?.force?.outOfHours ? { allowOutOfHours: true } : {}),
         ...(r?.force?.patientOverlap ? { allowPatientOverlap: true } : {}),
       },
@@ -718,7 +741,8 @@ export async function replanInTx(
       keys.push(...keysFor(tenantId, refs.practitioner.id, refs.service.id, dest, refs.durationMin));
     }
   }
-  await lockCapacityMany(tx, keys);
+  // CF (C2 (1d)): + el día del profesional, misma sentencia, sin hora (el motor lo re-pide: reentrante).
+  await lockAgendaKeysMany(tx, { cap: keys, pday: pdayKeysFromCapacityKeys(keys) });
   await lockTenantLocationsShared(tx, tenantId);
   // (3) Booking id asc: los futuros a cancelar ∪ los que se adoptan.
   await lockBookingsAscInTx(tx, tenantId, [...sel.cancelIds, ...adoptIdsOf(input.rows)]);

@@ -44,7 +44,17 @@ describe("[PL-1a] getPublicPlanCatalog (C-PL2)", () => {
 
   it("[BR-Z] la clave del cache lleva la marca: los bullets la traen resuelta y un rename no sirve la vieja", () => {
     const c = cache.calls.find((x) => x.tags?.includes(SAAS_PLANS_TAG));
-    expect(c?.keyParts).toEqual(["saas-plans:public", BRAND_NAME]);
+    expect(c?.keyParts?.slice(0, 2)).toEqual(["saas-plans:public", BRAND_NAME]);
+  });
+
+  it("[ZF3] A2: la clave lleva los textos de los bullets (sacar uno no deja el viejo 1 h en el Data Cache)", async () => {
+    const c = cache.calls.find((x) => x.tags?.includes(SAAS_PLANS_TAG));
+    expect(c?.keyParts).toHaveLength(3);
+    db.findMany.mockResolvedValue(M8_ROWS);
+    const bullets = new Set((await getPublicPlanCatalog()).flatMap((p) => p.features.flatMap((f) => f.bullets)));
+    const key = c!.keyParts![2].split("|");
+    for (const b of bullets) if (!b.startsWith("Todo lo del plan")) expect(key, b).toContain(b);
+    expect(c!.keyParts![2]).not.toMatch(/Diagnóstico y evaluaciones/);
   });
 
   it("en orden (sortOrder), con «Consultá» cuando el precio es null y Libre «A medida» + contacto", async () => {
@@ -120,7 +130,8 @@ describe("[VX2-c2] bullet de evoluciones (EV2 ya está)", () => {
     const kine = (await getPublicPlanCatalog()).find((p) => p.plan === "INDIVIDUAL")!.features[1].bullets;
     expect(kine.length).toBeLessThanOrEqual(MAX_FEATURE_BULLETS);
     expect(kine).toContain("Biblioteca con tus propios ejercicios");
-    expect(kine).toContain("Diagnóstico y evaluaciones");
+    // [ZF3] A2: Diagnóstico «Próximamente» y la EVA fuera de la app: no se prometen.
+    expect(kine.join(" | ")).not.toMatch(/diagn[oó]stico|evaluaci/i);
     expect(kine.join(" | ")).toMatch(/obra social/);
   });
 

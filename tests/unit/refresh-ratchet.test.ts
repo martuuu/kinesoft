@@ -33,9 +33,9 @@ const ROOT = process.cwd();
  */
 // PL-Z: 91 → 90 (rol en Usuarios). EV2-Z: 90 → 88, favorito y alta de ejercicio en Biblioteca (las actions revalidan).
 // PF1-Z (16-oct): 88 → 3, medido con el árbol entero tras PF1.0-PF1.2 (C-PF4: se sacaron los que la action ya
-// revalida y se marcaron los de realtime/route handler/auth). Quedan onboarding (step-nav, step-team) y el check-in
-// del portal; meta del brief ≤ 30.
-const MAX_UNMARKED = 3;
+// revalida y se marcaron los de realtime/route handler/auth). Quedan onboarding (step-nav, step-team); meta del brief ≤ 30.
+// CF (30-oct): 3 → 2, el check-in del portal se borró (EVA fuera de la app).
+const MAX_UNMARKED = 2;
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {

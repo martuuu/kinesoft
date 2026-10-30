@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { PortalAuth, PortalPatient } from "@/lib/portal-types";
+import type { PortalAuth, PortalPatient, PortalPlanDTO } from "@/lib/portal-types";
 
 /**
  * [IAM-3c] Pantalla de ingreso del portal (render sin jsdom): además de «Continuar con Google», el formulario
@@ -9,12 +9,14 @@ import type { PortalAuth, PortalPatient } from "@/lib/portal-types";
  * [VX2-f] Copy neutral por vertical (D-VX28, `lib/portal-copy.ts`): el ingreso y la home no prometen «recuperación»
  * ni «la evolución de tu dolor» (solo Kinesiología), y una ficha de Clínica general no ve «sesiones» ni «sin plan».
  */
-const portal = { auth: { signedIn: false } as PortalAuth };
+const portal = { auth: { signedIn: false } as PortalAuth, plan: null as PortalPlanDTO | null };
 vi.mock("@/lib/portal", () => ({
   getPortalAuth: async () => portal.auth,
-  submitCheckIn: vi.fn(),
+  getPortalPlan: async () => portal.plan,
   searchMyPortalPatients: vi.fn(),
 }));
+// La page de un consultorio solo mira el alias de slug cuando la ficha no está (no pasa en estos tests).
+vi.mock("@/lib/public-booking-internal", () => ({ resolveSlugAlias: async () => null }));
 vi.mock("@/lib/portal-auth", () => ({
   requestPortalLink: async () => ({ ok: true, data: { message: "x" } }),
 }));
@@ -37,10 +39,11 @@ vi.mock("react-dom", async (orig) => ({
 import { renderToStaticMarkup } from "react-dom/server";
 import PortalHome from "@/app/(portal)/portal/page";
 import PortalLayout from "@/app/(portal)/portal/layout";
-import { PortalCheckInForm } from "@/components/portal/check-in-form";
+import PortalTenantPage from "@/app/(portal)/portal/c/[slug]/page";
 
 beforeEach(() => {
   portal.auth = { signedIn: false };
+  portal.plan = null;
   ext.providers = ["google", "facebook"];
   ext.session = null;
   ext.formState = null;
@@ -53,7 +56,7 @@ const patient = (over: Partial<PortalPatient>): PortalPatient => ({
   tenantVertical: "KINESIOLOGY",
   firstName: "Ana",
   lastName: "Pérez",
-  sections: ["inicio", "plan", "checkin", "ejercicios", "cuenta", "reservar"],
+  sections: ["inicio", "plan", "ejercicios", "cuenta", "reservar"],
   programs: [],
   upcoming: [],
   ...over,
@@ -176,17 +179,37 @@ describe("[VX2-f] /portal con sesión, por vertical de la ficha", () => {
   });
 });
 
-describe("[VX2-f] check-in del portal por vertical", () => {
-  it("Kinesiología: «Antes de tu sesión»; General: «Antes de tu turno», sin sesión ni ejercicios", () => {
-    const k = renderToStaticMarkup(<PortalCheckInForm slug="demo" sessionId="s1" vertical="KINESIOLOGY" />);
-    const g = renderToStaticMarkup(<PortalCheckInForm slug="demo" sessionId="s1" vertical="GENERAL" />);
-    expect(k).toContain("Antes de tu sesión");
-    expect(g).toContain("Antes de tu turno");
-    expect(g).not.toMatch(/sesi[oó]n|check-in|ejercicio/i);
-    // Labels reales: el slider y las notas tienen su <label for>.
-    for (const html of [k, g]) {
-      expect(html).toContain('for="checkin-s1-pain"');
-      expect(html).toContain('for="checkin-s1-notes"');
-    }
+describe("[CF-L3] el portal no muestra el check-in (EVA fuera, decisión de Martin 30-oct)", () => {
+  it("con plan y próxima sesión: ni formulario, ni escala de dolor, ni «check-in»", async () => {
+    // Antes de CF: con `planes` ∧ `evaluaciones` la próxima sesión traía «Antes de tu sesión» con un slider EVA 0..10
+    // («Dolor ahora») y el estado «Check-in registrado». Se monta la page REAL del consultorio.
+    portal.auth = {
+      signedIn: true,
+      email: "ana@example.com",
+      fullName: null,
+      // Con TODAS las secciones que tenía un Kine antes de CF, «checkin» incluida (cast: ya no es del enum): la page no
+      // lo pinta aunque una ficha vieja o un caller desactualizado se lo pase.
+      patients: [patient({ programs: [program], sections: ["inicio", "plan", "checkin", "ejercicios", "cuenta"] as never })],
+    };
+    const future = new Date(Date.now() + 86_400_000).toISOString();
+    portal.plan = {
+      programId: "pr1",
+      title: "Hombro",
+      totalSessions: 2,
+      completedSessions: 0,
+      startDate: new Date(0).toISOString(),
+      sessions: [1, 2].map((n) => ({
+        id: `s${n}`,
+        index: n,
+        ordinal: n,
+        scheduledFor: future,
+        completedAt: null,
+        booking: null,
+      })),
+    };
+    const html = renderToStaticMarkup(await PortalTenantPage({ params: { slug: "demo" } }));
+    expect(html).toContain("Próxima sesión");
+    expect(html).toContain("Recorrido del plan");
+    expect(html).not.toMatch(/check-?in|Antes de tu (sesi[oó]n|turno)|dolor|\bEVA\b|type="range"/i);
   });
 });

@@ -42,11 +42,12 @@ import { arHourKeyOf } from "@/lib/availability/interval-cap";
  * `lockCapacityMany`.
  *
  * Orden respecto de los otros locks (C2): `lockPlanPatient` (lib/plan-lock.ts)
- * SIEMPRE antes que el cupo; el cupo antes que la HORA del profesional (T3,
- * enmienda C2 (1c), ver el bloque `phour` abajo); la hora antes que la SALA
- * (SR, enmienda C2 (1b)); la sala antes que `lockTenantLocationsShared`; y
- * recién después las filas (Booking FOR UPDATE id asc → Session →
- * TreatmentProgram). Cupo, hora y sala van en UNA sentencia
+ * SIEMPRE antes que el cupo; el cupo antes que el DÍA del profesional (CF,
+ * enmienda C2 (1d), ver el bloque `pday` abajo); el día antes que la HORA del
+ * profesional (T3, enmienda C2 (1c), bloque `phour`); la hora antes que la
+ * SALA (SR, enmienda C2 (1b)); la sala antes que `lockTenantLocationsShared`;
+ * y recién después las filas (Booking FOR UPDATE id asc → Session →
+ * TreatmentProgram). Cupo, día, hora y sala van en UNA sentencia
  * (`lockAgendaKeysMany`).
  *
  * Alcance de transacción: se suelta solo en COMMIT/ROLLBACK. Llamarlo fuera
@@ -320,30 +321,120 @@ export function orderedHourLockKeys(keys: readonly HourLockKey[]): string[] {
   return out;
 }
 
-/** Las tres familias de claves de agenda; cualquiera puede faltar o venir vacía. */
+// ─────────────────────────────────────────────────────────────────────────────
+// Día del profesional (CF, ADR-032, enmienda C2 (1d)): paciente → cupo → DÍA → hora → sala → sedes → filas
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Enmienda C2 (1d), CF (30-oct; regla «no atiende servicios distintos a la vez», ADR-032): paciente → cupo → día del
+// profesional → hora → sala → sedes → filas. Clave `kinesoft:pday:<t>:<profesional>:<día AR>` (`practitionerDayLockKey`):
+// dos turnos que se pisan comparten al menos un día AR de los que cubren; la de cupo lleva el servicio y la de hora solo
+// la hora de inicio (09:30 + 60' y 10:00 no la comparten), así que sin ésta dos altas de servicios distintos leían «0 de
+// otro servicio» y entraban las dos. Va en la MISMA sentencia (`lockAgendaKeysMany`: todo el cupo → todos los días →
+// todas las horas → todas las salas, cada grupo ordenado, `WITH ORDINALITY … ORDER BY o`): 0 sentencias nuevas. Se toma
+// SIEMPRE (no depende de `allowParallelServices`) en altas, lote, edición que cambia la ventana o reactiva, submit del
+// turnero y Planes (motor y «este y los siguientes», en el superconjunto junto al cupo, sin hora). No la toman
+// bloqueos/candado (`lockCapacityScope` ya toma el cupo de todos los servicios del día) ni la promoción del hold.
+// `capLocksHeld` = «el caller ya tomó cupo y día (y hora, salvo Planes)».
+//
+// Por qué SIEMPRE y no solo con la regla prendida: la clave no puede depender de una config que cambia en caliente.
+// Si el profesional apaga «Atiende servicios distintos a la vez» mientras corre un alta que la leyó prendida, esa tx
+// no habría tomado el día y la siguiente (que la lee apagada) contaría sin verla. Tomándola siempre, no hay ventana.
+// El costo: serializar altas del mismo profesional en el mismo día AR, que no compiten en volumen.
+//
+// Por qué después del cupo y antes de la hora: el cupo es la familia que ya tomaban todos (bloqueos y candado toman
+// cupo SIN día ni hora); el día va antes que la hora porque Planes toma cupo + día sin hora, y con el orden total
+// compartido (cupo < día < hora < sala, cada familia ordenada por componente) dos tx nunca se esperan en ciclo, tome
+// cada una el subconjunto de familias que tome. Prefijos "kinesoft:cap:" / "kinesoft:pday:" / "kinesoft:phour:" /
+// "kinesoft:room:" no se pisan.
+
+/** Una clave de día del profesional: (profesional, día AR "YYYY-MM-DD") dentro de un tenant. */
+export type PractitionerDayLockKey = { tenantId: string; practitionerId: string; dayKey: string };
+
+/** La clave textual del advisory lock de día del profesional (exportada para los tests de carrera). */
+export const practitionerDayLockKey = (o: PractitionerDayLockKey) =>
+  `kinesoft:pday:${o.tenantId}:${o.practitionerId}:${o.dayKey}`;
+
+/**
+ * Las claves de día de una ventana [start, end): el día AR del inicio y, si la fila cruza la medianoche AR, el
+ * siguiente (mismo criterio que `capacityKeysForWindow`: fin semiabierto, así que terminar 00:00 AR no toma el día
+ * siguiente). El día sale de `dayKeyOf` (`toARDateKey` de `lib/datetime-ar.ts`), nunca del huso del host.
+ */
+export function practitionerDayKeysForWindow(o: {
+  tenantId: string;
+  practitionerId: string;
+  start: Date;
+  end: Date;
+}): PractitionerDayLockKey[] {
+  const from = dayKeyOf(o.start);
+  const to = dayKeyOf(new Date(Math.max(o.start.getTime(), o.end.getTime() - 1)));
+  return dayKeyRange(from, to).map((dayKey) => ({ tenantId: o.tenantId, practitionerId: o.practitionerId, dayKey }));
+}
+
+/**
+ * Los días del profesional que cubre un conjunto de claves de cupo (deduplicados): lo usan los superconjuntos de
+ * Planes (`lockPlanWindowsInTx`, «este y los siguientes»), que arman cupo por (profesional, servicio, día) y tienen
+ * que tomar el día de los mismos (profesional, día) en la misma sentencia. Las claves de cupo ya cubren todos los días
+ * de cada ventana, así que el día sale de ellas sin volver a mirar las ventanas.
+ */
+export function pdayKeysFromCapacityKeys(keys: readonly CapacityLockKey[]): PractitionerDayLockKey[] {
+  const out: PractitionerDayLockKey[] = [];
+  const seen = new Set<string>();
+  for (const k of keys) {
+    const pk = { tenantId: k.tenantId, practitionerId: k.practitionerId, dayKey: k.dayKey };
+    const s = practitionerDayLockKey(pk);
+    if (seen.has(s)) continue;
+    seen.add(s);
+    out.push(pk);
+  }
+  return out;
+}
+
+/**
+ * Claves de día deduplicadas y ordenadas por (tenantId, practitionerId, dayKey), POR COMPONENTE (mismo motivo que
+ * `orderedCapacityLockKeys`: con ids de largo distinto, "a:" vs "a1:" concatenados invertirían el orden).
+ */
+export function orderedPractitionerDayLockKeys(keys: readonly PractitionerDayLockKey[]): string[] {
+  const sorted = [...keys].sort(
+    (a, b) => cmp(a.tenantId, b.tenantId) || cmp(a.practitionerId, b.practitionerId) || cmp(a.dayKey, b.dayKey)
+  );
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const k of sorted) {
+    const s = practitionerDayLockKey(k);
+    if (seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
+/** Las cuatro familias de claves de agenda; cualquiera puede faltar o venir vacía. */
 export type AgendaLockKeys = {
   cap?: readonly CapacityLockKey[];
+  pday?: readonly PractitionerDayLockKey[];
   hour?: readonly HourLockKey[];
   rooms?: readonly RoomLockKey[];
 };
 
 /**
- * El array exacto que bloquea `lockAgendaKeysMany`: cupo ordenado ++ horas ordenadas ++ salas ordenadas (nunca
- * intercaladas, aunque un tenant de la sala ordenara antes que el del cupo). Exportado para el unit test de orden
- * y para los tests de carrera (`pg_locks`).
+ * El array exacto que bloquea `lockAgendaKeysMany`: cupo ordenado ++ días ordenados ++ horas ordenadas ++ salas
+ * ordenadas (nunca intercaladas, aunque un tenant de una familia posterior ordenara antes que el del cupo). Exportado
+ * para el unit test de orden y para los tests de carrera (`pg_locks`).
  */
 export function orderedAgendaLockKeys(k: AgendaLockKeys): string[] {
   return [
     ...orderedCapacityLockKeys(k.cap ?? []),
+    ...orderedPractitionerDayLockKeys(k.pday ?? []),
     ...orderedHourLockKeys(k.hour ?? []),
     ...orderedRoomLockKeys(k.rooms ?? []),
   ];
 }
 
 /**
- * Cupo → hora → sala en UNA sentencia (C-AS3, enmienda C2 (1c)). Lo usan altas, lote, edición que cambia de
- * intervalo o reactiva, y el submit del turnero; `lockCapacityMany`/`lockCapacityWindow`/`lockCapacityAndRoomsMany`
- * quedan como envoltorios con su firma (C8). Todas las listas vacías: no-op sin ida a la base.
+ * Cupo → día → hora → sala en UNA sentencia (C-AS3, enmiendas C2 (1c) y (1d)). Lo usan altas, lote, edición que
+ * cambia la ventana o reactiva, el submit del turnero y Planes (cupo + día, sin hora);
+ * `lockCapacityMany`/`lockCapacityWindow`/`lockCapacityAndRoomsMany` quedan como envoltorios con su firma (C8), sin
+ * día. Todas las listas vacías: no-op sin ida a la base.
  */
 export async function lockAgendaKeysMany(tx: DbClient, keys: AgendaLockKeys): Promise<void> {
   await lockOrderedKeys(tx, orderedAgendaLockKeys(keys));

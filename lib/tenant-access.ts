@@ -106,7 +106,7 @@ export function canWrite(mode: TenantAccessMode): boolean {
   return mode === "full" || mode === "grace";
 }
 
-/** full | grace: turnero, check-in del portal y token realtime abiertos. */
+/** full | grace: turnero, «Mis datos» del portal y token realtime abiertos (el check-in se borró en CF). */
 export function publicSurfacesOpen(mode: TenantAccessMode): boolean {
   return mode === "full" || mode === "grace";
 }

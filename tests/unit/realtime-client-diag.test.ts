@@ -9,8 +9,8 @@
  *   por backoff (1, 2, 4… 30 s) y agotaba el rate limit de 30 cada 10 min.
  *
  * Fakes a mano (brief SV: `vi.fn` que tira a través de un mock rompe vitest 2.1.9). Se testean los símbolos reales:
- * `createSupabaseDriver`, `createRealtimeHub` y el `getRealtimeToken` que el hub cablea en prod; lo único mockeado es
- * la server action (frontera de red).
+ * `createSupabaseDriver`, `createRealtimeHub` y el `tokenGetterFromAction` que el hub cablea en prod (CF-RT: con la
+ * action que le pasa el provider); lo único mockeado es la server action (frontera de red).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DriverStatus, RealtimeDiag, StatusInfo } from "@/lib/realtime-client-types";
@@ -20,6 +20,7 @@ import {
   classifyJoinError,
   classifyMintError,
   clipDiagReason,
+  tokenGetterFromAction,
 } from "@/lib/realtime-client-state";
 
 const mintAction = vi.hoisted(() => ({
@@ -35,7 +36,12 @@ vi.mock("@/lib/realtime-token", () => ({
   },
 }));
 
-import { createRealtimeHub, getRealtimeToken } from "@/components/realtime/realtime-hub";
+import { createRealtimeHub } from "@/components/realtime/realtime-hub";
+import { mintRealtimeToken } from "@/lib/realtime-token";
+
+// CF-RT: lo que el hub arma con la action que le pasa el provider. Probe fijo: el test no tiene NEXT_PUBLIC_BUILD_ID.
+const sameBuild = async () => false;
+const getRealtimeToken = tokenGetterFromAction(mintRealtimeToken, sameBuild);
 
 const NOW = Date.parse("2026-10-18T12:00:00.000Z");
 
@@ -248,11 +254,37 @@ describe("[HF-1b] hub · motivo del mint", () => {
     expect(hub.getState()).toBe("polling");
   });
 
-  it("action que ya no existe (deploy nuevo, PWA vieja) → stale_build y se estaciona al toque", async () => {
+  // CF-RT: antes este caso era `stale_build` («Recargá») por el texto del error. En prod el mismo build respondía así
+  // (action no registrada) y recargar no arreglaba nada: con el build igual es `server_error` (3 intentos y se
+  // estaciona, como cualquier `{ok:false}`). `stale_build` solo con otro build confirmado: ver cf-rt-realtime-token.
+  it("[CF-RT2] «Failed to find Server Action» con el MISMO build → server_error y se estaciona a los 3", async () => {
     mintAction.throws = new Error(
       'Failed to find Server Action "abc". This request might be from an older or newer deployment.',
     );
     const { hub } = hubWithRealGetter();
+    await settle();
+    expect(hub.getDiag()).toMatchObject({ step: "mint", code: "server_error", permanent: true });
+    for (let i = 0; i < 600; i++) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      await settle();
+    }
+    expect(mintAction.calls).toBeLessThanOrEqual(4);
+    expect(hub.getState()).toBe("polling");
+  });
+
+  it("[CF-RT2] otro build confirmado → stale_build y se estaciona al toque", async () => {
+    mintAction.throws = new Error("Failed to find Server Action");
+    const fake = makeFake();
+    const hub = createRealtimeHub({ isOnline: () => true });
+    hub.start({ driver: "supabase", tenantId: "t1", url: "https://proj.supabase.co", anonKey: "k" }, async (b) =>
+      createSupabaseDriver({
+        url: b.url!,
+        anonKey: b.anonKey!,
+        tenantId: b.tenantId,
+        getToken: tokenGetterFromAction(mintRealtimeToken, async () => true),
+        deps: { RealtimeClient: fake.FakeClient, random: () => 0 },
+      }),
+    );
     await settle();
     expect(hub.getDiag()).toMatchObject({ step: "mint", code: "stale_build", permanent: true });
     for (let i = 0; i < 120; i++) {

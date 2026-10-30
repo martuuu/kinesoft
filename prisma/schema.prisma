@@ -105,6 +105,16 @@ model Tenant {
   // Los dos o ninguno (CHECK Tenant_logo_check en la base, drift aceptado). El ALTER va al final de M14 (lock corto).
   logoStorageKey              String?
   logoUpdatedAt               DateTime?
+  // CF M20 (cf_agenda_rules, feedback del cliente §28, decisiones 3 y 6 de Martin del 30-oct). Defaults del consultorio
+  // para sus profesionales; NULL = hereda. CHECKs Tenant_*_check en la base (drift aceptado, `IS NULL OR …`).
+  //  - agendaSlotStepMin: paso del SELECTOR de horarios del staff (15/30/45/60; NULL → 15). NO es `agendaSlotMinutes`
+  //    (alto de fila de la grilla, solo visual): uno decide qué horas se ofrecen, el otro cómo se dibuja la agenda.
+  //  - publicSlotStepMin: paso del turnero (15/30/45/60; NULL → automático por duración, AS-D9).
+  //  - publicMinLeadMinutes: anticipación mínima online en minutos, 0..80 640 (8 semanas; NULL → 60). Precedencia
+  //    PractitionerService.minLeadMinutes > esta > 60.
+  agendaSlotStepMin           Int?
+  publicSlotStepMin           Int?
+  publicMinLeadMinutes        Int?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -366,6 +376,14 @@ model Practitioner {
   honorific             String?
   signatureStorageKey   String?
   signatureUpdatedAt    DateTime?
+  // CF M20 (cf_agenda_rules, decisión 1 de Martin del 30-oct): «Atiende servicios distintos a la vez». false (default,
+  // SIN backfill: los existentes pasan a la regla nueva) = un turno de OTRO servicio que se pisa bloquea (staff: aviso
+  // forzable como sobreturno; turnero: no se ofrece); true = la regla de antes (el cupo era solo profesional + servicio).
+  allowParallelServices Boolean @default(false)
+  // CF M20: paso del selector del staff y del turnero de ESTE profesional (15/30/45/60; NULL = el del consultorio).
+  // No es `Tenant.agendaSlotMinutes` (alto de fila, visual). CHECKs Practitioner_*_check en la base (drift aceptado).
+  agendaSlotStepMin     Int?
+  publicSlotStepMin     Int?
   createdAt     DateTime @default(now())
 
   tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)

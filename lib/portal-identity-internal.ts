@@ -51,7 +51,7 @@ export type PortalPatientRef = {
   patientId: string;
   tenant: { id: string; slug: string; name: string; vertical: TenantVertical; publicEmail: string | null };
   modules: ReadonlySet<TenantModule>; // modulesFor(entitlements de la fila del tenant)
-  surfacesOpen: boolean; // publicSurfacesOpenFor(tenant): escrituras sin Actor (check-in, «Mis datos»)
+  surfacesOpen: boolean; // publicSurfacesOpenFor(tenant): escrituras sin Actor («Mis datos»; el check-in se borró en CF)
   patient: { firstName: string; lastName: string; assignedPractitionerId: string | null };
 };
 

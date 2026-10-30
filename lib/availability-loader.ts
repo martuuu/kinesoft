@@ -5,6 +5,7 @@ import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 import { parseModuleOverrides, roomsEnabled } from "@/lib/tenant-modules";
 import { addDays, dayKeyToDbDate, dayWindow, dbDateToDayKey, isDayKey } from "@/lib/availability/day";
 import { effectiveIntervalCap, type IntervalCap } from "@/lib/availability/interval-cap";
+import { effectiveAgendaRules, type PractitionerAgendaRules } from "@/lib/availability/agenda-rules";
 import {
   BOOKING_LOOKBACK_MIN,
   FALLBACK_TENANT_HOURS,
@@ -64,6 +65,10 @@ export type LoadedAvailabilityInput = Omit<AvailabilityInput, "bookings" | "room
   roomBlocks: ReadonlyArray<RoomBlock>;
   /** T3 (C-AS3): siempre cargado, una entrada por profesional de `templates` (null = sin tope). */
   intervalCaps: Readonly<Record<string, IntervalCap | null>>;
+  /** CF (M20): siempre cargado, una entrada por profesional de `templates` (ya con la herencia del consultorio). */
+  agendaRules: Readonly<Record<string, PractitionerAgendaRules>>;
+  /** CF (M20): `Tenant.publicMinLeadMinutes` crudo (null = sin configurar → `effectivePublicMinLead`). */
+  publicMinLeadMinutes: number | null;
 };
 
 export type LoadAvailabilityParams = {
@@ -280,6 +285,11 @@ async function loadForRuns(
         // T3 (C-AS3): tope por intervalo del consultorio (default de cada profesional en INHERIT). Misma fila.
         bookingCapCount: true,
         bookingCapIntervalMin: true,
+        // CF (M20): reglas de agenda del consultorio (default de cada profesional) y anticipación del turnero. Misma
+        // fila: 0 sentencias nuevas (el presupuesto de `createBooking` y del turnero no sube).
+        agendaSlotStepMin: true,
+        publicSlotStepMin: true,
+        publicMinLeadMinutes: true,
       },
     }),
     requestedIds && requestedIds.length === 0
@@ -289,6 +299,9 @@ async function loadForRuns(
             bookingCapMode: string;
             bookingCapCount: number | null;
             bookingCapIntervalMin: number | null;
+            allowParallelServices: boolean;
+            agendaSlotStepMin: number | null;
+            publicSlotStepMin: number | null;
           }[]
         )
       : db.practitioner.findMany({
@@ -305,7 +318,16 @@ async function loadForRuns(
             ...(params.publicBookingOnly ? { publicBookingEnabled: true } : {}),
           },
           // T3 (C-AS3): el tope propio viaja en la MISMA sentencia (columnas escalares; 0 sentencias nuevas).
-          select: { id: true, bookingCapMode: true, bookingCapCount: true, bookingCapIntervalMin: true },
+          // CF (M20): servicio exclusivo + pasos propios, también en la misma sentencia.
+          select: {
+            id: true,
+            bookingCapMode: true,
+            bookingCapCount: true,
+            bookingCapIntervalMin: true,
+            allowParallelServices: true,
+            agendaSlotStepMin: true,
+            publicSlotStepMin: true,
+          },
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         }),
     db.location.findFirst({
@@ -341,11 +363,16 @@ async function loadForRuns(
   // puedan divergir en la herencia.
   const tenantCap = { count: tenant.bookingCapCount, intervalMin: tenant.bookingCapIntervalMin };
   const intervalCaps: Record<string, IntervalCap | null> = {};
+  // CF (M20): reglas de agenda efectivas por profesional reservable, con la herencia decidida SOLO por
+  // `effectiveAgendaRules` (misma razón que el tope: motor, escrituras y turnero no pueden divergir).
+  const tenantRules = { agendaSlotStepMin: tenant.agendaSlotStepMin, publicSlotStepMin: tenant.publicSlotStepMin };
+  const agendaRules: Record<string, PractitionerAgendaRules> = {};
   for (const p of practitioners) {
     intervalCaps[p.id] = effectiveIntervalCap(
       { mode: p.bookingCapMode, count: p.bookingCapCount, intervalMin: p.bookingCapIntervalMin },
       tenantCap
     );
+    agendaRules[p.id] = effectiveAgendaRules(p, tenantRules);
   }
   const primaryLocationId = primary?.id ?? null;
   const resolveLocation = (id: string | null | undefined): string =>
@@ -643,5 +670,7 @@ async function loadForRuns(
     services: serviceInfos,
     practitionerPayers,
     intervalCaps,
+    agendaRules,
+    publicMinLeadMinutes: tenant.publicMinLeadMinutes,
   };
 }

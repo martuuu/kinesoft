@@ -196,8 +196,6 @@ type SessionRow = {
   bookingId: string | null;
   notes: string | null;
   rpe: number | null;
-  paInPre: number | null;
-  paInPost: number | null;
   exercisesDone: number;
   exercisesTotal: number;
 };
@@ -284,7 +282,7 @@ export async function timelineRowsInTx(
   const sessionRows = p.withSessions
     ? await tx.$queryRaw<SessionRow[]>`
         SELECT s.id, s."programId", tp.title AS "programTitle", s."completedAt", b.id AS "bookingId", s.notes,
-          s.rpe, s."paInPre", s."paInPost",
+          s.rpe,
           (SELECT count(*) FROM "SessionExercise" x WHERE x."sessionId" = s.id AND x.status = 'DONE')::int AS "exercisesDone",
           (SELECT count(*) FROM "SessionExercise" x WHERE x."sessionId" = s.id)::int AS "exercisesTotal"
         FROM "Session" s
@@ -309,8 +307,6 @@ export async function timelineRowsInTx(
       bookingId: s.bookingId,
       notes: s.notes,
       rpe: s.rpe,
-      paInPre: s.paInPre,
-      paInPost: s.paInPost,
       exercisesDone: s.exercisesDone,
       exercisesTotal: s.exercisesTotal,
     })),

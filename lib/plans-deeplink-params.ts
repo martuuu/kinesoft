@@ -10,8 +10,8 @@ export const PLANS_TAB = "planes" as const;
 export const HC_TAB = "evoluciones" as const;
 /**
  * Alias de pestañas del perfil → la canónica. FC-3d (§24.7): `?tab=hc` abre la historia clínica. La clave sigue
- * siendo `evoluciones` (los links de `clinicalNoteDeepLink` ya emitidos y `profileNoteBookingId` la usan) y `evol`
- * sigue siendo la curva EVA (EV2-D10): por eso el alias corto es `hc` y no se toca ninguna de las dos.
+ * siendo `evoluciones` (los links de `clinicalNoteDeepLink` ya emitidos y `profileNoteBookingId` la usan). `evol` era
+ * la curva EVA, que se sacó del perfil en CF (§28): un `?tab=evol` viejo cae en la pestaña por defecto.
  */
 export const PROFILE_TAB_ALIASES: Readonly<Record<string, string>> = Object.freeze({ plan: PLANS_TAB, hc: HC_TAB });
 /** Nombres de los params (una sola fuente; el shell los limpia después de abrir). */

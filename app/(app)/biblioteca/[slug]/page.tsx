@@ -9,6 +9,7 @@ import { Tag } from "@/components/ui/tag";
 import { Markdown } from "@/components/ui/markdown";
 import { PageHeader } from "@/components/ui/page-header";
 import { moduleWall } from "@/lib/module-wall";
+import { clinicalSurfaceAllowed } from "@/lib/clinical-wall";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,8 @@ export default async function Page({ params }: { params: { slug: string } }) {
   // VX-Z (B1): el layout y la página se renderizan EN PARALELO; sin el módulo, el layout muestra el muro o redirige,
   // pero la página igual corría sus queries (y `assertModule` tiraba). Mismo veredicto que el layout (actor cacheado).
   if ((await moduleWall("ejercicios")) !== "ok") return null;
+  // CF (decisión 7 de Martin): sin `clinical.read` el layout redirige; la página corta igual (layout y página corren en paralelo).
+  if (!(await clinicalSurfaceAllowed())) return null;
   const ex = await getExercise(params.slug);
   if (!ex) notFound();
 

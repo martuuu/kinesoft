@@ -252,6 +252,14 @@ describe("VX-Z · turnero", () => {
     }
   });
 
+  it("[CF-ZF4 M5] con «Confirmar turno» apagado por el campo de la vertical, lo dice en texto y en una región viva", () => {
+    // El paso 3 no se alcanza con un render estático: se fija el cableado (el texto es `missingTurneroReason`, la misma
+    // regla del submit, testeada en cf-form-data-step) y que la región quede montada en el paso para anunciarse.
+    const src = readFileSync("components/booking/public-booking-wizard.tsx", "utf8");
+    expect(src).toContain("const reasonMissing = step === 3 ? missingTurneroReason(hc, clinic.vertical)?.error ?? null : null;");
+    expect(src).toMatch(/\{!interstitial && step === 3 && \(\s*<p\s+data-turnero-confirm-blocker\s+aria-live="polite"[\s\S]*?\{reasonMissing\}\s*<\/p>/);
+  });
+
   it("el wizard mueve el foco al cambiar de paso, no en el primer render", () => {
     const src = readFileSync("components/booking/public-booking-wizard.tsx", "utf8");
     expect(src).toMatch(/if \(prevStep\.current === step\) return;[\s\S]*return focusStepHeadingWhenReady\(cardRef\.current\);[\s\S]*\}, \[step\]\);/);

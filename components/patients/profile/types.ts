@@ -3,7 +3,6 @@ import type {
   PatientBookingSummary,
   PatientBookingFull,
 } from "@/lib/patients-types";
-import type { EvaScore } from "@prisma/client";
 
 export type PractitionerOption = { id: string; name: string };
 
@@ -16,7 +15,7 @@ export type InsurerOption = { id: string; name: string; payerId?: string | null 
 
 /**
  * Composite patient prop shape consumed by the views. Built from the
- * initial server payload (`patientCore + recentBookings + evaScores`) plus
+ * initial server payload (`patientCore + recentBookings`) plus
  * lazy slices fetched on tab activation. `bookings` is replaced with the
  * full list after Turnos/Facturación opens.
  *
@@ -27,15 +26,18 @@ export type InsurerOption = { id: string; name: string; payerId?: string | null 
  * `components/planes/plan-editor-types.ts`). Así el título del plan, las notas
  * y la autorización de la OS solo existen donde el server los proyectó para
  * ese actor, y no hay dos fuentes de "los planes del paciente" en el perfil.
+ *
+ * CF (§28, decisión 4): ya no lleva `evaScores`: la EVA salió de toda la app (la pestaña y la card de Resumen eran
+ * sus únicos lectores). El modelo `EvaScore` y sus filas quedan en la base.
  */
 export type PatientWithRelations = PatientCore & {
   bookings: PatientBookingSummary[] | PatientBookingFull[];
-  evaScores: EvaScore[];
 };
 
 /**
- * Pestañas del perfil. EV2-3a (EV2-D10/D20): `evol` sigue siendo la curva EVA (label «EVA»: las URLs viejas
- * `?tab=evol` no se rompen) y `evoluciones` es la historia clínica (módulo `evoluciones` + `clinical.read`). FC-3d
+ * Pestañas del perfil. `evoluciones` es la historia clínica (módulo `evoluciones` + `clinical.read`). CF (§28,
+ * decisión 4): la pestaña `evol` (la curva EVA, label «EVA») se fue con la EVA; una URL vieja `?tab=evol` ya no es
+ * una pestaña y `resolveProfileTab` la manda a la inicial del viewer, como a cualquier id desconocido. FC-3d
  * (§24.7): la HC pasa a PRIMERA e inicial (alias `?tab=hc`): es lo que el profesional abre en cada atención y el
  * composer tiene que estar a la vista sin un click; Resumen queda segunda (y es la inicial sin `clinical.read`). S22b: `plan` → `planes` (C10: `?tab=planes`, con el
  * alias `plan` resuelto por `normalizeProfileTab` de `lib/plans-deeplink.ts`).
@@ -50,7 +52,6 @@ export type Tab =
   | "planes"
   | "archivos"
   | "antec"
-  | "evol"
   | "fact"
   | "actividad";
 
@@ -63,7 +64,6 @@ export const PROFILE_TABS: readonly Tab[] = [
   "planes",
   "archivos",
   "antec",
-  "evol",
   "fact",
   "actividad",
 ];

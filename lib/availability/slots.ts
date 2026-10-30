@@ -24,6 +24,17 @@
  * Sin `intervalCap` (ausente o null) la salida es la de antes de T3, sin la
  * clave `intervalCapUse`: la paridad de abajo no cambia.
  *
+ * CF (M20, decisiones 1 y 2): con `exclusive` (profesional que no atiende
+ * servicios distintos a la vez) un slot que pisa un turno de OTRO servicio
+ * (otro paciente) queda `available=false` con razón `otro-servicio`, entre
+ * `cupo-completo` y `tope-intervalo` (misma precedencia que `InstantClass`).
+ * El turnero lo toma duro; el selector del staff lo deja elegir y forzar. Los
+ * intervalos que chocan se arman UNA vez por grilla con el predicado único
+ * (`isOtherServiceConflict` contra una ventana sin bordes: decide servicio,
+ * paciente y retención; el solape semiabierto con cada slot se mide abajo,
+ * igual que el del cupo). Sin `exclusive` (ausente o null) no se arma nada y la
+ * salida es la de antes, sin claves nuevas.
+ *
  * Con la plantilla de fallback, paso 45 y anticipación 60 reproduce
  * `buildPublicSlots` (paridad en `tests/unit/availability-slots.test.ts`):
  * mismo instante, misma "HH:MM", mismo `available`. `buildPublicSlots` se
@@ -32,10 +43,14 @@
 import { isHoldingCapacity, overlapBlocks } from "@/lib/booking-capacity";
 import { formatWallTime, instantAt } from "@/lib/availability/day";
 import { intervalCapState, intervalStartsUsed } from "@/lib/availability/interval-cap";
+import { isOtherServiceConflict } from "@/lib/availability/exclusive-service";
 import type { BuildSlotsInput, SlotResult, SlotUnavailableReason } from "@/lib/availability/types";
 
 const MIN_MS = 60_000;
 const DAY_MS = 24 * 60 * MIN_MS;
+/** Ventana sin bordes (los límites de `Date`): con ella `isOtherServiceConflict` solo decide servicio, paciente y
+ *  retención, y el solape con cada slot se mide con los intervalos ya armados. */
+const ALL_TIME = { start: new Date(-8.64e15), end: new Date(8.64e15) };
 
 export function buildSlots(input: BuildSlotsInput): SlotResult[] {
   const { dayKey, stepMin, durationMin, lead, now, cap } = input;
@@ -46,6 +61,12 @@ export function buildSlots(input: BuildSlotsInput): SlotResult[] {
   const holding = input.bookings
     .filter((b) => isHoldingCapacity(b, now))
     .map((b) => ({ start: b.scheduledFor.getTime(), end: b.scheduledFor.getTime() + b.durationMin * MIN_MS }));
+  const ex = input.exclusive ?? null;
+  const otherBusy = ex
+    ? ex.bookings
+        .filter((b) => isOtherServiceConflict(b, { serviceId: ex.serviceId, patientId: ex.patientId, now, ...ALL_TIME }))
+        .map((b) => ({ start: b.scheduledFor.getTime(), end: b.scheduledFor.getTime() + b.durationMin * MIN_MS }))
+    : [];
   const nowMs = now.getTime();
   const earliest = nowMs + lead.minMinutes * MIN_MS;
   const latest = lead.maxDays == null ? Infinity : nowMs + lead.maxDays * DAY_MS;
@@ -66,6 +87,7 @@ export function buildSlots(input: BuildSlotsInput): SlotResult[] {
       else if (at < earliest) reason = "anticipacion-minima";
       else if (at > latest) reason = "fuera-de-horizonte";
       else if (overlapBlocks(used, cap)) reason = "cupo-completo";
+      else if (otherBusy.some((b) => b.start < end && b.end > at)) reason = "otro-servicio";
       // T3 (C-AS3): `m` ya es el reloj de pared AR del slot (minutos desde la medianoche de `dayKey`), así el
       // bucket sale sin un `Intl` por slot. Se cuenta contra `ic.bookings` (todos los del profesional), no contra
       // `input.bookings` (ya filtrados al servicio).

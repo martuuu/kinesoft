@@ -219,6 +219,8 @@ export type SessionDateLike = {
   outOfHours: boolean;
   blocked: boolean;
   blockReasons?: ReadonlyArray<string>;
+  /** CF (§28): la fecha pasó a sobreturno porque el profesional atiende otro servicio a esa hora, no por el cupo. */
+  otherServiceBusy?: boolean;
 };
 
 export const SESSION_STATE_LABEL: Record<SessionDateState, string> = {
@@ -277,7 +279,9 @@ export function describeSessionDate(d: SessionDateLike): {
       detail = "Fuera del horario del profesional";
       break;
     case "sobreturno":
-      detail = "El cupo de ese horario está completo";
+      // CF: con la regla «no atiende servicios distintos a la vez» el sobreturno puede venir de otro servicio; decir
+      // «cupo completo» daba un motivo falso.
+      detail = d.otherServiceBusy ? "Atiende otro servicio a esa hora" : "El cupo de ese horario está completo";
       break;
     default:
       break;

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 /** @type {import('next').NextConfig} */
 
 // --- Origin helpers -------------------------------------------------------
@@ -34,6 +36,25 @@ const isVercelProduction = process.env.VERCEL_ENV === "production";
 const allowedOrigins = Array.from(
   new Set([isVercelProduction ? "" : "localhost:3000", urlHost(appUrl)].filter(Boolean)),
 );
+
+// --- Id del build (CF-RT, §28 E) ------------------------------------------
+// El indicador realtime decía «Hay una versión nueva · Recargá» ante CUALQUIER respuesta rara de la action del token,
+// y en prod la causa era una action no registrada en el MISMO build: recargar no arreglaba nada. Ahora «versión nueva»
+// exige la prueba: el cliente compara el id horneado en su bundle (`NEXT_PUBLIC_BUILD_ID`, vía `env`) con el header
+// `x-build-id` de una respuesta fresca (`createBuildChangedProbe` en lib/realtime-client-state.ts).
+// - Del commit de Vercel (`VERCEL_GIT_COMMIT_SHA`, expuesto también en build) y NO de `Date.now()` ni del buildId de
+//   Next: el build de Next carga esta config en más de un proceso (workers de webpack) y un valor por proceso haría
+//   que el header y el bundle no coincidan nunca → «versión nueva» falsa en cada falla. Mismo commit = mismos ids de
+//   action (son hash de archivo + export), así que un redeploy del mismo commit no es «versión nueva» y está bien.
+// - Hasheado: no publicar el sha del repo en cada respuesta.
+// - Sin sha (local, CI) queda vacío: sin header ni id, el cliente nunca dice «versión nueva» por la action (el chunk
+//   que no carga sigue siendo `StaleBuildError`, otra señal).
+export function buildIdFrom(env) {
+  const sha = (env && env.VERCEL_GIT_COMMIT_SHA) || "";
+  if (!sha) return "";
+  return createHash("sha256").update(`kinesoft-build:${sha}`).digest("hex").slice(0, 16);
+}
+export const BUILD_ID = buildIdFrom(process.env);
 
 // --- Content-Security-Policy (Report-Only) --------------------------------
 // Conservative, non-blocking policy. Report-Only means violations are only
@@ -277,6 +298,9 @@ export const HC_PDF_ROUTES = ["/api/pacientes/**", "/pacientes/**", "/portal/c/*
 
 const nextConfig = {
   reactStrictMode: true,
+  // CF-RT: el id que compara el cliente (ver `buildIdFrom`). Sin id no se define: `process.env.NEXT_PUBLIC_BUILD_ID`
+  // queda `undefined` en el bundle y el probe responde «no se sabe».
+  env: BUILD_ID ? { NEXT_PUBLIC_BUILD_ID: BUILD_ID } : {},
   experimental: {
     // PL-2b (PL-D22): el comprobante de pago viaja en el cuerpo de la server action (≤ 4 MB + campos del form). El
     // default de Next (1 MB) lo cortaba antes de llegar a la validación; 4.5 MB deja el margen del multipart y sigue
@@ -347,6 +371,9 @@ const nextConfig = {
           { key: "Content-Type", value: "application/javascript; charset=utf-8" },
         ],
       },
+      // CF-RT: el build que sirve cada respuesta (ver `buildIdFrom`). Entrada propia al final y no dentro de la global:
+      // el índice 0 lo leen los tests y la clave no pisa nada. Lo consulta el cliente con un HEAD a /offline.html.
+      ...(BUILD_ID ? [{ source: "/(.*)", headers: [{ key: "x-build-id", value: BUILD_ID }] }] : []),
     ];
   },
 };

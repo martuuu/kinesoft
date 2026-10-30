@@ -149,8 +149,26 @@ export function directoryProfileStatus(p: Omit<ProfileStatusRow, "userId"> | nul
   return p.listed && !p.consentWithdrawnAt ? "published" : "none";
 }
 
-/** Fila del resumen de horarios + el tope por intervalo (T3e-2c). Mismas columnas del mismo select: 0 sentencias. */
-export type ConfiguracionScheduleRow = PractitionerScheduleSummaryRow & { bookingCap: PractitionerBookingCapView };
+/**
+ * CF-U4 (M20): reglas de agenda del profesional, CRUDAS (NULL = «Como el consultorio»), y las del consultorio para
+ * rotular esa opción. La herencia efectiva la decide `effectiveAgendaRules` (lib/availability/agenda-rules.ts); acá
+ * no se resuelve porque el form tiene que distinguir «hereda» de «eligió el mismo valor».
+ */
+export type PractitionerAgendaRulesView = {
+  allowParallelServices: boolean;
+  agendaSlotStepMin: number | null;
+  publicSlotStepMin: number | null;
+  tenant: { agendaSlotStepMin: number | null; publicSlotStepMin: number | null };
+};
+
+/**
+ * Fila del resumen de horarios + el tope por intervalo (T3e-2c) + las reglas de agenda (CF-U4). Mismas columnas del
+ * mismo select: 0 sentencias.
+ */
+export type ConfiguracionScheduleRow = PractitionerScheduleSummaryRow & {
+  bookingCap: PractitionerBookingCapView;
+  agendaRules: PractitionerAgendaRulesView;
+};
 
 /** FC-3i: estado de un asset del consultorio (logo, firma) sin la clave de Storage. */
 export type PracticeAssetFlag = { has: boolean; updatedAt: string | null };
@@ -366,6 +384,10 @@ export async function loadConfiguracionInTx(
               // T3e-2c (C-AS3): = getTenantSettings.
               bookingCapCount: true,
               bookingCapIntervalMin: true,
+              // CF-U4 (M20, decisiones 3 y 6): = getTenantSettings. Columnas en el select de siempre: 0 sentencias.
+              agendaSlotStepMin: true,
+              publicSlotStepMin: true,
+              publicMinLeadMinutes: true,
               updatedAt: true,
               // DIR-3c: pestaña «Directorio» (M11). Se separan abajo: `tenant` sigue igual a `getTenantSettings`.
               directoryListed: true,
@@ -394,6 +416,10 @@ export async function loadConfiguracionInTx(
               bookingCapMode: true,
               bookingCapCount: true,
               bookingCapIntervalMin: true,
+              // CF-U4 (M20, decisiones 1 y 3): reglas de agenda de la ficha, en el mismo select.
+              allowParallelServices: true,
+              agendaSlotStepMin: true,
+              publicSlotStepMin: true,
               user: { select: { fullName: true, email: true } },
               schedules: {
                 where: { tenantId, OR: [{ validUntil: null }, { validUntil: { gte: today } }] },
@@ -549,6 +575,12 @@ export async function loadConfiguracionInTx(
           count: p.bookingCapCount,
           intervalMin: p.bookingCapIntervalMin,
           tenant: tenantCap,
+        },
+        agendaRules: {
+          allowParallelServices: p.allowParallelServices,
+          agendaSlotStepMin: p.agendaSlotStepMin,
+          publicSlotStepMin: p.publicSlotStepMin,
+          tenant: { agendaSlotStepMin: tenantRow.agendaSlotStepMin, publicSlotStepMin: tenantRow.publicSlotStepMin },
         },
       };
     });

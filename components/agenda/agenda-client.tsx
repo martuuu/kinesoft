@@ -604,6 +604,10 @@ export function AgendaClient(props: Props) {
   );
   // Favoritos primero, en vivo (la estrella reordena sin recargar).
   const ordered = useMemo(() => practitionerOrder(badges, prefs), [badges, prefs]);
+  // Estable para el `DayLockDialog`: un `ordered.map(...)` inline era un array nuevo en cada render y su `ctx`/`initial`
+  // cambiaban tras el `revalidatePath` de «Bloquear N días» → el diálogo volvía al form sin mostrar «Listo» (E2E
+  // cf-day-lock). El diálogo ya compara por valor; esto evita recalcular su `ctx` en cada render.
+  const lockPractitioners = useMemo(() => ordered.map((p) => ({ id: p.id, name: p.name })), [ordered]);
 
   // ── Obra social (AS-2o, plan §23.9) ─────────────────────────────────────────
   // En la URL (`?os=`) como los profesionales: un refresh, la navegación de día/semana (`go`) o un link compartido
@@ -1624,7 +1628,7 @@ export function AgendaClient(props: Props) {
         <DayLockDialog
           open
           dayKey={lockDialog.dayKey}
-          practitioners={ordered.map((p) => ({ id: p.id, name: p.name }))}
+          practitioners={lockPractitioners}
           initialPractitionerIds={lockDialog.initial}
           locations={(props.locations ?? EMPTY).map((l) => ({ id: l.id, name: l.name }))}
           canBlockAll={caps.has("agenda.manageBlocks")}

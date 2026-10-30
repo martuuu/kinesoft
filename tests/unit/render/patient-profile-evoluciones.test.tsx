@@ -117,8 +117,6 @@ function session(over: Partial<TimelineSessionDTO> = {}): TimelineSessionDTO {
     bookingId: "bk-1",
     notes: "Tolera bien la carga.",
     rpe: 6,
-    paInPre: 7,
-    paInPost: 4,
     exercisesDone: 8,
     exercisesTotal: 10,
     ...over,
@@ -171,7 +169,6 @@ function profile(capabilities: Capability[], over: Partial<Parameters<typeof Pat
       patientCore={core}
       recentBookings={[]}
       billableCount={0}
-      evaScores={[]}
       capabilities={capabilities}
       role="OWNER"
       {...over}
@@ -196,10 +193,10 @@ beforeAll(() => Loadable.preloadAll());
 
 describe("[EV2-3a] pestañas del perfil por acceso", () => {
   // FC-3d (§24.7): la HC pasó a primera (antes segunda, después de Resumen).
-  it("profesional con clinical.read: «Historia clínica» primera, con el contador de vivas; la curva se llama «EVA»", () => {
+  it("profesional con clinical.read: «Historia clínica» primera, con el contador de vivas; sin pestaña «EVA» (CF-L1)", () => {
     const html = profile(["clinical.read"], { clinicalHome: home({ latest: note(), liveCount: 3 }) });
     expect(tabLabels(html)).toEqual([
-      "Historia clínica", "Resumen", "Turnos", "Sesiones", "Planes", "Archivos", "Antecedentes", "EVA", "Facturación", "Actividad",
+      "Historia clínica", "Resumen", "Turnos", "Sesiones", "Planes", "Archivos", "Antecedentes", "Facturación", "Actividad",
     ]);
     expect(html).toMatch(/data-profile-tab="evoluciones"[^>]*>Historia clínica<span[^>]*>3</);
   });
@@ -216,7 +213,7 @@ describe("[EV2-3a] pestañas del perfil por acceso", () => {
     expect(html).not.toContain("Control de hombro");
   });
 
-  it("consultorio General con clinical.read: Evoluciones es del núcleo (sí), EVA no", () => {
+  it("consultorio General con clinical.read: Evoluciones es del núcleo (sí)", () => {
     const html = profile(["clinical.read"], {}, GENERAL);
     expect(tabLabels(html)).toEqual(["Historia clínica", "Resumen", "Turnos", "Archivos", "Antecedentes", "Facturación", "Actividad"]);
   });
@@ -231,11 +228,22 @@ describe("[EV2-3a] pestañas del perfil por acceso", () => {
     expect(html).toContain("Alérgica al ibuprofeno.");
     expect(html).not.toContain("Notas clínicas");
   });
+
+  // CF (§28, decisión 4): Kine con `evaluaciones` (donde antes se montaba): Resumen ya no tiene la card «EVA · dolor»
+  // ni el «Registrar» de la EVA, y en todo el perfil no queda ningún texto «EVA».
+  it("[CF-L1] Resumen sin la tarjeta de EVA (Kinesiología, con el módulo evaluaciones)", () => {
+    const html = profile(["clinical.read"], { clinicalHome: home({ latest: note(), liveCount: 3 }), initialTab: "resumen" });
+    expect(html).toMatch(/data-profile-tab="resumen" aria-current="true"/);
+    expect(html).toContain("Notas generales");
+    expect(html).not.toMatch(/\bEVA\b/);
+    expect(html).not.toContain("Registrar</button>");
+    expect(html).not.toContain('name="value"');
+  });
 });
 
 // ─── Resumen ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
-const patient = { ...core, bookings: [], evaScores: [] } as unknown as PatientWithRelations;
+const patient = { ...core, bookings: [] } as unknown as PatientWithRelations;
 const planPerms = { manage: false, schedule: false } as unknown as Parameters<typeof ResumenView>[0]["permissions"];
 
 describe("[EV2-3a] ResumenView: Última evolución", () => {
@@ -307,7 +315,7 @@ describe("[EV2-3a] EvolucionesView: línea de tiempo", () => {
       occurredAt: "2026-10-10T12:00:00.000Z",
       voided: { at: "2026-10-10T13:00:00.000Z", byUserId: ME, reason: "Paciente equivocado" },
     });
-    const loose = session({ id: "ses-2", bookingId: "bk-9", completedAt: "2026-10-12T15:00:00.000Z", notes: null, rpe: null, paInPre: null, paInPost: null });
+    const loose = session({ id: "ses-2", bookingId: "bk-9", completedAt: "2026-10-12T15:00:00.000Z", notes: null, rpe: null });
     const html = view({
       initialPage: {
         items: [noteItem(root, [amendment], session()), sessionItem(loose), noteItem(voided)],
@@ -327,7 +335,8 @@ describe("[EV2-3a] EvolucionesView: línea de tiempo", () => {
     expect(html).toContain("Paciente equivocado");
     // Sesión del turno dentro de la nota, con su detalle; la suelta como tarjeta propia.
     expect(html).toContain("Sesión registrada · Rehabilitación de hombro");
-    expect(html).toContain("8/10 ejercicios · RPE 6 · EVA 7 → 4");
+    expect(html).toContain("8/10 ejercicios · RPE 6");
+    expect(html).not.toContain("EVA 7");
     expect(html).toContain("Tolera bien la carga.");
     expect(html).toMatch(/data-session-id="ses-2"[\s\S]*Sesión del plan · Rehabilitación de hombro/);
     // Paginado y acciones de la pestaña.
@@ -483,9 +492,19 @@ describe("[EV2-3a] helpers de la línea de tiempo", () => {
   });
 
   it("sessionDetailLine: omite lo que no se cargó", () => {
-    expect(sessionDetailLine(session())).toBe("8/10 ejercicios · RPE 6 · EVA 7 → 4");
-    expect(sessionDetailLine(session({ exercisesTotal: 0, rpe: null, paInPre: null, paInPost: 3 }))).toBe("EVA — → 3");
-    expect(sessionDetailLine(session({ exercisesTotal: 0, rpe: null, paInPre: null, paInPost: null }))).toBe("");
+    expect(sessionDetailLine(session())).toBe("8/10 ejercicios · RPE 6");
+    expect(sessionDetailLine(session({ exercisesTotal: 0, rpe: null }))).toBe("");
+  });
+
+  // CF (§28, decisión 4): la línea de la sesión en la HC ya no dice «EVA a → b», aunque la sesión vieja tenga los
+  // puntajes guardados (las columnas `paInPre`/`paInPost` quedan en la base).
+  it("[CF-L1] sessionDetailLine sin «EVA» aunque la sesión tenga los puntajes", () => {
+    for (const [pre, post] of [[7, 4], [null, 3], [5, null]] as const) {
+      const line = sessionDetailLine(session({ paInPre: pre, paInPost: post } as unknown as Partial<TimelineSessionDTO>));
+      expect(line).not.toContain("EVA");
+      expect(line).not.toContain("→");
+    }
+    expect(sessionDetailLine(session({ exercisesTotal: 0, rpe: null, paInPre: 7, paInPost: 4 } as unknown as Partial<TimelineSessionDTO>))).toBe("");
   });
 });
 

@@ -4,6 +4,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import { Sidebar } from "./sidebar";
 import { TopBar } from "./topbar";
+import { NotificationsBell } from "@/components/dashboard/notifications-bell";
 import { MobileBar } from "./mobile-bar";
 import { BottomNav } from "./bottom-nav";
 import { CommandPaletteLauncher } from "./command-palette-launcher";
@@ -186,11 +187,20 @@ export function AppShell({
                   caps={caps}
                   onOpenAppearance={openAppearance}
                   onPreloadAppearance={preloadAppearance}
+                  // [CF-F] Campana también con la barra lateral (antes solo en el dashboard). Panel al costado, por portal.
+                  bell={<NotificationsBell placement="side" />}
                 />
               )}
               <div className={styles.column}>
                 {banner}
-                <MobileBar userName={userName} ownPublicBooking={ownPublicBooking} onOpenAppearance={openAppearance} />
+                {/* [ZF3] A1: campana también en la barra móvil. Cada campana pide solo si se ve (`createBellGate`): en
+                    cualquier ancho hay una visible y un solo poller (la del chrome de escritorio queda en `.desktopOnly`). */}
+                <MobileBar
+                  userName={userName}
+                  ownPublicBooking={ownPublicBooking}
+                  onOpenAppearance={openAppearance}
+                  bell={<NotificationsBell placement="bar" />}
+                />
                 {!useSidebar && (
                   <div ref={topbarRef} className={styles.desktopOnly}>
                     <TopBar

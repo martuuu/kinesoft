@@ -99,68 +99,63 @@ export function MoneyInput({
   const shownError = invalid ? "Monto inválido. Ej.: 1.500 o 1.500,50" : error;
   const hasError = !!shownError;
 
-  const input = (
-    <div
-      style={{
-        position: "relative",
-        marginTop: variant === "field" ? 6 : 0,
-        width: width ?? "100%",
-      }}
-    >
-      <span
-        aria-hidden
-        style={{
-          position: "absolute",
-          left: 11,
-          top: "50%",
-          transform: "translateY(-50%)",
-          fontSize: 13,
-          color: "var(--navy-500)",
-          pointerEvents: "none",
-        }}
-      >
-        $
-      </span>
-      <input
-        id={id}
-        type="text"
-        inputMode="decimal"
-        autoComplete="off"
-        aria-label={ariaLabel ?? label}
-        aria-invalid={hasError || undefined}
-        required={required}
-        disabled={disabled}
-        placeholder={placeholder}
-        value={text}
-        onFocus={() => {
-          focused.current = true;
-        }}
-        onChange={(e) => handleChange(e.target.value)}
-        onBlur={handleBlur}
-        className="k-mono"
-        style={{
-          width: "100%",
-          padding: variant === "field" ? "10px 12px 10px 24px" : "8px 10px 8px 22px",
-          borderRadius: variant === "field" ? 12 : 10,
-          background: variant === "field" ? "rgba(255,255,255,0.96)" : "#fff",
-          border: `1px solid ${hasError ? "rgba(225,75,75,0.5)" : variant === "field" ? "rgba(15,30,51,0.08)" : "rgba(15,30,51,0.12)"}`,
-          fontSize: 14,
-          fontWeight: variant === "compact" ? 600 : undefined,
-          textAlign: variant === "compact" ? "right" : undefined,
-          color: "var(--navy-900)",
-          outline: "none",
-          opacity: disabled ? 0.5 : 1,
-          cursor: disabled ? "not-allowed" : undefined,
-        }}
-      />
-      {name && <input type="hidden" name={name} value={value ?? ""} />}
-    </div>
-  );
+  const commonInputProps = {
+    id,
+    type: "text",
+    inputMode: "decimal",
+    autoComplete: "off",
+    "aria-invalid": hasError || undefined,
+    required,
+    disabled,
+    placeholder,
+    value: text,
+    onFocus: () => {
+      focused.current = true;
+    },
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => handleChange(e.target.value),
+    onBlur: handleBlur,
+  } as const;
+  const hidden = name ? <input type="hidden" name={name} value={value ?? ""} /> : null;
 
   if (variant === "compact") {
     return (
       <div style={{ display: "grid", gap: 4, justifyItems: "end" }}>
-        {input}
+        <div style={{ position: "relative", width: width ?? "100%" }}>
+          <span
+            aria-hidden
+            style={{
+              position: "absolute",
+              left: 11,
+              top: "50%",
+              transform: "translateY(-50%)",
+              fontSize: 13,
+              color: "var(--navy-500)",
+              pointerEvents: "none",
+            }}
+          >
+            $
+          </span>
+          <input
+            {...commonInputProps}
+            aria-label={ariaLabel ?? label}
+            className="k-mono"
+            style={{
+              width: "100%",
+              padding: "8px 10px 8px 22px",
+              borderRadius: 10,
+              background: "#fff",
+              border: `1px solid ${hasError ? "rgba(225,75,75,0.5)" : "rgba(15,30,51,0.12)"}`,
+              fontSize: 14,
+              fontWeight: 600,
+              textAlign: "right",
+              color: "var(--navy-900)",
+              outline: "none",
+              opacity: disabled ? 0.5 : 1,
+              cursor: disabled ? "not-allowed" : undefined,
+            }}
+          />
+          {hidden}
+        </div>
         {hasError && (
           <span role="alert" style={{ fontSize: 11, color: "var(--danger-fg)" }}>
             {shownError}
@@ -170,28 +165,63 @@ export function MoneyInput({
     );
   }
 
+  /*
+   * [CF-UI1 · K] Variante `field` sobre las clases de C-F2, igual que `FormField` (components/ui/form-field.tsx): antes
+   * tenía estilo propio (rótulo de 12 px, fuente de 14 px → ~40 px de alto, sin anillo de foco visible) y quedaba
+   * desalineada al lado de un `FormField` en servicios, obras sociales, copago y cobros. Ahora alto 44 px, fuente 16 px
+   * (iOS no hace zoom al enfocar) y el foco de `.k-input:focus`. Solo queda inline lo que C-F2 no cubre: el «$» (wrapper
+   * relativo + `padding-left: 26px` para que el texto no lo pise) y el estado deshabilitado.
+   */
+  const hintId = `${id}-hint`;
+  const errorId = `${id}-error`;
+  const describedBy = hasError ? errorId : hint ? hintId : undefined;
   return (
-    <label htmlFor={id} style={{ display: "block", fontSize: 12, minWidth: 0 }}>
+    <div className="k-field" style={{ minWidth: 0, width }}>
       {label && (
-        <span style={{ fontWeight: 600, color: "var(--navy-500)", whiteSpace: "nowrap" }}>
+        <label
+          htmlFor={id}
+          className="k-label"
+          style={{ display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}
+        >
           {label}
-          {required && <span style={{ color: "var(--sky-700)" }}> *</span>}
-        </span>
+          {required && <span style={{ color: "var(--sky-700)" }}>*</span>}
+        </label>
       )}
-      {input}
-      {(hint || hasError) && (
+      <div style={{ position: "relative" }}>
         <span
-          role={hasError ? "alert" : undefined}
+          aria-hidden
           style={{
-            display: "block",
-            marginTop: 4,
-            fontSize: 11,
-            color: hasError ? "var(--danger-fg)" : "var(--navy-300)",
+            position: "absolute",
+            left: 14,
+            top: "50%",
+            transform: "translateY(-50%)",
+            fontSize: 16,
+            color: "var(--navy-500)",
+            pointerEvents: "none",
           }}
         >
-          {shownError ?? hint}
+          $
         </span>
-      )}
-    </label>
+        <input
+          {...commonInputProps}
+          // Con rótulo visible el nombre accesible sale del <label htmlFor>; `ariaLabel` solo si no hay rótulo.
+          aria-label={label ? undefined : ariaLabel}
+          aria-describedby={describedBy}
+          aria-errormessage={hasError ? errorId : undefined}
+          className="k-input k-mono"
+          style={{ paddingLeft: 26, ...(disabled ? { opacity: 0.5, cursor: "not-allowed" } : null) }}
+        />
+        {hidden}
+      </div>
+      {hasError ? (
+        <span id={errorId} role="alert" className="k-field-error">
+          {shownError}
+        </span>
+      ) : hint ? (
+        <span id={hintId} className="k-hint">
+          {hint}
+        </span>
+      ) : null}
+    </div>
   );
 }

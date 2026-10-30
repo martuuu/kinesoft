@@ -177,7 +177,8 @@ describe("[VX2-c1] landing", () => {
     expect(html).toContain("los ejercicios que creás quedan para todo tu consultorio");
     expect(html).toContain(`el catálogo de ${BRAND_NAME}`);
     expect(html).toContain("Terapia manual");
-    expect(html).toContain("Diagnóstico específico");
+    // [ZF3] A2: Diagnóstico está «Próximamente»: la landing no lo ofrece.
+    expect(html).not.toContain("Diagnóstico específico");
     expect(html).toContain("¿Otro tipo de consultorio? Con Clínica general tenés agenda, turnos e historia clínica.");
   });
 

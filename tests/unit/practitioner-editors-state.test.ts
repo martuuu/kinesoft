@@ -129,15 +129,16 @@ describe("rowToDraft / draftToInput", () => {
     expect(draftToInput(draft({ durationMin: "480" })).ok).toBe(true);
   });
 
-  it("anticipación: minutos > 59, basura y más de 30 días → error", () => {
+  it("anticipación: minutos > 59, basura y más de 8 semanas → error", () => {
     const a = draftToInput(draft({ leadHours: "1", leadMinutes: "75" }));
     expect(!a.ok && a.errors.minLead).toBe("Los minutos van de 0 a 59.");
     const b = draftToInput(draft({ leadHours: "x" }));
     expect(!b.ok && b.errors.minLead).toBeTruthy();
-    const c = draftToInput(draft({ leadHours: String(30 * 24 + 1) }));
-    expect(!c.ok && c.errors.minLead).toBe("Máximo 30 días de anticipación.");
-    const ok = draftToInput(draft({ leadHours: String(30 * 24), leadMinutes: "" }));
-    expect(ok.ok && ok.input.minLeadMinutes).toBe(30 * 24 * 60);
+    // [CF-U4] CF-D8: el tope pasó de 30 días a 8 semanas (= el del consultorio, `PUBLIC_MIN_LEAD_MAX_MINUTES`).
+    const c = draftToInput(draft({ leadHours: String(56 * 24 + 1) }));
+    expect(!c.ok && c.errors.minLead).toBe("Máximo 8 semanas de anticipación.");
+    const ok = draftToInput(draft({ leadHours: String(56 * 24), leadMinutes: "" }));
+    expect(ok.ok && ok.input.minLeadMinutes).toBe(56 * 24 * 60);
   });
 
   it("anticipación 0 h 0 min = 0 (no hereda), vacío = null (hereda)", () => {

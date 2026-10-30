@@ -27,7 +27,7 @@
  *
  * Precedencia de la clase de una fila (PD-07):
  *   duplicado > pasado > bloqueado > fuera de horario > superposición del
- *   paciente > cupo (sobreturno) > libre.
+ *   paciente > cupo (sobreturno) > otro servicio (CF, con `exclusiveService`) > libre.
  *   "pasado" no está en la lista de §5 de PLANES; va DESPUÉS de duplicado para
  *   que una fila pasada pueda adoptar el turno que ya existe a esa hora (la
  *   evaluación ya hecha, `countBookingAsSession1`, un turno COMPLETED suelto) y
@@ -55,6 +55,14 @@
  *   cuenta como sobreturno y no toma lock). El plan ya fija los horarios con el
  *   paciente; frenarlo por el tope obligaría a mover sesiones que el staff
  *   eligió a sabiendas.
+ *   CF (M20, CF-D4): con `exclusiveService`, una fila que pisa otro servicio
+ *   del profesional (otro paciente) es "otro-servicio": se PLIEGA en el cupo
+ *   (`flags.capacityFull = overlapBlocks(used, cap) || otherServiceBusy`), así
+ *   que se mueve o se fuerza con `force.capacity` y queda sobreturno
+ *   (`isOverbooked`), sin flag de force nuevo (`PlanForceFlags` no cambia).
+ *   `flags.otherServiceBusy` es el informativo para el copy. La sugerencia
+ *   (`suggestRowSlot`) también saltea el choque. Las filas virtuales del fold
+ *   son del servicio del plan: nunca chocan entre sí por esta regla.
  *
  * Fold de turnos virtuales: las filas se procesan por `index` y cada una que
  * va a crear un turno (create / force / move, por su resolución o por la de
@@ -264,6 +272,11 @@ export type PlanRowFlags = {
    * Ausente sin tope (`ClassifyPlanRowsInput.intervalCap` null/ausente).
    */
   overIntervalCap?: boolean;
+  /**
+   * CF (M20): la fila choca con otro servicio del profesional (CF-D4). Informativo: se PLIEGA en `capacityFull`
+   * (sobreturno, `force.capacity`), `PlanForceFlags` no cambia. Ausente sin `ClassifyPlanRowsInput.exclusiveService`.
+   */
+  otherServiceBusy?: boolean;
 };
 
 /** Entrada pura del clasificador (E2). */
@@ -419,6 +432,9 @@ export type ClassifyPlanRowsInput = {
   /** T3 (C-AS3): tope efectivo del profesional (`effectiveIntervalCap`); solo produce `flags.overIntervalCap`.
    *  `bookings` ya trae todos los del profesional. Ausente / null = sin tope (salida de siempre). */
   intervalCap?: IntervalCap | null;
+  /** CF (M20): profesional de servicio exclusivo (`PractitionerAgendaRules.exclusiveService`); `bookings` ya trae
+   *  todos los del profesional. Ausente / false = salida de siempre. */
+  exclusiveService?: boolean;
 };
 
 /** Por qué una resolución explícita no vale (→ stale de la fila, C7). */
@@ -465,7 +481,14 @@ type Probe = {
   used: number;
 };
 
-const FORCEABLE: ReadonlySet<PlanRowClass> = new Set(["fuera-de-horario", "paciente-superpuesto", "sobreturno"]);
+// CF (CF-D4): "otro-servicio" se fuerza como un sobreturno; `covers` pide `force.capacity` porque la regla está
+// plegada en `flags.capacityFull`.
+const FORCEABLE: ReadonlySet<PlanRowClass> = new Set([
+  "fuera-de-horario",
+  "paciente-superpuesto",
+  "sobreturno",
+  "otro-servicio",
+]);
 const CREATES: ReadonlySet<PlanResolutionKind> = new Set(["create", "force", "move"]);
 
 const toIso = (d: Date | string | null | undefined): string =>
@@ -542,6 +565,7 @@ const ceilStep = (ms: number) => Math.ceil(ms / STEP_MS) * STEP_MS;
  * Nunca en el pasado (H5) y sin anticipación (H4). "Libre" = lo que dice
  * `classifyInstant`: en horario, sin bloqueo, con cupo y sin chocar con el
  * paciente (incluidos los turnos virtuales que el caller metió en `bookings`).
+ * Con `exclusiveService` (CF), tampoco con otro servicio del profesional.
  */
 export function suggestRowSlot(input: SuggestRowSlotInput): string | null {
   const { at, nextDayKey, now } = input;
@@ -559,6 +583,7 @@ export function suggestRowSlot(input: SuggestRowSlotInput): string | null {
     bookings: input.bookings,
     now,
     excludeBookingId: input.excludeBookingId,
+    ...(input.exclusiveService ? { exclusiveService: true } : {}),
   };
   // `nextFreeSlot` arranca en `from + 15` redondeado al borde de 15: para
   // arrancar en X (ya en la grilla) se le pasa X − 15 min.
@@ -630,6 +655,7 @@ export function classifyPlanRows(
       now,
       excludeBookingId,
       ...(input.intervalCap ? { intervalCap: input.intervalCap } : {}),
+      ...(input.exclusiveService ? { exclusiveService: true } : {}),
     });
     const rest = excludeBookingId ? pool.filter((b) => b.id !== excludeBookingId) : pool;
     // Duplicado: preferir el turno real (adoptable) sobre una fila virtual.
@@ -639,11 +665,13 @@ export function classifyPlanRows(
     const flags: PlanRowFlags = {
       blocked: c.blocked,
       outOfHours: c.outOfHours,
-      capacityFull: overlapBlocks(c.used, cap),
+      // CF (CF-D4): el choque con otro servicio se pliega en el cupo (sin la regla, `otherServiceBusy` no existe).
+      capacityFull: overlapBlocks(c.used, cap) || c.otherServiceBusy === true,
       patientOverlapIds: patientConflictsAt(rest, { patientId, when, durationMin }).map((b) => b.id),
       past,
     };
     if (input.intervalCap) flags.overIntervalCap = c.intervalCapped === true;
+    if (input.exclusiveService) flags.otherServiceBusy = c.otherServiceBusy === true;
     if (dup) flags.duplicate = { bookingId: dup.id, updatedAt: toIso(dup.updatedAt), adoptable: isAdoptable(dup) };
     if (priorPaid) flags.priorPaid = priorPaid;
     // "tope-intervalo" es aviso en Planes: la fila queda "libre" (Crear por defecto, sin force) con la flag.
@@ -681,6 +709,7 @@ export function classifyPlanRows(
           blocks: input.blocks,
           bookings: pool,
           excludeBookingId: r.excludeBookingId,
+          ...(input.exclusiveService ? { exclusiveService: true } : {}),
         }) ?? undefined;
     }
 

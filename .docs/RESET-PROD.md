@@ -1,5 +1,9 @@
 # Reset de producción + push de PV (29-oct-2026)
 
+> ✅ **Ejecutado el 29/30-oct.** Desde ahí prod tiene **un cliente vivo**: esta guía **no se repite**. Las migraciones
+> siguientes son incrementales con precheck → backup → deploy → postcheck → push; la primera es **M20** (tanda CF,
+> [RUNBOOK «M20 en prod»](MIGRACIONES-RUNBOOK.md)).
+
 **Manda sobre [PUSH-DIA.md](PUSH-DIA.md)** para esta salida: prod se resetea, así que no hay migraciones incrementales,
 precheck `--pre` ni backup (decisión de Martin, 27/29-oct: «solo hay data demo»). Todo lo de esta guía lo corre Martin;
 el agente no ejecuta nada contra prod.

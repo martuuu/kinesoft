@@ -11,7 +11,7 @@
  *    `runWithRls` y pasan el `tx`), así que la regla vive en un solo lugar.
  *  - `access` lo resuelve el que llama con `patientAccessFor(actor, patientId, tx?)`; acá no se vuelve a pedir.
  *  - `where: { tenantId }` a mano en cada sentencia sobre una tabla con `tenantId` (en prod la conexión es BYPASSRLS).
- *    `Coverage` y `EvaScore` no tienen la columna: se filtran por `patientId`, que el acceso ya validó contra el tenant
+ *    `Coverage` no tiene la columna: se filtra por `patientId`, que el acceso ya validó contra el tenant
  *    (`patientAccessFor` devuelve "none" para un paciente de otro consultorio y nadie llega acá con "none").
  *  - `server-only` y no en el archivo `"use server"`: una export de ahí es un endpoint RPC, y estas funciones reciben
  *    el actor y el nivel de acceso como argumentos (un cliente podría falsificarlos).
@@ -22,7 +22,6 @@ import type { DbClient } from "@/lib/rls";
 import type { Actor } from "@/lib/session";
 import type { AccessLevel } from "@/lib/visibility";
 import { memberCapabilitiesForActor } from "@/lib/authz";
-import { modulesFor } from "@/lib/tenant-modules";
 import { bookingFieldAccess } from "@/lib/booking-field-access";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
 import type { PatientAdminCore, PatientBookingFull, PatientCoreWithAccess } from "@/lib/patients-types";
@@ -391,12 +390,3 @@ export async function patientBookingsAllInTx(
   return { rows, hasMore, nextCursor: hasMore ? page[page.length - 1].id : null };
 }
 
-/** Cuerpo de `getPatientEvaScores`: módulo `evaluaciones` (enmienda EV0) + acceso `full`; si no, vacío. */
-export async function patientEvaScoresInTx(tx: DbClient, actor: Actor, patientId: string, access: AccessLevel) {
-  if (!modulesFor(actor.entitlements).has("evaluaciones")) return [];
-  if (access !== "full") return [];
-  return tx.evaScore.findMany({
-    where: { patientId },
-    orderBy: { takenAt: "asc" },
-  });
-}

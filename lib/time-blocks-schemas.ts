@@ -15,7 +15,7 @@ import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import type { AgendaRoomBlockView } from "@/lib/availability-actions-types";
 import { toARDateKey } from "@/lib/datetime-ar";
-import { arDayStart } from "@/lib/time-blocks-window";
+import { arDayStart, TIME_BLOCK_MAX_DAYS as MAX_DAYS } from "@/lib/time-blocks-window";
 
 // PF1-Z (D-PF5): `TIME_BLOCK_MAX_DAYS` y `arDayStart` viven en `lib/time-blocks-window.ts` (sin zod) y se re-exportan
 // acá. Los componentes cliente de la agenda (`day-lock-form`, `block-mode-state`) los importan de allá: importarlos de
@@ -285,8 +285,12 @@ export type CreateTimeBlockResult = {
 
 /** Tope de profesionales por candado (un consultorio grande ronda 10). */
 export const DAY_LOCK_MAX_PRACTITIONERS = 100;
-/** Tope de ids esperados en `applyDayLock` (un día con 2000 turnos no existe). */
-export const DAY_LOCK_MAX_AFFECTED = 2000;
+/**
+ * Tope de ids esperados en `applyDayLock`. Era 2000 para UN día; CF-LOCK suma rangos de hasta 31 días (vacaciones de
+ * todo el equipo): 10 profesionales × 15 turnos × 31 días ronda 4650. Con 2000, zod rechazaba el apply con «Datos
+ * inválidos» después de un preview válido. 5000 cubre ese caso sin dejar abierto un payload sin techo.
+ */
+export const DAY_LOCK_MAX_AFFECTED = 5000;
 
 const MinOfDay = z.number().int().min(0).max(1440);
 
@@ -315,6 +319,14 @@ function isRealDayKey(dayKey: string): boolean {
 
 const DayLockScopeShape = {
   dayKey: DayKey,
+  /**
+   * CF-LOCK (pedido del cliente «¿está la opción de BLOQUEAR DÍA?»): último día AR del rango, inclusive. Ausente / null
+   * / igual a `dayKey` = el candado de UN día de siempre. Con rango, la franja (o el día entero) se repite en CADA día:
+   * una fila por día y destino con el mismo `groupId` (no una fila de N días), para que desbloquear un día suelto siga
+   * funcionando con `removeDayLock` (que no toca filas de varios días) y una franja de 9 a 12 no tape las noches.
+   * Tope: `TIME_BLOCK_MAX_DAYS` (31) contando los dos extremos, el mismo que «Bloquear horario» del modal.
+   */
+  endDayKey: DayKey.nullable().optional(),
   /** null = "todos" (una fila con practitionerId null, decisión 8). */
   practitionerIds: z.array(Id).min(1).max(DAY_LOCK_MAX_PRACTITIONERS).nullable(),
   /** null/ausente = todas las sedes. Con `roomId`: la sede de la sala o ausente. */
@@ -330,9 +342,33 @@ const DayLockScopeShape = {
   endMin: MinOfDay.optional(),
 };
 
+/** Días AR del rango del candado (inclusive), en orden. Sin `endDayKey` = solo `dayKey`. */
+export function dayLockDayKeys(v: { dayKey: string; endDayKey?: string | null }): string[] {
+  const last = v.endDayKey ?? v.dayKey;
+  const out: string[] = [];
+  // 00:00 AR + 24 h exactas (sin DST en AR desde 2009): nunca `setDate`/`getDate` del host. El tope evita un loop
+  // largo si alguien llama esto sin haber validado el rango.
+  for (let t = arDayStart(v.dayKey).getTime(); out.length <= MAX_DAYS; t += DAY_MS) {
+    const k = toARDateKey(new Date(t));
+    if (k > last) break;
+    out.push(k);
+  }
+  return out;
+}
+
+/** Cantidad de días del rango contando los dos extremos (puede ser ≤ 0 si `endDayKey < dayKey`). */
+export function dayLockSpanDays(dayKey: string, endDayKey: string): number {
+  return Math.round((arDayStart(endDayKey).getTime() - arDayStart(dayKey).getTime()) / DAY_MS) + 1;
+}
+
+/** Copy del tope de días (zod y diálogo). */
+export const DAY_LOCK_RANGE_MAX_ERROR = `Máximo ${MAX_DAYS} días, contando el primero y el último.`;
+export const DAY_LOCK_RANGE_ORDER_ERROR = "El último día tiene que ser igual o posterior al primero.";
+
 function refineDayLockScope(
   v: {
     dayKey: string;
+    endDayKey?: string | null;
     allDay: boolean;
     startMin?: number;
     endMin?: number;
@@ -343,6 +379,16 @@ function refineDayLockScope(
 ) {
   if (!isRealDayKey(v.dayKey)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["dayKey"], message: "Día inválido." });
+  }
+  if (v.endDayKey != null) {
+    if (!isRealDayKey(v.endDayKey)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["endDayKey"], message: "Día inválido." });
+    } else if (v.endDayKey < v.dayKey) {
+      // "YYYY-MM-DD" ordena como el calendario.
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["endDayKey"], message: DAY_LOCK_RANGE_ORDER_ERROR });
+    } else if (dayLockSpanDays(v.dayKey, v.endDayKey) > MAX_DAYS) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["endDayKey"], message: DAY_LOCK_RANGE_MAX_ERROR });
+    }
   }
   if (v.roomId && v.practitionerIds !== null) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["roomId"], message: ROOM_SCOPE_WITH_PRACTITIONERS_ERROR });
@@ -396,10 +442,19 @@ export const DayLockRemove = z
     practitionerId: Id.nullable(),
     roomId: Id.nullable().optional(),
     blockIds: z.array(Id).min(1).max(200).optional(),
+    /**
+     * CF-LOCK: «Quitar todo el bloqueo (lun 3 al vie 7)». Quita TODAS las filas vivas de ese grupo dentro del alcance
+     * (`practitionerId` / `roomId`), también las de otros días, siempre que el grupo toque `dayKey` (se desbloquea
+     * desde un día del bloqueo, no un grupo cualquiera por id). Excluyente con `blockIds`.
+     */
+    groupId: Id.optional(),
   })
   .superRefine((v, ctx) => {
     if (v.roomId && v.practitionerId !== null) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["roomId"], message: ROOM_SCOPE_WITH_PRACTITIONERS_ERROR });
+    }
+    if (v.groupId && v.blockIds) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["groupId"], message: "Indicá los bloqueos o el grupo; no ambos." });
     }
   });
 export type DayLockRemoveInput = z.input<typeof DayLockRemove>;
@@ -420,10 +475,14 @@ export type DayLockAffected = AffectedBooking & {
 
 export type DayLockPreview = {
   dayKey: string;
+  /** CF-LOCK: último día del rango (= `dayKey` en el candado de un día). */
+  endDayKey: string;
+  /** Días bloqueados (1 sin rango). */
+  days: number;
   startsAt: string;
   endsAt: string;
   allDay: boolean;
-  /** TODOS los afectados (un día está acotado), por hora. */
+  /** TODOS los afectados de todos los días (acotados por `DAY_LOCK_MAX_AFFECTED` al aplicar), por hora. */
   affected: DayLockAffected[];
 };
 
@@ -455,6 +514,11 @@ export type DayLockRemainingBlock = TimeBlockRow & {
   /** Abarca más de este día: quitarlo desbloquearía también los otros días. */
   multiDay: boolean;
 };
+
+/** Lectura de `dayLockGroupSpans`: cuántos días AR tiene un bloqueo de rango (para «Quitar todo el bloqueo (lun 3 al vie 7)»). */
+export const DayLockGroupSpansQuery = z.object({ groupIds: z.array(Id).min(1).max(50) });
+export type DayLockGroupSpansInput = z.input<typeof DayLockGroupSpansQuery>;
+export type DayLockGroupSpan = { groupId: string; firstDayKey: string; lastDayKey: string; days: number };
 
 export type RemoveDayLockData = {
   deleted: number;

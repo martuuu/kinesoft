@@ -4,7 +4,6 @@ import {
   PORTAL_PLAN_NO_BOOKING,
   portalNoLinkCopy,
   portalSessionOfTotal,
-  portalCheckInCopy,
   portalNextSessionLabel,
   portalNoPlanCopy,
   portalPatientCardCopy,
@@ -23,8 +22,8 @@ import { modulesFor } from "@/lib/tenant-modules";
 import { portalTabItems } from "@/components/portal/portal-tabs";
 
 /**
- * [VX2-f · D-VX28] Copy del portal por vertical. Regla de brief-vx §3: «turno» es el genérico, «sesión» (y el
- * «Check-in pre-sesión») solo en Kinesiología; nada de «recuperación» ni «evolución de tu dolor» en el copy neutral.
+ * [VX2-f · D-VX28] Copy del portal por vertical. Regla de brief-vx §3: «turno» es el genérico, «sesión» solo en
+ * Kinesiología (el check-in pre-sesión se fue en CF con la EVA); nada de «recuperación» ni «evolución de tu dolor» en el copy neutral.
  */
 const ALL = (o: unknown) => JSON.stringify(o);
 
@@ -44,7 +43,6 @@ describe("[VX2-f] portal-copy", () => {
       portalNoPlanCopy(false),
       portalSessionLabel("GENERAL", 3),
       portalNextSessionLabel("GENERAL", 3, 5),
-      portalCheckInCopy("GENERAL"),
     ];
     expect(ALL(g)).not.toMatch(/sesi[oó]n|check-in|ejercicio/i);
     expect(portalPatientCardCopy("GENERAL").noPlan).toBeNull();
@@ -57,14 +55,13 @@ describe("[VX2-f] portal-copy", () => {
     expect(portalNextSessionLabel("GENERAL", 3, 5)).toBe("Próximo turno · Turno 3 de 5");
   });
 
-  it("Kinesiología conserva «sesión por sesión» y el check-in pre-sesión", () => {
+  it("Kinesiología conserva «sesión por sesión»", () => {
     expect(portalTenantHeader({ vertical: "KINESIOLOGY", hasPlan: true, firstName: "Ana" }).lead).toBe(
       "Hola Ana. Acá ves cómo viene tu tratamiento, sesión por sesión."
     );
     expect(portalPlanProgress("KINESIOLOGY", 3, 10)).toBe("3 / 10 sesiones");
     expect(portalSessionLabel("KINESIOLOGY", 4)).toBe("Sesión 4");
     expect(portalNextSessionLabel("KINESIOLOGY", 3, 10)).toBe("Próxima sesión · Sesión 3 de 10");
-    expect(portalCheckInCopy("KINESIOLOGY").title).toBe("Antes de tu sesión");
     expect(portalPatientCardCopy("KINESIOLOGY").noPlan).toMatch(/plan de tratamiento/);
     expect(portalNoPlanCopy(true).linkToHome).toBe(false);
   });

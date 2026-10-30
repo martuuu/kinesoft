@@ -6,13 +6,11 @@ import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { ButtonLink } from "@/components/ui/button";
 import { IconArrow, IconCheck } from "@/components/ui/icons";
-import { PortalCheckInForm } from "@/components/portal/check-in-form";
 import { PortalTabs } from "@/components/portal/portal-tabs";
 import { BRAND_NAME } from "@/lib/brand";
 import {
   PORTAL_HOME,
   PORTAL_PLAN_NO_BOOKING,
-  portalCheckInCopy,
   portalNextSessionLabel,
   portalNoPlanCopy,
   portalPlanProgress,
@@ -34,9 +32,14 @@ export async function generateMetadata({ params }: { params: { slug: string } })
  * de ES4), que además deja «sesión» solo para Kinesiología.
  *
  * ES4 S24: qué se ve lo deciden las secciones de la ficha (`me.sections` = `portalSectionsFor(modules)`): el plan solo
- * con `plan`, el check-in solo con `checkin`, y las tabs (Estado de cuenta, Ejercicios, Sacar un turno) con las suyas.
+ * con `plan`, y las tabs (Estado de cuenta, Ejercicios, Sacar un turno) con las suyas.
  * El recorrido muestra cada sesión viva como «Sesión n de N» (ordinal por fecha, M13) con su turno (fecha, servicio y
- * profesional; sin montos ni notas). El gate de verdad está en `getPortalPlan`/`submitCheckIn`; acá solo se pinta.
+ * profesional; sin montos ni notas). El gate de verdad está en `getPortalPlan`; acá solo se pinta.
+ *
+ * CF (30-oct, decisión de Martin §28.1 punto 4): la próxima sesión ya no lleva el check-in (EVA 0..10 «Dolor ahora» +
+ * notas, «Tu profesional lo va a ver antes de la sesión»): la EVA salió de toda la app, y prometerle al paciente que el
+ * profesional ve su dolor cuando la app ya no se lo muestra sería prometer algo que no existe. Lo fija `[CF-L3]` en
+ * `tests/unit/render/portal-sign-in.test.tsx`.
  */
 
 const dateTime: Intl.DateTimeFormatOptions = {
@@ -237,7 +240,7 @@ export default async function PortalTenantPage({
           </Card>
 
           {nextSession && (
-            <Card style={{ padding: 18, display: "flex", flexDirection: "column", gap: 12 }}>
+            <Card style={{ padding: 18 }}>
               <div>
                 <div
                   style={{
@@ -259,14 +262,6 @@ export default async function PortalTenantPage({
                     : PORTAL_PLAN_NO_BOOKING}
                 </div>
               </div>
-              {/* S24: el check-in solo con la sección `checkin` (⇐ planes ∧ evaluaciones). */}
-              {!sections.has("checkin") ? null : nextSession.hasCheckIn ? (
-                <Tag tone="lime">
-                  <IconCheck size={11} stroke={3} /> {portalCheckInCopy(vertical).done}
-                </Tag>
-              ) : (
-                <PortalCheckInForm slug={params.slug} sessionId={nextSession.id} vertical={vertical} />
-              )}
             </Card>
           )}
 
@@ -332,7 +327,6 @@ export default async function PortalTenantPage({
                       </div>
                     )}
                   </div>
-                  {!done && s.hasCheckIn && sections.has("checkin") && <Tag tone="sky">{portalCheckInCopy(vertical).done}</Tag>}
                 </div>
               );
             })}

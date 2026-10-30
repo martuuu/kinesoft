@@ -28,6 +28,7 @@ import { auditInTx } from "@/lib/audit";
 import { syncDefaultSchedulesToTenantHours } from "@/lib/agenda-defaults";
 import { isAgendaSlotMinutes } from "@/lib/tenant-settings-constants";
 import { parseBookingCapPair } from "@/lib/booking-cap-config";
+import { parseTenantAgendaRules, type TenantAgendaRulesWrite } from "@/lib/agenda-rules-config";
 import { applyTenantEntitlementsInTx } from "@/lib/tenant-entitlements-internal";
 import { tenantEntitlementTags } from "@/lib/cache-tags";
 import { updateTenantProfileInTx } from "@/lib/tenant-profile-internal";
@@ -61,6 +62,15 @@ export type TenantSettings = {
    */
   bookingCapCount: number | null;
   bookingCapIntervalMin: number | null;
+  /**
+   * CF (M20, decisiones 3 y 6): reglas de agenda del consultorio, crudas (NULL = default: paso 15 en la agenda,
+   * automático en el turnero, anticipación 60'). Las hereda cada profesional sin valor propio. Se editan con
+   * `setTenantAgendaRules`. Requeridos (CF-U4): los traen `getTenantSettings` y el `tenant` de
+   * `lib/configuracion-page-loader.ts` (mismo select; el test de igualdad de PF2-d lo fija).
+   */
+  agendaSlotStepMin: number | null;
+  publicSlotStepMin: number | null;
+  publicMinLeadMinutes: number | null;
   /** BO2-D: ISO de `Tenant.updatedAt`, para el CAS opcional de `updateTenantBasics`. */
   updatedAt: string;
 };
@@ -86,6 +96,9 @@ export async function getTenantSettings(): Promise<TenantSettings> {
       agendaSlotMinutes: true,
       bookingCapCount: true,
       bookingCapIntervalMin: true,
+      agendaSlotStepMin: true,
+      publicSlotStepMin: true,
+      publicMinLeadMinutes: true,
       updatedAt: true,
     },
   }));
@@ -206,6 +219,79 @@ async function setTenantBookingCapImpl(input: { count: number | null; intervalMi
   if (changed) {
     // El modal de turnos, el lote y el turnero leen el tope en cada request (sin cache por tenant): alcanza con las
     // rutas que lo muestran ya pintado.
+    revalidatePath("/configuracion");
+    revalidatePath("/agenda");
+    revalidatePath("/dashboard");
+  }
+  return { ok: true, data: undefined };
+}
+
+/**
+ * Reglas de agenda del consultorio (CF, §28; M20; decisiones 3 y 6, CF-D8/CF-D11): intervalo de horarios de la
+ * agenda (15/30/45/60), del turnero (automático o 15/30/45/60) y anticipación mínima del turnero (0..8 semanas, en
+ * minutos). NULL = default (hereda). Se manda el form ENTERO (los tres valores, CF-K): un campo ausente es NULL.
+ *
+ * Mismo patrón que `setTenantBookingCap` (por eso `tenant.admin` —la Secretaria con «Configuración» lo maneja— y
+ * `withSupportWritable`): cambia qué horarios ve el staff y cuáles ofrece el turnero, así que se audita
+ * (`tenant.agenda_rules`, con el antes y el después) en la MISMA tx; el mismo valor = ni write ni audit; `FOR UPDATE`
+ * solo para que el `from` del audit sea el que se pisó. La regla de cada valor la valida `parseTenantAgendaRules`
+ * antes de escribir: el CHECK de M20 rebotaría como un 500 («No pudimos guardar») sin decir qué campo corregir.
+ */
+export async function setTenantAgendaRules(...args: Parameters<typeof setTenantAgendaRulesImpl>): ReturnType<typeof setTenantAgendaRulesImpl> {
+  return withReadOnlyResult(() => withSupportWritable("lib/tenant-settings.ts#setTenantAgendaRules", () => setTenantAgendaRulesImpl(...args)));
+}
+
+// Forma en el borde (zod): números o strings de dígitos (un <select> manda strings), vacío = NULL. El rango y la
+// lista de valores los decide `parseTenantAgendaRules`, que devuelve el copy y el campo.
+const AgendaRuleValue = z.union([z.number(), z.string().max(16), z.null()]).optional();
+const TenantAgendaRulesInput = z.object({
+  agendaSlotStepMin: AgendaRuleValue,
+  publicSlotStepMin: AgendaRuleValue,
+  publicMinLeadMinutes: AgendaRuleValue,
+});
+
+async function setTenantAgendaRulesImpl(input: {
+  agendaSlotStepMin: number | string | null;
+  publicSlotStepMin: number | string | null;
+  publicMinLeadMinutes: number | string | null;
+}): Promise<ActionResult> {
+  const actor = await requireTenantAdmin();
+  const shape = TenantAgendaRulesInput.safeParse(input ?? {});
+  if (!shape.success) return { ok: false, error: "Datos inválidos" };
+  const parsed = parseTenantAgendaRules(shape.data);
+  if (!parsed.ok) return { ok: false, error: parsed.error, fieldErrors: { [parsed.field]: [parsed.error] } };
+  const to = parsed.data;
+  const changed = await runWithRls(actor.tenantId, async (tx) => {
+    const [prev] = await tx.$queryRaw<TenantAgendaRulesWrite[]>`
+      SELECT "agendaSlotStepMin", "publicSlotStepMin", "publicMinLeadMinutes"
+        FROM "Tenant" WHERE "id" = ${actor.tenantId} FOR UPDATE`;
+    if (!prev) return false;
+    const from: TenantAgendaRulesWrite = {
+      agendaSlotStepMin: prev.agendaSlotStepMin,
+      publicSlotStepMin: prev.publicSlotStepMin,
+      publicMinLeadMinutes: prev.publicMinLeadMinutes,
+    };
+    if (
+      from.agendaSlotStepMin === to.agendaSlotStepMin &&
+      from.publicSlotStepMin === to.publicSlotStepMin &&
+      from.publicMinLeadMinutes === to.publicMinLeadMinutes
+    ) {
+      return false;
+    }
+    await tx.tenant.update({ where: { id: actor.tenantId }, data: to });
+    await auditInTx(tx, {
+      tenantId: actor.tenantId,
+      actorId: actor.userId,
+      action: "tenant.agenda_rules",
+      entity: "Tenant",
+      entityId: actor.tenantId,
+      payload: { from, to },
+    });
+    return true;
+  });
+  if (changed) {
+    // Igual que el tope: el selector del staff y el turnero leen las reglas en cada request (loader sin cache por
+    // tenant); alcanza con las rutas que las muestran ya pintadas.
     revalidatePath("/configuracion");
     revalidatePath("/agenda");
     revalidatePath("/dashboard");

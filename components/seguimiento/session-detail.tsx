@@ -34,11 +34,15 @@ import {
   SEGUIMIENTO_COPY,
   dischargeCopy,
   isSessionWithoutEvolution,
+  sameSessionMetaDraft,
   sessionClinicalNoteAction,
+  sessionMetaDraftFrom,
+  sessionMetaPayload,
   sessionCounterLabel,
   sessionHeading,
   sortByOrdinal,
   type SessionClinicalNote,
+  type SessionMetaDraft,
 } from "@/components/seguimiento/seguimiento-model";
 
 /**
@@ -105,46 +109,6 @@ export function urlWithoutAgendarParam(href: string): string | null {
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
-/**
- * Borrador de las anotaciones del kine. Vive en `SessionDetail` (no en el
- * panel) para que "Cerrar sesión" mande lo que está tipeado: H3 era que el
- * cierre solo mandaba el id y lo no guardado se perdía.
- */
-type MetaDraft = {
-  notes: string;
-  paInPre: number | "";
-  paInPost: number | "";
-  rpe: number | "";
-};
-
-function draftFrom(session: SessionDTO): MetaDraft {
-  return {
-    notes: session.notes ?? "",
-    paInPre: session.paInPre ?? "",
-    paInPost: session.paInPost ?? "",
-    rpe: session.rpe ?? "",
-  };
-}
-
-/** `""` → `null`: vaciar un campo es un cambio válido (antes no se podía borrar). */
-function draftToMeta(d: MetaDraft) {
-  return {
-    notes: d.notes.trim() === "" ? null : d.notes,
-    paInPre: d.paInPre === "" ? null : d.paInPre,
-    paInPost: d.paInPost === "" ? null : d.paInPost,
-    rpe: d.rpe === "" ? null : d.rpe,
-  };
-}
-
-function sameDraft(a: MetaDraft, b: MetaDraft) {
-  return (
-    a.notes.trim() === b.notes.trim() &&
-    a.paInPre === b.paInPre &&
-    a.paInPost === b.paInPost &&
-    a.rpe === b.rpe
-  );
-}
-
 export function SessionDetail({
   session,
   scheduledLabel,
@@ -187,7 +151,7 @@ export function SessionDetail({
   // (ni la meta de la sesión ni una evolución de HC viva del turno, EV2-D18).
   const withoutEvolution = isSessionWithoutEvolution(session, { hasClinicalNote: !!noteState?.hasLiveNote });
   // "Registrar sesión" (EV2-D19) depende SOLO de la meta de la sesión, no de la
-  // evolución de HC (EV2-Z A2): con la HC cargada y sin EVA, el panel tiene que
+  // evolución de HC (EV2-Z A2): con la HC cargada y sin registro, el panel tiene que
   // seguir abierto para registrar la sesión del plan.
   const unrecorded = isSessionWithoutEvolution(session);
   const editable = !completed || unrecorded;
@@ -210,10 +174,10 @@ export function SessionDetail({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const confirm = useConfirm();
-  const [draft, setDraft] = useState<MetaDraft>(() => draftFrom(session));
+  const [draft, setDraft] = useState<SessionMetaDraft>(() => sessionMetaDraftFrom(session));
   // Base = lo persistido (props). Tras guardar, la respuesta de la action (que revalida /seguimiento/[id]) trae las
   // props nuevas y el borrador vuelve a coincidir → deja de estar sucio.
-  const dirty = editable && !sameDraft(draft, draftFrom(session));
+  const dirty = editable && !sameSessionMetaDraft(draft, sessionMetaDraftFrom(session));
   useUnsavedGuard(dirty);
   const counter = sessionCounterLabel(session.ordinal, session.totalLive);
   const heading = sessionHeading({ ordinal: session.ordinal, totalLive: session.totalLive, title: session.title });
@@ -228,12 +192,12 @@ export function SessionDetail({
     setError(null);
     const ok = await confirm({
       title: "¿Cerrar la sesión?",
-      message: "Se marca como realizada con las anotaciones, EVA y RPE que cargaste. Los ejercicios pendientes quedan como hechos.",
+      message: "Se marca como realizada con las anotaciones y el RPE que cargaste. Los ejercicios pendientes quedan como hechos.",
       confirmLabel: "Cerrar sesión",
     });
     if (!ok) return;
     start(async () => {
-      const r = await completeSessionFromSeguimiento(session.id, draftToMeta(draft));
+      const r = await completeSessionFromSeguimiento(session.id, sessionMetaPayload(draft));
       if (!r.ok) {
         setError(r.error);
         return;
@@ -246,7 +210,7 @@ export function SessionDetail({
   const loadEvolution = () => {
     setError(null);
     setInfo(null);
-    const meta = draftToMeta(draft);
+    const meta = sessionMetaPayload(draft);
     if (Object.values(meta).every((v) => v == null)) {
       setError(SEGUIMIENTO_COPY.evolutionEmpty);
       return;
@@ -257,7 +221,7 @@ export function SessionDetail({
         setError(r.error);
         return;
       }
-      // `loaded:false` = ya tenía evolución (p. ej. una EVA que el DTO no trae):
+      // `loaded:false` = ya tenía evolución (p. ej. una EVA vieja que el DTO no trae):
       // el server no pisa y se avisa en vez de fingir que se guardó.
       if (!r.data.loaded) setInfo(SEGUIMIENTO_COPY.evolutionAlreadyLoaded);
       // PF1.2 (C-PF4): `loadSessionEvolution` revalida /seguimiento/[id]: sin `router.refresh()`.
@@ -419,8 +383,6 @@ export function SessionDetail({
               )}
             </Card>
           )}
-
-          <PainTimeline sessions={rail} currentIndex={session.index} />
 
           {info && (
             <div role="status" style={{ padding: 10, borderRadius: 12, background: "rgba(31,79,190,0.06)", fontSize: 13 }}>
@@ -894,26 +856,26 @@ function SessionNotes({
 }: {
   className?: string;
   session: SessionDTO;
-  draft: MetaDraft;
-  onChange: (d: MetaDraft) => void;
+  draft: SessionMetaDraft;
+  onChange: (d: SessionMetaDraft) => void;
   dirty: boolean;
   disabled: boolean;
   /**
    * Sesión realizada "Sin evolución" (S12b): el botón pasa a ser "Registrar
    * sesión" (EV2-D19; antes "Cargar evolución", que ahora es la evolución de
    * HC) con `loadSessionEvolution`, que además marca los ejercicios
-   * pendientes como hechos y registra la EVA post, igual que el cierre.
+   * pendientes como hechos, igual que el cierre.
    */
   evolution?: { onLoad: () => void; pending: boolean } | null;
 }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const set = <K extends keyof MetaDraft>(k: K, v: MetaDraft[K]) => onChange({ ...draft, [k]: v });
+  const set = <K extends keyof SessionMetaDraft>(k: K, v: SessionMetaDraft[K]) => onChange({ ...draft, [k]: v });
 
   const save = () => {
     setError(null);
     start(async () => {
-      const r = await updateSessionMeta({ sessionId: session.id, ...draftToMeta(draft) });
+      const r = await updateSessionMeta({ sessionId: session.id, ...sessionMetaPayload(draft) });
       // Antes un error acá se tragaba: el kine veía sus notas en pantalla y
       // creía que estaban guardadas. PF1.2 (C-PF4): `updateSessionMeta` revalida /seguimiento/[id]: sin refresh.
       if (!r.ok) setError(r.error);
@@ -925,9 +887,8 @@ function SessionNotes({
       <div className="k-display" style={{ fontSize: 14, fontWeight: 700 }}>
         Anotaciones del kinesiólogo
       </div>
+      {/* CF-L2: sin EVA pre/post (sale de la app); el RPE queda. Una columna de 1/3 para que el campo no se estire. */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-        <MiniField label="EVA pre" value={draft.paInPre} onChange={(v) => set("paInPre", v)} disabled={disabled} />
-        <MiniField label="EVA post" value={draft.paInPost} onChange={(v) => set("paInPost", v)} disabled={disabled} />
         <MiniField label="RPE" value={draft.rpe} onChange={(v) => set("rpe", v)} disabled={disabled} />
       </div>
       <textarea
@@ -1029,171 +990,5 @@ function MiniField({
         }}
       />
     </label>
-  );
-}
-
-/**
- * PainTimeline — inline sparkline rendering pre/post EVA values across
- * all sessions of the active plan. Reads from the `program.sessions`
- * shape that already comes with `paInPre` + `paInPost`. The current
- * session is highlighted; sessions without data fall into a "no
- * datapoint" gap.
- *
- * Lightweight SVG — no charting dep. Width adapts to container.
- */
-function PainTimeline({
-  sessions,
-  currentIndex,
-}: {
-  sessions: { id: string; index: number; paInPre: number | null; paInPost: number | null }[];
-  currentIndex: number;
-}) {
-  if (sessions.length < 2) return null;
-  const hasAnyData = sessions.some((s) => s.paInPre != null || s.paInPost != null);
-  if (!hasAnyData) {
-    return (
-      <Card style={{ padding: 14 }}>
-        <div
-          style={{
-            fontSize: 11,
-            color: "var(--navy-300)",
-            fontWeight: 700,
-            letterSpacing: "0.06em",
-            textTransform: "uppercase",
-          }}
-        >
-          Dolor (EVA) · timeline
-        </div>
-        <div style={{ marginTop: 6, fontSize: 12, color: "var(--navy-500)" }}>
-          Cuando cierres sesiones con EVA pre/post, vas a ver acá la evolución del dolor.
-        </div>
-      </Card>
-    );
-  }
-
-  const W = 100; // viewBox units; SVG scales via CSS
-  const H = 38;
-  const xStep = W / Math.max(sessions.length - 1, 1);
-  const yFor = (v: number | null) =>
-    v == null ? null : H - 4 - (v / 10) * (H - 10);
-
-  type PointShape = { x: number; y: number | null; v: number | null };
-  const preLine: PointShape[] = sessions.map((s, i) => ({
-    x: i * xStep,
-    y: yFor(s.paInPre),
-    v: s.paInPre,
-  }));
-  const postLine: PointShape[] = sessions.map((s, i) => ({
-    x: i * xStep,
-    y: yFor(s.paInPost),
-    v: s.paInPost,
-  }));
-
-  // Stitch consecutive defined points into path segments.
-  const pathFrom = (line: PointShape[]) => {
-    let d = "";
-    let pen: "M" | "L" = "M";
-    for (const p of line) {
-      if (p.y == null) {
-        pen = "M";
-        continue;
-      }
-      d += `${pen}${p.x.toFixed(2)} ${p.y.toFixed(2)} `;
-      pen = "L";
-    }
-    return d.trim();
-  };
-
-  const last = sessions[sessions.length - 1];
-  const trend =
-    last.paInPost != null && sessions[0].paInPre != null
-      ? last.paInPost - sessions[0].paInPre
-      : null;
-
-  return (
-    <Card style={{ padding: 14 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-        <div
-          style={{
-            fontSize: 11,
-            color: "var(--navy-300)",
-            fontWeight: 700,
-            letterSpacing: "0.06em",
-            textTransform: "uppercase",
-          }}
-        >
-          Dolor (EVA) · evolución
-        </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <Legend dot="var(--sky-700)" label="Pre" />
-          <Legend dot="var(--success-fg)" label="Post" />
-          {trend != null && (
-            <span
-              className="k-mono"
-              style={{
-                fontSize: 11,
-                color: trend < 0 ? "var(--success-fg)" : trend > 0 ? "var(--danger-fg)" : "var(--navy-500)",
-                fontWeight: 700,
-              }}
-              title="Variación entre la primera EVA pre y la última EVA post"
-            >
-              {trend > 0 ? "+" : ""}
-              {trend.toFixed(1)}
-            </span>
-          )}
-        </div>
-      </div>
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: "100%", height: 64 }}>
-        {/* Gridlines at 0 / 5 / 10 */}
-        {[0, 5, 10].map((v) => (
-          <line
-            key={v}
-            x1={0}
-            x2={W}
-            y1={(yFor(v) ?? 0).toFixed(2)}
-            y2={(yFor(v) ?? 0).toFixed(2)}
-            stroke="rgba(15,30,51,0.08)"
-            strokeWidth={0.25}
-          />
-        ))}
-        {/* Current session marker */}
-        {(() => {
-          const i = sessions.findIndex((s) => s.index === currentIndex);
-          if (i < 0) return null;
-          return (
-            <line
-              x1={i * xStep}
-              x2={i * xStep}
-              y1={0}
-              y2={H}
-              stroke="rgba(31,79,190,0.25)"
-              strokeWidth={0.6}
-              strokeDasharray="1.5 1.5"
-            />
-          );
-        })()}
-        <path d={pathFrom(preLine)} fill="none" stroke="var(--sky-700)" strokeWidth={0.9} strokeLinecap="round" strokeLinejoin="round" />
-        <path d={pathFrom(postLine)} fill="none" stroke="var(--success-fg)" strokeWidth={0.9} strokeLinecap="round" strokeLinejoin="round" />
-        {preLine.map((p) =>
-          p.y == null ? null : (
-            <circle key={`pre-${p.x}`} cx={p.x} cy={p.y} r={1.1} fill="var(--sky-700)" />
-          )
-        )}
-        {postLine.map((p) =>
-          p.y == null ? null : (
-            <circle key={`post-${p.x}`} cx={p.x} cy={p.y} r={1.1} fill="var(--success-fg)" />
-          )
-        )}
-      </svg>
-    </Card>
-  );
-}
-
-function Legend({ dot, label }: { dot: string; label: string }) {
-  return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--navy-500)" }}>
-      <span style={{ width: 8, height: 8, borderRadius: "50%", background: dot, display: "inline-block" }} />
-      {label}
-    </span>
   );
 }

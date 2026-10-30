@@ -424,9 +424,15 @@ export function NoteCard({
       <FoldableHcBody note={note} />
 
       {until && (
-        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--sky-700)" }} data-testid="editable-until">
-          {until}
-        </span>
+        // [CF-UI1 · M] Segunda línea liviana: qué pasa cuando vence la ventana (no se bloquea, pasa a enmienda).
+        <div style={{ display: "grid", gap: 2 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--sky-700)" }} data-testid="editable-until">
+            {until}
+          </span>
+          <span style={{ fontSize: 12, color: "var(--navy-500)" }} data-testid="editable-until-after">
+            {COPY.editWindowAfterHint}
+          </span>
+        </div>
       )}
 
       {actions.edit && (

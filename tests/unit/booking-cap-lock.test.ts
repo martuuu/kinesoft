@@ -21,11 +21,16 @@ import {
   orderedCapacityAndRoomLockKeys,
   orderedCapacityLockKeys,
   orderedHourLockKeys,
+  orderedPractitionerDayLockKeys,
   orderedRoomLockKeys,
+  pdayKeysFromCapacityKeys,
+  practitionerDayKeysForWindow,
+  practitionerDayLockKey,
   roomKeysForWindow,
   roomLockKey,
   type CapacityLockKey,
   type HourLockKey,
+  type PractitionerDayLockKey,
   type RoomLockKey,
 } from "@/lib/booking-cap-lock";
 import type { DbClient } from "@/lib/rls";
@@ -270,5 +275,182 @@ describe("[AS-2k] claves de hora del profesional (C2 (1c))", () => {
     });
     expect(w.calls).toHaveLength(1);
     expect(w.calls[0].values).toEqual([["kinesoft:cap:t1:p:s:2027-03-09", "kinesoft:cap:t1:p:s:2027-03-10"]]);
+  });
+});
+
+// [CF-L1..3] CF (ADR-032, enmienda C2 (1d)): clave de DÍA del profesional entre el cupo y la hora, en la misma
+// sentencia. Lo que pasa en Postgres (orden real en `pg_locks`, 1 sentencia) en `tests/integration/cf-locks-pday.test.ts`.
+describe("[CF-L] claves de día del profesional (C2 (1d))", () => {
+  it("[CF-L1] practitionerDayLockKey: formato y prefijo propio (no choca con cupo, hora ni sala)", () => {
+    const k = practitionerDayLockKey({ tenantId: T, practitionerId: "p1", dayKey: "2027-01-01" });
+    expect(k).toBe("kinesoft:pday:t1:p1:2027-01-01");
+    for (const other of ["kinesoft:cap:", "kinesoft:phour:", "kinesoft:room:"]) expect(k.startsWith(other)).toBe(false);
+  });
+
+  it("[CF-L1] orderedPractitionerDayLockKeys deduplica y ordena por componente (tenant, profesional, día)", () => {
+    const keys: PractitionerDayLockKey[] = [
+      { tenantId: T, practitionerId: "p2", dayKey: "2027-01-01" },
+      { tenantId: T, practitionerId: "p1", dayKey: "2027-01-02" },
+      { tenantId: T, practitionerId: "p1", dayKey: "2027-01-01" },
+      { tenantId: T, practitionerId: "p2", dayKey: "2027-01-01" }, // duplicada
+    ];
+    expect(orderedPractitionerDayLockKeys(keys)).toEqual([
+      "kinesoft:pday:t1:p1:2027-01-01",
+      "kinesoft:pday:t1:p1:2027-01-02",
+      "kinesoft:pday:t1:p2:2027-01-01",
+    ]);
+    expect(orderedPractitionerDayLockKeys([])).toEqual([]);
+  });
+
+  it("[CF-L1] prefijos «a:» vs «a1:»: orden por componente, no por el string concatenado", () => {
+    const keys: PractitionerDayLockKey[] = [
+      { tenantId: T, practitionerId: "a1", dayKey: "2027-01-01" },
+      { tenantId: T, practitionerId: "a", dayKey: "2027-01-01" },
+    ];
+    // Concatenado, "…:a1:…" < "…:a:…" ('1' < ':'): el orden por componente pone «a» primero.
+    expect(practitionerDayLockKey(keys[0]) < practitionerDayLockKey(keys[1])).toBe(true);
+    expect(orderedPractitionerDayLockKeys(keys)).toEqual([
+      "kinesoft:pday:t1:a:2027-01-01",
+      "kinesoft:pday:t1:a1:2027-01-01",
+    ]);
+    const byTenant: PractitionerDayLockKey[] = [
+      { tenantId: "a1", practitionerId: "p", dayKey: "2027-01-01" },
+      { tenantId: "a", practitionerId: "p", dayKey: "2027-01-01" },
+    ];
+    expect(orderedPractitionerDayLockKeys(byTenant)).toEqual([
+      "kinesoft:pday:a:p:2027-01-01",
+      "kinesoft:pday:a1:p:2027-01-01",
+    ]);
+  });
+
+  it("[CF-L1] pdayKeysFromCapacityKeys: un día por (tenant, profesional, día), sin el servicio, deduplicado", () => {
+    const cap: CapacityLockKey[] = [
+      { tenantId: T, practitionerId: "p1", serviceId: "s2", dayKey: "2027-01-01" },
+      { tenantId: T, practitionerId: "p1", serviceId: "s1", dayKey: "2027-01-01" },
+      { tenantId: T, practitionerId: "p1", serviceId: "s1", dayKey: "2027-01-02" },
+      { tenantId: T, practitionerId: "p2", serviceId: "s1", dayKey: "2027-01-01" },
+    ];
+    expect(pdayKeysFromCapacityKeys(cap)).toEqual([
+      { tenantId: T, practitionerId: "p1", dayKey: "2027-01-01" },
+      { tenantId: T, practitionerId: "p1", dayKey: "2027-01-02" },
+      { tenantId: T, practitionerId: "p2", dayKey: "2027-01-01" },
+    ]);
+    expect(pdayKeysFromCapacityKeys([])).toEqual([]);
+  });
+
+  it("[CF-L2] 23:30 AR + 60' = dos días AR; terminar 00:00 AR no toma el siguiente; 22:00 AR es su día AR (no el UTC)", () => {
+    const base = { tenantId: T, practitionerId: "p" };
+    // 23:30 AR = 02:30Z del día siguiente: con TZ=UTC el día del host sería el 10 de punta a punta.
+    const cross = practitionerDayKeysForWindow({
+      ...base,
+      start: new Date("2027-03-09T23:30:00-03:00"),
+      end: new Date("2027-03-10T00:30:00-03:00"),
+    });
+    expect(cross).toEqual([
+      { tenantId: T, practitionerId: "p", dayKey: "2027-03-09" },
+      { tenantId: T, practitionerId: "p", dayKey: "2027-03-10" },
+    ]);
+    const edge = practitionerDayKeysForWindow({
+      ...base,
+      start: new Date("2027-03-09T23:00:00-03:00"),
+      end: new Date("2027-03-10T00:00:00-03:00"),
+    });
+    expect(edge.map((k) => k.dayKey)).toEqual(["2027-03-09"]);
+    const late = practitionerDayKeysForWindow({
+      ...base,
+      start: new Date("2027-03-09T22:00:00-03:00"),
+      end: new Date("2027-03-09T22:45:00-03:00"),
+    });
+    expect(late.map((k) => k.dayKey)).toEqual(["2027-03-09"]);
+    // Ventana vacía (start = end): igual el día del inicio, como el cupo.
+    const zero = practitionerDayKeysForWindow({
+      ...base,
+      start: new Date("2027-03-09T10:00:00-03:00"),
+      end: new Date("2027-03-09T10:00:00-03:00"),
+    });
+    expect(zero.map((k) => k.dayKey)).toEqual(["2027-03-09"]);
+  });
+
+  it("[CF-L2] el día de una ventana coincide con el del cupo (mismos días AR, sin el servicio)", () => {
+    const w = { tenantId: T, practitionerId: "p", start: new Date("2027-03-09T23:30:00-03:00"), end: new Date("2027-03-10T00:30:00-03:00") };
+    const fromCap = pdayKeysFromCapacityKeys(
+      ["s1", "s2"].flatMap((serviceId) => [
+        { tenantId: T, practitionerId: "p", serviceId, dayKey: "2027-03-09" },
+        { tenantId: T, practitionerId: "p", serviceId, dayKey: "2027-03-10" },
+      ])
+    );
+    expect(orderedPractitionerDayLockKeys(fromCap)).toEqual(orderedPractitionerDayLockKeys(practitionerDayKeysForWindow(w)));
+  });
+
+  // Tenants elegidos para que un orden global mezclado invierta las familias: sala ("t1") < hora ("t2") < día
+  // ("t3") < cupo ("t4"). El contrato es cupo ++ día ++ hora ++ sala, siempre.
+  const cap: CapacityLockKey[] = [
+    { tenantId: "t4", practitionerId: "p2", serviceId: "s", dayKey: "2027-01-01" },
+    { tenantId: "t4", practitionerId: "p1", serviceId: "s", dayKey: "2027-01-01" },
+  ];
+  const pday: PractitionerDayLockKey[] = [
+    { tenantId: "t3", practitionerId: "p2", dayKey: "2027-01-01" },
+    { tenantId: "t3", practitionerId: "p1", dayKey: "2027-01-02" },
+    { tenantId: "t3", practitionerId: "p1", dayKey: "2027-01-01" },
+    { tenantId: "t3", practitionerId: "p1", dayKey: "2027-01-01" },
+  ];
+  const hour: HourLockKey[] = [
+    { tenantId: "t2", practitionerId: "p1", hourKey: "2027-01-01T11" },
+    { tenantId: "t2", practitionerId: "p1", hourKey: "2027-01-01T10" },
+  ];
+  const rooms: RoomLockKey[] = [
+    { tenantId: "t1", roomId: "r2", dayKey: "2027-01-01" },
+    { tenantId: "t1", roomId: "r1", dayKey: "2027-01-01" },
+  ];
+
+  it("[CF-L3] orderedAgendaLockKeys: todo el cupo → todos los días → todas las horas → todas las salas (nunca intercaladas)", () => {
+    const all = orderedAgendaLockKeys({ cap, pday, hour, rooms });
+    expect(all).toEqual([
+      capacityLockKey(cap[1]),
+      capacityLockKey(cap[0]),
+      "kinesoft:pday:t3:p1:2027-01-01",
+      "kinesoft:pday:t3:p1:2027-01-02",
+      "kinesoft:pday:t3:p2:2027-01-01",
+      "kinesoft:phour:t2:p1:2027-01-01T10",
+      "kinesoft:phour:t2:p1:2027-01-01T11",
+      "kinesoft:room:t1:r1:2027-01-01",
+      "kinesoft:room:t1:r2:2027-01-01",
+    ]);
+    // Cada familia es un bloque contiguo, en el orden del contrato.
+    const fam = all.map((k) => k.split(":")[1]);
+    const blocks = fam.filter((f, i) => i === 0 || fam[i - 1] !== f);
+    expect(blocks).toEqual(["cap", "pday", "phour", "room"]);
+    // Sin días = el array de T3 de siempre (los callers que no pasan `pday` no cambian de claves).
+    expect(orderedAgendaLockKeys({ cap, hour, rooms })).toEqual([
+      ...orderedCapacityLockKeys(cap),
+      ...orderedHourLockKeys(hour),
+      ...orderedRoomLockKeys(rooms),
+    ]);
+    // Planes: cupo + día, sin hora ni sala.
+    expect(orderedAgendaLockKeys({ cap, pday: pdayKeysFromCapacityKeys(cap) })).toEqual([
+      capacityLockKey(cap[1]),
+      capacityLockKey(cap[0]),
+      "kinesoft:pday:t4:p1:2027-01-01",
+      "kinesoft:pday:t4:p2:2027-01-01",
+    ]);
+    expect(orderedAgendaLockKeys({ pday: [] })).toEqual([]);
+  });
+
+  it("[CF-L3] lockAgendaKeysMany con día: UNA sentencia, la misma SQL literal de C2 (1)", async () => {
+    const { tx, calls } = fakeTx();
+    await lockAgendaKeysMany(tx, { cap, pday, hour, rooms });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].values).toEqual([orderedAgendaLockKeys({ cap, pday, hour, rooms })]);
+    const ref = fakeTx();
+    await lockCapacityMany(ref.tx, cap);
+    expect(calls[0].sql).toBe(ref.calls[0].sql);
+
+    // Solo días también es una sentencia; listas vacías = no-op.
+    const d = fakeTx();
+    await lockAgendaKeysMany(d.tx, { pday });
+    expect(d.calls.map((c) => c.values)).toEqual([[orderedPractitionerDayLockKeys(pday)]]);
+    const none = fakeTx();
+    await lockAgendaKeysMany(none.tx, { cap: [], pday: [], hour: [], rooms: [] });
+    expect(none.calls).toHaveLength(0);
   });
 });

@@ -98,6 +98,19 @@ export function slugPreview(form: Pick<NewTenantFormState, "clinicName" | "slug"
 }
 
 /**
+ * CF-MAIL (§28 G): el slug viaja en el link del portal y del turnero que reciben los pacientes. El consultorio del
+ * cliente quedó dado de alta como «tmp» y eso salía en cada invitación. Avisa (no bloquea: el superadmin puede querer
+ * un consultorio de prueba de verdad) si el slug efectivo es `tmp|test|prueba|demo` solo o seguido de un guion.
+ */
+const PLACEHOLDER_SLUG_RE = /^(tmp|test|prueba|demo)(-|$)/;
+export const PLACEHOLDER_SLUG_WARNING =
+  "Ese slug queda en los links que reciben los pacientes. Elegí uno con el nombre del consultorio.";
+
+export function isPlaceholderSlug(slug: string): boolean {
+  return PLACEHOLDER_SLUG_RE.test(slug.trim().toLowerCase());
+}
+
+/**
  * Lo que viaja a `createTenantWithOwner`. Slug y trial vacíos no se mandan (el server usa el derivado y el del
  * catálogo). Un trial no numérico viaja como NaN para que el zod del server lo rechace con su copy.
  */
@@ -196,6 +209,11 @@ export function NewTenantForm({
               "Escribí el nombre para ver la dirección."
             )}
           </span>
+          {preview && isPlaceholderSlug(preview) && (
+            <span data-testid="slug-placeholder-warning" role="status" style={{ fontSize: 12, color: "var(--warn-fg)" }}>
+              {PLACEHOLDER_SLUG_WARNING}
+            </span>
+          )}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(180px, 100%), 1fr))", gap: 12 }}>
           <FormField

@@ -321,12 +321,14 @@ export function insertNoteInItems(items: TimelineItem[], note: ClinicalNoteDTO, 
   return [...rest, item].sort(compareItems);
 }
 
-/** Línea de detalle de una sesión completada: «8/10 ejercicios · RPE 6 · EVA 7 → 4». */
+/**
+ * Línea de detalle de una sesión completada: «8/10 ejercicios · RPE 6». CF (§28, decisión 4): ya no lleva «EVA a → b»
+ * (la EVA salió de toda la app; los puntajes viejos quedan en `Session.paInPre/paInPost` y no se muestran).
+ */
 export function sessionDetailLine(s: TimelineSessionDTO): string {
   const parts: string[] = [];
   if (s.exercisesTotal > 0) parts.push(`${s.exercisesDone}/${s.exercisesTotal} ejercicios`);
   if (s.rpe != null) parts.push(`RPE ${s.rpe}`);
-  if (s.paInPre != null || s.paInPost != null) parts.push(`EVA ${s.paInPre ?? "—"} → ${s.paInPost ?? "—"}`);
   return parts.join(" · ");
 }
 
@@ -751,7 +753,7 @@ export function EvolucionesView({
 
 /**
  * Sesión completada de un plan. Suelta (sin evolución de su turno en la página) va como tarjeta propia; dentro de una
- * evolución, indentada debajo (es el registro del plan: ejercicios, RPE, EVA), sin acciones: se edita en Seguimiento.
+ * evolución, indentada debajo (es el registro del plan: ejercicios, RPE), sin acciones: se edita en Seguimiento.
  */
 function SessionBlock({ session, nested = false }: { session: TimelineSessionDTO; nested?: boolean }) {
   const detail = sessionDetailLine(session);

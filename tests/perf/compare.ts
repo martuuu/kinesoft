@@ -106,6 +106,7 @@ export const REFERENCE_ERRATA: Readonly<Record<string, { statements?: number; in
   "f.createBooking.osteo.conflict": { statements: 1, why: "liveBlocksInTx (integrador final de B-pre) posterior a agenda-multi.json" },
   "f.createBookingsBatch.20": { statements: 20, why: "liveBlocksInTx ×20 (integrador final de B-pre) posterior a agenda-multi.json" },
   "f.createBookingsBatch.20.gym.busy": { statements: 20, why: "liveBlocksInTx ×20 (integrador final de B-pre) posterior a agenda-multi.json" },
+  "updateBooking.patientChange": { statements: 2, why: "ZF1 (CF, M1 de ZA): cambiar el paciente toma pday y cuenta otro servicio (lock + conteo); el interruptor se lee solo con aviso" },
 };
 
 /** Compara las filas medidas contra la referencia. Puro: lo usa el CLI de abajo. */

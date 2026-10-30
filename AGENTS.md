@@ -5,9 +5,9 @@ pacientes e historia clínica, planes de tratamiento, diagnóstico, biblioteca d
 facturación de copago y obra social. El stack es Next.js 14 (App Router) + TypeScript strict + Prisma 5 +
 PostgreSQL (Supabase) + Vercel + Mercado Pago. Todas las tablas de dominio llevan `tenantId`.
 
-Project lead: Martin Navarro. **Prod tiene datos demo y todavía nadie lo usa**, pero se sigue tratando como
-pre-producción real: cualquier cosa que toque datos, plata o la agenda va con precheck → backup → deploy (sin staging
-ni reset). Este archivo resume cómo se ejecuta; el detalle vive en `.docs/`.
+Project lead: Martin Navarro. **Prod está viva con un cliente desde el reset del 29-oct**: hay datos reales y no se
+vuelve a resetear. Cualquier cosa que toque datos, plata o la agenda va con precheck → backup → deploy (sin staging ni
+reset). Este archivo resume cómo se ejecuta; el detalle vive en `.docs/`.
 
 ## 1. Planificación: nada se ejecuta sin planning
 

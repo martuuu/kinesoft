@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactNode } from "react";
@@ -17,7 +17,6 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/lib/patients", () => ({
   setPatientArchived: vi.fn(),
   sendPatientPortalInvite: vi.fn(),
-  recordEvaScore: vi.fn(),
 }));
 vi.mock("@/lib/bookings", () => ({ setBookingInsurerPaid: vi.fn(), setBookingCopagoPaid: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: () => {}, revalidateTag: () => {}, unstable_cache: (f: unknown) => f }));
@@ -30,7 +29,6 @@ vi.mock("react", async (importOriginal) => {
 import { PatientsList, patientRowSubline, rowEnterDelayMs } from "@/components/patients/patients-list";
 import { heroPlanSummaryText, HERO_PLAN_SUMMARY_FROM } from "@/components/patients/profile/hero";
 import { ResumenView, RESUMEN_COPY } from "@/components/patients/profile/views/resumen-view";
-import { EvolucionView } from "@/components/patients/profile/views/evolucion-view";
 import { factDateLabel } from "@/components/patients/profile/views/facturacion-view";
 import { sessionPastUnclosed } from "@/components/patients/profile/views/sesiones-view";
 import { TabsBar } from "@/components/patients/profile/tabs-bar";
@@ -163,7 +161,6 @@ describe("[PF1.1] D6/D12: vacíos con acción", () => {
     lastName: "Gómez",
     notes: null,
     bookings: [],
-    evaScores: [],
   } as unknown as PatientWithRelations;
 
   it("Resumen sin diagnóstico: «Sin diagnóstico cargado» + «Cargar diagnóstico», nunca otro texto", () => {
@@ -191,9 +188,16 @@ describe("[PF1.1] D6/D12: vacíos con acción", () => {
     expect(src("components/patients/patient-profile.tsx")).toMatch(/const diagnosisName = patientCore\.diagnosisTitle \?\? null;/);
   });
 
-  it("pestaña EVA vacía: «Registrar EVA» solo con callback", () => {
-    expect(renderToStaticMarkup(<EvolucionView patient={patient} onRegister={() => {}} />)).toContain("Registrar EVA");
-    expect(renderToStaticMarkup(<EvolucionView patient={patient} />)).not.toContain("Registrar EVA");
+  // CF (§28, decisión 4): la pestaña EVA (con su «Registrar EVA») y la card «EVA · dolor» de Resumen salieron. Se monta
+  // Resumen en Kinesiología (con `evaluaciones`, donde antes aparecía la card) y se fija que la vista ya no exista.
+  it("[CF-L1] Resumen sin la card de EVA y sin la vista de la pestaña EVA", () => {
+    const html = wrap(
+      <ResumenView patient={patient} plan={null} diagnosisName={null} permissions={NO_PLAN_PERMISSIONS} onOpenEditor={() => {}} />
+    );
+    expect(html).not.toMatch(/\bEVA\b/);
+    expect(html).not.toContain('name="value"');
+    expect(existsSync(join(ROOT, "components/patients/profile/views/evolucion-view.tsx"))).toBe(false);
+    expect(src("components/patients/profile/views/resumen-view.tsx")).not.toContain("recordEvaScore");
   });
 });
 

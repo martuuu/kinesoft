@@ -27,7 +27,7 @@
  * es el server; `PlanPermissions` solo evita botones que van a rebotar.
  */
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { PRACTITIONER_CONFLICT_ERROR, isIntervalCapError } from "@/lib/bookings-constants";
+import { PRACTITIONER_CONFLICT_ERROR, isIntervalCapError, isOtherServiceError } from "@/lib/bookings-constants";
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -237,7 +237,9 @@ export type RescheduleForceFlag =
   | "allowOverbooking"
   | "allowRoomConflict"
   // T3 (C-AS3): tope «N turnos cada X min» del profesional; forzarlo deja el turno como sobreturno (decisión 6).
-  | "allowIntervalCap";
+  | "allowIntervalCap"
+  // CF (§28, decisión 2): el profesional ya atiende OTRO servicio a esa hora; el staff puede forzarlo y queda sobreturno.
+  | "allowOtherService";
 export type RescheduleForce = Partial<Record<RescheduleForceFlag, boolean>>;
 
 const BLOCKED_PREFIX = (() => {
@@ -274,6 +276,9 @@ export function rescheduleForceFor(error: string): RescheduleForceFlag | null {
   if (error === PRACTITIONER_CONFLICT_ERROR) return "allowOverbooking";
   // T3e-2u2: el texto del tope lleva nombre y números (`INTERVAL_CAP_ERROR`), así que se reconoce por su forma.
   if (isIntervalCapError(error)) return "allowIntervalCap";
+  // CF-U1b: `rescheduleSession` rechaza con `OTHER_SERVICE_ERROR({})` genérico (sin nombres); se reconoce por la forma.
+  // Sin este mapeo el staff leía el aviso sin botón para forzarlo, y la decisión 2 de Martin es «avisa y deja forzar».
+  if (isOtherServiceError(error)) return "allowOtherService";
   return null;
 }
 
@@ -284,6 +289,7 @@ export const RESCHEDULE_FORCE_LABEL: Readonly<Record<RescheduleForceFlag, string
   allowOverbooking: "Moverlo igual (sobreturno)",
   allowRoomConflict: "Moverlo igual (sala ocupada)",
   allowIntervalCap: "Moverlo igual (queda como sobreturno)",
+  allowOtherService: "Moverlo igual (queda como sobreturno)",
 };
 
 // ─── Card ────────────────────────────────────────────────────────────────────

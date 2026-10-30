@@ -1,5 +1,12 @@
 # Día del push · checklist único (23-oct-2026; PV, 27-oct)
 
+> ⚠️ **Histórico desde el 29/30-oct.** Este camino incremental (M12 → … → M19 sobre la base vieja) **nunca se ejecutó**:
+> prod se reseteó con [RESET-PROD.md](RESET-PROD.md), que aplicó las 47 desde cero, y desde ahí está viva con un cliente.
+> Las partes D1-D4 ya no corren: desde CF el `--pre` **exige M12..M19 presentes** (daría FAIL «pendiente») y
+> `--booking-relfilenode` ya no hace falta (M20 no toca Booking; el flag quedó opcional). Para la próxima migración
+> (**M20**, tanda CF): [RUNBOOK «M20 en prod»](MIGRACIONES-RUNBOOK.md). Las listas de variables (B, B1, B2) siguen
+> sirviendo de referencia.
+
 > **El único checklist del día del push** de T3 → T7 + PV (§27) a producción. Reemplaza a [GO-LIVE-PASO-A-PASO.md](GO-LIVE-PASO-A-PASO.md)
 > (14-oct, queda como historia). Todo lo que toca prod **lo corrés vos**: el agente nunca ejecuta nada contra prod
 > (decisión 1 del 22-oct, plan §26.1). En cada paso marcado con 📋 **pegás la salida en el chat** y el agente la verifica

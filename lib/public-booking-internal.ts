@@ -79,7 +79,7 @@ export const PUBLIC_BOOKING_SWITCH_SELECT = {
 
 /**
  * ¿Las superficies públicas SIN Actor de este consultorio están abiertas? (BO2-D, C-BO1 `publicSurfacesOpen`:
- * turnero, check-in del portal; el token realtime lo mira con el Actor). Con el modo EFECTIVO
+ * turnero, «Mis datos» del portal; el token realtime lo mira con el Actor). Con el modo EFECTIVO
  * (`TENANT_ACCESS_ENFORCEMENT`): con el default `banner` solo cierran suspendido y dado de baja (un trial vencido
  * sigue tomando turnos hasta que Martin pase a `enforce`); con `enforce`, también el solo lectura.
  * Lo que NUNCA se gatea acá: el webhook de MP (AUDIT §5.4: un pago siempre se concilia, aunque el consultorio
@@ -313,7 +313,8 @@ export type PublicPatientInput = {
   email: string; // ya normalizado (trim + minúsculas) por el schema
   phone: string;
   documentId: string;
-  dateOfBirth: Date;
+  /** CF-FORM (§28): opcional en el turnero; null = no la dio (`Patient.dateOfBirth` es nullable). */
+  dateOfBirth: Date | null;
   coverageInsurer?: string;
   coveragePlan?: string;
   emergencyName?: string;

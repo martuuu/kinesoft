@@ -63,7 +63,7 @@ import { roomsEnabled } from "@/lib/tenant-modules";
 import { canManageBlocksFor, type Capability } from "@/lib/capabilities";
 import { isHoldingCapacity } from "@/lib/booking-capacity";
 import { lockTenantLocationsShared } from "@/lib/location-lock";
-import { lockCapacity, lockCapacityAndRoomsMany, roomKeysForWindow } from "@/lib/booking-cap-lock";
+import { lockCapacityAndRoomsMany, lockCapacityMany, roomKeysForWindow, type CapacityLockKey } from "@/lib/booking-cap-lock";
 import { BAD_ROOM_ERROR } from "@/lib/bookings-constants";
 import { dayKeyOf, dayKeyRange } from "@/lib/availability/day";
 import { cancelBookingsInTx } from "@/lib/bookings-cancel-internal";
@@ -77,6 +77,7 @@ import type { ActionResult } from "@/lib/validation";
 import {
   AFFECTED_LIST_LIMIT,
   DayLockApply,
+  DayLockGroupSpansQuery,
   DayLockPreviewQuery,
   DayLockRemove,
   NOT_ROOM_BLOCK,
@@ -85,6 +86,7 @@ import {
   TimeBlockDelete,
   TimeBlockList,
   arDayStart,
+  dayLockDayKeys,
   dayLockWindow,
   normalizeBlockWindow,
   type AffectedBooking,
@@ -93,6 +95,8 @@ import {
   type DayLockAffected,
   type DayLockApplyData,
   type DayLockApplyInput,
+  type DayLockGroupSpan,
+  type DayLockGroupSpansInput,
   type DayLockPreview,
   type DayLockPreviewInput,
   type DayLockRemoveInput,
@@ -279,17 +283,21 @@ async function lockCapacityScope(
   tx: DbClient,
   o: { tenantId: string; practitionerIds: string[]; dayKeys: string[] }
 ): Promise<void> {
-  const serviceIds = (await tx.service.findMany({ where: { tenantId: o.tenantId }, select: { id: true } }))
-    .map((x) => x.id)
-    .sort();
-  const days = [...o.dayKeys].sort();
-  for (const practitionerId of [...o.practitionerIds].sort()) {
+  const serviceIds = (await tx.service.findMany({ where: { tenantId: o.tenantId }, select: { id: true } })).map(
+    (x) => x.id
+  );
+  const keys: CapacityLockKey[] = [];
+  for (const practitionerId of o.practitionerIds) {
     for (const serviceId of serviceIds) {
-      for (const dayKey of days) {
-        await lockCapacity(tx, { tenantId: o.tenantId, practitionerId, serviceId, dayKey });
-      }
+      for (const dayKey of o.dayKeys) keys.push({ tenantId: o.tenantId, practitionerId, serviceId, dayKey });
     }
   }
+  // CF-LOCK: antes era un `pg_advisory_xact_lock` por clave (una ida y vuelta cada una). Con el candado de rango (31
+  // días × profesionales × servicios) eso eran cientos o miles de sentencias en una tx. `lockCapacityMany` toma las
+  // MISMAS claves en el MISMO orden global del contrato C2 (`orderedCapacityLockKeys`: tenant, profesional, servicio,
+  // día, por componente — el de los `for` con `sort()` de antes) en UNA sentencia, y espera en la primera ocupada sin
+  // tener tomadas las siguientes. Dedup incluido.
+  await lockCapacityMany(tx, keys);
 }
 
 // Mismo criterio de "cobro registrado" que `cancelBookingsInTx` (H1): acá solo
@@ -314,6 +322,12 @@ async function findAffectedBookings(
     tenantId: string;
     startsAt: Date;
     endsAt: Date;
+    /**
+     * CF-LOCK: ventanas exactas dentro de [startsAt, endsAt) (una por día de un candado de rango). Sin esto se toma
+     * la ventana entera: con una franja de 9 a 12 en 5 días, el sobre [lun 9:00, vie 12:00) traería los turnos de la
+     * tarde. Se consulta el sobre UNA vez y se filtra en memoria (no una consulta por día).
+     */
+    windows?: readonly { startsAt: Date; endsAt: Date }[];
     practitionerIds: string[] | null;
     locationId: string | null;
     locationIsPrimary: boolean;
@@ -362,13 +376,17 @@ async function findAffectedBookings(
       payment: { select: { status: true } },
     },
   });
+  const windows = o.windows ?? [{ startsAt: o.startsAt, endsAt: o.endsAt }];
   return candidates
-    .filter(
-      (b) =>
-        b.scheduledFor.getTime() + b.durationMin * 60_000 > o.startsAt.getTime() &&
+    .filter((b) => {
+      const s = b.scheduledFor.getTime();
+      const e = s + b.durationMin * 60_000;
+      return (
+        windows.some((w) => s < w.endsAt.getTime() && e > w.startsAt.getTime()) &&
         // Una reserva pública impaga y vencida ya no ocupa el horario (§5.18).
         isHoldingCapacity(b, o.now)
-    )
+      );
+    })
     .map((b) => ({
       id: b.id,
       practitionerId: b.practitionerId,
@@ -734,6 +752,27 @@ function sameIds(a: readonly string[], b: readonly string[]): boolean {
   return true;
 }
 
+/**
+ * CF-LOCK: ventanas del candado, UNA por día AR del rango (`dayLockDayKeys`, aritmética AR sin `setHours`/`getDay`
+ * del host), y su sobre [primera, última). Sin `endDayKey` es un solo día: lo de siempre.
+ */
+function dayLockWindows(input: {
+  dayKey: string;
+  endDayKey?: string | null;
+  allDay: boolean;
+  startMin?: number;
+  endMin?: number;
+}): { dayKeys: string[]; windows: { startsAt: Date; endsAt: Date }[]; startsAt: Date; endsAt: Date } {
+  const dayKeys = dayLockDayKeys(input);
+  const windows = dayKeys.map((k) => dayLockWindow(k, input));
+  return { dayKeys, windows, startsAt: windows[0].startsAt, endsAt: windows[windows.length - 1].endsAt };
+}
+
+/** Rótulo del motivo de cancelación del candado: el día, o «del X al Y» en un rango. */
+function dayLockSpanText(dayKeys: readonly string[]): string {
+  return dayKeys.length === 1 ? `del día ${dayKeys[0]}` : `del ${dayKeys[0]} al ${dayKeys[dayKeys.length - 1]}`;
+}
+
 export async function previewDayLock(raw: DayLockPreviewInput): Promise<ActionResult<DayLockPreview>> {
   const parsed = DayLockPreviewQuery.safeParse(raw);
   if (!parsed.success) {
@@ -747,7 +786,7 @@ export async function previewDayLock(raw: DayLockPreviewInput): Promise<ActionRe
   if (roomId) assertCanManageRoom(actor, caps);
   else assertCanManageTargets(caps, actor.practitionerId, targets);
   const pracIds = targets.filter((t): t is string => t !== null);
-  const win = dayLockWindow(input.dayKey, input);
+  const win = dayLockWindows(input);
 
   type TxOut = { kind: "error"; error: string } | { kind: "ok"; affected: DayLockAffected[] };
   let out: TxOut;
@@ -761,6 +800,7 @@ export async function previewDayLock(raw: DayLockPreviewInput): Promise<ActionRe
           tenantId,
           startsAt: win.startsAt,
           endsAt: win.endsAt,
+          windows: win.windows,
           practitionerIds: null,
           locationId: room.locationId,
           locationIsPrimary: false,
@@ -788,6 +828,7 @@ export async function previewDayLock(raw: DayLockPreviewInput): Promise<ActionRe
         tenantId,
         startsAt: win.startsAt,
         endsAt: win.endsAt,
+        windows: win.windows,
         practitionerIds: input.practitionerIds ? pracIds : null,
         locationId: input.locationId ?? null,
         locationIsPrimary,
@@ -804,6 +845,8 @@ export async function previewDayLock(raw: DayLockPreviewInput): Promise<ActionRe
     ok: true,
     data: {
       dayKey: input.dayKey,
+      endDayKey: win.dayKeys[win.dayKeys.length - 1],
+      days: win.dayKeys.length,
       startsAt: win.startsAt.toISOString(),
       endsAt: win.endsAt.toISOString(),
       allDay: input.allDay,
@@ -831,7 +874,7 @@ async function applyDayLockImpl(raw: DayLockApplyInput): Promise<ApplyDayLockRes
   if (roomId) assertCanManageRoom(actor, caps);
   else assertCanManageTargets(caps, actor.practitionerId, targets);
   const pracIds = targets.filter((t): t is string => t !== null);
-  const win = dayLockWindow(input.dayKey, input);
+  const win = dayLockWindows(input);
   // Con sala se reemplaza por la sede de la sala (validada en la tx).
   let locationId = input.locationId ?? null;
   const now = new Date();
@@ -845,7 +888,8 @@ async function applyDayLockImpl(raw: DayLockApplyInput): Promise<ApplyDayLockRes
     out = await runWithRls(tenantId, async (tx): Promise<TxOut> => {
       let locationIsPrimary = false;
       if (roomId) {
-        // 1-3 (sala, SR-B): clave de sala del día → sedes → validar la sala.
+        // 1-3 (sala, SR-B): clave de sala de CADA día del sobre → sedes → validar la sala. En un rango con franja el
+        //    sobre incluye las noches: lockear de más esos días no cambia nada (son los mismos días AR).
         const room = await lockAndCheckRoom(tx, {
           tenantId,
           roomId,
@@ -871,8 +915,9 @@ async function applyDayLockImpl(raw: DayLockApplyInput): Promise<ApplyDayLockRes
           ).map((p) => p.id);
         }
 
-        // 2. Locks de cupo del día (ver cabecera de la sección), en orden fijo.
-        await lockCapacityScope(tx, { tenantId, practitionerIds: lockPracIds, dayKeys: [input.dayKey] });
+        // 2. Locks de cupo de TODOS los días del rango (ver cabecera de la sección), en orden fijo: sin los del 2.º día
+        //    en adelante, un alta en vuelo ese día no se vería en el recálculo ni vería el bloqueo.
+        await lockCapacityScope(tx, { tenantId, practitionerIds: lockPracIds, dayKeys: win.dayKeys });
 
         // 3. Sede: lock compartido y después validar.
         if (locationId) {
@@ -887,6 +932,7 @@ async function applyDayLockImpl(raw: DayLockApplyInput): Promise<ApplyDayLockRes
         tenantId,
         startsAt: win.startsAt,
         endsAt: win.endsAt,
+        windows: win.windows,
         practitionerIds: input.practitionerIds ? pracIds : null,
         locationId,
         locationIsPrimary,
@@ -901,49 +947,62 @@ async function applyDayLockImpl(raw: DayLockApplyInput): Promise<ApplyDayLockRes
       //    idéntico (doble click, reintento tras un timeout), se reusa.
       //    SR-B: `roomId` en el filtro — sin él, un candado "todos" de una
       //    sede reusaría el bloqueo de UNA sala (también practitionerId null).
+      //    CF-LOCK: en un rango, "idéntico" = cada (destino, día) ya tiene su fila con esa ventana. Si falta alguna se
+      //    crea el rango entero con un grupo nuevo (no se completan huecos: el grupo nuevo es lo que «Quitar todo el
+      //    bloqueo» borra, y mezclar filas de otro grupo lo dejaría a medias).
       const existing = await tx.timeBlock.findMany({
         where: {
           tenantId,
           deletedAt: null,
-          startsAt: win.startsAt,
-          endsAt: win.endsAt,
+          startsAt: { in: win.windows.map((w) => w.startsAt) },
           locationId,
           roomId,
           practitionerId: input.practitionerIds ? { in: pracIds } : null,
         },
-        select: { id: true, practitionerId: true, groupId: true },
+        select: { id: true, practitionerId: true, groupId: true, startsAt: true, endsAt: true },
         orderBy: { createdAt: "asc" },
       });
-      const byTarget = new Map<string | null, { id: string; groupId: string | null }>();
-      for (const e of existing) if (!byTarget.has(e.practitionerId)) byTarget.set(e.practitionerId, e);
-      const reused = targets.every((t) => byTarget.has(t));
+      const keyOf = (practitionerId: string | null, startsAt: Date) => `${practitionerId ?? "*"}|${startsAt.getTime()}`;
+      const endOf = new Map(win.windows.map((w) => [w.startsAt.getTime(), w.endsAt.getTime()]));
+      const byTargetDay = new Map<string, { id: string; groupId: string | null }>();
+      for (const e of existing) {
+        if (endOf.get(e.startsAt.getTime()) !== e.endsAt.getTime()) continue;
+        const k = keyOf(e.practitionerId, e.startsAt);
+        if (!byTargetDay.has(k)) byTargetDay.set(k, e);
+      }
+      const cells = win.windows.flatMap((w) => targets.map((t) => keyOf(t, w.startsAt)));
+      const reused = cells.every((k) => byTargetDay.has(k));
+      // Grupo para 2+ filas: varios destinos (decisión 8) o varios días (CF-LOCK). Una fila suelta se borra por id.
+      const grouped = targets.length > 1 || win.windows.length > 1;
 
       let ids: string[];
       let groupId: string | null;
       if (reused) {
-        ids = targets.map((t) => byTarget.get(t)!.id);
-        groupId = targets.length > 1 ? (byTarget.get(targets[0])!.groupId ?? null) : null;
+        ids = cells.map((k) => byTargetDay.get(k)!.id);
+        groupId = grouped ? (byTargetDay.get(cells[0])!.groupId ?? null) : null;
       } else {
-        // Decisión 8: "todos" = una fila null; subconjunto = N filas con groupId.
-        groupId = targets.length > 1 ? randomUUID() : null;
+        // Decisión 8: "todos" = una fila null; subconjunto = N filas con groupId. CF-LOCK: × cada día del rango.
+        groupId = grouped ? randomUUID() : null;
         ids = [];
-        for (const practitionerId of targets) {
-          const row = await tx.timeBlock.create({
-            data: {
-              tenantId,
-              practitionerId,
-              locationId,
-              roomId,
-              startsAt: win.startsAt,
-              endsAt: win.endsAt,
-              allDay: input.allDay,
-              reason: input.reason,
-              groupId,
-              createdById: actor.userId,
-            },
-            select: { id: true },
-          });
-          ids.push(row.id);
+        for (const w of win.windows) {
+          for (const practitionerId of targets) {
+            const row = await tx.timeBlock.create({
+              data: {
+                tenantId,
+                practitionerId,
+                locationId,
+                roomId,
+                startsAt: w.startsAt,
+                endsAt: w.endsAt,
+                allDay: input.allDay,
+                reason: input.reason,
+                groupId,
+                createdById: actor.userId,
+              },
+              select: { id: true },
+            });
+            ids.push(row.id);
+          }
         }
       }
 
@@ -960,7 +1019,7 @@ async function applyDayLockImpl(raw: DayLockApplyInput): Promise<ApplyDayLockRes
         const res = await cancelBookingsInTx(tx, {
           tenantId,
           bookingIds: affected.map((a) => a.id),
-          reason: `${roomId ? "Bloqueo de sala" : "Candado"} del día ${input.dayKey}${input.reason ? `: ${input.reason}` : ""}`,
+          reason: `${roomId ? "Bloqueo de sala" : "Candado"} ${dayLockSpanText(win.dayKeys)}${input.reason ? `: ${input.reason}` : ""}`,
           actorId: actor.userId,
           auditAction: "booking.cancel.dayLock",
         });
@@ -1006,6 +1065,8 @@ async function applyDayLockImpl(raw: DayLockApplyInput): Promise<ApplyDayLockRes
       error: "La agenda cambió mientras decidías: revisá la lista actualizada de turnos.",
       affected: {
         dayKey: input.dayKey,
+        endDayKey: win.dayKeys[win.dayKeys.length - 1],
+        days: win.dayKeys.length,
         startsAt: win.startsAt.toISOString(),
         endsAt: win.endsAt.toISOString(),
         allDay: input.allDay,
@@ -1027,10 +1088,12 @@ async function applyDayLockImpl(raw: DayLockApplyInput): Promise<ApplyDayLockRes
   //      ofrece slots). Un candado de varios profesionales, de "todos" o de
   //      sala va con `practitionerId: null`. No re-invalida `bookingDays`: ya
   //      lo hizo el paso 1 en este mismo request.
+  //      CF-LOCK: un rango manda UNO solo con `day: null` («re-pedí lo que estés mirando»), como `emitAvailability`
+  //      (FX1b, «1 commit = 1 POST»): uno por día eran hasta 31 POST a Broadcast por un clic.
   await afterBookingsCommitted(tenantId, out.refs);
   await afterAvailabilityCommitted(
     tenantId,
-    { practitionerId: availabilityScopeOf(targets, roomId), day: input.dayKey },
+    { practitionerId: availabilityScopeOf(targets, roomId), day: win.dayKeys.length === 1 ? input.dayKey : null },
     { invalidateCaches: false }
   );
   return { ok: true, data };
@@ -1039,7 +1102,12 @@ async function applyDayLockImpl(raw: DayLockApplyInput): Promise<ApplyDayLockRes
 /**
  * Desbloquear un día: soft-delete (`deletedAt`) de los bloqueos CONTENIDOS en
  * ese día AR del alcance (`practitionerId`: sus filas; null: todas las del
- * día). No toca:
+ * día). Un candado de RANGO (CF-LOCK) son filas de un día con el mismo
+ * `groupId`, así que desbloquear un día quita SOLO ese día (decisión con
+ * default de CF-LOCK: «me voy de vacaciones pero el miércoles atiendo»). Con
+ * `groupId` («Quitar todo el bloqueo (lun 3 al vie 7)») quita todas las filas vivas
+ * de ese grupo dentro del alcance, de todos sus días, si el grupo toca el día
+ * pedido. No toca:
  *   - bloqueos de varios días (vacaciones): quitarlos desbloquearía también
  *     los otros días → se informan en `remaining` con `multiDay`;
  *   - visto desde un profesional, el bloqueo de "todos" (alcanza al resto del
@@ -1059,7 +1127,7 @@ async function removeDayLockImpl(raw: DayLockRemoveInput): Promise<ActionResult<
   if (!parsed.success) {
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
   }
-  const { dayKey, practitionerId, blockIds } = parsed.data;
+  const { dayKey, practitionerId, blockIds, groupId } = parsed.data;
   const roomId = parsed.data.roomId ?? null;
   const { actor, caps } = await actorWithCaps();
   const tenantId = actor.tenantId;
@@ -1071,10 +1139,63 @@ async function removeDayLockImpl(raw: DayLockRemoveInput): Promise<ActionResult<
   type TxOut =
     | { kind: "none" }
     | { kind: "forbidden" }
-    | { kind: "ok"; deletedIds: string[]; remaining: RemoveDayLockData["remaining"] };
+    | {
+        kind: "ok";
+        deletedIds: string[];
+        remaining: RemoveDayLockData["remaining"];
+        /** Días AR de lo borrado (para el aviso realtime de un grupo: `day: null` si son varios). */
+        days: string[];
+      };
   let out: TxOut;
   try {
     out = await runWithRls(tenantId, async (tx): Promise<TxOut> => {
+      if (groupId) {
+        // CF-LOCK «Quitar todo el bloqueo»: el grupo en el alcance del pedido (mismo filtro sala / no-sala y de
+        // profesional que el desbloqueo por día). Tiene que tocar el día desde el que se pidió.
+        const rows = await tx.timeBlock.findMany({
+          where: {
+            tenantId,
+            deletedAt: null,
+            groupId,
+            ...(roomId ? { roomId } : NOT_ROOM_BLOCK),
+            ...(practitionerId ? { practitionerId } : {}),
+          },
+          orderBy: [{ startsAt: "asc" }, { id: "asc" }],
+        });
+        if (!rows.some((b) => b.startsAt.getTime() < dayEnd.getTime() && b.endsAt.getTime() > dayStart.getTime())) {
+          return { kind: "none" };
+        }
+        // Todas o ninguna (como `deleteTimeBlock`): un grupo con una fila ajena no se borra a medias.
+        if (rows.some((b) => !canManageBlocksFor(caps, actor.practitionerId, b.practitionerId))) {
+          return { kind: "forbidden" };
+        }
+        const deletedIds = rows.map((b) => b.id);
+        await tx.timeBlock.updateMany({
+          where: { tenantId, id: { in: deletedIds }, deletedAt: null },
+          data: { deletedAt: new Date() },
+        });
+        // Lo que sigue tocando el día pedido (otros bloqueos, no del grupo).
+        const remaining = await tx.timeBlock.findMany({
+          where: {
+            tenantId,
+            deletedAt: null,
+            startsAt: { lt: dayEnd },
+            endsAt: { gt: dayStart },
+            ...(roomId ? { roomId } : NOT_ROOM_BLOCK),
+            ...(practitionerId ? { OR: [{ practitionerId }, { practitionerId: null }] } : {}),
+          },
+          orderBy: [{ startsAt: "asc" }, { id: "asc" }],
+        });
+        return {
+          kind: "ok",
+          deletedIds,
+          remaining: remaining.map((b) => ({
+            ...toRow(b),
+            multiDay: b.startsAt.getTime() < dayStart.getTime() || b.endsAt.getTime() > dayEnd.getTime(),
+          })),
+          days: [...new Set(rows.map((b) => dayKeyOf(b.startsAt)))],
+        };
+      }
       const touching = await tx.timeBlock.findMany({
         where: {
           tenantId,
@@ -1111,7 +1232,7 @@ async function removeDayLockImpl(raw: DayLockRemoveInput): Promise<ActionResult<
       const remaining = touching
         .filter((b) => !gone.has(b.id))
         .map((b) => ({ ...toRow(b), multiDay: isMultiDay(b) }));
-      return { kind: "ok", deletedIds, remaining };
+      return { kind: "ok", deletedIds, remaining, days: [dayKey] };
     });
   } catch (e) {
     // BO3-F: el modo lectura / soporte sube al wrapper con su copy (no el genérico de acá).
@@ -1126,10 +1247,46 @@ async function removeDayLockImpl(raw: DayLockRemoveInput): Promise<ActionResult<
     revalidatePath("/agenda");
     // SV06b: desbloquear devuelve los slots del día. Solo si se borró algo: sin
     // cambios no hay nada que avisar. Alcance = el pedido (sala → null).
+    // CF-LOCK: quitar un grupo de varios días → uno solo con `day: null` (FX1b).
     await afterAvailabilityCommitted(tenantId, {
       practitionerId: roomId ? null : practitionerId,
-      day: dayKey,
+      day: out.days.length === 1 ? out.days[0] : null,
     });
   }
   return { ok: true, data: { deleted: out.deletedIds.length, remaining: out.remaining } };
+}
+
+/**
+ * CF-LOCK: cuántos días AR tiene cada bloqueo de rango (grupo), para que el diálogo ofrezca «Quitar todo el bloqueo
+ * (N días)» desde cualquiera de sus días. El diálogo solo conoce los bloqueos de la ventana que mira la agenda; el
+ * grupo puede seguir fuera de ella. Solo lectura: mismo permiso que `listTimeBlocks` (`agenda.viewAll`), `where
+ * tenantId` a mano (BYPASSRLS en prod) y solo grupos de más de un día (uno de varios profesionales en un día no es
+ * un rango). Las filas de sala cuentan también: un bloqueo de sala de varios días se quita igual.
+ */
+export async function dayLockGroupSpans(raw: DayLockGroupSpansInput): Promise<ActionResult<DayLockGroupSpan[]>> {
+  const { actor } = await requireCapability("agenda.viewAll", VIEW_MSG);
+  const parsed = DayLockGroupSpansQuery.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: "Datos inválidos" };
+  const tenantId = actor.tenantId;
+  const rows = await runWithRls(tenantId, (tx) =>
+    tx.timeBlock.findMany({
+      where: { tenantId, deletedAt: null, groupId: { in: [...new Set(parsed.data.groupIds)] } },
+      select: { groupId: true, startsAt: true },
+    })
+  );
+  const byGroup = new Map<string, Set<string>>();
+  for (const r of rows) {
+    if (!r.groupId) continue;
+    const days = byGroup.get(r.groupId) ?? new Set<string>();
+    days.add(dayKeyOf(r.startsAt));
+    byGroup.set(r.groupId, days);
+  }
+  const data: DayLockGroupSpan[] = [];
+  for (const [groupId, days] of byGroup) {
+    if (days.size < 2) continue;
+    const sorted = [...days].sort();
+    data.push({ groupId, firstDayKey: sorted[0], lastDayKey: sorted[sorted.length - 1], days: sorted.length });
+  }
+  data.sort((a, b) => a.groupId.localeCompare(b.groupId));
+  return { ok: true, data };
 }

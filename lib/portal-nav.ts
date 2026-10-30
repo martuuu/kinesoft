@@ -4,7 +4,6 @@
  * módulo por su cuenta).
  *
  *   plan       ⇐ planes
- *   checkin    ⇐ planes ∧ evaluaciones
  *   ejercicios ⇐ planes ∧ ejercicios
  *   reservar   ⇐ turneroPublico
  *   cuenta     siempre (los turnos sueltos existen también en General)
@@ -16,11 +15,15 @@
  * profesional compartió con el paciente (la foto ya impresa de una ficha, `PatientDocument`), nunca la HC ni sus notas.
  * Por eso no hay ni habrá una sección «evoluciones» en el enum (lo fija `tests/unit/portal-nav.test.ts`).
  *
+ * CF (30-oct, decisión de Martin §28.1 punto 4): se fue la sección `checkin` (⇐ planes ∧ evaluaciones). Era una EVA
+ * 0..10 + notas que el paciente mandaba antes de la sesión; la EVA salió de toda la app. Las `EvaScore` con `source`
+ * «checkin-…» que ya existen quedan en la base y en el export; el portal no las lee ni escribe más.
+ *
  * Puro (solo `import type`): lo pueden importar las superficies del portal sin sumar bundle.
  */
 import type { TenantModule } from "./tenant-modules";
 
-export const PORTAL_SECTIONS = ["inicio", "plan", "cuenta", "documentos", "ejercicios", "checkin", "reservar"] as const;
+export const PORTAL_SECTIONS = ["inicio", "plan", "cuenta", "documentos", "ejercicios", "reservar"] as const;
 export type PortalSection = (typeof PORTAL_SECTIONS)[number];
 
 // `modulesFor` devuelve sets memoizados: con un WeakMap el mismo set de módulos da el mismo set de secciones (identidad
@@ -33,7 +36,6 @@ export function portalSectionsFor(modules: ReadonlySet<TenantModule>): ReadonlyS
   const out = new Set<PortalSection>(["inicio", "cuenta", "documentos"]);
   if (modules.has("planes")) {
     out.add("plan");
-    if (modules.has("evaluaciones")) out.add("checkin");
     if (modules.has("ejercicios")) out.add("ejercicios");
   }
   if (modules.has("turneroPublico")) out.add("reservar");

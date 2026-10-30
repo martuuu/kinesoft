@@ -1338,3 +1338,20 @@ BYPASSRLS). HD-6: sin `RESEND_API_KEY`/`EMAIL_FROM` el build de Production falla
 roles `kinesoft_*` no cambian (`[BR-9]`, `tests/unit/br-brand.test.tsx:213`): renombrarlas rompería secretos sellados,
 códigos de vínculo y sesiones.
 
+## 27. Feedback del cliente (CF, 30-oct-2026; en develop, sin push)
+
+Diseño en [ARCHITECTURE ADR-032 y «Realtime»](ARCHITECTURE.md); hallazgos en [AUDIT «Ronda CF»](AUDIT.md#ronda-cf).
+- **Superficies clínicas por capability.** Planes, Diagnóstico, Seguimiento, Ejercicios y Terapia manual piden
+  `clinical.read` en el menú (`lib/nav.ts:87-123`), en ⌘K (`shortcutsFor`) y en el **server**: cada `layout.tsx`
+  redirige a `/dashboard` sin ella (`app/(app)/diagnostico/layout.tsx:22`) y su `page.tsx` corta temprano
+  (`clinicalSurfaceAllowed`, `app/(app)/planes/page.tsx:24`; patrón VX-Z B1, porque layout y página renderizan en
+  paralelo). Lo ven solo quienes
+  atienden; la Secretaría, Facturación, un Titular/Admin que no atiende y el soporte de Plataforma rebotan. Las actions
+  de esas áreas ya tenían su propia barrera; esto saca la UI.
+- **Setters de M20.** `setTenantAgendaRules` (`requireTenantAdmin`) y `setPractitionerAgendaRules` (`schedule.configure`
+  + profesional del tenant), ambos con `withSupportWritable`, zod + parsers legibles (no el 500 del CHECK), `FOR UPDATE`
+  y audit en la tx (`tenant.agenda_rules` / `practitioner.agenda_rules` con `{from,to}`).
+- **Turnero.** La regla de otro servicio es bloqueo duro y no revela qué hay: el horario simplemente no se ofrece (el
+  turnero no conoce al paciente al listar, así que la excepción «mismo paciente» es solo del staff).
+- **Mails.** El motivo técnico del rechazo de la invitación al portal solo lo ven Titular y Admin; el link que se muestra
+  es el del portal, nunca un magic link.

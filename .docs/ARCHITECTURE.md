@@ -1161,6 +1161,20 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
     «Ronda T3» B4). `capLocksHeld` = «el caller ya tomó cupo y hora». Carreras en
     `tests/integration/locks-interval.test.ts` y `as2-interval-cap.test.ts` (quien espera la hora tiene todo su cupo y
     ninguna sala). Enmienda AUDIT §5.28/§5.40.
+  - **Enmienda C2 (1d), CF (30-oct; regla «no atiende servicios distintos a la vez», ADR-032):** paciente → cupo → **día del
+    profesional** → hora → sala → sedes → filas. Clave `kinesoft:pday:<t>:<profesional>:<día AR>` (`practitionerDayLockKey`):
+    dos turnos que se pisan comparten al menos un día AR de los que cubren; la de cupo lleva el servicio y la de hora solo la
+    hora de inicio (09:30 + 60' y 10:00 no la comparten), así que sin ésta dos altas de servicios distintos leían «0 de otro
+    servicio» y entraban las dos. Va en la MISMA sentencia (`lockAgendaKeysMany`: todo el cupo → todos los días → todas las
+    horas → todas las salas, cada grupo ordenado, `WITH ORDINALITY … ORDER BY o`): 0 sentencias nuevas. Se toma SIEMPRE (no
+    depende de `allowParallelServices`) en altas, lote, edición que cambia la ventana o reactiva, submit del turnero y Planes
+    (motor y «este y los siguientes», en el superconjunto junto al cupo, sin hora). No la toman bloqueos/candado
+    (`lockCapacityScope` ya toma el cupo de todos los servicios del día) ni la promoción del hold. `capLocksHeld` = «el caller
+    ya tomó cupo y día (y hora, salvo Planes)».
+    Código: `lib/booking-cap-lock.ts:354` (clave), `:362` (`practitionerDayKeysForWindow`), `:379`
+    (`pdayKeysFromCapacityKeys`), `:424` (`orderedAgendaLockKeys`), `:439` (`lockAgendaKeysMany`); turnero
+    `lib/public-booking.ts:864`; Planes `lib/plans-engine-internal.ts:388` y `lib/plans-move-internal.ts:448,745`.
+    Carreras `[CF-R1..3]` en los dos roles. Enmienda AUDIT §5.28/§5.40 y [PLANES §4 C2](PLANES.md).
   - **Seguimiento y `rescheduleSession`** lockean el plan con **`FOR NO KEY UPDATE`** (`lib/sessions.ts:706,996`),
     no `FOR UPDATE`: el INSERT de un turno con FK al plan pide `FOR KEY SHARE` sobre el plan, que choca con
     `FOR UPDATE` pero no con `FOR NO KEY UPDATE`. Sigue serializando dos cierres concurrentes (A4 de ES1).
@@ -1264,6 +1278,8 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
   - El proyecto Supabase necesita una clave **HS256** (legacy o del sistema nuevo con `kid`); la rotación es de consola
     + env, sin código (EXTERNAL-CONFIG §3.1).
   - Multi-pestaña: cada pestaña su socket y su token (leader election → C1).
+- **Enmienda CF (30-oct): el realtime nunca anduvo en prod.** Ver «Realtime: la action del token no estaba registrada» en
+  la sección CF, abajo.
 
 ### ADR-007 — La app manda los mails; Supabase solo emite tokens (status: ACCEPTED, IAM, 14-oct-2026)
 
@@ -2066,6 +2082,107 @@ está el cierre explícito y la sesión persistente apagada.
 | `lib/http/capped-body.ts` | Lectura de body con tope (webhooks de MP y WhatsApp) |
 | `lib/patients-list-{internal,logic}.ts` · `components/patients/patients-pagination.tsx` | `/pacientes` paginado (HD-10) |
 | `lib/brand.ts` · `app/{icon.svg,apple-icon.tsx,opengraph-image.tsx,manifest.ts}` | Marca |
+
+## CF (30-oct-2026): feedback del primer cliente en producción
+
+Plan §28 (brief `wip-20/brief-cf.md`; olas CF-0..CF-5 y Z). **En `develop`, sin commitear y sin push.** Una migración:
+**M20** `20261030120000_cf_agenda_rules`, aditiva y **antes** del deploy ([RUNBOOK «M20 en prod»](MIGRACIONES-RUNBOOK.md)).
+Es la primera tanda con prod viva (reset del 29/30-oct). Hallazgos en [AUDIT «Ronda CF»](AUDIT.md#ronda-cf).
+
+### ADR-032 — Regla por profesional: no atiende servicios distintos a la vez (status: ACCEPTED, CF, 30-oct-2026)
+
+**Contexto.** El cliente reportó que la agenda «bloqueaba» de 16:15 a 18. La auditoría (§28.0) encontró lo contrario de lo
+reportado: el cupo era estrictamente **profesional + servicio** (`countAgendaOccupancy`, motor `classify.ts`, turnero
+`public-booking-slots.ts`), así que un turno de Osteopatía **no** frenaba uno de RPG del mismo profesional a la misma
+hora; lo que vio era el cupo del mismo servicio (60' a las 16:15 pisa el de las 17) con el selector de a 15'. Además
+pidió elegir el intervalo de horarios y la anticipación del turnero. La clave `phour` (C2 1c) no servía: es la hora AR
+de **inicio**, así que 09:30 + 60' y 10:00 + 60' no la comparten y nada serializaba dos servicios distintos.
+
+**Decisión** (decisiones 1, 2, 3 y 6 de Martin, §28.1; defaults CF-D1..12, §28.2):
+- **`Practitioner.allowParallelServices`** (M20, `BOOLEAN NOT NULL DEFAULT false`, sin backfill). Apagado (el default de
+  todos al migrar) = **un turno de OTRO servicio que se pisa bloquea**; prendido = la regla de antes. El mismo servicio
+  sigue hasta su cupo. UI: Configuración → Profesionales → pestaña Horarios → «Reglas de la agenda de <nombre>».
+- **Predicado único** `isOtherServiceConflict` / `otherServiceConflicts` (`lib/availability/exclusive-service.ts:43,55`)
+  para motor, escritura y turnero: otro servicio ∧ `isHoldingCapacity` (§5.18, CF-D5: NO_SHOW y COMPLETED cuentan) ∧
+  solape semiabierto ∧ **no** el mismo paciente no nulo (CF-D3: un paciente con dos servicios seguidos no se bloquea a
+  sí mismo; solo staff, el turnero no conoce al paciente al listar).
+- **Staff: avisa y deja forzar como sobreturno.** Clase nueva `"otro-servicio"` (`lib/availability/types.ts:342,441`;
+  precedencia `… sobreturno > otro-servicio > tope-intervalo > libre`). Un turno: prompt propio + `allowOtherService`
+  (`lib/booking-force-flags.ts:53`, orden `blocked, outOfHours, conflict, otherService, intervalCap, patientOverlap,
+  roomBusy`); el update devuelve `kind: "other-service"` (`lib/bookings-core.ts:1393`). Lote y Planes lo pliegan en
+  «sobreturno» (`allowOverbooking` / `force.capacity`, CF-D4; en plan `capacityFull ||= otherServiceBusy`,
+  `lib/availability/plan.ts:60`). Forzado = `isOverbooked` + `[SOBRETURNO]` (§5.29).
+- **Turnero: bloqueo duro.** `PublicOffer.exclusiveService` (`lib/public-booking-slots.ts:191,235,324`): el horario no se
+  ofrece y el submit re-chequea con el lock tomado (`slotGone`).
+- **Escritura en una sentencia:** `countAgendaOccupancy({…, exclusiveService, patientId})` (`lib/bookings-core.ts:362`)
+  devuelve también `otherService`; con `exclusiveService` el `where` pierde `serviceId`. `countCapacityOverlaps` (§5) no
+  cambia byte a byte. El nombre del servicio del aviso (`otherServiceLabel`, `:269`) es +1 query solo en el aviso.
+- **Lock `kinesoft:pday:`** (día AR del profesional, enmienda C2 (1d) en ADR-004), siempre, en la misma sentencia que
+  cupo, hora y sala. Con `capLocksHeld` el core igual chequea la regla (CF-D12).
+- **Pasos del selector** (decisión 3; M20 `{Tenant,Practitioner}.agendaSlotStepMin` / `publicSlotStepMin`, 15/30/45/60):
+  `effectiveAgendaRules` (`lib/availability/agenda-rules.ts:40`). Staff: profesional → consultorio → 15
+  (`lib/availability-actions.ts:409`, CF-D6). Turnero: profesional → consultorio → `publicSlotStepFor(duración)`
+  (CF-D7). No es `agendaSlotMinutes` (alto de fila de la grilla, solo visual). La hora manual exacta ya existía: se hizo
+  visible («¿Otro horario?» en el selector).
+- **Anticipación del turnero por consultorio** (decisión 6; `Tenant.publicMinLeadMinutes`, 0..80 640 = 8 semanas):
+  `effectivePublicMinLead` (`agenda-rules.ts:57`) = `PractitionerService.minLeadMinutes` > consultorio > 60 (0 es un
+  valor). UI en horas/días/semanas (`lib/lead-time.ts`). El tope del servicio pasó de 30 días a 8 semanas. Con
+  anticipación larga el turnero recarga la ventana desde el primer día posible; el texto «al menos N de anticipación»
+  solo si es > 60' (CF-D9).
+- **Setters** `setTenantAgendaRules` (`lib/tenant-settings.ts:241`, `requireTenantAdmin`) y `setPractitionerAgendaRules`
+  (`lib/practitioner-schedule.ts:1087`, `schedule.configure`), ambos con `withSupportWritable`, FOR UPDATE, no-op si no
+  cambia y audit `tenant.agenda_rules` / `practitioner.agenda_rules` en la tx (CF-D11). Las columnas no van al export
+  (CF-D10, backlog).
+
+**Carve-out de paridad (§5.27).** Sin `exclusiveService` el motor da la salida de antes sin claves nuevas: los fijados
+`availability-classify.test.ts:372` y `booking-schedule.test.ts:434` pasan sin editarse; los oráculos `buildPublicSlots`
+(paso 45) y `nextFreeSlot` / `firstFree` (paso 15) no cambian. La regla nueva tiene sus tests (`[CF-E1..7]`).
+
+**Descartados.** Regla por consultorio o por servicio (Martin: por profesional); bloqueo duro también en el staff (la
+Secretaría necesita poder cargar el sobreturno); reusar la clave `phour` (no cubre turnos que arrancan en horas
+distintas); backfill en `true` para no cambiar a nadie (Martin: el default es que no puede).
+
+**Consecuencias.**
+- Al migrar, **todos** quedan con la regla nueva. El precheck `pre.M20.crossService` (WARN) lista quién tiene hoy
+  servicios pisados: a esos se les prende el interruptor después del deploy. Los turnos ya cargados no se tocan.
+- Perf: 0 sentencias nuevas en las escrituras (`[CF-PERF1]`: `f.createBooking` 31/5, lote 182/22, update iguales con la
+  regla prendida y apagada).
+- `firstFree` sigue en 15 (CF-D6): con paso 30 puede sugerir 10:15, fuera de la grilla (aceptado, el chip lo tolera).
+- La Secretaría ve el aviso «{Profesional} está atendiendo «{Servicio}» en ese horario.» y puede cargarlo como sobreturno.
+
+### Realtime: la action del token no estaba registrada (CF-RT, enmienda de ADR-006)
+
+**Por qué falló en prod.** `mintRealtimeToken` solo se alcanzaba por un `import()` dinámico (el provider cargaba el hub
+dinámico y el hub importaba la action). Next 14.2 no registra en `.next/server/server-reference-manifest.json` una action
+que el cliente solo alcanza así: el server respondía «Failed to find Server Action» **con el mismo build**, el cliente
+recibía `undefined` y el hub lo clasificaba como `stale_build` en cada carga. El E2E corre con `REALTIME_DRIVER=off` y el
+driver `local` no usa la action: por eso nunca se vio. Era la regla de AUDIT `server-action-import-dinamico` (Tanda B),
+que no tenía guard.
+
+**Fix.**
+- `lib/realtime-token-action.ts:20` (`"use server"`, `mintRealtimeTokenAction`): referencia **estática** que importa
+  `components/providers/realtime-provider.tsx:59` y le pasa al hub (`createRealtimeHub({ getToken })`, `:300`). El hub
+  sigue dinámico. Es un módulo aparte (con `import()` perezoso de `lib/realtime-token` adentro) porque un import estático
+  de `lib/realtime-token` desde el provider evalúa `lib/session` en los tests de render y los rompe. La TV
+  (`components/tv/use-display-live.ts`) ya importaba estático.
+- **Clasificación:** un `ok` faltante o un 500 son `server_error`, no `stale_build`. `stale_build` solo con un build
+  distinto **comprobado**: el id horneado (`NEXT_PUBLIC_BUILD_ID`) contra el header `x-build-id` de una respuesta fresca
+  (`lib/realtime-client-state.ts:283-311`; `next.config.mjs:57`, `sha256(VERCEL_GIT_COMMIT_SHA)[:16]`). Requiere
+  «Automatically expose System Environment Variables» en Vercel (Martin: activado).
+- **Guard post-build** `scripts/check-server-actions.mjs` (`npm run check:actions`): todo `createServerReference("<id>")`
+  de `.next/static/chunks/**` tiene que estar en el manifest; exit 1 si falta uno. Corre en el gate después del build
+  seguro (TESTING.md). Test con fixtures `tests/unit/cf-rt-check-server-actions.test.ts`.
+
+### Módulos nuevos de CF
+
+| Módulo | Qué es |
+| --- | --- |
+| `lib/availability/agenda-rules.ts` · `lib/availability/exclusive-service.ts` | Herencia de pasos y anticipación; predicado único de «otro servicio» (puros) |
+| `lib/agenda-rules-config.ts` · `lib/lead-time.ts` | Copy y parsers client-safe (sin zod); horas/días/semanas ↔ minutos |
+| `components/configuracion/panels/practitioners/agenda-rules-editor.tsx` · `general-panel.tsx` «Reglas de la agenda» | UI de M20 |
+| `lib/realtime-token-action.ts` · `scripts/check-server-actions.mjs` | Fix del realtime y su guard |
+| `components/ui/coming-soon.tsx` | «Próximamente» (Diagnóstico) |
+| `app/favicon.ico` | Favicon con el sello C (íconos versionados `?v=2`) |
 
 ## Cache & cookies (what is implemented — updated 30-sep-2026)
 

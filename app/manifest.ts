@@ -10,6 +10,9 @@ import { BRAND_NAME, BRAND_SHORT_NAME } from "@/lib/brand";
  *   acepta degradés ni variables CSS.
  * - `display: "standalone"` también en escritorio, sin `window-controls-overlay` en v1 (MB-D7).
  * - Los PNG los genera `app/icons/[name]/route.tsx` con `next/og` (MB-D15, sin binarios a mano).
+ * - [CF-UI1 · H] Los `src` llevan `?v=2`: el ícono cambió de marca (BR-a) con la misma URL, y Chrome/Android y el SW
+ *   (PRECACHE de `public/sw.js`) seguían mostrando el PNG viejo cacheado. La ruta ignora la query. Al cambiar el dibujo
+ *   de nuevo, subir el número acá y en `public/sw.js` (NO el `VERSION` del SW, preservado [BR-9]).
  * - El middleware NO corre sobre este archivo ni sobre `/icons/*` (matcher): con mantenimiento prendido devolvería
  *   503 y la instalación fallaría.
  */
@@ -31,15 +34,15 @@ export default function manifest(): MetadataRoute.Manifest {
     theme_color: "#1F4FBE",
     categories: ["medical", "productivity", "business"],
     icons: [
-      { src: "/icons/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
-      { src: "/icons/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
-      { src: "/icons/maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+      { src: "/icons/icon-192.png?v=2", sizes: "192x192", type: "image/png", purpose: "any" },
+      { src: "/icons/icon-512.png?v=2", sizes: "512x512", type: "image/png", purpose: "any" },
+      { src: "/icons/maskable-512.png?v=2", sizes: "512x512", type: "image/png", purpose: "maskable" },
     ],
     shortcuts: [
-      { name: "Agenda", url: "/agenda", icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }] },
-      { name: "Nuevo turno", url: "/agenda?new=1", icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }] },
-      { name: "Sala de espera", url: "/sala", icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }] },
-      { name: "Pacientes", url: "/pacientes", icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }] },
+      { name: "Agenda", url: "/agenda", icons: [{ src: "/icons/icon-192.png?v=2", sizes: "192x192" }] },
+      { name: "Nuevo turno", url: "/agenda?new=1", icons: [{ src: "/icons/icon-192.png?v=2", sizes: "192x192" }] },
+      { name: "Sala de espera", url: "/sala", icons: [{ src: "/icons/icon-192.png?v=2", sizes: "192x192" }] },
+      { name: "Pacientes", url: "/pacientes", icons: [{ src: "/icons/icon-192.png?v=2", sizes: "192x192" }] },
     ],
   };
 }

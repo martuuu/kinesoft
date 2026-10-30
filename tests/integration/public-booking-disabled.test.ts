@@ -92,6 +92,8 @@ describe.skipIf(!RUN)("EV-T · turnero público con switch", () => {
         phone: `11${Math.floor(Math.random() * 1e8).toString().padStart(8, "0")}`,
         documentId: opts.documentId ?? `${Math.floor(1e7 + Math.random() * 8e7)}`,
         dateOfBirth: "1990-05-10",
+        title: "Lumbalgia",
+        notes: "Control",
       },
     };
   }

@@ -3,6 +3,7 @@ import { gatingForActor } from "@/lib/plan-gating";
 import { getActor } from "@/lib/session";
 import { BibliotecaClient } from "@/components/biblioteca/biblioteca-client";
 import { moduleWall } from "@/lib/module-wall";
+import { clinicalSurfaceAllowed } from "@/lib/clinical-wall";
 
 export const metadata = { title: "Biblioteca" };
 export const dynamic = "force-dynamic";
@@ -21,6 +22,8 @@ export default async function BibliotecaPage({ searchParams }: { searchParams: S
   // VX-Z (B1): el layout y la página se renderizan EN PARALELO; sin el módulo, el layout muestra el muro o redirige,
   // pero la página igual corría sus queries (y `assertModule` tiraba). Mismo veredicto que el layout (actor cacheado).
   if ((await moduleWall("ejercicios")) !== "ok") return null;
+  // CF-NAV: mismo veredicto que el layout (sin `clinical.read` → /dashboard), antes de cualquier query.
+  if (!(await clinicalSurfaceAllowed())) return null;
   const filters = {
     q: searchParams.q,
     difficulty: searchParams.difficulty ? Number(searchParams.difficulty) : undefined,

@@ -61,8 +61,10 @@ import {
   hourKeyForStart,
   lockAgendaKeysMany,
   lockCapacityAndRoomsMany,
+  practitionerDayKeysForWindow,
   roomKeysForWindow,
 } from "@/lib/booking-cap-lock";
+import { isOtherServiceConflict } from "@/lib/availability/exclusive-service";
 import {
   arIntervalKeyOf,
   arIntervalLabels,
@@ -256,6 +258,27 @@ export function hasClinicalText(b: { title: string | null; description: string |
 }
 
 /**
+ * CF: nombre del servicio que ya ocupa el horario, para el aviso «otro servicio» (`OTHER_SERVICE_ERROR`). +1 query
+ * SOLO cuando hay aviso: el conteo (`countAgendaOccupancy`) trae el id y no el nombre para no tocar su sentencia.
+ * null = no se pudo leer (servicio de otro tenant o borrado): el copy cae a «otro servicio».
+ */
+export async function otherServiceLabel(tx: Tx, tenantId: string, serviceId: string): Promise<string | null> {
+  const svc = await tx.service.findFirst({ where: { id: serviceId, tenantId }, select: { name: true } });
+  return svc?.name ?? null;
+}
+
+/**
+ * ZF1: ¿el profesional NO atiende servicios distintos a la vez? (`!allowParallelServices`, como `effectiveAgendaRules`).
+ * Lo usa solo el cambio de paciente sin cambio de ventana, que no carga `loadInstantAvailability` (de donde sale la
+ * regla en el resto de la edición), y solo cuando el conteo ya encontró otro servicio: +1 sentencia solo en ese caso.
+ * Sin fila (no debería: la edición ya leyó el turno del tenant) = el default de M20 (la regla puesta).
+ */
+async function practitionerExclusiveService(tx: Tx, tenantId: string, practitionerId: string): Promise<boolean> {
+  const p = await tx.practitioner.findFirst({ where: { id: practitionerId, tenantId }, select: { allowParallelServices: true } });
+  return !(p?.allowParallelServices ?? false);
+}
+
+/**
  * Nombre del profesional para el aviso de conflicto. Del TENANT (antes era un
  * `findUnique` por id pelado) y nunca el email: el fallback es genérico.
  */
@@ -337,6 +360,15 @@ export async function countCapacityOverlaps(
  *
  * `excludeId` / `excludeKey` valen para los dos conteos: el turno editado (o el reintento idempotente) no se cuenta
  * contra sí mismo ni en el cupo ni en el tope.
+ *
+ * CF (§28, ADR-032, brief A.5): «el profesional no atiende servicios distintos a la vez» va plegado en la MISMA
+ * sentencia (techos estrictos de perf: 0 sentencias nuevas). Con `exclusiveService` (= `!allowParallelServices`,
+ * lo decide el caller con la regla leída post-lock) el where pierde `serviceId` como con tope, y `otherService`
+ * cuenta los turnos de OTRO servicio que se pisan con [start, end) con el predicado único del motor
+ * (`isOtherServiceConflict`: retiene cupo, solape semiabierto, el mismo paciente no nulo no cuenta, CF-D3).
+ * `first` = el que empieza antes (el del aviso; la query no ordena y el resultado tiene que ser estable). Sin
+ * `exclusiveService` no se cuenta nada y, sin `cap`, la query sigue siendo la de `countCapacityOverlaps` byte a
+ * byte (§5).
  */
 export async function countAgendaOccupancy(
   tx: Tx,
@@ -350,15 +382,26 @@ export async function countAgendaOccupancy(
     excludeId?: string;
     excludeKey?: string | null;
     cap?: IntervalCap | null;
+    /** CF: !allowParallelServices. true → el where pierde serviceId (como con tope); ventana lt = cap ? max(intervalEnd,end) : end. */
+    exclusiveService?: boolean;
+    /** CF-D3: paciente del turno nuevo (null = guest). */
+    patientId?: string | null;
   }
-): Promise<{ overlap: number; intervalStarts: number }> {
+): Promise<{
+  overlap: number;
+  intervalStarts: number;
+  otherService: { count: number; first: { serviceId: string; scheduledFor: Date } | null };
+}> {
   const cap = o.cap ?? null;
+  const exclusive = o.exclusiveService === true;
+  /** El where cruza servicios (tope u otro servicio): `overlap` se filtra en JS por el servicio. */
+  const crossService = cap != null || exclusive;
   const intervalEnd = cap ? arIntervalWindow(o.start, cap.intervalMin).end : null;
   const candidates = await tx.booking.findMany({
     where: {
       tenantId: o.tenantId,
       practitionerId: o.practitionerId,
-      ...(cap ? {} : { serviceId: o.serviceId }),
+      ...(crossService ? {} : { serviceId: o.serviceId }),
       status: { notIn: ["CANCELLED"] },
       scheduledFor: {
         lt: intervalEnd && intervalEnd > o.end ? intervalEnd : o.end,
@@ -376,12 +419,12 @@ export async function countAgendaOccupancy(
       createdAt: true,
       patientId: true,
       idempotencyKey: true,
-      ...(cap ? { serviceId: true } : {}),
+      ...(crossService ? { serviceId: true } : {}),
     },
   });
   const overlap = candidates.filter(
     (c) =>
-      (!cap || (c as { serviceId?: string }).serviceId === o.serviceId) &&
+      (!crossService || (c as { serviceId?: string }).serviceId === o.serviceId) &&
       isHoldingCapacity(c, o.now) &&
       c.scheduledFor < o.end &&
       new Date(c.scheduledFor.getTime() + c.durationMin * 60_000) > o.start
@@ -392,7 +435,18 @@ export async function countAgendaOccupancy(
         { practitionerId: o.practitionerId, when: o.start, intervalMin: cap.intervalMin, now: o.now }
       )
     : 0;
-  return { overlap, intervalStarts };
+  let otherCount = 0;
+  let first: { serviceId: string; scheduledFor: Date } | null = null;
+  if (exclusive) {
+    const q = { serviceId: o.serviceId, patientId: o.patientId ?? null, start: o.start, end: o.end, now: o.now };
+    for (const c of candidates) {
+      const b = { ...c, serviceId: (c as { serviceId?: string }).serviceId! };
+      if (!isOtherServiceConflict(b, q)) continue;
+      otherCount++;
+      if (!first || b.scheduledFor < first.scheduledFor) first = { serviceId: b.serviceId, scheduledFor: b.scheduledFor };
+    }
+  }
+  return { overlap, intervalStarts, otherService: { count: otherCount, first } };
 }
 
 /**
@@ -752,6 +806,9 @@ export async function suggestNextFreeSlot(
     // T3 (C-AS3): el «próximo libre» de cualquier aviso respeta el tope por intervalo del profesional (el loader
     // ya lo trae, 0 sentencias): sin esto, el aviso de tope sugería otro horario del MISMO intervalo lleno.
     intervalCap: input.intervalCaps[o.practitionerId] ?? null,
+    // CF (handoff de CF-E): el «próximo libre» saltea los turnos de OTRO servicio del profesional si no atiende
+    // servicios distintos a la vez; sin esto el aviso «otro servicio» sugería un horario que vuelve a avisar.
+    ...(input.agendaRules[o.practitionerId]?.exclusiveService ? { exclusiveService: true } : {}),
   });
 }
 
@@ -1340,6 +1397,11 @@ export type BookingUpdateTxOutcome =
   | ({ kind: "out-of-hours" } & BookingUpdatePrompt)
   | { kind: "patient-overlap"; existingISO: string }
   | ({ kind: "conflict" } & BookingUpdatePrompt)
+  // CF (§28, ADR-032): el profesional no tiene `allowParallelServices` y en el horario NUEVO ya atiende OTRO servicio
+  // (`existingAt` = el inicio del primero que se pisa). Va después del cupo y antes del tope (brief CF A.5). Forzable
+  // SOLO con `allowOtherService` (queda sobreturno). También con `capLocksHeld` (CF-D12: Planes toma cupo + día).
+  // El nombre del servicio lo lee el caller (`otherServiceLabel`), fuera del camino que escribe.
+  | ({ kind: "other-service"; otherServiceId: string; existingAt: Date } & BookingUpdatePrompt)
   // T3 (C-AS3): el intervalo AR del horario NUEVO ya tiene `used` turnos del profesional y el tope es
   // `intervalCap`. Solo si el turno cambia de intervalo o se reactiva (cambiar la duración no pregunta) y sin
   // `capLocksHeld` (Planes avisa sin bloquear). Forzable con `allowIntervalCap` (queda sobreturno).
@@ -1428,6 +1490,15 @@ export type BookingUpdateTxOutcome =
  *   - pregunta (`interval-cap`, forzable con `allowIntervalCap` = sobreturno) solo si cambia el intervalo AR o se
  *     reactiva; cambiar la duración no pregunta. 2.º+ turno bajo el tope → `ok.intervalCapNotice` (informativo).
  *
+ * Otro servicio (CF, §28, ADR-032, enmienda C2 (1d): paciente → cupo → DÍA → hora → sala → sedes → filas):
+ *   - la edición que cambia la ventana (mover, alargar/acortar) o reactiva suma las claves `kinesoft:pday:` de los
+ *     días AR del horario NUEVO a la MISMA sentencia del cupo (siempre, no depende de la regla: ver
+ *     `lib/booking-cap-lock.ts`); un cambio de solo sede no (la ventana no cambia);
+ *   - la regla (`agendaRules[profesional].exclusiveService`) se lee DESPUÉS del lock, en la carga que ya corría;
+ *   - el conteo va plegado en la query del cupo (`countAgendaOccupancy` con `exclusiveService`, 0 sentencias);
+ *   - orden de los avisos: cupo → OTRO SERVICIO → tope → sala; forzable con `allowOtherService` (sobreturno);
+ *   - con `capLocksHeld` se chequea igual (CF-D12): Planes ya tomó cupo + día en su superconjunto.
+ *
  * `opts.capLocksHeld`: el caller ya tomó los locks de cupo de los días del
  * horario NUEVO (C2: "este y los siguientes" los toma todos ordenados antes
  * de llamar al core por fila); acá no se vuelven a pedir. Sin el flag, se
@@ -1435,7 +1506,9 @@ export type BookingUpdateTxOutcome =
  * = «el caller ya tomó cupo Y hora»; los callers de Planes (superconjuntos de
  * `lib/plans-move-internal.ts`) NO toman la hora porque en Planes el tope es
  * solo aviso (`overIntervalCap`), así que con el flag el core tampoco chequea
- * el tope (ni pregunta, ni marca sobreturno por tope).
+ * el tope (ni pregunta, ni marca sobreturno por tope). CF (C2 (1d)):
+ * `capLocksHeld` = «el caller ya tomó cupo y día (y hora, salvo Planes)»; la
+ * regla de otro servicio SÍ se chequea (CF-D12).
  * `opts.now`: el "ahora" de la clasificación y del cupo (una reserva pública
  * impaga vencida deja de contar); el wrapper lo fija antes de abrir la tx.
  */
@@ -1559,6 +1632,14 @@ export async function applyBookingUpdateInTx(
   const reactivating = before.status === "CANCELLED" && finalStatus !== "CANCELLED";
   const windowChanged = slotChanged || durationChanged || reactivating;
   const locationChanged = patchLocationId !== undefined && patchLocationId !== before.locationId;
+  /**
+   * ZF1 (hallazgo M1 de ZA): cambia el paciente sin cambiar la ventana. Corre la regla de otro servicio con el paciente
+   * final (y toma el `pday`); con `windowChanged` ya corre en el conteo de siempre. Un turno cancelado no retiene cupo:
+   * el bloque de abajo es `finalStatus !== "CANCELLED"`.
+   */
+  const patientOtherService = patientChanged && !windowChanged;
+  const dayKeys = () =>
+    practitionerDayKeysForWindow({ tenantId: actor.tenantId, practitionerId: before.practitionerId, start: newWhen, end });
 
   // ── SR: sala final del turno ──────────────────────────────────────────────
   // Tres fuentes (lib/validation.ts `bookingRoomId`):
@@ -1674,16 +1755,22 @@ export async function applyBookingUpdateInTx(
           slotChanged || reactivating
             ? [hourKeyForStart({ tenantId: actor.tenantId, practitionerId: before.practitionerId, start: newWhen })]
             : [];
+        // CF (enmienda C2 (1d)): el DÍA del profesional de la ventana nueva, entre el cupo y la hora, en la misma
+        // sentencia. La clave de cupo lleva el servicio y la de hora solo el inicio, así que sin ésta una edición
+        // y un alta de OTRO servicio que se pisan leían «0 de otro servicio» y entraban las dos. Solo si cambia la
+        // ventana o se reactiva (un cambio de solo sede no suma ocupación a ningún instante), o si cambia el paciente
+        // (ZF1: el turno pasa a ser de OTRA persona sobre la misma ventana; ver `patientOtherService`).
+        const pday = windowChanged || patientOtherService ? dayKeys() : [];
         if (roomCheckable && !roomDefaulted && targetRoomId) {
           // SR, enmienda C2 (1b): la sala ya se conoce (elegida o la que tenía)
-          // → cupo, hora y sala en UNA sentencia (cupo → hora → sala → sedes →
-          // filas). Misma cantidad de statements que el lock de cupo solo.
-          await lockAgendaKeysMany(tx, { cap: capacityKeysForWindow(capWindow), hour, rooms: roomKeys(targetRoomId) });
+          // → cupo, día, hora y sala en UNA sentencia (cupo → día → hora → sala
+          // → sedes → filas). Misma cantidad de statements que el lock de cupo solo.
+          await lockAgendaKeysMany(tx, { cap: capacityKeysForWindow(capWindow), pday, hour, rooms: roomKeys(targetRoomId) });
           roomKeyHeld = true;
         } else {
           // Sin sala (o la por defecto, que sale de las franjas que se cargan
-          // DESPUÉS de este lock): cupo + hora, 0 statements nuevos.
-          await lockAgendaKeysMany(tx, { cap: capacityKeysForWindow(capWindow), hour });
+          // DESPUÉS de este lock): cupo + día + hora, 0 statements nuevos.
+          await lockAgendaKeysMany(tx, { cap: capacityKeysForWindow(capWindow), pday, hour });
         }
       }
       const rule = await practitionerServiceRule(tx, actor.tenantId, before.practitionerId, before.service);
@@ -1746,20 +1833,36 @@ export async function applyBookingUpdateInTx(
         }
       }
     }
+    /** ZF1: cambio de paciente sin cambio de ventana ni de sede: el bloque de arriba no corrió, falta el día. */
+    const pdayOnly = patientOtherService && !locationChanged && !opts.capLocksHeld;
     if (roomCheckable && !roomKeyHeld && targetRoomId && targetRoomId !== before.roomId) {
       // Solo cambia la sala (mismo horario, misma sede): el cupo no se mueve,
       // así que solo la clave de sala (C2 (1b): sigue antes de las sedes).
-      await lockCapacityAndRoomsMany(tx, [], roomKeys(targetRoomId));
+      // ZF1: si además cambia el paciente, el día va en la MISMA sentencia, antes de la sala (C2 (1d)).
+      if (pdayOnly) await lockAgendaKeysMany(tx, { pday: dayKeys(), rooms: roomKeys(targetRoomId) });
+      else await lockCapacityAndRoomsMany(tx, [], roomKeys(targetRoomId));
       roomKeyHeld = true;
+    } else if (pdayOnly) {
+      // ZF1: solo el día del profesional, sin cupo ni hora: el turno no se mueve, así que no suma ocupación al cupo de
+      // su servicio ni un inicio al intervalo (no hay nada que serializar ahí). El orden C2 se respeta igual: esta tx
+      // no toma cupo después (cupo → día → hora → sala), y el día alcanza para ordenarse con un alta o una edición de
+      // otro servicio, que lo toman en su misma sentencia.
+      await lockAgendaKeysMany(tx, { pday: dayKeys() });
     }
 
     if (pat?.overlapISO && !force.allowPatientOverlap) {
       return { kind: "patient-overlap", existingISO: pat.overlapISO };
     }
     let capacityReached = false;
+    let otherBusy = false;
     let intervalFull = false;
     let intervalMoved = false;
     if (windowChanged) {
+      // CF: la regla sale de la carga post-lock (`avail`, ya cargada: `windowChanged` entra al bloque de arriba), así
+      // que prender/apagar «Atiende servicios distintos a la vez» commiteado en el medio ya se ve. El loader arma una
+      // entrada por profesional con plantilla (la ausencia ya salió como `practitioner-not-bookable`); el `?? true`
+      // es el default de M20 por si eso cambiara. Con `capLocksHeld` también (CF-D12).
+      const exclusiveService = avail?.agendaRules[before.practitionerId]?.exclusiveService ?? true;
       // B3.1 (TOCTOU): el lock de cupo de los días del horario NUEVO ya se
       // tomó arriba (antes de clasificar); el conteo y el update van en este
       // mismo tx. T3: con tope, la MISMA sentencia cuenta también los inicios
@@ -1773,10 +1876,28 @@ export async function applyBookingUpdateInTx(
         now,
         excludeId: id,
         cap: icap,
+        exclusiveService,
+        patientId: finalPatientId,
       });
       capacityReached = overlapBlocks(occ.overlap, cap);
       if (capacityReached && !force.allowOverbooking) {
         return { kind: "conflict", before, newWhen, newDuration, cap, finalPatientId };
+      }
+      // CF: cupo → OTRO SERVICIO → tope → sala (brief CF A.5). Flag propio: aceptar el cupo del servicio
+      // (`allowOverbooking`) no tapa en silencio que el profesional ya atiende otra cosa a esa hora.
+      const other = occ.otherService.first;
+      otherBusy = occ.otherService.count > 0;
+      if (other && !force.allowOtherService) {
+        return {
+          kind: "other-service",
+          otherServiceId: other.serviceId,
+          existingAt: other.scheduledFor,
+          before,
+          newWhen,
+          newDuration,
+          cap,
+          finalPatientId,
+        };
       }
       // T3 (C-AS3): orden de los avisos = cupo → TOPE → (paciente, ya arriba en la edición) → sala. Se PREGUNTA
       // solo si el turno cambia de intervalo AR o se reactiva: alargarlo o moverlo dentro del mismo intervalo no
@@ -1805,9 +1926,48 @@ export async function applyBookingUpdateInTx(
         }
         if (intervalMoved && v.state === "notice") intervalNotice = { used: v.used, time: v.fromTime, to: v.toTime, intervalMin: icap!.intervalMin };
       }
+    } else if (patientOtherService) {
+      // ZF1 (hallazgo M1 de ZA): mismo horario, OTRA persona. Lo único que cambia es la exención del mismo paciente
+      // (CF-D3): Ana con Evaluación 10:00 y Kine 10:15 estaba permitido; pasarle el Kine a Beto deja al profesional
+      // con dos pacientes en servicios distintos a la vez. Solo la regla de otro servicio: el cupo del servicio y el
+      // tope no se re-preguntan (el turno sigue ocupando el mismo lugar y el mismo inicio; un cupo ya pasado por otros
+      // no es culpa de este cambio), así que no se mira `overlap` ni `intervalStarts`.
+      // La regla: con sede cambiada `avail` ya está cargada (post-lock); si no, se cuenta primero con la regla puesta y
+      // el interruptor se lee SOLO si hay otro servicio (+1 sentencia solo en ese caso). Las dos lecturas van después
+      // del `pday`, así que prender/apagar el interruptor commiteado en el medio se ve.
+      const known = avail ? (avail.agendaRules[before.practitionerId]?.exclusiveService ?? true) : null;
+      if (known !== false) {
+        const occ = await countAgendaOccupancy(tx, {
+          tenantId: actor.tenantId,
+          practitionerId: before.practitionerId,
+          serviceId: before.serviceId,
+          start: newWhen,
+          end,
+          now,
+          excludeId: id,
+          exclusiveService: true,
+          patientId: finalPatientId,
+        });
+        const other = occ.otherService.first;
+        if (other && (known ?? (await practitionerExclusiveService(tx, actor.tenantId, before.practitionerId)))) {
+          if (!force.allowOtherService) {
+            return {
+              kind: "other-service",
+              otherServiceId: other.serviceId,
+              existingAt: other.scheduledFor,
+              before,
+              newWhen,
+              newDuration,
+              cap,
+              finalPatientId,
+            };
+          }
+          otherBusy = true;
+        }
+      }
     }
-    // B3.1: `isOverbooked` refleja el horario NUEVO: forzado (cupo, tope o
-    // bloqueo) → true; movido a un hueco libre → false. Sin cambio de
+    // B3.1: `isOverbooked` refleja el horario NUEVO: forzado (cupo, otro
+    // servicio (CF), tope o bloqueo) → true; movido a un hueco libre → false. Sin cambio de
     // horario no se toca (salvo que un cambio de sede lo deje sobre un
     // bloqueo forzado). El prefijo "[SOBRETURNO]" de notes no se toca acá
     // (como antes: el update nunca lo escribió).
@@ -1817,8 +1977,11 @@ export async function applyBookingUpdateInTx(
     // más tarde: alargar un turno normal no lo convierte en sobreturno; uno que YA lo era por el tope lo sigue siendo.
     if (windowChanged) {
       isOverbooked =
-        capacityReached || blocked || (intervalMoved ? intervalFull : intervalFull && before.isOverbooked);
-    } else if (blocked) isOverbooked = true;
+        capacityReached ||
+        otherBusy ||
+        blocked ||
+        (intervalMoved ? intervalFull : intervalFull && before.isOverbooked);
+    } else if (blocked || otherBusy) isOverbooked = true;
   }
 
   // Sede elegida: lock compartido + activa en este tx (carrera con

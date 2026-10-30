@@ -118,12 +118,14 @@ type Layout = (p: { children: ReactNode }) => Promise<ReactElement>;
  * Segmento → (layout real, módulo que DEBE exigir). El módulo esperado es el del contrato (nav + §26.8), no el que lee
  * el layout: si un layout pasara a mirar otro módulo, la fila se rompe acá.
  */
-const SEGMENTS: ReadonlyArray<{ seg: string; module: TenantModule; layout: Layout }> = [
-  { seg: "planes", module: "planes", layout: PlanesLayout as Layout },
-  { seg: "seguimiento", module: "sesiones", layout: SeguimientoLayout as Layout },
-  { seg: "diagnostico", module: "diagnostico", layout: DiagnosticoLayout as Layout },
-  { seg: "biblioteca", module: "ejercicios", layout: BibliotecaLayout as Layout },
-  { seg: "terapia-manual", module: "ejercicios", layout: TerapiaManualLayout as Layout },
+// CF-NAV (§28, decisión 7 de Martin): `clinical` = el segmento exige además `clinical.read` (sin ella, /dashboard antes
+// del muro de módulo): Planes, Seguimiento, Diagnóstico, Ejercicios y Terapia manual.
+const SEGMENTS: ReadonlyArray<{ seg: string; module: TenantModule; layout: Layout; clinical?: true }> = [
+  { seg: "planes", module: "planes", layout: PlanesLayout as Layout, clinical: true },
+  { seg: "seguimiento", module: "sesiones", layout: SeguimientoLayout as Layout, clinical: true },
+  { seg: "diagnostico", module: "diagnostico", layout: DiagnosticoLayout as Layout, clinical: true },
+  { seg: "biblioteca", module: "ejercicios", layout: BibliotecaLayout as Layout, clinical: true },
+  { seg: "terapia-manual", module: "ejercicios", layout: TerapiaManualLayout as Layout, clinical: true },
   { seg: "reportes", module: "reportes", layout: ReportesLayout as Layout },
   { seg: "sala", module: "salaEspera", layout: SalaLayout as Layout },
 ];
@@ -169,17 +171,19 @@ function expectedWall(e: TenantEntitlements, m: TenantModule, canBuy: boolean): 
 
 /**
  * Oráculo del menú (orden del sidebar). Independiente de `NAV_ITEMS`: es la regla del producto escrita aparte (Sala con
- * `agenda.reception`, Cobros con `billing.collect` y cobros online prendidos, Configuración con `tenant.admin`).
+ * `agenda.reception`, Cobros con `billing.collect` y cobros online prendidos, Configuración con `tenant.admin`; desde
+ * CF-NAV, Planes/Diagnóstico/Seguimiento/Ejercicios/Terapia manual con `clinical.read`).
  */
 function expectedNav(mods: ReadonlySet<TenantModule>, caps: ReadonlySet<Capability>, onlinePayments: boolean): string[] {
   const out = ["/dashboard"];
   if (mods.has("agenda")) out.push("/agenda");
   if (mods.has("salaEspera") && caps.has("agenda.reception")) out.push("/sala");
   if (mods.has("pacientes")) out.push("/pacientes");
-  if (mods.has("planes")) out.push("/planes");
-  if (mods.has("diagnostico")) out.push("/diagnostico");
-  if (mods.has("sesiones")) out.push("/seguimiento");
-  if (mods.has("ejercicios")) out.push("/biblioteca", "/terapia-manual");
+  const clinical = caps.has("clinical.read");
+  if (clinical && mods.has("planes")) out.push("/planes");
+  if (clinical && mods.has("diagnostico")) out.push("/diagnostico");
+  if (clinical && mods.has("sesiones")) out.push("/seguimiento");
+  if (clinical && mods.has("ejercicios")) out.push("/biblioteca", "/terapia-manual");
   if (onlinePayments && caps.has("billing.collect")) out.push("/cobros");
   if (caps.has("tenant.admin")) out.push("/configuracion");
   return out;
@@ -314,7 +318,8 @@ describe.skipIf(!RUN)("[QA-M] matriz de routing por plan × vertical × rol", ()
           const canBuy = caps.has("account.billing");
           for (const s of SEGMENTS) {
             got[`${k} /${s.seg}`] = await runLayout(s.layout);
-            want[`${k} /${s.seg}`] = expectedWall(ents, s.module, canBuy);
+            want[`${k} /${s.seg}`] =
+              s.clinical && !caps.has("clinical.read") ? "redirect" : expectedWall(ents, s.module, canBuy);
           }
           got[`${k} /agenda/ocupacion`] = await moduleWall("agenda");
           want[`${k} /agenda/ocupacion`] = "ok";
@@ -372,19 +377,19 @@ describe.skipIf(!RUN)("[QA-M] matriz de routing por plan × vertical × rol", ()
     });
   });
 
-  it("[QA-M] literal 7: menú de Facturación en Clínica Kine: sin Sala (no recepciona), con Cobros, sin Configuración", async () => {
+  // CF-NAV (§28, decisión 7): Facturación no tiene `clinical.read` → tampoco Planes/Diagnóstico/Seguimiento/Ejercicios.
+  it("[QA-M] literal 7: menú de Facturación en Clínica Kine: sin Sala (no recepciona), sin lo clínico, con Cobros, sin Configuración", async () => {
     asUser(cell("CLINICA", "KINESIOLOGY").users.BILLING!);
-    expect(await realNav()).toEqual([
-      "/dashboard",
-      "/agenda",
-      "/pacientes",
-      "/planes",
-      "/diagnostico",
-      "/seguimiento",
-      "/biblioteca",
-      "/terapia-manual",
-      "/cobros",
-    ]);
+    expect(await realNav()).toEqual(["/dashboard", "/agenda", "/pacientes", "/cobros"]);
+  });
+
+  it("[CF-I2] literal 7b: la Secretaría en Clínica Kine rebota de las cinco pantallas clínicas; el Profesional entra", async () => {
+    for (const l of [PlanesLayout, SeguimientoLayout, DiagnosticoLayout, BibliotecaLayout, TerapiaManualLayout]) {
+      expect(await wallAs("CLINICA", "KINESIOLOGY", "ASSISTANT", l as Layout)).toBe("redirect");
+      expect(await wallAs("CLINICA", "KINESIOLOGY", "PRACTITIONER", l as Layout)).toBe("ok");
+    }
+    asUser(cell("CLINICA", "KINESIOLOGY").users.ASSISTANT!);
+    expect(await realNav()).toEqual(["/dashboard", "/agenda", "/sala", "/pacientes", "/cobros"]);
   });
 
   it("[QA-M] literal 8: menú del Titular en Individual General: solo el núcleo + Cobros + Configuración; sin cobros online, sin Cobros", async () => {

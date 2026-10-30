@@ -44,6 +44,17 @@ const FORBIDDEN: { id: string; re: RegExp }[] = [
   { id: "app móvil", re: /app (móvil|movil)|app store|play store/i },
   { id: "IA", re: /inteligencia artificial|\bIA\b/ },
   { id: "precio de ejemplo", re: /precio de ejemplo/i },
+  // [CF-L] Decisión de Martin (30-oct, §28.1 punto 4): la EVA salió de toda la app (perfil, Seguimiento, check-in del
+  // portal). La landing prometía «Seguimiento del dolor · La escala EVA de cada sesión, en una curva» y el portal
+  // pedía «Dolor ahora». `EVA` va sin /i: con /i agarraría la clase CSS `s.eva` y palabras como «nueva» no (\b), pero
+  // «Eva» (nombre propio) sí.
+  { id: "EVA", re: /\bEVA\b/ },
+  { id: "seguimiento del dolor", re: /(escala|seguimiento|evoluci[oó]n|curva)( de tu| del)? dolor|dolor ahora/i },
+  // [ZF3] A2 (CF-ZB): Diagnóstico quedó «Próximamente» en la app y las evaluaciones (EVA) salieron en CF. La landing
+  // ofrecía «Diagnóstico específico» y /precios el bullet «Diagnóstico y evaluaciones». Vuelven con su evidencia
+  // (`// claim-ok:`) cuando existan.
+  { id: "diagnóstico específico", re: /diagn[oó]stico espec[ií]fico/i },
+  { id: "evaluaciones", re: /\bevaluaciones\b/i },
 ];
 
 /**
@@ -116,6 +127,8 @@ export function publicCopyFiles(): string[] {
     ...walk("components/contact"),
     ...["login", "signup", "forgot", "reset"].flatMap((n) => walk(`components/screens/${n}-screen.tsx`)),
     ...walk("lib/portal-copy.ts"),
+    // [ZF3] A2: los bullets de las tarjetas de precio (landing y /precios) salen de acá, no de components/landing.
+    ...walk("lib/saas-plans-public.ts"),
   ].map(rel);
   return [...new Set([...fromApp, ...extras])].sort();
 }
@@ -204,6 +217,13 @@ describe("[VX2-c1] claims prohibidos en superficies públicas (§3.4)", () => {
       `<label>Matrícula</label>`,
       `<p>Diagnóstico con IA</p>`,
       `<p>Débito automático de Mercado Pago</p>`,
+      `<strong>Escala EVA</strong>`,
+      `title: "Seguimiento del dolor",`,
+      `<p>Tu profesional ve la evolución de tu dolor</p>`,
+      `painLabel: "Dolor ahora",`,
+      `title: "Diagnóstico específico",`,
+      `{ modules: ["diagnostico", "evaluaciones"], text: "Diagnóstico y evaluaciones" },`,
+      `<li>Evaluaciones de cada sesión</li>`,
     ];
     for (const b of bad) expect(findClaims("x.tsx", b), b).not.toEqual([]);
   });

@@ -39,7 +39,7 @@ import { intervalStartsUsed, type IntervalCap } from "@/lib/availability/interva
 import { runWithRls } from "@/lib/rls";
 import { createPlan } from "@/tests/helpers/plan-factory";
 import { listPublicSlots } from "@/lib/public-booking";
-import { hourKeyForStart, hourLockKey } from "@/lib/booking-cap-lock";
+import { practitionerDayLockKey } from "@/lib/booking-cap-lock";
 import type { BookingIntervalCapNotice, BookingIntervalCapPrompt } from "@/lib/bookings-types";
 import { localToARIso, toARDateKey, toARDow, toARMinutes } from "@/lib/datetime-ar";
 import {
@@ -85,7 +85,9 @@ describe.skipIf(!RUN)("[AS-2w] tope de turnos por intervalo (C-AS3)", () => {
   beforeAll(async () => {
     db = ownerClient();
     await sweepOrphanTestTenants(db);
-    T = await createEphemeralTenant(db);
+    // CF: test del tope por intervalo (M12): svcA y svcB del mismo profesional se pisan a propósito; la regla de
+    // servicio (allowParallelServices) se prueba en cf-*.
+    T = await createEphemeralTenant(db, { allowParallelServices: true });
     // Cupo ilimitado y del consultorio (sin fila PractitionerService = habilitado y PUBLIC para todos): el cupo
     // por servicio no se mete; lo que frena es solo el tope por intervalo.
     svcA = (
@@ -98,9 +100,9 @@ describe.skipIf(!RUN)("[AS-2w] tope de turnos por intervalo (C-AS3)", () => {
         data: { tenantId: T.tenantId, practitionerId: null, name: "Evaluación", durationMin: 30, priceCents: 0 },
       })
     ).id;
-    PB = await addPractitioner(db, T, "PRACTITIONER");
-    PC = await addPractitioner(db, T, "PRACTITIONER");
-    PP = await addPractitioner(db, T, "PRACTITIONER");
+    PB = await addPractitioner(db, T, "PRACTITIONER", { allowParallelServices: true });
+    PC = await addPractitioner(db, T, "PRACTITIONER", { allowParallelServices: true });
+    PP = await addPractitioner(db, T, "PRACTITIONER", { allowParallelServices: true });
     // Consultorio: 2 cada 15' (default de INHERIT). El titular: el mismo, pero propio (CUSTOM).
     await db.tenant.update({ where: { id: T.tenantId }, data: { bookingCapCount: 2, bookingCapIntervalMin: 15 } });
     await db.practitioner.update({
@@ -188,7 +190,13 @@ describe.skipIf(!RUN)("[AS-2w] tope de turnos por intervalo (C-AS3)", () => {
 
   it("[AS-2w] concurrencia con tope 1 cada 60': dos altas de servicios distintos en la misma hora → entra una", async () => {
     const day = "2027-11-04";
-    const hk = hourLockKey(hourKeyForStart({ tenantId: T.tenantId, practitionerId: PC.practitionerId, start: ar(`${day}T11:00`) }));
+    // CF, enmienda C2 (1d): el alta toma cupo → DÍA del profesional → hora en una sentencia, así que la primera clave
+    // que comparten dos altas de servicios distintos del mismo profesional es el día (`kinesoft:pday:`), no la hora:
+    // con el holder en la hora, la segunda esperaba el día (tomado por la primera) y nunca llegaba a la hora. Se
+    // retiene el día para que LAS DOS queden esperando; lo que afirma el test no cambia: entra una sola y la otra
+    // recibe el aviso del tope (los profesionales de este archivo tienen `allowParallelServices`, así que el día no
+    // agrega el aviso de otro servicio: lo que frena es el tope).
+    const hk = practitionerDayLockKey({ tenantId: T.tenantId, practitionerId: PC.practitionerId, dayKey: day });
     const holder = ownerClient();
     const probe = ownerClient();
     let release!: () => void;
@@ -204,7 +212,7 @@ describe.skipIf(!RUN)("[AS-2w] tope de turnos por intervalo (C-AS3)", () => {
       { timeout: 20_000 }
     );
     await got;
-    // Servicios distintos = claves de cupo distintas: solo la clave de HORA las serializa.
+    // Servicios distintos = claves de cupo distintas: las serializan el día (C2 (1d)) y la hora (C2 (1c)).
     const pa = alta({ prac: PC.practitionerId, when: ar(`${day}T11:00`), svc: svcA });
     const pb = alta({ prac: PC.practitionerId, when: ar(`${day}T11:20`), svc: svcB });
     try {
@@ -398,7 +406,8 @@ describe.skipIf(!RUN)("[AS-2w] tope de turnos por intervalo (C-AS3)", () => {
   // ── Paridad del conteo plegado (C-AS3: «Test de paridad overlap === countCapacityOverlaps») ─────────────────
 
   it("[AS-2w] countAgendaOccupancy: overlap === countCapacityOverlaps con y sin tope; intervalStarts = intervalStartsUsed", async () => {
-    const PX = await addPractitioner(db, T, "PRACTITIONER");
+    // CF: paridad del conteo del tope con servicios mezclados; la regla de servicio se prueba en cf-*.
+    const PX = await addPractitioner(db, T, "PRACTITIONER", { allowParallelServices: true });
     const day = "2027-11-11";
     const now = new Date();
     // Cualquier servicio, solapes largos que vienen de antes (≤ 480'), un cancelado, una reserva pública impaga
@@ -480,6 +489,6 @@ describe.skipIf(!RUN)("[AS-2w] tope de turnos por intervalo (C-AS3)", () => {
     ]);
     // De A solapan [10:00, 10:45): 07:30 (180'), 10:00 y 10:40 (el cancelado de 10:20 no). Inicios en [10:00, 11:00)
     // de cualquier servicio: 10:00, 10:05, 10:40, 10:59 (no el cancelado ni el público vencido).
-    expect(busy).toEqual({ overlap: 3, intervalStarts: 4 });
+    expect(busy).toEqual({ overlap: 3, intervalStarts: 4, otherService: { count: 0, first: null } });
   });
 });

@@ -720,6 +720,7 @@ describe.skipIf(!RUN)("SV08 · emisión por write-path (realtime)", () => {
           email: `ana-${randomUUID().slice(0, 8)}@test.local`,
           phone: `11${Math.floor(Math.random() * 1e8).toString().padStart(8, "0")}`,
           dateOfBirth: "1990-05-10",
+          title: "Lumbalgia",
         },
       });
       expect(r).toMatchObject({ ok: true });

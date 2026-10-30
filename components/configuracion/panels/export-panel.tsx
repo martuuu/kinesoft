@@ -75,7 +75,9 @@ export function ExportPanel({
           <li>Pacientes con sus coberturas y contactos de emergencia, archivados incluidos.</li>
           <li>Turnos y pagos.</li>
           <li>Planes de tratamiento, sesiones y ejercicios de cada sesión.</li>
-          <li>Historia clínica: diagnósticos, evaluaciones, EVA y notas.</li>
+          {/* CF (30-oct): sin «EVA». Las filas de `EvaScore` siguen saliendo en el archivo (los datos quedan, §28.1 punto 4),
+              pero la app ya no tiene EVA y nombrarla acá la prometía. */}
+          <li>Historia clínica: diagnósticos, evaluaciones y notas.</li>
           <li>El registro de actividad de los últimos 12 meses.</li>
         </ul>
       </Card>

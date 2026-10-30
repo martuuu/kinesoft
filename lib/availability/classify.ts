@@ -4,7 +4,7 @@
  * el batch (`classifyBatchInstant`), `nextFreeSlot` y, más adelante, Planes.
  *
  * Precedencia (contrato `InstantClass` de `types.ts`):
- *   duplicado > bloqueado > fuera-de-horario > paciente-superpuesto > sobreturno > tope-intervalo > libre
+ *   duplicado > bloqueado > fuera-de-horario > paciente-superpuesto > sobreturno > otro-servicio > tope-intervalo > libre
  * "paciente-superpuesto" antes que "sobreturno" porque así lo chequea el
  * clasificador del batch de hoy (`classifyBatchSlot`: primero el paciente,
  * después el cupo) y el batch los muestra a los dos como "sobreturno".
@@ -39,6 +39,18 @@
  *     cualquier otra clase lo tapa, pero `intervalCapped` se informa igual
  *     (forzar el cupo no fuerza el tope: cada uno tiene su flag). Sin
  *     `intervalCap` la salida es la de antes, sin claves nuevas.
+ * CF (M20, decisiones 1 y 2 del 30-oct):
+ *   • otro-servicio: con `exclusiveService`, el profesional ya atiende OTRO
+ *     servicio (otro paciente) que pisa [when, when + duración). Lo decide SOLO
+ *     `isOtherServiceConflict` (`exclusive-service.ts`, el mismo predicado que
+ *     usan las escrituras y el turnero). Va después de "sobreturno" (el cupo
+ *     del servicio lleno ya es sobreturno y se fuerza con el mismo flag) y antes
+ *     de "tope-intervalo" (el turno chocaría con otro paciente, no solo con el
+ *     ritmo de la agenda). `otherServiceBusy` / `otherServiceId` se informan
+ *     aunque gane otra clase, como `intervalCapped`. Sin el flag (ausente o
+ *     false) no se recorre nada y la salida es la de antes, sin claves nuevas
+ *     (carve-out de la paridad §5.27: `availability-classify.test.ts:372` y
+ *     `booking-schedule.test.ts:434` no cambian).
  *
  * Franjas: `rangesFor(practitionerId, dayKey)` inyectada — normalmente
  * `workingRanges` de `ranges.ts` (B2.1a) sobre el `AvailabilityInput`. OJO:
@@ -52,6 +64,7 @@ import type { BatchSlotStatus } from "@/lib/booking-schedule";
 import { toARDateKey, toARMinutes } from "@/lib/datetime-ar";
 import { dayKeyOf, dayWindow } from "@/lib/availability/day";
 import { intervalCapState, intervalStartsUsed, type IntervalCap } from "@/lib/availability/interval-cap";
+import { isOtherServiceConflict } from "@/lib/availability/exclusive-service";
 import type {
   AvailabilityBooking,
   DayKey,
@@ -91,6 +104,12 @@ export type ClassifyInstantInput = {
    * prefiltro por servicio (como el de `nextFreeSlot` sin tope) lo subcontaría. Ausente / null = sin tope.
    */
   intervalCap?: IntervalCap | null;
+  /**
+   * CF (M20): el profesional no atiende servicios distintos a la vez (`PractitionerAgendaRules.exclusiveService`).
+   * true ⇒ `bookings` TIENE que traer todos los turnos no cancelados del profesional (cualquier servicio), igual
+   * que con tope. Ausente / false = salida de antes, sin claves nuevas (carve-out de la paridad §5.27).
+   */
+  exclusiveService?: boolean;
 };
 
 const MIN_MS = 60_000;
@@ -201,6 +220,8 @@ type Parts = {
   intervalUsed: number;
   /** T3: `intervalCapState(intervalUsed, cap) === "full"` (false sin tope). */
   intervalCapped: boolean;
+  /** CF: servicio del primer turno de OTRO servicio que choca (orden de entrada); null sin choque o sin la regla. */
+  otherServiceId: string | null;
 };
 
 /** Reloj de pared AR de `when`, ya calculado (ver `classifyInstantAt`). */
@@ -270,6 +291,16 @@ function evaluate(input: ClassifyInstantInput, wall: ArWall): Parts {
     : 0;
   const intervalCapped = ic ? intervalCapState(intervalUsed, ic) === "full" : false;
 
+  // CF (M20): mismo recorrido que el cupo (`rows`, ya sin el turno editado), con el predicado único. Filtrar por
+  // profesional es del caller según el contrato de `isOtherServiceConflict`; acá `bookings` trae a todos (el chequeo
+  // del paciente los necesita). Sin la regla no se recorre nada.
+  let otherServiceId: string | null = null;
+  if (input.exclusiveService) {
+    const q = { serviceId, patientId, start: when, end, now };
+    const hitOther = rows.find((b) => b.practitionerId === practitionerId && isOtherServiceConflict(b, q));
+    otherServiceId = hitOther ? hitOther.serviceId : null;
+  }
+
   return {
     duplicate,
     patientOverlap,
@@ -279,6 +310,7 @@ function evaluate(input: ClassifyInstantInput, wall: ArWall): Parts {
     atCapacity: overlapBlocks(used, input.cap),
     intervalUsed,
     intervalCapped,
+    otherServiceId,
   };
 }
 
@@ -289,6 +321,14 @@ function intervalCapFields(
 ): { intervalCapped?: boolean; intervalCapUse?: IntervalCapUse } {
   const ic = input.intervalCap;
   return ic ? { intervalCapped: p.intervalCapped, intervalCapUse: { used: p.intervalUsed, cap: ic } } : {};
+}
+
+/** Las claves de la regla de servicio exclusivo, SOLO con la regla (carve-out §5.27: sin ella, ni las claves). */
+function otherServiceFields(
+  input: ClassifyInstantInput,
+  p: Parts
+): { otherServiceBusy?: boolean; otherServiceId?: string | null } {
+  return input.exclusiveService ? { otherServiceBusy: p.otherServiceId != null, otherServiceId: p.otherServiceId } : {};
 }
 
 /**
@@ -318,9 +358,11 @@ export function classifyInstantAt(input: ClassifyInstantInput, wall: ArWall): In
           ? "paciente-superpuesto"
           : p.atCapacity
             ? "sobreturno"
-            : p.intervalCapped
-              ? "tope-intervalo"
-              : "libre";
+            : p.otherServiceId != null
+              ? "otro-servicio"
+              : p.intervalCapped
+                ? "tope-intervalo"
+                : "libre";
   return {
     class: cls,
     outOfHours: p.outOfHours,
@@ -329,6 +371,7 @@ export function classifyInstantAt(input: ClassifyInstantInput, wall: ArWall): In
     used: p.used,
     cap: input.cap,
     ...intervalCapFields(input, p),
+    ...otherServiceFields(input, p),
   };
 }
 
@@ -345,6 +388,9 @@ export type BatchInstantClassification = {
   intervalCapped?: boolean;
   /** Uso del tope en esa fecha. Solo con tope. */
   intervalCapUse?: IntervalCapUse;
+  /** CF (M20): choca con otro servicio del profesional; «libre» sube a «sobreturno» (como un bloqueo, CF-D4). Solo
+   *  con `exclusiveService`; sin el flag, `status` = `classifyBatchSlot`. */
+  otherServiceBusy?: boolean;
 };
 
 /**
@@ -353,14 +399,18 @@ export type BatchInstantClassification = {
  *   • fuera de horario NO cambia el status — es el flag `outOfHours`, solo
  *     aviso (decisión 2; el diseño pide un flag, no un BatchSlotStatus nuevo);
  *   • un bloqueo sube "libre" a "sobreturno": el staff lo puede crear, pero
- *     confirmándolo como sobreturno (decisión 1). "duplicado" no se toca.
+ *     confirmándolo como sobreturno (decisión 1). "duplicado" no se toca;
+ *   • CF (CF-D4): con `exclusiveService`, chocar con otro servicio también sube
+ *     "libre" a "sobreturno" (el lote no tiene prompt propio: se fuerza con
+ *     `allowOverbooking`) y queda el flag informativo `otherServiceBusy`. Sin la
+ *     regla, `status` sigue siendo exactamente el de `classifyBatchSlot`.
  */
 export function classifyBatchInstant(input: ClassifyInstantInput): BatchInstantClassification {
   const p = evaluate(input, arWallOf(input.when));
   const blocked = p.blockIds.length > 0;
   const status: BatchSlotStatus = p.duplicate
     ? "duplicado"
-    : p.patientOverlap || p.atCapacity || blocked
+    : p.patientOverlap || p.atCapacity || blocked || p.otherServiceId != null
       ? "sobreturno"
       : "libre";
   return {
@@ -371,5 +421,6 @@ export function classifyBatchInstant(input: ClassifyInstantInput): BatchInstantC
     used: p.used,
     cap: input.cap,
     ...intervalCapFields(input, p),
+    ...(input.exclusiveService ? { otherServiceBusy: p.otherServiceId != null } : {}),
   };
 }

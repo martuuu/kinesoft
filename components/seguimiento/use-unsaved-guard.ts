@@ -3,7 +3,7 @@
 /**
  * Guard de cambios sin guardar para el detalle de sesión (A2a-S03 ítem 2).
  *
- * Motivo: las notas / EVA / RPE del panel viven en estado local hasta que se
+ * Motivo: las notas y el RPE del panel viven en estado local hasta que se
  * aprieta "Guardar anotaciones" o "Cerrar sesión". Salir de la página (rail de
  * sesiones, breadcrumbs, sidebar, cerrar la pestaña) las tiraba sin aviso.
  *
@@ -46,7 +46,7 @@ export function useUnsavedGuard(dirty: boolean) {
       e.stopPropagation();
       void confirm({
         title: "¿Salir sin guardar?",
-        message: "Tenés anotaciones de la sesión sin guardar (notas, EVA o RPE). Si salís, se pierden.",
+        message: "Tenés anotaciones de la sesión sin guardar (notas o RPE). Si salís, se pierden.",
         confirmLabel: "Salir sin guardar",
         cancelLabel: "Seguir editando",
         tone: "danger",

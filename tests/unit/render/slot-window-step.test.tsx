@@ -173,3 +173,15 @@ describe("[TP-1] Próximo turno disponible selecciona el primer libre", () => {
     expect(src).not.toMatch(/components\/ui\/(drawer|modal|toast|confirm-dialog)/);
   });
 });
+
+describe("[CF-U5] anticipación mínima del turnero (CF-D9)", () => {
+  const LEAD = "de anticipación.";
+  it("con 120' muestra el aviso con formatLeadTime", () => {
+    const html = view({ window: { ...WINDOW, minLeadMinutes: 120 } });
+    expect(html).toContain("Los turnos online se piden con al menos 2 horas de anticipación.");
+  });
+  it("con 60' o sin el campo no hay aviso", () => {
+    expect(view({ window: { ...WINDOW, minLeadMinutes: 60 } })).not.toContain(LEAD);
+    expect(view()).not.toContain(LEAD);
+  });
+});

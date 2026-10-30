@@ -27,7 +27,6 @@ import {
   stripPlanIntentParams,
 } from "@/lib/plans-deeplink-params";
 import type { ProfilePlanIntent } from "@/lib/plans-deeplink";
-import type { EvaScore } from "@prisma/client";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { useToast } from "@/components/ui/toast";
 import { PatientHero, PatientAdminHero } from "@/components/patients/profile/hero";
@@ -92,7 +91,6 @@ const TAB_LOADERS = {
   sesiones: () => import("@/components/patients/profile/views/sesiones-view"),
   planes: () => import("@/components/patients/profile/views/plan-view"),
   antec: () => import("@/components/patients/profile/views/antecedentes-view"),
-  evol: () => import("@/components/patients/profile/views/evolucion-view"),
   fact: () => import("@/components/patients/profile/views/facturacion-view"),
 } satisfies Partial<Record<Tab, () => Promise<unknown>>>;
 
@@ -109,7 +107,6 @@ const ArchivosView = dynamic(() => TAB_LOADERS.archivos().then((m) => m.Archivos
 const SesionesView = dynamic(() => TAB_LOADERS.sesiones().then((m) => m.SesionesView), { loading: TabLoading });
 const PlanView = dynamic(() => TAB_LOADERS.planes().then((m) => m.PlanView), { loading: TabLoading });
 const AntecedentesView = dynamic(() => TAB_LOADERS.antec().then((m) => m.AntecedentesView), { loading: TabLoading });
-const EvolucionView = dynamic(() => TAB_LOADERS.evol().then((m) => m.EvolucionView), { loading: TabLoading });
 const FacturacionView = dynamic(() => TAB_LOADERS.fact().then((m) => m.FacturacionView), { loading: TabLoading });
 
 /** Tamaño de página de turnos del perfil (Turnos + Facturación). */
@@ -202,8 +199,6 @@ export type PatientProfileProps = {
   patientCore: PatientCore;
   recentBookings: PatientBookingSummary[];
   billableCount: number;
-  /** `[]` sin el módulo `evaluaciones` (la página ni siquiera los pide). */
-  evaScores: EvaScore[];
   insurers?: InsurerOption[];
   practitioners?: PractitionerOption[];
   canReassign?: boolean;
@@ -254,7 +249,6 @@ export function PatientProfile({
   patientCore,
   recentBookings,
   billableCount,
-  evaScores,
   insurers = [],
   practitioners = [],
   canReassign = false,
@@ -581,9 +575,8 @@ export function PatientProfile({
     () => ({
       ...patientCore,
       bookings: bookingsAll ?? recentBookings,
-      evaScores,
     }),
-    [patientCore, bookingsAll, recentBookings, evaScores]
+    [patientCore, bookingsAll, recentBookings]
   );
   // FC-3i1: lo que la tarjeta de ficha necesita para compartir y para el respaldo (memo: el contexto de la HC no cambia
   // cuando cambian los turnos).
@@ -622,6 +615,10 @@ export function PatientProfile({
         canReassign={canReassign}
         editRequest={editPatientRequest}
         whatsappActive={whatsappActive}
+        // Handoff de CF-MAIL. Pedía `role === "OWNER" || role === "ADMIN" || caps.has("tenant.admin")`, pero el guard
+        // PL-1b congela las comparaciones de rol (el rol solo ya no dice qué puede alguien): mismo corte por capabilities
+        // del MIEMBRO (`account.owner` = Titular; `tenant.admin` = Admin con «Configuración» o delegado).
+        canSeeEmailReason={caps.has("account.owner") || caps.has("tenant.admin")}
       />
 
       <TabsBar
@@ -719,7 +716,6 @@ export function PatientProfile({
           )}
           {tab === "archivos" && <ArchivosView patientId={patient.id} />}
           {tab === "antec" && <AntecedentesView patient={patient} />}
-          {tab === "evol" && <EvolucionView patient={patient} onRegister={() => setTab("resumen")} />}
           {tab === "fact" && (
             <FacturacionView
               patientName={`${patient.firstName} ${patient.lastName}`}

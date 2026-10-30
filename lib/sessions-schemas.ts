@@ -39,6 +39,9 @@ const RescheduleForce = z
     // T3 (C-AS3): pasar el tope por intervalo del profesional (queda sobreturno). Sin esto, `.strict()` rechazaba
     // el reintento del drawer de Seguimiento con el flag nuevo como «input inválido».
     allowIntervalCap: z.boolean().optional(),
+    // CF (§28): pasar el aviso «el profesional ya atiende otro servicio a esa hora» (queda sobreturno). Mismo motivo
+    // que `allowIntervalCap`: sin esto `.strict()` rechaza el reintento del drawer.
+    allowOtherService: z.boolean().optional(),
   })
   .strict();
 

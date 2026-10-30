@@ -6,8 +6,10 @@
  *   - Submit: con el intervalo lleno por un turno de OTRO servicio, rechaza con el copy de siempre («se acaba de
  *     ocupar…») sin escribir. El cupo por servicio no lo ve: el que frena es el tope (cruza servicios).
  *   - Carrera: dos reservas online de servicios DISTINTOS en la misma hora con tope 1 cada 60' → entra una. Las claves
- *     de cupo son distintas (llevan el servicio); solo la clave de HORA (`kinesoft:phour:…`) las serializa. Mientras
- *     esperan la hora, cada una YA tiene su cupo tomado (orden C2 (1c): cupo → hora, en una sentencia).
+ *     de cupo son distintas (llevan el servicio). Desde CF (enmienda C2 (1d)) las serializa primero el DÍA del
+ *     profesional (`kinesoft:pday:…`) y después la HORA (`kinesoft:phour:…`): con la hora tomada por un tercero, una
+ *     espera la hora (ya con cupo y día) y la otra espera el día (ya con su cupo). Orden cupo → día → hora, en una
+ *     sentencia. El tope sigue siendo el que rechaza a la segunda (el fixture prende `allowParallelServices`).
  *   - Staff: `listAvailableSlots` marca el slot `tope-intervalo` con `intervalCapUse`; `classifyBookingInstant`
  *     devuelve `intervalCapped` / `intervalCapUse` (el modal pide «Cargar como sobreturno»).
  *
@@ -25,7 +27,7 @@ import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { submitPublicBooking } from "@/lib/public-booking";
 import { classifyBookingInstant, listAvailableSlots } from "@/lib/availability-actions";
-import { capacityLockKey, hourKeyForStart, hourLockKey } from "@/lib/booking-cap-lock";
+import { capacityLockKey, hourKeyForStart, hourLockKey, practitionerDayLockKey } from "@/lib/booking-cap-lock";
 import type { SubmitPublicBookingInput } from "@/lib/public-booking-types";
 import { localToARIso, toARDateKey, toARDow } from "@/lib/datetime-ar";
 import {
@@ -73,7 +75,9 @@ describe.skipIf(!RUN)("[AS-2l] turnero y staff con tope por intervalo (C-AS3)", 
   beforeAll(async () => {
     db = ownerClient();
     await sweepOrphanTestTenants(db);
-    T = await createEphemeralTenant(db);
+    // CF: test del tope por intervalo (M12) con Kine y Evaluación del mismo profesional solapados a propósito; la
+    // regla de servicio (allowParallelServices) se prueba en cf-*.
+    T = await createEphemeralTenant(db, { allowParallelServices: true });
     // Cupo ilimitado y del consultorio (sin fila PractitionerService = habilitado y PUBLIC): lo único que frena es
     // el tope. 60' → paso del turnero 60 (AS-D9): grilla 08:00, 09:00, … con el horario fallback del consultorio.
     for (const name of ["Kine", "Evaluación"]) {
@@ -107,6 +111,7 @@ describe.skipIf(!RUN)("[AS-2l] turnero y staff con tope por intervalo (C-AS3)", 
         email: `tope-${randomUUID().slice(0, 8)}@test.local`,
         phone: `11${Math.floor(Math.random() * 1e8).toString().padStart(8, "0")}`,
         dateOfBirth: "1990-05-10",
+        title: "Lumbalgia",
         documentId: o.dni,
       },
     };
@@ -156,6 +161,7 @@ describe.skipIf(!RUN)("[AS-2l] turnero y staff con tope por intervalo (C-AS3)", 
     const hk = hourLockKey(hourKeyForStart({ tenantId: T.tenantId, practitionerId: T.practitionerId, start: when }));
     const capKey = (serviceId: string) =>
       capacityLockKey({ tenantId: T.tenantId, practitionerId: T.practitionerId, serviceId, dayKey: day });
+    const pdayKey = practitionerDayLockKey({ tenantId: T.tenantId, practitionerId: T.practitionerId, dayKey: day });
     const holder = ownerClient();
     const probe = ownerClient();
     let release!: () => void;
@@ -174,11 +180,14 @@ describe.skipIf(!RUN)("[AS-2l] turnero y staff con tope por intervalo (C-AS3)", 
     const pa = submitPublicBooking(req({ serviceId: svcA, when, dni: "70200001" }));
     const pb = submitPublicBooking(req({ serviceId: svcB, when, dni: "70200002" }));
     try {
-      await waitForAdvisoryWaiter(probe, hk, { minWaiters: 2, timeoutMs: 8_000 });
-      // Orden C2 (1c): quien espera la hora ya tiene su cupo (no al revés: si no, cupo ↔ hora podría ciclar con un
-      // alta de la agenda).
+      // C2 (1d): la primera en tomar el día espera la hora; la otra espera el día (las dos con su cupo ya tomado).
+      await waitForAdvisoryWaiter(probe, hk, { minWaiters: 1, timeoutMs: 8_000 });
+      await waitForAdvisoryWaiter(probe, pdayKey, { minWaiters: 1, timeoutMs: 8_000 });
+      // Orden cupo → día → hora: quien espera ya tiene lo anterior (no al revés: si no, podría ciclar con un alta de
+      // la agenda).
       expect(await grantedHolders(probe, capKey(svcA))).toBe(1);
       expect(await grantedHolders(probe, capKey(svcB))).toBe(1);
+      expect(await grantedHolders(probe, pdayKey)).toBe(1);
       release();
       await held;
       const outs = await Promise.all([pa, pb]);

@@ -13,6 +13,8 @@ import type {
   RealtimeDiag,
   RealtimeDiagCode,
   RealtimeDiagStep,
+  RealtimeTokenFailure,
+  RealtimeTokenGetter,
   ResyncReason,
   StatusInfo,
   Timers,
@@ -258,17 +260,103 @@ export function classifyMintError(error: unknown): { code: RealtimeDiagCode; rea
 }
 
 /**
- * La action del token TIRÓ (por contrato no tira nunca, ver `mintRealtimeToken`): o la red, o la action ya no existe
- * en el server. Next 14 responde «Failed to find Server Action… older or newer deployment» (en prod el mensaje puede
- * llegar genérico), y un resultado que no es `{ok}` es una respuesta que no vino de la action. Red → `null`
- * (transitorio); todo lo demás → versión nueva.
+ * La action del token TIRÓ (por contrato no tira nunca, ver `mintRealtimeToken`): o la red, o el server respondió con
+ * un error (500, «Failed to find Server Action…»). Red → `null` (transitorio); todo lo demás → `server_error`.
+ *
+ * CF-RT (§28 E): antes todo lo que no era red se llamaba `stale_build` («Hay una versión nueva · Recargá»). En prod la
+ * action del token NO estaba registrada en el build (solo alcanzable por `import()`, Next 14.2 no la anotaba en
+ * `server-reference-manifest.json`) y el mismo build respondía «Failed to find Server Action»: el cartel pedía recargar
+ * y recargar no arreglaba nada. «older or newer deployment» es lo que Next SUPONE, no lo que pasó. Que el build cambió
+ * de verdad lo decide `tokenGetterFromAction` con `createBuildChangedProbe`, no el texto del error.
  */
 export function classifyMintThrow(err: unknown): { code: RealtimeDiagCode; reason: string } | null {
   const reason = clipDiagReason(err);
   const name = err instanceof Error ? err.name : "";
   if (name === "TypeError" && /fetch|network|load failed/i.test(reason)) return null;
   if (name === "AbortError") return null;
-  return { code: "stale_build", reason: reason || "La action del token no respondió" };
+  return { code: "server_error", reason: reason || "La action del token no respondió" };
+}
+
+// ─── CF-RT · ¿cambió el build? ───────────────────────────────────────────────
+
+/** Header que `next.config.mjs` pone en TODAS las respuestas con el id del build que las sirve. */
+export const BUILD_ID_HEADER = "x-build-id";
+/**
+ * A qué se le pregunta el build: un estático chico de `public/` que el middleware no toca (matcher de `middleware.ts`:
+ * sin sesión, sin redirect a /login, sin base) y que el service worker deja pasar (solo intercepta navegaciones GET; esto
+ * es un HEAD). Same-origin: entra en el `connect-src 'self'` de todas las CSP, la de `/tv` incluida.
+ */
+export const BUILD_PROBE_PATH = "/offline.html";
+
+/** `true` = el server sirve OTRO build; `false` = el mismo; `null` = no se puede saber (sin id, sin header, sin red). */
+export type BuildChangedProbe = () => Promise<boolean | null>;
+
+/**
+ * Compara el id horneado en ESTE bundle (`NEXT_PUBLIC_BUILD_ID`, lo define `next.config.mjs` `env`) con el header
+ * `x-build-id` de una respuesta fresca del server. Ante la duda, `null`: el que llama NO dice «versión nueva» (un cartel
+ * de recargar que no arregla nada es peor que «reintentamos»). En local/CI sin `VERCEL_GIT_COMMIT_SHA` no hay id y
+ * siempre es `null`.
+ */
+export function createBuildChangedProbe(
+  o: { bakedId?: string; fetch?: typeof fetch; path?: string } = {},
+): BuildChangedProbe {
+  return async () => {
+    // Literal `process.env.NEXT_PUBLIC_BUILD_ID`: Next lo reemplaza en build solo escrito así.
+    const baked = o.bakedId ?? process.env.NEXT_PUBLIC_BUILD_ID ?? "";
+    if (!baked) return null;
+    const f = o.fetch ?? (typeof fetch === "function" ? fetch : null);
+    if (!f) return null;
+    try {
+      const res = await f(o.path ?? BUILD_PROBE_PATH, { method: "HEAD", cache: "no-store", credentials: "same-origin" });
+      const served = res.headers.get(BUILD_ID_HEADER);
+      if (!served) return null;
+      return served !== baked;
+    } catch {
+      return null;
+    }
+  };
+}
+
+const defaultBuildProbe = createBuildChangedProbe();
+
+/** Lo que devuelven las actions del token (`mintRealtimeToken`, `mintDisplayRealtimeToken`): se valida, no se confía. */
+function isTokenData(v: unknown): v is { token: string; expiresAt: string } {
+  return (
+    !!v &&
+    typeof v === "object" &&
+    typeof (v as { token?: unknown }).token === "string" &&
+    typeof (v as { expiresAt?: unknown }).expiresAt === "string"
+  );
+}
+
+/**
+ * Server action del token → `RealtimeTokenGetter` clasificado (HF-1b): `{ok:true}` → token; `{ok:false}` →
+ * `classifyMintError`; red → `null`; todo lo demás (la action tiró, o respondió algo que no es `{ok}` — el `undefined`
+ * de un «Failed to find Server Action») → `server_error`, y solo si `probe` confirma otro build → `stale_build`.
+ * Lo usan el hub de la app y la TV: una sola clasificación.
+ */
+export function tokenGetterFromAction(
+  action: () => Promise<unknown>,
+  probe: BuildChangedProbe = defaultBuildProbe,
+): RealtimeTokenGetter {
+  const upgrade = async (f: RealtimeTokenFailure): Promise<RealtimeTokenFailure> =>
+    (await probe().catch(() => null)) === true ? { code: "stale_build", reason: f.reason } : f;
+  return async () => {
+    let r: unknown;
+    try {
+      r = await action();
+    } catch (err) {
+      const t = classifyMintThrow(err);
+      return t ? upgrade(t) : null;
+    }
+    if (!r || typeof r !== "object" || !("ok" in r)) {
+      return upgrade({ code: "server_error", reason: "La action del token no respondió" });
+    }
+    const res = r as { ok: unknown; data?: unknown; error?: unknown };
+    if (res.ok === true && isTokenData(res.data)) return res.data;
+    if (res.ok === true) return upgrade({ code: "server_error", reason: "La action del token respondió sin token" });
+    return classifyMintError(res.error);
+  };
 }
 
 const AUTH_REASON = /jwt|unauthori[sz]ed|permission|forbidden|token|signature|claim|expired|not allowed|invalid.*key/i;

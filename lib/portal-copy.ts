@@ -104,34 +104,8 @@ export function portalNextSessionLabel(vertical: TenantVertical, ordinal: number
   return `${isKinePortal(vertical) ? "Próxima sesión" : "Próximo turno"} · ${portalSessionOfTotal(vertical, ordinal, total)}`;
 }
 
-/** Check-in antes de la cita (`components/portal/check-in-form.tsx`). «Antes de tu sesión» solo en Kinesiología (antes «Check-in pre-sesión»). */
-export function portalCheckInCopy(vertical: TenantVertical): {
-  title: string;
-  lead: string;
-  painLabel: string;
-  notesLabel: string;
-  notesPlaceholder: string;
-  submit: string;
-  pending: string;
-  done: string;
-} {
-  const kine = isKinePortal(vertical);
-  return {
-    // ES4-Z (b): «Check-in pre-sesión» era jerga; el botón y el estado conservan «check-in».
-    title: kine ? "Antes de tu sesión" : "Antes de tu turno",
-    lead: kine
-      ? "¿Cómo estás llegando? Tu profesional lo va a ver antes de la sesión."
-      : "¿Cómo estás llegando? Tu profesional lo va a ver antes del turno.",
-    painLabel: "Dolor ahora",
-    notesLabel: "Notas",
-    notesPlaceholder: kine
-      ? "¿Hubo algo distinto esta semana? ¿Algún ejercicio que te molestó?"
-      : "¿Hubo algo distinto desde la última vez?",
-    submit: kine ? "Enviar check-in" : "Enviar",
-    pending: "Enviando…",
-    done: kine ? "Check-in registrado" : "Recibido",
-  };
-}
+// CF (30-oct, §28.1 punto 4): acá vivía `portalCheckInCopy` («Antes de tu sesión», «Dolor ahora», «Tu profesional lo va
+// a ver antes de la sesión»). Se fue con el check-in del portal: la EVA salió de toda la app.
 
 // ── ES4 S24 · turnos del plan y navegación ──────────────────────────────────────────────────────────────────────
 
@@ -146,7 +120,7 @@ export function portalSessionOfTotal(vertical: TenantVertical, ordinal: number, 
 /** Fila del recorrido sin turno vigente (sin turno todavía, o el que había se canceló: C4). */
 export const PORTAL_PLAN_NO_BOOKING = "Todavía sin turno asignado";
 
-/** Tabs del consultorio (`components/portal/portal-tabs.tsx`). `plan` y `checkin` no son tabs: viven en «inicio». */
+/** Tabs del consultorio (`components/portal/portal-tabs.tsx`). `plan` no es tab: vive en «inicio». */
 export type PortalTab = Extract<PortalSection, "inicio" | "documentos" | "cuenta" | "ejercicios" | "reservar">;
 
 /**
@@ -174,7 +148,7 @@ export function portalTabLabel(tab: PortalTab, hasPlan: boolean): string {
 /**
  * «17 de oct de 2026», el día ARGENTINO de un ISO: con `getDate()` del host, un compartido a las 23:30 AR saldría al
  * día siguiente en Vercel (UTC). Intl con zona fija, mismas opciones que `formatDateAR(…, "short")` de `lib/format`,
- * pero SIN importarlo: este módulo lo carga `check-in-form` (cliente) y un import de `lib/format` acá le sumaba 0,8 kB
+ * pero SIN importarlo: este módulo lo cargaba `check-in-form` (cliente, borrado en CF) y un import de `lib/format` acá le sumaba 0,8 kB
  * a `/portal/c/[slug]` (medido en el build de FC-4a). Una función sin imports el minificador la descarta si no se usa.
  */
 export function portalDocumentDate(iso: string): string {

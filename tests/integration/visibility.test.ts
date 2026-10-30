@@ -14,7 +14,6 @@ import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import {
   setPatientDiagnosis,
-  recordEvaScore,
   setPatientArchived,
   getPatientActivity,
 } from "@/lib/patients";
@@ -116,13 +115,11 @@ describe.skipIf(!RUN)("A2b-S-vis · visibilidad de HC y export", () => {
   });
 
   describe("control positivo: acceso full por asignación o share", () => {
-    it("el asignado edita diagnóstico y carga EVA", async () => {
+    // CF (§28): la carga de EVA (`recordEvaScore`) salió con la EVA; queda el diagnóstico como escritura clínica.
+    it("el asignado edita diagnóstico", async () => {
       asUser(kineA.userId);
       expect((await setPatientDiagnosis(pat, "Lumbalgia mecánica", "L4-L5")).ok).toBe(true);
       expect(await db.patient.count({ where: { id: pat, diagnosisTitle: "Lumbalgia mecánica" } })).toBe(1);
-      const r = await recordEvaScore({ patientId: pat, value: 6, source: "pre" });
-      expect(r.ok).toBe(true);
-      expect(await db.evaScore.count({ where: { patientId: pat, source: "pre" } })).toBe(1);
     });
 
     it("el asignado ve archivos y actividad", async () => {

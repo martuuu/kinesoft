@@ -4,8 +4,9 @@
 > T6+T7): las rondas viejas (Ronda 1 a Tanda B, 874 ítems) están **textuales** en [QA-HISTORICO.md](QA-HISTORICO.md);
 > lo crítico que sigue valiendo de ellas está resumido en el §2.
 >
-> **Orden:** §1 QA de producción por plan (prod demo, después del push) → §2 P0 (lo que no puede fallar) → §3 lo
-> vigente de T3 a T7. Marcá cada ítem ✅/❌. **Un 🔴 P0 en ❌ frena el pase a prod.**
+> **Orden:** §1 QA de producción por plan (después del push) → §2 P0 (lo que no puede fallar) → §3 lo vigente de T3 a
+> CF. Marcá cada ítem ✅/❌. **Un 🔴 P0 en ❌ frena el pase a prod.** Desde el reset del 29/30-oct **prod tiene un cliente
+> vivo**: lo de prod se prueba en consultorios de QA propios, nunca creando ni moviendo turnos en el del cliente.
 
 ## Cómo se corre
 
@@ -19,8 +20,8 @@
   - **Nunca `npm run dev` pelado** contra algo que no sea el Docker (desde INF-DEV se niega a arrancar contra un
     Supabase remoto) y nunca un Preview que comparta la base de prod (H6).
 - **Fechas siempre con `TZ=UTC`** (`dev:local` ya la fija): en AR-local los bugs de timezone no se ven.
-- **Prod: solo el §1**, en prod demo, después del push y del postcheck (PUSH-DIA paso F), con los consultorios de
-  `scripts/qa-tenants.ts`. Nada más del QA se corre contra prod.
+- **Prod: solo el §1 y el «CF»**, después del push y del postcheck, con los consultorios de `scripts/qa-tenants.ts` (o
+  uno de QA propio). Nada más del QA se corre contra prod, y nada sobre el consultorio del cliente.
 - Antes de marcar algo como manual, mirá la columna de cobertura: si dice **QA-M** (integración
   `tests/integration/plan-routing-matrix.test.ts`) o **QA-E** / **E2E** (Playwright, `tests/e2e/*.spec.ts`), ya corre
   en el gate; a mano conviene igual una pasada visual, pero no es lo que hay que priorizar.
@@ -43,7 +44,7 @@
 
 ---
 
-## §1 · QA de producción por plan (prod demo, después del push)
+## §1 · QA de producción por plan (después del push)
 
 ### 1.0 Preparación
 
@@ -82,12 +83,15 @@
 
 - Módulos (`modulesFor`, `lib/tenant-modules.ts:68-80` y `:104-117`): **núcleo** en todos (Agenda, Pacientes,
   Facturación, Obras sociales, Historia clínica) · **Kinesiología en todos los planes**: Reportes, Planes, Sesiones,
-  Diagnóstico, Evaluaciones (EVA), Ejercicios · **Kine desde Consultorio**: plantillas, favoritos y el catálogo global
+  Diagnóstico, Evaluaciones (módulo; la EVA salió de la UI en CF), Ejercicios · **Kine desde Consultorio**: plantillas, favoritos y el catálogo global
   de ejercicios · **Clínica y Libre, en las dos verticales**: Salas y Sala de espera · el turnero es un switch.
 - Menú (`lib/nav.ts:64-118`), en este orden: Inicio · Agenda · Sala de espera (módulo + `agenda.reception`) ·
   Pacientes · Planes · Diagnóstico · Seguimiento · Ejercicios · Terapia Manual · Cobros (`billing.collect` + cobros
-  online) · Configuración (`tenant.admin`). Las entradas clínicas no piden capability: la Secretaría y Facturación de un
-  Kine **ven** Planes, Diagnóstico, etc. en el menú (lo que ven adentro lo recorta el server).
+  online) · Configuración (`tenant.admin`). **Desde CF (decisión 7, `lib/nav.ts:87-123`)** Planes, Diagnóstico,
+  Seguimiento, Ejercicios y Terapia Manual piden `clinical.read`: Secretaría, Facturación y un Titular/Admin **que no
+  atiende** no los ven y la URL los manda a `/dashboard`. Ojo: `qa-tenants` crea como «atiende» solo al Profesional
+  (`scripts/lib/qa-tenants-core.ts:217`); si una tarjeta de abajo le lista esas entradas al Titular o al Admin y el menú
+  real no las tiene, es por esto (anotalo, no es un bug).
 - Capacidades (`lib/capabilities.ts`, `MATRIX`): Profesional y Secretaría tienen `agenda.reception`; Facturación no
   (no ve «Sala de espera» y `/sala` la manda a `/agenda`, `app/(app)/sala/page.tsx:50`). Solo Titular y Admin (con
   «Configuración») ven «Configuración» en el menú; cualquier miembro abre `/configuracion` y ve al menos «Soporte»
@@ -150,9 +154,10 @@
 - [ ] **Titular** y **Administración** — Menú: Inicio · Agenda · Pacientes · Planes · Diagnóstico · Seguimiento ·
   Ejercicios · Terapia Manual · Configuración. `/sala` → muro con «Ver planes» (QA-M literal 6 para el Admin).
   Biblioteca con el catálogo global; plantillas y favoritos habilitados.
-- [ ] **Secretaría** — Menú: Inicio · Agenda · Pacientes · Planes · Diagnóstico · Seguimiento · Ejercicios · Terapia
-  Manual. Planes sin títulos («Sesiones sin turno»); sin HC. `/sala` → muro sin «Ver planes» (QA-M literal 6).
-- [ ] **Profesional 1 y 2** — mismo menú que la Secretaría; HC solo de sus pacientes (o compartidos).
+- [ ] **Secretaría** — Menú: Inicio · Agenda · Pacientes (CF: sin Planes, Diagnóstico, Seguimiento, Ejercicios ni
+  Terapia Manual; esas URLs → `/dashboard`). Sin HC. `/sala` → muro sin «Ver planes» (QA-M literal 6).
+- [ ] **Profesional 1 y 2** — Menú: Inicio · Agenda · Pacientes · Planes · Diagnóstico · Seguimiento · Ejercicios ·
+  Terapia Manual; HC solo de sus pacientes (o compartidos).
 - [ ] **Cupo:** igual que Consultorio General.
 
 **`qa-clinica-general`** (6 personas, 2 salas)
@@ -170,10 +175,10 @@
 **`qa-clinica-kinesiologia`** (6 personas, 2 salas)
 - [ ] **Titular** / **Administración** — Menú completo: Inicio · Agenda · Sala de espera · Pacientes · Planes ·
   Diagnóstico · Seguimiento · Ejercicios · Terapia Manual · Configuración. `/sala` + «Pantallas» abre su drawer (QA-E).
-- [ ] **Secretaría** y **Profesional** — Menú sin Configuración; Sala de espera sí. `/tv` vinculada desde este
-  consultorio muestra la sala (QA-M: `/tv` «paired» en Clínica).
-- [ ] **Facturación** — Menú: Inicio · Agenda · Pacientes · Planes · Diagnóstico · Seguimiento · Ejercicios · Terapia
-  Manual (QA-M literal 7, sin Cobros con `MP_CONNECT_MODE=off`). `/sala` → `/agenda`.
+- [ ] **Secretaría** y **Profesional** — Menú sin Configuración; Sala de espera sí; la Secretaría además sin las
+  entradas clínicas (CF). `/tv` vinculada desde este consultorio muestra la sala (QA-M: `/tv` «paired» en Clínica).
+- [ ] **Facturación** — Menú: Inicio · Agenda · Pacientes (CF: sin las entradas clínicas; sin Cobros con
+  `MP_CONNECT_MODE=off`). `/sala` → `/agenda`.
 - [ ] **Cupo:** igual que Clínica General.
 
 **`qa-libre-general`** y **`qa-libre-kinesiologia`** (6 personas, 2 salas, cupos a medida)
@@ -335,14 +340,14 @@
 
 ### Bloqueos por plan y ciclo de vida
 - [ ] Todo el §1 (menús, muros, cupos y estados) en local antes del push, con consultorios propios o los del E2E.
-- [ ] «Suspender» desde Plataforma: los miembros caen en `/suspendido`, el turnero dice «no disponible», el check-in del portal se rechaza y un pago de MP en curso **concilia igual** *(BO)*.
+- [ ] «Suspender» desde Plataforma: los miembros caen en `/suspendido`, el turnero dice «no disponible» y un pago de MP en curso **concilia igual** *(BO)*.
 - [ ] Con `enforce` y solo lectura: guardar en Servicios, Sedes, Horarios, Salas, Obras sociales, Equipo, General, Diagnóstico, ejercicios, plantillas y favoritos muestra el aviso de solo lectura, no «Ocurrió un error»; leer la HC funciona *(BO, EV1)*.
 - [ ] Bajar de Clínica a Consultorio con 7 usuarios → hay que elegir **exactamente** quiénes pierden el acceso; «Pasar a Consultorio» apagado hasta que la cuenta cierra *(PL-3a)*.
 - [ ] Bajar de Clínica: las salas «duermen» (sin «Por sala», Recepción ni «Llamar»; «Llegó» sigue) y al volver reaparecen con sus franjas *(PL-2f)*.
 - [ ] Turnos online apagados → `/c/<slug>/booking` «Turnos online no disponibles» con el contacto y `noindex`; la página de estado de un turno ya reservado sigue andando *(EV0)*.
 
 ### Realtime y Recepción
-- [ ] prod · Plan Consultorio en Chrome y en la PWA instalada: la agenda dice «En vivo» y un cambio desde otra cuenta llega en < 2 s; sin «En vivo» se actualiza cada ~60 s *(Tanda A, HF-1)*.
+- [ ] prod · Plan Consultorio en Chrome y en la PWA instalada: la agenda dice «En vivo» y un cambio desde otra cuenta llega en < 2 s; sin «En vivo» se actualiza cada ~60 s *(Tanda A, HF-1; hasta CF nunca anduvo en prod: ver «CF»)*.
 - [ ] prod · `/plataforma/sistema`: huella del secreto de realtime (8 caracteres, nunca el valor) igual a la de `scripts/realtime-verify.ts` *(Tanda A, HF-1)*.
 - [ ] «Llegó» desde el drawer en Individual y Consultorio (turno de hoy) con «Deshacer»; en Consultorio no hay «Llamar» *(Tanda A, HF-2c)*.
 - [ ] Clínica: «Llegó» → el profesional ve el aviso en < 2 s; «Llamar» desde `/sala` mueve la card sin recargar en la otra pestaña *(SV)*.
@@ -366,7 +371,7 @@
 
 ---
 
-## §3 · Vigente por tanda (T3 a T7 y PV)
+## §3 · Vigente por tanda (T3 a T7, PV y CF)
 
 ## T3 · Agenda, Secretaria, cobros y módulos (19-oct-2026)
 
@@ -799,3 +804,76 @@ ADR-030 / ADR-031; hallazgos en [AUDIT «Ronda PV»](AUDIT.md#ronda-pv). Los E2E
 - [ ] Webhook de MP con body de más de 64 KiB → **413** (`curl -X POST --data-binary @grande.json`); uno normal sigue 200.
 - [ ] Débito cancelado desde MP (simulador) → mail «débito cancelado» en Mailpit.
 
+
+## CF · Feedback del primer cliente (30-oct-2026)
+
+Plan §28, **con migración M20** (`cf_agenda_rules`; en prod antes del push, [RUNBOOK «M20 en prod»](MIGRACIONES-RUNBOOK.md)).
+Diseño en ARCHITECTURE ADR-032; hallazgos en [AUDIT «Ronda CF»](AUDIT.md#ronda-cf). **En prod, después del deploy**, con
+un consultorio de QA propio (Kine, con dos profesionales y dos servicios cada uno, turnero prendido), nunca creando
+turnos en el del cliente. Cada pantalla a **1366×768** y a **390** (Chrome mobile o la PWA). Los E2E `cf-*` cubren el
+camino feliz en local.
+
+### 🔴 P0 · Un profesional no atiende servicios distintos a la vez
+- [ ] Con el interruptor apagado (default): turno de Kinesiología 10:00-11:00 del Prof. 1; nuevo turno de **otro
+  servicio** del Prof. 1 a las 10:30 con **otro paciente** → el selector marca ese horario como ocupado por otro servicio
+  y al guardar sale el aviso «<Prof. 1> está atendiendo «Kinesiología» en ese horario.» **sin escribir nada**.
+- [ ] Desde el aviso, forzar → el turno queda como **sobreturno** (marca de sobreturno en la agenda).
+- [ ] Mismo servicio a la misma hora → entra hasta el cupo del servicio, como antes. Mismo **paciente** con otro servicio
+  seguido o pisado → sin aviso de «otro servicio».
+- [ ] Mover o alargar un turno existente hasta pisar uno de otro servicio → mismo aviso.
+- [ ] Configuración → Profesionales → Prof. 1 → Horarios → «Reglas de la agenda de <nombre>» → tildar «Atiende servicios
+  distintos a la vez» → Guardar reglas (salir sin guardar avisa) → el alta de 10:30 entra sin aviso.
+- [ ] Turnero público con el interruptor apagado: el servicio B **no ofrece** 10:00 ni 10:30 del Prof. 1 (el día figura
+  como completo si no queda nada); con el interruptor prendido, sí.
+
+### Pasos y hora manual
+- [ ] Configuración → General → «Reglas de la agenda»: horarios cada 30 → en el modal del turno el selector dice
+  «Horarios cada 30 min» y ofrece :00 y :30. Un profesional con paso propio de 15 → ofrece de a 15 solo para él.
+- [ ] Paso del turnero en 60 (o automático) → `/c/<slug>/booking` ofrece de a 60 (automático = según la duración).
+- [ ] Hora manual: el link «¿Otro horario?» del selector lleva el foco a «Hora»; cargar 10:10 a mano guarda 10:10. A 1366
+  y a 390 «Duración» queda alineada con «Hora» aunque se vea la ayuda.
+
+### Anticipación del turnero
+- [ ] «Reglas de la agenda» → anticipación 2 días (también probar horas y semanas) → el turnero no ofrece nada antes de
+  pasado mañana, dice «Los turnos online se piden con al menos 2 días de anticipación.» una sola vez y arranca la
+  ventana en el primer día posible. Con 1 hora o vacío, no aparece el texto.
+- [ ] Un servicio del profesional con anticipación propia (0 incluido) le gana a la del consultorio.
+
+### Formulario del turnero
+- [ ] Kine: «Diagnóstico» obligatorio y arriba (sin él no confirma y dice qué falta); fecha de nacimiento **opcional**
+  (vacía → la reserva entra). General: «Motivo de consulta» obligatorio. Nombre, apellido, DNI, email y teléfono siguen
+  obligatorios.
+
+### 🔴 P0 · Bloquear varios días
+- [ ] Agenda → «Bloquear días» → «Hasta el día (opcional)»: vacaciones de lunes a viernes con un turno el **martes** →
+  la vista previa lista el turno del martes; confirmar → los 5 días bloqueados y el diálogo muestra «Listo» (no vuelve
+  al formulario).
+- [ ] Abrir un día del rango → quitar **solo ese día** → los otros siguen bloqueados.
+- [ ] «Quitar todo el bloqueo (…)» → se liberan todos los días del rango.
+- [ ] Turnero: los días bloqueados no se ofrecen (y vuelven al quitar el bloqueo). Más de 31 días → error claro.
+
+### Menú por rol, EVA y Diagnóstico
+- [ ] **Secretaría** (y Facturación): sin Diagnóstico, Planes, Ejercicios, Seguimiento ni Terapia manual en el menú, en
+  la barra de mobile ni en ⌘K; abrir `/planes`, `/diagnostico`, `/biblioteca`, `/seguimiento` o `/terapia-manual` →
+  `/dashboard`. El Profesional los sigue viendo.
+- [ ] EVA fuera: el perfil no tiene la pestaña de evolución ni la tarjeta de EVA en Resumen; Seguimiento sin EVA pre/post
+  ni curva; el portal sin check-in; la HC sin la línea «EVA a → b»; landing, precios y «Plan y uso» sin «Diagnóstico» ni
+  «Evaluaciones» como beneficio.
+- [ ] `/diagnostico` → «Diagnóstico · Próximamente» con «Volver al inicio».
+
+### Notificaciones y realtime
+- [ ] Con más de 4 avisos: el panel muestra más de 4, se nota que hay más (pie con cuántos, desvanecido) y «Ver
+  anteriores» trae los anteriores. Alta de un paciente por la Secretaría → le llega al Titular.
+- [ ] Apariencia «Barra lateral»: la campana está en la barra lateral (se abre con teclado y Escape vuelve al botón); a
+  390 la campana está en la barra de arriba. Nunca dos campanas en el dashboard.
+- [ ] **«En vivo» en la PWA instalada y en Chrome**: la agenda dice «En vivo» y un turno creado desde otra cuenta aparece
+  en < 2 s. Si dice «Versión nueva» sin haber deployado, o «error del servidor», pegá el diagnóstico del indicador.
+
+### Mail, favicon y detalles
+- [ ] Perfil del paciente → invitar al portal con Resend mal configurado (o un email inválido) → el error dice el
+  motivo (no culpa siempre al proveedor) y muestra el link del portal para copiar; Titular/Admin ven el motivo técnico.
+- [ ] Favicon: borrar la caché del sitio (o ventana privada) → la pestaña muestra el sello C; `/favicon.ico` responde.
+  La PWA reinstalada muestra el ícono nuevo.
+- [ ] Configuración → Servicios: el campo de precio (MoneyInput) tiene el mismo alto y borde que los demás, con el «$»
+  adentro y foco visible, a 1366 y a 390.
+- [ ] Fichas y HC: debajo de «Podés editar hasta…» se lee «Después se puede editar, pero queda como enmienda.»

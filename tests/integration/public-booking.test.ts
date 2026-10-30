@@ -53,11 +53,18 @@ import {
 
 const RUN = process.env.INTEGRATION === "1";
 
-/** Un día hábil (no domingo) entre 7 y 13 días adelante, en calendario AR. */
+/**
+ * El `offset`-ésimo día hábil (no domingo) desde 7 días adelante, en calendario AR: offsets distintos → días distintos.
+ * CF: antes era «el primer hábil desde 7 + offset», y si el día 7 caía domingo `DAY` (Consulta) y `futureWeekday(1)`
+ * (Osteopatía 08:00-09:00) eran el MISMO día: con la regla de servicio de M20 (`allowParallelServices = false`, el
+ * default que se deja a propósito) la Consulta de las 08:45 quedaba bloqueada solo los domingos. La regla de servicio
+ * se prueba en cf-*.
+ */
 function futureWeekday(offset = 0): string {
-  for (let d = 7 + offset; ; d++) {
+  let seen = -1;
+  for (let d = 7; ; d++) {
     const key = toARDateKey(new Date(Date.now() + d * 86_400_000));
-    if (toARDow(new Date(localToARIso(`${key}T12:00:00`))) !== 0) return key;
+    if (toARDow(new Date(localToARIso(`${key}T12:00:00`))) !== 0 && ++seen === offset) return key;
   }
 }
 const at = (day: string, hhmm: string) => new Date(localToARIso(`${day}T${hhmm}:00`)).toISOString();
@@ -98,6 +105,7 @@ describe.skipIf(!RUN)("reserva pública · submitPublicBooking (A2b-S-pub)", () 
         email: `ana-${randomUUID().slice(0, 8)}@test.local`,
         phone: `11${Math.floor(Math.random() * 1e8).toString().padStart(8, "0")}`,
         dateOfBirth: "1990-05-10",
+        title: "Lumbalgia",
         ...patch,
       },
     };
@@ -499,6 +507,7 @@ describe.skipIf(!RUN)("reserva pública · motor de disponibilidad (B3.2 AV-publ
         phone: `11${Math.floor(Math.random() * 1e8).toString().padStart(8, "0")}`,
         documentId: o.documentId,
         dateOfBirth: "1985-03-02",
+        title: "Lumbalgia",
       },
     };
   }
@@ -737,6 +746,7 @@ describe.skipIf(!RUN)("SV06a · turnero público → afterBookingsCommitted", ()
         phone: `11${Math.floor(Math.random() * 1e8).toString().padStart(8, "0")}`,
         documentId,
         dateOfBirth: "1991-07-01",
+        title: "Lumbalgia",
       },
     };
   }

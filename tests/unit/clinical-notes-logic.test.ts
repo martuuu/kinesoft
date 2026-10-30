@@ -316,8 +316,6 @@ function session(id: string, completedH: number, bookingId: string | null = null
     bookingId,
     notes: null,
     rpe: null,
-    paInPre: null,
-    paInPost: null,
     exercisesDone: 3,
     exercisesTotal: 4,
   };

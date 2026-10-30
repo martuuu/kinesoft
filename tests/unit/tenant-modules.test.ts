@@ -206,8 +206,8 @@ describe("isProfileTabAllowed", () => {
   const general = modulesFor(e("GENERAL", "CLINICA"));
   const kine = modulesFor(e("KINESIOLOGY", "INDIVIDUAL"));
 
-  it("sesiones/plan/planes/evol dependen de su módulo", () => {
-    for (const tab of ["sesiones", "plan", "planes", "evol"]) {
+  it("sesiones/plan/planes dependen de su módulo", () => {
+    for (const tab of ["sesiones", "plan", "planes"]) {
       expect(isProfileTabAllowed(tab, general)).toBe(false);
       expect(isProfileTabAllowed(tab, kine)).toBe(true);
     }
@@ -319,8 +319,9 @@ describe("nav único (C-EV2)", () => {
     expect(hrefs(navFor(kine))).toContain("/agenda");
   });
 
+  // CF-NAV: `shortcutsFor` filtra por capabilities como `navFor`; con las del Titular que atiende son los de siempre.
   it("shortcutsFor: Kine = los SHORTCUTS de lib/search.ts de hoy", () => {
-    expect(shortcutsFor(kine)).toEqual([
+    expect(shortcutsFor(kine, ownerCaps)).toEqual([
       { id: "nav:dashboard", category: "shortcut", label: "Inicio", href: "/dashboard" },
       { id: "nav:agenda", category: "shortcut", label: "Agenda", href: "/agenda" },
       { id: "nav:pacientes", category: "shortcut", label: "Pacientes", href: "/pacientes" },
@@ -337,7 +338,7 @@ describe("nav único (C-EV2)", () => {
   });
 
   it("shortcutsFor: General sin atajos clínicos", () => {
-    expect(shortcutsFor(general).map((s) => s.href)).toEqual(["/dashboard", "/agenda", "/pacientes"]);
+    expect(shortcutsFor(general, ownerCaps).map((s) => s.href)).toEqual(["/dashboard", "/agenda", "/pacientes"]);
   });
 });
 

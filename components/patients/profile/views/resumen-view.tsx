@@ -1,16 +1,13 @@
 "use client";
 
-import { useTransition } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { IconPlus } from "@/components/ui/icons";
-import { recordEvaScore } from "@/lib/patients";
 import { DisciplineChip } from "@/components/planes/discipline-chip";
 import { PLAN_STATUS_LABEL } from "@/components/planes/plan-booking-groups";
 import { sessionCounterLabel } from "@/components/seguimiento/seguimiento-model";
 import type { PlanDTO, ResumenViewProps } from "@/components/planes/plan-editor-types";
-import type { PatientWithRelations } from "../types";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { KindTag } from "@/components/clinical-notes/kind-tag";
 import { authorLine, noteDateLabel } from "@/components/clinical-notes/clinical-notes-ui";
@@ -32,7 +29,6 @@ export type ResumenClinicalProps = {
 export const RESUMEN_COPY = {
   noDiagnosis: "Sin diagnóstico cargado",
   addDiagnosis: "Cargar diagnóstico",
-  evaEmpty: "Todavía no hay puntajes de EVA. Registrá el de hoy abajo.",
 } as const;
 
 /** Tope del extracto de «Última ficha»: la nota entera está en la pestaña. */
@@ -101,7 +97,7 @@ export function ResumenView({
 }: ResumenViewProps & ResumenClinicalProps) {
   // P3.Z (F3b): en un consultorio General (sin `planes` / `diagnostico`) el
   // Resumen mostraba la card de Plan y "Diagnóstico principal": la UI tiene que
-  // esconder lo que el server ya rechaza (VERTICALES, C-EV8), como `EvaScoreSlot`.
+  // esconder lo que el server ya rechaza (VERTICALES, C-EV8).
   const { has } = useTenantModules();
   const plansEnabled = has("planes");
   const diagnosisEnabled = has("diagnostico");
@@ -315,8 +311,8 @@ export function ResumenView({
           </p>
         </Card>
       </div>
-
-      <EvaScoreSlot patient={patient} />
+      {/* CF (§28, decisión 4 de Martin): la card «EVA · dolor» (curva + «Registrar») salió del Resumen con la EVA de
+          toda la app. Los `EvaScore` guardados quedan en la base (y en el export); nadie los carga ni los muestra. */}
     </div>
   );
 }
@@ -358,99 +354,6 @@ function LatestNoteCard({
           </Button>
         </div>
       )}
-    </Card>
-  );
-}
-
-/**
- * Enmienda EV0 (S22b): la carga de EVA es del módulo `evaluaciones`. Un
- * consultorio General no la ve (el server además la rechaza: `recordEvaScore`
- * con `requireModule`). Componente aparte para no cortar los hooks de
- * `EvaScoreSide` con un return condicional.
- */
-function EvaScoreSlot({ patient }: { patient: PatientWithRelations }) {
-  const { has } = useTenantModules();
-  return has("evaluaciones") ? <EvaScoreSide patient={patient} /> : null;
-}
-
-function EvaScoreSide({ patient }: { patient: PatientWithRelations }) {
-  const [pending, start] = useTransition();
-  const submit = (formData: FormData) => {
-    start(async () => {
-      // PF-0d: sin `router.refresh()` después; `recordEvaScore` revalida la
-      // ficha y la respuesta de la action ya trae el EVA nuevo.
-      await recordEvaScore({
-        patientId: patient.id,
-        value: Number(formData.get("value")),
-        source: "manual",
-      });
-    });
-  };
-  const scores = patient.evaScores;
-  const max = 10;
-  return (
-    <Card glass style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
-      <div className="k-display" style={{ fontSize: 14, fontWeight: 700 }}>
-        EVA · dolor
-      </div>
-      <div style={{ height: 90, position: "relative", padding: "4px 0" }}>
-        {scores.length ? (
-          <svg viewBox="0 0 100 40" width="100%" height="100%" preserveAspectRatio="none">
-            <polyline
-              fill="none"
-              stroke="var(--sky-700)"
-              strokeWidth="1.5"
-              points={scores
-                .map((s, i) => `${(i / Math.max(scores.length - 1, 1)) * 100},${40 - (s.value / max) * 40}`)
-                .join(" ")}
-            />
-            {scores.map((s, i) => (
-              <circle
-                key={s.id}
-                cx={(i / Math.max(scores.length - 1, 1)) * 100}
-                cy={40 - (s.value / max) * 40}
-                r="1.6"
-                fill="var(--sky-700)"
-              />
-            ))}
-          </svg>
-        ) : (
-          <div
-            style={{
-              fontSize: 12,
-              color: "var(--navy-500)",
-              textAlign: "center",
-              paddingTop: 24,
-            }}
-          >
-            {RESUMEN_COPY.evaEmpty}
-          </div>
-        )}
-      </div>
-      <form action={submit} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <label htmlFor={`eva-${patient.id}`} style={{ fontSize: 11, color: "var(--navy-500)", fontWeight: 600 }}>
-          EVA hoy
-        </label>
-        <input
-          id={`eva-${patient.id}`}
-          name="value"
-          type="number"
-          min={0}
-          max={10}
-          defaultValue={4}
-          style={{
-            width: 56,
-            padding: "6px 8px",
-            borderRadius: 8,
-            border: "1px solid rgba(15,30,51,0.08)",
-            fontSize: 13,
-            textAlign: "center",
-          }}
-        />
-        <Button type="submit" variant="primary" disabled={pending} style={{ fontSize: 12, padding: "8px 12px" }}>
-          {pending ? "Guardando…" : "Registrar"}
-        </Button>
-      </form>
     </Card>
   );
 }

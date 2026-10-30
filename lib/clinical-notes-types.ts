@@ -105,8 +105,6 @@ export type TimelineSessionDTO = {
   bookingId: string | null;
   notes: string | null;
   rpe: number | null;
-  paInPre: number | null;
-  paInPost: number | null;
   exercisesDone: number;
   exercisesTotal: number;
 };

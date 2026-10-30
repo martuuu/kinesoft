@@ -346,10 +346,13 @@ function ServiceModal({
           defaultValue={service?.maxConcurrent ?? ""}
           // EV1-C2: el ejemplo de kinesiología/osteopatía solo tiene sentido en esa vertical
           // (`hasPlanes` la distingue: Clínica general no tiene el módulo `planes`).
+          // CF-U4 (decisión 1): la segunda oración es la misma línea que `CUPO_SCOPE_HINT` de los servicios del
+          // profesional (se repite el literal para no meter ese editor en el chunk de esta pestaña).
           hint={
-            hasPlanes
+            (hasPlanes
               ? "Vacío = ilimitado (kinesiología: varios pacientes en paralelo). Poné 1 para osteopatía (un turno por horario)."
-              : "Vacío = ilimitado (varios pacientes en paralelo). Poné 1 para un solo turno por horario."
+              : "Vacío = ilimitado (varios pacientes en paralelo). Poné 1 para un solo turno por horario.") +
+            " El cupo es por servicio. Un profesional no atiende servicios distintos a la vez salvo que lo actives en Profesionales → Horarios («Atiende servicios distintos a la vez»)."
           }
         />
         <FormField

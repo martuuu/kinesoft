@@ -12,6 +12,8 @@
  *     `worker-src`/`manifest-src` explícitos en las dos CSP para que un cambio futuro de `script-src` no rompa el SW.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { getMiddlewareMatchers } from "next/dist/build/analysis/get-page-static-info";
 import manifest from "@/app/manifest";
 import { BRAND_NAME, BRAND_SHORT_NAME } from "@/lib/brand";
@@ -58,17 +60,23 @@ describe("[MB-0b] app/manifest.ts", () => {
     for (const s of m.shortcuts ?? []) expect(s.url.startsWith(scope)).toBe(true);
   });
 
-  it("íconos 192 y 512 (any) + maskable 512, todos servidos por app/icons/[name]", async () => {
+  // [CF-UI1 · H] `?v=2`: el PNG cambió de marca con la misma URL y quedaba el viejo cacheado (navegador y SW). La ruta
+  // sirve por pathname, así que se compara sin la query.
+  it("íconos 192 y 512 (any) + maskable 512, todos servidos por app/icons/[name] y versionados", async () => {
     const icons = m.icons ?? [];
     expect(icons).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ src: "/icons/icon-192.png", sizes: "192x192", purpose: "any" }),
-        expect.objectContaining({ src: "/icons/icon-512.png", sizes: "512x512", purpose: "any" }),
-        expect.objectContaining({ src: "/icons/maskable-512.png", sizes: "512x512", purpose: "maskable" }),
+        expect.objectContaining({ src: "/icons/icon-192.png?v=2", sizes: "192x192", purpose: "any" }),
+        expect.objectContaining({ src: "/icons/icon-512.png?v=2", sizes: "512x512", purpose: "any" }),
+        expect.objectContaining({ src: "/icons/maskable-512.png?v=2", sizes: "512x512", purpose: "maskable" }),
       ]),
     );
     const served = (await generateStaticParams()).map((p) => `/icons/${p.name}`);
-    for (const i of icons) expect(served).toContain(i.src);
+    const all = [...icons, ...(m.shortcuts ?? []).flatMap((s) => s.icons ?? [])];
+    for (const i of all) {
+      expect(i.src).toMatch(/\?v=2$/);
+      expect(served).toContain(i.src.split("?")[0]);
+    }
   });
 
   it("colores como hex (un manifest no acepta degradés ni variables CSS)", () => {
@@ -163,5 +171,34 @@ describe("[MB-0b] next.config.mjs · /sw.js y CSP", () => {
       expect(directive(csp, "worker-src")).toEqual(["'self'"]);
       expect(directive(csp, "manifest-src")).toEqual(["'self'"]);
     }
+  });
+});
+
+// [CF-UI1 · H] Faltaba `/favicon.ico` (404): algunos navegadores, los marcadores y el buscador lo piden aunque haya
+// `app/icon.svg`. Lo genera `scripts/generate-favicon.tsx` desde `app/icon.svg`: ICO con PNG embebidos de 16/32/48 px.
+describe("[CF-H1] app/favicon.ico", () => {
+  const ico = readFileSync(join(process.cwd(), "app/favicon.ico"));
+
+  it("ICO válido con 16, 32 y 48 px, cada uno un PNG RGBA del tamaño declarado", () => {
+    expect(ico.readUInt16LE(0)).toBe(0);
+    expect(ico.readUInt16LE(2)).toBe(1);
+    const n = ico.readUInt16LE(4);
+    const sizes: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const e = 6 + 16 * i;
+      const declared = ico.readUInt8(e);
+      expect(ico.readUInt8(e + 1)).toBe(declared);
+      const len = ico.readUInt32LE(e + 8);
+      const off = ico.readUInt32LE(e + 12);
+      expect(off + len).toBeLessThanOrEqual(ico.length);
+      const png = ico.subarray(off, off + len);
+      expect(png.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+      // IHDR: ancho y alto (big-endian) en 16..23, color type 6 = RGBA (esquinas transparentes).
+      expect(png.readUInt32BE(16)).toBe(declared);
+      expect(png.readUInt32BE(20)).toBe(declared);
+      expect(png.readUInt8(25)).toBe(6);
+      sizes.push(declared);
+    }
+    expect(sizes).toEqual([16, 32, 48]);
   });
 });

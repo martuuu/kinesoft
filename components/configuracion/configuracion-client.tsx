@@ -224,6 +224,8 @@ export function ConfiguracionClient(props: Props) {
   const [fichasDirty, setFichasDirty] = useState(false);
   // TP-3a: la política de «Cobros online» es un formulario en línea (monto, nota).
   const [paymentsDirty, setPaymentsDirty] = useState(false);
+  // CF-ZF4 (B18): el tope y las reglas de la agenda de General también se editan en línea.
+  const [generalDirty, setGeneralDirty] = useState(false);
   // TP-3a: el aviso de `?mp=` es de la vuelta del callback: se ve una vez, en la pestaña a la que volvió, y se apaga al
   // cambiar de pestaña (volver no lo vuelve a mostrar). Sacarlo de la URL (que un refresh no lo repita) lo hacen las
   // dos pestañas de Mercado Pago al montar (`useDropMpReturnParam`, TP-ZF3): acá era una copia en el JS inicial.
@@ -234,14 +236,16 @@ export function ConfiguracionClient(props: Props) {
   const setTab = useCallback(
     async (t: Tab) => {
       if (t === tab) return;
-      if (practitionerDirty || directoryDirty || fichasDirty || paymentsDirty) {
-        const where = practitionerDirty
-          ? "Profesionales"
-          : directoryDirty
-            ? "Directorio"
-            : fichasDirty
-              ? "Mis fichas"
-              : "Cobros online";
+      if (generalDirty || practitionerDirty || directoryDirty || fichasDirty || paymentsDirty) {
+        const where = generalDirty
+          ? "General"
+          : practitionerDirty
+            ? "Profesionales"
+            : directoryDirty
+              ? "Directorio"
+              : fichasDirty
+                ? "Mis fichas"
+                : "Cobros online";
         const ok = await confirm({
           title: "¿Descartar los cambios sin guardar?",
           message: `Tenés cambios sin guardar en ${where}. Si cambiás de pestaña, se pierden.`,
@@ -250,6 +254,7 @@ export function ConfiguracionClient(props: Props) {
           cancelLabel: "Seguir editando",
         });
         if (!ok) return;
+        setGeneralDirty(false);
         setPractitionerDirty(false);
         setDirectoryDirty(false);
         setFichasDirty(false);
@@ -269,7 +274,7 @@ export function ConfiguracionClient(props: Props) {
         /* sin history: la pestaña vale igual */
       }
     },
-    [tab, practitionerDirty, directoryDirty, fichasDirty, paymentsDirty, confirm]
+    [tab, generalDirty, practitionerDirty, directoryDirty, fichasDirty, paymentsDirty, confirm]
   );
   const can = (t: Tab) => visible.includes(t);
   // «Accesos de soporte»: PL-F1b (decisión de Martin, 16-oct), cualquier miembro, si la página pudo leerlos. Antes
@@ -296,6 +301,7 @@ export function ConfiguracionClient(props: Props) {
           sensitive={sensitive}
           support={props.support}
           logo={sensitive ? props.logo ?? null : null}
+          onDirtyChange={setGeneralDirty}
         />
       )}
       {tab === "sedes" && can("sedes") && <LocationsPanel locations={props.locations} rooms={props.rooms} />}

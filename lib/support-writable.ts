@@ -60,10 +60,12 @@ export const SUPPORT_WRITABLE_ACTIONS: ReadonlySet<string> = new Set([
   "lib/practitioner-schedule.ts#upsertException",
   "lib/practitioner-schedule.ts#deleteException",
   "lib/practitioner-schedule.ts#setPractitionerBookingCap", // T3e-2c: tope por intervalo del profesional (Horarios)
+  "lib/practitioner-schedule.ts#setPractitionerAgendaRules", // CF-A: reglas de agenda del profesional (servicios a la vez, pasos)
   "lib/practitioner-public.ts#setPractitionerPublicBooking",
   // Datos del consultorio, horario del consultorio y turnero (handoff a BO2-D)
   "lib/tenant-settings.ts#setBusinessHours",
   "lib/tenant-settings.ts#setTenantBookingCap", // T3e-2c: tope por intervalo del consultorio
+  "lib/tenant-settings.ts#setTenantAgendaRules", // CF-A: reglas de agenda del consultorio (pasos, anticipación del turnero)
   "lib/tenant-settings.ts#setPublicBookingEnabled",
   "lib/tenant-settings.ts#updateTenantBasics",
   // Usuarios y equipo (handoff a BO2-B)

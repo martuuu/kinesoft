@@ -142,6 +142,7 @@ describe.skipIf(!RUN)("TP-1 · listPublicSlotWindow (turnero real)", () => {
         phone: "1155554444",
         documentId: `${Math.floor(Math.random() * 1e8)}`,
         dateOfBirth: "1990-05-10",
+        title: "Lumbalgia",
       },
     });
     expect(res).toMatchObject({ ok: true, data: { next: "reserved", initPoint: null, amountCents: null } });

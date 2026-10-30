@@ -50,6 +50,8 @@ export const FICHA_FORM_COPY = {
   saveAmend: "Guardar enmienda",
   amendHint: "La enmienda se agrega debajo de la ficha original, que queda como estaba.",
   amendCarriedHint: "Copiamos tu texto: dejá solo lo que agrega o corrige.",
+  /** [CF-UI1 · M] Igual que `CLINICAL_NOTES_UI_COPY.editWindowAfterHint`: a las 24 h no se bloquea, pasa a enmienda. */
+  editWindowAfterHint: "Después se puede editar, pero queda como enmienda.",
   /** T4-Z (handoff de ZF3): antes armado a mano en ficha-form. */
   amendOf: (date: string, author: string) => `Enmienda a la ficha del ${date} de ${author}.`,
   /** T4-Z A1: título y diagnósticos plegados en el composer inline hasta que se piden. */

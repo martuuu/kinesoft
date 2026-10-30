@@ -7,14 +7,13 @@
  * `getPatientBookingsSummary` → `patientBookingsSummaryInTx`, `getPatientActivity`) con el actor real; solo se mockea
  * la sesión (`asUser`). Efecto observable: la fila (no) quedó, la lista tiene ≤ N.
  *
- * Controles contra el falso verde: EVA 7 se guarda, un diagnóstico dentro del tope se guarda, `take` y `limit`
+ * Controles contra el falso verde: un diagnóstico dentro del tope se guarda, `take` y `limit`
  * normales (5 y 80, lo que mandan el perfil y la pestaña Actividad) devuelven exactamente eso.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import {
-  recordEvaScore,
   setPatientDiagnosis,
   getPatientBookingsSummary,
   getPatientActivity,
@@ -39,21 +38,8 @@ describe.skipIf(!RUN)("HD-3 · topes de entrada en pacientes", () => {
     await db?.$disconnect();
   });
 
-  it("[HD-3] EVA 11 / −1 / 7.5 rechazada sin fila nueva; EVA 7 ok", async () => {
-    const p = await addPatient(db, A);
-    asUser(A.userId);
-    for (const value of [11, -1, 7.5]) {
-      const r = await recordEvaScore({ patientId: p, value });
-      expect(r).toEqual({ ok: false, error: "La EVA va de 0 a 10." });
-    }
-    // patientId de más de 64 → mismo rechazo, sin tocar la base.
-    expect((await recordEvaScore({ patientId: "x".repeat(65), value: 5 })).ok).toBe(false);
-    expect(await db.evaScore.count({ where: { patientId: p } })).toBe(0);
-
-    const ok = await recordEvaScore({ patientId: p, value: 7 });
-    expect(ok.ok).toBe(true);
-    expect((await db.evaScore.findMany({ where: { patientId: p } })).map((e) => e.value)).toEqual([7]);
-  });
+  // CF (§28): acá estaba «[HD-3] EVA 11 / −1 / 7.5 rechazada». `recordEvaScore` se borró con la EVA (lo fija
+  // patients-rpc-surface `[CF-L1]`); `EvaScoreCreate` sigue validando el cierre de sesión.
 
   it("[HD-3] diagnóstico: título de 201 rechazado y diagnóstico intacto; nota de 4001 rechazada", async () => {
     const p = await addPatient(db, A);

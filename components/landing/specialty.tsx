@@ -13,8 +13,16 @@ import s from "./specialty.module.css";
  *   (`lib/exercises.ts:429-430`), o sea que se comparte con **todo el equipo** (D-VX27; con el paciente no: eso es ES4).
  *   Catálogo, plantillas y favoritos desde Consultorio (`lib/tenant-modules.ts:69`, `lib/plan-templates.ts:270`).
  * - Terapia manual: catálogo de maniobras por sesión (`prisma/schema.prisma:1036-1062`).
- * - Diagnóstico: mapa corporal + ejercicios por fase (`lib/diagnosis-engine.ts`, `components/diagnostico/*`).
- * - Planes de kinesiología u osteopatía y curva EVA (`components/planes/plan-card.tsx`, pestaña Evolución).
+ * - Planes de kinesiología u osteopatía (`components/planes/plan-card.tsx`).
+ *
+ * CF (30-oct, decisión de Martin §28.1 punto 4): se fueron el ítem «Seguimiento del dolor · La escala EVA de cada
+ * sesión, en una curva» y la tarjeta «Escala EVA» del mock. La EVA salió de toda la app (perfil, Seguimiento y portal):
+ * la landing no puede prometerla. Lo frena el guard `tests/unit/public-claims.test.ts` (ids «EVA» y «seguimiento del
+ * dolor»).
+ *
+ * [ZF3] A2 (CF-ZB): se fue también «Diagnóstico específico · Marcás la zona en el mapa corporal…». Diagnóstico quedó
+ * «Próximamente» en la app (CF): la landing no lo puede ofrecer como algo que ya está. Guard: id «diagnóstico
+ * específico» en `tests/unit/public-claims.test.ts`.
  */
 const svg = (children: ReactNode) => (
   <svg
@@ -48,24 +56,9 @@ const ITEMS: { icon: ReactNode; title: string; text: string }[] = [
     text: "Tu catálogo de maniobras, para sumarlas a cada sesión junto con los ejercicios.",
   },
   {
-    icon: svg(
-      <>
-        <circle cx="12" cy="4.5" r="2" />
-        <path d="M12 7v7M8 9.5h8M12 14l-3 6.5M12 14l3 6.5" />
-      </>,
-    ),
-    title: "Diagnóstico específico",
-    text: "Marcás la zona en el mapa corporal, afinás el cuadro y te propone ejercicios por fase para armar el plan.",
-  },
-  {
     icon: svg(<path d="M4 12h3l2-5 4 10 2-5h5" />),
     title: "Planes de tratamiento",
     text: "De kinesiología u osteopatía, sesión por sesión, con los turnos atados al plan.",
-  },
-  {
-    icon: svg(<path d="M4 19.5h16M6 16l4-5 3 3 5-7" />),
-    title: "Seguimiento del dolor",
-    text: "La escala EVA de cada sesión, en una curva.",
   },
 ];
 
@@ -121,22 +114,6 @@ export function Specialty() {
               <span className={`${base.mockBar} ${base.w30}`} />
               <span className={`${base.mockBar} ${base.w55}`} />
             </div>
-          </div>
-          <div className={s.card}>
-            <strong className={s.cardTitle}>Escala EVA</strong>
-            <svg className={s.eva} viewBox="0 0 300 80" preserveAspectRatio="none">
-              <path d="M0 20H300M0 40H300M0 60H300" stroke="rgba(15,30,51,.07)" strokeWidth="1" />
-              <path d="M6 10 L54 16 L102 28 L150 34 L198 48 L246 56 L294 64 L294 80 L6 80 Z" fill="rgba(94,146,204,.14)" />
-              <polyline
-                points="6,10 54,16 102,28 150,34 198,48 246,56 294,64"
-                fill="none"
-                stroke="var(--sky-700)"
-                strokeWidth="2.5"
-                strokeLinejoin="round"
-                strokeLinecap="round"
-                vectorEffect="non-scaling-stroke"
-              />
-            </svg>
           </div>
         </div>
       </div>

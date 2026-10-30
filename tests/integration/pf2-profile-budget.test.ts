@@ -44,7 +44,6 @@ import {
   getPatientBookingsAll,
   getPatientBookingsSummary,
   getPatientBillableCount,
-  getPatientEvaScores,
 } from "@/lib/patients";
 import { getPatientPlans, getPatientPlanBalances } from "@/lib/plans-read";
 import { getPatientClinicalHome, getPatientClinicalSummary, getPatientTimeline } from "@/lib/clinical-notes-read";
@@ -61,6 +60,12 @@ const BUDGET = 3;
  * lectura nueva: se discute, no se corre el número.
  */
 const HOME_TX_STATEMENTS = 11;
+/**
+ * [CF-L1] Techo de sentencias del perfil `full` completo (las 3 tx + actor), peor caso con deep link, cache en frío.
+ * Medido el 30-oct: 37. Antes de CF eran 38: la EVA salió de la app (§28, decisión 4) y el loader dejó de leer
+ * `EvaScore` (un `findMany` por carga en Kinesiología). Si sube, es una lectura nueva: se discute, no se corre el número.
+ */
+const FULL_PROFILE_STATEMENTS = 37;
 
 /** Claves exactas de `PatientAdminCore` (congelado) y de la proyección básica. */
 const ADMIN_CORE_KEYS = [
@@ -175,6 +180,10 @@ describe.skipIf(!RUN)("PF2-b · perfil del paciente en ≤ 3 tx, misma visibilid
       console.log(`[PF2-b] perfil full (${who === A.userId ? "Titular" : "a cargo"}): ${m.transactions} tx · ${m.statements} sentencias`);
       expect(result.access).toBe("full");
       expect(m.transactions).toBe(BUDGET);
+      // [CF-L1] Kinesiología (con `evaluaciones`) y un `EvaScore` en el fixture: la carga ya no lo lee. Es una sentencia
+      // menos por perfil `full` que antes de CF.
+      expect(recorded().filter((e) => /"EvaScore"/.test(e.query))).toEqual([]);
+      expect(m.statements).toBeLessThanOrEqual(FULL_PROFILE_STATEMENTS);
       // La tx 3 es la «clinical home» completa: la página no tiene que pedir nada más al montar.
       if (result.access !== "full") return;
       expect(result.clinicalHome?.firstPage?.items.length).toBeGreaterThan(0);
@@ -264,8 +273,8 @@ describe.skipIf(!RUN)("PF2-b · perfil del paciente en ≤ 3 tx, misma visibilid
       expect(r.recentBookings[0]).toMatchObject({ title: "Lumbalgia", notes: "Refiere dolor 8/10" });
       expect(r.billableCount).toBe(await getPatientBillableCount(patientId));
       expect(r.billableCount).toBe(1);
-      expect(r.evaScores).toEqual(await getPatientEvaScores(patientId));
-      expect(r.evaScores).toHaveLength(1);
+      // CF (§28, decisión 4): la carga ya no trae EVA (el paciente tiene una fila de `EvaScore` en el fixture).
+      expect(r).not.toHaveProperty("evaScores");
       expect(r.plans).toEqual(await getPatientPlans({ patientId }));
       expect(r.balances).toEqual(await getPatientPlanBalances({ patientId }));
       // FC-3d: `clinicalSummary` suelto se borró del loader (nadie lo consumía): el resumen es `clinicalHome.summary`.
@@ -310,7 +319,7 @@ describe.skipIf(!RUN)("PF2-b · perfil del paciente en ≤ 3 tx, misma visibilid
     expect(recorded().filter((e) => /"(TreatmentProgram|EvaScore)"/.test(e.query))).toEqual([]);
     expect(r.plans).toBeNull();
     expect(r.balances).toBeNull();
-    expect(r.evaScores).toEqual([]);
+    expect(r).not.toHaveProperty("evaScores");
     expect(m.transactions).toBeLessThanOrEqual(BUDGET);
   });
 

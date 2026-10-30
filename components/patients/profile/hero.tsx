@@ -92,6 +92,7 @@ export function PatientHero({
   onOpenPlan,
   editRequest = 0,
   whatsappActive = false,
+  canSeeEmailReason = false,
 }: PatientHeroProps & {
   /**
    * PF1.1 (D6): contador que sube cuando otra superficie de la ficha pide «Editar paciente» (el «Cargar diagnóstico»
@@ -100,6 +101,11 @@ export function PatientHero({
   editRequest?: number;
   /** WA-U3: el consultorio manda avisos por WhatsApp; «Editar paciente» muestra el consentimiento. */
   whatsappActive?: boolean;
+  /**
+   * CF-MAIL (§28 G): quien administra (OWNER/ADMIN o `tenant.admin`) ve el código técnico de por qué no salió el mail
+   * de «Enviar al portal» (`link_*`, `provider_error:…`), que es lo que se busca en Resend. El resto ve solo el copy.
+   */
+  canSeeEmailReason?: boolean;
 }) {
   // Modals lifted here — outside the <Card glass> — so backdrop-filter
   // on the card doesn't create a stacking context that traps position:fixed.
@@ -172,6 +178,7 @@ export function PatientHero({
           plansEnabled={plansEnabled}
           onAskArchivePlans={() => setAskPlans(true)}
           onEdit={() => setEditing(true)}
+          canSeeEmailReason={canSeeEmailReason}
         />
       </Card>
 
@@ -315,6 +322,7 @@ function PatientHeroActions({
   plansEnabled,
   onAskArchivePlans,
   onEdit,
+  canSeeEmailReason,
 }: {
   patient: PatientWithRelations;
   insurers: InsurerOption[];
@@ -326,6 +334,7 @@ function PatientHeroActions({
   /** Abre el diálogo L9 (vive fuera del Card glass, como el de Editar). */
   onAskArchivePlans: () => void;
   onEdit: () => void;
+  canSeeEmailReason: boolean;
 }) {
   const confirm = useConfirm();
   const [archiving, startArchive] = useTransition();
@@ -382,11 +391,7 @@ function PatientHeroActions({
   };
 
   const [portalSending, startPortal] = useTransition();
-  const [portalResult, setPortalResult] = useState<
-    | { ok: true; emailSent: boolean; portalUrl: string; emailStatus?: string }
-    | { ok: false; error: string }
-    | null
-  >(null);
+  const [portalResult, setPortalResult] = useState<PortalInviteResult | null>(null);
 
   const sendToPortal = () => {
     setPortalResult(null);
@@ -460,31 +465,7 @@ function PatientHeroActions({
           {archiveError}
         </div>
       )}
-      {portalResult && (
-        <div
-          style={{
-            maxWidth: 320,
-            padding: 8,
-            borderRadius: 8,
-            fontSize: 11.5,
-            background: portalResult.ok
-              ? portalResult.emailSent
-                ? "var(--success-bg)"
-                : "var(--warn-bg)"
-              : "var(--danger-bg)",
-            color: portalResult.ok ? "var(--navy-900)" : "var(--danger-fg)",
-            textAlign: "right",
-          }}
-        >
-          {portalResult.ok
-            ? portalResult.emailSent
-              ? "✓ Email enviado al paciente."
-              : portalResult.emailStatus === "skipped"
-                ? `Este entorno no manda mails: compartile el link del portal. ${portalResult.portalUrl}`
-                : `No pudimos mandar el mail. Probá de nuevo en un rato. Link del portal: ${portalResult.portalUrl}`
-            : portalResult.error}
-        </div>
-      )}
+      {portalResult && <PortalInviteNotice result={portalResult} canSeeReason={canSeeEmailReason} />}
       <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
         Última actualización:{" "}
         {patient.updatedAt.toLocaleString("es-AR", {
@@ -503,6 +484,103 @@ function PatientHeroActions({
   );
 }
 
+
+/** Lo que devuelve `sendPatientPortalInvite`, aplanado para el aviso del hero. */
+export type PortalInviteResult =
+  | {
+      ok: true;
+      emailSent: boolean;
+      portalUrl: string;
+      emailStatus?: string;
+      emailReason?: string | null;
+    }
+  | { ok: false; error: string };
+
+/**
+ * CF-MAIL (§28 G): el cliente veía «No pudimos mandar el mail…» tanto si fallaba la generación del link de acceso
+ * (`issueAccessLink` → `link_<code>`, se arregla reintentando) como si Resend rechazaba el envío (`provider_error:…`,
+ * configuración del dominio: reintentar no sirve y hay que pasar el link a mano). Ahora son dos copys distintos y el
+ * link del portal va con «Copiar» en los dos.
+ *
+ * [ZF3] M6 (CF-ZB): «el proveedor rechazó» salía también para fallas que no son del proveedor. Por código
+ * (`EmailNotSentReason`, lib/email/transport.ts): `invalid_to` lo arregla el profesional corrigiendo el email;
+ * `rate_limited`/`timeout`/`network_error` se arreglan reintentando; el resto (`provider_error`, `internal_error`…)
+ * sigue con pasar el link a mano.
+ */
+export const PORTAL_INVITE_COPY = {
+  sent: "✓ Email enviado al paciente.",
+  skipped: "Este entorno no manda mails: compartile el link del portal.",
+  linkFailed: "No pudimos generar el link de acceso. Probá de nuevo en unos minutos.",
+  providerFailed: "El proveedor de mails rechazó el envío. Pasale este link al paciente:",
+  invalidTo: "El email del paciente no es válido: corregilo en «Editar paciente».",
+  retryLater: "No pudimos mandar el mail ahora. Probá de nuevo en unos minutos o pasale este link:",
+} as const;
+
+const RETRYABLE_EMAIL_REASONS = new Set(["rate_limited", "timeout", "network_error"]);
+
+/** Copy del aviso según estado y código (el de Resend llega como `<código>:<name>:<status>`: manda el primero). */
+export function portalInviteMessage(emailStatus: string | null | undefined, reason: string): string {
+  if (emailStatus === "skipped") return PORTAL_INVITE_COPY.skipped;
+  if (reason.startsWith("link_")) return PORTAL_INVITE_COPY.linkFailed;
+  const code = reason.split(":")[0];
+  if (code === "invalid_to") return PORTAL_INVITE_COPY.invalidTo;
+  if (RETRYABLE_EMAIL_REASONS.has(code)) return PORTAL_INVITE_COPY.retryLater;
+  return PORTAL_INVITE_COPY.providerFailed;
+}
+
+/**
+ * El `emailReason` es un código (`EmailNotSentReason` + `:<name>:<status>` de Resend, o `link_<code>`), nunca una
+ * dirección. Igual se filtra por forma antes de pintarlo: si algún día un proveedor devuelve texto libre (con el email
+ * del paciente adentro), no llega a la pantalla.
+ */
+const TECH_REASON_RE = /^[a-z0-9_:.-]{1,80}$/i;
+
+export function PortalInviteNotice({ result, canSeeReason }: { result: PortalInviteResult; canSeeReason: boolean }) {
+  const [copied, setCopied] = useState(false);
+  const box = (bg: string, fg: string) => ({
+    maxWidth: 320,
+    padding: 8,
+    borderRadius: 8,
+    fontSize: 11.5,
+    background: bg,
+    color: fg,
+    textAlign: "right" as const,
+  });
+  if (!result.ok) return <div style={box("var(--danger-bg)", "var(--danger-fg)")}>{result.error}</div>;
+  if (result.emailSent) return <div style={box("var(--success-bg)", "var(--navy-900)")}>{PORTAL_INVITE_COPY.sent}</div>;
+
+  const reason = result.emailReason ?? "";
+  const message = portalInviteMessage(result.emailStatus, reason);
+  const showReason = canSeeReason && result.emailStatus !== "skipped" && TECH_REASON_RE.test(reason);
+  const copy = () => {
+    navigator.clipboard
+      .writeText(result.portalUrl)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      })
+      .catch(() => setCopied(false));
+  };
+  return (
+    <div role="status" style={{ ...box("var(--warn-bg)", "var(--navy-900)"), display: "grid", gap: 6 }}>
+      <span>{message}</span>
+      {result.portalUrl && (
+        <span style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" }}>
+          <code style={{ fontSize: 11, overflowWrap: "anywhere", textAlign: "left" }}>{result.portalUrl}</code>
+          {/* [ZF3] B22: tamaño del design system (`.k-btn-sm`) en vez del padding a mano. */}
+          <Button variant="ghost" size="sm" onClick={copy}>
+            {copied ? "Copiado" : "Copiar"}
+          </Button>
+        </span>
+      )}
+      {showReason && (
+        <span data-testid="portal-invite-reason" style={{ fontSize: 10.5, color: "var(--navy-500)" }}>
+          Código para soporte: <code>{reason}</code>
+        </span>
+      )}
+    </div>
+  );
+}
 
 /**
  * EV1-C2: rótulo del profesional asignado en el hero. «Kine» es de kinesiología;

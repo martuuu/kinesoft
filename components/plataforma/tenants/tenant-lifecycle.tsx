@@ -63,7 +63,7 @@ const STATUS_COPY: Record<StatusKind, { title: string; button: string; pending: 
     button: "Suspender",
     pending: "Suspendiendo…",
     effect:
-      "Nadie del equipo va a poder entrar (ven la pantalla de consultorio suspendido) y los turnos online y el check-in se cierran. No se borra nada y se puede reactivar.",
+      "Nadie del equipo va a poder entrar (ven la pantalla de consultorio suspendido) y los turnos online se cierran. No se borra nada y se puede reactivar.",
   },
   close: {
     title: "Dar de baja el consultorio",

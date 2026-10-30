@@ -363,9 +363,15 @@ export function FichaForm({
             </p>
           )}
           {until && (
-            <p style={{ ...hintStyle, fontWeight: 600, color: "var(--sky-700)" }} data-testid="editable-until">
-              {until}
-            </p>
+            <>
+              <p style={{ ...hintStyle, fontWeight: 600, color: "var(--sky-700)" }} data-testid="editable-until">
+                {until}
+              </p>
+              {/* [CF-UI1 · M] Qué pasa cuando vence la ventana: no se bloquea, pasa a enmienda. */}
+              <p style={hintStyle} data-testid="editable-until-after">
+                {COPY.editWindowAfterHint}
+              </p>
+            </>
           )}
         </div>
       ) : null}

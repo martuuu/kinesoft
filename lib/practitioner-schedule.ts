@@ -83,6 +83,8 @@ import type { ActionResult } from "@/lib/validation";
 import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 import { auditInTx } from "@/lib/audit";
 import { parsePractitionerBookingCap, type BookingCapMode } from "@/lib/booking-cap-config";
+import { parsePractitionerAgendaRules, type PractitionerAgendaRulesWrite } from "@/lib/agenda-rules-config";
+import { z } from "zod";
 
 const WRITE_MSG = "Solo OWNER/ADMIN pueden configurar sedes y horarios.";
 const READ_MSG = "No tenés permiso para ver la agenda del consultorio.";
@@ -1046,6 +1048,85 @@ async function setPractitionerBookingCapImpl(
         from: { mode: prev.bookingCapMode, count: prev.bookingCapCount, intervalMin: prev.bookingCapIntervalMin },
         to: { mode: to.bookingCapMode, count: to.bookingCapCount, intervalMin: to.bookingCapIntervalMin },
       },
+    });
+    return "changed" as const;
+  });
+  if (res === "notFound") return { ok: false, error: PRAC_NOT_FOUND };
+  if (res === "changed") revalidateAll();
+  return { ok: true, data: undefined };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reglas de agenda del profesional (CF, §28; M20)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const RULES_WRITE_MSG = "Solo quien tiene permiso de «Configuración» puede cambiar las reglas de agenda del profesional.";
+
+// Forma en el borde (zod). El booleano NO se coacciona: `parsePractitionerAgendaRules` exige un boolean real (un
+// «"true"» o un ausente que se tomara como false le cambiaría la regla sin que nadie la toque) y devuelve su copy.
+const AgendaRuleValue = z.union([z.number(), z.string().max(16), z.null()]).optional();
+const PractitionerAgendaRulesInput = z.object({
+  allowParallelServices: z.unknown(),
+  agendaSlotStepMin: AgendaRuleValue,
+  publicSlotStepMin: AgendaRuleValue,
+});
+
+/**
+ * Reglas de agenda del profesional (CF, decisiones 1 y 3; CF-D11): «Atiende servicios distintos a la vez»
+ * (`allowParallelServices`, default apagado) y el intervalo de horarios propio de la agenda y del turnero (NULL =
+ * «Usar el del consultorio»). Se manda el form ENTERO (los tres valores, CF-K).
+ *
+ * Mismo criterio que `setPractitionerBookingCap` (y por eso también `withSupportWritable`): `schedule.configure`,
+ * porque es la agenda del consultorio y no una preferencia del profesional (el propio profesional sin «Configuración»
+ * no se habilita a atender dos servicios a la vez); profesional RESERVABLE (`findBookablePractitioner`): un id ajeno,
+ * suspendido o la fila vieja de la Secretaria dan el mismo «Profesional no encontrado.». Audit
+ * `practitioner.agenda_rules` en la misma tx con el antes y el después; el mismo valor = ni write ni audit;
+ * `FOR UPDATE` para que el `from` sea el que se pisó. Los valores los valida `parsePractitionerAgendaRules` antes de
+ * escribir (copy y campo, en vez del 500 del CHECK de M20). Los turnos existentes no se tocan (CF-D1).
+ */
+export async function setPractitionerAgendaRules(...args: Parameters<typeof setPractitionerAgendaRulesImpl>): ReturnType<typeof setPractitionerAgendaRulesImpl> {
+  return withReadOnlyResult(() => withSupportWritable("lib/practitioner-schedule.ts#setPractitionerAgendaRules", () => setPractitionerAgendaRulesImpl(...args)));
+}
+
+async function setPractitionerAgendaRulesImpl(
+  practitionerId: string,
+  input: { allowParallelServices: boolean; agendaSlotStepMin: number | string | null; publicSlotStepMin: number | string | null }
+): Promise<ActionResult> {
+  const { actor } = await requireCapability("schedule.configure", RULES_WRITE_MSG);
+  const idOk = EntityId.safeParse(practitionerId);
+  if (!idOk.success) return { ok: false, error: PRAC_NOT_FOUND };
+  const shape = PractitionerAgendaRulesInput.safeParse(input ?? {});
+  if (!shape.success) return { ok: false, error: "Datos inválidos" };
+  const parsed = parsePractitionerAgendaRules(shape.data);
+  if (!parsed.ok) return { ok: false, error: parsed.error, fieldErrors: { [parsed.field]: [parsed.error] } };
+  const to = parsed.data;
+  const res = await runWithRls(actor.tenantId, async (tx) => {
+    const found = await findBookablePractitioner(tx, actor.tenantId, idOk.data);
+    if (!found) return "notFound" as const;
+    const [prev] = await tx.$queryRaw<PractitionerAgendaRulesWrite[]>`
+      SELECT "allowParallelServices", "agendaSlotStepMin", "publicSlotStepMin"
+        FROM "Practitioner" WHERE "id" = ${found.id} AND "tenantId" = ${actor.tenantId} FOR UPDATE`;
+    if (!prev) return "notFound" as const;
+    const from: PractitionerAgendaRulesWrite = {
+      allowParallelServices: prev.allowParallelServices,
+      agendaSlotStepMin: prev.agendaSlotStepMin,
+      publicSlotStepMin: prev.publicSlotStepMin,
+    };
+    if (
+      from.allowParallelServices === to.allowParallelServices &&
+      from.agendaSlotStepMin === to.agendaSlotStepMin &&
+      from.publicSlotStepMin === to.publicSlotStepMin
+    ) {
+      return "same" as const;
+    }
+    await tx.practitioner.updateMany({ where: { id: found.id, tenantId: actor.tenantId }, data: to });
+    await auditInTx(tx, {
+      tenantId: actor.tenantId,
+      actorId: actor.userId,
+      action: "practitioner.agenda_rules",
+      entity: "Practitioner",
+      entityId: found.id,
+      payload: { from, to },
     });
     return "changed" as const;
   });

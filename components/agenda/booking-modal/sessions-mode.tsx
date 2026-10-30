@@ -46,7 +46,7 @@ import {
   type SessionStateTone,
   type SessionsValue,
 } from "@/lib/sessions-mode-state";
-import { batchIntervalCapLine, previewIntervalCappedCount } from "@/lib/booking-modal-state";
+import { batchIntervalCapLine, batchOtherServiceMark, previewIntervalCappedCount } from "@/lib/booking-modal-state";
 import { DayOfWeekPicker } from "../controls";
 
 const TONE_STYLE: Record<
@@ -363,12 +363,16 @@ export function SessionsMode({
           >
             {rows.map((r, i) => {
               const capOnRow = data?.items[i]?.intervalCapped === true;
+              // CF-D4: la fecha ya viene como «Sobreturno»; la marca dice por qué (otro servicio a esa hora, no el cupo).
+              const otherMark = data?.items[i] ? batchOtherServiceMark(data.items[i]) : null;
               const tone = TONE_STYLE[SESSION_STATE_TONE[r.state]];
               return (
                 <li
                   key={r.key}
                   title={
-                    [r.detail, r.extra].filter(Boolean).join(" · ") || undefined
+                    [otherMark && r.state === "sobreturno" ? `${otherMark} a esa hora` : r.detail, r.extra]
+                      .filter(Boolean)
+                      .join(" · ") || undefined
                   }
                   style={{
                     display: "flex",
@@ -404,6 +408,7 @@ export function SessionsMode({
                     {r.label}
                     {r.extra ? " · fuera de horario" : ""}
                     {capOnRow ? " · tope completo" : ""}
+                    {otherMark ? ` · ${otherMark.toLowerCase()}` : ""}
                   </span>
                 </li>
               );

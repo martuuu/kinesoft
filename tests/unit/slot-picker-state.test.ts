@@ -110,7 +110,7 @@ describe("chips", () => {
       ["09", 1],
       ["10", 1],
     ]);
-    expect(summarizeSlots(s)).toEqual({ total: 4, free: 3, full: 0, conflict: 0, blocked: 1 });
+    expect(summarizeSlots(s)).toEqual({ total: 4, free: 3, full: 0, conflict: 0, blocked: 1, otherService: 0 });
   });
 });
 

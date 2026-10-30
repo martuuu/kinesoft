@@ -51,17 +51,25 @@ import { clientIp } from "@/lib/client-ip";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { loadAvailabilityInputs } from "@/lib/availability-loader";
 import { lockTenantLocationsShared } from "@/lib/location-lock";
-import { capacityKeysForWindow, hourKeyForStart, lockAgendaKeysMany } from "@/lib/booking-cap-lock";
+import {
+  capacityKeysForWindow,
+  hourKeyForStart,
+  lockAgendaKeysMany,
+  practitionerDayKeysForWindow,
+} from "@/lib/booking-cap-lock";
 import { lockActiveRoomInTx } from "@/lib/booking-rooms-internal";
 import { defaultRoomFor } from "@/lib/availability/rooms";
 import { acceptsInsurer, addDays, eligiblePractitioners, isDayKey, resolvePractitionerService } from "@/lib/availability";
 import {
   PUBLIC_FIRST_FREE_HORIZON_DAYS,
   PUBLIC_MAX_AHEAD_DAYS,
+  PUBLIC_WINDOW_DAYS,
   PUBLIC_WINDOW_SCAN_DAYS,
   checkPublicSlot,
+  earliestPublicLeadDay,
   firstPublicSlotAcross,
   publicDaySlots,
+  publicLeadDay,
   publicSlotWindow,
   resolvePublicOffer,
 } from "@/lib/public-booking-slots";
@@ -75,6 +83,7 @@ import {
   turneroWhatsAppActive,
 } from "@/lib/public-booking-internal";
 import { WA_CONSENT_VERSION } from "@/lib/whatsapp/types";
+import { missingTurneroReason } from "@/lib/public-wizard-state";
 import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 import type { ActionResult } from "@/lib/validation";
 import { publicPractitionerName } from "@/lib/display-name";
@@ -428,19 +437,41 @@ export async function listPublicSlotWindow(raw: ListPublicSlotWindowInput): Prom
   const tenant = await resolvePublicTarget(input.tenantSlug, input.practitionerId);
   if (!tenant) return empty;
 
-  const availability = await loadAvailabilityInputs(prisma, {
-    tenantId: tenant.id,
-    practitionerIds: [input.practitionerId],
-    serviceId: input.serviceId,
-    locationId: input.locationId,
-    from: fromDay,
-    to: lastDay,
-  });
+  const load = (from: string, to: string) =>
+    loadAvailabilityInputs(prisma, {
+      tenantId: tenant.id,
+      practitionerIds: [input.practitionerId],
+      serviceId: input.serviceId,
+      locationId: input.locationId,
+      from,
+      to,
+    });
+  let scanFrom = fromDay;
+  let scanLast = lastDay;
+  let availability = await load(scanFrom, scanLast);
+  // CF (decisión 6): la anticipación del consultorio llega a 8 semanas y la búsqueda mira 6. Si el día de
+  // anticipación cae en los últimos `PUBLIC_WINDOW_DAYS` de lo cargado (o después), lo cargado no alcanza para 5
+  // hábiles: se vuelve a cargar desde ese día. SOLO en ese caso (+1 carga): con los 60' de siempre cae hoy o mañana y
+  // el costo del TP-1 (una carga) no cambia. La anticipación se lee de la oferta ya cargada (PS > consultorio > 60,
+  // `resolvePublicOffer`), así que no hay lectura previa de configuración.
+  const offer = resolvePublicOffer(availability, input.practitionerId, input.serviceId);
+  if (offer) {
+    const leadDay = publicLeadDay(offer, now);
+    if (leadDay > addDays(lastDay, -PUBLIC_WINDOW_DAYS) && leadDay <= maxDay) {
+      const end = addDays(leadDay, PUBLIC_WINDOW_SCAN_DAYS - 1);
+      const reloadLast = end < maxDay ? end : maxDay;
+      if (reloadLast > lastDay) {
+        scanFrom = leadDay > fromDay ? leadDay : fromDay;
+        scanLast = reloadLast;
+        availability = await load(scanFrom, scanLast);
+      }
+    }
+  }
   return publicSlotWindow(availability, {
     practitionerId: input.practitionerId,
     serviceId: input.serviceId,
-    fromDay,
-    lastDay,
+    fromDay: scanFrom,
+    lastDay: scanLast,
     locationId: input.locationId ?? null,
     now,
   });
@@ -481,22 +512,40 @@ export async function findFirstPublicSlot(raw: FirstPublicSlotInput): Promise<Pu
 
   // Sin `practitionerIds`: el loader trae los reservables; PL-2f: solo los
   // prendidos en el turnero (`publicBookingOnly`, mismo where que `publicPractitionerWhere`).
-  const availability = await loadAvailabilityInputs(prisma, {
-    tenantId: tenant.id,
-    publicBookingOnly: true,
-    serviceId: input.serviceId,
-    locationId: input.locationId,
-    from: fromDay,
-    to: addDays(fromDay, PUBLIC_FIRST_FREE_HORIZON_DAYS - 1),
-  });
-  return firstPublicSlotAcross(availability, {
+  const load = (from: string) =>
+    loadAvailabilityInputs(prisma, {
+      tenantId: tenant.id,
+      publicBookingOnly: true,
+      serviceId: input.serviceId,
+      locationId: input.locationId,
+      from,
+      to: addDays(from, PUBLIC_FIRST_FREE_HORIZON_DAYS - 1),
+    });
+  const search = (availability: Awaited<ReturnType<typeof load>>, from: string) =>
+    firstPublicSlotAcross(availability, {
+      serviceId: input.serviceId,
+      practitionerIds: availability.templates.map((t) => t.practitionerId),
+      insurerId: input.insurerId ?? null,
+      locationId: input.locationId ?? null,
+      fromDay: from,
+      now,
+    });
+  const availability = await load(fromDay);
+  const hit = search(availability, fromDay);
+  if (hit) return hit;
+  // CF (decisión 6): con una anticipación de semanas (consultorio o PS) los 14 días desde hoy son todos
+  // `anticipacion-minima` y respondía «nadie tiene lugar». El inicio se corre al día de anticipación MÁS TEMPRANO
+  // entre las ofertas y se mira el horizonte desde ahí. Solo si la primera búsqueda no encontró nada (el primer
+  // horario libre no puede estar antes de ese día, así que el resultado es el mismo que arrancar ahí) y el día cae
+  // después del inicio: con los 60' de siempre no hay carga de más salvo pasada la última franja del día.
+  const leadDay = earliestPublicLeadDay(availability, {
     serviceId: input.serviceId,
     practitionerIds: availability.templates.map((t) => t.practitionerId),
     insurerId: input.insurerId ?? null,
-    locationId: input.locationId ?? null,
-    fromDay,
     now,
   });
+  if (!leadDay || leadDay <= fromDay || leadDay > addDays(today, PUBLIC_MAX_AHEAD_DAYS)) return null;
+  return search(await load(leadDay), leadDay);
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -569,7 +618,7 @@ class PublicSlotGoneError extends Error {}
  *     `publicDaySlots`, la MISMA grilla que lista el wizard: franjas del
  *     profesional (o el horario del tenant si no tiene), excepción del día,
  *     bloqueos duros (un slot bloqueado no se ofrece ni se acepta),
- *     anticipación `minLeadMinutes ?? 60`, tope `maxLeadDays` y cupo
+ *     anticipación PS > consultorio > 60 (CF), tope `maxLeadDays` y cupo
  *     profesional + servicio contando solo lo que sigue reteniendo
  *     (`isHoldingCapacity`). Solo servicios habilitados y PUBLIC para ese
  *     profesional; la duración es la de su PractitionerService. T3: paso
@@ -635,6 +684,10 @@ export async function submitPublicBooking(
   // BO2-D: también con el consultorio suspendido / dado de baja (o en solo lectura con `enforce`): mismo corte,
   // mismo lugar, mismo copy.
   if (!isPublicTurneroOpen(tenant)) return { ok: false, error: PUBLIC_BOOKING_CLOSED_ERROR };
+  // CF-FORM (§28, decisión 5): el «diagnóstico» obligatorio sale de la vertical de ESTA fila (Kinesiología → `title`,
+  // General → `notes`), nunca del request. Antes de `resolvePublicPatient`: un submit incompleto no crea la ficha.
+  const missingReason = missingTurneroReason(data.patient, tenant.vertical);
+  if (missingReason) return { ok: false, ...missingReason };
 
   const service = await prisma.service.findFirst({
     where: { id: data.serviceId, tenantId: tenant.id },
@@ -732,7 +785,8 @@ export async function submitPublicBooking(
           email: data.patient.email,
           phone: data.patient.phone,
           documentId: data.patient.documentId,
-          dateOfBirth: new Date(data.patient.dateOfBirth),
+          // CF-FORM: opcional (null = no la dio). `new Date("YYYY-MM-DD")` = medianoche UTC (AUDIT §5.11).
+          dateOfBirth: data.patient.dateOfBirth ? new Date(data.patient.dateOfBirth) : null,
           coverageInsurer: data.patient.coverageInsurer || undefined,
           coveragePlan: data.patient.coveragePlan || undefined,
           emergencyName: data.patient.emergencyName || undefined,
@@ -779,7 +833,7 @@ export async function submitPublicBooking(
         // y la agenda también se serializan entre sí — y recién después se
         // recarga y re-chequea la grilla con este tx: en READ COMMITTED la
         // recarga ya ve la fila del que entró antes. Orden de locks igual que
-        // en lib/bookings.ts (cupo → hora → sedes): sin ciclos.
+        // en lib/bookings.ts (cupo → día → hora → sedes, C2 (1d)): sin ciclos.
         //
         // T3 (C-AS3, enmienda C2 (1c)): además del cupo, la HORA AR del inicio
         // del profesional (`kinesoft:phour:…`), en la MISMA sentencia
@@ -791,13 +845,27 @@ export async function submitPublicBooking(
         // la agenda, así que turnero y staff se serializan por el tope. Se
         // toma SIEMPRE (con o sin tope): la clave no depende de la config, y
         // un tope prendido en el medio no deja una ventana sin lock.
+        //
+        // CF (enmienda C2 (1d), ADR-032): y el DÍA AR del profesional (`kinesoft:pday:…`), entre el cupo y la hora,
+        // también en la misma sentencia. La regla «no atiende servicios distintos a la vez» cruza servicios y ventanas:
+        // 09:00 + 60' (Kine, online) y 09:30 + 60' (Evaluación, agenda) no comparten cupo (lleva el servicio) ni hora
+        // (la de inicio); sin ésta las dos leían «0 de otro servicio» y entraban. Dos turnos que se pisan comparten
+        // al menos un día de los que cubren. Siempre (no depende de `allowParallelServices`), como la hora. La recarga
+        // fresca de abajo re-chequea la regla con el motor (`otro-servicio` → "unavailable").
+        const end = new Date(scheduledFor.getTime() + offer.durationMin * 60_000);
         await lockAgendaKeysMany(tx, {
           cap: capacityKeysForWindow({
             tenantId: tenant.id,
             practitionerId: data.practitionerId,
             serviceId: service.id,
             start: scheduledFor,
-            end: new Date(scheduledFor.getTime() + offer.durationMin * 60_000),
+            end,
+          }),
+          pday: practitionerDayKeysForWindow({
+            tenantId: tenant.id,
+            practitionerId: data.practitionerId,
+            start: scheduledFor,
+            end,
           }),
           hour: [hourKeyForStart({ tenantId: tenant.id, practitionerId: data.practitionerId, start: scheduledFor })],
         });

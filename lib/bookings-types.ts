@@ -1,7 +1,7 @@
 import type { BookingStatus, PaymentStatus } from "@prisma/client";
 import type { PaymentMethod } from "@/lib/payment-method";
 import type { BatchSlotStatus } from "@/lib/booking-schedule";
-import type { IntervalCapPromptData } from "@/lib/booking-force-flags";
+import type { IntervalCapPromptData, OtherServicePromptData } from "@/lib/booking-force-flags";
 import type { ReceptionAction, ReceptionState } from "@/lib/reception-state";
 import type { Discipline } from "@/lib/plans-constants";
 import type { LinkedPlanDiscipline } from "@/lib/plan-display";
@@ -107,6 +107,14 @@ export type BookingBlockedPrompt = {
 export type BookingIntervalCapPrompt = IntervalCapPromptData;
 
 /**
+ * CF (§28, CF-D4): el profesional ya atiende otro servicio en ese horario y no tiene servicios en paralelo. Aviso
+ * forzable `otherService` (con `allowOtherService` el turno queda sobreturno). `serviceName` null = no se pudo leer
+ * el nombre (copy «otro servicio»); `existingISO` = inicio del turno que ocupa; `nextFreeISO` como en `conflict`.
+ * Forma única con `ForceableResult.otherService` (`lib/booking-force-flags.ts`).
+ */
+export type BookingOtherServicePrompt = OtherServicePromptData;
+
+/**
  * T3 (C-AS3): aviso INFORMATIVO del 2.º turno del intervalo (`intervalCapState === "notice"`), en un resultado
  * `ok: true`: no bloquea ni pide confirmación. `time` = "HH:MM" AR del inicio del intervalo. Copy con
  * `intervalCapNoticeText` («Ya hay 1 turno de Ana a las 10:00.»).
@@ -141,6 +149,12 @@ export type BatchDateOutcome = {
    * «Agendar igual esas fechas»); con el flag entra como sobreturno. Ausente = false (lote de antes de T3d).
    */
   intervalCapped?: boolean;
+  /**
+   * CF (CF-D4): en esa fecha el profesional ya atiende otro servicio. INFORMATIVO: el lote lo pliega en
+   * «sobreturno» (status sube a "sobreturno", se fuerza con `allowOverbooking`); el flag solo deja decir por qué.
+   * Ausente = false.
+   */
+  otherServiceBusy?: true;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

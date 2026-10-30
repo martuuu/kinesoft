@@ -103,6 +103,28 @@ export function isIntervalCapError(message: string | null | undefined): boolean 
   return typeof message === "string" && INTERVAL_CAP_ERROR_RE.test(message);
 }
 
+/**
+ * CF (§28, CF-D4): el profesional ya atiende OTRO servicio en ese horario y no tiene servicios en paralelo
+ * (`Practitioner.allowParallelServices = false`, M20). Mismo texto que el titular del aviso forzable
+ * (`forcePromptHeadline` «otherService»): Lote y Planes solo reciben este texto y lo pliegan en «sobreturno».
+ * Sin servicio (no se pudo leer el nombre) dice «otro servicio»; sin profesional, «El profesional».
+ */
+export const OTHER_SERVICE_ERROR = (o: { practitionerName?: string | null; serviceName?: string | null }) =>
+  `${o.practitionerName || "El profesional"} está atendiendo ${
+    o.serviceName ? `«${o.serviceName}»` : "otro servicio"
+  } en ese horario.`;
+
+// `.+` dentro de las comillas: el nombre del servicio lo escribe el consultorio y puede traer cualquier cosa.
+const OTHER_SERVICE_ERROR_RE = / está atendiendo (?:«.+»|otro servicio) en ese horario\.$/;
+
+/**
+ * ¿Este rechazo es el de «otro servicio» (`OTHER_SERVICE_ERROR`)? Para los callers que solo reciben el texto
+ * (Seguimiento / Planes), como `isIntervalCapError`: lleva nombres, así que se reconoce por la forma.
+ */
+export function isOtherServiceError(message: string | null | undefined): boolean {
+  return typeof message === "string" && OTHER_SERVICE_ERROR_RE.test(message);
+}
+
 // ─── Planes · sincronía turno ↔ sesión (S12, C4; textos literales del plan) ───
 
 /** Reactivar un turno de plan cuya sesión ya está realizada o archivada, o cuyo plan no está ACTIVE/PAUSED. */

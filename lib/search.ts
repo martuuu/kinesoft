@@ -13,6 +13,7 @@
  */
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
+import { capabilitiesForActor } from "@/lib/authz";
 import { gatingForActor } from "@/lib/plan-gating";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { shortcutsFor } from "@/lib/nav";
@@ -21,7 +22,7 @@ import { escapeLike } from "@/lib/email-match";
 
 import type { SearchHit } from "@/lib/search-types";
 
-// EV0 (C-EV2): los atajos salen de `shortcutsFor(modules)` de `lib/nav.ts`, la
+// EV0 (C-EV2): los atajos salen de `shortcutsFor(modules, caps)` de `lib/nav.ts`, la
 // misma fuente que sidebar y topbar. Antes había una lista `SHORTCUTS` fija acá
 // y un consultorio General veía "Diagnóstico"/"Seguimiento"/"Biblioteca".
 
@@ -32,13 +33,20 @@ export async function globalSearch(q: string): Promise<SearchHit[]> {
   const term = (typeof q === "string" ? q : "").slice(0, 100).trim();
   const actor = await getActor();
   const modules = modulesFor(actor.entitlements);
-  const shortcuts = shortcutsFor(modules);
+  // CF-NAV (§28, decisión 7): los atajos filtran por las caps del actor, igual que el sidebar. Sin `clinical.read`
+  // (Secretaria, Facturación, Titular que no atiende, soporte) no aparecen Planes/Diagnóstico/Seguimiento/Ejercicios.
+  // `capabilitiesForActor` resuelve con `actor.membership` (sin query extra en el camino común).
+  const caps = await capabilitiesForActor(actor);
+  const shortcuts = shortcutsFor(modules, caps);
   if (!term) return shortcuts;
 
   // Sin el módulo no se consulta (no alcanza con filtrar el resultado: es una
   // query de menos y no depende de que la visibilidad esté bien armada).
-  const withExercises = modules.has("ejercicios");
-  const withConditions = modules.has("diagnostico");
+  // CF-NAV: ejercicios y condiciones llevan a /biblioteca, que sin `clinical.read` redirige a /dashboard: sin la
+  // capability tampoco se consultan (un resultado que no abre nada es peor que no verlo).
+  const clinical = caps.has("clinical.read");
+  const withExercises = clinical && modules.has("ejercicios");
+  const withConditions = clinical && modules.has("diagnostico");
   // Sin `ejercicios` el gate tampoco hace falta (su visibilidad sería vacía).
   const gate = withExercises ? await gatingForActor() : null;
   const insensitive = "insensitive" as const;

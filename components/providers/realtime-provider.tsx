@@ -15,9 +15,9 @@
  * Por qué así:
  * - Bundle (§18.10 punto 7, FX3): este archivo va en el first-load de TODAS las
  *   rutas del workspace, así que acá queda solo el cableado. El hub
- *   (`components/realtime/realtime-hub`, con `lib/realtime-client-state`, el
- *   schema zod de `lib/realtime-events` y la action del token) entra por
- *   `import()` dinámico en el effect, y nunca con `driver:"off"`. El gate de SV
+ *   (`components/realtime/realtime-hub`, con `lib/realtime-client-state` y el
+ *   schema zod de `lib/realtime-events`) entra por `import()` dinámico en el
+ *   effect, y nunca con `driver:"off"`. El gate de SV
  *   midió +11 kB gz por ruta con hub y avisos estáticos; los drivers (y por ellos
  *   `@supabase/realtime-js`) van un `import()` más abajo, en el hub.
  * - Los listeners viven ACÁ (no en el hub): las pantallas se suscriben en su
@@ -39,6 +39,14 @@
  *   congelada hasta navegar. Ahora `createVisiblePoller` avisa `"poll"` cada 60 s solo con la pestaña visible (y
  *   `"visible"` al volver a verla), el mismo resync que dispara el hub. Vive acá y no en el hub porque con `off` el
  *   hub no se descarga: son ~30 líneas sin dependencias en el first-load.
+ *
+ * CF-RT (§28 E): la action del token se importa ACÁ, estática (`mintRealtimeTokenAction`, la referencia de
+ * `lib/realtime-token-action`), y se le pasa al hub. Antes la importaba el hub, y Next 14.2 no registra en
+ * `server-reference-manifest.json` una action que el cliente solo alcanza por `import()` (AUDIT:2333): en prod el server
+ * respondía «Failed to find Server Action» con el MISMO build y el indicador pedía recargar para siempre. Lo que entra
+ * al first-load es la referencia (`createServerReference(id)`, del runtime que Next ya trae), no el código de la
+ * action: el grafo del shell corta en el `"use server"` (pf1-shell). `scripts/check-server-actions.mjs` corre después
+ * del build y falla si un id de los chunks no está en el manifest.
  */
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 // Solo tipos: `import type` se borra al compilar y no arrastra el módulo al bundle.
@@ -47,6 +55,8 @@ import type { RealtimeAgendaMessage, RealtimeBootstrap } from "@/lib/realtime-ev
 // Sin dependencias las dos (las cuida su cabecera): son lo único de valor que este archivo suma al first-load.
 import { importWithRetry, isStaleBuildError } from "@/lib/chunk-retry";
 import { reportClientError, type ClientErrorKind } from "@/lib/client-error-report";
+// CF-RT: estática a propósito (ver cabecera). Es `"use server"`: al cliente llega solo la referencia.
+import { mintRealtimeTokenAction } from "@/lib/realtime-token-action";
 
 /**
  * Por qué hay que re-pedir. `"connect"` no está: la primera conexión llega con la
@@ -287,7 +297,7 @@ export function RealtimeProvider({
     importWithRetry(() => import("@/components/realtime/realtime-hub")).then(
       ({ createRealtimeHub }) => {
         if (cancelled) return;
-        const hub = createRealtimeHub();
+        const hub = createRealtimeHub({ getToken: mintRealtimeTokenAction });
         const offState = hub.onState(setState);
         const offDiag = hub.onDiag((d) => {
           setDiag(d);

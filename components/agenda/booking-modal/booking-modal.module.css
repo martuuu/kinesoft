@@ -8,7 +8,9 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) 86px;
   gap: 10px;
-  align-items: end;
+  /* start (no end): con la ayuda de la hora manual debajo del horario, end bajaba la Duración y desalineaba los
+     rótulos (ZB M4). Los dos campos arrancan con su rótulo de una línea, así que alinean arriba. */
+  align-items: start;
 }
 @media (max-width: 479px) {
   .scheduleRow {

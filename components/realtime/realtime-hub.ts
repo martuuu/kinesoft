@@ -5,9 +5,14 @@
  * del driver. `RealtimeProvider` lo carga por `import()` dinámico SOLO cuando el
  * bootstrap trae un driver (`supabase`/`local`): con `driver:"off"` (el deploy
  * de prod arranca así) ni este módulo, ni `lib/realtime-client-state`, ni zod de
- * `lib/realtime-events`, ni la referencia a la action del token entran al
- * first-load de las rutas del workspace (§18.10 punto 7: el gate midió +11 kB gz
- * por ruta con todo esto estático en `(app)/layout`).
+ * `lib/realtime-events` entran al first-load de las rutas del workspace (§18.10
+ * punto 7: el gate midió +11 kB gz por ruta con todo esto estático en `(app)/layout`).
+ *
+ * CF-RT (§28 E): la action del token NO se importa acá. Next 14.2 no registra en `server-reference-manifest.json` una
+ * action que el cliente solo alcanza por `import()` (AUDIT:2333): el chunk del hub llamaba un id que el server no
+ * conocía, «Failed to find Server Action» en el MISMO build, y el indicador pedía recargar para siempre. El provider la
+ * importa estática (`lib/realtime-token-action`: una referencia, no su código) y la pasa en `createRealtimeHub({ getToken })`;
+ * `scripts/check-server-actions.mjs` lo verifica después de cada build.
  *
  * Los drivers (y por ellos `@supabase/realtime-js`) siguen un nivel más abajo:
  * entran por otro `import()` dentro de `defaultLoadDriver`.
@@ -20,14 +25,13 @@
  * indicador y lo manda una vez por código al beacon de errores del cliente.
  */
 import {
-  classifyMintError,
-  classifyMintThrow,
   createCoalescer,
   defaultTimers,
   deriveConnectionState,
   makeDiag,
   nextPollDelay,
   shouldResync,
+  tokenGetterFromAction,
   COALESCE_WINDOW_MS,
 } from "@/lib/realtime-client-state";
 import type {
@@ -35,12 +39,12 @@ import type {
   DriverStatus,
   RealtimeDiag,
   RealtimeDriver,
-  RealtimeTokenGetter,
   Timers,
 } from "@/lib/realtime-client-types";
 import { importWithRetry, isStaleBuildError } from "@/lib/chunk-retry";
 import type { RealtimeBootstrap } from "@/lib/realtime-events";
-import { mintRealtimeToken } from "@/lib/realtime-token";
+// Solo el tipo (se borra al compilar): el VALOR lo trae el provider, estático (ver cabecera).
+import type { mintRealtimeToken } from "@/lib/realtime-token";
 import type {
   RealtimeBatchListener,
   RealtimeResyncListener,
@@ -50,7 +54,12 @@ import type {
 /** Crea el driver del bootstrap; `null` = no hay transporte posible (queda `off`). */
 export type DriverLoader = (bootstrap: RealtimeBootstrap) => Promise<RealtimeDriver | null>;
 
+/** La server action del token tal cual (sin clasificar): la clasifica `tokenGetterFromAction`. */
+export type RealtimeTokenAction = () => Promise<Awaited<ReturnType<typeof mintRealtimeToken>> | undefined>;
+
 export type RealtimeHubOptions = {
+  /** CF-RT: la action del token importada ESTÁTICA por el provider. Sin ella (tests) el driver `supabase` no tiene token. */
+  getToken?: RealtimeTokenAction;
   timers?: Timers;
   /** `navigator.onLine`; `undefined` (SSR) cuenta como online. */
   isOnline?: () => boolean | undefined;
@@ -86,31 +95,18 @@ function defaultIsOnline(): boolean | undefined {
     : undefined;
 }
 
-/**
- * Token del canal. HF-1b: el `{ok:false}` ya no se aplana a `null` — vuelve clasificado (`classifyMintError`) para que
- * el driver lo cuente como permanente y el indicador diga por qué. Que la action TIRE (por contrato no tira) es red
- * (`null`, transitorio) o una action que ya no existe en el server (`stale_build`: deploy nuevo con la PWA vieja).
- */
-export const getRealtimeToken: RealtimeTokenGetter = async () => {
-  let r: unknown;
-  try {
-    r = await mintRealtimeToken();
-  } catch (err) {
-    return classifyMintThrow(err);
-  }
-  // Una respuesta sin `ok` no salió de la action (Next devolvió otra cosa: id de action de otro build).
-  if (!r || typeof r !== "object" || !("ok" in r)) {
-    return { code: "stale_build", reason: "La action del token no respondió" };
-  }
-  const res = r as Awaited<ReturnType<typeof mintRealtimeToken>>;
-  return res.ok ? res.data : classifyMintError(res.error);
-};
+/** Sin action inyectada no hay token posible: `{ok:false}` clasificado como error del server (no «versión nueva»). */
+const noTokenAction: RealtimeTokenAction = async () => ({ ok: false, error: "realtime-error" });
 
 /**
  * Import dinámico: ni los drivers ni realtime-js entran al first-load (§18.10 punto 7). HF-1b: con un reintento
  * (`importWithRetry`); si el chunk tampoco está a los 5 s, tira `StaleBuildError` y el hub lo marca versión nueva.
+ * CF-RT: el token sale de `getToken` (la action que trae el provider) clasificada por `tokenGetterFromAction`.
  */
-export const defaultLoadDriver: DriverLoader = async (b) => {
+export async function defaultLoadDriver(
+  b: RealtimeBootstrap,
+  getToken: RealtimeTokenAction = noTokenAction,
+): Promise<RealtimeDriver | null> {
   if (b.driver === "local") {
     const { createLocalDriver } = await importWithRetry(() => import("@/lib/realtime-client-local"));
     return createLocalDriver();
@@ -121,15 +117,16 @@ export const defaultLoadDriver: DriverLoader = async (b) => {
       url: b.url,
       anonKey: b.anonKey,
       tenantId: b.tenantId,
-      getToken: getRealtimeToken,
+      getToken: tokenGetterFromAction(getToken),
     });
   }
   return null;
-};
+}
 
 export function createRealtimeHub(opts: RealtimeHubOptions = {}): RealtimeHub {
   const timers = opts.timers ?? defaultTimers;
   const isOnline = opts.isOnline ?? defaultIsOnline;
+  const loadWithToken: DriverLoader = (b) => defaultLoadDriver(b, opts.getToken);
 
   const batchListeners = new Set<RealtimeBatchListener>();
   const resyncListeners = new Set<RealtimeResyncListener>();
@@ -282,7 +279,7 @@ export function createRealtimeHub(opts: RealtimeHubOptions = {}): RealtimeHub {
       driver?.nudge("reconnect");
     },
 
-    start(bootstrap, loadDriver = defaultLoadDriver) {
+    start(bootstrap, loadDriver = loadWithToken) {
       if (session) stopSession();
       if (bootstrap.driver === "off") return () => {};
       const mine = {};

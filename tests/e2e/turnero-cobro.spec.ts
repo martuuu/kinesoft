@@ -65,6 +65,9 @@ async function fillWizard(page: Page, who: { firstName: string; lastName: string
   await page.locator("#booking-phone").fill("1155550177");
   await page.locator("#booking-documentId").fill(dni);
   await page.locator("#booking-dateOfBirth").fill("1988-03-12");
+  // CF-FORM: el «diagnóstico» es obligatorio según la vertical (Kine #booking-title; General #booking-notes).
+  if (await page.locator("#booking-title").count()) await page.locator("#booking-title").fill("Lumbalgia");
+  else await page.locator("#booking-notes").fill("Control");
   return { dni, slotIso };
 }
 

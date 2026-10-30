@@ -93,7 +93,7 @@ const BUDGET = {
   listPatients: 10,
   updateBookingReschedule: 27,
   updateBookingPlan: 28,
-  updateBookingPatient: 14,
+  updateBookingPatient: 16, // ZF1 (CF): cambiar el paciente toma pday y cuenta otro servicio (+2)
 } as const;
 
 /** Planes sembrados (de 20 sesiones, vinculadas a turnos de la grilla). */

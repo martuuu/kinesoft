@@ -27,7 +27,6 @@ import {
   getPatientBookingsSummary,
   getPatientBookingsAll,
   getPatientBillableCount,
-  getPatientEvaScores,
   setPatientDiagnosis,
 } from "@/lib/patients";
 import { patientAccessFor } from "@/lib/visibility";
@@ -318,7 +317,6 @@ describe.skipIf(!RUN)("P0-S07sp · Secretaria en pacientes", () => {
       expect(b.practitionerName).not.toBe(kineProfile.email);
     }
     expect(await getPatientBillableCount(p)).toBe(1);
-    expect(await getPatientEvaScores(p)).toEqual([]);
 
     // Control: OWNER (full + clinical.read) ve los campos.
     asUser(A.userId);

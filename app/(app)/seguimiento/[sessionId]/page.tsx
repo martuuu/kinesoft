@@ -11,6 +11,7 @@ import {
   type SessionClinicalNote,
 } from "@/components/seguimiento/seguimiento-model";
 import { moduleWall } from "@/lib/module-wall";
+import { clinicalSurfaceAllowed } from "@/lib/clinical-wall";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +36,8 @@ export default async function Page({
   // VX-Z (B1): el layout y la página se renderizan EN PARALELO; sin el módulo, el layout muestra el muro o redirige,
   // pero la página igual corría sus queries (y `assertModule` tiraba). Mismo veredicto que el layout (actor cacheado).
   if ((await moduleWall("sesiones")) !== "ok") return null;
+  // CF (decisión 7 de Martin): sin `clinical.read` el layout redirige; la página corta igual (layout y página corren en paralelo).
+  if (!(await clinicalSurfaceAllowed())) return null;
   const session = await getSessionDetail(params.sessionId);
   if (!session) notFound();
 

@@ -117,7 +117,7 @@ async function changeStatus(
   return { ok: true, data: { updatedAt: res.updatedAt.toISOString() } };
 }
 
-/** ACTIVE → SUSPENDED. El equipo deja de entrar (pantalla /suspendido), el turnero y el check-in se cierran. */
+/** ACTIVE → SUSPENDED. El equipo deja de entrar (pantalla /suspendido), el turnero y las escrituras del portal se cierran. */
 export async function suspendPlatformTenant(raw: unknown): Promise<Result> {
   const actor = await requirePlatformAdmin("tenant.status.update");
   const parsed = ChangePlatformTenantStatus.safeParse(raw);

@@ -3,10 +3,13 @@
  * siempre conecta con el owner, como el script con DIRECT_URL). El SCRIPT no se corre: lo corre Martin contra prod.
  *
  * Qué se fija:
- *  - `--post` sobre la base local (las 46 migraciones aplicadas) da PASS en todo; el único SKIP admitido es el de la
+ *  - `--post` sobre la base local (las 48 migraciones aplicadas) da PASS en todo; el único SKIP admitido es el de la
  *    Data API (en el Docker no existen los roles `anon`/`authenticated` de Supabase) y el de Storage.
- *  - `--pre` sobre la misma base dice, migración por migración, que las 6 de la tanda YA están aplicadas (no
- *    pendientes) y saltea sus prechecks en vez de dar FAIL por «el objeto ya existe».
+ *  - `--pre` (CF, 30-oct: M12..M19 ya están en prod desde el reset; la pendiente es solo M20): exige M12..M19
+ *    PRESENTES (aplicadas con su checksum y con sus objetos: PASS) y, como en el Docker M20 también está aplicada, la
+ *    marca «ya aplicada» y saltea sus prechecks en vez de dar FAIL por «el objeto ya existe».
+ *  - Con `evaluateApplied`, los prechecks de M20 corren igual: `pre.M20.absent` da FAIL nombrando las columnas y
+ *    `pre.M20.crossService` (el SQL literal del brief) detecta un par de servicios distintos pisados armado a propósito.
  *  - Todo corre en UNA transacción READ ONLY: un write adentro rebota (25006).
  *  - El chequeo de `pg_dump` compara la versión local contra la del server (el backup con un pg_dump viejo falla).
  *  - La tabla impresa no lleva la URL de conexión.
@@ -14,9 +17,12 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import path from "node:path";
 import type { PrismaClient } from "@prisma/client";
-import { ownerClient } from "@/tests/helpers/tenant-factory";
+import { addService, createEphemeralTenant, ownerClient, uniqueSuffix, type EphemeralTenant } from "@/tests/helpers/tenant-factory";
+import { localToARIso, toARDateKey } from "@/lib/datetime-ar";
 import {
-  T6T7_MIGRATIONS,
+  APPLIED_MIGRATIONS,
+  PENDING_MIGRATIONS,
+  TRACKED_MIGRATIONS,
   formatPrecheckTable,
   runProdPrecheck,
   withReadOnlyTx,
@@ -61,26 +67,35 @@ describe.skipIf(!RUN)("[INF-S] prod-precheck (núcleo) contra el Docker local", 
     ]) {
       expect(post.rows.find((r) => r.id === id)?.status, id).toBe("PASS");
     }
-    for (const m of T6T7_MIGRATIONS) {
+    for (const m of TRACKED_MIGRATIONS) {
       expect(post.rows.some((r) => r.group === m.key && r.status === "PASS"), m.key).toBe(true);
+    }
+    for (const id of ["post.M20.objects", "post.M20.columns", "post.M20.checks", "post.M20.parallel"]) {
+      expect(post.rows.find((r) => r.id === id)?.status, id).toBe("PASS");
     }
   });
 
-  it("[INF-S] --pre en local: las 7 figuran YA aplicadas (no pendientes) y sus prechecks se saltean", () => {
-    expect(T6T7_MIGRATIONS.map((m) => m.key)).toEqual(["M12", "M14", "M18", "M17", "M15", "M16", "M19"]);
+  it("[INF-S] --pre en local: M12..M19 PRESENTES (PASS, checksum y objetos); M20 ya aplicada y sus prechecks se saltean", () => {
+    expect(APPLIED_MIGRATIONS.map((m) => m.key)).toEqual(["M12", "M14", "M18", "M17", "M15", "M16", "M19"]);
+    expect(PENDING_MIGRATIONS.map((m) => m.key)).toEqual(["M20"]);
     const pending = pre.rows.find((r) => r.id === "pre.migrations.pending");
     expect(pending?.status).toBe("PASS");
     expect(pending?.detail).toMatch(/0 pendientes/);
-    for (const m of T6T7_MIGRATIONS) {
+    expect(pre.rows.find((r) => r.id === "pre.repo.checksums")?.status).toBe("PASS");
+    for (const m of APPLIED_MIGRATIONS) {
       const st = pre.rows.find((r) => r.id === `pre.state.${m.key}`);
-      expect(st?.status, m.key).toBe("WARN");
-      expect(st?.detail, m.key).toMatch(/ya aplicada/);
-      expect(st?.detail, m.key).not.toMatch(/pendiente/);
-      // Ningún precheck de objeto de esa migración da FAIL por «ya existe»: van todos SKIP.
-      const objs = pre.rows.filter((r) => r.group === m.key && r.id !== `pre.state.${m.key}`);
-      expect(objs.length, m.key).toBeGreaterThan(0);
-      expect(objs.every((r) => r.status === "SKIP"), m.key).toBe(true);
+      expect(st?.status, m.key).toBe("PASS");
+      expect(st?.detail, m.key).toMatch(/ya aplicada .*checksum verificado/);
+      // Ya no se esperan ausentes: sus objetos tienen que estar.
+      expect(pre.rows.find((r) => r.id === `pre.${m.key}.present`)?.status, m.key).toBe("PASS");
+      expect(pre.rows.some((r) => r.id === `pre.${m.key}.absent`), m.key).toBe(false);
     }
+    const st = pre.rows.find((r) => r.id === "pre.state.M20");
+    expect(st?.status).toBe("WARN");
+    expect(st?.detail).toMatch(/ya aplicada/);
+    const objs = pre.rows.filter((r) => r.group === "M20" && r.id !== "pre.state.M20");
+    expect(objs.map((r) => r.id).sort()).toEqual(["pre.M20.absent", "pre.M20.crossService"]);
+    expect(objs.every((r) => r.status === "SKIP")).toBe(true);
     expect(pre.rows.find((r) => r.id === "pre.migrations.failed")?.status).toBe("PASS");
     expect(pre.rows.find((r) => r.id === "pre.role.bypassrls")?.status).toBe("PASS");
     expect(pre.rows.find((r) => r.id === "pre.server.version")?.status).toBe("PASS");
@@ -90,7 +105,7 @@ describe.skipIf(!RUN)("[INF-S] prod-precheck (núcleo) contra el Docker local", 
     expect(fails, JSON.stringify(fails, null, 2)).toEqual([]);
   });
 
-  it("[INF-S] el SQL de los prechecks de --pre corre sin errores (evaluado sobre las ya aplicadas)", async () => {
+  it("[INF-S] el SQL de los prechecks de M20 corre sin errores (evaluado sobre la ya aplicada)", async () => {
     const forced = await runProdPrecheck({
       db,
       mode: "pre",
@@ -100,25 +115,79 @@ describe.skipIf(!RUN)("[INF-S] prod-precheck (núcleo) contra el Docker local", 
     });
     const broken = forced.rows.filter((r) => /la consulta falló/.test(r.detail));
     expect(broken, JSON.stringify(broken, null, 2)).toEqual([]);
-    // Con los objetos ya creados, los «no existe» dan FAIL nombrando lo que encontró (el veredicto de verdad).
-    for (const id of ["pre.M12.absent", "pre.M14.absent", "pre.M18.absent", "pre.M17.absent", "pre.M15.absent", "pre.M16.absent"]) {
-      const row = forced.rows.find((r) => r.id === id);
-      expect(row?.status, id).toBe("FAIL");
-      expect(row?.detail, id).toMatch(/ya existen/);
+    // Con las columnas ya creadas, el «no existe» da FAIL nombrando lo que encontró (el veredicto de verdad).
+    const absent = forced.rows.find((r) => r.id === "pre.M20.absent");
+    expect(absent?.status).toBe("FAIL");
+    expect(absent?.detail).toMatch(/ya existen/);
+    expect(absent?.detail).toMatch(/Practitioner\.allowParallelServices/);
+    // El informativo corre: PASS (nadie) o WARN (lista), nunca FAIL.
+    expect(["PASS", "WARN"]).toContain(forced.rows.find((r) => r.id === "pre.M20.crossService")?.status);
+  });
+
+  it("[INF-S] pre.M20.crossService lista a quien tiene servicios distintos pisados (y no el mismo paciente ni cancelados)", async () => {
+    let T: EphemeralTenant | undefined;
+    try {
+      T = await createEphemeralTenant(db);
+      const other = await addService(db, T, { name: "Evaluación" });
+      const at = new Date(Date.now() + 3 * 86_400_000);
+      at.setUTCSeconds(0, 0);
+      const plus = (min: number) => new Date(at.getTime() + min * 60_000);
+      const [p1, p2] = await Promise.all(
+        ["Uno", "Dos"].map((n) =>
+          db.patient.create({ data: { tenantId: T!.tenantId, firstName: n, lastName: "CF-M" }, select: { id: true } })
+        )
+      );
+      const mk = (serviceId: string, patientId: string, start: Date, status: "CONFIRMED" | "CANCELLED" = "CONFIRMED") =>
+        db.booking.create({
+          data: { tenantId: T!.tenantId, practitionerId: T!.practitionerId, serviceId, patientId, scheduledFor: start, durationMin: 45, status,
+            idempotencyKey: `cfm-${uniqueSuffix()}` },
+        });
+      // El único par que cuenta: servicio A 45' (p1) a la hora y servicio B (p2) a la hora + 30' → se pisan 15'.
+      await mk(T.serviceId, p1.id, at);
+      await mk(other, p2.id, plus(30));
+      // No suman pares: p2 en B cancelado encima de A; y p2 en B justo cuando termina el de A (+45', borde abierto,
+      // pisa solo al de p2 en B, que es el MISMO servicio).
+      await mk(other, p2.id, plus(5), "CANCELLED");
+      await mk(other, p2.id, plus(45));
+      const forced = await runProdPrecheck({ db, mode: "pre", migrationsDir: MIGRATIONS_DIR, pgDumpVersion: null, evaluateApplied: true });
+      const row = forced.rows.find((r) => r.id === "pre.M20.crossService");
+      expect(row?.status).toBe("WARN");
+      expect(row?.detail).toContain(`${T.slug}:${T.practitionerId} 1 desde`);
+    } finally {
+      await T?.cleanup();
     }
-    // El md5 de M14 no es el de M9: el precheck de M14 frena (lo que tiene que pasar si prod tuviera otra función).
-    expect(forced.rows.find((r) => r.id === "pre.M14.clinicalNoteGuard")?.status).toBe("FAIL");
-    // Los informativos y los de datos sí corren y pasan sobre la base local.
-    for (const id of ["pre.M12.adminBackfill", "pre.M14.counts", "pre.M18.counts", "pre.M18.relfilenode", "pre.M16.chargeUnique", "pre.M16.anchorDay"]) {
-      expect(forced.rows.find((r) => r.id === id)?.status, id).toBe("PASS");
+  });
+
+  it("[ZF1] pre.M20.crossService imprime el «desde» en día AR: un par a las 21:30 AR no sale con el día siguiente (UTC)", async () => {
+    // El bug (B2 del revisor ZA): `toISOString().slice(0, 10)` del primer turno. 21:30 AR = 00:30 UTC del día
+    // siguiente, así que Martin leía en el reporte un día que no es el del turno.
+    let T: EphemeralTenant | undefined;
+    try {
+      T = await createEphemeralTenant(db);
+      const other = await addService(db, T, { name: "Evaluación" });
+      const day = toARDateKey(new Date(Date.now() + 3 * 86_400_000));
+      const at = new Date(localToARIso(`${day}T21:30:00`));
+      const utcDay = at.toISOString().slice(0, 10);
+      expect(utcDay).not.toBe(day); // no vacuo: el turno cruza la medianoche UTC
+      const [p1, p2] = await Promise.all(
+        ["Uno", "Dos"].map((n) =>
+          db.patient.create({ data: { tenantId: T!.tenantId, firstName: n, lastName: "ZF1" }, select: { id: true } })
+        )
+      );
+      const mk = (serviceId: string, patientId: string, start: Date) =>
+        db.booking.create({
+          data: { tenantId: T!.tenantId, practitionerId: T!.practitionerId, serviceId, patientId, scheduledFor: start, durationMin: 45,
+            status: "CONFIRMED", idempotencyKey: `zf1-${uniqueSuffix()}` },
+        });
+      await mk(T.serviceId, p1.id, at);
+      await mk(other, p2.id, new Date(at.getTime() + 30 * 60_000));
+      const forced = await runProdPrecheck({ db, mode: "pre", migrationsDir: MIGRATIONS_DIR, pgDumpVersion: null, evaluateApplied: true });
+      const row = forced.rows.find((r) => r.id === "pre.M20.crossService");
+      expect(row?.status).toBe("WARN");
+      expect(row?.detail).toContain(`${T.slug}:${T.practitionerId} 1 desde ${day}`);
+    } finally {
+      await T?.cleanup();
     }
-    const rfn = forced.rows.find((r) => r.id === "pre.M18.relfilenode")!.detail.match(/relfilenode = (\d+)/)?.[1];
-    expect(rfn).toBeTruthy();
-    // El --post compara el relfilenode que anotó el --pre: igual → PASS; otro → FAIL (la tabla se reescribió).
-    const same = await runProdPrecheck({ db, mode: "post", migrationsDir: MIGRATIONS_DIR, pgDumpVersion: null, bookingRelfilenode: Number(rfn) });
-    expect(same.rows.find((r) => r.id === "post.M18.depositColumn")?.status).toBe("PASS");
-    const other = await runProdPrecheck({ db, mode: "post", migrationsDir: MIGRATIONS_DIR, pgDumpVersion: null, bookingRelfilenode: 1 });
-    expect(other.rows.find((r) => r.id === "post.M18.depositColumn")?.status).toBe("FAIL");
   });
 
   it("[INF-S] Data API: PASS (nada para anon/authenticated) o SKIP si los roles no existen", () => {

@@ -16,6 +16,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { listPublicSlotWindow } from "@/lib/public-booking";
 import type { PublicLocation, PublicSlot, PublicSlotWindow, PublicWindowDay } from "@/lib/public-booking-types";
 import { toARDateKey } from "@/lib/datetime-ar";
+import { formatLeadTime } from "@/lib/lead-time";
 import {
   canGoPrevWindow,
   dayHeading,
@@ -254,6 +255,12 @@ export function SlotWindowView(p: SlotWindowViewProps) {
         </div>
       </div>
 
+      {/* CF-D9: solo si la anticipación efectiva supera el default de 60' (con 1 h no aporta nada). */}
+      {w?.minLeadMinutes != null && w.minLeadMinutes > 60 && (
+        <p className={s.windowNotice}>
+          Los turnos online se piden con al menos {formatLeadTime(w.minLeadMinutes)} de anticipación.
+        </p>
+      )}
       {p.notice && (
         <p className={s.windowNotice} role="status">
           {p.notice}

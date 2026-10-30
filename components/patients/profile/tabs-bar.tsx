@@ -44,7 +44,7 @@ export function scrollDeltaToReveal(
  *
  * S22b (ES3): el perfil completo pasa en `only` las pestañas que permite el
  * consultorio (`isProfileTabAllowed`: sin `planes` no hay Planes, sin
- * `sesiones` no hay Sesiones, sin `evaluaciones` no hay EVA). La pestaña
+ * `sesiones` no hay Sesiones). La pestaña
  * "Plan" pasa a "Planes" (`?tab=planes`, alias `plan`).
  *
  * P3.Z (F3b, a11y): era `role="tablist"`/`role="tab"` sin `aria-controls` ni
@@ -53,8 +53,8 @@ export function scrollDeltaToReveal(
  * con ids en el shell; se eligió lo más simple que queda correcto: botones
  * nativos (Tab/Enter/Espacio) en un `<nav>` con `aria-current` en la activa.
  *
- * EV2-3a (EV2-D10/D20): `evol` (la curva EVA) se llamaba «Evolución» y chocaba con la evolución de HC (H-EV2): pasa a
- * «EVA» con el mismo id. «Evoluciones» (`evoluciones`) cuenta las evoluciones vivas (raíces no anuladas).
+ * EV2-3a (EV2-D10/D20): «Evoluciones» (`evoluciones`) cuenta las evoluciones vivas (raíces no anuladas). CF (§28,
+ * decisión 4): la pestaña «EVA» (`evol`) salió con la EVA de toda la app.
  *
  * PF1.1 (C-PF1/C-PF2): el subrayado es `m.span` (no `motion.`): lo pinta el SSR con su `style` y el deslizamiento
  * (`layoutId`) llega cuando `LazyMotion` carga las features. `onPreload` se llama en `pointerenter`/`focus` para
@@ -93,7 +93,6 @@ export function TabsBar({
     { id: "planes", label: "Planes", count: counts.planes || undefined },
     { id: "archivos", label: "Archivos" },
     { id: "antec", label: "Antecedentes" },
-    { id: "evol", label: "EVA" },
     { id: "fact", label: "Facturación", count: counts.fact || undefined },
     { id: "actividad", label: "Actividad" },
   ];

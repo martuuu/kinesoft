@@ -27,6 +27,12 @@
  * parcial lo rechaza siempre). Para cargar fuera de grilla o retroactivo queda
  * la entrada manual de `schedule-section.tsx`.
  *
+ * CF-U2 (§28 decisiones 2 y 3): encabezado «Horarios cada N min» con el paso
+ * que rige (`slotStepHeader`: el server lo resuelve por profesional, CF-D6);
+ * chip «Atiende otro servicio» elegible como sobreturno; el «Primer turno
+ * libre» puede caer fuera de la grilla (paso 30 y `firstFree` en 15) y se
+ * muestra igual, con aviso si queda elegido (`offGridPickTime`).
+ *
  * Accesibilidad: cada grilla es un `radiogroup` con roving tabindex (←→↑↓,
  * Home/End saltan los no elegibles); el estado de carga se anuncia en una
  * región `aria-live`. Fechas: todo en DayKey AR y `slot.time` del server; el
@@ -40,6 +46,7 @@ import type {
   PractitionerSlots,
   StaffSlot,
 } from "@/lib/availability-actions-types";
+import { AGENDA_RULES_COPY } from "@/lib/agenda-rules-config";
 import {
   SLOT_QUERY_DEBOUNCE_MS,
   anyRows,
@@ -48,6 +55,8 @@ import {
   dayLabelLong,
   firstFreeView,
   groupByHour,
+  offGridPickTime,
+  slotStepHeader,
   moveRoving,
   rovingEntry,
   sanitizeDuration,
@@ -209,6 +218,7 @@ export function SlotPicker(props: SlotPickerProps) {
       ) : (
         <>
           <LiveStatus state={main.state} onRetry={main.retry} />
+          {main.state.status === "ok" && <StepHeader data={main.state.data} />}
           {main.state.status === "ok" &&
             (main.state.data.mode === "practitioner" ? (
               <PractitionerGrid
@@ -307,6 +317,13 @@ function Warn({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** CF-U2: «Horarios cada N min» (o «según cada profesional»). Exportado para el render test. */
+export function StepHeader({ data }: { data: ListSlotsResult }) {
+  const text = slotStepHeader(data);
+  if (!text) return null;
+  return <div style={{ fontSize: 11, fontWeight: 700, color: "var(--navy-500)", letterSpacing: 0.2 }}>{text}</div>;
+}
+
 function LiveStatus({ state, onRetry }: { state: Load<unknown>; onRetry: () => void }) {
   return (
     <div aria-live="polite" role="status">
@@ -323,7 +340,8 @@ function LiveStatus({ state, onRetry }: { state: Load<unknown>; onRetry: () => v
   );
 }
 
-function PractitionerGrid({
+/** Exportado para el render test (CF-U2). */
+export function PractitionerGrid({
   data,
   value,
   onPick,
@@ -336,6 +354,7 @@ function PractitionerGrid({
 }) {
   const summary = summarizeSlots(data.slots);
   const lock = data.dayLockState;
+  const offGrid = offGridPickTime(value, data);
   return (
     <div style={{ display: "grid", gap: 6 }}>
       {!data.serviceEnabled && <Warn>No atiende este servicio — habilitalo en Configuración → Profesionales.</Warn>}
@@ -358,20 +377,30 @@ function PractitionerGrid({
             label="Horarios del día"
             byHour
           />
+          {offGrid && (
+            <Muted>
+              Elegiste las {offGrid}, fuera de la grilla de cada {data.stepMin} min: se valida al confirmar.
+            </Muted>
+          )}
           <Muted>
             {summary.free === 0
               ? "No quedan horarios libres este día."
               : `${summary.free} ${summary.free === 1 ? "horario libre" : "horarios libres"}`}
             {data.isFallbackSchedule ? " · horario heredado del consultorio" : ""}
           </Muted>
-          <Legend showConflict={summary.conflict > 0} showFull={summary.full > 0} />
+          <Legend
+            showConflict={summary.conflict > 0}
+            showFull={summary.full > 0}
+            showOtherService={summary.otherService > 0}
+          />
         </>
       )}
     </div>
   );
 }
 
-function AnyView({
+/** Exportado para el render test (CF-U2). */
+export function AnyView({
   data,
   today,
   labelOf,
@@ -398,6 +427,8 @@ function AnyView({
 }) {
   const rows = anyRows(data, labelOf);
   const ff = firstFreeView(data, today, labelOf);
+  // CF-U2: con pasos distintos el encabezado dice «según cada profesional»; cada fila muestra el suyo.
+  const mixedSteps = new Set(rows.map((r) => r.stepMin)).size > 1;
   if (rows.length === 0) {
     return (
       <Muted>
@@ -446,6 +477,11 @@ function AnyView({
               <div style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 32 }}>
                 <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: "var(--navy-900)", minWidth: 0 }}>
                   {r.label}
+                  {mixedSteps && (
+                    <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 500, color: "var(--navy-500)" }}>
+                      · cada {r.stepMin} min
+                    </span>
+                  )}
                   {r.isFirstFree && (
                     <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: "var(--sky-700)" }}>
                       · primer libre
@@ -490,13 +526,26 @@ function AnyView({
   );
 }
 
-function Legend({ showConflict, showFull }: { showConflict: boolean; showFull: boolean }) {
-  if (!showConflict && !showFull) return null;
+function Legend({
+  showConflict,
+  showFull,
+  showOtherService = false,
+}: {
+  showConflict: boolean;
+  showFull: boolean;
+  showOtherService?: boolean;
+}) {
+  if (!showConflict && !showFull && !showOtherService) return null;
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 11, color: "var(--navy-500)" }}>
       {showFull && (
         <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
           <Swatch tone="full" /> Cupo completo (sobreturno)
+        </span>
+      )}
+      {showOtherService && (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <Swatch tone="full" /> {AGENDA_RULES_COPY.otherServiceLine} (sobreturno)
         </span>
       )}
       {showConflict && (
@@ -603,6 +652,13 @@ function ChipGroup({
       >
         {s.time}
         {v.occupancy && <span style={{ fontSize: 10, fontWeight: 500, opacity: 0.8 }}>{v.occupancy}</span>}
+        {/* CF-U2: canal no cromático (mismo tono que el cupo completo): la nota en texto. ZB M8: corta; el texto
+            completo va en `aria-label`/`title` (hint) y en la leyenda. aria-hidden para no leerla dos veces. */}
+        {v.note && (
+          <span aria-hidden style={{ fontSize: 10, fontWeight: 500 }}>
+            {v.note}
+          </span>
+        )}
       </button>
     );
   };

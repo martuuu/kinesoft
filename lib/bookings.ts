@@ -24,7 +24,13 @@ import { bookingHasMoney, priorPaidStamp } from "@/lib/plan-pricing";
 import { formatARS } from "@/lib/format";
 import { classifyBatchInstant, dayKeyOf, defaultRoomFor, expandDates, roomOccupancyAt } from "@/lib/availability";
 import { loadAvailabilityInputs } from "@/lib/availability-loader";
-import { capacityKeysForWindow, hourKeyForStart, lockAgendaKeysMany, roomKeysForWindow } from "@/lib/booking-cap-lock";
+import {
+  capacityKeysForWindow,
+  hourKeyForStart,
+  lockAgendaKeysMany,
+  practitionerDayKeysForWindow,
+  roomKeysForWindow,
+} from "@/lib/booking-cap-lock";
 import { lockTenantLocationsShared } from "@/lib/location-lock";
 import { countRoomOverlapsInTx, loadRoomBookingsInTx, lockActiveRoomInTx } from "@/lib/booking-rooms-internal";
 import { bulkPatientAccess } from "@/lib/visibility";
@@ -75,6 +81,7 @@ import {
   lockActiveLocation,
   lockPlanReactivationInTx,
   notifyPlanNearingDischarge,
+  otherServiceLabel,
   activeForSession,
   planStampData,
   practitionerLabel,
@@ -96,6 +103,7 @@ import {
   BLOCKED_ERROR,
   CLINICAL_RELINK_ERROR,
   INTERVAL_CAP_ERROR,
+  OTHER_SERVICE_ERROR,
   OUT_OF_HOURS_ERROR,
   PATIENT_OVERLAP_ERROR,
   PLAN_DELETE_ERROR,
@@ -139,6 +147,7 @@ import {
   type BookingBlockedPrompt,
   type BookingIntervalCapNotice,
   type BookingIntervalCapPrompt,
+  type BookingOtherServicePrompt,
   type BookingOutOfHoursPrompt,
   type BookingRow,
   type ReceptionActionResult,
@@ -640,6 +649,12 @@ export async function createBooking(
     // tope «N turnos cada X min» del profesional lleno. ES sobreturno
     // (`isOverbooked` + prefijo). Flag propio: no fuerza el cupo del servicio.
     allowIntervalCap?: boolean;
+    // CF (§28, ADR-032): el staff confirmó «Cargar igual» aunque el profesional
+    // ya atiende OTRO servicio en ese horario (sin `allowParallelServices`). ES
+    // sobreturno (`isOverbooked` + prefijo). Flag propio: `allowOverbooking`
+    // (cupo del servicio) no lo pasa, para que aceptar «ya tiene un turno» no
+    // tape en silencio que el profesional está con otra cosa.
+    allowOtherService?: boolean;
     // Stable per-attempt key from the client so a double-submit / retry
     // collapses to one row, while a deliberate new turno gets its own.
     idempotencyKey?: string;
@@ -664,6 +679,10 @@ export async function createBooking(
     // T3 (C-AS3): tope por intervalo lleno (re-llamar con allowIntervalCap; queda
     // sobreturno). Sale después del cupo y antes de la sala.
     intervalCap?: BookingIntervalCapPrompt;
+    // CF (§28, ADR-032): el profesional ya atiende OTRO servicio en ese horario
+    // (re-llamar con allowOtherService; queda sobreturno). Sale después del cupo
+    // y antes del tope (FORCE_PROMPT_ORDER).
+    otherService?: BookingOtherServicePrompt;
     // T3 (C-AS3): en un `ok: true`, el turno es el 2.º+ de su intervalo bajo el
     // tope («Ya hay 1 turno de Ana a las 10:00.»): informativo, sin confirmar.
     intervalCapNotice?: BookingIntervalCapNotice;
@@ -765,6 +784,12 @@ export async function createBooking(
   // lee en el tx previo, como las franjas: la clave de hora no depende de la config, así que un cambio de tope
   // commiteado en el medio solo puede correr la decisión de un alta suelta, nunca dejar dos sin serializar.
   const icap = input.intervalCaps[data.practitionerId] ?? null;
+  // CF (§28, ADR-032): «no atiende servicios distintos a la vez» (= !allowParallelServices), del mismo loader de
+  // `pre` que el tope (0 sentencias) y con la misma razón para leerlo afuera de la tx: la clave `pday` se toma
+  // SIEMPRE, no depende de la regla, así que prender/apagar el interruptor en el medio solo puede correr la decisión
+  // de un alta suelta, nunca dejar dos sin serializar. El loader arma una entrada por profesional reservable (el que
+  // no lo es ya salió en `validateBookingRefsInTx`); `?? true` es el default de M20, como en la edición.
+  const exclusiveService = input.agendaRules[data.practitionerId]?.exclusiveService ?? true;
   const suggest = () =>
     suggestNextFreeSlot(actor.tenantId, {
       practitionerId: data.practitionerId,
@@ -914,8 +939,17 @@ export async function createBooking(
       // la del inicio) SIEMPRE: el tope cruza servicios y el lock de cupo lleva
       // el servicio, así que sin ella dos altas de servicios distintos en el
       // mismo intervalo leían «0 de 1» las dos y entraban las dos.
+      // CF, enmienda C2 (1d): + el DÍA del profesional (`kinesoft:pday:`), entre el cupo y la hora, en la MISMA
+      // sentencia (0 sentencias nuevas). Sin él, Kine 09:30 + 60' y Evaluación 10:00 no compartían ninguna clave
+      // (el cupo lleva el servicio; la hora, solo la del inicio) y las dos leían «0 de otro servicio» ([CF-R1]).
       await lockAgendaKeysMany(tx, {
         cap: capacityKeysForWindow(capWindow),
+        pday: practitionerDayKeysForWindow({
+          tenantId: actor.tenantId,
+          practitionerId: data.practitionerId,
+          start: data.scheduledFor,
+          end,
+        }),
         hour: [hourKeyForStart({ tenantId: actor.tenantId, practitionerId: data.practitionerId, start: data.scheduledFor })],
         rooms: roomCheck
           ? roomKeysForWindow({ tenantId: actor.tenantId, roomId: roomTarget!, start: data.scheduledFor, end })
@@ -949,22 +983,36 @@ export async function createBooking(
         now,
         excludeKey: clientKey,
         cap: icap,
+        // CF: el otro servicio va en la MISMA sentencia (el where pierde el servicio, como con tope). El paciente
+        // del turno nuevo exime a sus propios turnos (CF-D3); un guest (null) no exime a nadie.
+        exclusiveService,
+        patientId: data.patientId ?? null,
       });
       const capacityReached = overlapBlocks(occ.overlap, rule.cap);
       // Sin escribir: la UI ofrece el próximo libre o re-llamar con
       // allowOverbooking=true para forzar el sobreturno.
       if (capacityReached && !raw.allowOverbooking) return { kind: "conflict" as const };
+      // CF: cupo → OTRO SERVICIO → tope → sala (brief CF A.5), sin escribir. `first` = el que empieza antes, para
+      // que el aviso sea estable («está atendiendo «Kine»» con el inicio de ese turno).
+      const otherBusy = occ.otherService.count > 0;
+      if (occ.otherService.first && !raw.allowOtherService) {
+        return {
+          kind: "other-service" as const,
+          serviceId: occ.otherService.first.serviceId,
+          existingAt: occ.otherService.first.scheduledFor,
+        };
+      }
       // T3: tope lleno → aviso forzable DESPUÉS del cupo y antes de la sala
       // (FORCE_PROMPT_ORDER), sin escribir.
       const iv = intervalCapVerdict(occ.intervalStarts, icap, data.scheduledFor);
       const intervalFull = iv?.state === "full";
       if (intervalFull && !raw.allowIntervalCap) return { kind: "interval-cap" as const, verdict: iv! };
 
-      // Sobreturno = cupo lleno forzado, bloqueo forzado (decisión 1) o tope
-      // forzado (decisión 6 del 19-oct). B3.1:
+      // Sobreturno = cupo lleno forzado, bloqueo forzado (decisión 1), tope
+      // forzado (decisión 6 del 19-oct) u otro servicio forzado (CF). B3.1:
       // `isOverbooked` (M-agenda) es la fuente; el prefijo "[SOBRETURNO]" en
-      // notes se sigue escribiendo hasta el contract posterior a B-pre.
-      const overbooked = capacityReached || live.blocked || intervalFull;
+      // notes se sigue escribiendo hasta el contract posterior a B-pre (§5.29).
+      const overbooked = capacityReached || otherBusy || live.blocked || intervalFull;
       const notes = overbooked ? `[SOBRETURNO] ${own.notes ?? ""}`.trim() : own.notes;
 
       // Sede: lock compartido + activa, en el MISMO tx que el upsert (carrera
@@ -1089,6 +1137,24 @@ export async function createBooking(
       };
     }
     if (w.kind === "bad-room") return { ok: false, error: BAD_ROOM_ERROR };
+    if (w.kind === "other-service") {
+      // CF: el nombre del servicio que ocupa el horario va en la MISMA tx de lectura que el del profesional (+1 query
+      // SOLO en este aviso, fuera de la tx que escribe), como en la edición.
+      const [[practitionerName, serviceName], nextFreeISO] = await Promise.all([
+        runWithRls(actor.tenantId, async (tx) => [
+          await practitionerLabel(tx, actor.tenantId, data.practitionerId),
+          await otherServiceLabel(tx, actor.tenantId, w.serviceId),
+        ] as const),
+        suggest(),
+      ]);
+      const prompt: BookingOtherServicePrompt = {
+        practitionerName,
+        serviceName,
+        existingISO: w.existingAt.toISOString(),
+        nextFreeISO,
+      };
+      return { ok: false, error: OTHER_SERVICE_ERROR(prompt), otherService: prompt };
+    }
     if (w.kind === "interval-cap") {
       const [practitionerName, nextFreeISO] = await Promise.all([nameOf(), suggest()]);
       const v = w.verdict;
@@ -1205,6 +1271,9 @@ type UpdateBookingResult = ActionResult<{ updatedAt: Date }> & {
   // T3 (C-AS3): tope por intervalo lleno en el intervalo NUEVO (mover o reactivar;
   // forzable con `allowIntervalCap`, queda sobreturno).
   intervalCap?: BookingIntervalCapPrompt;
+  // CF (§28, ADR-032): el profesional ya atiende OTRO servicio en el horario nuevo (mover, alargar o reactivar;
+  // forzable con `allowOtherService`, queda sobreturno).
+  otherService?: BookingOtherServicePrompt;
   // T3 (C-AS3): en un `ok: true`, el turno quedó 2.º+ de su intervalo nuevo bajo el tope (informativo).
   intervalCapNotice?: BookingIntervalCapNotice;
   /**
@@ -1234,6 +1303,9 @@ async function updateBookingImpl(
     allowRoomConflict?: boolean;
     // T3 (C-AS3): pasar el tope por intervalo (queda sobreturno). Llega también desde `setBookingStatus` (reactivar).
     allowIntervalCap?: boolean;
+    // CF (§28): mover/alargar/reactivar aunque el profesional ya atienda otro servicio a esa hora (queda
+    // sobreturno). Flag propio: `allowOverbooking` no lo pasa. Llega también desde `setBookingStatus` (reactivar).
+    allowOtherService?: boolean;
     expectedUpdatedAt?: string;
   }
 ): Promise<UpdateBookingResult> {
@@ -1265,6 +1337,7 @@ async function updateBookingImpl(
           allowBlocked: raw.allowBlocked,
           allowRoomConflict: raw.allowRoomConflict,
           allowIntervalCap: raw.allowIntervalCap,
+          allowOtherService: raw.allowOtherService,
         },
       },
       { now }
@@ -1349,10 +1422,16 @@ async function updateBookingImpl(
     outcome.kind === "conflict" ||
     outcome.kind === "blocked" ||
     outcome.kind === "out-of-hours" ||
-    outcome.kind === "interval-cap"
+    outcome.kind === "interval-cap" ||
+    outcome.kind === "other-service"
   ) {
-    const [practitionerName, nextFreeISO] = await Promise.all([
-      runWithRls(actor.tenantId, (tx) => practitionerLabel(tx, actor.tenantId, outcome.before.practitionerId)),
+    const [[practitionerName, otherServiceName], nextFreeISO] = await Promise.all([
+      // CF: el nombre del servicio que ocupa el horario va en la MISMA tx de lectura que el del profesional (+1 query
+      // solo en este aviso; fuera de la tx que escribe).
+      runWithRls(actor.tenantId, async (tx) => [
+        await practitionerLabel(tx, actor.tenantId, outcome.before.practitionerId),
+        outcome.kind === "other-service" ? await otherServiceLabel(tx, actor.tenantId, outcome.otherServiceId) : null,
+      ] as const),
       suggestNextFreeSlot(actor.tenantId, {
         practitionerId: outcome.before.practitionerId,
         serviceId: outcome.before.serviceId,
@@ -1384,6 +1463,15 @@ async function updateBookingImpl(
         nextFreeISO,
       };
       return { ok: false, error: INTERVAL_CAP_ERROR(prompt), intervalCap: prompt };
+    }
+    if (outcome.kind === "other-service") {
+      const prompt: BookingOtherServicePrompt = {
+        practitionerName,
+        serviceName: otherServiceName,
+        existingISO: outcome.existingAt.toISOString(),
+        nextFreeISO,
+      };
+      return { ok: false, error: OTHER_SERVICE_ERROR(prompt), otherService: prompt };
     }
     return {
       ok: false,
@@ -2530,6 +2618,12 @@ async function createBookingsBatchImpl(
   // T3 (C-AS3): tope efectivo del profesional (del loader, 0 sentencias). El loader trae TODOS los turnos del
   // profesional en el rango (no acota por servicio), que es lo que el tope necesita para contar inicios.
   const icap = input.intervalCaps[data.practitionerId] ?? null;
+  // CF (§28, ADR-032, CF-D4): «no atiende servicios distintos a la vez», del mismo loader (0 sentencias), igual que el
+  // alta suelta. El lote no tiene aviso propio: la fecha que pisa otro servicio sube a «sobreturno» (se fuerza con
+  // `allowOverbooking`) y queda el flag informativo `otherServiceBusy`. Se usa el MISMO valor en el preflight y en
+  // el re-conteo de cada fecha, para que una fecha no pueda decir «libre» en uno y contar otro servicio en el otro
+  // por la regla (sí por lo commiteado en el medio, que es lo que el re-conteo está para ver).
+  const exclusiveService = input.agendaRules[data.practitionerId]?.exclusiveService ?? true;
 
   const plan = loaded.perDate.map(({ when, locationId, roomId: roomTarget, roomLocationId }) => {
     // Por defecto archivada (o de otra sede que la de la fecha) → sin sala.
@@ -2563,6 +2657,7 @@ async function createBookingsBatchImpl(
       bookings: input.bookings,
       now,
       intervalCap: icap,
+      ...(exclusiveService ? { exclusiveService: true } : {}),
     });
     return {
       when,
@@ -2574,6 +2669,7 @@ async function createBookingsBatchImpl(
       roomLocationId: roomOk ? roomLocationId : null,
       roomBusy: !!occ?.atCapacity,
       intervalCapped: c.intervalCapped === true,
+      otherServiceBusy: c.otherServiceBusy === true,
     };
   });
   const free = plan.filter((p) => p.status === "libre").length;
@@ -2589,6 +2685,8 @@ async function createBookingsBatchImpl(
     ...(p.roomBusy ? { roomBusy: true } : {}),
     // T3 (C-AS3): ídem (sin tope, la forma de la respuesta no cambia).
     ...(p.intervalCapped ? { intervalCapped: true } : {}),
+    // CF (CF-D4): ídem; el status ya subió a "sobreturno" en el motor. Con `allowParallelServices`, sin la clave.
+    ...(p.otherServiceBusy ? { otherServiceBusy: true as const } : {}),
   }));
 
   if (raw.dryRun) {
@@ -2616,7 +2714,7 @@ async function createBookingsBatchImpl(
   // (una vez, fuera de las tx por fecha).
   const refs: BookingChangeRef[] = [];
 
-  for (const slot of plan) {
+  for (const [i, slot] of plan.entries()) {
     const { when } = slot;
     // Never creatable — the DB index would reject it anyway.
     if (slot.status === "duplicado") continue;
@@ -2655,8 +2753,11 @@ async function createBookingsBatchImpl(
         // SR, C2 (1b) y T3, C2 (1c): cupo + HORA (+ sala con chequeo) de ESTA
         // fecha en una sentencia (= mismo número de statements que el lock de
         // cupo solo: el lote de 20 no admite ni una sentencia más por fecha).
+        // CF, C2 (1d): + el DÍA del profesional de esta fecha, en la misma sentencia (0 sentencias nuevas): sin él, el
+        // re-conteo del otro servicio no serializa con un alta de otro servicio que empieza a otra hora.
         await lockAgendaKeysMany(tx, {
           cap: capacityKeysForWindow(capWindow),
+          pday: practitionerDayKeysForWindow({ tenantId: actor.tenantId, practitionerId: data.practitionerId, start: when, end }),
           hour: [hourKeyForStart({ tenantId: actor.tenantId, practitionerId: data.practitionerId, start: when })],
           rooms: roomCheck
             ? roomKeysForWindow({ tenantId: actor.tenantId, roomId: slot.room!.id, start: when, end })
@@ -2696,12 +2797,20 @@ async function createBookingsBatchImpl(
           now,
           excludeKey: idempotencyKey,
           cap: icap,
+          // CF: otro servicio en la MISMA sentencia (CF-D3: el paciente del lote exime a sus propios turnos).
+          exclusiveService,
+          patientId: data.patientId ?? null,
         });
-        const capOver = slot.status === "sobreturno" || liveBlocked || overlapBlocks(occ.overlap, rule.cap);
-        if (capOver && !raw.allowOverbooking) return { kind: "omitted" as const };
+        // CF (CF-D4): otro servicio con el día tomado = sobreturno (plegado en `allowOverbooking`). Ve también lo
+        // commiteado después del preflight. `liveBlocked` no necesita la regla: re-clasifica sin turnos (solo
+        // bloqueos), y el otro servicio sale de este conteo.
+        const otherBusy = occ.otherService.count > 0;
+        const capOver =
+          slot.status === "sobreturno" || liveBlocked || otherBusy || overlapBlocks(occ.overlap, rule.cap);
+        if (capOver && !raw.allowOverbooking) return { kind: "omitted" as const, otherBusy };
         // Flag propio (no `allowOverbooking`): forzar el cupo no fuerza el tope, ni al revés.
         const intervalFull = intervalCapVerdict(occ.intervalStarts, icap, when)?.state === "full";
-        if (intervalFull && !raw.allowIntervalCap) return { kind: "omitted" as const };
+        if (intervalFull && !raw.allowIntervalCap) return { kind: "omitted" as const, otherBusy };
         const isOverbook = capOver || intervalFull;
         // Sede: elegida o la de la franja de ese día; archivada en el medio →
         // la elegida omite la fecha, la de por defecto cae a null (= principal).
@@ -2723,9 +2832,9 @@ async function createBookingsBatchImpl(
           roomId = room.id;
           loc = slot.roomLocationId;
         } else {
-          if (slot.room && typeof data.roomId === "string") return { kind: "omitted" as const };
+          if (slot.room && typeof data.roomId === "string") return { kind: "omitted" as const, otherBusy };
           if (loc && !(await lockActiveLocation(tx, actor.tenantId, loc))) {
-            if (data.locationId) return { kind: "omitted" as const };
+            if (data.locationId) return { kind: "omitted" as const, otherBusy };
             loc = null;
           }
         }
@@ -2742,7 +2851,7 @@ async function createBookingsBatchImpl(
             capacity: room.capacity,
             excludeKey: idempotencyKey,
           });
-          if (occ.atCapacity) return { kind: "omitted" as const };
+          if (occ.atCapacity) return { kind: "omitted" as const, otherBusy };
         }
         // Same tagging the single-create path uses, so reports can tell them apart.
         const notes = isOverbook ? `[SOBRETURNO] ${own.notes ?? ""}`.trim() : own.notes;
@@ -2775,8 +2884,11 @@ async function createBookingsBatchImpl(
           }),
           select: { id: true, practitionerId: true, scheduledFor: true, roomId: true },
         });
-        return { kind: "ok" as const, isOverbook, row };
+        return { kind: "ok" as const, isOverbook, row, otherBusy };
       });
+      // CF: el re-conteo vio otro servicio que el preflight no (commiteado en el medio): se informa en esa fecha,
+      // como lo hubiera dicho el preflight (el status queda el del preflight, igual que con un bloqueo en vivo).
+      if (w.otherBusy && !datesOut[i].otherServiceBusy) datesOut[i] = { ...datesOut[i], otherServiceBusy: true };
       if (w.kind === "omitted") {
         omitted++;
         continue;

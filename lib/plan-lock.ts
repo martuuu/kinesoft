@@ -21,8 +21,10 @@ import type { DbClient } from "@/lib/rls";
  *   - Solo lo toman las operaciones que cambian la ESTRUCTURA de un plan:
  *     crear, generar, re-planificar, mover en serie, agregar o archivar
  *     sesiones, cambiar de estado, cambiar el precio, adoptar y sacar.
- *   - SIEMPRE se toma primero, antes que cualquier lock de cupo
- *     (`lockCapacityMany`), de sedes o de filas.
+ *   - SIEMPRE se toma primero, antes que cualquier lock de cupo o de día del
+ *     profesional (`lockCapacityMany` / `lockAgendaKeysMany`; enmienda C2 (1d),
+ *     CF: paciente → cupo → día → hora → sala → sedes → filas), de sedes o de
+ *     filas.
  *   - Ninguna función que corra con un lock de cupo tomado lo pide.
  *     `applyBookingUpdateInTx` nunca lo pide: un "solo este" desde la agenda
  *     toma cupo → sedes → Booking → Session, y si además pidiera este lock

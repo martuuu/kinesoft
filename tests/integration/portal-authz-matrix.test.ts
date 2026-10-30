@@ -78,7 +78,7 @@ vi.mock("@/lib/audit", async (importOriginal) => {
 import * as ReactNs from "react";
 (globalThis as { React?: unknown }).React = ReactNs;
 
-import { getPortalAuth, getPortalPlan, submitCheckIn } from "@/lib/portal";
+import { getPortalAuth, getPortalPlan } from "@/lib/portal";
 import { getPortalAccount, getPortalAccountPage } from "@/lib/portal-account";
 import { getPortalExercisesView } from "@/lib/portal-exercises";
 import { requestPortalProfileChange } from "@/lib/portal-profile";
@@ -469,47 +469,9 @@ describe.skipIf(!RUN)("[ES4-S26p] matriz de autorización del portal", () => {
     });
   });
 
-  // ── submitCheckIn ────────────────────────────────────────────────────────────────────────────────────────────────
-
-  describe("submitCheckIn", () => {
-    it("⛔ P con el sessionId de OTRO paciente de K: no escribe", async () => {
-      as(P);
-      const r = await refusedWithoutWrite(() => submitCheckIn({ tenantSlug: K.slug, sessionId: sOtherK, pain: 5 }));
-      expect(r.ok).toBe(false);
-    });
-
-    it.each([
-      ["P-otro (sesión de P)", () => as(POtro), () => sK],
-      ["P-sinvínculo (sesión de P)", () => as(PFree), () => sK],
-      ["P-sinverif (su propia sesión)", () => as(PUnver, false), () => sUnverK],
-      ["STAFF (sesión de su ficha vinculada)", () => as(STAFF), () => sStaffK],
-    ])("⛔ %s en K: no escribe", async (_who, login, sid) => {
-      login();
-      const r = await refusedWithoutWrite(() =>
-        submitCheckIn({ tenantSlug: K.slug, sessionId: sid(), pain: 7, notes: "me duele" })
-      );
-      expect(r).toEqual({ ok: false, error: "Sin acceso." });
-    });
-
-    it("⛔ P-General en G (sin `evaluaciones`): no escribe", async () => {
-      as(PGen);
-      const r = await refusedWithoutWrite(() => submitCheckIn({ tenantSlug: G.slug, sessionId: sG, pain: 3 }));
-      expect(r.ok).toBe(false);
-    });
-
-    it("✅ P en K: crea la EvaScore con note + sessionId, sin tocar la ficha", async () => {
-      as(P);
-      const before = await db.patient.findUniqueOrThrow({ where: { id: pK }, select: { notes: true, updatedAt: true } });
-      const r = await submitCheckIn({ tenantSlug: K.slug, sessionId: sK, pain: 6, notes: "  Me tira la lumbar  " });
-      expect(r).toEqual({ ok: true, data: undefined });
-      const eva = await db.evaScore.findMany({ where: { patientId: pK } });
-      expect(eva).toHaveLength(1);
-      expect(eva[0]).toMatchObject({ value: 6, sessionId: sK, note: "Me tira la lumbar", source: `checkin-${sK}` });
-      expect(await db.patient.findUniqueOrThrow({ where: { id: pK }, select: { notes: true, updatedAt: true } })).toEqual(
-        before
-      );
-    });
-  });
+  // CF (30-oct, §28.1 punto 4): acá vivía la matriz de `submitCheckIn` (⛔ otro paciente / sin vínculo / sin verificar /
+  // staff / General sin `evaluaciones`; ✅ EvaScore con note + sessionId). El check-in del portal se borró con la EVA:
+  // no hay escritura que autorizar. Que no exista lo fija `[CF-L3]` en tests/integration/portal.test.ts.
 
   // ── Estado de cuenta ─────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -650,10 +612,8 @@ describe.skipIf(!RUN)("[ES4-S26p] matriz de autorización del portal", () => {
       expect((await getPortalExercisesView(S.slug)).kind).toBe("ok");
     });
 
-    it("escrituras ⛔: check-in y «Mis datos» no escriben", async () => {
+    it("escrituras ⛔: «Mis datos» no escribe (el check-in se fue en CF)", async () => {
       as(PSusp);
-      const c = await refusedWithoutWrite(() => submitCheckIn({ tenantSlug: S.slug, sessionId: sSusp, pain: 4 }));
-      expect(c.ok).toBe(false);
       const m = await refusedWithoutWrite(() =>
         requestPortalProfileChange({ tenantSlug: S.slug, changes: { phone: "11-1234" } })
       );
@@ -685,7 +645,6 @@ describe.skipIf(!RUN)("[ES4-S26p] matriz de autorización del portal", () => {
         out.push(await pageOf(PortalExercisesPage({ params: { slug } })));
         // Actions con entradas que se rechazan antes de escribir (las escrituras ya se probaron arriba).
         __rateLimitInternals.reset();
-        out.push(await submitCheckIn({ tenantSlug: slug, sessionId: "no-existe", pain: 1 }));
         out.push(await requestPortalProfileChange({ tenantSlug: slug, changes: {} }));
       }
       out.push(await linkPortalByInvite(form({ t: "no-es-un-token" })));
@@ -1077,7 +1036,7 @@ describe.skipIf(!RUN)("[ES4-S26p] matriz de autorización del portal", () => {
 
     // Hallazgo [ES4-S26p] `portal-vincular-consultorio-suspendido`, decidido en ES4 P4.Z (default del orquestador, lo
     // confirma Martin): vincular NO es una escritura del consultorio. Solo habilita LECTURAS (plan, turnos, cuenta), que
-    // con el consultorio suspendido siguen permitidas (Ley 26.529, BO2-D). Las escrituras del paciente (check-in, «Mis
+    // con el consultorio suspendido siguen permitidas (Ley 26.529, BO2-D). Las escrituras del paciente («Mis
     // datos») siguen cortadas por `publicSurfacesOpenFor`. Antes era un it.fails que pedía el rechazo.
     it("[ES4-S26p] consultorio suspendido: la invitación SÍ vincula (vincular habilita solo lecturas)", async () => {
       const someone = await account();

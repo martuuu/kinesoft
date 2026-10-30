@@ -77,6 +77,7 @@ import {
   BASIC_ACCESS_ERROR,
   BLOCKED_ERROR,
   INTERVAL_CAP_ERROR,
+  OTHER_SERVICE_ERROR,
   OUT_OF_HOURS_ERROR,
   PATIENT_OVERLAP_ERROR,
   PLAN_SESSION_NOT_PENDING_ERROR,
@@ -357,7 +358,7 @@ export async function listOpenSessions(now: Date = new Date()): Promise<OpenSess
     // `count(*) OVER ()` da el total antes del LIMIT en la misma sentencia.
     // EV2-2d (EV2-D18): una evolución de HC raíz viva del turno ACTIVO de la sesión también la saca del bucket
     // (mismo `EXISTS` que `lockSessionEvolutionStateInTx` al reabrir, en esta misma sentencia; anulada, vuelve).
-    // EV2-Z A2: «Registrar sesión» NO lo mira: la sesión sale del bucket pero se le puede cargar EVA/anotaciones.
+    // EV2-Z A2: «Registrar sesión» NO lo mira: la sesión sale del bucket pero se le pueden cargar anotaciones.
     // Espejo SQL de `ownPatientsWhere`. Acá `actor.practitionerId` no es null (corte de arriba); con null el `=`
     // de SQL igual daría NULL (falso), pero no se depende de eso.
     const ownPid = actor.practitionerId;
@@ -523,8 +524,6 @@ export async function getSessionDetail(id: string) {
                 title: true,
                 scheduledFor: true,
                 completedAt: true,
-                paInPre: true,
-                paInPost: true,
               },
             },
           },
@@ -628,6 +627,11 @@ function bookingOutcomeError(o: Exclude<Awaited<ReturnType<typeof applyBookingUp
       // T3 (C-AS3): el tope por intervalo del profesional, sin el nombre (Seguimiento muestra solo el texto; no se
       // suma la lectura del profesional a la tx). Se fuerza con `force.allowIntervalCap` (queda sobreturno).
       return INTERVAL_CAP_ERROR({ used: o.used, cap: o.intervalCap.count, fromTime: o.fromTime, toTime: o.toTime });
+    case "other-service":
+      // CF (§28): el profesional ya atiende otro servicio en ese horario. Copy genérico, sin nombres (mismo criterio
+      // que el tope: Seguimiento muestra solo el texto y no se suman lecturas a la tx). El drawer lo reconoce con
+      // `isOtherServiceError` y reintenta con `force.allowOtherService` (queda sobreturno).
+      return OTHER_SERVICE_ERROR({});
     case "plan-session-not-pending":
       return PLAN_SESSION_NOT_PENDING_ERROR(o.ordinal);
     default:
@@ -678,6 +682,8 @@ async function rescheduleSessionImpl(input: {
     allowBlocked?: boolean;
     allowRoomConflict?: boolean;
     allowIntervalCap?: boolean;
+    // CF (§28): pasar el aviso «el profesional ya atiende otro servicio a esa hora» (queda sobreturno).
+    allowOtherService?: boolean;
   };
 }): Promise<ActionResult<RescheduleSessionResult>> {
   const actor = await getActor();
@@ -852,7 +858,7 @@ async function updateSessionMetaImpl(input: SessionMetaUpdateInput): Promise<Act
   if (!parsed.success) {
     return {
       ok: false,
-      error: "EVA y RPE tienen que ser enteros entre 0 y 10.",
+      error: "El RPE tiene que ser un entero entre 0 y 10.",
       fieldErrors: parsed.error.flatten().fieldErrors,
     };
   }
@@ -964,7 +970,7 @@ async function completeSessionFromSeguimientoImpl(
   if (!parsed.success) {
     return {
       ok: false,
-      error: "EVA y RPE tienen que ser enteros entre 0 y 10.",
+      error: "El RPE tiene que ser un entero entre 0 y 10.",
       fieldErrors: parsed.error.flatten().fieldErrors,
     };
   }
@@ -1110,7 +1116,7 @@ async function loadSessionEvolutionImpl(
   if (!id.success || !parsed.success) {
     return {
       ok: false,
-      error: "EVA y RPE tienen que ser enteros entre 0 y 10.",
+      error: "El RPE tiene que ser un entero entre 0 y 10.",
       fieldErrors: parsed.success ? undefined : parsed.error.flatten().fieldErrors,
     };
   }

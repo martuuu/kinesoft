@@ -13,9 +13,13 @@
  * superior» (Apariencia, Ayuda y soporte, turnero propio, Seguridad, Cambiar de consultorio, Cerrar sesión): ya está en
  * el first-load del shell por el topbar, así que no suma bytes.
  *
- * Sin campana de notificaciones a propósito: `NotificationsBell` pide el conteo al montarse, y esta barra está
- * montada también en escritorio (oculta): sería un request extra en cada carga de cada usuario.
+ * Campana ([ZF3] A1, CF-ZB): antes no había, a propósito, porque `NotificationsBell` pedía el conteo al montarse y esta
+ * barra está montada también en escritorio (oculta): era un request extra en cada carga. Con la «Barra lateral» la
+ * campana pasó del dashboard al Sidebar (`.desktopOnly`) y en mobile no quedaba ninguna. Ahora la campana solo pide
+ * si se ve (`createBellGate`, lib/notifications-live.ts): la de acá en mobile, la del chrome de escritorio desde 768.
+ * Llega por prop (`bell`) como en el Sidebar: la arma el AppShell y esta barra se renderiza suelta en tests sin router.
  */
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { KineLogo } from "@/components/ui/kine-logo";
 import { IconSearch } from "@/components/ui/icons";
@@ -27,7 +31,10 @@ export function MobileBar({
   userName,
   ownPublicBooking = null,
   onOpenAppearance,
+  bell,
 }: {
+  /** [ZF3] A1: campana de la barra móvil (`<NotificationsBell placement="bar" />`, la pasa el AppShell). */
+  bell?: ReactNode;
   /** Nombre visible del usuario (ya sin email, `displayUserName`). Sin nombre (tests), sin avatar. */
   userName?: string;
   ownPublicBooking?: { practitionerId: string; enabled: boolean; myMp?: boolean } | null;
@@ -51,6 +58,7 @@ export function MobileBar({
       >
         <IconSearch size={18} />
       </button>
+      {bell && <span className={styles.mobileAccount}>{bell}</span>}
       {userName && (
         <span className={styles.mobileAccount}>
           <TopbarAccountMenu name={userName} onOpenAppearance={onOpenAppearance} ownPublicBooking={ownPublicBooking} />

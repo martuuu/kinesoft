@@ -41,9 +41,11 @@ export function dayLockTooltip(status: DayLockStatus, reason: string | null, can
   const why = reason ? `: ${reason}` : "";
   if (status === "locked") return `Día bloqueado${why}.${canAct ? " Tocá para ver o desbloquear." : ""}`;
   if (status === "partial") return `Día bloqueado en parte${why}.${canAct ? " Tocá para ver o cambiar." : ""}`;
-  return canAct ? "Bloquear el día" : "Día abierto";
+  // CF-LOCK: «Bloquear días» y no «Bloquear el día»: el cliente preguntó si existía «bloquear día» teniéndolo enfrente
+  // con el rótulo «Bloquear». Ahora el diálogo acepta un rango (vacaciones) y el rótulo lo dice.
+  return canAct ? "Bloquear días" : "Día abierto";
 }
 
 export function dayLockShortLabel(status: DayLockStatus): string {
-  return status === "locked" ? "Bloqueado" : status === "partial" ? "En parte" : "Bloquear";
+  return status === "locked" ? "Bloqueado" : status === "partial" ? "En parte" : "Bloquear días";
 }

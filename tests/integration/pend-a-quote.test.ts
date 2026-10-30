@@ -83,6 +83,7 @@ describe.skipIf(!RUN)("[PEND-a] cotización del turnero = cobro del server", () 
         phone: `11${n.toString().padStart(8, "0")}`,
         documentId: `${30_000_000 + (n % 9_000_000)}`,
         dateOfBirth: "1990-05-10",
+        title: "Lumbalgia",
         ...(o.coverageInsurer ? { coverageInsurer: o.coverageInsurer } : {}),
       },
     };

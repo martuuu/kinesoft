@@ -11,6 +11,7 @@
  * herencia, un cupo que queda "fantasma" al apagar el override, una
  * anticipación en horas que se guarda en horas), así que vive acá con tests.
  */
+import { formatLeadTime } from "@/lib/lead-time";
 import {
   PractitionerServiceInput,
   PS_DURATION_MAX,
@@ -120,7 +121,7 @@ export function draftToInput(
   } else {
     minLead = joinLead(d.leadHours, d.leadMinutes);
     if (minLead !== null && minLead > PS_MIN_LEAD_MAX)
-      errors.minLead = `Máximo ${PS_MIN_LEAD_MAX / 60 / 24} días de anticipación.`;
+      errors.minLead = `Máximo ${formatLeadTime(PS_MIN_LEAD_MAX)} de anticipación.`;
   }
 
   const maxDays = parseIntField(d.maxLeadDays);

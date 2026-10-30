@@ -97,8 +97,6 @@ describe("[FC-2b] capTimelinePage", () => {
       bookingId: null,
       notes: "y".repeat(59_990),
       rpe: null,
-      paInPre: null,
-      paInPost: null,
       exercisesDone: 0,
       exercisesTotal: 0,
     };

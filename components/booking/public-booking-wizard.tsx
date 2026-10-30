@@ -51,7 +51,9 @@ import {
   formatLocationAddress,
   initialWindowNav,
   initialWizardSelection,
+  isTurneroHcComplete,
   locationsForPractitioner,
+  missingTurneroReason,
   nextAttempt,
   payNowFor,
   quotedForInterstitial,
@@ -278,7 +280,11 @@ export function PublicBookingWizard({
     (step === 0 && (mode === "any" || !!practitionerId)) ||
     (step === 1 && !!serviceId) ||
     (step === 2 && !!slotISO && !!practitionerId) ||
-    (step === 3 && isHcValid(hc) && canConfirmPayment(payment, payChoice));
+    // CF-FORM: misma regla que el submit (fecha opcional, «diagnóstico» según la vertical): `lib/public-wizard-state.ts`.
+    (step === 3 && isTurneroHcComplete(hc, clinic.vertical) && canConfirmPayment(payment, payChoice));
+  // CF-ZF4 (M5): «Confirmar turno» apagado sin decir por qué cuando falta el campo obligatorio de la vertical (el
+  // diagnóstico en Kinesiología, el motivo en General): se lo dice en texto, no solo con el color del botón.
+  const reasonMissing = step === 3 ? missingTurneroReason(hc, clinic.vertical)?.error ?? null : null;
 
   const next = () => {
     if (!canAdvance) return;
@@ -495,6 +501,16 @@ export function PublicBookingWizard({
               <IconArrow size={14} />
             </Button>
           </footer>}
+          {/* CF-ZF4 (M5): la región vive montada en el paso 3 para que el lector anuncie cuando aparece o se va. */}
+          {!interstitial && step === 3 && (
+            <p
+              data-turnero-confirm-blocker
+              aria-live="polite"
+              style={{ margin: 0, fontSize: 13, color: "var(--navy-500)", textAlign: "right", minHeight: "1.4em" }}
+            >
+              {reasonMissing}
+            </p>
+          )}
         </Card>
 
         <SummaryAside
@@ -542,17 +558,6 @@ function newIdempotencyKey(): string {
   b[8] = (b[8] & 0x3f) | 0x80;
   const h = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
-}
-
-function isHcValid(hc: PatientHC) {
-  return (
-    hc.firstName.trim().length > 0 &&
-    hc.lastName.trim().length > 0 &&
-    hc.email.includes("@") &&
-    hc.phone.trim().length >= 6 &&
-    hc.documentId.trim().length >= 4 &&
-    hc.dateOfBirth.length === 10
-  );
 }
 
 function Nav({ clinic, session }: { clinic: PublicClinic; session: { email: string } | null }) {

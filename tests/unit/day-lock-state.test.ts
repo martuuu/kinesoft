@@ -5,7 +5,7 @@
  * y TZ=AR (test:tz-ar): las horas de pared tienen que salir AR en los dos.
  */
 import { describe, it, expect } from "vitest";
-import { dayLockTooltip, lockReasonOf, lockStatusOf } from "@/lib/day-lock-state";
+import { dayLockShortLabel, dayLockTooltip, lockReasonOf, lockStatusOf } from "@/lib/day-lock-state";
 import {
   affectedHeadline,
   affectedLines,
@@ -23,6 +23,11 @@ import {
   removeSummary,
   sameIdSet,
   dayLockThrownMessage,
+  dayLockDaysCount,
+  dayLockGroupRemovals,
+  dayKeyRangeShort,
+  dayLockRangeSummary,
+  removeGroupRequest,
   roomNameOf,
   withRoomScope,
   ROOM_SCOPE_NOTE,
@@ -31,6 +36,7 @@ import {
   DayLockApply,
   DayLockPreviewQuery,
   DayLockRemove,
+  dayLockDayKeys,
   dayLockWindow,
   type DayLockAffected,
 } from "@/lib/time-blocks-schemas";
@@ -107,7 +113,8 @@ describe("botón", () => {
     expect(lockReasonOf("open")).toBe(null);
   });
   it("tooltip", () => {
-    expect(dayLockTooltip("open", null)).toBe("Bloquear el día");
+    // CF-LOCK: «Bloquear el día» → «Bloquear días» (el diálogo ahora acepta un rango).
+    expect(dayLockTooltip("open", null)).toBe("Bloquear días");
     expect(dayLockTooltip("locked", "Feriado")).toBe("Día bloqueado: Feriado. Tocá para ver o desbloquear.");
     expect(dayLockTooltip("partial", null, false)).toBe("Día bloqueado en parte.");
   });
@@ -206,8 +213,8 @@ describe("formato AR", () => {
       },
     ];
     expect(affectedLines(a, practitioners)).toEqual([
-      { id: "b1", time: "10:00", practitioner: "Beto Osteo", patient: "Juana Pérez", hasPayment: true },
-      { id: "b2", time: "11:00", practitioner: "Profesional", patient: "Paciente sin nombre", hasPayment: false },
+      { id: "b1", day: "mar 9", time: "10:00", practitioner: "Beto Osteo", patient: "Juana Pérez", hasPayment: true },
+      { id: "b2", day: "mar 9", time: "11:00", practitioner: "Profesional", patient: "Paciente sin nombre", hasPayment: false },
     ]);
     expect(affectedHeadline(0, true)).toBe("No hay turnos en ese día.");
     expect(affectedHeadline(2, false)).toBe("Hay 2 turnos en esa franja.");
@@ -464,5 +471,132 @@ describe("[SR-BU] alcance Una sala", () => {
     expect(roomNameOf("r1", rooms)).toBe("Consultorio 2");
     expect(roomNameOf("zz", rooms)).toBe("Sala");
     expect(ROOM_SCOPE_NOTE).toBe("Bloqueás solo la sala: los profesionales siguen con su horario.");
+  });
+});
+
+// CF-LOCK (CF-2, ítem N «Bloquear días»): rango de días en el candado. TZ=UTC y TZ=AR: los días salen AR en los dos.
+describe("[CF-N1] rango de días", () => {
+  it("[CF-N1] zod: endDayKey ≥ dayKey y como máximo 31 días contando los dos extremos", () => {
+    const base = { dayKey: "2027-07-01", practitionerIds: null, allDay: true };
+    expect(DayLockPreviewQuery.safeParse({ ...base, endDayKey: "2027-07-02" }).success).toBe(true);
+    expect(DayLockPreviewQuery.safeParse({ ...base, endDayKey: "2027-07-31" }).success).toBe(true);
+    const over = DayLockPreviewQuery.safeParse({ ...base, endDayKey: "2027-08-01" });
+    expect(over.success).toBe(false);
+    if (!over.success) expect(over.error.flatten().fieldErrors.endDayKey?.[0]).toMatch(/31 días/);
+    const back = DayLockApply.safeParse({
+      ...base,
+      endDayKey: "2027-06-30",
+      bookingsDecision: "keep",
+      expectedAffectedIds: [],
+    });
+    expect(back.success).toBe(false);
+    expect(DayLockPreviewQuery.safeParse({ ...base, endDayKey: "2027-02-30" }).success).toBe(false);
+    // Igual al inicio o ausente = el candado de un día.
+    expect(DayLockPreviewQuery.safeParse({ ...base, endDayKey: "2027-07-01" }).success).toBe(true);
+    expect(dayLockDayKeys({ dayKey: "2027-07-01" })).toEqual(["2027-07-01"]);
+  });
+  it("[CF-N1] días del rango: cruza mes y domingo sin depender del host; 31 días exactos", () => {
+    expect(dayLockDayKeys({ dayKey: "2027-04-30", endDayKey: "2027-05-03" })).toEqual([
+      "2027-04-30",
+      "2027-05-01",
+      "2027-05-02",
+      "2027-05-03",
+    ]);
+    expect(dayLockDayKeys({ dayKey: "2027-07-01", endDayKey: "2027-07-31" })).toHaveLength(31);
+  });
+  it("[CF-N1] remove: groupId excluyente con blockIds", () => {
+    expect(DayLockRemove.safeParse({ dayKey: DAY, practitionerId: null, groupId: "g1" }).success).toBe(true);
+    expect(DayLockRemove.safeParse({ dayKey: DAY, practitionerId: null, groupId: "g1", blockIds: ["b"] }).success).toBe(
+      false
+    );
+  });
+  it("[CF-N1] form: «Hasta el día» opcional → endDayKey en el alcance; igual al día = un día; errores de orden y tope", () => {
+    const a = initialDayLockForm(null, admin);
+    expect(a.endDayKey).toBeNull();
+    expect(isDayLockFormDirty(a, { ...a, endDayKey: "2027-03-12" })).toBe(true);
+    const r = buildDayLockScope(DAY, { ...a, endDayKey: "2027-03-12" }, admin);
+    expect(r.ok && r.scope).toEqual({
+      dayKey: DAY,
+      endDayKey: "2027-03-12",
+      practitionerIds: null,
+      locationId: null,
+      allDay: true,
+    });
+    const same = buildDayLockScope(DAY, { ...a, endDayKey: DAY }, admin);
+    expect(same.ok && same.scope).toEqual({ dayKey: DAY, practitionerIds: null, locationId: null, allDay: true });
+    const back = buildDayLockScope(DAY, { ...a, endDayKey: "2027-03-08" }, admin);
+    expect(back.ok).toBe(false);
+    if (!back.ok) expect(back.errors.endDayKey).toBe("El último día tiene que ser igual o posterior al primero.");
+    const long = buildDayLockScope(DAY, { ...a, endDayKey: "2027-04-09" }, admin);
+    expect(long.ok).toBe(false);
+    if (!long.ok) expect(long.errors.endDayKey).toBe("Hasta 31 días, contando el primero y el último.");
+    expect(buildDayLockScope(DAY, { ...a, endDayKey: "2027-04-08" }, admin).ok).toBe(true);
+  });
+  it("[CF-N1] resumen «Se bloquean N días: del lun 3 al vie 7» (mismo mes y entre meses)", () => {
+    expect(dayLockDaysCount("2027-05-03", "2027-05-07")).toBe(5);
+    expect(dayLockDaysCount("2027-05-03", null)).toBe(1);
+    expect(dayLockRangeSummary("2027-05-03", "2027-05-07")).toBe("Se bloquean 5 días: del lun 3 al vie 7.");
+    expect(dayLockRangeSummary("2027-04-30", "2027-05-03")).toBe("Se bloquean 4 días: del vie 30/4 al lun 3/5.");
+    expect(dayLockRangeSummary("2027-05-03", null)).toBeNull();
+    expect(dayLockRangeSummary("2027-05-03", "2027-05-03")).toBeNull();
+    expect(dayLockRangeSummary("2027-05-03", "2027-05-01")).toBeNull();
+  });
+  it("[CF-N1] afectados de varios días: cada línea trae su día AR; titular y resultado hablan de días", () => {
+    const lines = affectedLines(
+      [
+        { id: "b1", practitionerId: "p1", scheduledFor: "2027-05-04T02:30:00.000Z", durationMin: 45, patientName: "Ana", status: "CONFIRMED", hasPayment: false, inPlan: false },
+      ] as DayLockAffected[],
+      practitioners
+    );
+    // 02:30 UTC del 4 = 23:30 AR del lunes 3.
+    expect(lines[0]).toMatchObject({ day: "lun 3", time: "23:30" });
+    expect(affectedHeadline(2, true, null, 5)).toBe("Hay 2 turnos en esos días.");
+    expect(affectedHeadline(0, false, null, 5)).toBe("No hay turnos en esas franjas.");
+    expect(affectedHeadline(1, true, "Box 1", 3)).toBe("Hay 1 turno en Box 1 esos días.");
+    const data = { ids: ["a"], groupId: "g", startsAt: "", endsAt: "", reused: false, decision: "keep" as const, kept: [], cancelled: [], skipped: [] };
+    expect(applySummary(data, { days: 5 }).headline).toBe("Listo, quedaron bloqueados 5 días.");
+    expect(applySummary({ ...data, reused: true }, { days: 5 }).headline).toBe("Esos días ya estaban bloqueados así.");
+  });
+  it("[CF-N1] desbloquear: un día de un rango se quita solo; «Quitar todo el bloqueo (lun 8 al vie 12)» por grupo", () => {
+    const day = {
+      id: "d2",
+      groupId: "g1",
+      practitionerId: "p2",
+      startsAt: "2027-03-09T03:00:00.000Z",
+      endsAt: "2027-03-10T03:00:00.000Z",
+      allDay: true,
+      reason: "Vacaciones",
+    };
+    const room = { ...day, id: "r2", groupId: "g2", practitionerId: null, roomId: "r1" };
+    const ctxR = { ...admin, rooms: [{ id: "r1", locationId: "L1", name: "Box 1" }] };
+    const spans = [
+      { groupId: "g1", firstDayKey: "2027-03-08", lastDayKey: "2027-03-12", days: 5 },
+      { groupId: "g2", firstDayKey: "2027-03-09", lastDayKey: "2027-03-10", days: 2 },
+    ];
+    const r = removableBlocks([day, room], DAY, ctxR, spans);
+    expect(r.map((x) => [x.block.id, x.removable, x.groupDays, x.groupRange])).toEqual([
+      ["d2", true, 5, { firstDayKey: "2027-03-08", lastDayKey: "2027-03-12" }],
+      ["r2", true, 2, { firstDayKey: "2027-03-09", lastDayKey: "2027-03-10" }],
+    ]);
+    expect(r[0].label).toBe("Todo el día · Beto Osteo · Vacaciones · 1 de 5 días");
+    expect(dayLockGroupRemovals(r)).toEqual([
+      // ZB B21: con el rango en fechas AR, no solo «N días».
+      { groupId: "g1", days: 5, label: "Quitar todo el bloqueo (lun 8 al vie 12)", block: day },
+      { groupId: "g2", days: 2, label: "Quitar todo el bloqueo (mar 9 al mié 10)", block: room },
+    ]);
+    expect(removeGroupRequest(DAY, day, ctxR)).toEqual({ dayKey: DAY, practitionerId: null, groupId: "g1" });
+    expect(removeGroupRequest(DAY, room, ctxR)).toEqual({ dayKey: DAY, practitionerId: null, roomId: "r1", groupId: "g2" });
+    expect(removeGroupRequest(DAY, day, prac)).toEqual({ dayKey: DAY, practitionerId: "p2", groupId: "g1" });
+    // Sin spans (o grupo de un solo día, p. ej. varios profesionales en un día) no hay «Quitar todo».
+    expect(dayLockGroupRemovals(removableBlocks([day], DAY, admin))).toEqual([]);
+    expect(removableBlocks([day], DAY, admin)[0].label).toBe("Todo el día · Beto Osteo · Vacaciones");
+  });
+  it("[ZB B21] rango corto de días AR: mismo mes sin mes; si cruza de mes, con «/mes»", () => {
+    expect(dayKeyRangeShort("2027-03-08", "2027-03-12")).toBe("lun 8 al vie 12");
+    expect(dayKeyRangeShort("2027-04-30", "2027-05-03")).toBe("vie 30/4 al lun 3/5");
+  });
+  it("[CF-N1] botón del encabezado: «Bloquear días»", () => {
+    expect(dayLockShortLabel("open")).toBe("Bloquear días");
+    expect(dayLockTooltip("open", null)).toBe("Bloquear días");
   });
 });

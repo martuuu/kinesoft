@@ -116,13 +116,13 @@ describe("[P3-S20] modelo de Seguimiento", () => {
 
   it("[EV2-Z M1] hint de «Sin ficha» literal (cuenta la ficha de HC y el registro de la sesión)", () => {
     expect(SEGUIMIENTO_COPY.sinEvolucionHint).toBe(
-      "Realizadas en los últimos 14 días sin ficha ni registro de la sesión (anotaciones, EVA o ejercicios)."
+      "Realizadas en los últimos 14 días sin ficha ni registro de la sesión (anotaciones, RPE o ejercicios)."
     );
     const s = row({ id: "ev1", completedAt: new Date("2026-10-05T13:00:00.000Z") });
     const out = html(
       <SeguimientoLanding buckets={buckets({ recent: { rows: [s], total: 1 }, realizadasSinEvolucion: { rows: [s], total: 1 } })} plansEnabled />
     );
-    expect(out).toContain("sin ficha ni registro de la sesión (anotaciones, EVA o ejercicios).");
+    expect(out).toContain("sin ficha ni registro de la sesión (anotaciones, RPE o ejercicios).");
   });
 
   it("copy de alta literal C13", () => {
@@ -511,5 +511,54 @@ describe("[PF1.2] detalle de sesión responsive a 1024 (ev2-seguimiento-detalle-
     expect(out).toMatch(/class="[^"]*detailWrap[^"]*"/);
     expect(out).toMatch(/class="[^"]*rail[^"]*"/);
     expect(out).toMatch(/class="[^"]*side[^"]*"/);
+  });
+});
+
+// ─── CF-L2: la EVA sale de Seguimiento (decisión de Martin 30-oct, brief CF «L») ─────────────────────────────────
+// Los datos (`Session.paInPre/paInPost`, `EvaScore`) y el contrato de las actions quedan: el cliente deja de MANDAR
+// las claves de EVA (undefined = «no tocar» en `SessionMeta`), así una EVA vieja guardada no se borra al cerrar.
+describe("[CF-L2] Seguimiento sin EVA", () => {
+  it("[CF-L2] el detalle no pinta EVA pre/post ni la curva de dolor; RPE y anotaciones siguen", () => {
+    const legacy = detail(
+      { paInPre: 7, paInPost: 3 },
+      {
+        sessions: [
+          { id: "ses2", index: 6, scheduledFor: new Date("2026-10-03T12:00:00.000Z"), completedAt: new Date("2026-10-03T13:00:00.000Z"), paInPre: 8, paInPost: 5 },
+          { id: "ses3", index: 7, scheduledFor: new Date("2026-10-06T12:00:00.000Z"), completedAt: null, paInPre: 7, paInPost: 3 },
+        ],
+      }
+    );
+    const out = html(<SessionDetail session={legacy} scheduledLabel="x" />);
+    expect(out).not.toMatch(/EVA/);
+    expect(out).not.toContain("Dolor");
+    expect(out).toContain("RPE");
+    expect(out).toContain("Anotaciones del kinesiólogo");
+    expect(out).toContain("Cerrar sesión");
+  });
+
+  it("[CF-L2] el copy de Seguimiento no menciona la EVA", () => {
+    for (const v of Object.values(SEGUIMIENTO_COPY)) expect(v).not.toMatch(/EVA/);
+  });
+
+  it("[CF-L2] cerrar/registrar/guardar mandan el payload sin claves de EVA y el schema real lo acepta", async () => {
+    const { sessionMetaDraftFrom, sessionMetaPayload, sameSessionMetaDraft } = await import(
+      "@/components/seguimiento/seguimiento-model"
+    );
+    const { SessionMeta } = await import("@/lib/validation");
+    const draft = sessionMetaDraftFrom({ notes: "  Respondió bien ", rpe: 6, paInPre: 7, paInPost: 3 } as never);
+    expect(draft).toEqual({ notes: "  Respondió bien ", rpe: 6 });
+    const payload = sessionMetaPayload(draft);
+    expect(payload).toEqual({ notes: "  Respondió bien ", rpe: 6 });
+    expect(Object.keys(payload).sort()).toEqual(["notes", "rpe"]);
+    // `SessionMeta` es el que parsea `completeSessionFromSeguimiento` / `loadSessionEvolution`: sin EVA = undefined
+    // = la fila conserva lo que tenía.
+    const parsed = SessionMeta.parse(payload);
+    expect(parsed.paInPre).toBeUndefined();
+    expect(parsed.paInPost).toBeUndefined();
+    expect(parsed.rpe).toBe(6);
+    // Vaciar sigue siendo un cambio válido (null), y el dirty-guard solo mira notas y RPE.
+    expect(sessionMetaPayload({ notes: " ", rpe: "" })).toEqual({ notes: null, rpe: null });
+    expect(sameSessionMetaDraft({ notes: "a ", rpe: 6 }, { notes: "a", rpe: 6 })).toBe(true);
+    expect(sameSessionMetaDraft({ notes: "a", rpe: 6 }, { notes: "a", rpe: "" })).toBe(false);
   });
 });

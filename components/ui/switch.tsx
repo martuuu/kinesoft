@@ -18,11 +18,14 @@ export function Switch({
   onChange,
   disabled,
   "aria-label": ariaLabel,
+  "aria-describedby": ariaDescribedBy,
 }: {
   on: boolean;
   onChange: () => void;
   disabled?: boolean;
   "aria-label"?: string;
+  /** Texto de ayuda de la fila (hint): sin esto el lector no lo asocia al interruptor (revisión CF-ZB B15). */
+  "aria-describedby"?: string;
 }) {
   return (
     <button
@@ -30,6 +33,7 @@ export function Switch({
       role="switch"
       aria-checked={on}
       aria-label={ariaLabel}
+      aria-describedby={ariaDescribedBy}
       onClick={onChange}
       disabled={disabled}
       className={styles.switch}

@@ -12,6 +12,7 @@
 import { addDays, dowOfDayKey, isDayKey } from "@/lib/availability/day";
 // `formatARS` ya está en el first load del turnero (resumen y `payment-choice.tsx`): importarlo acá no suma bytes.
 import { formatARS } from "@/lib/format";
+import type { TenantVertical } from "@prisma/client";
 import type {
   PublicClinic,
   PublicFirstSlot,
@@ -679,7 +680,78 @@ export function windowNotice(args: { requestedFrom: string; jumped: boolean; win
     return `No había turnos libres hasta el ${dayLabel(addDays(first, -1))}; te mostramos desde el ${dayLabel(first)}.`;
   }
   if (args.jumped && first > args.requestedFrom) {
+    // CF-U5: con anticipación larga los días dentro de ella no son hábiles para el turnero y el server los saltea en
+    // silencio (`skippedFrom` queda null). «El jueves 22 no tiene horarios» haría creer que ese día no atiende; se
+    // nombra la causa probable. Sin `now` acá no se distingue de un domingo intermedio: el copy no afirma el día.
+    // CF-ZF4 (B20): con minLead > 60' el paso ya muestra «Los turnos online se piden con al menos …» (CF-D9, mismo
+    // umbral): repetir «por la anticipación del consultorio» decía lo mismo dos veces, una arriba de la otra.
+    if (args.window.minLeadMinutes != null && args.window.minLeadMinutes > 60) {
+      return `Te mostramos desde el ${dayLabel(first)}.`;
+    }
     return `El ${dayLabel(args.requestedFrom)} no tiene horarios. Te mostramos los siguientes.`;
   }
   return null;
+}
+
+/**
+ * CF-FORM (§28, decisión 5 de Martin): el «diagnóstico» obligatorio del turnero depende de la vertical del consultorio.
+ * Kinesiología → `title` («Diagnóstico»); General → `notes` («Motivo de consulta»): en General la UI no muestra el
+ * diagnóstico (EV1-C2) y el motivo es su campo equivalente. Sin vertical (un `PublicClinic` viejo) = Kinesiología, el
+ * mismo fallback que el copy del wizard (`isGeneral = vertical === "GENERAL"`).
+ *
+ * No va en `PatientHCSchema` porque la vertical no viaja en el request: el server la lee de la fila del consultorio
+ * (un cliente armado a mano no puede elegir qué campo le exigen) y el wizard la tiene en `clinic.vertical`. Pura y
+ * compartida por los dos lados, así el botón «Confirmar» y el submit no divergen. Vive ACÁ y no en
+ * `public-booking-types.ts` porque ese módulo value-importa zod: importarlo por valor desde el wizard sumaría zod al
+ * first load del turnero (techo de 115 kB gz, §25.11).
+ */
+export const TURNERO_REASON_FIELD = {
+  KINESIOLOGY: { field: "title", label: "Diagnóstico", missing: "Completá el diagnóstico." },
+  GENERAL: { field: "notes", label: "Motivo de consulta", missing: "Completá el motivo de consulta." },
+} as const satisfies Record<TenantVertical, { field: "title" | "notes"; label: string; missing: string }>;
+
+export function turneroReasonField(vertical: TenantVertical | null | undefined) {
+  return TURNERO_REASON_FIELD[vertical === "GENERAL" ? "GENERAL" : "KINESIOLOGY"];
+}
+
+/** El campo obligatorio de la vertical que falta (`{ title: [...] }` / `{ notes: [...] }`), o null si está. */
+export function missingTurneroReason(
+  patient: { title?: string | null; notes?: string | null },
+  vertical: TenantVertical | null | undefined
+): { error: string; fieldErrors: Record<string, string[]> } | null {
+  const r = turneroReasonField(vertical);
+  if ((patient[r.field] ?? "").trim() !== "") return null;
+  return { error: r.missing, fieldErrors: { [r.field]: [r.missing] } };
+}
+
+/** Lo que mira `isTurneroHcComplete` del formulario «Tus datos» (subconjunto de `PatientHC` del wizard). */
+export type TurneroHcRequired = {
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  documentId: string;
+  dateOfBirth: string;
+  title: string;
+  notes: string;
+};
+
+/**
+ * CF-FORM (§28, decisión 5 de Martin): ¿se puede confirmar «Tus datos»? Obligatorios: nombre, apellido, email, teléfono,
+ * DNI y el «diagnóstico» de la vertical (`turneroReasonField`: Kinesiología → `title`, General → `notes`), la MISMA
+ * regla que aplica el submit con la vertical del server. La fecha de nacimiento es opcional: vacía pasa, y si la
+ * cargaron tiene que ser una fecha completa del `<input type="date">` (`YYYY-MM-DD`; el rango 1900..hoy lo valida el
+ * server, como antes). Antes la fecha era obligatoria y el diagnóstico no.
+ */
+export function isTurneroHcComplete(hc: TurneroHcRequired, vertical: TenantVertical | null | undefined): boolean {
+  const dob = hc.dateOfBirth.trim();
+  return (
+    hc.firstName.trim().length > 0 &&
+    hc.lastName.trim().length > 0 &&
+    hc.email.includes("@") &&
+    hc.phone.trim().length >= 6 &&
+    hc.documentId.trim().length >= 4 &&
+    (dob === "" || /^\d{4}-\d{2}-\d{2}$/.test(dob)) &&
+    hc[turneroReasonField(vertical).field].trim().length > 0
+  );
 }

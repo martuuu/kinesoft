@@ -131,6 +131,7 @@ describe.skipIf(!RUN)("[TP-2t] turnero con cobro online", () => {
         phone: `11${n.toString().padStart(8, "0")}`,
         documentId: `${30_000_000 + (n % 9_000_000)}`,
         dateOfBirth: "1990-05-10",
+        title: "Lumbalgia",
         ...o.patient,
       },
     };

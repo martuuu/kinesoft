@@ -76,7 +76,7 @@ const core = {
   updatedAt: new Date("2026-09-01T12:00:00Z"),
 } as unknown as PatientCore;
 
-const patient = { ...core, bookings: [], evaScores: [] } as PatientWithRelations;
+const patient = { ...core, bookings: [] } as PatientWithRelations;
 
 const FULL: PlanPermissions = { manage: true, schedule: true, authorize: true, restore: true, templates: true };
 const SECRETARIA: PlanPermissions = { ...NO_PLAN_PERMISSIONS, schedule: true, authorize: true };

@@ -35,7 +35,6 @@ import {
   setPatientCoverage,
   updatePatient,
   setPatientDiagnosis,
-  recordEvaScore,
   setPatientArchived,
   bulkArchivePatients,
   getPatientActivity,
@@ -329,11 +328,6 @@ const ROWS: Row[] = [
     untouched: (c, db) => db.treatmentProgram.count({ where: { patientId: c.patB, title: "Colado por A" } }),
   },
   {
-    name: "recordEvaScore de un paciente de B",
-    act: (c) => recordEvaScore({ patientId: c.patB, value: 7, source: "colado-a" }),
-    untouched: (c, db) => db.evaScore.count({ where: { patientId: c.patB, source: "colado-a" } }),
-  },
-  {
     name: "updatePlanDetails de un plan de B",
     act: (c) => updatePlanDetails({ programId: c.programB, expectedUpdatedAt: c.programBUpdatedAt, title: "Pisado por A" }),
     untouched: (c, db) => db.treatmentProgram.count({ where: { id: c.programB, title: "Pisado por A" } }),
@@ -485,11 +479,6 @@ const BASIC_ROWS: BasicRow[] = [
     name: "createPlan",
     act: (c) => gateCut(createPlan(planDraft(c.T, c.pat, "Colado por básico"))),
     untouched: (c, db) => db.treatmentProgram.count({ where: { patientId: c.pat, title: "Colado por básico" } }),
-  },
-  {
-    name: "recordEvaScore",
-    act: (c) => recordEvaScore({ patientId: c.pat, value: 3, source: "colado-basico" }),
-    untouched: (c, db) => db.evaScore.count({ where: { patientId: c.pat, source: "colado-basico" } }),
   },
   {
     name: "updatePlanDetails",
@@ -1220,14 +1209,6 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
       GENERAL: { exp: "deny", note: "sin `diagnostico` → ok:false (P4.Z)" }, SUPPORT: "ro" },
       act: (fx) => setPatientDiagnosis(fx.patientId, "S26b dx", "x"),
       effect: async (fx, db) => (await db.patient.findUniqueOrThrow({ where: { id: fx.patientId } })).diagnosisTitle === "S26b dx",
-    },
-    {
-      kind: "write",
-      name: "Paciente · recordEvaScore (clínico)",
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "deny", GENERAL: { exp: "deny", note: "sin `evaluaciones` → ok:false, no tira (P4.Z)" }, SUPPORT: "ro" },
-      // Sin `settle`: desde P4.Z ninguna celda tira; si volviera a tirar ForbiddenError, la celda falla.
-      act: (fx) => recordEvaScore({ patientId: fx.patientId, value: 5, source: "s26b" }),
-      effect: async (fx, db) => (await db.evaScore.count({ where: { patientId: fx.patientId, source: "s26b" } })) > 0,
     },
     {
       kind: "write",

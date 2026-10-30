@@ -12,7 +12,7 @@ export type PortalPatient = {
   lastName: string;
   /**
    * ES4 S24: secciones del portal de ESTA ficha (`portalSectionsFor(ref.modules)`, lib/portal-nav.ts): gatean el
-   * plan, el check-in, las tabs y «Sacar un turno». Array y no Set: viaja como prop serializable.
+   * plan, las tabs y «Sacar un turno». Array y no Set: viaja como prop serializable.
    */
   sections: PortalSection[];
   /** Planes ACTIVE vinculados, vivos (solo con la sección `plan`; si no, vacío). Contadores sobre sesiones vivas. */
@@ -68,8 +68,6 @@ export type PortalPlanDTO = {
     completedAt: string | null;
     // P0-S02p: sin `notes` a propósito. `Session.notes` es nota privada del
     // kine; el DTO llega al navegador del paciente. No volver a sumarla.
-    /** ¿El paciente ya mandó el check-in de esta sesión? (por `EvaScore.sessionId`, o el `source` viejo). */
-    hasCheckIn: boolean;
     /** Turno vigente de la sesión (no cancelado ni ausente); null = «sin turno» todavía (C4). */
     booking: PortalPlanBookingDTO | null;
   }[];

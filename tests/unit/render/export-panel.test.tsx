@@ -21,4 +21,12 @@ describe("[BO5-C] ExportPanel", () => {
     expect(html).toContain("puede tardar");
     expect(html).toContain("Historia clínica");
   });
+
+  it("[CF-L] sin claims de EVA (salió de la app, decisión de Martin 30-oct)", () => {
+    // Las filas de `EvaScore` siguen en el archivo (`lib/tenant-export-logic.ts`, «los datos quedan»), pero el panel ya
+    // no la nombra: es una pantalla de la app y la app ya no tiene EVA.
+    const html = renderToStaticMarkup(<ExportPanel />);
+    expect(html).not.toMatch(/\bEVA\b/);
+    expect(html).toContain("Historia clínica: diagnósticos, evaluaciones y notas.");
+  });
 });

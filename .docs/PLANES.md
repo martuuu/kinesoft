@@ -284,7 +284,7 @@ Van literales en los prompts del área. "🔁" = cambió respecto de la recomend
 | **PD-10** | Ciclo de vida, edición y legacy | ✅ D7 (pausar o cancelar pregunta; por defecto cancela los futuros impagos); I5 derivado + `updateProgram` solo título y notas; archivar solo CANCELLED/COMPLETED; restaurar OWNER/ADMIN; ordinal; sincronía de Atendido; L5-L9 (L9 = archivar un paciente pausa sus planes); reactivación; legacy exento hasta "Completar datos" | ES2b |
 | **PD-11** | Visual y puertas | ✅ Chip "Kine · 3/10" accesible + PHI del título; "Fuera de plan" solo con plan vinculado de la misma disciplina; link "Crealo como plan" con prefill; puerta 4 navega al perfil; una entrada "Planes" con pestañas; plantillas UI; V19. **Portal ampliado** (E3): turnos y progreso, estado de cuenta, "Mis datos", ejercicios **del plan** | ES3 (tokens en ES1) |
 | **PD-12** | E2E | ✅ Playwright como devDependency + Auth no-prod (`.env.e2e.local` de staging). Si no está, E2E manual y `test:e2e` fuera del gate. Corre en el gate final del bloque B | ES4 |
-| **PD-13** | Qué ve la Secretaria | ✅ **Datos administrativos:** nombre, DNI, contacto, OS y cobertura, contacto de emergencia, turnos y estado de cobro. **Nunca HC**, aunque esté "Consultorio común". Nivel `admin` en `lib/visibility.ts` (S02p) | ES1 |
+| **PD-13** | Qué ve la Secretaria | ✅ **Datos administrativos:** nombre, DNI, contacto, OS y cobertura, contacto de emergencia, turnos y estado de cobro. **Nunca HC**, aunque esté "Consultorio común". Nivel `admin` en `lib/visibility.ts` (S02p). **CF (30-oct):** sin `/planes` ni «Sesiones sin turno» (§2.6) | ES1 |
 | **PD-14** | Un paciente en varios consultorios | ✅ `Patient.userId` único **por consultorio**. Una cuenta (email), fichas distintas por consultorio, sin compartir nada clínico. `DROP INDEX "Patient_userId_key"` aprobado como excepción (§3) | ES2a (M1) |
 | **PD-15** 🔁 | Vínculo de la cuenta del portal | ✅ **Automático por email verificado** si hay exactamente 1 ficha con ese email en ese consultorio y no tiene `userId`; si no, invitación con token (S24a) | ES4 |
 | **PD-16** | Quién carga autorizaciones de OS | ✅ Profesional y Secretaria: capability `plans.authorize`, con historial de órdenes | ES2b / ES3 |
@@ -456,6 +456,7 @@ Van literales en los prompts del área. "🔁" = cambió respecto de la recomend
 - Opera turnos por la capability positiva `agenda.operateAll` (OWNER, ADMIN, ASSISTANT), nunca por "full".
 - **Un campo se escribe si y solo si se puede leer:** `bookingFieldAccess` (`lib/booking-field-access.ts`) es la única regla para la agenda, el ICS, el alta, el batch, `updateBooking` y el core.
 - Ve datos administrativos (nivel `admin`), nunca HC. No tiene `plans.manage`: en planes agenda, reprograma y cancela (`plans.schedule`) y carga autorizaciones (`plans.authorize`).
+- **Nota CF (30-oct, decisión 7 de Martin; plan §28):** la Secretaría (y todo rol sin `clinical.read`) **ya no ve `/planes`** (menú, ⌘K y redirect a `/dashboard` en el layout, `lib/nav.ts:87`). Pierde «Sesiones sin turno» de /planes; el profesional la sigue teniendo en la agenda del plan. Lo de arriba (`plans.schedule`, `plans.authorize`) sigue valiendo en el server y desde la agenda y el perfil del paciente.
 
 **Autorización de la OS (PQ-01, PD-16, PQ-15):**
 - **Fechas en `DATE`.** Se leen con `dbDateToDayKey` y se escriben con `dayKeyToDbDate`. Las flags comparan dayKeys AR, nunca instantes.
@@ -764,6 +765,24 @@ filas**:
   (`lib/time-blocks.ts:189-203`). `archiveRoom`/`updateRoom`/`restoreRoom`: sedes **exclusivo**.
 - **Sin clave de sala (SR-D3):** Planes, "este y los siguientes" (`capLocksHeld`) y el turnero estampan la sala sin
   chequear ocupación; no se tocan C6/C7 ni se suma riesgo de deadlock.
+
+**Enmienda C2 (1c) · Hora del profesional (T3, 19-oct).** Literal en ARCHITECTURE ADR-004 y AUDIT §5.28: paciente → cupo
+→ hora (`kinesoft:phour:`) → sala → sedes → filas. Planes no toma la hora.
+
+**Enmienda C2 (1d), CF (30-oct; regla «no atiende servicios distintos a la vez», ADR-032):** paciente → cupo → **día del
+profesional** → hora → sala → sedes → filas. Clave `kinesoft:pday:<t>:<profesional>:<día AR>` (`practitionerDayLockKey`):
+dos turnos que se pisan comparten al menos un día AR de los que cubren; la de cupo lleva el servicio y la de hora solo la
+hora de inicio (09:30 + 60' y 10:00 no la comparten), así que sin ésta dos altas de servicios distintos leían «0 de otro
+servicio» y entraban las dos. Va en la MISMA sentencia (`lockAgendaKeysMany`: todo el cupo → todos los días → todas las
+horas → todas las salas, cada grupo ordenado, `WITH ORDINALITY … ORDER BY o`): 0 sentencias nuevas. Se toma SIEMPRE (no
+depende de `allowParallelServices`) en altas, lote, edición que cambia la ventana o reactiva, submit del turnero y Planes
+(motor y «este y los siguientes», en el superconjunto junto al cupo, sin hora). No la toman bloqueos/candado
+(`lockCapacityScope` ya toma el cupo de todos los servicios del día) ni la promoción del hold. `capLocksHeld` = «el caller
+ya tomó cupo y día (y hora, salvo Planes)».
+- En Planes: `lockAgendaKeysMany(tx, { cap: keys, pday: pdayKeysFromCapacityKeys(keys) })` (`lib/plans-engine-internal.ts:388`,
+  `lib/plans-move-internal.ts:448,745`). El forzado de la serie (`force.capacity || c.overbooked`) pasa también
+  `allowOtherService`; la fila de plan con otro servicio es `capacityFull` + `otherServiceBusy` («Atiende otro servicio a
+  esa hora»). `PlanForceFlags` no cambia.
 
 ### C3 · Keys
 

@@ -17,6 +17,7 @@ import {
   setBusinessHours,
   setPublicBookingEnabled,
   setTenantBookingCap,
+  setTenantAgendaRules,
 } from "@/lib/tenant-settings";
 import { SAAS_PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
 import {
@@ -38,6 +39,15 @@ import { AlertModeControl } from "@/components/realtime/alert-prefs-controls";
 import type { PracticeAssetState } from "./practice-asset-field";
 import { HC_VISIBILITY_COPY as VIS_COPY, hcVisibilityChange, hcVisibilityOf, type HcVisibility } from "./fichas-settings-logic";
 import { BRAND_NAME } from "@/lib/brand";
+import {
+  AGENDA_RULES_COPY,
+  DEFAULT_AGENDA_STEP_MIN,
+  PUBLIC_MIN_LEAD_MAX_MINUTES,
+  SLOT_STEP_OPTIONS,
+  parseTenantAgendaRules,
+  type TenantAgendaRulesWrite,
+} from "@/lib/agenda-rules-config";
+import { leadFromParts, leadToParts, type LeadUnit } from "@/lib/lead-time";
 
 // [FC-3i] El logo baja del chunk de «Mis fichas» (mismo `import()` que configuracion-client): ver
 // `practice-asset-field.tsx` (sin chunk compartido nuevo). Con SSR (default de `dynamic`): la tarjeta sale pintada.
@@ -58,6 +68,7 @@ export function GeneralPanel({
   sensitive,
   support = false,
   logo = null,
+  onDirtyChange,
 }: {
   tenant: TenantSettings;
   /** `tenant.admin` («Configuración»): horario y vista de agenda del consultorio. */
@@ -68,8 +79,19 @@ export function GeneralPanel({
   support?: boolean;
   /** [FC-3i] Logo del consultorio (`tenant.sensitive`); null = sin la tarjeta (la página no lo leyó). */
   logo?: PracticeAssetState | null;
+  /**
+   * [CF-ZF4 · B18] Dirty-guard del shell (el patrón de Profesionales): el tope y las reglas de la agenda se editan en
+   * línea, sin Drawer, y cambiar de pestaña de Configuración desmontaba la tarjeta y perdía lo cargado sin avisar.
+   */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const router = useRouter();
+  const [capDirty, setCapDirty] = useState(false);
+  const [rulesDirty, setRulesDirty] = useState(false);
+  useEffect(() => {
+    onDirtyChange?.(capDirty || rulesDirty);
+  }, [capDirty, rulesDirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   const { agenda, setAgenda } = useTweaks();
   const [pending, start] = useTransition();
   const [shared, setShared] = useState(tenant.sharedPatientView);
@@ -320,7 +342,11 @@ export function GeneralPanel({
         )}
       </Card>
 
-      <BookingCapCard tenant={tenant} admin={canAdmin} />
+      <BookingCapCard tenant={tenant} admin={canAdmin} onDirtyChange={setCapDirty} />
+
+      {/* CF-U4: a diferencia del tope (deshabilitado sin «Configuración»), esta tarjeta no se monta: es nueva y no
+          hay a quién confundir con un control que «desapareció»; el server lo exige igual (`requireTenantAdmin`). */}
+      {canAdmin && <AgendaRulesCard tenant={tenant} onDirtyChange={setRulesDirty} />}
 
       {/* BO3-F: las preferencias son de la cuenta que mira; las del superadmin como soporte no se guardan (su sesión
           es de solo lectura fuera de las actions de Configuración) y no le sirven al consultorio. */}
@@ -416,11 +442,19 @@ export function AlertPrefsCard() {
 
 /**
  * «Turnos por profesional» (T3e-2c; decisión 6 del 19-oct, plan §23.7): el tope del consultorio, que hereda cada
- * profesional salvo que en su ficha diga «Sin tope» o tenga uno propio. Vacío = sin tope. `tenant.admin` como el
+ * profesional salvo que en Profesionales diga «Sin tope» o tenga uno propio. Vacío = sin tope. `tenant.admin` como el
  * horario: es operativo (la Secretaria con «Configuración» lo maneja). La validación es la misma que la del server
  * (`parseBookingCapPair`), así el botón no se prende con un par a medias.
  */
-function BookingCapCard({ tenant, admin }: { tenant: TenantSettings; admin: boolean }) {
+function BookingCapCard({
+  tenant,
+  admin,
+  onDirtyChange,
+}: {
+  tenant: TenantSettings;
+  admin: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const [pending, start] = useTransition();
   const savedCount = tenant.bookingCapCount == null ? "" : String(tenant.bookingCapCount);
   const savedInterval = String(tenant.bookingCapIntervalMin ?? 15);
@@ -435,6 +469,7 @@ function BookingCapCard({ tenant, admin }: { tenant: TenantSettings; admin: bool
   const empty = count.trim() === "";
   const parsed = parseBookingCapPair(empty ? null : count.trim(), empty ? null : Number(interval));
   const dirty = empty ? tenant.bookingCapCount != null : count.trim() !== savedCount || interval !== savedInterval;
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
 
   const save = () => {
     setMsg(null);
@@ -457,7 +492,7 @@ function BookingCapCard({ tenant, admin }: { tenant: TenantSettings; admin: bool
         Cuántos turnos puede tener cada profesional que empiecen en el mismo intervalo (10:00, 10:15…), de cualquier
         servicio. Desde el segundo turno, la agenda te avisa; pasado el tope, se carga como <strong>sobreturno</strong> si
         lo confirmás, y el turnero online no lo ofrece. Dejalo vacío para no poner tope. Cada profesional puede tener el
-        suyo en su ficha.
+        suyo en Profesionales.
       </div>
       <div style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11 }}>
@@ -505,6 +540,239 @@ function BookingCapCard({ tenant, admin }: { tenant: TenantSettings; admin: bool
           style={{ marginLeft: "auto" }}
         >
           {pending ? "Guardando…" : "Guardar tope"}
+        </Button>
+      </div>
+      {msg && (
+        <div
+          role={msg.tone === "err" ? "alert" : "status"}
+          style={{
+            marginTop: 12,
+            padding: 10,
+            borderRadius: 10,
+            background: msg.tone === "ok" ? "var(--success-bg)" : "var(--danger-bg)",
+            color: msg.tone === "ok" ? "var(--success-fg)" : "var(--danger-fg)",
+            fontSize: 12,
+          }}
+        >
+          {msg.text}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+type TenantAgendaRulesSaved = {
+  agendaSlotStepMin: number | null;
+  publicSlotStepMin: number | null;
+  publicMinLeadMinutes: number | null;
+};
+
+/** Form de «Reglas de la agenda» (strings, como los inputs). Anticipación vacía = NULL = default (1 hora). */
+export type TenantAgendaRulesDraft = { agendaStep: string; publicStep: string; leadValue: string; leadUnit: LeadUnit };
+
+const LEAD_UNIT_LABEL: Record<LeadUnit, string> = { hours: "horas", days: "días", weeks: "semanas" };
+
+/**
+ * Puro: lo guardado → form. La agenda no tiene opción «sin configurar» (NULL = 15, CF-D6): muestra 15. La anticipación
+ * abre con `leadToParts` (la mayor unidad que divide exacto) para que abrir y guardar sin tocar sea la identidad.
+ */
+export function tenantAgendaRulesDraft(saved: TenantAgendaRulesSaved): TenantAgendaRulesDraft {
+  const lead = saved.publicMinLeadMinutes == null ? null : leadToParts(saved.publicMinLeadMinutes);
+  return {
+    agendaStep: String(saved.agendaSlotStepMin ?? DEFAULT_AGENDA_STEP_MIN),
+    publicStep: saved.publicSlotStepMin == null ? "" : String(saved.publicSlotStepMin),
+    leadValue: lead ? String(lead.value) : "",
+    leadUnit: lead?.unit ?? "hours",
+  };
+}
+
+/**
+ * Puro: form → input de `setTenantAgendaRules` (form entero, vacío = NULL). Si el select de la agenda sigue en lo que
+ * mostró al abrir, se manda lo guardado: así un NULL (hereda el default) no se convierte en un 15 fijo por haber
+ * guardado otro campo. La validación final es la del server (`parseTenantAgendaRules`), con su copy y su campo.
+ */
+export function tenantAgendaRulesInput(
+  d: TenantAgendaRulesDraft,
+  saved: TenantAgendaRulesSaved
+): { ok: true; input: TenantAgendaRulesWrite } | { ok: false; field: keyof TenantAgendaRulesWrite; error: string } {
+  const agenda =
+    d.agendaStep === String(saved.agendaSlotStepMin ?? DEFAULT_AGENDA_STEP_MIN) ? saved.agendaSlotStepMin : Number(d.agendaStep);
+  const v = d.leadValue.trim();
+  let lead: number | null = null;
+  if (v !== "") {
+    // Enteros: «1,5 horas» daría 90' y al reabrir `leadToParts` lo mostraría como «2 horas» (no es la identidad).
+    if (!/^\d+$/.test(v)) return { ok: false, field: "publicMinLeadMinutes", error: AGENDA_RULES_COPY.minLead };
+    lead = leadFromParts(Number(v), d.leadUnit);
+  }
+  const parsed = parseTenantAgendaRules({
+    agendaSlotStepMin: agenda,
+    publicSlotStepMin: d.publicStep === "" ? null : Number(d.publicStep),
+    publicMinLeadMinutes: lead,
+  });
+  if (!parsed.ok) return { ok: false, field: parsed.field, error: parsed.error };
+  return { ok: true, input: parsed.data };
+}
+
+/**
+ * «Reglas de la agenda» (CF-U4; §28, decisiones 3 y 6 de Martin del 30-oct; M20): cada cuánto ofrece horarios el
+ * selector de la agenda (15/30/45/60) y el turnero (automático o 15/30/45/60), y la anticipación mínima del turnero
+ * (horas/días/semanas, hasta 8 semanas; vacío = 1 hora). Las hereda cada profesional sin valor propio; la anticipación
+ * de un servicio del profesional manda sobre esta. `tenant.admin`, como el tope.
+ */
+function AgendaRulesCard({ tenant, onDirtyChange }: { tenant: TenantSettings; onDirtyChange?: (dirty: boolean) => void }) {
+  const [pending, start] = useTransition();
+  // `?? null`: fixtures viejos (cast) sin los campos de M20 no rompen el render.
+  const saved: TenantAgendaRulesSaved = {
+    agendaSlotStepMin: tenant.agendaSlotStepMin ?? null,
+    publicSlotStepMin: tenant.publicSlotStepMin ?? null,
+    publicMinLeadMinutes: tenant.publicMinLeadMinutes ?? null,
+  };
+  const savedKey = `${saved.agendaSlotStepMin}|${saved.publicSlotStepMin}|${saved.publicMinLeadMinutes}`;
+  const [draft, setDraft] = useState<TenantAgendaRulesDraft>(() => tenantAgendaRulesDraft(saved));
+  const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const [fieldErr, setFieldErr] = useState<Partial<Record<keyof TenantAgendaRulesWrite, string>>>({});
+  // Sync cuando la action revalida y llega el tenant nuevo (mismo criterio que el horario).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setDraft(tenantAgendaRulesDraft(saved)); }, [savedKey]);
+
+  const initial = tenantAgendaRulesDraft(saved);
+  const dirty =
+    draft.agendaStep !== initial.agendaStep ||
+    draft.publicStep !== initial.publicStep ||
+    draft.leadValue.trim() !== initial.leadValue ||
+    (draft.leadValue.trim() !== "" && draft.leadUnit !== initial.leadUnit);
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
+  const set = (p: Partial<TenantAgendaRulesDraft>) => {
+    setDraft((d) => ({ ...d, ...p }));
+    setMsg(null);
+    setFieldErr({});
+  };
+
+  const save = () => {
+    setMsg(null);
+    setFieldErr({});
+    const r0 = tenantAgendaRulesInput(draft, saved);
+    if (!r0.ok) {
+      // El error va al lado del campo (no se repite abajo).
+      setFieldErr({ [r0.field]: r0.error });
+      return;
+    }
+    start(async () => {
+      const r = await setTenantAgendaRules(r0.input);
+      if (!r.ok) {
+        const fe: Partial<Record<string, string[]>> = r.fieldErrors ?? {};
+        setFieldErr({
+          agendaSlotStepMin: fe.agendaSlotStepMin?.[0],
+          publicSlotStepMin: fe.publicSlotStepMin?.[0],
+          publicMinLeadMinutes: fe.publicMinLeadMinutes?.[0],
+        });
+        // Con campo, el error va al lado del campo; sin campo (permiso, «Datos inválidos»), abajo.
+        if (!r.fieldErrors) setMsg({ tone: "err", text: r.error });
+      }
+      // [PF1.1-config · C-PF4] Sin `router.refresh()`: la action revalida `/configuracion`.
+      else setMsg({ tone: "ok", text: "Reglas guardadas." });
+    });
+  };
+
+  const labelStyle = { fontWeight: 600, color: "var(--navy-500)", textTransform: "uppercase", letterSpacing: "0.06em" } as const;
+  const errLine = (t?: string) =>
+    t ? (
+      <span role="alert" style={{ fontSize: 12, color: "var(--danger-fg)", textTransform: "none", letterSpacing: 0 }}>
+        {t}
+      </span>
+    ) : null;
+
+  return (
+    <Card style={{ padding: 20 }} data-agenda-rules-card>
+      <EyebrowLabel>Reglas de la agenda</EyebrowLabel>
+      <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 4, marginBottom: 14, lineHeight: 1.45 }}>
+        Cada cuánto se ofrecen horarios al dar un turno y en el turnero online, y con cuánta anticipación se pueden
+        pedir turnos online. Cada profesional puede tener sus propios intervalos en Profesionales, y cada servicio del
+        profesional su propia anticipación.
+      </div>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 14, flexWrap: "wrap" }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11 }}>
+          <span style={labelStyle}>Horarios de la agenda cada</span>
+          <select
+            className={styles.select}
+            value={draft.agendaStep}
+            onChange={(e) => set({ agendaStep: e.target.value })}
+            disabled={pending}
+            aria-label="Horarios de la agenda cada"
+            aria-invalid={!!fieldErr.agendaSlotStepMin || undefined}
+          >
+            {SLOT_STEP_OPTIONS.map((m) => (
+              <option key={m} value={m}>
+                {m} min
+              </option>
+            ))}
+          </select>
+          {errLine(fieldErr.agendaSlotStepMin)}
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11 }}>
+          <span style={labelStyle}>Horarios del turnero cada</span>
+          <select
+            className={styles.select}
+            value={draft.publicStep}
+            onChange={(e) => set({ publicStep: e.target.value })}
+            disabled={pending}
+            aria-label="Horarios del turnero cada"
+            aria-invalid={!!fieldErr.publicSlotStepMin || undefined}
+          >
+            <option value="">{AGENDA_RULES_COPY.publicStepAuto}</option>
+            {SLOT_STEP_OPTIONS.map((m) => (
+              <option key={m} value={m}>
+                {m} min
+              </option>
+            ))}
+          </select>
+          {errLine(fieldErr.publicSlotStepMin)}
+        </label>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11 }}>
+          <span style={labelStyle} id="agenda-rules-lead-l">Anticipación mínima del turnero</span>
+          <div role="group" aria-labelledby="agenda-rules-lead-l" style={{ display: "flex", gap: 6 }}>
+            <input
+              className={styles.select}
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={Math.floor(PUBLIC_MIN_LEAD_MAX_MINUTES / leadFromParts(1, draft.leadUnit))}
+              step={1}
+              value={draft.leadValue}
+              onChange={(e) => set({ leadValue: e.target.value })}
+              disabled={pending}
+              aria-label="Anticipación mínima del turnero"
+              aria-invalid={!!fieldErr.publicMinLeadMinutes || undefined}
+              aria-describedby="agenda-rules-lead-hint"
+              style={{ width: 80, cursor: "text" }}
+            />
+            <select
+              className={styles.select}
+              value={draft.leadUnit}
+              onChange={(e) => set({ leadUnit: e.target.value as LeadUnit })}
+              disabled={pending}
+              aria-label="Unidad de la anticipación mínima"
+            >
+              {(["hours", "days", "weeks"] as const).map((u) => (
+                <option key={u} value={u}>
+                  {LEAD_UNIT_LABEL[u]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <span id="agenda-rules-lead-hint" style={{ fontSize: 12, color: "var(--navy-500)" }}>
+            Por defecto, 1 hora. Hasta 8 semanas.
+          </span>
+          {errLine(fieldErr.publicMinLeadMinutes)}
+        </div>
+        <Button
+          type="button"
+          variant="primary"
+          onClick={save}
+          disabled={pending || !dirty}
+          style={{ marginLeft: "auto", alignSelf: "flex-end" }}
+        >
+          {pending ? "Guardando…" : "Guardar reglas"}
         </Button>
       </div>
       {msg && (

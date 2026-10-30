@@ -160,6 +160,9 @@ describe.skipIf(!RUN)("[PF2-d] /configuracion: presupuesto de tx e igualdad con 
     const { result: r, m } = await load(T.userId);
     console.info(`[PF2-d] /configuracion Titular: ${m.transactions} tx · ${m.statements} sentencias · ${m.dbMs} ms DB`);
     expect(m.transactions).toBeLessThanOrEqual(3);
+    // [CF-U4] Las reglas de agenda de M20 (consultorio y profesional) son columnas en los selects de siempre: ninguna
+    // sentencia nueva (42 medidas antes de CF-U4, 30-oct).
+    expect(m.statements).toBeLessThanOrEqual(42);
 
     asUser(T.userId);
     const [settings, insurers, services, team, pending, conditions, locations, summary, rooms, support] =
@@ -184,13 +187,28 @@ describe.skipIf(!RUN)("[PF2-d] /configuracion: presupuesto de tx e igualdad con 
     expect(plain(r.locations)).toEqual(plain(locations));
     // T3e-2c (C-AS3): el loader suma a cada fila el tope del profesional y el del consultorio (`bookingCap`, mismas
     // columnas del mismo select); sin eso, la fila es la del lector.
-    expect(plain(r.scheduleSummary.map(({ bookingCap: _cap, ...row }) => row))).toEqual(plain(summary));
+    // CF-U4: ídem con las reglas de agenda (`agendaRules`).
+    expect(plain(r.scheduleSummary.map(({ bookingCap: _cap, agendaRules: _rules, ...row }) => row))).toEqual(plain(summary));
     const caps = await db.practitioner.findMany({
       where: { id: { in: summary.map((s) => s.practitionerId) } },
-      select: { id: true, bookingCapMode: true, bookingCapCount: true, bookingCapIntervalMin: true },
+      select: {
+        id: true,
+        bookingCapMode: true,
+        bookingCapCount: true,
+        bookingCapIntervalMin: true,
+        allowParallelServices: true,
+        agendaSlotStepMin: true,
+        publicSlotStepMin: true,
+      },
     });
     for (const row of r.scheduleSummary) {
       const c = caps.find((x) => x.id === row.practitionerId)!;
+      expect(row.agendaRules).toEqual({
+        allowParallelServices: c.allowParallelServices,
+        agendaSlotStepMin: c.agendaSlotStepMin,
+        publicSlotStepMin: c.publicSlotStepMin,
+        tenant: { agendaSlotStepMin: settings.agendaSlotStepMin, publicSlotStepMin: settings.publicSlotStepMin },
+      });
       expect(row.bookingCap).toEqual({
         mode: c.bookingCapMode,
         count: c.bookingCapCount,
@@ -231,6 +249,8 @@ describe.skipIf(!RUN)("[PF2-d] /configuracion: presupuesto de tx e igualdad con 
     const { result: r, m } = await load(adminUserId);
     console.info(`[PF2-d] /configuracion ADMIN: ${m.transactions} tx · ${m.statements} sentencias`);
     expect(m.transactions).toBeLessThanOrEqual(1);
+    // [CF-U4] Sin sentencias nuevas por las reglas de agenda (21 antes de CF-U4).
+    expect(m.statements).toBeLessThanOrEqual(21);
     expect(r.planUsage).toBeNull();
     expect(r.billingOverview).toBeNull();
     expect(r.catalog).toEqual([]);

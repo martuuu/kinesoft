@@ -13,7 +13,7 @@
  *
  * Contrato del server (lib/bookings.ts, post-B3.1): cada respuesta trae como
  * mucho UN aviso, en el orden en que se chequean (bloqueo → horario → cupo →
- * tope por intervalo (T3) → paciente → sala, SR). Forzar uno puede destapar el siguiente, por eso los flags se
+ * otro servicio (CF) → tope por intervalo (T3) → paciente → sala, SR). Forzar uno puede destapar el siguiente, por eso los flags se
  * ACUMULAN entre reintentos y un aviso cuyo flag ya se mandó se ignora (si
  * vuelve igual, es un error real: se muestra `error` en vez de loopear).
  *
@@ -41,6 +41,16 @@ export type ForceFlags = {
    * cupo del servicio no fuerza el tope, ni al revés.
    */
   allowIntervalCap?: boolean;
+  /**
+   * CF (§28, CF-D4): cargar igual un turno cuando el profesional ya atiende
+   * OTRO servicio en ese horario y no tiene `allowParallelServices`. ES
+   * sobreturno (`isOverbooked`). Flag propio: el feedback del cliente fue que
+   * con el cupo por servicio una osteo y una kine del mismo profesional se
+   * pisaban sin aviso; si este aviso se forzara con `allowOverbooking`, aceptar
+   * «ya tiene un turno» (mismo servicio) taparía en silencio el de otro
+   * servicio, que es justo lo que se quería ver.
+   */
+  allowOtherService?: boolean;
 };
 
 /**
@@ -48,9 +58,18 @@ export type ForceFlags = {
  * del paciente (el conteo de sala corre después del lock de cupo + sala, C2
  * (1b)), así que con todos los avisos presentes la sala se pregunta al final.
  * `intervalCap` (T3) va justo después del cupo: los dos son «sobreturno» y se
- * cuentan en la misma query (`countAgendaOccupancy`).
+ * cuentan en la misma query (`countAgendaOccupancy`). `otherService` (CF) va
+ * entre el cupo y el tope: el server lo chequea en ese orden en la misma
+ * sentencia (brief CF A.5 «cupo → otro servicio → tope → sala»).
  */
-export type ForcePromptKind = "blocked" | "outOfHours" | "conflict" | "intervalCap" | "patientOverlap" | "roomBusy";
+export type ForcePromptKind =
+  | "blocked"
+  | "outOfHours"
+  | "conflict"
+  | "otherService"
+  | "intervalCap"
+  | "patientOverlap"
+  | "roomBusy";
 
 /** Lo que el cliente lee del resultado (subconjunto estructural de
  *  `UpdateBookingResult`; `null` se trata como ausente). */
@@ -73,6 +92,22 @@ export type ForceableResult = {
    * `arIntervalLabels`; el cliente no recalcula husos).
    */
   intervalCap?: IntervalCapPromptData | null;
+  /**
+   * CF (CF-D4): el profesional ya atiende otro servicio en ese horario.
+   * `serviceName` null = el server no pudo leer el nombre (copy genérico «otro
+   * servicio»). Forma estructural de `BookingOtherServicePrompt`
+   * (`lib/bookings-types.ts`), que se declara acá para no importar el archivo
+   * de tipos del server desde un módulo cliente.
+   */
+  otherService?: OtherServicePromptData | null;
+};
+
+/** Lo que el server manda del aviso «otro servicio» (CF). */
+export type OtherServicePromptData = {
+  practitionerName: string;
+  serviceName: string | null;
+  existingISO: string;
+  nextFreeISO: string | null;
 };
 
 /** Lo que el server manda del tope por intervalo (aviso forzable `intervalCap`). */
@@ -101,6 +136,8 @@ export type ForcePrompt = {
   roomBlocked?: boolean;
   /** Solo `intervalCap`: uso del tope y el intervalo, para el copy. */
   intervalCap?: { used: number; cap: number; fromTime: string; toTime: string };
+  /** Solo `otherService`: nombre del servicio que ya ocupa el horario (null = genérico). */
+  otherServiceName?: string | null;
 };
 
 export const FORCE_FLAG_BY_KIND: Record<ForcePromptKind, keyof ForceFlags> = {
@@ -110,6 +147,7 @@ export const FORCE_FLAG_BY_KIND: Record<ForcePromptKind, keyof ForceFlags> = {
   patientOverlap: "allowPatientOverlap",
   roomBusy: "allowRoomConflict",
   intervalCap: "allowIntervalCap",
+  otherService: "allowOtherService",
 };
 
 /** Orden de chequeo del server: el primero presente es el que se muestra. */
@@ -117,13 +155,14 @@ export const FORCE_PROMPT_ORDER: readonly ForcePromptKind[] = [
   "blocked",
   "outOfHours",
   "conflict",
+  "otherService",
   "intervalCap",
   "patientOverlap",
   "roomBusy",
 ];
 
 /** Clases que, forzadas, dejan el turno como sobreturno (`isOverbooked`). */
-const OVERBOOKS: ReadonlySet<ForcePromptKind> = new Set(["blocked", "conflict", "intervalCap"]);
+const OVERBOOKS: ReadonlySet<ForcePromptKind> = new Set(["blocked", "conflict", "otherService", "intervalCap"]);
 const ORDER = FORCE_PROMPT_ORDER;
 
 /**
@@ -159,6 +198,16 @@ export function nextForcePrompt(r: ForceableResult, sent: ForceFlags = {}): Forc
         practitionerName: r.conflict.practitionerName,
         reason: null,
         nextFreeISO: r.conflict.nextFreeISO ?? null,
+      };
+    }
+    if (kind === "otherService" && r.otherService) {
+      return {
+        kind,
+        flag,
+        practitionerName: r.otherService.practitionerName,
+        reason: null,
+        nextFreeISO: r.otherService.nextFreeISO ?? null,
+        otherServiceName: r.otherService.serviceName ?? null,
       };
     }
     if (kind === "intervalCap" && r.intervalCap) {
@@ -227,6 +276,11 @@ export function forcePromptHeadline(p: ForcePrompt): string {
       return `Ese horario está fuera de la agenda de ${p.practitionerName}.`;
     case "conflict":
       return `${p.practitionerName} ya tiene un turno en ese horario.`;
+    case "otherService":
+      // Mismo texto que `OTHER_SERVICE_ERROR` (bookings-constants), que es lo que leen Lote y Planes.
+      return p.otherServiceName
+        ? `${p.practitionerName} está atendiendo «${p.otherServiceName}» en ese horario.`
+        : `${p.practitionerName} está atendiendo otro servicio en ese horario.`;
     case "intervalCap": {
       // Copy de C-AS3: «{Profesional} ya tiene {n} turnos entre las {HH:mm} y las {HH:mm} (tope: {cap}).»
       const c = p.intervalCap;
@@ -295,8 +349,8 @@ export function intervalCapNoticeFromServer(n: {
 }
 
 /**
- * Texto del botón que fuerza. Bloqueado, cupo lleno o tope por intervalo
- * forzados = sobreturno (`isOverbooked`, decisión 1 de B-pre y decisión 6 de
+ * Texto del botón que fuerza. Bloqueado, cupo lleno, otro servicio (CF) o tope
+ * por intervalo forzados = sobreturno (`isOverbooked`, decisión 1 de B-pre y decisión 6 de
  * T3); fuera de horario no ocupa cupo de más, es solo "igual". La sala forzada
  * (SR-D2) tampoco es sobreturno: "Asignar igual" desde el cambio de sala del
  * drawer, "Cargar igual" en el resto.

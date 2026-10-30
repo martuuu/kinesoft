@@ -12,15 +12,15 @@
 // S22b (ES3, H1 de S22f): la tabla de Turnos del perfil administrativo es la
 // `TurnosView` real en modo `admin` (antes `AdminTurnosView`, una copia); la
 // fila pasa de `admin-turno-row` a `turno-row`. La página pide planes y saldos
-// solo con el módulo `planes` (enmienda EV0), y los EVA solo con
-// `evaluaciones`: los mocks de `getActor` suman `entitlements`.
+// solo con el módulo `planes` (enmienda EV0) (la EVA ya no se carga: CF,
+// §28): los mocks de `getActor` suman `entitlements`.
 // Los tests contra el server de S07sp (proyección `admin` real de
 // `getPatientCore`, turnos redactados) son post-integración y viven en
 // `tests/integration/patients-secretaria.test.ts`.
 // PF2-b (C-PF8): la página ya no llama a cada lector; hace UNA carga con
 // `loadPatientProfilePage` (lib/patient-profile-loader.ts). Acá se mockea esa
 // frontera con la DB y se fija qué hace la PÁGINA con cada nivel; qué lee el
-// loader por nivel y módulo (planes/EVA solo con su módulo, nada clínico para
+// loader por nivel y módulo (planes solo con su módulo, nada clínico para
 // `admin`, paridad con los lectores públicos) lo fija contra Postgres
 // `tests/integration/pf2-profile-budget.test.ts`.
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -326,7 +326,6 @@ describe("[S22b] página del paciente con acceso full", () => {
     balances: { ok: true, data: EMPTY_BALANCES },
     recentBookings: [],
     billableCount: 0,
-    evaScores: [],
     practitioners: [],
     noteBookingRow: null,
     insurers: [],
@@ -348,14 +347,14 @@ describe("[S22b] página del paciente con acceso full", () => {
     return (profile as ReactElement<Record<string, unknown>>).props;
   }
 
-  it("consultorio General: sin planes ni saldos en la carga → pestaña vacía, saldos null, sin EVA", async () => {
+  it("consultorio General: sin planes ni saldos en la carga → pestaña vacía, saldos null, sin EVA (CF-L1: la prop ya no existe)", async () => {
     entitlements.current = { vertical: "GENERAL", plan: "INDIVIDUAL", publicBookingEnabled: false };
     data.load.mockResolvedValue(fullLoad({ plans: null, balances: null }));
     const props = profileProps(await PatientPage({ params: { id: admin.id } }));
     expect(props.initialPlans).toEqual([]);
     expect(props.initialPlanBalances).toBeNull();
     expect(props.initialPlansError).toBeNull();
-    expect(props.evaScores).toEqual([]);
+    expect(props).not.toHaveProperty("evaScores");
   });
 
   it("Kinesiología: planes, saldos y capacidades del miembro llegan al perfil", async () => {

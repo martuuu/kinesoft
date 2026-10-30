@@ -11,6 +11,7 @@ import { Field } from "@/components/ui/field";
 import { GoogleIcon } from "@/components/ui/brand-icons";
 import { IconAlert } from "@/components/ui/icons";
 import type { PublicClinic } from "@/lib/public-booking-types";
+import { turneroReasonField } from "@/lib/public-wizard-state";
 import type { TenantVertical } from "@prisma/client";
 import type { PatientHC } from "../public-booking-wizard";
 import { StepHeader } from "./shared";
@@ -65,6 +66,9 @@ export function DataStep({
 }) {
   const upd = <K extends keyof PatientHC>(k: K, v: PatientHC[K]) => setHc({ ...hc, [k]: v });
   const isGeneral = clinic.vertical === "GENERAL";
+  // CF-FORM (§28, decisión 5): el obligatorio de la vertical (Kinesiología → «Diagnóstico», General → «Motivo de
+  // consulta»), la misma regla que habilita «Confirmar» (`isTurneroHcComplete`) y que vuelve a mirar el server.
+  const reason = turneroReasonField(clinic.vertical).field;
   // VX2-d1: `Field` del design system (label real + ids estables) y `autoComplete` en lo que el navegador sabe
   // completar del propio paciente. El contacto de emergencia es OTRA persona: `off`, para que no se autocomplete
   // con el nombre y el teléfono del paciente.
@@ -116,8 +120,9 @@ export function DataStep({
         <Field id="booking-documentId" label="DNI">
           {text("documentId", { inputMode: "numeric", autoComplete: "off", required: true })}
         </Field>
-        <Field id="booking-dateOfBirth" label="Fecha de nacimiento">
-          {text("dateOfBirth", { type: "date", autoComplete: "bday", required: true })}
+        {/* CF-FORM: opcional (decisión 5 de Martin). */}
+        <Field id="booking-dateOfBirth" label="Fecha de nacimiento" optional>
+          {text("dateOfBirth", { type: "date", autoComplete: "bday" })}
         </Field>
         <Field id="booking-coverageInsurer" label="Obra social" optional>
           {text("coverageInsurer", { placeholder: "OSDE, Swiss…", autoComplete: "off" })}
@@ -133,11 +138,32 @@ export function DataStep({
         </Field>
       </div>
 
-      <Field id="booking-notes" label="Motivo de consulta" optional>
+      {/* EV1-C2: en Clínica general no hay diagnóstico de kinesiología, y «Motivo de consulta» ya es el campo
+          de abajo: el título (`hc.title` → `diagnosisTitle`) no se pide. La descripción queda: es texto libre.
+          CF-ZF4 (M5): en Kinesiología el Diagnóstico obligatorio va ANTES del Motivo opcional (debajo, el paciente
+          llenaba el opcional, salteaba el obligatorio y no entendía por qué «Confirmar turno» seguía apagado). */}
+      {!isGeneral && (
+        // CF-FORM: obligatorio en Kinesiología. Default de la sesión: el hint le dice qué escribir a quien no tiene diagnóstico médico.
+        <Field
+          id="booking-title"
+          label="Diagnóstico"
+          optional={reason !== "title"}
+          hint={reason === "title" ? "Si no tenés un diagnóstico médico, contanos qué te pasa (ej. dolor de rodilla)." : undefined}
+        >
+          {text("title", {
+            placeholder: "Ej. Lumbalgia, esguince de tobillo…",
+            autoComplete: "off",
+            required: reason === "title",
+          })}
+        </Field>
+      )}
+
+      <Field id="booking-notes" label="Motivo de consulta" optional={reason !== "notes"}>
         <textarea
           className="k-input"
           name="notes"
           rows={3}
+          required={reason === "notes"}
           value={hc.notes}
           onChange={(e) => upd("notes", e.target.value)}
           placeholder={
@@ -147,14 +173,6 @@ export function DataStep({
           }
         />
       </Field>
-
-      {/* EV1-C2: en Clínica general no hay diagnóstico de kinesiología, y «Motivo de consulta» ya es el campo
-          de arriba: el título (`hc.title` → `diagnosisTitle`) no se pide. La descripción queda: es texto libre. */}
-      {!isGeneral && (
-        <Field id="booking-title" label="Diagnóstico" optional>
-          {text("title", { placeholder: "Ej. Lumbalgia, esguince de tobillo…", autoComplete: "off" })}
-        </Field>
-      )}
 
       <Field id="booking-description" label="Descripción" optional>
         <textarea

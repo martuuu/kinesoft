@@ -554,6 +554,17 @@ describe("[TP-1] windowNav siguientes/anteriores/ir a fecha", () => {
     );
   });
 
+  it("[CF-U5][CF-ZF4 B20] ir a una fecha dentro de la anticipación: no dice «no tiene horarios» ni repite la anticipación", () => {
+    // Con minLead > 60' la vista ya muestra «Los turnos online se piden con al menos …»: el aviso no la repite.
+    const w = win({ days: win().days.slice(4), minLeadMinutes: 2880 });
+    expect(W.windowNotice({ requestedFrom: "2026-10-22", jumped: true, window: w })).toBe("Te mostramos desde el viernes 23.");
+    // Con 60' (el default) sigue el aviso de día no hábil.
+    const w60 = win({ days: win().days.slice(4), minLeadMinutes: 60 });
+    expect(W.windowNotice({ requestedFrom: "2026-10-22", jumped: true, window: w60 })).toBe(
+      "El jueves 22 no tiene horarios. Te mostramos los siguientes."
+    );
+  });
+
   it("sin libres en 6 semanas = primera tanda toda «Completo» sin salto (o ventana vacía)", () => {
     const allFull = win({ days: win().days.map((d) => ({ ...d, status: "full" as const, slots: [] })) });
     expect(W.windowHasNoFreeSlots(allFull)).toBe(true);

@@ -20,6 +20,10 @@
  * tope / Propio: N cada X min»). Se edita en línea con el mismo dirty-guard. Llega en la fila del resumen
  * (`bookingCap`, loader de Configuración); sin él (otro caller, fixture viejo) no se muestra.
  *
+ * CF-U4 (§28, decisiones 1 y 3): debajo del tope, las reglas de agenda (`PractitionerAgendaRulesEditor`:
+ * «Atiende servicios distintos a la vez» y los intervalos de la agenda y del turnero). Mismo patrón: en línea, con el
+ * dirty-guard del shell, y solo si la fila trae `agendaRules`.
+ *
  * Layout: tarjetas que se acomodan solas (grid auto-fill) arriba y el detalle
  * abajo; en un celular quedan apiladas sin necesitar un breakpoint.
  */
@@ -48,6 +52,7 @@ import { ServicesEditor } from "./services-editor";
 import { PayersEditor } from "./payers-editor";
 import { PublicBookingSwitch } from "./public-booking-switch";
 import { SpecialtiesEditor } from "./specialties-editor";
+import { PractitionerAgendaRulesEditor, type PractitionerAgendaRulesView } from "./agenda-rules-editor";
 import type { TeamMemberRow } from "@/lib/invitations-types";
 
 type SubTab = "horarios" | "excepciones" | "servicios" | "coberturas" | "especialidades";
@@ -65,8 +70,14 @@ export type PractitionerSpecialtiesData = {
   byPractitioner: Readonly<Record<string, readonly string[]>>;
 };
 
-/** Fila del resumen con el tope (T3e-2c). `bookingCap` opcional: el tipo base de `configuracion-client` no lo declara. */
-export type PractitionerPanelRow = PractitionerScheduleSummaryRow & { bookingCap?: PractitionerBookingCapView };
+/**
+ * Fila del resumen con el tope (T3e-2c) y las reglas de agenda (CF-U4). Opcionales: el tipo base de
+ * `configuracion-client` no los declara (el loader sí los trae, `ConfiguracionScheduleRow`).
+ */
+export type PractitionerPanelRow = PractitionerScheduleSummaryRow & {
+  bookingCap?: PractitionerBookingCapView;
+  agendaRules?: PractitionerAgendaRulesView;
+};
 
 export function PractitionerPanel({
   summary,
@@ -110,7 +121,8 @@ export function PractitionerPanel({
   const [payDirty, setPayDirty] = useState(false);
   const [speDirty, setSpeDirty] = useState(false);
   const [capDirty, setCapDirty] = useState(false);
-  const dirty = svcDirty || payDirty || speDirty || capDirty;
+  const [rulesDirty, setRulesDirty] = useState(false);
+  const dirty = svcDirty || payDirty || speDirty || capDirty || rulesDirty;
   const subTabs = specialties ? SUB_TABS : SUB_TABS.filter((t) => t.key !== "especialidades");
 
   useEffect(() => {
@@ -142,6 +154,7 @@ export function PractitionerPanel({
       setPayDirty(false);
       setSpeDirty(false);
       setCapDirty(false);
+      setRulesDirty(false);
       go();
     },
     [dirty, confirm]
@@ -297,6 +310,16 @@ export function PractitionerPanel({
                 practitionerName={selected.name}
                 cap={selected.bookingCap}
                 onDirtyChange={setCapDirty}
+              />
+            )}
+            {/* CF-U4 (decisiones 1 y 3): «Atiende servicios distintos a la vez» y el intervalo propio de horarios. */}
+            {sub === "horarios" && selected.agendaRules && (
+              <PractitionerAgendaRulesEditor
+                key={`rules-${selected.practitionerId}`}
+                practitionerId={selected.practitionerId}
+                practitionerName={selected.name}
+                rules={selected.agendaRules}
+                onDirtyChange={setRulesDirty}
               />
             )}
             {sub === "horarios" && (

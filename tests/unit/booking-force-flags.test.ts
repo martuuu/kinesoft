@@ -80,8 +80,16 @@ const roomBlocked = { roomName: "Consultorio 2", nextFreeISO: null, blocked: { r
 
 describe("roomBusy (SR)", () => {
   it("ORDER: roomBusy va último y con el flag allowRoomConflict", () => {
-    // T3 (C-AS3): `intervalCap` entra después del cupo; la sala sigue última.
-    expect(FORCE_PROMPT_ORDER).toEqual(["blocked", "outOfHours", "conflict", "intervalCap", "patientOverlap", "roomBusy"]);
+    // T3 (C-AS3): `intervalCap` entra después del cupo; CF suma `otherService` entre los dos; la sala sigue última.
+    expect(FORCE_PROMPT_ORDER).toEqual([
+      "blocked",
+      "outOfHours",
+      "conflict",
+      "otherService",
+      "intervalCap",
+      "patientOverlap",
+      "roomBusy",
+    ]);
     expect(FORCE_FLAG_BY_KIND.roomBusy).toBe("allowRoomConflict");
     const all: ForceableResult = { blocked, outOfHours, conflict, patientOverlap, roomBusy };
     expect(nextForcePrompt(all)?.kind).toBe("blocked");
@@ -267,5 +275,58 @@ describe("[AS-2k] intervalCap (tope por intervalo)", () => {
     expect(intervalCapNoticeFromServer({ practitionerName: "Ana", used: 1, time: "10:00", to: "11:00", intervalMin: 60 })).toBe(
       "Ya hay 1 turno de Ana entre las 10:00 y las 11:00."
     );
+  });
+});
+
+// CF (§28, CF-D4): «otro servicio» = el profesional ya atiende OTRO servicio en ese horario y no tiene habilitados
+// servicios en paralelo. Aviso forzable propio (`allowOtherService`), va justo después del cupo y ES sobreturno.
+describe("[CF-C1] otherService", () => {
+  const otherService = { practitionerName: "Ana", serviceName: "Osteopatía", existingISO: NEXT, nextFreeISO: NEXT };
+
+  it("orden: después del cupo y antes del tope; flag allowOtherService", () => {
+    expect(FORCE_PROMPT_ORDER).toEqual([
+      "blocked",
+      "outOfHours",
+      "conflict",
+      "otherService",
+      "intervalCap",
+      "patientOverlap",
+      "roomBusy",
+    ]);
+    expect(FORCE_FLAG_BY_KIND.otherService).toBe("allowOtherService");
+    const intervalCap = { practitionerName: "Ana", used: 2, cap: 2, fromTime: "10:00", toTime: "11:00", nextFreeISO: null };
+    const all: ForceableResult = { conflict, otherService, intervalCap };
+    expect(nextForcePrompt(all)?.kind).toBe("conflict");
+    expect(nextForcePrompt(all, { allowOverbooking: true })?.kind).toBe("otherService");
+    expect(nextForcePrompt(all, { allowOverbooking: true, allowOtherService: true })?.kind).toBe("intervalCap");
+  });
+
+  it("prompt trae profesional, servicio y próximo libre; withForce acumula el flag", () => {
+    const p = nextForcePrompt({ otherService })!;
+    expect(p).toMatchObject({ kind: "otherService", flag: "allowOtherService", practitionerName: "Ana", nextFreeISO: NEXT });
+    expect(p.otherServiceName).toBe("Osteopatía");
+    const sent: ForceFlags = withForce({ allowOverbooking: true }, p);
+    expect(sent).toEqual({ allowOverbooking: true, allowOtherService: true });
+    expect(nextForcePrompt({ otherService }, sent)).toBeNull();
+  });
+
+  it("titular con y sin servicio", () => {
+    expect(forcePromptHeadline(nextForcePrompt({ otherService })!)).toBe(
+      "Ana está atendiendo «Osteopatía» en ese horario."
+    );
+    expect(forcePromptHeadline(nextForcePrompt({ otherService: { ...otherService, serviceName: null } })!)).toBe(
+      "Ana está atendiendo otro servicio en ese horario."
+    );
+  });
+
+  it("label de confirmación: sobreturno", () => {
+    const p = nextForcePrompt({ otherService })!;
+    expect(forcePromptActionLabel(p, "edit")).toBe("Cargar como sobreturno");
+    expect(forcePromptActionLabel(p, "reschedule")).toBe("Cargar como sobreturno");
+    expect(forcePromptConfirm(p, "reschedule")).toEqual({
+      title: "Ana está atendiendo «Osteopatía» en ese horario.",
+      message: "Si lo reprogramás, queda como sobreturno.",
+      confirmLabel: "Cargar como sobreturno",
+    });
   });
 });

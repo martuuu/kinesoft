@@ -32,7 +32,6 @@ vi.mock("@/lib/patients", () => ({
   setPatientArchived: vi.fn(),
   bulkArchivePatients: vi.fn(),
   sendPatientPortalInvite: vi.fn(),
-  recordEvaScore: vi.fn(),
 }));
 vi.mock("@/lib/bookings", () => ({ setBookingInsurerPaid: vi.fn(), setBookingCopagoPaid: vi.fn() }));
 const net = vi.hoisted(() => ({ getPatientPlans: vi.fn(), getPatientPlanBalances: vi.fn() }));
@@ -293,7 +292,6 @@ describe("[MB-1d] perfil del paciente sin interactivos anidados (C-MB3: hoy 1 â†
         patientCore={core}
         recentBookings={[]}
         billableCount={0}
-        evaScores={[]}
         capabilities={["plans.manage", "clinical.read", "clinical.write"] as never}
         role="OWNER"
         initialPlans={[]}

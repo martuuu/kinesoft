@@ -169,8 +169,17 @@ export type PublicWindowDay = { date: string /* YYYY-MM-DD AR */; status: "open"
  * `reachedEnd`: la búsqueda llegó al tope (6 semanas / `maxLeadDays` / 90 días) sin completar 5 hábiles, o no queda
  * nada después. `skippedFrom`: si los 5 primeros hábiles estaban completos y la ventana avanzó sola, el `from`
  * pedido (para «No había turnos libres del 19 al 23; te mostramos desde el lun 26»); si no, null.
+ * `minLeadMinutes` (CF, decisión 6 / CF-D9): la anticipación EFECTIVA del (profesional, servicio) = PractitionerService
+ * > consultorio > 60', para el copy «Los turnos online se piden con al menos N de anticipación» (el wizard la pinta solo
+ * si es > 60). Ausente en las ventanas vacías por compuerta (turnero cerrado, servicio ajeno, fuera del tope).
  */
-export type PublicSlotWindow = { days: PublicWindowDay[]; nextFrom: string | null; reachedEnd: boolean; skippedFrom: string | null /* si avanzó solo: desde qué día no había libres */ };
+export type PublicSlotWindow = {
+  days: PublicWindowDay[];
+  nextFrom: string | null;
+  reachedEnd: boolean;
+  skippedFrom: string | null /* si avanzó solo: desde qué día no había libres */;
+  minLeadMinutes?: number;
+};
 export type ListPublicSlotWindowInput = { tenantSlug: string; practitionerId: string; serviceId: string; from?: string /* YYYY-MM-DD; default hoy AR */; locationId?: string };
 
 /** Validación server de `ListPublicSlotWindowInput` (viene de un anónimo). Mismos topes que `ListPublicSlotsSchema`. */
@@ -290,10 +299,16 @@ export const PatientHCSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(120),
   phone: z.string().trim().min(6).max(30),
   documentId: z.string().trim().min(4).max(20),
+  // CF-FORM (§28, decisión 5 de Martin, feedback del cliente): opcional; antes era obligatoria. `""` (el
+  // `<input type="date">` vacío), ausente o null → null (`Patient.dateOfBirth` ya es nullable). Si viene, la validación
+  // 1900..hoy es la de siempre, y `new Date("YYYY-MM-DD")` sigue siendo la medianoche UTC (excepción de `dateOfBirth`,
+  // AUDIT §5.11): no se pasa por `lib/datetime-ar.ts`.
   dateOfBirth: z
     .string()
-    .min(1)
+    .nullish()
+    .transform((s) => (s == null || s.trim() === "" ? null : s.trim()))
     .refine((s) => {
+      if (s === null) return true;
       const t = new Date(s).getTime();
       if (Number.isNaN(t)) return false;
       const d = new Date(t);
@@ -307,6 +322,10 @@ export const PatientHCSchema = z.object({
   title: z.string().trim().max(80).optional().or(z.literal("")),
   description: z.string().trim().max(2000).optional().or(z.literal("")),
 });
+
+// CF-FORM (§28, decisión 5): el «diagnóstico» obligatorio por vertical NO va en `PatientHCSchema` (la vertical no viaja
+// en el request; el submit la lee de la fila del consultorio). La regla vive en `lib/public-wizard-state.ts`
+// (`missingTurneroReason` / `isTurneroHcComplete`): este módulo value-importa zod y el wizard solo lo importa como tipo.
 
 export const SubmitSchema = z.object({
   tenantSlug: z.string().min(1).max(80),

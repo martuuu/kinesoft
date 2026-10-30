@@ -54,6 +54,10 @@ export const AGENDA_AVAILABILITY_MAX_DAYS = 14;
  *   • la grilla se ancla al inicio de cada franja (`buildSlots`), así que una
  *     franja 8:00 da 8:00, 8:15, 8:30…; la UI puede agrupar por hora.
  * El caller puede pedir 30/45/60 (`stepMin`) si quiere una lista más corta.
+ * CF (M20, decisión 3; CF-D6): ahora es el ÚLTIMO default. Rige `q.stepMin` ?? el paso del profesional ?? el del
+ * consultorio (`PractitionerAgendaRules.agendaStepMin`, herencia en `lib/availability/agenda-rules.ts`) ?? 15.
+ * `nextFreeSlot` / `firstFree` siguen en 15 (paridad §5.27): con un paso de 30 el «primer hueco» sugerido puede ser
+ * un 10:15 que la lista no muestra; es un horario libre real y se acepta (el brief lo fijó así).
  * El turnero público NO usa esto: su paso es `publicSlotStepFor(duración)` (AS-D9, T3; antes fijo 45).
  */
 export const STAFF_SLOT_STEP_MIN = 15;
@@ -186,6 +190,10 @@ export type AnyPractitionerSlot = {
   practitionerId: string;
   durationMin: number;
   cap: number | null;
+  /** CF (CF-D6): paso con el que se armó la grilla de ESTE profesional (pedido ?? profesional ?? consultorio ?? 15).
+   *  El server SIEMPRE lo manda; opcional solo para no romper los fixtures de `slot-picker-state.test.ts` (de otra
+   *  sesión) en esta ola: la UI lee `p.stepMin ?? data.stepMin`. Pasarlo a requerido con esos fixtures (CF-U2). */
+  stepMin?: number;
   /** Primer slot disponible del día (y sin conflicto del paciente), o null. */
   firstSlot: StaffSlot | null;
   availableCount: number;
@@ -195,6 +203,8 @@ export type AnySlots = {
   mode: "any";
   dayKey: DayKey;
   serviceId: string;
+  /** El paso PEDIDO (`q.stepMin`) o `STAFF_SLOT_STEP_MIN`; el que rige por profesional va en
+   *  `practitioners[i].stepMin` (CF). */
   stepMin: number;
   /** Solo los elegibles (servicio habilitado y, con `insurerId`, cobertura
    *  aceptada), en el orden del consultorio. */
@@ -239,6 +249,14 @@ export type InstantCheck = {
   intervalCapped?: boolean;
   /** T3: uso del tope en ese intervalo (aviso del 2.º turno con `used ≥ 1`, «x/tope»). Ausente = sin tope. */
   intervalCapUse?: IntervalCapUse;
+  /**
+   * CF (M20, decisiones 1 y 2): el profesional ya atiende OTRO servicio (de otro paciente) en ese horario; el alta lo
+   * pide como sobreturno. Se informa aunque `class` sea otra de mayor precedencia. Ausente = el profesional atiende
+   * servicios distintos a la vez (sin la regla, payload de antes).
+   */
+  otherServiceBusy?: boolean;
+  /** CF: servicio del primer turno que choca (copy «Atiende Evaluación»); null sin choque. Ausente sin la regla. */
+  otherServiceId?: string | null;
 };
 
 export type RecurrencePreviewItem = {
@@ -261,6 +279,9 @@ export type RecurrencePreviewItem = {
   intervalCapped?: boolean;
   /** T3: uso del tope en esa fecha. Ausente = sin tope. */
   intervalCapUse?: IntervalCapUse;
+  /** CF (CF-D4): la fecha pisa otro servicio del profesional; ya va plegada en `status` «sobreturno» (el lote la
+   *  omite sin `allowOverbooking`). Ausente sin la regla. */
+  otherServiceBusy?: boolean;
 };
 
 export type RecurrencePreview = {

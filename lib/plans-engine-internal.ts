@@ -20,8 +20,9 @@ import "server-only";
  *     `clinicalCase` para Diagnóstico, S17d).
  *   - `StalePlanPreview`.
  *
- * Orden de locks (C2, literal): `lockPlanPatient` primero → cupos
- * (`lockCapacityMany`, UNA sentencia, claves ordenadas) →
+ * Orden de locks (C2, literal; enmienda (1d) CF): `lockPlanPatient` primero →
+ * cupos → días del profesional (`lockAgendaKeysMany`, UNA sentencia, cada
+ * familia ordenada, sin hora) →
  * `lockTenantLocationsShared` una vez → filas Booking `FOR UPDATE` id asc →
  * Session → TreatmentProgram. La disponibilidad se carga DESPUÉS de los locks
  * de cupo: en READ COMMITTED cada sentencia ve lo que otro commiteó mientras
@@ -47,7 +48,12 @@ import { capabilitiesForMembership, MEMBER_ACCESS_SELECT, type Capability } from
 import { isClinicalMember } from "@/lib/roles";
 import { assertPlanManageInTx } from "@/lib/plan-authz-internal";
 import { lockPlanPatient } from "@/lib/plan-lock";
-import { capacityKeysForWindow, lockCapacityMany, type CapacityLockKey } from "@/lib/booking-cap-lock";
+import {
+  capacityKeysForWindow,
+  lockAgendaKeysMany,
+  pdayKeysFromCapacityKeys,
+  type CapacityLockKey,
+} from "@/lib/booking-cap-lock";
 import { lockTenantLocationsShared } from "@/lib/location-lock";
 import { assertProgramInvariantsInTx } from "@/lib/plan-invariants-internal";
 import { adoptableBookingWhere } from "@/lib/plan-predicates";
@@ -350,6 +356,14 @@ function landingInstant(row: PlanEngineRow, res: PlanRowResolution | undefined):
  * Locks de cupo (C2 (1)) de todos los turnos que las resoluciones pueden
  * crear, en UNA sentencia, y después el lock compartido de sedes (C2 (2)),
  * una vez. Va antes de cargar la disponibilidad.
+ *
+ * CF (enmienda C2 (1d), CF-D12): en la MISMA sentencia, después del cupo, el
+ * día del profesional (`kinesoft:pday:`) de cada (profesional, día) del cupo;
+ * sin hora (el tope es solo aviso en Planes). La clave de cupo lleva el
+ * servicio, así que sin el día un plan y un alta suelta de OTRO servicio a la
+ * misma hora leían «0 de otro servicio» y entraban los dos
+ * (`cf-pl-plans.test.ts` [CF-PL3]). Se toma siempre, prendida o no la regla
+ * (si se apaga mientras corre un alta que la leyó prendida no hay ventana).
  */
 async function lockPlanWindowsInTx(
   tx: DbClient,
@@ -371,7 +385,7 @@ async function lockPlanWindowsInTx(
       })
     );
   }
-  await lockCapacityMany(tx, keys);
+  await lockAgendaKeysMany(tx, { cap: keys, pday: pdayKeysFromCapacityKeys(keys) });
   await lockTenantLocationsShared(tx, ctx.tenantId);
 }
 
@@ -438,6 +452,11 @@ async function classifyInTx(
       bookings: availability.bookings,
       // T3 (C-AS3): el tope por intervalo es solo aviso en Planes (`overIntervalCap`), sin lock ni bloqueo.
       intervalCap: availability.input.intervalCaps?.[ctx.practitionerId] ?? null,
+      // CF (M20, CF-D4): «no atiende servicios distintos a la vez». La fila que pisa otro servicio del profesional
+      // (otro paciente) sale "otro-servicio", plegada en el cupo: se fuerza con `force.capacity` y queda sobreturno.
+      // `availability.bookings` trae TODOS los turnos del profesional en los días cargados (el loader filtra por
+      // `practitionerId`, no por servicio), así que el choque se ve.
+      exclusiveService: availability.input.agendaRules?.[ctx.practitionerId]?.exclusiveService === true,
       now,
       excludeBookingIds,
     },

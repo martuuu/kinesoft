@@ -49,7 +49,6 @@ import {
   patientBookingsAllInTx,
   patientBookingsSummaryInTx,
   patientCoreInTx,
-  patientEvaScoresInTx,
 } from "@/lib/patients-profile-internal";
 import type { PatientAdminCore, PatientBasic, PatientCore } from "@/lib/patients-types";
 import { listInsurers } from "@/lib/insurers";
@@ -112,7 +111,6 @@ export type PatientProfileTx =
       balances: PlanReadResult<PatientPlanBalances> | null;
       recentBookings: Awaited<ReturnType<typeof patientBookingsSummaryInTx>>;
       billableCount: number;
-      evaScores: Awaited<ReturnType<typeof patientEvaScoresInTx>>;
       practitioners: PractitionerRow[];
       noteBookingRow: ProfileNoteBookingRow | null;
     };
@@ -148,8 +146,8 @@ export async function loadPatientProfile(
   const pb = plansEnabled ? await patientPlansAndBalancesInTx(tx, actor, caps, patientId, access) : null;
   const recentBookings = await patientBookingsSummaryInTx(tx, actor, patientId, access, PROFILE_RECENT_BOOKINGS);
   const billableCount = await patientBillableCountInTx(tx, actor, patientId, access);
-  // Enmienda EV0 de S22b: sin `evaluaciones` no se piden EVA (y la pestaña EVA no se muestra).
-  const evaScores = await patientEvaScoresInTx(tx, actor, patientId, access);
+  // CF (§28, decisión 4): ya no se leen los `EvaScore` (la pestaña EVA y la card de Resumen salieron de la app). Era
+  // una sentencia por carga de un perfil `full` con `evaluaciones`; pf2-profile-budget fija el techo nuevo.
   const practitioners = await tx.practitioner.findMany({
     // Solo miembros con la invitación aceptada: un profesional removido
     // (membresía borrada) conserva su fila Practitioner y seguía en los
@@ -174,7 +172,6 @@ export async function loadPatientProfile(
     balances: pb?.balances ?? null,
     recentBookings,
     billableCount,
-    evaScores,
     practitioners,
     noteBookingRow,
   };

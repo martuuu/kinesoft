@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { AccessWall } from "@/components/ui/access-wall";
 import { moduleWall } from "@/lib/module-wall";
+import { clinicalSurfaceAllowed } from "@/lib/clinical-wall";
 
 /**
  * Guard de módulo del segmento /diagnostico (EV0, plan §15.4): requiere `diagnostico`.
@@ -16,6 +17,9 @@ import { moduleWall } from "@/lib/module-wall";
  * vez del redirect; si ningún plan lo trae para la vertical, /dashboard como antes. El muro no abre nada.
  */
 export default async function DiagnosticoLayout({ children }: { children: React.ReactNode }) {
+  // CF-NAV (§28, decisión 7): sin `clinical.read` (Secretaria, Facturación, Titular que no atiende, soporte) → /dashboard,
+  // antes del muro de módulo: a quien no puede usar la pantalla no se le ofrece un upsell para abrirla.
+  if (!(await clinicalSurfaceAllowed())) redirect("/dashboard");
   const wall = await moduleWall("diagnostico");
   if (wall === "redirect") redirect("/dashboard");
   // T3c-1p: `wall` es el upsell (`plan` + `canBuy`) o `{ disabled: true }` si Plataforma lo deshabilitó a mano.

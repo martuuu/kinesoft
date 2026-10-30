@@ -206,6 +206,12 @@ function staffSlots(
   // (no disponible, con `intervalCapUse` para «Tope completo (2/2)») y lo puede forzar como sobreturno en el alta.
   const ofPractitioner = input.bookings.filter((b) => b.practitionerId === q.practitionerId);
   const intervalCap = input.intervalCaps[q.practitionerId] ?? null;
+  // CF (M20, decisiones 1 y 2): profesional que no atiende servicios distintos a la vez. El slot que pisa OTRO
+  // servicio de OTRO paciente sale `otro-servicio` (el staff lo puede forzar como sobreturno). Va con el paciente
+  // del modal: su propio turno de otro servicio no cuenta (CF-D3; ese choque ya lo marca `patientConflict`).
+  const exclusive = input.agendaRules[q.practitionerId]?.exclusiveService
+    ? { serviceId: q.serviceId, patientId: q.patientId, bookings: ofPractitioner }
+    : null;
   const slots: SlotResult[] = buildSlots({
     dayKey: q.dayKey,
     ranges: workingRanges(q.practitionerId, q.dayKey, input, opts),
@@ -218,6 +224,7 @@ function staffSlots(
     bookings: ofPractitioner.filter((b) => b.serviceId === q.serviceId),
     cap: q.cap,
     intervalCap: intervalCap ? { practitionerId: q.practitionerId, cap: intervalCap, bookings: ofPractitioner } : null,
+    exclusive,
   });
   return slots.map((s) => ({
     ...s,
@@ -348,8 +355,9 @@ export async function getAgendaAvailability(
  * con `insurerId`, cobertura aceptada) + el hueco más temprano entre todos
  * (`firstFreeAcrossPractitioners`, que puede caer otro día si este está lleno).
  *
- * Paso: `stepMin` o `STAFF_SLOT_STEP_MIN` (15; ver la decisión en el archivo
- * de tipos). Sin anticipación mínima (es el staff). Profesional puntual con el
+ * Paso (CF-D6): `stepMin` pedido ?? el del profesional ?? el del consultorio
+ * ?? `STAFF_SLOT_STEP_MIN` (15; ver la decisión en el archivo de tipos), POR
+ * profesional: en "any" cada uno arma su grilla con su paso. Sin anticipación mínima (es el staff). Profesional puntual con el
  * servicio deshabilitado o sin la cobertura: igual devuelve slots (la grilla
  * informa la ocupación), con `serviceEnabled`/`acceptsInsurer` en false para
  * que la UI avise. Ojo: con el servicio deshabilitado el alta se RECHAZA
@@ -366,7 +374,6 @@ export async function listAvailableSlots(raw: ListSlotsQueryInput): Promise<Acti
   const locationId = q.locationId ?? null;
   const patientId = q.patientId ?? null;
   const insurerId = q.insurerId ?? null;
-  const stepMin = q.stepMin ?? STAFF_SLOT_STEP_MIN;
   const now = new Date();
   const isAny = q.practitionerId === "any";
 
@@ -396,11 +403,16 @@ export async function listAvailableSlots(raw: ListSlotsQueryInput): Promise<Acti
   });
   if (loaded.err !== null) return { ok: false, error: loaded.err };
   const { input } = loaded;
+  // CF (CF-D6): el pedido explícito gana; si no, la regla del profesional (que ya hereda la del consultorio). El
+  // `SlotPicker` no lo manda, así que en el modal rige la regla. Sin regla cargada (profesional no reservable, p. ej.
+  // dado de baja con turnos futuros) cae en 15, como antes.
+  const stepFor = (pid: string) => q.stepMin ?? input.agendaRules[pid]?.agendaStepMin ?? STAFF_SLOT_STEP_MIN;
 
   if (!isAny) {
     const pid = q.practitionerId;
     const eff = ruleFor(input, pid, q.serviceId)!;
     const durationMin = q.durationMin ?? eff.durationMin;
+    const stepMin = stepFor(pid);
     const lock = dayLockState(pid, q.dayKey, input, { locationId });
     return {
       ok: true,
@@ -442,6 +454,7 @@ export async function listAvailableSlots(raw: ListSlotsQueryInput): Promise<Acti
   const practitioners: AnyPractitionerSlot[] = eligible.map((pid) => {
     const eff = ruleFor(input, pid, q.serviceId)!;
     const durationMin = q.durationMin ?? eff.durationMin;
+    const stepMin = stepFor(pid);
     const slots = staffSlots(input, {
       practitionerId: pid,
       serviceId: q.serviceId,
@@ -454,7 +467,7 @@ export async function listAvailableSlots(raw: ListSlotsQueryInput): Promise<Acti
       now,
     });
     const usable = slots.filter((s) => s.available && !s.patientConflict);
-    return { practitionerId: pid, durationMin, cap: eff.cap, firstSlot: usable[0] ?? null, availableCount: usable.length };
+    return { practitionerId: pid, durationMin, cap: eff.cap, stepMin, firstSlot: usable[0] ?? null, availableCount: usable.length };
   });
 
   // Cursor de `nextFreeSlot` = from + 15 → arrancar 15' antes del inicio del
@@ -481,6 +494,9 @@ export async function listAvailableSlots(raw: ListSlotsQueryInput): Promise<Acti
     // marca `tope-intervalo`): si no, el modal sugería un horario que el alta después frena con «Cargar como
     // sobreturno».
     intervalCaps: input.intervalCaps,
+    // CF (M20): tampoco sugiere un horario que pisa otro servicio (el alta lo pediría como sobreturno). El paso del
+    // primer hueco sigue en 15 (CF-D6, paridad §5.27).
+    agendaRules: input.agendaRules,
   });
 
   return {
@@ -489,7 +505,7 @@ export async function listAvailableSlots(raw: ListSlotsQueryInput): Promise<Acti
       mode: "any",
       dayKey: q.dayKey,
       serviceId: q.serviceId,
-      stepMin,
+      stepMin: q.stepMin ?? STAFF_SLOT_STEP_MIN,
       practitioners,
       firstFree,
     },
@@ -610,6 +626,8 @@ export async function classifyBookingInstant(raw: ClassifyInstantQueryInput): Pr
     // T3 (C-AS3): `input.bookings` ya trae todos los turnos del profesional (el loader no acota por servicio), que
     // es contra lo que se cuenta el tope.
     intervalCap: input.intervalCaps[q.practitionerId] ?? null,
+    // CF (M20): con la regla, el motor suma la clase `otro-servicio` y `otherServiceBusy`/`otherServiceId`.
+    ...(input.agendaRules[q.practitionerId]?.exclusiveService ? { exclusiveService: true } : {}),
   });
   return {
     ok: true,
@@ -628,6 +646,8 @@ export async function classifyBookingInstant(raw: ClassifyInstantQueryInput): Pr
       // Solo con tope (sin tope el motor no los manda y el payload queda como antes).
       ...(c.intervalCapped != null ? { intervalCapped: c.intervalCapped } : {}),
       ...(c.intervalCapUse ? { intervalCapUse: c.intervalCapUse } : {}),
+      // CF: solo con la regla (sin ella el motor no los manda y el payload queda como antes).
+      ...(c.otherServiceBusy != null ? { otherServiceBusy: c.otherServiceBusy, otherServiceId: c.otherServiceId ?? null } : {}),
     },
   };
 }
@@ -711,6 +731,8 @@ export async function previewRecurrence(raw: RecurrencePreviewQueryInput): Promi
     // T3 (C-AS3): el lote marca las fechas que pasan el tope («{n} fechas superan el tope»). No cambia `status`
     // (el motor lo deja como el multi-turno de hoy) ni `counts`: van como flag aparte, como `outOfHours`.
     intervalCap: input.intervalCaps[q.practitionerId] ?? null,
+    // CF (CF-D4): con la regla, chocar con otro servicio sube la fecha a «sobreturno» y queda `otherServiceBusy`.
+    ...(input.agendaRules[q.practitionerId]?.exclusiveService ? { exclusiveService: true } : {}),
   };
   const items: RecurrencePreviewItem[] = dates.map((when) => {
     const batch = classifyBatchInstant({ ...base, when });
@@ -728,6 +750,9 @@ export async function previewRecurrence(raw: RecurrencePreviewQueryInput): Promi
       cap: batch.cap,
       ...(batch.intervalCapped != null ? { intervalCapped: batch.intervalCapped } : {}),
       ...(batch.intervalCapUse ? { intervalCapUse: batch.intervalCapUse } : {}),
+      // Solo cuando choca: la regla viene prendida por default (M20), así que con `!= null` cada fecha de cada
+      // consultorio sumaba `otherServiceBusy: false` y la respuesta crecía para todos (PF2-c fija la forma).
+      ...(batch.otherServiceBusy ? { otherServiceBusy: true } : {}),
     };
   });
 

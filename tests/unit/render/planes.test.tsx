@@ -193,13 +193,16 @@ describe("[P3-S21] nav: una entrada Planes + atajo (solo lib/nav.ts)", () => {
     const h = navFor(kine, OWNER).map((i) => i.href);
     expect(h.filter((x) => x.startsWith("/planes"))).toEqual(["/planes"]);
     expect(h.indexOf("/planes")).toBe(h.indexOf("/pacientes") + 1);
-    expect(navFor(kine, SECRE).map((i) => i.href)).toContain("/planes");
+    // CF-NAV (§28, decisión 7): Planes exige `clinical.read`; la Secretaria y Facturación ya no lo ven (antes sí, PD-13).
+    expect(navFor(kine, SECRE).map((i) => i.href)).not.toContain("/planes");
+    expect(navFor(kine, BILLING).map((i) => i.href)).not.toContain("/planes");
     expect(navFor(general, OWNER).map((i) => i.href)).not.toContain("/planes");
   });
 
-  it("atajo ⌘K Planes solo con el módulo", () => {
-    expect(shortcutsFor(kine)).toContainEqual({ id: "nav:planes", category: "shortcut", label: "Planes", href: "/planes" });
-    expect(shortcutsFor(general).map((s) => s.href)).not.toContain("/planes");
+  it("atajo ⌘K Planes solo con el módulo (y, desde CF-NAV, con clinical.read)", () => {
+    expect(shortcutsFor(kine, OWNER)).toContainEqual({ id: "nav:planes", category: "shortcut", label: "Planes", href: "/planes" });
+    expect(shortcutsFor(general, OWNER).map((s) => s.href)).not.toContain("/planes");
+    expect(shortcutsFor(kine, SECRE).map((s) => s.href)).not.toContain("/planes");
   });
 });
 

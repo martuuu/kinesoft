@@ -31,9 +31,16 @@
  *   • Cupo: profesional + servicio (decisión 5), decidido SOLO con
  *     `isHoldingCapacity` + `overlapBlocks` de `lib/booking-capacity.ts`
  *     (preservar AUDIT §5.18). `cap` null = ilimitado.
+ *   • Servicio exclusivo (CF, M20, decisión 1 del 30-oct): con
+ *     `PractitionerAgendaRules.exclusiveService` el profesional no atiende dos
+ *     servicios DISTINTOS a la vez (otro paciente). Predicado único en
+ *     `lib/availability/exclusive-service.ts`; herencia en `agenda-rules.ts`.
+ *     Sin la regla (ausente o false) el motor da la salida de antes, byte a
+ *     byte (carve-out de la paridad §5.27).
  */
 import type { BatchExistingBooking } from "@/lib/booking-schedule";
 import type { IntervalCap } from "@/lib/availability/interval-cap";
+import type { PractitionerAgendaRules } from "@/lib/availability/agenda-rules";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Primitivos
@@ -304,6 +311,19 @@ export type AvailabilityInput = {
    * tope sumadas a los selects de tenant y profesional que ya corrían (0 sentencias nuevas).
    */
   intervalCaps?: Readonly<Record<string, IntervalCap | null>>;
+  /**
+   * CF (M20): reglas de agenda EFECTIVAS de cada profesional cargado (`effectiveAgendaRules`: servicio exclusivo,
+   * paso del selector del staff y del turnero, ya con la herencia del consultorio). Un profesional ausente del mapa
+   * = sin regla nueva (no exclusivo, pasos de siempre). Opcional para los callers puros; el loader siempre lo carga,
+   * con las columnas sumadas a los selects de tenant y profesional que ya corrían (0 sentencias nuevas).
+   */
+  agendaRules?: Readonly<Record<string, PractitionerAgendaRules>>;
+  /**
+   * CF (M20, decisión 6): anticipación mínima del turnero del CONSULTORIO (`Tenant.publicMinLeadMinutes`), cruda:
+   * null = sin configurar. La efectiva de cada servicio la decide `effectivePublicMinLead(ps.minLeadMinutes, esto)`
+   * (PS > consultorio > 60; 0 es un valor).
+   */
+  publicMinLeadMinutes?: number | null;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -316,6 +336,10 @@ export type SlotUnavailableReason =
   | "anticipacion-minima" // antes de now + minLead
   | "fuera-de-horizonte" // después de now + maxLeadDays
   | "cupo-completo" // overlapBlocks(used, cap)
+  // CF (M20): el profesional es de servicio exclusivo y ya atiende OTRO servicio (otro paciente) que pisa el slot
+  // (`isOtherServiceConflict`). Con el cupo también lleno gana "cupo-completo"; sobre "tope-intervalo" gana este
+  // (misma precedencia que `InstantClass`). Turnero: duro; staff: forzable como sobreturno (decisión 2).
+  | "otro-servicio"
   // T3 (C-AS3): el intervalo AR del slot ya tiene `cap.count` turnos del profesional (cualquier servicio). Va
   // ÚLTIMO: con el cupo del servicio también lleno, gana "cupo-completo" (mismo orden que `InstantClass`:
   // sobreturno > tope-intervalo). El turnero no lo ofrece (duro); el selector del staff lo deja elegir y forzar.
@@ -354,6 +378,16 @@ export type BuildSlotsInput = {
   bookings: ReadonlyArray<AvailabilityBooking>;
   cap: number | null;
   /**
+   * CF (M20): servicio exclusivo del profesional. `bookings` acá son los turnos no cancelados del PROFESIONAL
+   * (cualquier servicio; no los ya filtrados de arriba): los intervalos de otro servicio se calculan una vez por
+   * grilla. Ausente o `null` = sin la regla (la grilla de siempre, byte a byte).
+   */
+  exclusive?: {
+    serviceId: string;
+    patientId?: string | null;
+    bookings: ReadonlyArray<AvailabilityBooking>;
+  } | null;
+  /**
    * T3 (C-AS3): tope por intervalo del profesional. `bookings` acá son TODOS los turnos no cancelados del
    * profesional (cualquier servicio), no los ya filtrados de arriba: el tope cruza servicios. Ausente o
    * `null` = sin tope (la grilla de siempre, byte a byte).
@@ -375,7 +409,7 @@ export type IntervalCapContext = {
 
 /**
  * Clase de un instante (`classifyInstant`, B2.1b), en este orden de precedencia:
- *   duplicado > bloqueado > fuera-de-horario > paciente-superpuesto > sobreturno > tope-intervalo > libre
+ *   duplicado > bloqueado > fuera-de-horario > paciente-superpuesto > sobreturno > otro-servicio > tope-intervalo > libre
  * (el orden real entre paciente-superpuesto y sobreturno es el de `classify.ts`, heredado del batch).
  *   • duplicado: el paciente ya tiene un turno que arranca en ese instante (el
  *     índice único parcial lo rechaza: nunca creable).
@@ -392,6 +426,11 @@ export type IntervalCapContext = {
  *     `isOverbooked` (decisión 6); turnero: duro; Planes: aviso
  *     (`overIntervalCap`) sin bloqueo. Va justo antes de "libre": cualquier
  *     otra clase lo tapa (un sobreturno de cupo ya es sobreturno).
+ *   • otro-servicio (CF, M20, decisiones 1 y 2): profesional de servicio
+ *     exclusivo que ya atiende otro servicio (otro paciente) que solapa
+ *     (`isOtherServiceConflict`). Staff: aviso forzable, queda sobreturno;
+ *     turnero: duro; lote y Planes: lo pliegan en «sobreturno» (CF-D4). Solo
+ *     con `ClassifyInstantInput.exclusiveService`.
  */
 export type InstantClass =
   | "duplicado"
@@ -399,6 +438,7 @@ export type InstantClass =
   | "fuera-de-horario"
   | "sobreturno"
   | "paciente-superpuesto"
+  | "otro-servicio"
   | "tope-intervalo"
   | "libre";
 
@@ -421,6 +461,14 @@ export type InstantClassification = {
   intervalCapped?: boolean;
   /** Uso del tope (aviso del 2.º turno y «x/tope»). Solo con tope. */
   intervalCapUse?: IntervalCapUse;
+  /**
+   * CF (M20): ya atiende otro servicio en ese horario (`isOtherServiceConflict`). Se informa aunque gane una clase
+   * de mayor precedencia (como `intervalCapped`): forzar el cupo no tiene por qué ocultar el choque. SOLO con
+   * `exclusiveService`; ausente = sin la regla (salida de antes, sin claves nuevas).
+   */
+  otherServiceBusy?: boolean;
+  /** Servicio del primer turno que choca (para el copy «Atiende Evaluación»); null sin choque. Solo con la regla. */
+  otherServiceId?: string | null;
 };
 
 /** Estado de candado de un día para un profesional (`dayLockState`, B2.1a). */

@@ -18,9 +18,9 @@
  *
  * Lo que queda en la allow-list y por qué (Anexo B, «No se tocan»):
  *  - `CLINICAL_NOTE_KIND_LABEL.EVOLUTION` = «Evolución»: es el TIPO de ficha (Primera consulta / Evolución / …);
- *  - la EVA (`evol`, `evolucion-view.tsx`, «Dolor (EVA) · evolución», «evolución de tu dolor» del portal): es la
+ *  - la EVA (`evol`, `evolucion-view.tsx`, «evolución de tu dolor» del portal): es la
  *    curva de dolor, otra cosa;
- *  - el refinamiento de diagnóstico (`refinement-panel.tsx`), `session-detail.tsx` y `dashboard-screen.tsx`, que
+ *  - el refinamiento de diagnóstico (`refinement-panel.tsx`) y `dashboard-screen.tsx`, que
  *    hablan de la evolución clínica del paciente, no del documento.
  *
  * Baseline (FC-3h2, 19-oct, después de FC-3h1 `5d07636`): 7 apariciones en 5 archivos, todas de la lista de arriba.
@@ -43,11 +43,6 @@ const WORD = /evoluci[oó]n(?:es)?/gi;
 const ALLOW: Record<string, string[]> = {
   // El TIPO de ficha (Primera consulta / Evolución / Alta): CLINICAL_NOTE_KIND_LABEL.EVOLUTION.
   "lib/clinical-notes-types.ts": ['EVOLUTION: "Evolución",'],
-  // EVA: la curva de dolor del plan, no el documento de la HC.
-  "components/seguimiento/session-detail.tsx": [
-    "Cuando cierres sesiones con EVA pre/post, vas a ver acá la evolución del dolor.",
-    "Dolor (EVA) · evolución",
-  ],
   // La evolución clínica del paciente (alta o continuidad), no el documento.
   "components/screens/dashboard-screen.tsx": [
     "<p className={styles.heroText}>Revisá su evolución y dejá programada el alta o la continuidad.</p>",

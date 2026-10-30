@@ -13,6 +13,7 @@
  */
 import { z } from "zod";
 import type { PracticeVisibility } from "@prisma/client";
+import { PUBLIC_MIN_LEAD_MAX_MINUTES } from "@/lib/availability/agenda-rules";
 
 /** Id de fila del tenant (cuid). El tope evita payloads absurdos en el where. */
 export const EntityId = z.string().trim().min(1).max(64);
@@ -22,8 +23,11 @@ export const EntityId = z.string().trim().min(1).max(64);
 // sobre minutos AR y un 47 dejaría huecos de 3 min imposibles de ofrecer.
 export const PS_DURATION_MIN = 5;
 export const PS_DURATION_MAX = 480;
-/** Anticipación mínima: hasta 30 días expresados en minutos. */
-export const PS_MIN_LEAD_MAX = 30 * 24 * 60;
+/**
+ * Anticipación mínima: hasta 8 semanas en minutos (CF-D8). Antes 30 días; ahora el mismo tope que la del consultorio
+ * (`Tenant.publicMinLeadMinutes`, CHECK de M20), así un servicio puede pedir tanta anticipación como el consultorio.
+ */
+export const PS_MIN_LEAD_MAX = PUBLIC_MIN_LEAD_MAX_MINUTES;
 /** Horizonte: hasta 2 años. */
 export const PS_MAX_LEAD_DAYS_MAX = 730;
 /** Mismo tope que `Service.maxConcurrent`. */
@@ -57,7 +61,7 @@ export const PractitionerServiceInput = z
     ).optional(),
     visibility: z.enum(["PUBLIC", "PRIVATE"]),
     minLeadMinutes: nullableInt(
-      z.number().int().min(0, "La anticipación no puede ser negativa").max(PS_MIN_LEAD_MAX)
+      z.number().int().min(0, "La anticipación no puede ser negativa").max(PS_MIN_LEAD_MAX, "Máximo 8 semanas de anticipación")
     ).optional(),
     maxLeadDays: nullableInt(
       z.number().int().min(0, "El horizonte no puede ser negativo").max(PS_MAX_LEAD_DAYS_MAX)

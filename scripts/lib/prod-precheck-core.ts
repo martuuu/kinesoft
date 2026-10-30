@@ -1,7 +1,9 @@
 /**
  * INF-S · núcleo de `scripts/prod-precheck.ts` (plan §26.7, decisión 1 de Martin del 22-oct): prechecks y postchecks
- * de SOLO LECTURA del día del push, para las 6 migraciones que todavía no están en prod (orden de timestamp
- * M12 → M14 → M18 → M17 → M15 → M16 → M19).
+ * de SOLO LECTURA del día del push. Nació para las 7 de T3..PV (M12 → M14 → M18 → M17 → M15 → M16 → M19); desde el
+ * reset de prod (29/30-oct) esas 7 ya están aplicadas allá y la única pendiente es **M20** (CF, `cf_agenda_rules`):
+ * el `--pre` exige que M12..M19 estén PRESENTES (aplicadas con su checksum y con sus objetos) y corre los prechecks
+ * de M20; el `--post` sigue verificando las 8 objeto por objeto.
  *
  * Por qué existe: hasta T5 cada migración tenía su bloque de SQL suelto en el RUNBOOK y Martin lo copiaba a mano en el
  * SQL editor de Supabase, uno por uno, comparando a ojo contra el comentario («-- 0 filas», «-- = el md5 de M9»). Con
@@ -27,16 +29,21 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { Prisma, PrismaClient } from "@prisma/client";
+// ZF1 (B2 de ZA): el «desde» del precheck de M20 es un día AR: `toISOString().slice(0, 10)` daba el día UTC (un turno
+// de las 21:30 AR salía con el día siguiente). Relativo, como `qa-tenants-core.ts`: el script corre con tsx sin alias.
+import { toARDateKey } from "../../lib/datetime-ar";
 
 export type CheckStatus = "PASS" | "WARN" | "FAIL" | "SKIP";
 export type CheckRow = { id: string; group: string; title: string; status: CheckStatus; detail: string };
 export type PrecheckMode = "pre" | "post";
 
 /**
- * Las 6 de la tanda, en el orden en que `migrate deploy` las aplica (timestamp). `sha256` = el checksum que Prisma
+ * Las 7 de T3..PV, en el orden en que `migrate deploy` las aplicó (timestamp). `sha256` = el checksum que Prisma
  * guarda en `_prisma_migrations` (sha256 del `migration.sql`): RUNBOOK para M12/M14/M18, handoff de MIG para el resto.
+ * CF (30-oct): YA APLICADAS en prod (reset del 29/30-oct, las 47 del repo). Siguen acá porque su checksum y sus objetos
+ * son contrato: el `--pre` las exige presentes y el `--post` las re-verifica.
  */
-export const T6T7_MIGRATIONS = [
+export const APPLIED_MIGRATIONS = [
   { key: "M12", name: "20261020120000_agenda_secretaria_config", sha256: "a0849c4d28c7154acb3b9a0cf47075bbbde608161d32d126d7ae9d85f9fd7485" },
   { key: "M14", name: "20261021120000_fichas_clinicas", sha256: "f7b12bab45002308751095ee12deb717c4f375ad39e9a3e8470f16afbe4967c9" },
   { key: "M18", name: "20261022120000_turnero_cobros_mp", sha256: "0ffc0c9157d5d9df71770f6d62019a6c916f673db7529eceaa00768d5c88006e" },
@@ -46,7 +53,18 @@ export const T6T7_MIGRATIONS = [
   // PV (27-oct): tickets de Plataforma. Sumada a la misma tanda porque va en el mismo push (decisión de Martin).
   { key: "M19", name: "20261027120000_support_tickets", sha256: "7ac440677f5f80098b6245f1de70b556cc7ea9d4aeeb923b2c6eb9825803f7a2" },
 ] as const;
-type MigKey = (typeof T6T7_MIGRATIONS)[number]["key"];
+/**
+ * Las pendientes en prod de esta salida (CF, 30-oct): solo M20. sha256 verificado en local (CF-M, `migrate deploy`
+ * sobre el Docker; = `_prisma_migrations.checksum`).
+ */
+export const PENDING_MIGRATIONS = [
+  { key: "M20", name: "20261030120000_cf_agenda_rules", sha256: "e5d84eec9eba6f11ed6181fc0e18e34b5d220a637808906d445381207ea5b032" },
+] as const;
+/** Todas las que el precheck conoce, en orden de aplicación (checksums del --pre/--post y orden de la tabla impresa). */
+export const TRACKED_MIGRATIONS = [...APPLIED_MIGRATIONS, ...PENDING_MIGRATIONS] as const;
+type MigKey = (typeof TRACKED_MIGRATIONS)[number]["key"];
+type AppliedKey = (typeof APPLIED_MIGRATIONS)[number]["key"];
+type PendingKey = (typeof PENDING_MIGRATIONS)[number]["key"];
 
 /** md5(prosrc) esperados después del deploy. `clinical_note_guard` = el de M14 (RUNBOOK «M14 en prod»). */
 export const EXPECTED_MD5 = {
@@ -56,8 +74,6 @@ export const EXPECTED_MD5 = {
   online_charge_sync_booking: "f98cc831211d6d5aa559900d3b82bccc",
   saas_adjustment_guard: "fd8790f4959e9f56ea743dead6bb6d2b",
 } as const;
-/** md5 de `clinical_note_guard` de M9: el que M14 reemplaza línea por línea. Otro valor en prod = frenar (RUNBOOK). */
-export const M9_CLINICAL_NOTE_GUARD_MD5 = "0a87f3688a5002c59a7b5238e2ae8a44";
 
 export type PrecheckOptions = {
   /** Conexión owner (DIRECT_URL): con BYPASSRLS, si no los conteos de tablas con RLS darían 0 falsos. */
@@ -70,8 +86,8 @@ export type PrecheckOptions = {
   /** `--post`: el relfilenode de `Booking` que anotó el `--pre` (M18 no tiene que reescribir la tabla). */
   bookingRelfilenode?: number | null;
   /**
-   * Solo tests: corre los prechecks de `--pre` también para las migraciones YA aplicadas. En el Docker las 6 están
-   * aplicadas y sin esto su SQL no se ejecutaría nunca antes del día del push (los «no existe» dan FAIL, que es lo
+   * Solo tests: corre los prechecks de `--pre` de las PENDIENTES (M20) aunque ya estén aplicadas. En el Docker M20
+   * está aplicada y sin esto su SQL no se ejecutaría nunca antes del día del push (el «no existe» da FAIL, que es lo
    * esperado; lo que se valida es que ninguna consulta tire).
    */
   evaluateApplied?: boolean;
@@ -455,6 +471,48 @@ const M16_COLUMNS = [
   ...["baseAmountCents", "adjustmentsCents", "mpCheckoutExpectedCents", "mpCheckoutCreatedAt"].map((c) => `SaasCharge.${c}`),
   ...["mpPreapprovalId", "splitFromId", "mpPayload"].map((c) => `SaasPayment.${c}`),
 ];
+// M20 (CF · reglas de agenda): RUNBOOK «M20 en prod». Sin tablas, sin índices, sin tocar Booking.
+const M20_COLUMNS = [
+  "Tenant.agendaSlotStepMin",
+  "Tenant.publicSlotStepMin",
+  "Tenant.publicMinLeadMinutes",
+  "Practitioner.allowParallelServices",
+  "Practitioner.agendaSlotStepMin",
+  "Practitioner.publicSlotStepMin",
+] as const;
+const M20_CHECKS = [
+  "Tenant_agendaSlotStepMin_check",
+  "Tenant_publicSlotStepMin_check",
+  "Tenant_publicMinLeadMinutes_check",
+  "Practitioner_agendaSlotStepMin_check",
+  "Practitioner_publicSlotStepMin_check",
+] as const;
+/**
+ * Profesionales con turnos vivos (desde 7 días atrás) de servicios DISTINTOS que se pisan, de pacientes distintos (o sin
+ * paciente). SQL literal del brief CF §A.1. Con M20 + el código de CF esos pares pasan a ser «otro servicio ocupado»
+ * (CF-D1, sin backfill): los turnos ya cargados no se tocan, pero el próximo que se pise avisa (staff) o no se ofrece
+ * (turnero). Es la lista a quien prenderle «Atiende servicios distintos a la vez» si trabaja así.
+ */
+const M20_CROSS_SERVICE_SQL = `WITH b AS (SELECT "id","tenantId","practitionerId","serviceId","patientId","scheduledFor",
+  "scheduledFor" + make_interval(mins => "durationMin") AS "endsAt" FROM "Booking"
+  WHERE "status" <> 'CANCELLED' AND "scheduledFor" >= now() - interval '7 days')
+SELECT t."slug", b1."practitionerId", count(*) AS pares, min(b1."scheduledFor") AS primero
+FROM b b1 JOIN b b2 ON b2."tenantId"=b1."tenantId" AND b2."practitionerId"=b1."practitionerId"
+ AND b2."serviceId"<>b1."serviceId" AND b2."id">b1."id" AND b2."scheduledFor"<b1."endsAt" AND b1."scheduledFor"<b2."endsAt"
+ AND (b1."patientId" IS NULL OR b2."patientId" IS NULL OR b1."patientId"<>b2."patientId")
+JOIN "Tenant" t ON t."id"=b1."tenantId" GROUP BY 1,2 ORDER BY pares DESC`;
+
+/** Objetos de cada migración ya aplicada: el `--pre` los exige presentes (mismo inventario que el `--post`). */
+const APPLIED_OBJECTS: Record<AppliedKey, Parameters<typeof present>[1]> = {
+  M12: { columns: M12_COLUMNS, types: ["BookingCapMode", "BookingPaymentMethod"] },
+  M14: { tables: M14_TABLES, types: M14_TYPES, columns: M14_COLUMNS, procs: ["patient_document_guard"] },
+  M18: { tables: M18_TABLES, types: M18_TYPES, columns: ["Booking.onlineDepositCents"], procs: ["online_charge_guard", "online_charge_sync_booking"] },
+  M17: { tables: ["ReceptionDisplay"], types: M17_TYPES },
+  M15: { tables: M15_TABLES, types: M15_TYPES, columns: M15_COLUMNS },
+  M16: { tables: ["SaasAdjustment"], types: M16_TYPES, columns: M16_COLUMNS, procs: ["saas_adjustment_guard"] },
+  M19: { tables: ["SupportTicketNote"], types: M19_TYPES, columns: M19_COLUMNS },
+};
+
 const M16_CHECKS_EXISTING = [
   "SaasSubscription_cancel_check", "SaasSubscription_pendingPlan_check", "SaasSubscription_mpPending_check",
   "SaasCharge_breakdown_check", "SaasCharge_checkout_check", "SaasPayment_mpPayload_check", "SaasPayment_source_mp_check",
@@ -574,163 +632,81 @@ async function preChecks(c: Collector, tx: Tx, o: PrecheckOptions, ms: MigState)
       : pass(`${ms.applied.size} aplicadas, ninguna fallida ni rolled back`);
   });
 
-  const expected = new Set<string>(T6T7_MIGRATIONS.map((m) => m.name));
-  await c.check("pre.migrations.pending", "base", "Pendientes = las de la tanda (M12 → M14 → M18 → M17 → M15 → M16 → M19)", async () => {
+  const expected = new Set<string>(PENDING_MIGRATIONS.map((m) => m.name));
+  await c.check("pre.migrations.pending", "base", "Pendientes = solo M20 (CF; M12..M19 ya aplicadas desde el reset)", async () => {
     const unexpected = ms.pending.filter((n) => !expected.has(n));
     if (unexpected.length > 0) {
-      return fail(`pendientes que NO son de esta tanda (revisar antes de deployar): ${list(unexpected)}`);
+      return fail(`pendientes que NO son de esta salida (revisar antes de deployar): ${list(unexpected)}`);
     }
     if (ms.unknownInDb.length > 0) {
       return warn(`${ms.pending.length} pendientes; la base tiene aplicadas migraciones que el repo no conoce: ${list(ms.unknownInDb)}`);
     }
-    const keys = T6T7_MIGRATIONS.filter((m) => ms.pending.includes(m.name)).map((m) => m.key);
+    const keys = PENDING_MIGRATIONS.filter((m) => ms.pending.includes(m.name)).map((m) => m.key);
     return pass(`${ms.pending.length} pendientes${keys.length ? `: ${keys.join(" → ")}` : " (la base ya está al día)"}`);
   });
 
-  await c.check("pre.repo.checksums", "base", "Repo: migration.sql de la tanda = el sha256 verificado en local", async () => {
-    const bad = T6T7_MIGRATIONS.filter((m) => fileSha256(o.migrationsDir, m.name) !== m.sha256).map((m) => m.key);
-    return bad.length === 0 ? pass("los 7 sha256 coinciden con el RUNBOOK y el handoff de MIG") : fail(`migration.sql cambiado: ${bad.join(", ")}`);
+  await c.check("pre.repo.checksums", "base", "Repo: migration.sql de M12..M20 = el sha256 verificado en local", async () => {
+    const bad = TRACKED_MIGRATIONS.filter((m) => fileSha256(o.migrationsDir, m.name) !== m.sha256).map((m) => m.key);
+    return bad.length === 0
+      ? pass(`los ${TRACKED_MIGRATIONS.length} sha256 coinciden con el RUNBOOK y los handoffs`)
+      : fail(`migration.sql cambiado: ${bad.join(", ")}`);
   });
 
-  for (const m of T6T7_MIGRATIONS) {
-    const isPending = ms.pending.includes(m.name);
+  // Ya aplicadas (M12..M19): el reset de prod las aplicó. Pendiente o con otro checksum = prod no es lo que creemos.
+  for (const m of APPLIED_MIGRATIONS) {
     const row = ms.db.find((r) => r.migration_name === m.name && r.finished_at && !r.rolled_back_at);
     c.add(
       `pre.state.${m.key}`,
       m.key,
       `${m.key} ${m.name}`,
-      isPending
+      !row
+        ? fail("pendiente: tenía que estar aplicada desde el reset (29/30-oct); frená y revisá _prisma_migrations")
+        : row.checksum !== m.sha256
+          ? fail(`ya aplicada pero con otro checksum (${row.checksum.slice(0, 12)}… ≠ ${m.sha256.slice(0, 12)}…): el SQL de prod no es el del repo`)
+          : pass(`ya aplicada (${row.finished_at ? new Date(row.finished_at).toISOString().slice(0, 16) + "Z" : "?"}) con el checksum verificado`)
+    );
+    await c.check(`pre.${m.key}.present`, m.key, `${m.key}: sus objetos existen`, () => present(tx, APPLIED_OBJECTS[m.key]));
+  }
+
+  // Pendientes (M20): si ya está aplicada, no hay nada que aplicar y sus prechecks se saltean.
+  for (const m of PENDING_MIGRATIONS) {
+    const row = ms.db.find((r) => r.migration_name === m.name && r.finished_at && !r.rolled_back_at);
+    c.add(
+      `pre.state.${m.key}`,
+      m.key,
+      `${m.key} ${m.name}`,
+      ms.pending.includes(m.name)
         ? pass("pendiente: la aplica este deploy")
         : warn(`ya aplicada (${row?.finished_at ? new Date(row.finished_at).toISOString().slice(0, 16) + "Z" : "?"}): no hay nada que aplicar; sus prechecks se saltean`)
     );
   }
-  const run = (key: MigKey) => o.evaluateApplied === true || ms.pending.includes(T6T7_MIGRATIONS.find((m) => m.key === key)!.name);
-  const gate = async (id: string, key: MigKey, title: string, fn: () => Promise<Verdict>) => {
+  const run = (key: PendingKey) => o.evaluateApplied === true || ms.pending.includes(PENDING_MIGRATIONS.find((m) => m.key === key)!.name);
+  const gate = async (id: string, key: PendingKey, title: string, fn: () => Promise<Verdict>) => {
     if (!run(key)) c.add(id, key, title, skip(`${key} ya aplicada`));
     else await c.check(id, key, title, fn);
   };
 
-  // M12 (RUNBOOK «M12 en prod»)
-  await gate("pre.M12.absent", "M12", "M12: columnas y enums nuevos no existen", () =>
-    absent(tx, { columns: M12_COLUMNS, types: ["BookingCapMode", "BookingPaymentMethod"] })
-  );
-  await gate("pre.M12.practitionerCap", "M12", "M12: Practitioner.bookingCap* no existe", async () => {
-    const n = await scalar(
-      tx,
-      `SELECT count(*) AS n FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'Practitioner' AND column_name LIKE 'bookingCap%'`
-    );
-    return n === 0 ? pass("0 columnas") : fail(`${n} columnas bookingCap* ya existen`);
-  });
-  await gate("pre.M12.adminBackfill", "M12", "M12 (d): ADMIN sin «Planes y pagos» (guardá esta lista: es el rollback del backfill)", async () => {
-    const r = await rows<{ id: string; tenantId: string; titular: boolean }>(
-      tx,
-      `SELECT m.id, m."tenantId",
-              EXISTS (SELECT 1 FROM "AuditEvent" a WHERE a."tenantId" = m."tenantId" AND a."entityId" = m.id
-                        AND a.entity = 'Membership'
-                        AND a.action IN ('membership.grants.change','platform.membership.grants.change')
-                        AND a.payload->'from'->>'grantBilling' = 'true'
-                        AND a.payload->'to'->>'grantBilling' = 'false') AS titular
-         FROM "Membership" m WHERE m.role = 'ADMIN' AND NOT m."grantBilling" ORDER BY m."tenantId", m.id`
-    );
-    const backfill = r.filter((x) => !x.titular).map((x) => x.id);
-    const kept = r.filter((x) => x.titular).map((x) => x.id);
-    return pass(
-      `${r.length} ADMIN sin grantBilling · se backfillean a true (${backfill.length}): ${list(backfill, 30)} · el Titular se lo sacó (${kept.length}): ${list(kept, 30)}`
-    );
-  });
-  await gate("pre.M12.staffBilling", "M12", "M12 (e): Secretaría/Facturación con «Configuración» o «Planes y pagos»", async () => {
-    const r = await rows<{ role: string; s: unknown; b: unknown }>(
-      tx,
-      `SELECT m.role::text AS role, count(*) FILTER (WHERE m."grantSettings") AS s, count(*) FILTER (WHERE m."grantBilling") AS b
-         FROM "Membership" m WHERE m.role IN ('ASSISTANT','BILLING') GROUP BY m.role ORDER BY 1`
-    );
-    const withBilling = r.reduce((a, x) => a + num(x.b), 0);
-    const txt = r.map((x) => `${x.role}: ${num(x.s)} con Configuración, ${num(x.b)} con Planes y pagos`).join(" · ") || "sin Secretaría ni Facturación";
-    // C-AS1: el código de T3 les saca lo delicado (no la migración). Con filas, avisarle al Titular.
-    return withBilling > 0 ? warn(`${txt}: avisale al Titular (C-AS1 se los saca)`) : pass(txt);
-  });
-  await gate("pre.M12.paidBookings", "M12", "M12 (f): turnos PAID/REFUNDED (quedan «Sin informar» el medio)", async () =>
-    pass(`${await scalar(tx, `SELECT count(*) AS n FROM "Booking" WHERE "paymentStatus" IN ('PAID','REFUNDED')`)} turnos (informativo)`)
+  // M20 (RUNBOOK «M20 en prod»)
+  await gate("pre.M20.absent", "M20", "M20: las 6 columnas nuevas de Tenant/Practitioner no existen", () => absent(tx, { columns: M20_COLUMNS }));
+  await gate(
+    "pre.M20.crossService",
+    "M20",
+    "M20: profesionales con servicios distintos pisados (informativo: a quién prenderle «Atiende servicios distintos a la vez»)",
+    async () => {
+      const r = await rows<{ slug: string; practitionerId: string; pares: unknown; primero: Date }>(tx, M20_CROSS_SERVICE_SQL);
+      if (r.length === 0) return pass("nadie: ningún profesional tiene turnos vivos de servicios distintos que se pisen (desde hace 7 días)");
+      // WARN, no FAIL (CF-D1): la migración no toca turnos; es la lista para el aviso al cliente y el interruptor.
+      return warn(
+        `${r.length} profesionales (slug:practitionerId pares desde): ${list(
+          r.map((x) => `${x.slug}:${x.practitionerId} ${num(x.pares)} desde ${toARDateKey(new Date(x.primero))}`),
+          20
+        )} → después del deploy, prendeles «Atiende servicios distintos a la vez» si trabajan así (o avisales)`
+      );
+    }
   );
 
-  // M14 (RUNBOOK «M14 en prod»)
-  await gate("pre.M14.absent", "M14", "M14: tablas, columnas y enums nuevos no existen", () =>
-    absent(tx, { tables: M14_TABLES, types: M14_TYPES, columns: M14_COLUMNS, procs: ["patient_document_guard"] })
-  );
-  await gate("pre.M14.clinicalNoteGuard", "M14", "M14: clinical_note_guard() es la de M9 (la que M14 reemplaza línea por línea)", async () => {
-    const got = await md5Of(tx, "clinical_note_guard");
-    if (got.length !== 1) return fail(`clinical_note_guard(): ${got.length} definiciones (se esperaba 1, la de M9)`);
-    return got[0] === M9_CLINICAL_NOTE_GUARD_MD5
-      ? pass(`md5 = ${got[0]} (M9)`)
-      : fail(`md5 = ${got[0]} ≠ M9 ${M9_CLINICAL_NOTE_GUARD_MD5}: FRENAR, alguien tocó la función a mano (comparar antes de seguir)`);
-  });
-  await gate("pre.M14.counts", "M14", "M14: conteos (informativo; el --post tiene que dar lo mismo)", async () => {
-    const notes = await scalar(tx, `SELECT count(*) AS n FROM "ClinicalNote"`);
-    const tenants = await scalar(tx, `SELECT count(*) AS n FROM "Tenant"`);
-    return pass(`ClinicalNote = ${notes} · Tenant = ${tenants}`);
-  });
-
-  // M18 (RUNBOOK «M18 en prod»)
-  await gate("pre.M18.absent", "M18", "M18: tablas, enums, columna y funciones nuevas no existen", () =>
-    absent(tx, {
-      tables: M18_TABLES,
-      types: M18_TYPES,
-      columns: ["Booking.onlineDepositCents"],
-      procs: ["online_charge_guard", "online_charge_sync_booking"],
-    })
-  );
-  await gate("pre.M18.counts", "M18", "M18: turnos, checkout legado y holds en vuelo (informativo)", async () => {
-    const bookings = await scalar(tx, `SELECT count(*) AS n FROM "Booking"`);
-    const pay = await rows<{ status: string; n: unknown }>(tx, `SELECT status::text AS status, count(*) AS n FROM "Payment" GROUP BY 1 ORDER BY 1`);
-    const holds = await scalar(tx, `SELECT count(*) AS n FROM "Booking" WHERE status = 'PENDING' AND "idempotencyKey" LIKE 'pub:%'`);
-    return pass(
-      `Booking = ${bookings} · Payment: ${pay.map((p) => `${p.status} ${num(p.n)}`).join(", ") || "0"} · holds del turnero en vuelo = ${holds}`
-    );
-  });
-  await gate("pre.M18.relfilenode", "M18", "M18: relfilenode de Booking (ANOTALO: el --post tiene que dar el mismo)", async () => {
-    const n = await scalar(tx, `SELECT relfilenode AS n FROM pg_class WHERE oid = to_regclass('public."Booking"')`);
-    return pass(`relfilenode = ${n} → después: --post --booking-relfilenode=${n}`);
-  });
-
-  // M17 / M15 / M16 (Anexos A-C + handoff de MIG)
-  await gate("pre.M17.absent", "M17", "M17: ReceptionDisplay y sus enums no existen", () =>
-    absent(tx, { tables: ["ReceptionDisplay"], types: M17_TYPES })
-  );
-  await gate("pre.M15.absent", "M15", "M15: tablas, enums y columnas de WhatsApp no existen", () =>
-    absent(tx, { tables: M15_TABLES, types: M15_TYPES, columns: M15_COLUMNS })
-  );
-  await gate("pre.M16.absent", "M16", "M16: SaasAdjustment, enums, columnas y guard no existen", () =>
-    absent(tx, { tables: ["SaasAdjustment"], types: M16_TYPES, columns: M16_COLUMNS, procs: ["saas_adjustment_guard"] })
-  );
-  await gate("pre.M19.absent", "M19", "M19: SupportTicketNote, SupportTicketSource y las columnas de ticket no existen", () =>
-    absent(tx, { tables: ["SupportTicketNote"], types: M19_TYPES, columns: M19_COLUMNS })
-  );
-  await gate("pre.M16.chargeUnique", "M16", "M16: SaasCharge(id, tenantId) único (destino de la FK compuesta)", async () => {
-    const n = await scalar(tx, `SELECT count(*) AS n FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'SaasCharge_id_tenantId_key'`);
-    return n === 1 ? pass("SaasCharge_id_tenantId_key presente (M8)") : fail("falta SaasCharge_id_tenantId_key: la FK de SaasAdjustment no se puede crear");
-  });
-  await gate("pre.M16.checkoutPreference", "M16", "M16: SaasCharge.mpCheckoutPreferenceId no null = 0", async () => {
-    const n = await scalar(tx, `SELECT count(*) AS n FROM "SaasCharge" WHERE "mpCheckoutPreferenceId" IS NOT NULL`);
-    // SaasCharge_checkout_check exige preferencia ⇔ monto esperado ⇔ fecha: una fila vieja con preferencia y sin los
-    // otros dos hace fallar el ADD CONSTRAINT y la migración entera.
-    return n === 0 ? pass("0 cargos con preferencia de checkout") : fail(`${n} cargos con mpCheckoutPreferenceId: el CHECK nuevo de M16 falla`);
-  });
-  await gate("pre.M16.mpPayments", "M16", "M16: SaasPayment con source ≠ MANUAL (se espera 0)", async () => {
-    const n = await scalar(tx, `SELECT count(*) AS n FROM "SaasPayment" WHERE source <> 'MANUAL'`);
-    return n === 0 ? pass("0 pagos de Mercado Pago") : warn(`${n} pagos no MANUAL: revisar contra SaasPayment_source_mp_check antes de seguir`);
-  });
-  await gate("pre.M16.anchorDay", "M16", "M16: distribución de anchorDay (lo re-ancla saas-reanchor después del deploy)", async () => {
-    const r = await rows<{ d: number; n: unknown }>(tx, `SELECT "anchorDay" AS d, count(*) AS n FROM "SaasSubscription" GROUP BY 1 ORDER BY 1`);
-    return pass(r.length ? r.map((x) => `día ${x.d}: ${num(x.n)}`).join(" · ") : "sin suscripciones");
-  });
-  await gate("pre.M16.customPrice", "M16", "M16: suscripciones con customPriceCents", async () => {
-    const n = await scalar(tx, `SELECT count(*) AS n FROM "SaasSubscription" WHERE "customPriceCents" IS NOT NULL`);
-    // MPS-D14: un precio a medida legado nace con customPricePlan NULL = vale para cualquier plan. Se avisa para que
-    // Martin decida si lo ata a un plan después del deploy.
-    return n === 0 ? pass("0 con precio a medida") : warn(`${n} con precio a medida: quedan con customPricePlan NULL (vale para cualquier plan, MPS-D14)`);
-  });
-
-  // Sesiones y locks: el deploy toma ACCESS EXCLUSIVE en Booking/Patient/Tenant (M14, M15, M18) con lock_timeout 5 s.
+  // Sesiones y locks: M20 toma ACCESS EXCLUSIVE en Tenant y Practitioner (ALTER TABLE, solo catálogo) con lock_timeout
+  // 5 s. Las dos se leen en cada request de agenda: una tx larga sobre ellas hace caer el deploy con P3009.
   await c.check("pre.activity.longTx", "base", "Transacciones de más de 30 s (pg_stat_activity)", async () => {
     const r = await rows<{ pid: number; u: string | null; app: string | null; state: string | null; age: unknown }>(
       tx,
@@ -742,12 +718,12 @@ async function preChecks(c: Collector, tx: Tx, o: PrecheckOptions, ms: MigState)
       ? pass("ninguna")
       : warn(`${r.length}: ${list(r.map((x) => `pid ${x.pid} ${x.u ?? "?"}/${x.app || "-"} ${x.state ?? "?"} ${num(x.age)} s`), 6)} (esperá a que terminen)`);
   });
-  await c.check("pre.activity.locks", "base", "Locks sobre Booking, Patient y Tenant", async () => {
+  await c.check("pre.activity.locks", "base", "Locks sobre Tenant y Practitioner (las que altera M20)", async () => {
     const r = await rows<{ pid: number; rel: string; mode: string; granted: boolean; age: unknown }>(
       tx,
       `SELECT l.pid, c.relname AS rel, l.mode, l.granted, coalesce(extract(epoch FROM now() - a.xact_start)::int, 0) AS age
          FROM pg_locks l JOIN pg_class c ON c.oid = l.relation LEFT JOIN pg_stat_activity a ON a.pid = l.pid
-        WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('Booking','Patient','Tenant') AND l.pid <> pg_backend_pid()
+        WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('Tenant','Practitioner') AND l.pid <> pg_backend_pid()
           AND (NOT l.granted OR l.mode IN ('ShareLock','ShareRowExclusiveLock','ExclusiveLock','AccessExclusiveLock')
                OR now() - a.xact_start > interval '30 seconds')
         ORDER BY 1`
@@ -808,14 +784,14 @@ async function postChecks(c: Collector, tx: Tx, o: PrecheckOptions, ms: MigState
       ? warn(`${ms.applied.size} aplicadas; la base tiene migraciones que el repo no conoce: ${list(ms.unknownInDb)}`)
       : pass(`${ms.applied.size} aplicadas = ${ms.repo.length} del repo («Database schema is up to date!»)`);
   });
-  await c.check("post.migrate.checksums", "base", "Checksum de las 6 en _prisma_migrations = sha256 del repo", async () => {
+  await c.check("post.migrate.checksums", "base", "Checksum de M12..M20 en _prisma_migrations = sha256 del repo", async () => {
     const bad: string[] = [];
-    for (const m of T6T7_MIGRATIONS) {
+    for (const m of TRACKED_MIGRATIONS) {
       const r = ms.db.find((x) => x.migration_name === m.name && x.finished_at && !x.rolled_back_at);
       if (!r) bad.push(`${m.key} sin aplicar`);
       else if (r.checksum !== m.sha256 || fileSha256(o.migrationsDir, m.name) !== m.sha256) bad.push(`${m.key} checksum distinto`);
     }
-    return bad.length === 0 ? pass("M12, M14, M18, M17, M15, M16 y M19 con el checksum verificado") : fail(list(bad));
+    return bad.length === 0 ? pass("M12, M14, M18, M17, M15, M16, M19 y M20 con el checksum verificado") : fail(list(bad));
   });
 
   await c.check("post.grants.app", "base", "Rol de la app: SELECT sobre las 15 tablas nuevas (DEFAULT PRIVILEGES)", async () => {
@@ -1032,6 +1008,31 @@ async function postChecks(c: Collector, tx: Tx, o: PrecheckOptions, ms: MigState
     return n === 0 ? pass("0 hilos con source NULL") : warn(`${n} hilos con source NULL (los escribió el código viejo entre M19 y el deploy; se leen con COALESCE)`);
   });
 
+  // M20 (CF · reglas de agenda): 6 columnas y 5 CHECK; el interruptor nace apagado para todos (sin backfill, CF-D1).
+  await c.check("post.M20.objects", "M20", "M20: 6 columnas en Tenant/Practitioner", () => present(tx, { columns: M20_COLUMNS }));
+  await c.check("post.M20.columns", "M20", "M20: allowParallelServices boolean NOT NULL DEFAULT false; las otras 5 integer NULL sin DEFAULT", async () => {
+    const r = await rows<{ n: string; t: string; nullable: string; d: string | null }>(
+      tx,
+      `SELECT table_name || '.' || column_name AS n, data_type AS t, is_nullable AS nullable, column_default AS d
+         FROM information_schema.columns WHERE table_schema = 'public' AND (table_name || '.' || column_name) = ANY($1::text[])`,
+      [...M20_COLUMNS]
+    );
+    const bad: string[] = [];
+    for (const col of M20_COLUMNS) {
+      const x = r.find((y) => y.n === col);
+      const want = col === "Practitioner.allowParallelServices" ? "boolean NO false" : "integer YES -";
+      const got = x ? `${x.t} ${x.nullable} ${x.d ?? "-"}` : "no existe";
+      if (got !== want) bad.push(`${col}: ${got} (≠ ${want})`);
+    }
+    return bad.length === 0 ? pass("tipos, nulabilidad y DEFAULT como el SQL de M20") : fail(list(bad));
+  });
+  await c.check("post.M20.checks", "M20", "M20: 5 CHECK (paso 15/30/45/60, anticipación 0..80 640)", () => constraintsByName(tx, M20_CHECKS, "c"));
+  await c.check("post.M20.parallel", "M20", "M20: profesionales con «Atiende servicios distintos a la vez» prendido (informativo)", async () => {
+    const on = await scalar(tx, `SELECT count(*) AS n FROM "Practitioner" WHERE "allowParallelServices"`);
+    const total = await scalar(tx, `SELECT count(*) AS n FROM "Practitioner"`);
+    // Recién migrado da 0 de N (nadie lo tiene): prenderlo a los que listó pre.M20.crossService es tarea del día.
+    return pass(`${on} de ${total} profesionales`);
+  });
 }
 
 // ─── entrada ────────────────────────────────────────────────────────────────
@@ -1051,9 +1052,9 @@ export async function runProdPrecheck(o: PrecheckOptions): Promise<PrecheckResul
 /** Tabla de texto para pegar en el chat (sin colores: se copia tal cual). */
 export function formatPrecheckTable(r: PrecheckResult): string {
   const lines: string[] = [];
-  // Agrupado por bloque (Base y después M12 → M19 en orden de aplicación), estable dentro de cada uno: los chequeos
+  // Agrupado por bloque (Base y después M12 → M20 en orden de aplicación), estable dentro de cada uno: los chequeos
   // se ejecutan en el orden que conviene a la tx, pero se leen por migración.
-  const rank = (g: string) => (g === "base" ? 0 : 1 + T6T7_MIGRATIONS.findIndex((m) => m.key === g));
+  const rank = (g: string) => (g === "base" ? 0 : 1 + TRACKED_MIGRATIONS.findIndex((m) => m.key === g));
   const sorted = r.rows.map((row, i) => ({ row, i })).sort((a, b) => rank(a.row.group) - rank(b.row.group) || a.i - b.i);
   const counts = { PASS: 0, WARN: 0, FAIL: 0, SKIP: 0 } as Record<CheckStatus, number>;
   let group = "";

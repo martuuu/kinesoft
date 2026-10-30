@@ -57,6 +57,14 @@ export type TenantRole = Role;
  */
 export type LegalFixtureOpts = { acceptLegal?: boolean };
 
+/**
+ * CF (M20): sin valor → default de la base (`false` = el profesional NO atiende dos servicios distintos a la vez).
+ * A propósito la factory NO lo relaja (anti-false-green: los tests nuevos de la regla de servicio corren contra lo
+ * que nace en prod). Solo lo prenden los fixtures que pisan servicios distintos del mismo profesional para probar
+ * OTRA cosa (tope por intervalo de M12, salas…), con el comentario `// CF:` al lado.
+ */
+export type PractitionerFixtureOpts = { allowParallelServices?: boolean };
+
 export async function acceptLegalFor(prisma: PrismaClient, userId: string): Promise<void> {
   await prisma.userSecurityEvent.create({
     data: { userId, kind: "legal.accepted", payload: { version: LEGAL_VERSION, via: "signup" } },
@@ -267,7 +275,8 @@ export async function createEphemeralTenant(
     seatLimitOverride?: number | null;
     /** BO0 (M7): el UserProfile del OWNER nace deshabilitado a nivel plataforma. */
     disabled?: boolean;
-  } & LegalFixtureOpts = {}
+  } & LegalFixtureOpts &
+    PractitionerFixtureOpts = {}
 ): Promise<EphemeralTenant> {
   const s = uniqueSuffix();
   const slug = `test-${s}`;
@@ -304,6 +313,7 @@ export async function createEphemeralTenant(
       userId,
       specialty: "Test",
       publicBookingEnabled: opts.practitionerPublicBooking ?? true,
+      allowParallelServices: opts.allowParallelServices,
     },
   });
   // PL-1 (integrador): un ADMIN nace con «Configuración» delegada, como el backfill de M8 y la invitación de ADMIN
@@ -342,7 +352,7 @@ export async function addPractitioner(
   prisma: PrismaClient,
   t: EphemeralTenant,
   role: TenantRole = "PRACTITIONER",
-  opts: LegalFixtureOpts = {}
+  opts: LegalFixtureOpts & PractitionerFixtureOpts = {}
 ): Promise<{ userId: string; practitionerId: string }> {
   const s = uniqueSuffix();
   const userId = `test-user-${s}`;
@@ -350,7 +360,13 @@ export async function addPractitioner(
   if (opts.acceptLegal !== false) await acceptLegalFor(prisma, userId);
   // PL-0 (M8): prendido en el turnero como el titular de la factory (ver createEphemeralTenant).
   const p = await prisma.practitioner.create({
-    data: { tenantId: t.tenantId, userId, specialty: "Test", publicBookingEnabled: true },
+    data: {
+      tenantId: t.tenantId,
+      userId,
+      specialty: "Test",
+      publicBookingEnabled: true,
+      allowParallelServices: opts.allowParallelServices,
+    },
   });
   // PL-1: ADMIN con «Configuración» (como el backfill de M8). Sigue con `Practitioner` y `clinical = true`: es la
   // forma de un ADMIN de antes de §20.17 (lo normaliza M8b), que es lo que asumen los tests que lo usan con agenda.

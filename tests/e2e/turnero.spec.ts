@@ -49,6 +49,9 @@ test("turnero público: ventana de 5 días, reserva sin cobro y «¡Turno reserv
   await page.locator("#booking-phone").fill("1155550199");
   await page.locator("#booking-documentId").fill(dni);
   await page.locator("#booking-dateOfBirth").fill("1990-05-04");
+  // CF-FORM: el «diagnóstico» es obligatorio según la vertical (Kine #booking-title; General #booking-notes).
+  if (await page.locator("#booking-title").count()) await page.locator("#booking-title").fill("Lumbalgia");
+  else await page.locator("#booking-notes").fill("Control");
   await page.getByRole("button", { name: "Confirmar turno" }).click();
 
   await page.waitForURL(/\/booking\/[^/]+\/ok/);

@@ -98,6 +98,9 @@ export function planRowStatus(row: PlanPreviewRow & { blockReason?: string | nul
   else if (f.blocked) [kind, label] = ["blocked", row.blockReason ? `Bloqueado: ${row.blockReason}` : "Bloqueado"];
   else if (f.outOfHours) [kind, label] = ["out-of-hours", "Fuera de horario"];
   else if (f.patientOverlapIds.length > 0) [kind, label] = ["overlap", "Se superpone con otro turno del paciente"];
+  // CF-D4: el choque con otro servicio del profesional se pliega en capacityFull (mismo force.capacity y mismo
+  // glifo), pero el motivo es otro: "Sobreturno" a secas hacía pensar en el cupo del servicio.
+  else if (f.otherServiceBusy) [kind, label] = ["capacity", "Atiende otro servicio a esa hora"];
   else if (f.capacityFull) [kind, label] = ["capacity", "Sobreturno"];
   else [kind, label] = ["free", "Libre"];
   return { kind, label, glyph: STATUS_GLYPH[kind] };

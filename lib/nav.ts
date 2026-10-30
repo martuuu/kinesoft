@@ -77,17 +77,22 @@ export const NAV_ITEMS: readonly NavItem[] = [
     capability: "agenda.reception",
   },
   { href: "/pacientes", label: "Pacientes", icon: "users", module: "pacientes", shortcut: "Pacientes" },
-  // Planes (S21): sin capability a propósito, así también es atajo de ⌘K.
-  // La Secretaria entra (filtro "Sesiones sin turno", sin títulos: PD-13);
-  // lo que cada rol ve lo recorta `listPlans` en el server.
+  // CF-NAV (§28, decisión 7 de Martin, 30-oct): Planes, Diagnóstico, Seguimiento, Ejercicios y Terapia manual exigen
+  // `clinical.read`. La Secretaria, Facturación y el Titular que no atiende no las ven (antes Planes iba sin capability
+  // para que la Secretaria usara el filtro «Sesiones sin turno», PD-13; el cliente pidió sacarle todo lo clínico del
+  // menú). Su layout redirige a /dashboard con el mismo criterio (`lib/clinical-wall.ts`); las actions siguen con su
+  // propio chequeo. El ⌘K las publica como atajo solo con la capability (`shortcutsFor(modules, caps)`).
   // PF1.0-a (S3 de VX0-b): ícono propio (`plans`, el portapapeles de las pestañas). Reusaba `bookmark`, el mismo de
   // Plataforma en el pie: con el sidebar contraído había dos «marcadores» iguales y no se sabía cuál era cuál.
-  { href: "/planes", label: "Planes", icon: "plans", module: "planes", shortcut: "Planes" },
+  { href: "/planes", label: "Planes", icon: "plans", module: "planes", capability: "clinical.read", shortcut: "Planes" },
+  // CF (decisión 8): la página muestra «Próximamente» (`components/ui/coming-soon.tsx`); la entrada queda para quien
+  // la vería igual, así se entera de que viene.
   {
     href: "/diagnostico",
     label: "Diagnóstico",
     icon: "heart",
     module: "diagnostico",
+    capability: "clinical.read",
     shortcut: "Diagnóstico",
   },
   // Seguimiento = sesiones del plan (en General no hay "Sesiones/Seguimiento").
@@ -97,16 +102,30 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: "Seguimiento",
     icon: "chart",
     module: "sesiones",
+    capability: "clinical.read",
     shortcut: "Seguimiento",
   },
-  { href: "/biblioteca", label: "Ejercicios", icon: "dumbbell", module: "ejercicios", shortcut: "Ejercicios" },
+  {
+    href: "/biblioteca",
+    label: "Ejercicios",
+    icon: "dumbbell",
+    module: "ejercicios",
+    capability: "clinical.read",
+    shortcut: "Ejercicios",
+  },
   // Terapia manual = biblioteca de maniobras: es la parte "kine" de la
   // biblioteca, sin módulo propio en la matriz → va con `ejercicios`.
-  { href: "/terapia-manual", label: "Terapia Manual", icon: "activity", module: "ejercicios" },
+  {
+    href: "/terapia-manual",
+    label: "Terapia Manual",
+    icon: "activity",
+    module: "ejercicios",
+    capability: "clinical.read",
+  },
   // [TP-3g] Cobros online (T5, §25.10; TP-UI-D7): SIEMPRE con `billing.collect`, aunque no haya cobros (la página
   // muestra el estado vacío). Sin módulo: cobrar no depende del plan. El Profesional NO la ve en el nav (Anexo C 3g):
   // con `billing.collectOwn` puede abrir /cobros y ve solo lo suyo, pero sus cobros los encuentra en el turno y en
-  // Facturación del paciente. Tiene capability → no es atajo del ⌘K (el ⌘K no conoce el rol).
+  // Facturación del paciente. Sin `shortcut` → no es atajo del ⌘K.
   // TP-3z: ícono propio (`tag`). Sin cobros online (`MP_CONNECT_MODE=off`) no aparece: lo saca `shellNavCaps`.
   { href: "/cobros", label: "Cobros", icon: "tag", capability: "billing.collect" },
   // PL-F1b: «Reportes» salió del nav y del ⌘K (regla de Martin: lo que no tiene funcionalidad se saca). La página era
@@ -198,13 +217,12 @@ function shortcutId(href: string): string {
 
 /**
  * Atajos de navegación del ⌘K (reemplazo de `SHORTCUTS` de `lib/search.ts`).
- * Solo filtra por módulo: el ⌘K no conoce el rol y una entrada con capability
- * no se publica como atajo.
+ * Mismo filtro que `navFor` (módulo + capability): CF-NAV le pasó las caps del actor (`lib/search.ts`). Antes el ⌘K no
+ * conocía el rol y una entrada con capability nunca era atajo; con Planes/Diagnóstico/Seguimiento/Ejercicios detrás de
+ * `clinical.read` eso los habría sacado para todos. Sin caps falla cerrado, igual que `navFor`.
  */
-export function shortcutsFor(modules: ReadonlySet<TenantModule>): SearchHit[] {
-  return NAV_ITEMS.filter(
-    (it) => it.shortcut !== undefined && !it.capability && allowed(it, modules, undefined)
-  ).map((it) => ({
+export function shortcutsFor(modules: ReadonlySet<TenantModule>, caps?: ReadonlySet<Capability>): SearchHit[] {
+  return NAV_ITEMS.filter((it) => it.shortcut !== undefined && allowed(it, modules, caps)).map((it) => ({
     id: shortcutId(it.href),
     category: "shortcut" as const,
     label: it.shortcut as string,

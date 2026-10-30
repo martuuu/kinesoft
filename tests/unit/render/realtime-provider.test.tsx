@@ -12,8 +12,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-// La action del token es "use server" (Prisma, sesión): fuera del test. El hub
-// la usa solo vía `defaultLoadDriver`, que los tests no invocan.
+// La action del token es "use server" (Prisma, sesión): fuera del test. CF-RT: el provider la importa estática y la
+// pasa al hub; el hub la usa solo vía `defaultLoadDriver`, que estos tests no invocan.
 const mint = vi.hoisted(() => ({ calls: 0 }));
 vi.mock("@/lib/realtime-token", () => ({
   mintRealtimeToken: async () => {
@@ -156,8 +156,9 @@ describe("[SV07b] RealtimeProvider · render", () => {
  * [FX3] Bundle (§18.10 punto 7): el provider va en el first-load de TODAS las rutas
  * del workspace; el gate midió +11 kB gz con el hub estático. Se afirma sobre el
  * source (como `realtime-client-drivers.test.ts` con realtime-js): ningún import
- * de VALOR del hub, del estado del cliente, del schema zod ni de la action del
- * token; el hub entra solo por `import()`.
+ * de VALOR del hub, del estado del cliente ni del schema zod; el hub entra solo por `import()`.
+ * CF-RT (§28 E): la referencia a la action del token (`lib/realtime-token-action`) SÍ va estática en el provider
+ * (Next 14.2 no registra una action alcanzable solo por `import()`); al first-load llega la referencia, no su código.
  */
 function staticValueImport(src: string, mod: string): boolean {
   const m = mod.replace(/[/.@-]/g, (c) => `\\${c}`);
@@ -176,13 +177,16 @@ describe("[FX3] RealtimeProvider · bundle liviano", () => {
         "@/components/realtime/realtime-hub",
         "@/lib/realtime-client-state",
         "@/lib/realtime-events",
-        "@/lib/realtime-token",
         "@/lib/realtime-client-local",
         "@/lib/realtime-client-supabase",
       ]) {
         expect(staticValueImport(src, mod), `${f} → ${mod}`).toBe(false);
       }
     }
+    // Ni la action real: el provider trae la REFERENCIA (`lib/realtime-token-action`, "use server", delega al llamarla).
+    for (const f of ["components/providers/realtime-provider.tsx", "components/realtime/live-indicator.tsx"])
+      expect(staticValueImport(read(f), "@/lib/realtime-token"), `${f} → @/lib/realtime-token`).toBe(false);
+    expect(staticValueImport(read("components/providers/realtime-provider.tsx"), "@/lib/realtime-token-action")).toBe(true);
     expect(read("components/providers/realtime-provider.tsx")).toMatch(
       /import\(\s*["']@\/components\/realtime\/realtime-hub["']\s*\)/,
     );

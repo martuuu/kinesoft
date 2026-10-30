@@ -13,15 +13,19 @@
  *   - "Sin evolución" en el detalle = realizada y sin nada cargado (espejo del
  *     "untouched" del server); la EvaScore no viaja en el DTO, así que el
  *     server tiene la última palabra (`loadSessionEvolution` → `loaded:false`);
+ *   - CF-L2 (Martin, 30-oct): la EVA sale de la app. El borrador del kine es
+ *     solo anotaciones + RPE y el payload NO lleva las claves de EVA
+ *     (`SessionMeta`: undefined = no tocar), así una EVA vieja ya guardada no
+ *     se borra al guardar ni al cerrar. Los datos y el modelo quedan;
  *   - EV2-D19 (Martin puede revertir): la acción que guarda la meta de la
- *     sesión (anotaciones, EVA, RPE) se llama «Registrar sesión»; «Cargar
+ *     sesión (anotaciones, RPE) se llama «Registrar sesión»; «Cargar
  *     evolución» pasa a ser la evolución de la historia clínica del turno de
  *     la sesión (`FichaDrawer`). EV2-D18: una evolución viva del turno
  *     también saca la sesión de «Sin evolución» (bucket y tag), pero NO
  *     bloquea «Registrar sesión» (EV2-Z A2, default del orquestador para
- *     Martin): la evolución de HC y el registro del plan (EVA, ejercicios)
+ *     Martin): la evolución de HC y el registro del plan (RPE, ejercicios)
  *     son cosas distintas; si la HC bloqueaba, una sesión con evolución y
- *     sin EVA quedaba sin forma de cargarle la EVA.
+ *     sin registro quedaba sin forma de registrarla.
  */
 import { planSessionLabel } from "@/lib/plan-display";
 import type { OpenSessionBuckets } from "@/lib/sessions-types";
@@ -35,7 +39,7 @@ export const SEGUIMIENTO_COPY = {
   sinTurnoTitle: "Sin turno",
   sinTurnoHint: "Sesiones de planes activos que no tienen turno en la agenda.",
   sinEvolucionTitle: "Sin ficha",
-  sinEvolucionHint: "Realizadas en los últimos 14 días sin ficha ni registro de la sesión (anotaciones, EVA o ejercicios).",
+  sinEvolucionHint: "Realizadas en los últimos 14 días sin ficha ni registro de la sesión (anotaciones, RPE o ejercicios).",
   sinEvolucionTag: "Sin ficha",
   /** EV2-D19: guarda la meta de la sesión (antes decía «Cargar evolución»). */
   registrarSesion: "Registrar sesión",
@@ -47,7 +51,7 @@ export const SEGUIMIENTO_COPY = {
   dischargeAction: "Ver el plan",
   /** EV2-Z A2/M3: el registro de la sesión no depende de la evolución de HC; esto es solo «ya tenía meta». */
   evolutionAlreadyLoaded: "Esta sesión ya tenía un registro: editalo con «Guardar anotaciones».",
-  evolutionEmpty: "Cargá al menos una anotación, la EVA, el RPE o un ejercicio hecho.",
+  evolutionEmpty: "Cargá al menos una anotación, el RPE o un ejercicio hecho.",
   archived: "Sesión archivada",
   scheduleTitle: "Agendar sesión",
   scheduleConfirm: "Agendar turno",
@@ -159,9 +163,40 @@ export type EvolutionProbe = {
 };
 
 /**
+ * Borrador de las anotaciones del kine (vive en `SessionDetail` para que "Cerrar sesión" mande lo tipeado: H3 era que
+ * el cierre solo mandaba el id y lo no guardado se perdía). CF-L2: sin EVA pre/post.
+ */
+export type SessionMetaDraft = {
+  notes: string;
+  rpe: number | "";
+};
+
+export function sessionMetaDraftFrom(s: { notes: string | null; rpe: number | null }): SessionMetaDraft {
+  return { notes: s.notes ?? "", rpe: s.rpe ?? "" };
+}
+
+/**
+ * Payload de `updateSessionMeta` / `completeSessionFromSeguimiento` / `loadSessionEvolution`. `""` → `null`: vaciar
+ * un campo es un cambio válido. CF-L2: sin `paInPre`/`paInPost` a propósito (ni siquiera en null): null VACIARÍA la
+ * EVA vieja de la fila y undefined la deja como está; el server sigue aceptando las claves (contrato intacto).
+ */
+export function sessionMetaPayload(d: SessionMetaDraft): { notes: string | null; rpe: number | null } {
+  return {
+    notes: d.notes.trim() === "" ? null : d.notes,
+    rpe: d.rpe === "" ? null : d.rpe,
+  };
+}
+
+export function sameSessionMetaDraft(a: SessionMetaDraft, b: SessionMetaDraft): boolean {
+  return a.notes.trim() === b.notes.trim() && a.rpe === b.rpe;
+}
+
+/**
  * Realizada (p. ej. por "Atendido" en la agenda) y sin evolución cargada. EV2-D18: `hasClinicalNote` = el turno
  * activo de la sesión tiene una evolución de HC viva (raíz no anulada); con eso tampoco es "Sin evolución", igual
- * que en el bucket del server (`listOpenSessions`).
+ * que en el bucket del server (`listOpenSessions`). CF-L2: `paInPre`/`paInPost` se siguen mirando aunque la EVA ya no
+ * se cargue: una sesión vieja con EVA guardada está «tocada» para el server (`lockSessionEvolutionStateInTx`), y si
+ * acá dijera «Sin ficha» ofrecería un «Registrar sesión» que el server rechaza.
  */
 export function isSessionWithoutEvolution(s: EvolutionProbe, opts?: { hasClinicalNote?: boolean }): boolean {
   return (

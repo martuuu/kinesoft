@@ -4,7 +4,10 @@
  * inmutables y los cachea el navegador: el SW no los toca (cache-first acá = deploys viejos pegados). */
 const VERSION = "ks-sw-v2";
 const OFFLINE_URL = "/offline.html";
-const PRECACHE = [OFFLINE_URL, "/icons/icon-192.png"];
+// [CF-UI1 · H] `?v=2` = el mismo ícono que declara `app/manifest.ts`: una URL nueva fuerza a bajar el PNG con la marca
+// actual sin tocar `VERSION` (preservado [BR-9]); el activate igual no borra nada porque el nombre del cache no cambia,
+// así que la entrada vieja queda huérfana pero inofensiva (un PNG de 192 px) hasta que el navegador la desaloje.
+const PRECACHE = [OFFLINE_URL, "/icons/icon-192.png?v=2"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(VERSION).then((c) => c.addAll(PRECACHE)).then(() => self.skipWaiting()));

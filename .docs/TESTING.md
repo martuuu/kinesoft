@@ -419,6 +419,31 @@ su alcance queda vacío (anti falso verde).
     `kinesoft:*`, roles, cache del SW, UID del ICS) **siguen existiendo** con la grafía vieja.
   - `zf1b-idle-surfaces` fija que exports, `/cuenta` y `/plataforma` chequean `kine_idle`.
 
+### Patrones nuevos de CF (feedback del cliente, M20, 30-oct-2026)
+
+- **Tests primero por ID** (§28.6): `[CF-M1..2]`, `[CF-K1..3]`, `[CF-E1..7]` (motor en TZ=UTC), `[CF-L1..4]` (locks),
+  `[CF-C1..3]`, `[CF-W1..5]`, `[CF-P1..4]`, `[CF-A1..5]`, `[CF-PL1..3]`, `[CF-F1..3]`, `[CF-I1]`, `[CF-N1]`, `[CF-H1]`,
+  `[CF-RT1]`. Ojo: `[CF-D1]`/`[CF-D2]` son tests del **formulario del turnero**, no los defaults CF-D1/D2 (CLAUDE.md).
+- **Carve-out de paridad:** la regla nueva va en tests nuevos (`cf-e-engine`); los fijados
+  `availability-classify.test.ts:372` y `booking-schedule.test.ts:434` **no se editan** (AUDIT §5.27).
+- **Carreras `[CF-R1..3]` en los dos roles** (`tests/integration/cf-race-two-services.test.ts`, `cf-locks-pday`): 09:30 + 60'
+  vs 10:00 + 60' de servicios distintos → entra una; turnero vs staff; plan vs alta sin 40P01. Quien espera, espera en
+  `pday` (lo afirman con `pg_locks`). Fixtures que pisan servicios a propósito (`as2-interval-cap`, `as2l-…`) llevan
+  `allowParallelServices: true`.
+- **`m20-cf-agenda-rules`** verifica los objetos de M20 en los dos roles y que el INSERT viejo de `Practitioner` toma el
+  DEFAULT.
+- **E2E `cf-*`** (`tests/e2e/cf-{agenda-rules,config,day-lock,misc,secretaria,turnero}.spec.ts`, fixture
+  `tests/e2e/support/cf.ts`). El del candado arrancó con `test.fail` por el bug del diálogo (anterior a CF) y se da
+  vuelta con ZF2.
+- **Guard post-build de server actions** (`npm run check:actions`, `scripts/check-server-actions.mjs`): todo
+  `createServerReference("<id>")` de `.next/static/chunks/**` existe en `.next/server/server-reference-manifest.json`.
+  Corre **después del build seguro** (abajo), exit 0 obligatorio; contra un `.next` viejo da 1. Unit con fixtures:
+  `tests/unit/cf-rt-check-server-actions.test.ts`. Existe porque el realtime pasó en verde meses sin andar: el E2E corre
+  con `REALTIME_DRIVER=off` y el driver `local` no usa la action.
+- **Perf `[CF-PERF1]`:** `f.createBooking` 31/5, lote 182/22 y update con las mismas sentencias con la regla prendida y
+  apagada. `tests/perf/plans.perf.test.ts` no tiene JSON de referencia: `compare.ts` no lo vigila (AUDIT «Ronda CF»).
+- `vitest --project unit` no existe en este repo: `npm test` o `npx vitest run <archivos>`.
+
 ### Build local (`next build`) — siempre con el env local explícito
 
 Dos problemas. `.env.local` define `NODE_ENV`, y `next build` con ese valor falla en el prerender. Y, más grave, `next build`
@@ -602,6 +627,8 @@ Corren en CI **sin levantar DB ni server**, parseando el repo. Sesión `ci-pipel
 - **Guards de T6/T7** — en la unit: `whatsapp-guard`, `tv-csp`, `inf-dev-safe` (ver «Patrones nuevos de T6/T7»).
 - **Guards de PV** — en la unit: `server-surface-guard` (superficie RPC), `brand-literal` estricto y `[BR-9]` (ver
   «Patrones nuevos de PV»).
+- **Guard de CF** — **después del build**: `npm run check:actions` (toda action referenciada por el cliente está en el
+  manifest del server; ver «Patrones nuevos de CF»).
 - **Guards de la cara pública (VX)** — también en la unit: `public-surface-imports`, `public-claims`, `ui-ratchets`,
   `tokens-contract`, `bundle-groups`, `module-wall-page-cut` (ver «Patrones nuevos de VX»). El presupuesto de bundle
   corre después del build (`check-bundle-budget.mjs`).

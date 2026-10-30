@@ -5,8 +5,10 @@
  *
  * Lo corre Martin, nunca un agente (decisión 1 del 22-oct). Pega la salida en el chat y el agente la verifica antes
  * de cada paso:
- *   1. `--pre`  → backup (`db:prod:backup`) → `db:prod:deploy` (M12 → M14 → M18 → M17 → M15 → M16)
- *   2. `--post` (con `--booking-relfilenode=<el que imprimió el --pre>`) → push.
+ *   1. `--pre`  → backup (`db:prod:backup`) → `db:prod:deploy`. Desde el reset del 29-oct, M12..M19 ya están en prod y
+ *      la única pendiente es M20 `cf_agenda_rules` (CF, 30-oct; MIGRACIONES-RUNBOOK «M20 en prod»).
+ *   2. `--post` → push. `--booking-relfilenode=<el que imprimió el --pre>` es opcional: confirma que ninguna migración
+ *      reescribió "Booking" (M20 no lo toca).
  *
  * Seguridad:
  *  - Una sola tx `READ ONLY`: Postgres rechaza cualquier write.
@@ -20,7 +22,7 @@
  * Uso:
  *   npm run db:prod:precheck -- --pre                      (= dotenv -e .env.prod.local -- tsx scripts/prod-precheck.ts)
  *   KINESOFT_CONFIRM_PROD=<ref> npm run db:prod:precheck -- --pre
- *   KINESOFT_CONFIRM_PROD=<ref> npm run db:prod:precheck -- --post --booking-relfilenode=<n>
+ *   KINESOFT_CONFIRM_PROD=<ref> npm run db:prod:precheck -- --post [--booking-relfilenode=<n>]
  * Local (Docker :5433, para ensayar):
  *   npx dotenv -e .env.local -- npx tsx scripts/prod-precheck.ts --post
  */

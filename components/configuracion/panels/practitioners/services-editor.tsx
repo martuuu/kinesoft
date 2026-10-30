@@ -46,6 +46,10 @@ import {
 import { ErrorBox } from "../../controls";
 import { durationOptionsWith } from "@/lib/service-durations";
 
+/** CF-U4: la misma línea en Servicios (catálogo) y en los servicios del profesional. */
+export const CUPO_SCOPE_HINT =
+  "El cupo es por servicio. Un profesional no atiende servicios distintos a la vez salvo que lo actives en Profesionales → Horarios («Atiende servicios distintos a la vez»).";
+
 type RowStatus =
   | { kind: "idle" }
   | { kind: "saving" }
@@ -215,6 +219,9 @@ export function ServicesEditor({
           Qué servicios ofrece {practitionerName} y con qué reglas. Lo que dejes vacío toma el valor
           del servicio. Cada fila se guarda por separado.
         </div>
+        {/* CF-U4 (decisión 1): el cupo no habilita a atender OTRO servicio en el mismo horario; eso es el interruptor
+            «Atiende servicios distintos a la vez» de la ficha (sub-pestaña Horarios). */}
+        <div style={{ fontSize: 12, color: "var(--navy-500)", marginTop: 4 }}>{CUPO_SCOPE_HINT}</div>
         {dirtyCount > 0 && (
           <div role="status" style={{ fontSize: 12, color: "var(--warn-fg)", marginTop: 6, fontWeight: 600 }}>
             {dirtyCount === 1 ? "1 servicio con cambios sin guardar" : `${dirtyCount} servicios con cambios sin guardar`}
@@ -418,7 +425,7 @@ function ServiceRowEditor({
         {errors.minLead ? (
           <FieldError id={`${idp}-lead-err`} msg={errors.minLead} />
         ) : (
-          <span id={`${idp}-lead-hint`} className="pse-hint">Vacío: la del turnero</span>
+          <span id={`${idp}-lead-hint`} className="pse-hint">Vacío: la del consultorio</span>
         )}
       </div>
 

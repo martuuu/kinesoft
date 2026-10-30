@@ -184,6 +184,14 @@ type SidebarProps = {
   onPreloadAppearance?: () => void;
   /** Capabilities del rol (array: llega de un Server Component). Sin caps, falla cerrado. */
   caps?: readonly Capability[];
+  /**
+   * [CF-F] Campana debajo del consultorio activo. Con la Apariencia «Barra lateral» existía solo en el dashboard (AUDIT
+   * bell-sin-barra-superior): los avisos no se veían en agenda ni pacientes. La pasa el AppShell al `<aside>` de
+   * escritorio (no el Drawer móvil, que también arma `SidebarBody`: serían dos campanas y dos pollers con el `<aside>`
+   * oculto montado). Llega por prop y no se importa acá: la campana trae las server actions de notificaciones y el
+   * sidebar se renderiza suelto en varios tests del shell.
+   */
+  bell?: ReactNode;
 };
 
 /**
@@ -198,6 +206,7 @@ export function Sidebar({
   onOpenAppearance,
   onPreloadAppearance,
   className,
+  bell,
 }: SidebarProps & { className?: string }) {
   const w = collapsed ? 64 : 232;
   return (
@@ -213,6 +222,7 @@ export function Sidebar({
         caps={caps}
         onOpenAppearance={onOpenAppearance}
         onPreloadAppearance={onPreloadAppearance}
+        bell={bell}
       />
     </aside>
   );
@@ -227,6 +237,7 @@ export function SidebarBody({
   onNavigate,
   animatedPill = true,
   footerExtra,
+  bell,
 }: SidebarProps & {
   /** Drawer móvil: cerrar al tocar un destino. */
   onNavigate?: () => void;
@@ -285,6 +296,17 @@ export function SidebarBody({
           selector (también colapsado, con las iniciales); con 1, solo el nombre; sin provider, nada. Las opciones
           llegan por `TenantChoiceProvider` (AppShell), no por props. */}
       <TenantSwitcher collapsed={collapsed} />
+      {bell && (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: collapsed ? "center" : "flex-start",
+            padding: collapsed ? "2px 0 8px" : "0 6px 10px",
+          }}
+        >
+          {bell}
+        </div>
+      )}
       <nav aria-label="Secciones" className={styles.navList} style={{ alignItems: collapsed ? "center" : "stretch" }}>
         {main.map((it) => {
           const on = active === it.href;

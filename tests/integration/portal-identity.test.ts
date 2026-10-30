@@ -14,7 +14,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
-import { getPortalAuth, getPortalPlan, searchMyPortalPatients, submitCheckIn } from "@/lib/portal";
+import { getPortalAuth, getPortalPlan, searchMyPortalPatients } from "@/lib/portal";
 import { requirePortalPatient, listPortalPatients, getPortalUser } from "@/lib/portal-identity-internal";
 import {
   linkPatientCas,
@@ -85,15 +85,13 @@ describe.skipIf(!RUN)("[P4-S24a] portal · identidad por (tenantId, userId)", ()
   it("[P4-S24a] ficha con el email pero sin userId no aparece en getPortalAuth", async () => {
     const me = await account();
     const patientId = await addPatient(db, A, { email: me.email });
-    const { sessionId } = await addPlan(A, patientId);
+    await addPlan(A, patientId);
     asUser(me.id);
 
     const auth = await getPortalAuth();
     expect(auth.signedIn).toBe(true);
     if (auth.signedIn) expect(auth.patients).toEqual([]);
     expect(await getPortalPlan(A.slug)).toBeNull();
-    expect(await submitCheckIn({ tenantSlug: A.slug, sessionId, pain: 5 })).toEqual({ ok: false, error: "Sin acceso." });
-    expect(await db.evaScore.count({ where: { patientId } })).toBe(0);
   });
 
   it("[P4-S24a] dos fichas Ana@x / ana@x en un consultorio → no vincula, outcome ambiguous", async () => {

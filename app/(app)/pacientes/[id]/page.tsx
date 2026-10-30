@@ -25,8 +25,8 @@ export const metadata = { title: "Paciente" };
 
 /**
  * S22b (ES3): los planes salen de la proyección de `getPatientPlans` / `getPatientPlanBalances` (S14). Solo se piden
- * con el módulo `planes` (enmienda EV0: un consultorio General no carga planes ni saldos); los EVA, solo con
- * `evaluaciones`. El deep-link C10 (`?tab=planes&programa=…`, `?tab=planes&nuevo=1&turno=…&prefill=…`, alias
+ * con el módulo `planes` (enmienda EV0: un consultorio General no carga planes ni saldos). La EVA ya no se carga (CF,
+ * §28: salió de la app). El deep-link C10 (`?tab=planes&programa=…`, `?tab=planes&nuevo=1&turno=…&prefill=…`, alias
  * `?tab=plan`) se parsea acá con `parseProfilePlanParams` y el shell lo consume una vez.
  *
  * PF2-b (C-PF8): la página resuelve el actor y hace UNA carga (`loadPatientProfilePage` →
@@ -54,7 +54,7 @@ export default async function PatientPage({
   // P0-S07v · nivel `admin` (PD-13): rol sin `clinical.read` (Secretaria,
   // BILLING). Va ANTES del corte de "no full": antes caía a la vista básica
   // ("Sin acceso") y la Secretaria no veía ni el teléfono. Solo turnos (con
-  // estado de cobro) y capabilities; ningún slice clínico (EVA, plantillas).
+  // estado de cobro) y capabilities; ningún slice clínico (plantillas).
   // Con el módulo `planes`, los planes en su proyección `admin` (sin título ni
   // notas, S14) y los saldos, para agrupar Turnos por plan (H1 de S22f).
   //
@@ -133,7 +133,6 @@ export default async function PatientPage({
         patientCore={patientCore}
         recentBookings={data.recentBookings}
         billableCount={data.billableCount}
-        evaScores={data.evaScores}
         insurers={data.insurers
           .filter((i) => !i.isParticular)
           .map((i) => ({ id: i.id, name: i.name, payerId: i.payerId }))}

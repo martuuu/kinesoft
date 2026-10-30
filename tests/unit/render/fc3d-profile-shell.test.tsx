@@ -101,7 +101,6 @@ function profile(
             patientCore={core}
             recentBookings={[]}
             billableCount={0}
-            evaScores={[]}
             capabilities={capabilities}
             role="PRACTITIONER"
             clinicalHome={capabilities.includes("clinical.read") ? home : null}
@@ -155,9 +154,11 @@ describe("[FC-3d] HC primera e inicial", () => {
 });
 
 describe("[FC-3d] ?tab=hc y ?turno= sin tab", () => {
-  it("[FC-3d] ?tab=hc es alias de la HC (clave `evoluciones`); `evol` sigue siendo la EVA", () => {
+  it("[FC-3d] ?tab=hc es alias de la HC (clave `evoluciones`); `evol` (la EVA, CF-L1) ya no es pestaña", () => {
     expect(normalizeProfileTab("hc")).toBe("evoluciones");
+    // `evol` no es alias de nada: pasa crudo y `resolveProfileTab` lo manda a la inicial (CF, §28: la EVA salió).
     expect(normalizeProfileTab("evol")).toBe("evol");
+    expect(resolveProfileTab("evol", profileTabsFor(KINE, { clinicalRead: true }))).toBe(HC_TAB);
     expect(parseProfilePlanParams({ tab: "hc", turno: "bk_1" })).toEqual({ tab: "evoluciones", intent: { kind: "none" } });
     const tabs = profileTabsFor(KINE, { clinicalRead: true });
     expect(resolveProfileTab("hc", tabs)).toBe(HC_TAB);

@@ -75,6 +75,7 @@ describe.skipIf(!RUN)("PL-2f · turnero por profesional", () => {
         phone: `11${Math.floor(Math.random() * 1e8).toString().padStart(8, "0")}`,
         documentId: `${Math.floor(1e7 + Math.random() * 8e7)}`,
         dateOfBirth: "1990-05-10",
+        title: "Lumbalgia",
       },
     };
   }

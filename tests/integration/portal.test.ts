@@ -6,19 +6,19 @@
  * - [P4-S24a] el portal autoriza por el vínculo `Patient.userId` (tenantId, userId), no por email: los fixtures
  *   crean la ficha YA vinculada a la cuenta (lo que deja el sign-in o la invitación). La regla de vínculo y el
  *   «sin vínculo no ve nada» están en tests/integration/portal-identity.test.ts;
- * - el check-in NO toca `Patient.notes` (antes anteponía el texto y cortaba a
- *   4 kB las notas del kine): crea la EvaScore, notifica al profesional
- *   asignado y deja un audit con el texto.
+ * - [CF-L3] el check-in pre-sesión (EVA 0..10 + notas, `submitCheckIn`) se borró con la EVA de toda la app (decisión
+ *   de Martin 30-oct, §28.1 punto 4): ni la action, ni la sección, ni el dato en el DTO. Las `EvaScore` viejas quedan.
  * - [P4-S24] el plan que se muestra es el VINCULADO (turnos con `programId` o `schedule`) más reciente: los fixtures
  *   arman planes con su turno, como los deja el motor de Planes. Los gates por módulo (`portalSectionsFor`) se prueban
- *   con un consultorio de Clínica general (sin `planes` ni `evaluaciones`; en la matriz no existe un Kine sin planes).
+ *   con un consultorio de Clínica general (sin `planes`; en la matriz no existe un Kine sin planes).
  *
  * Llama a las actions REALES de lib/portal.ts; solo se mockea la sesión de
  * Supabase (tests/helpers/actor.ts → `<userId>@test.local`, verificado).
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { PrismaClient } from "@prisma/client";
-import { getPortalAuth, getPortalPlan, submitCheckIn } from "@/lib/portal";
+import * as portalActions from "@/lib/portal";
+import { getPortalAuth, getPortalPlan } from "@/lib/portal";
 import { __rateLimitInternals } from "@/lib/rate-limit";
 import {
   ownerClient,
@@ -32,10 +32,10 @@ import { addPlanBooking, addPlanSession } from "@/tests/helpers/plan-factory";
 
 const RUN = process.env.INTEGRATION === "1";
 
-describe.skipIf(!RUN)("portal · identidad y check-in", () => {
+describe.skipIf(!RUN)("portal · identidad y plan", () => {
   let db: PrismaClient;
   let A: EphemeralTenant;
-  /** Clínica general: sin `planes` ni `evaluaciones` (lib/tenant-modules.ts); turnero apagado. */
+  /** Clínica general: sin `planes` (lib/tenant-modules.ts); turnero apagado. */
   let G: EphemeralTenant;
 
   beforeAll(async () => {
@@ -110,38 +110,28 @@ describe.skipIf(!RUN)("portal · identidad y check-in", () => {
     expect(plan?.title).toBe("Plan lumbar");
   });
 
-  it("el check-in no toca Patient.notes: crea la EvaScore y notifica al asignado (sin audit, PL-A)", async () => {
+  // [CF-L3] La EVA salió de toda la app (decisión de Martin 30-oct, §28.1 punto 4), incluido el check-in del portal.
+  // Antes `submitCheckIn` escribía una `EvaScore` «checkin-<sesión>» y notificaba «… · EVA 6/10» al profesional, y
+  // `getPortalPlan` traía `hasCheckIn` por sesión. Los datos viejos quedan en la base: el portal no los lee ni los manda.
+  it("[CF-L3] sin check-in: no hay action, el plan no trae el dato y una EvaScore vieja no se filtra", async () => {
+    expect("submitCheckIn" in portalActions).toBe(false);
     const uid = await patientIdentity();
-    const kineNotes = "Nota clínica del kine: no tocar.";
-    const patientId = await linkedPatient(uid, { notes: kineNotes });
+    const patientId = await linkedPatient(uid);
     const { sessionId } = await addProgramWithSession(patientId);
+    await db.evaScore.create({
+      data: { patientId, value: 7, source: `checkin-${sessionId}`, sessionId, note: "Texto viejo del paciente" },
+    });
     asUser(uid);
 
-    const r = await submitCheckIn({ tenantSlug: A.slug, sessionId, pain: 6, notes: "  Me duele al agacharme  " });
-    expect(r).toEqual({ ok: true, data: undefined });
-
-    const p = await db.patient.findUniqueOrThrow({ where: { id: patientId }, select: { notes: true } });
-    expect(p.notes).toBe(kineNotes);
-
-    const eva = await db.evaScore.findMany({ where: { patientId } });
-    expect(eva).toHaveLength(1);
-    expect(eva[0]).toMatchObject({ value: 6, source: `checkin-${sessionId}` });
-
-    // El asignado por defecto del factory es el practitioner del OWNER.
-    const notif = await db.notification.findMany({
-      where: { tenantId: A.tenantId, userId: A.userId, link: `/pacientes/${patientId}` },
-    });
-    expect(notif).toHaveLength(1);
-    expect(notif[0].title).toContain("EVA 6/10");
-    expect(notif[0].body).toBe("Me duele al agacharme");
-
-    // PL-A (plan §20.5.9): el check-in es ruido operativo y ya no audita (antes copiaba el texto del paciente al
-    // payload del audit). Queda la EvaScore y la notificación de arriba.
-    expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, entityId: patientId } })).toBe(0);
-
-    // Segundo check-in de la misma sesión: rechazado, sin tocar nada.
-    const again = await submitCheckIn({ tenantSlug: A.slug, sessionId, pain: 2, notes: "otra" });
-    expect(again.ok).toBe(false);
+    const plan = await getPortalPlan(A.slug);
+    expect(plan?.title).toBe("Plan lumbar");
+    expect(plan?.sessions).toHaveLength(1);
+    expect(plan?.sessions[0]).not.toHaveProperty("hasCheckIn");
+    expect(JSON.stringify(plan)).not.toMatch(/checkin|Texto viejo/i);
+    const auth = await getPortalAuth();
+    if (!auth.signedIn) throw new Error("debería tener sesión");
+    expect(auth.patients.find((p) => p.id === patientId)?.sections).not.toContain("checkin");
+    // El dato no se borra (los datos y el modelo quedan).
     expect(await db.evaScore.count({ where: { patientId } })).toBe(1);
   });
 
@@ -211,35 +201,17 @@ describe.skipIf(!RUN)("portal · identidad y check-in", () => {
     expect(auth.patients.find((p) => p.id === patientId)?.programs.map((p) => p.id)).toEqual([second.programId, first.programId]);
   });
 
-  // BO2-D (C-BO1 `publicSurfacesOpen`): el check-in es una escritura sin Actor; con el consultorio suspendido
-  // (o en solo lectura bajo `enforce`) se rechaza sin escribir. Leer el plan NO se corta (Ley 26.529).
-  it("[BO2-D] consultorio suspendido o en solo lectura con enforce: check-in rechazado, el plan se sigue viendo", async () => {
+  // BO2-D (C-BO1 `publicSurfacesOpen`): con el consultorio suspendido leer el plan NO se corta (Ley 26.529). La mitad
+  // de escritura (el check-in rechazado) se fue con el check-in en CF.
+  it("[BO2-D] consultorio suspendido: el plan se sigue viendo", async () => {
     const uid = await patientIdentity();
     const patientId = await linkedPatient(uid);
-    const { sessionId } = await addProgramWithSession(patientId);
+    await addProgramWithSession(patientId);
     asUser(uid);
-    const prev = process.env.TENANT_ACCESS_ENFORCEMENT;
     try {
       await db.tenant.update({ where: { id: A.tenantId }, data: { status: "SUSPENDED" } });
-      const r = await submitCheckIn({ tenantSlug: A.slug, sessionId, pain: 4 });
-      expect(r).toMatchObject({ ok: false, error: expect.stringMatching(/no está recibiendo check-ins/) });
       expect((await getPortalPlan(A.slug))?.title).toBe("Plan lumbar");
-
-      await db.tenant.update({
-        where: { id: A.tenantId },
-        data: { status: "ACTIVE", subscriptionStatus: "TRIALING", trialEndsAt: new Date(Date.now() - 30 * 86_400_000) },
-      });
-      process.env.TENANT_ACCESS_ENFORCEMENT = "enforce";
-      expect((await submitCheckIn({ tenantSlug: A.slug, sessionId, pain: 4 })).ok).toBe(false);
-      expect(await db.evaScore.count({ where: { patientId } })).toBe(0);
-
-      // Con `banner` (default) el trial vencido solo se avisa: el check-in pasa.
-      process.env.TENANT_ACCESS_ENFORCEMENT = "banner";
-      expect(await submitCheckIn({ tenantSlug: A.slug, sessionId, pain: 4 })).toEqual({ ok: true, data: undefined });
-      expect(await db.evaScore.count({ where: { patientId } })).toBe(1);
     } finally {
-      if (prev === undefined) delete process.env.TENANT_ACCESS_ENFORCEMENT;
-      else process.env.TENANT_ACCESS_ENFORCEMENT = prev;
       await db.tenant.update({
         where: { id: A.tenantId },
         data: { status: "ACTIVE", subscriptionStatus: "ACTIVE", trialEndsAt: null },
@@ -247,33 +219,7 @@ describe.skipIf(!RUN)("portal · identidad y check-in", () => {
     }
   });
 
-  it("una identidad staff no puede hacer check-in sobre una ficha con su email", async () => {
-    const patientId = (
-      await db.patient.findFirstOrThrow({ where: { tenantId: A.tenantId, email: `${A.userId}@test.local` } })
-    ).id;
-    const session = await db.session.findFirstOrThrow({ where: { program: { patientId } } });
-    asUser(A.userId);
-    const r = await submitCheckIn({ tenantSlug: A.slug, sessionId: session.id, pain: 3 });
-    expect(r.ok).toBe(false);
-    expect(await db.evaScore.count({ where: { patientId } })).toBe(0);
-  });
-  // ── ES4 S24 · turnos del plan, gates por módulo y check-in con note/sessionId ──────────────────────────────────
-
-  it("[P4-S24] check-in llena note y sessionId", async () => {
-    const uid = await patientIdentity();
-    const patientId = await linkedPatient(uid);
-    const { sessionId } = await addProgramWithSession(patientId);
-    asUser(uid);
-
-    expect(await submitCheckIn({ tenantSlug: A.slug, sessionId, pain: 3, notes: "  Mejor que la semana pasada  " })).toEqual({
-      ok: true,
-      data: undefined,
-    });
-    const eva = await db.evaScore.findMany({ where: { patientId } });
-    expect(eva).toHaveLength(1);
-    // M1 (schema EvaScore): «las escrituras nuevas llenan ambos»; `source` queda por compatibilidad.
-    expect(eva[0]).toMatchObject({ value: 3, note: "Mejor que la semana pasada", sessionId, source: `checkin-${sessionId}` });
-  });
+  // ── ES4 S24 · turnos del plan y gates por módulo ─────────────────────────────────────────────────────────────────
 
   it("[P4-S24] General/Kine sin planes → getPortalPlan null y getPortalAuth sin programs", async () => {
     // Un consultorio General no tiene `planes`; el plan existe en la base (alta vieja, cambio de vertical) y aun así
@@ -289,18 +235,6 @@ describe.skipIf(!RUN)("portal · identidad y check-in", () => {
     expect(auth.patients).toHaveLength(1);
     expect(auth.patients[0].programs).toEqual([]);
     expect(await getPortalPlan(G.slug)).toBeNull();
-  });
-
-  it("[P4-S24] sin evaluaciones → submitCheckIn rechaza", async () => {
-    const uid = await patientIdentity();
-    const patientId = await linkedPatient(uid, {}, G);
-    const { sessionId } = await addProgramWithSession(patientId, G);
-    asUser(uid);
-
-    const r = await submitCheckIn({ tenantSlug: G.slug, sessionId, pain: 5, notes: "algo" });
-    expect(r.ok).toBe(false);
-    expect(await db.evaScore.count({ where: { patientId } })).toBe(0);
-    expect(await db.notification.count({ where: { tenantId: G.tenantId, link: `/pacientes/${patientId}` } })).toBe(0);
   });
 
   it("[P4-S24] turnos del plan: «n de N» por fecha entre las vivas, profesional sin email, sin montos ni notas", async () => {
@@ -377,51 +311,7 @@ describe.skipIf(!RUN)("portal · identidad y check-in", () => {
     if (auth.signedIn) expect(auth.patients[0].programs.map((p) => p.id)).toEqual([programId]);
   });
 
-  it("[P4-S24] «ya enviado» se detecta por sessionId (y por el source viejo)", async () => {
-    const uid = await patientIdentity();
-    const patientId = await linkedPatient(uid);
-    const { sessionId } = await addProgramWithSession(patientId);
-    asUser(uid);
-
-    expect((await getPortalPlan(A.slug))?.sessions[0].hasCheckIn).toBe(false);
-    // Una EVA del kine con la misma sesión (source "pre") NO es un check-in del paciente.
-    await db.evaScore.create({ data: { patientId, value: 2, source: "pre", sessionId } });
-    expect((await getPortalPlan(A.slug))?.sessions[0].hasCheckIn).toBe(false);
-    expect((await submitCheckIn({ tenantSlug: A.slug, sessionId, pain: 4 })).ok).toBe(true);
-    expect((await getPortalPlan(A.slug))?.sessions[0].hasCheckIn).toBe(true);
-    const again = await submitCheckIn({ tenantSlug: A.slug, sessionId, pain: 4 });
-    expect(again).toMatchObject({ ok: false, error: expect.stringMatching(/Ya enviaste/) });
-
-    // Fila vieja (antes de S24: solo `source`, sin `sessionId`): también cuenta como enviada.
-    const uid2 = await patientIdentity();
-    const p2 = await linkedPatient(uid2);
-    const legacy = await addProgramWithSession(p2);
-    await db.evaScore.create({ data: { patientId: p2, value: 5, source: `checkin-${legacy.sessionId}` } });
-    asUser(uid2);
-    expect((await getPortalPlan(A.slug))?.sessions[0].hasCheckIn).toBe(true);
-    expect((await submitCheckIn({ tenantSlug: A.slug, sessionId: legacy.sessionId, pain: 4 })).ok).toBe(false);
-    expect(await db.evaScore.count({ where: { patientId: p2 } })).toBe(1);
-  });
-
-  it("[P4-S24] check-in sobre una sesión archivada o de un plan de otro paciente: rechazado sin escribir", async () => {
-    const uid = await patientIdentity();
-    const patientId = await linkedPatient(uid);
-    const { programId } = await addProgramWithSession(patientId);
-    const archived = await addPlanSession(db, programId, {
-      index: 2,
-      practitionerId: A.practitionerId,
-      archivedAt: new Date(),
-    });
-    const other = await addPatient(db, A);
-    const foreign = await addProgramWithSession(other);
-    asUser(uid);
-
-    expect((await submitCheckIn({ tenantSlug: A.slug, sessionId: archived, pain: 4 })).ok).toBe(false);
-    expect((await submitCheckIn({ tenantSlug: A.slug, sessionId: foreign.sessionId, pain: 4 })).ok).toBe(false);
-    expect(await db.evaScore.count({ where: { patientId: { in: [patientId, other] } } })).toBe(0);
-  });
-
-  it("[P4-S24] secciones por ficha: Kine con turnero = plan, check-in, ejercicios, cuenta y reservar; General sin turnero = inicio y cuenta", async () => {
+  it("[P4-S24] secciones por ficha: Kine con turnero = plan, ejercicios, cuenta y reservar (sin check-in, CF-L3); General sin turnero = inicio y cuenta", async () => {
     const uid = await patientIdentity();
     await linkedPatient(uid);
     await linkedPatient(uid, {}, G);
@@ -430,7 +320,7 @@ describe.skipIf(!RUN)("portal · identidad y check-in", () => {
     const auth = await getPortalAuth();
     if (!auth.signedIn) throw new Error("sin sesión");
     const byTenant = new Map(auth.patients.map((p) => [p.tenantSlug, [...p.sections].sort()]));
-    expect(byTenant.get(A.slug)).toEqual(["checkin", "cuenta", "documentos", "ejercicios", "inicio", "plan", "reservar"]);
+    expect(byTenant.get(A.slug)).toEqual(["cuenta", "documentos", "ejercicios", "inicio", "plan", "reservar"]);
     expect(byTenant.get(G.slug)).toEqual(["cuenta", "documentos", "inicio"]);
   });
 });

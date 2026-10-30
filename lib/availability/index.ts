@@ -14,6 +14,13 @@
  *   rooms       salas (SR1a): defaultRoomFor, roomOccupancyAt, roomAssignmentsFor
  *   interval-cap  tope de turnos por intervalo (T3, C-AS3): effectiveIntervalCap,
  *               arIntervalWindow/arIntervalKeyOf/arHourKeyOf, intervalStartsUsed, intervalCapState
+ *   agenda-rules  reglas de agenda por profesional (CF, M20): effectiveAgendaRules, effectivePublicMinLead,
+ *               SLOT_STEP_OPTIONS / isSlotStepMin
+ *   exclusive-service  «ya atiende otro servicio» (CF, M20): isOtherServiceConflict, otherServiceConflicts.
+ *               El motor lo aplica solo con la regla: `ClassifyInstantInput.exclusiveService` (clase
+ *               "otro-servicio" y lote), `BuildSlotsInput.exclusive` (razón "otro-servicio"),
+ *               `FirstFreeAcrossInput.agendaRules[pid].exclusiveService` y `ClassifyPlanRowsInput.exclusiveService`
+ *               (Planes: plegado en el cupo). Quien arma el input lo saca de `AvailabilityInput.agendaRules[pid]`.
  */
 export * from "@/lib/availability/types";
 export * from "@/lib/availability/day";
@@ -25,3 +32,5 @@ export * from "@/lib/availability/recurrence";
 export * from "@/lib/availability/plan";
 export * from "@/lib/availability/rooms";
 export * from "@/lib/availability/interval-cap";
+export * from "@/lib/availability/agenda-rules";
+export * from "@/lib/availability/exclusive-service";

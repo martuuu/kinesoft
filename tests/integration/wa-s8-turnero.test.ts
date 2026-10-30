@@ -84,6 +84,7 @@ describe.skipIf(!RUN)("[WA-S8] consentimiento de WhatsApp en el turnero", () => 
         phone: o.phone,
         documentId: o.documentId,
         dateOfBirth: "1990-05-10",
+        title: "Lumbalgia",
       },
       ...(o.waConsent === undefined ? {} : { waConsent: o.waConsent }),
     };

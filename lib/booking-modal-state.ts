@@ -35,7 +35,9 @@ import {
   intervalCapNoticeFromServer,
   nextForcePrompt,
   type IntervalCapPromptData,
+  type OtherServicePromptData,
 } from "@/lib/booking-force-flags";
+import { toARDateKey } from "@/lib/datetime-ar";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Modos
@@ -404,6 +406,9 @@ export type ForceFlags = {
   allowRoomConflict?: boolean;
   /** T3 (C-AS3, decisión 6): cargar igual con el tope por intervalo lleno. ES sobreturno. */
   allowIntervalCap?: boolean;
+  /** CF (CF-D4): cargar igual aunque el profesional atienda otro servicio a esa hora. ES sobreturno. Solo el alta de
+   *  un turno: el lote lo pliega en `allowOverbooking` (`buildBatchPayload` lo saca). */
+  allowOtherService?: boolean;
 };
 
 export type CreateBookingPayload = BookingCreateInput & ForceFlags & { idempotencyKey: string };
@@ -468,7 +473,8 @@ export type PromptConfirmation =
   | "outOfHours"
   | "blocked"
   | "roomConflict"
-  | "intervalCap";
+  | "intervalCap"
+  | "otherService";
 
 export function withConfirmation<P extends ForceFlags>(payload: P, kind: PromptConfirmation): P {
   switch (kind) {
@@ -493,6 +499,10 @@ export function withConfirmation<P extends ForceFlags>(payload: P, kind: PromptC
       // cupo del servicio no fuerza el tope, ni al revés). El server marca el
       // turno `isOverbooked` (decisión 6: es sobreturno).
       return { ...payload, allowIntervalCap: true };
+    case "otherService":
+      // CF (CF-D4): flag propio (`FORCE_FLAG_BY_KIND.otherService`). Si se forzara con `allowOverbooking`, aceptar
+      // «ya tiene un turno» del mismo servicio taparía en silencio el choque con otro servicio. Queda sobreturno.
+      return { ...payload, allowOtherService: true };
   }
 }
 
@@ -514,6 +524,8 @@ export function withNextFree<P extends ForceFlags & { scheduledFor?: unknown }>(
     allowRoomConflict: _f,
     // T3: el tope también (otro intervalo, otro conteo). Handoff H5 de T3d-2k.
     allowIntervalCap: _g,
+    // CF: otra hora, otro choque posible con otro servicio: se vuelve a preguntar.
+    allowOtherService: _h,
     ...rest
   } = payload;
   return { ...(rest as P), scheduledFor: iso };
@@ -550,6 +562,9 @@ export function buildBatchPayload<P extends ForceFlags>(base: P, series: BatchSe
     allowRoomConflict: _r,
     // T3: el batch decide el tope con su propio `allowIntervalCap` («Agendar igual esas fechas»).
     allowIntervalCap: _i,
+    // CF-D4: el lote no tiene aviso propio de «otro servicio»: la fecha sube a «sobreturno» y se fuerza con
+    // `allowOverbooking`. Un `allowOtherService` del alta simple no tiene que viajar (handoff CF-C).
+    allowOtherService: _x,
     ...rest
   } = base;
   return {
@@ -582,6 +597,8 @@ export type BatchDateRoomLike = {
   roomBusy?: boolean;
   /** T3 (C-AS3): la fecha pasa el tope por intervalo (sin `allowIntervalCap` el server la omite). */
   intervalCapped?: boolean;
+  /** CF (CF-D4): la fecha pisa otro servicio del profesional. Informativo: ya viene plegada en «sobreturno». */
+  otherServiceBusy?: boolean;
 };
 export type BatchPlanLike = {
   free: number;
@@ -733,4 +750,88 @@ export function previewIntervalCappedCount(items: ReadonlyArray<{ intervalCapped
   let n = 0;
   for (const it of items) if (it.intervalCapped === true) n++;
   return n;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Otro servicio a la misma hora (CF, §28, decisiones 1 y 2, CF-D4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const AR_TZ = "America/Argentina/Buenos_Aires";
+
+/** "10:00" de pared AR. */
+function arTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: AR_TZ });
+}
+
+/** "mié 10 mar 09:00" de pared AR (próximo libre en otro día). */
+function arDayTime(iso: string): string {
+  return new Date(iso).toLocaleString("es-AR", {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone: AR_TZ,
+  });
+}
+
+/** El aviso «otro servicio» de un resultado de `createBooking`, o null. */
+export function otherServicePromptOf(r: {
+  ok: boolean;
+  otherService?: OtherServicePromptData | null;
+}): OtherServicePromptData | null {
+  if (r.ok) return null;
+  return r.otherService ?? null;
+}
+
+/**
+ * Copy del aviso en el alta de un turno. El titular sale de `forcePromptHeadline` (el mismo texto que
+ * `OTHER_SERVICE_ERROR`, que es lo que leen Lote y Planes), así el literal vive en un solo lugar. El próximo libre
+ * lleva el día solo si no es el mismo día AR del turno que choca: con la hora sola, «11:30» de mañana se leía como
+ * de hoy.
+ */
+export function otherServicePromptCopy(p: OtherServicePromptData): {
+  title: string;
+  detail: string;
+  nextFreeLine: string | null;
+  confirmLabel: string;
+  backLabel: string;
+} {
+  const prompt = nextForcePrompt({ otherService: p })!;
+  const service = p.serviceName || "otro servicio";
+  let nextFreeLine: string | null = null;
+  if (p.nextFreeISO) {
+    const sameDay = toARDateKey(p.nextFreeISO) === toARDateKey(p.existingISO);
+    nextFreeLine = `Próximo horario libre: ${sameDay ? arTime(p.nextFreeISO) : arDayTime(p.nextFreeISO)}`;
+  }
+  return {
+    title: forcePromptHeadline(prompt),
+    detail: `Ese turno de ${service} empieza a las ${arTime(p.existingISO)}.`,
+    nextFreeLine,
+    confirmLabel: "Cargar como sobreturno",
+    backLabel: "Elegir otro horario",
+  };
+}
+
+/** Marca de la fecha del lote / preview de Sesiones que pisa otro servicio. */
+export const BATCH_OTHER_SERVICE_LABEL = "Atiende otro servicio";
+
+export function batchOtherServiceMark(d: { otherServiceBusy?: boolean }): string | null {
+  return d.otherServiceBusy === true ? BATCH_OTHER_SERVICE_LABEL : null;
+}
+
+/**
+ * Fechas del resultado REAL del lote que el preflight dio libres y el re-conteo vio con otro servicio (se commiteó
+ * algo en el medio). El server deja el `status` del preflight y suma el flag (`createBookingsBatch`): según
+ * `allowOverbooking` entraron como sobreturno o se omitieron, y el toast lo dice para que no sorprenda.
+ */
+export function batchLateOtherServiceCount(dates: ReadonlyArray<{ status: string; otherServiceBusy?: boolean }>): number {
+  let n = 0;
+  for (const d of dates) if (d.status === "libre" && d.otherServiceBusy === true) n++;
+  return n;
+}
+
+export function batchLateOtherServiceLine(n: number): string {
+  return n === 1 ? "1 fecha se ocupó con otro servicio mientras tanto" : `${n} fechas se ocuparon con otro servicio mientras tanto`;
 }

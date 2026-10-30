@@ -4,7 +4,7 @@
 // PlanView los testean S22h/S22a en `patient-profile-plans.test.tsx` y
 // `plan-view.test.tsx`):
 //   - pestañas por módulo (`isProfileTabAllowed`, enmienda EV0 de S22b): un
-//     consultorio General no ve Planes, Sesiones ni Evolución;
+//     consultorio General no ve Planes ni Sesiones (la pestaña EVA salió en CF, §28);
 //   - `?tab=plan` es alias de `planes` (C10) y una pestaña oculta o
 //     desconocida cae a Resumen;
 //   - `pickProfilePlans` sobre `PlanDTO` (hereda P0-S02u-perfil:
@@ -149,25 +149,24 @@ describe("[S22b] pickProfilePlans", () => {
 });
 
 describe("[S22b] pestañas por módulo y deep-link", () => {
-  it("General: sin Sesiones, Planes ni EVA; Kinesiología: todas (sin clinical.read, sin Evoluciones)", () => {
+  it("General: sin Sesiones ni Planes; Kinesiología: todas (sin clinical.read, sin Evoluciones)", () => {
     expect(profileTabsFor(GENERAL)).toEqual(["resumen", "turnos", "archivos", "antec", "fact", "actividad"]);
     expect(profileTabsFor(KINE)).toEqual([
-      "resumen", "turnos", "sesiones", "planes", "archivos", "antec", "evol", "fact", "actividad",
+      "resumen", "turnos", "sesiones", "planes", "archivos", "antec", "fact", "actividad",
     ]);
   });
 
   // EV2-3a (EV2-D20): Evoluciones es del núcleo (todas las verticales) pero exige `clinical.read` del miembro.
   // FC-3d (§24.7): la HC va primera.
-  it("[EV2-3a] Evoluciones: con clinical.read en General y Kine; `evol` sigue siendo EVA", () => {
+  it("[EV2-3a] Evoluciones: con clinical.read en General y Kine", () => {
     expect(profileTabsFor(GENERAL, { clinicalRead: true })).toEqual([
       "evoluciones", "resumen", "turnos", "archivos", "antec", "fact", "actividad",
     ]);
     expect(profileTabsFor(KINE, { clinicalRead: true })).toEqual([
-      "evoluciones", "resumen", "turnos", "sesiones", "planes", "archivos", "antec", "evol", "fact", "actividad",
+      "evoluciones", "resumen", "turnos", "sesiones", "planes", "archivos", "antec", "fact", "actividad",
     ]);
     expect(resolveProfileTab("evoluciones", profileTabsFor(KINE))).toBe("resumen");
     expect(resolveProfileTab("evoluciones", profileTabsFor(KINE, { clinicalRead: true }))).toBe("evoluciones");
-    expect(resolveProfileTab("evol", profileTabsFor(KINE, { clinicalRead: true }))).toBe("evol");
   });
 
   it("?tab=plan es alias de planes; una pestaña oculta o desconocida cae a Resumen", () => {
@@ -178,6 +177,38 @@ describe("[S22b] pestañas por módulo y deep-link", () => {
     expect(resolveProfileTab("fact", profileTabsFor(GENERAL))).toBe("fact");
     expect(resolveProfileTab("<script>", profileTabsFor(KINE))).toBe("resumen");
     expect(resolveProfileTab(null, profileTabsFor(KINE))).toBe("resumen");
+  });
+});
+
+// CF (§28, decisión 4 de Martin): la EVA sale de toda la app. El perfil ya no tiene la pestaña `evol` («EVA») y una URL
+// vieja `?tab=evol` (links guardados, historial) cae en la pestaña inicial del viewer, como cualquier pestaña desconocida.
+describe("[CF-L1] perfil sin la pestaña EVA", () => {
+  it("ninguna combinación de módulos ni de clinical.read ofrece `evol`", () => {
+    for (const mods of [GENERAL, KINE]) {
+      for (const clinicalRead of [false, true]) expect(profileTabsFor(mods, { clinicalRead })).not.toContain("evol");
+    }
+    expect(profileTabsFor(KINE)).toEqual(["resumen", "turnos", "sesiones", "planes", "archivos", "antec", "fact", "actividad"]);
+  });
+
+  it("?tab=evol cae a la pestaña por defecto (HC con clinical.read, Resumen sin)", () => {
+    expect(resolveProfileTab("evol", profileTabsFor(KINE, { clinicalRead: true }))).toBe("evoluciones");
+    expect(resolveProfileTab("evol", profileTabsFor(KINE))).toBe("resumen");
+    expect(resolveProfileTab("evol", profileTabsFor(GENERAL, { clinicalRead: true }))).toBe("evoluciones");
+  });
+
+  it("el shell renderizado con ?tab=evol no muestra el botón «EVA» y abre la inicial", () => {
+    const html = renderToStaticMarkup(
+      <TenantModulesProvider modules={KINE}>
+        <ToastProvider>
+          <ConfirmProvider>
+            <PatientProfile patientCore={core} recentBookings={[]} billableCount={0} initialTab="evol" />
+          </ConfirmProvider>
+        </ToastProvider>
+      </TenantModulesProvider>,
+    );
+    expect(tabLabels(html)).not.toContain("EVA");
+    expect(html).not.toContain('data-profile-tab="evol"');
+    expect(html).toMatch(/data-profile-tab="resumen" aria-current="true"/);
   });
 });
 
@@ -205,7 +236,7 @@ describe("[P3-Z-F3b] TabsBar: botones con aria-current, sin tabs a medias", () =
 });
 
 describe("[S22b] shell en un consultorio General", () => {
-  it("no muestra Planes/Sesiones/Evolución aunque el link pida ?tab=planes&nuevo=1", () => {
+  it("no muestra Planes/Sesiones aunque el link pida ?tab=planes&nuevo=1", () => {
     const html = renderToStaticMarkup(
       <TenantModulesProvider modules={GENERAL}>
         <ToastProvider>
@@ -214,7 +245,6 @@ describe("[S22b] shell en un consultorio General", () => {
               patientCore={core}
               recentBookings={[]}
               billableCount={0}
-              evaScores={[]}
               capabilities={["plans.manage", "clinical.read"]}
               role="OWNER"
               // Aunque llegaran planes, sin el módulo el shell no los usa.
@@ -244,7 +274,6 @@ describe("[S22b] shell en un consultorio General", () => {
               patientCore={core}
               recentBookings={[]}
               billableCount={0}
-              evaScores={[]}
               initialPlans={[
                 plan("ACTIVE", "2026-09-01T12:00:00Z"),
                 plan("COMPLETED", "2026-08-01T12:00:00Z", 2, { archivedAt: new Date() }),
@@ -256,7 +285,7 @@ describe("[S22b] shell en un consultorio General", () => {
       </TenantModulesProvider>,
     );
     expect(tabLabels(html)).toEqual([
-      "Resumen", "Turnos", "Sesiones", "Planes", "Archivos", "Antecedentes", "EVA", "Facturación", "Actividad",
+      "Resumen", "Turnos", "Sesiones", "Planes", "Archivos", "Antecedentes", "Facturación", "Actividad",
     ]);
     expect(html).toMatch(/>Planes<span[^>]*>1</);
     // P0-S02u-perfil (badge = lo que lista la vista), leído del render del

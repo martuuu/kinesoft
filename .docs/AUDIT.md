@@ -12,7 +12,7 @@
 > 63 menores, 2 refutados. El código es el árbitro: donde un doc decía una cosa y el código otra,
 > mandó el código.
 >
-> **Estado global:** MVP funcional, desplegado (desde el 15-oct: prod con datos demo, sin uso real; se trata como pre-producción). El núcleo (auth/tenancy, flujo de
+> **Estado global:** MVP funcional, desplegado (desde el reset del 29/30-oct prod está **viva con un cliente**: datos reales, sin reset posible). El núcleo (auth/tenancy, flujo de
 > booking, visibilidad de pacientes, billing de copago, webhook MP) está **genuinamente sólido**
 > (ver §Inventario de preservar). Los gaps de abajo son la distancia entre "anda para mi hermano"
 > y "SaaS vendible a consultorios".
@@ -1071,6 +1071,12 @@ completa, bundle final de `/agenda`) se anota al cerrarlo.
 **Rondas 33-35** (T4, T5, T6/T7): tablas en §2. **Ronda 36 · PV (27-oct-2026):** antes de vender (plan §27). **Con
 migración M19** (`20261027120000_support_tickets`, solo en local). Tickets, legales, cierre por inactividad, renombre a
 «Consultorio Online» y HD-1..18; tabla [«Ronda PV»](#ronda-pv) en §2; §5.4 y §5.27 enmendados.
+
+**Ronda 37 · CF (30-oct-2026):** feedback del primer cliente en producción (plan §28). **Con migración M20**
+(`20261030120000_cf_agenda_rules`, solo en local; orden para prod en RUNBOOK «M20 en prod»). En `develop`, **sin
+commitear y sin push**. Regla «no atiende servicios distintos a la vez» (ADR-032), pasos y anticipación, realtime que
+nunca anduvo, EVA fuera, menú de la Secretaría, candado de varios días; tabla [«Ronda CF»](#ronda-cf) en §2; §5.27,
+§5.28, §5.40 y §5.43 enmendados. Gate final (ZG) ✅ 30-oct (detalle en la Ronda CF).
 
 ## Cómo leer la severidad
 
@@ -2326,11 +2332,11 @@ cerraron en su tabla de origen («DIR y MB», «SV»).
 | H-SESS mantenerme-conectado | media | B | lib/supabase/session-mode.ts · lib/supabase/server.ts · middleware.ts · app/api/auth/{sign-in,sign-out}/route.ts · app/auth/callback/route.ts | 🟢 `279d4a2` | Destildado = cookies de sesión sin `maxAge` + `kine_session_mode=ephemeral` para que los refresh no vuelvan a 400 días; OAuth siempre persistente (SECURITY §11.2, ARCHITECTURE «Cache & cookies») |
 | H-E2E sin-e2e | media | OPS | playwright.config.ts · tests/e2e/* · .github/workflows/ci.yml | 🟢 OPS-6 `bde089c` | 9 specs con GoTrue falso y tenant efímero, job de CI no bloqueante por 2 semanas (TESTING.md) |
 | perfil-volver-listado-44 | baja | MB | components/patients/profile (link «← Volver al listado») | 🔴 | < 44 px en mobile. Sale de `mbz-tap-backlog-44`; va con el resto de ese backlog |
-| bell-doble-en-dashboard | baja | C | components/dashboard · topbar (`NotificationsBell`) | 🔴 | En el dashboard hay **2** `NotificationsBell` montadas: con AS-0c son dos pollers de 60 s y dos suscripciones. Dejar una sola (o compartir el estado) |
-| bell-sin-barra-superior | baja | C | app-shell / Apariencia «Barra lateral» | 🔴 | Con la Apariencia «Barra lateral» no hay campana fuera del dashboard: los avisos en vivo no se ven en agenda ni pacientes |
+| bell-doble-en-dashboard | baja | C | components/dashboard/dashboard-screen.tsx · components/layout/topbar.tsx:136 | 🟢 CF-NOT | La campana del dashboard salió: queda una sola por pantalla (la de la topbar, o la de la barra lateral). Ver «Ronda CF» |
+| bell-sin-barra-superior | baja | C | components/layout/app-shell.tsx:191 | 🟢 CF-NOT + ZF (mobile, ZB A1) | Con «Barra lateral» la campana va en la barra (`placement="side"`); en mobile la barra lateral se oculta y la campana va en la barra de arriba. Ver «Ronda CF» |
 | emaillog-status-createdat-idx | baja | C/PF | prisma/schema.prisma (`EmailLog`) | 🔴 | La tarjeta de Sistema filtra por `status` y ordena por `createdAt` sin índice. Con pocos mails da igual; sumar `EmailLog(status, createdAt)` en la próxima migración de PF |
 | env-service-url-heredada-local | media | OPS/C1 | `.env` (Prisma lo lee siempre) · `DATABASE_URL_SERVICE` | 🟡 parcial (PV) | Si `.env` tiene la `DATABASE_URL_SERVICE` de prod y `.env.local` no la define, Prisma la hereda en local (carga `.env` además de `.env.local`): un test o script del canal service escribiría en prod. Hoy latente: ninguno de los dos la define (verificado solo por nombre de clave). Fix: guard en `lib/env.ts` o en los scripts que falle si local apunta a un host remoto. **PV HD-17:** `npm run dev` ya frena con `DATABASE_URL_SERVICE` remota (`scripts/dev-safe.mjs:31-41`); los scripts sueltos y los tests todavía no |
-| server-action-import-dinamico | baja | C (convención) | components/agenda/booking-drawer/share-actions.tsx | 🟢 `b1272b8` (regla) | `import()` dinámico de un módulo `"use server"` desde un client component falla en build («Failed to find Server Action»). **Regla:** las server actions se importan estático; diferir el componente, no la action |
+| server-action-import-dinamico | **alta** (CF) | C (convención) | components/agenda/booking-drawer/share-actions.tsx · components/realtime/realtime-hub.ts · scripts/check-server-actions.mjs | 🟢 `b1272b8` (regla) + CF-RT (guard) | `import()` dinámico de un módulo `"use server"` desde un client component falla en build («Failed to find Server Action»). **Regla:** las server actions se importan estático; diferir el componente, no la action. **CF:** la regla no tenía guard y el hub del realtime la violaba (la action del token): el realtime nunca anduvo en prod. Ahora la verifica `npm run check:actions` después de cada build («Ronda CF») |
 | sesion-restaurada-por-chrome | baja | C | navegador · lib/idle-logout.ts · app/(app)/layout.tsx:79 | 🟢 PV IN-S `df444a2` + ZF1b | Cierre por inactividad (15 min + aviso 60 s) con «Mantenerme conectado» destildado; el server redirige a `/login?reason=idle` antes de cualquier loader (ARCHITECTURE ADR-031) |
 
 ### Ronda T3 (19-oct): agenda, Secretaria, cobros y módulos
@@ -2355,7 +2361,7 @@ y 40. Revisores de T3-Z: (a) seguridad/plata/concurrencia, (b) UX/copy/a11y; sus
 | H-AS check-medio-refunded | media | B | prisma/migrations/20261020120000_agenda_secretaria_config | 🟢 T3b-1m `12bb08b` | CHECK `Booking_copago_method_check`: medio ⇒ `PAID` o `REFUNDED` (el webhook de MP de T5 no rompe) |
 | H-AS soporte-sin-cierre | media | B | lib/support-session-tenant{,-internal}.ts | 🟢 T3c-1s `0914a9b` + T3d-1g | Canal service con `where {id, tenantId, endedAt:null}`, audit doble (ARCHITECTURE ADR-024) |
 | H-AS write-paths-sin-reservable | media | B | lib/services.ts:88,180 · lib/practitioner-services.ts:52,138 · lib/practitioner-schedule.ts · lib/practitioner-payers.ts · lib/patients.ts | 🟢 T3c-1s | Validan profesional reservable (`bookablePractitionerWhere` con `user.disabledAt`, `lib/practitioner-scope.ts:21`) |
-| H-AS cupo-por-servicio | media | B | lib/booking-cap-lock.ts:295,347 · lib/bookings-core.ts:301,335 · lib/availability/interval-cap.ts | 🟢 T3b-2k `73909c4` + T3c-2e `68c35d6` + T3c-2l `9b39fc6` + T3d-2w `b8503c9` | Tope «N turnos cada X min» de cualquier servicio con la clave `kinesoft:phour:` (enmienda §5.28/§5.40); `countAgendaOccupancy` con 0 sentencias nuevas, `countCapacityOverlaps` byte a byte igual (§5); `RescheduleForce` suma `allowIntervalCap`. UI de aviso/sobreturno en T3e-2u1 `e815e45` y 2u2 `7c06642`; configuración en T3e-2c `698d020` |
+| H-AS cupo-por-servicio | media | B | lib/booking-cap-lock.ts:295,347 · lib/bookings-core.ts:301,335 · lib/availability/interval-cap.ts | 🟢 T3b-2k `73909c4` + T3c-2e `68c35d6` + T3c-2l `9b39fc6` + T3d-2w `b8503c9` | Tope «N turnos cada X min» de cualquier servicio con la clave `kinesoft:phour:` (enmienda §5.28/§5.40); `countAgendaOccupancy` con 0 sentencias nuevas, `countCapacityOverlaps` byte a byte igual (§5); `RescheduleForce` suma `allowIntervalCap`. UI de aviso/sobreturno en T3e-2u1 `e815e45` y 2u2 `7c06642`; configuración en T3e-2c `698d020`. **CF (ADR-032):** el cupo sigue siendo por servicio, pero desde M20 un profesional con `allowParallelServices = false` (el default) **no** atiende otro servicio a la vez: el staff avisa y deja forzar como sobreturno, el turnero no lo ofrece; lock `kinesoft:pday:` (C2 1d) |
 | H-AS filas-15-a-60 | media | B | lib/agenda-utils.ts · components/agenda/views/week-grid-view.tsx | 🟢 T3d-2g `bdee4e1` | `normalizeSlotMinutes`/`effectiveRowMinutes`; el zoom por usuario cambia la grilla solo si lo eligió (`zoomSet`) |
 | H-AS bundle-agenda-178 | media | PF | /agenda | 🟢 T3a `fd5e6af` `a880ffa` `a2c84af` (meta) | KPIs, diálogo del candado, roles e `INSTANT_CLASS_LABEL` fuera del first load; guard `tests/unit/agenda-first-load-guard.test.ts`. Meta ≤173,1 tras T3a y ≤174,5 al cierre: el número final lo da el gate de T3-Z |
 | H-AS filtro-os | baja | B | lib/bookings.ts:474 · lib/patients.ts:195 · lib/patients-os-filter.ts | 🟢 T3e-2o `d25c5a7` + T3e-2p `f9be4a5` | `insurerKey` en la agenda (`null` nunca matchea y se cuenta); /pacientes por `insurerId` de la cobertura vigente (reemplaza el ILIKE) |
@@ -2627,7 +2633,7 @@ aunque la TV también anda con polling, y el chip «Plan Clínica» (sala de esp
 | pv za-M1 reenvio-sin-aceptar | media | C0 | lib/platform-provisioning-internal.ts · app/(auth)/forgot | 🟢 LG-G | Cerrado con un gate para TODOS en `app/(app)/layout.tsx` (decisión de Martin 27-oct: prod se resetea, no hay cuentas viejas que cuidar): sin la aceptación vigente → `/aceptar-terminos?next=…&via=app_gate` (`lib/legal-gate.ts`, `lib/legal-gate-internal.ts`). Exentos: acceso de soporte y actor demo. +1 sentencia por carga completa (`UserSecurityEvent_userId_createdAt_idx`). Límite: server actions y API routes no pasan por el layout |
 | pv zb-M7 topbar-1366 | baja | VX | components/layout/topbar* | 🔴 abierto | La topbar desborda a 1366 (pre-PV); en `/agenda` también |
 | pv online-payments-settings-rpc | baja | C | lib/mp-connect-actions.ts:181 · lib/booking-payment-policy.ts:157 | 🔴 abierto | `getOnlinePaymentsSettings` exportada desde `"use server"` sin llamador de cliente (en el allowlist RPC). Mover a `lib/online-payments-settings-internal.ts` (server-only); la usan `pf2-config-budget`, `authz-matrix`, `tp2o` (esfuerzo alto) |
-| pv eva-coerce | baja | C | lib/validation.ts:323 (`EvaScoreCreate`) | 🔴 abierto | `""` / `null` se coercen a EVA 0 |
+| pv eva-coerce | baja | C | lib/validation.ts:324 (`EvaScoreCreate`) | 🟢 sin escritor (CF) | `recordEvaScore` se borró con la EVA (CF-EVA1, decisión 4): el schema quedó sin uso. Borrarlo en la próxima limpieza |
 | pv tag-combobox-sin-catch | baja | C | components/exercises/tag-combobox · create-exercise-drawer | 🔴 abierto | No atrapan el error de `ensureTag` (> 40 / rate limit): `maxLength` 40 + try/catch con toast |
 | pv og-por-middleware | baja | C | middleware.ts:246 | 🔴 abierto | `/opengraph-image` pasa por el middleware: con mantenimiento prendido el 503 rompe la vista previa |
 | pv idx-supportthread-createdby | baja | C/PF | prisma/schema.prisma (`SupportThread`) | 🔴 abierto | El tope diario cuenta por `(createdById, createdAt)` sin índice. Pocas filas hoy; sumar en la próxima migración |
@@ -2637,6 +2643,74 @@ aunque la TV también anda con polling, y el chip «Plan Clínica» (sala de esp
 | pv server-actions-sin-idle | — | — | server actions | 🟡 aceptado | No chequean `kine_idle`; dependen de que el cliente cierre a T (ADR-031) |
 | pv legal-entity | — | Martin | lib/legal.ts:27 | 🟡 Martin | Razón social, CUIT, domicilio + revisión del abogado antes de vender ([EXTERNAL-CONFIG §0.16](EXTERNAL-CONFIG.md#marca-pv)) |
 | pv 2fa-nombre-viejo | — | Martin | lib/two-factor.ts:190 | 🟡 aviso | Las apps ya enroladas siguen mostrando «KineSoft»; los códigos funcionan |
+
+### <a id="ronda-cf"></a>Ronda CF (30-oct): feedback del primer cliente en producción (M20, ADR-032)
+
+Ronda 37. Plan §28 (brief `wip-20/brief-cf.md`; olas CF-0..CF-5 y Z), en `develop` **sin commitear y sin push** (la
+corrida no commitea). M20 `20261030120000_cf_agenda_rules` aplicada solo en el Docker local; en prod va **antes** del push
+([RUNBOOK «M20 en prod»](MIGRACIONES-RUNBOOK.md)). Diseño en ARCHITECTURE ADR-032, enmienda C2 (1d) de ADR-004 y
+«Realtime: la action del token no estaba registrada». Auditoría de solo lectura (3 Explore + 1 Plan) sobre los 14 puntos
+del cliente; revisores **ZA** (locks, concurrencia, TZ, `where tenantId`, realtime) y **ZB** (UI, copy, a11y a 390 y
+1366×768); fixers ZF1..ZF4. **Gate ZG (30-oct) ✅: tsc app+scripts 0 · unit 8197/8197 en UTC y AR · guard:isolation · migrate status 48 al día · integración app 3927 ✓ / owner 3876 ✓ · perf sin regresiones (55 escenarios; `updateBooking.patientChange` 14→16 con errata) · build seguro + `perf:bundle` ok (/agenda 175,9 · turnero 114,7 · públicas ≤105,6 kB) · `check:actions` 421/421 en el manifest · 0 `supabase.co` en `.next/static` · E2E 86/86 · `prod-precheck --post` 47 PASS contra el Docker.**
+
+**Hallazgos de la auditoría (§28.0/§28.3)**
+
+| Slug | Sev | Ubicación | Estado | Cierre |
+|---|---|---|---|---|
+| cf servicios-a-la-vez | alta | lib/availability/exclusive-service.ts:43,55 · lib/bookings-core.ts:362 · lib/public-booking-slots.ts:191,324 · lib/booking-cap-lock.ts:354 | 🟢 CF-K/L/E/W1/W2/P/PL/A/U1..U4 | **Al revés de lo reportado:** el cupo era solo profesional + servicio, así que otro servicio del mismo profesional nunca bloqueaba; lo que vio el cliente («bloqueado 16:15 a 18») era el cupo del mismo servicio. Ahora `Practitioner.allowParallelServices` (default false): staff avisa y deja forzar como sobreturno, turnero no lo ofrece, mismo paciente no cuenta; lock `pday` (ADR-032) |
+| cf intervalo-de-horarios | media | lib/availability/agenda-rules.ts:40 · lib/availability-actions.ts:409 · components/agenda/booking-modal/slot-picker.tsx | 🟢 CF-A/U2/U4 | Paso por consultorio y por profesional (agenda 15/30/45/60, turnero automático o 15/30/45/60); «Horarios cada N min» y la hora manual más visible |
+| cf anticipacion-turnero | media | lib/availability/agenda-rules.ts:57 · lib/public-booking-slots.ts:230 · lib/lead-time.ts · lib/practitioner-config-schemas.ts:30 | 🟢 CF-P/U4/U5 | Por consultorio en horas/días/semanas; PS > consultorio > 60; tope 8 semanas; la ventana recarga desde el primer día posible |
+| cf realtime-nunca-anduvo | **alta** | lib/realtime-token-action.ts:20 · components/providers/realtime-provider.tsx:59,300 · lib/realtime-client-state.ts:283 · scripts/check-server-actions.mjs | 🟢 CF-RT | La action del token solo se alcanzaba por `import()` dinámico: Next no la registraba («Failed to find Server Action») y el hub lo llamaba `stale_build`. Import estático, `server_error` en vez de `stale_build`, build id por `x-build-id`, guard post-build `npm run check:actions` |
+| cf notificaciones | media | components/dashboard/notifications-bell.tsx:41,168,392 · lib/patients.ts:449 · components/layout/app-shell.tsx:191 | 🟢 CF-NOT + ZF3 | El popover mostraba ~4 con el scroll oculto: más alto, pie con cuántas hay, desvanecido y «Ver anteriores» (hasta 50). Paciente nuevo avisa a titulares y admins (`notifyTenantOwners`), no solo a quien lo creó. Filas refrescan con el panel cerrado; «Cargando…» trabado y `.catch` arreglados. Campana también con barra lateral |
+| cf mails-portal | media | lib/patients.ts (`sendPatientPortalInvite`) · components/patients/profile/hero.tsx:95,108 | 🟢 CF-MAIL + ZF (ZB M6) | Sin bug de payload. El error distingue «no pudimos generar el link» de un rechazo del proveedor, muestra el link del portal y el motivo a Titular/Admin. **Martin:** consulta a `EmailLog` y arreglar Resend |
+| cf slug-tmp | baja | components/plataforma/tenants/new-tenant-drawer.tsx:105 | 🟢 CF-MAIL (aviso) · 🟡 Martin | Es un dato: el consultorio se creó como «tmp» y el slug no cambia al renombrar. Aviso en el alta de Plataforma si el slug es tmp, test, prueba o demo. Martin lo cambia en /plataforma → Ciclo de vida (queda el alias) |
+| cf favicon | baja | app/favicon.ico · app/manifest.ts:37 · public/offline.html · public/sw.js | 🟢 CF-UI1 | Faltaba `/favicon.ico` (navegadores y Google seguían con el viejo). Sello C, `offline.html` sin el SVG viejo, íconos `?v=2` (el `VERSION` del SW no se tocó, §5) |
+| cf menu-secretaria | media | lib/nav.ts:87,95,105,113,123 · app/(app)/{diagnostico,planes,biblioteca,seguimiento,terapia-manual}/layout.tsx · lib/search.ts | 🟢 CF-NAV | Planes, Diagnóstico, Seguimiento, Ejercicios y Terapia manual piden `clinical.read`; layout y página redirigen a `/dashboard`; ⌘K sin esos atajos. La Secretaría pierde «Sesiones sin turno» de /planes (PLANES PD-13). Soporte de Plataforma también rebota |
+| cf moneyinput | baja | components/ui/money-input.tsx:172,211 | 🟢 CF-UI1 | La variante `field` usa `.k-field`/`.k-input` (44 px, 16 px, foco visible) con el «$» posicionado. Test `[CF-K1]` |
+| cf eva-fuera | media | components/patients/profile/* · components/seguimiento/session-detail.tsx · components/portal/check-in-form.tsx (borrado) · lib/patients.ts:270 · lib/tenant-modules.ts:245 | 🟢 CF-EVA1..3 | Fuera de perfil, Seguimiento (pre/post y curva), check-in del portal, línea «EVA a → b» de la HC y claims. Datos y `EvaScore` quedan; `recordEvaScore`, `getPatientEvaScores` y la action del check-in, borradas |
+| cf diagnostico-proximamente | baja | app/(app)/diagnostico/page.tsx:3,23 · components/ui/coming-soon.tsx | 🟢 CF-UI1 | «Próximamente» después del muro de módulo; no carga el wizard |
+| cf formulario-turnero | media | lib/public-booking-types.ts:285,303 · lib/public-wizard-state.ts · components/booking/wizard/data-step.tsx | 🟢 CF-FORM + ZF (ZB M5) | Fecha de nacimiento opcional; diagnóstico obligatorio (Kine `title` «Diagnóstico»; General `notes` «Motivo de consulta») |
+| cf hc-24h | baja | components/clinical-notes/clinical-notes-ui.ts · components/fichas/fichas-copy.ts:54 | 🟢 CF-UI1 | «Después se puede editar, pero queda como enmienda.» debajo de «Podés editar hasta…» |
+| cf bloquear-dias | media | lib/time-blocks.ts:757,848,1068 · lib/time-blocks-schemas.ts:329,346 · components/agenda/day-lock/* | 🟢 CF-LOCK | El candado del día suma «Hasta el día» (≤ 31 días, filas por día con `groupId`, una sentencia `lockCapacityMany`); quitar un día suelto o todo el rango; botón «Bloquear días». `DAY_LOCK_MAX_AFFECTED` 2000 → 5000 |
+
+**Revisores (ZA / ZB) → fixers ZF1..ZF4** (verificados en el archivo y en el gate ZG)
+
+| Slug | Sev | Ubicación | Estado | Cierre |
+|---|---|---|---|---|
+| za M1 cambio-paciente-saltea-regla | media | lib/bookings-core.ts (patientChanged / windowChanged) | 🟢 ZF1 | Cambiar el paciente de un turno (sin mover horario) no tomaba `pday` ni contaba otro servicio: dos pacientes en servicios distintos a la vez sin aviso. Ahora `patientOtherService` toma `pday` y cuenta con el paciente final; `updateBooking.patientChange` 14 → 16 sentencias (errata en `tests/perf/compare.ts`). Default ZF1-D1: re-pregunta también conflictos previos con terceros |
+| za B1 comentario-partido | baja | lib/tenant-settings.ts:229,303 · lib/bookings-core.ts (practitionerLabel) | 🟢 ZF1 | Bloques CF insertados en medio de comentarios ajenos |
+| za B2 precheck-fecha-utc | baja | scripts/lib/prod-precheck-core.ts:698 | 🟢 ZF1 | El WARN `pre.M20.crossService` imprimía el día UTC; ahora `toARDateKey` (test 21:30 AR) |
+| za (resto) | — | locks, turnero, setters, realtime, Secretaría, EVA, notificaciones | ✅ sin hallazgos | Revisado en el diff real: pday en alta / lote / edición / turnero / Planes en la misma sentencia y orden C2 (1d); sin deadlock; `countCapacityOverlaps` byte a byte |
+| zf2 extra esc-dia-bloqueado | baja | components/agenda/day-lock/day-lock-dialog.tsx (requestClose) | 🟢 ZF2 | Esc y la X no cerraban ~1 s en «Día bloqueado» (`pending` de `useTransition`); lo encontró el E2E |
+| zb A1 campana-mobile | alta | components/dashboard/dashboard-screen.tsx:119 · components/layout/shell.module.css:162 | 🟢 ZF | Con barra lateral la campana desaparecía en mobile (el aside oculto seguía poleando) |
+| zb A2 claims-diagnostico | alta | components/landing/specialty.tsx:58-60 · lib/saas-plans-public.ts:65 · lib/saas-billing-view.ts:51-52 (M10) | 🟢 ZF | Landing, precios y Plan y uso prometían Diagnóstico y Evaluaciones; ids nuevos en `public-claims.test.ts` |
+| zb M3 foco-otro-horario | media | components/agenda/booking-modal/index.tsx:1168 | 🟢 ZF | El foco buscaba un `datetime-local` que ya no existe |
+| zb M4 hora-manual-desalinea | media | components/agenda/booking-modal/booking-modal.module.css:11 | 🟢 ZF | `align-items: end` → `start` (Duración desalineada con la ayuda) |
+| zb M5 turnero-orden-campos | media | components/booking/wizard/data-step.tsx:141-172 · public-booking-wizard.tsx:283,491 | 🟢 ZF | Diagnóstico obligatorio primero y el faltante visible |
+| zb M6 mail-culpa-proveedor | media | components/patients/profile/hero.tsx:533-539 | 🟢 ZF | Copys propios para `invalid_to`, `rate_limited`, `timeout`, `network_error`, `no_api_key` |
+| zb M7 ficha-mal-usado | media | services-editor.tsx:51 · services-panel.tsx:355 · general-panel.tsx:668 · diagnostico/page.tsx:25 | 🟢 ZF | «Ficha» es la ficha clínica (CLAUDE.md) |
+| zb M8/M9, B11..B22 | media/baja | slot-picker{,-state}.tsx · notifications-bell.tsx · booking-modal-state.ts · agenda-rules-{editor,config}.ts(x) · general-panel.tsx · slot-window-step.tsx · day-lock-{dialog,form}.ts(x) · hero.tsx:556 | 🟢 ZF | Densidad del chip «otro servicio», teclado de la campana lateral, «Cargar como sobreturno», leyenda, «Cargalo a mano», selects de 44, dirty-guard de «Reglas de la agenda», anticipación dicha una vez, rótulos del rango del candado, `Copiar` chico |
+| cf day-lock-dialog-reset | media | components/agenda/agenda-client.tsx:1627 · components/agenda/day-lock/day-lock-dialog.tsx:392,399,446 | 🟢 ZF2 | **Anterior a CF** (`026f937`): tras «Bloquear N días» el diálogo volvía al form sin «Listo» (`practitioners` nuevo en cada render → `initial` nuevo → el efecto de reset). El spec E2E con `test.fail` se da vuelta |
+
+**Decisiones con default de CF** (§28.2; rigen si Martin no dice otra cosa): CF-D1..12. Más, de las sesiones:
+`firstFree` sigue en 15 (con paso 30 puede sugerir 10:15; rec.: aceptar, CF-A) · el update forzado no escribe el prefijo
+`[SOBRETURNO]`, solo `isOverbooked`, como siempre (CF-W2) · se muestra el link del portal, no el magic link (CF-MAIL) ·
+el cliente omite las claves de EVA del cierre (null borraría la EVA vieja, CF-EVA2) · hint Kine del diagnóstico «Si no
+tenés un diagnóstico médico, contanos qué te pasa (ej. dolor de rodilla).» (CF-FORM) · candado: domingos también, quitar
+un día = solo ese día (CF-LOCK D2/D3) · ⌘K sin `clinical.read` no busca ejercicios ni condiciones (CF-NAV).
+
+**Pendiente (backlog de CF)**
+
+| Slug | Sev | Bloque | Ubicación | Estado | Detalle / destino |
+|---|---|---|---|---|---|
+| cf mp-connect-withaccounttoken-carrera | media | **B** (plata) | tests/integration/tp2o-mp-connect.test.ts:591 · lib/mp-connect/* (`withAccountToken`) | 🔴 abierto | Intermitente en la integración owner completa: `withAccountToken` concurrente devolvió `null` bajo carga (2 reruns 16/16). Posible carrera del CAS del refresh de MP Connect: dos refresh a la vez, uno pierde y no relee. Ajeno a CF; investigar antes de prender `MP_CONNECT_MODE` |
+| cf candado-max-locks | baja | C1 (perf) | lib/time-blocks.ts (`lockCapacityMany` del candado) | 🔴 abierto | El candado de 31 días toma un advisory lock por profesional × servicio × día: con muchos profesionales y servicios puede agotar `max_locks_per_transaction` (64 × conexiones). Medir; si hace falta, lock por (profesional, día) |
+| cf plans-perf-sin-json | baja | C1 (perf) | tests/perf/plans.perf.test.ts · tests/perf/compare.ts | 🔴 abierto | No tiene JSON de referencia: `compare.ts` no lo vigila (CF-PL lo verificó a mano: mismas sentencias) |
+| cf sessions-mode-copy | baja | C | lib/sessions-mode-state.ts:285 (`describeSessionDate`) | 🟡 tapado en el render | Dice «El cupo de ese horario está completo» también para otro servicio; arreglar el helper con `otherServiceBusy` |
+| cf display-live-stale | baja | C | components/tv/use-display-live.ts (`onStaleBuild` del feed) | 🔴 abierto | La TV sigue recargando ante una respuesta no-`{ok}` (tope 1 cada 5 min) |
+| cf export-reglas | baja | C | export del consultorio | 🔴 abierto | Las columnas de M20 no van al export (CF-D10) |
+| cf limpieza-eva | — | C | lib/validation.ts:324 · components/landing/specialty.module.css (`.eva`) · comentarios del check-in (tenant-access:109, platform-tenant-lifecycle:120, public-booking-internal:82, portal-identity-internal:7,54, sessions-internal:132) | 🔴 cosmético | Restos sin uso de la EVA |
+| cf firstfree-paso-15 | — | Martin | lib/availability/next-free.ts | 🟡 decide Martin | Ver decisiones (rec.: aceptar) |
 
 ### Resumen del checklist (al 2026-09-29)
 
@@ -2884,6 +2958,14 @@ era intencional.
     en el preservado §5 solo cambia la cota `gte` (misma sentencia; perf `f.createBooking` 31/5, lote 182/22, agenda 12).
     Locks por día AR. Oráculo `booking-schedule.ts` (240) NO se edita. Cierra «Hallazgo B cupo-lookback-240» y
     `public-overlap-lookback-sin-uso`. Test `hd13-long-booking-lookback`.
+    **Enmienda CF (ADR-032, carve-out de paridad):** `AvailabilityInput.agendaRules` / `publicMinLeadMinutes`,
+    `ClassifyInstantInput.exclusiveService`, `BuildSlotsInput.exclusive` y la clase `"otro-servicio"` son aditivos: **sin
+    `exclusiveService` la salida es la de antes, sin claves nuevas**. Los fijados `availability-classify.test.ts:372` y
+    `booking-schedule.test.ts:434` pasan sin editarse; la regla nueva tiene su test (`[CF-E1..7]`). Los oráculos no cambian:
+    `buildPublicSlots` sigue con paso **45** y `nextFreeSlot` / `firstFree` con **15**. El paso del selector lo resuelve el
+    server (staff: profesional → consultorio → 15; turnero: profesional → consultorio → `publicSlotStepFor`). Con regla
+    exclusiva `nextFreeSlot` conserva todos los turnos del profesional (como con tope). El lookback sigue en 480 y lo
+    comparte la consulta de «otro servicio» (misma sentencia de `countAgendaOccupancy`).
 28. **Orden de locks en escrituras de agenda (B-pre).** Siempre **cupo → sedes (compartido) → filas**: (1)
     `lockCapacityWindow` (`lib/booking-cap-lock.ts`: `pg_advisory_xact_lock` por tenant + profesional + servicio
     + **día AR**, todos los días que toca el turno, en orden ascendente), (2) `lockTenantLocationsShared` y
@@ -2902,6 +2984,16 @@ era intencional.
     `lockCapacityMany`/`Window`/`AndRoomsMany` quedan como envoltorios con su firma. La toman siempre altas, lote, edición
     que cambia de intervalo o reactiva y el submit del turnero; no la toman bloqueos, candado, promoción del hold ni
     Planes (B4, riesgo aceptado).
+    **Enmienda C2 (1d), CF (30-oct; regla «no atiende servicios distintos a la vez», ADR-032):** paciente → cupo → **día del
+    profesional** → hora → sala → sedes → filas. Clave `kinesoft:pday:<t>:<profesional>:<día AR>` (`practitionerDayLockKey`):
+    dos turnos que se pisan comparten al menos un día AR de los que cubren; la de cupo lleva el servicio y la de hora solo la
+    hora de inicio (09:30 + 60' y 10:00 no la comparten), así que sin ésta dos altas de servicios distintos leían «0 de otro
+    servicio» y entraban las dos. Va en la MISMA sentencia (`lockAgendaKeysMany`: todo el cupo → todos los días → todas las
+    horas → todas las salas, cada grupo ordenado, `WITH ORDINALITY … ORDER BY o`): 0 sentencias nuevas. Se toma SIEMPRE (no
+    depende de `allowParallelServices`) en altas, lote, edición que cambia la ventana o reactiva, submit del turnero y Planes
+    (motor y «este y los siguientes», en el superconjunto junto al cupo, sin hora). No la toman bloqueos/candado
+    (`lockCapacityScope` ya toma el cupo de todos los servicios del día) ni la promoción del hold. `capLocksHeld` = «el caller
+    ya tomó cupo y día (y hora, salvo Planes)».
 29. **`Booking.isOverbooked` + prefijo `[SOBRETURNO]` hasta el contract.** `isOverbooked` es la fuente; los
     write-paths **siguen escribiendo** el prefijo en `notes` (el código viejo que convive durante el deploy y las
     notas que ve el usuario lo usan) hasta la migración contract posterior a B-pre. No dejar de escribirlo ni borrarlo de las notas existentes.
@@ -2969,7 +3061,10 @@ era intencional.
 40. **Orden de locks de Planes (ES2b, ADR-004 = PLANES C2; enmienda de §5.28).** `lockPlanPatient` primero (solo
     operaciones de estructura del plan) → cupos `lockCapacityMany` (una sentencia, claves ordenadas; desde T3, C2 (1c),
     seguido de las horas `kinesoft:phour:` y las salas en esa misma sentencia cuando el write-path las toma:
-    `lockAgendaKeysMany`; el motor de Planes no toma la de hora) → sedes
+    `lockAgendaKeysMany`; el motor de Planes no toma la de hora; desde CF, C2 (1d), también el **día del profesional**
+    `kinesoft:pday:` entre cupo y hora, y Planes sí lo toma: `lockAgendaKeysMany(tx, { cap, pday:
+    pdayKeysFromCapacityKeys(cap) })` en `lockPlanWindowsInTx` y en los superconjuntos de `plans-move-internal.ts:448,745`;
+    ver §5.28) → sedes
     compartidas → `Booking` `FOR UPDATE` id asc → `Session` → `TreatmentProgram` (CAS al final). Seguimiento y
     `rescheduleSession` lockean el plan con `FOR NO KEY UPDATE`; el motor lockea las sesiones que escribe; un
     reintento de la tx ante P2034/40P01. No invertir Program/Session ni escribir `Session` después de un INSERT de
@@ -2987,6 +3082,8 @@ era intencional.
 43. **El mismo profesional no ocupa su sala dos veces (SR-D1).** `capacity` = profesionales a la vez; `roomOccupancyAt`
     (`lib/availability/rooms.ts:107-140`) cuenta profesionales **distintos** del que pide. Los pacientes simultáneos
     siguen en el cupo del servicio. No contar turnos: un kine con varios pacientes chocaría consigo mismo.
+    **CF (ADR-032):** esto es la sala. La regla «no atiende servicios distintos a la vez» es aparte: compara turnos del
+    mismo profesional de **otro servicio** (no del mismo, que sigue en su cupo) y no mira salas.
 44. **Planes, serie y turnero no chequean sala (SR-D3).** El motor de Planes, "este y los siguientes"
     (`capLocksHeld`) y el turnero **estampan** la sala por defecto (`defaultRoomFor`; archivada → sin sala) sin contar
     ocupación ni tomar clave de sala. La barrera es la validación dura de Configuración (SR-D4). No sumarles el chequeo:

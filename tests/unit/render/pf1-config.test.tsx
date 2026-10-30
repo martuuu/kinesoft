@@ -187,8 +187,9 @@ describe("[PF1.1-config · C3/C4] General", () => {
     const h = html();
     expect(h).toMatch(/class="[^"]*twoCol[^"]*"/);
     expect(h).not.toMatch(/outline:\s*none/);
-    // Apertura, Cierre, Vista de agenda y (T3e-2c) el intervalo del tope de «Turnos por profesional».
-    expect(h.match(/<select[^>]*class="[^"]*select[^"]*"/g)?.length).toBe(4);
+    // Apertura, Cierre, Vista de agenda, (T3e-2c) el intervalo del tope de «Turnos por profesional» y (CF-U4) los 3 de
+    // «Reglas de la agenda» (agenda, turnero y unidad de la anticipación).
+    expect(h.match(/<select[^>]*class="[^"]*select[^"]*"/g)?.length).toBe(7);
   });
 });
 

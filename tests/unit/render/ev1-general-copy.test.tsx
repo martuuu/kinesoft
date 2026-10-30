@@ -41,7 +41,6 @@ import { modulesFor } from "@/lib/tenant-modules";
 import { PatientAdminHero } from "@/components/patients/profile/hero";
 import { PatientBasicView } from "@/components/patients/patient-basic-view";
 import { InsurersPanel } from "@/components/configuracion/panels/insurers-panel";
-import { PortalCheckInForm } from "@/components/portal/check-in-form";
 import { PractitionerStep } from "@/components/booking/wizard/practitioner-step";
 import type { PatientAdminCore } from "@/lib/patients-types";
 import type { InsurerRow } from "@/lib/insurers-types";
@@ -112,11 +111,8 @@ describe("[EV1-C2] copy por vertical", () => {
     expect(k).toContain("le abona la prestadora al kine por sesión.");
   });
 
-  it("check-in del portal: «Tu profesional», sin kinesiólogo", () => {
-    const html = renderToStaticMarkup(<PortalCheckInForm slug="demo" sessionId="s1" />);
-    expect(html).toContain("Tu profesional lo va a ver");
-    expect(html).not.toMatch(/kinesi[oó]log/i);
-  });
+  // CF (30-oct): acá estaba «check-in del portal: «Tu profesional», sin kinesiólogo». El check-in se borró con la EVA
+  // (decisión de Martin §28.1 punto 4); que el portal no lo pinte lo fija `[CF-L3]` en render/portal-sign-in.test.tsx.
 
   it("turnero, paso Profesional: sin especialidad, General no inventa «Kinesiología»; Kine sí (golden)", () => {
     const clinic = (vertical?: "GENERAL" | "KINESIOLOGY"): PublicClinic & { vertical?: "GENERAL" | "KINESIOLOGY" } => ({

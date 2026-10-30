@@ -107,7 +107,8 @@ describe("[MB-0a] public/sw.js", () => {
     sw.listeners.install(event);
     await done();
     expect(sw.log.opened).toEqual(["ks-sw-v2"]);
-    expect(sw.log.added).toEqual([["/offline.html", "/icons/icon-192.png"]]);
+    // [CF-UI1 · H] Con `?v=2`, igual que el manifest: URL nueva = PNG con la marca actual, sin tocar `VERSION`.
+    expect(sw.log.added).toEqual([["/offline.html", "/icons/icon-192.png?v=2"]]);
     expect(sw.log.put).toEqual([]);
     expect(sw.log.skipWaiting).toBe(1);
   });
@@ -179,6 +180,13 @@ describe("[MB-0a] public/offline.html", () => {
       '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">',
     );
     expect(OFFLINE_HTML).not.toMatch(/maximum-scale|user-scalable/);
+  });
+
+  // [CF-UI1 · H] El logo es el «A · Sello C» (la C + el punto lima), no la figura vieja de BR-a para atrás.
+  it("[CF-H2] logo = sello C", () => {
+    expect(OFFLINE_HTML).toContain('d="M30.88 14.17 A12 12 0 1 0 30.88 33.83"');
+    expect(OFFLINE_HTML).toContain('fill="#c8f564"');
+    expect(OFFLINE_HTML).not.toContain("M6 9.5C6 12 7.5 13 8 14.5L6 21");
   });
 
   it("copy del contrato: título, aviso de que no se guardan datos y botón Reintentar", () => {

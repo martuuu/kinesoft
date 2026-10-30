@@ -4,6 +4,7 @@ import { listServices } from "@/lib/bookings";
 import { PlanesClient } from "@/components/planes/planes-client";
 import { availableDisciplines, planesHref } from "@/components/planes/planes-model";
 import { moduleWall } from "@/lib/module-wall";
+import { clinicalSurfaceAllowed } from "@/lib/clinical-wall";
 
 export const metadata = { title: "Planes" };
 export const dynamic = "force-dynamic";
@@ -19,6 +20,8 @@ export default async function PlanesIndexPage() {
   // VX-Z (B1): el layout y la página se renderizan EN PARALELO; sin el módulo, el layout muestra el muro o redirige,
   // pero la página igual corría sus queries (y `assertModule` tiraba). Mismo veredicto que el layout (actor cacheado).
   if ((await moduleWall("planes")) !== "ok") return null;
+  // CF-NAV: mismo veredicto que el layout (sin `clinical.read` → /dashboard), antes de cualquier query.
+  if (!(await clinicalSurfaceAllowed())) return null;
   const [services, caps] = await Promise.all([listServices(), getCapabilities()]);
   const disciplines = availableDisciplines(services);
   if (disciplines.length > 0) redirect(planesHref(disciplines[0]));

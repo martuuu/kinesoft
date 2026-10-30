@@ -11,7 +11,11 @@
  *     (lun-sáb, horario del tenant) y sin bloqueos reproduce el suggest viejo
  *     (paridad en `tests/unit/availability-next-free.test.ts`). Con
  *     `intervalCap` (T3, C-AS3) un intervalo con el tope lleno no es "libre"
- *     ("tope-intervalo") y se saltea; sin tope, la de siempre.
+ *     ("tope-intervalo") y se saltea; sin tope, la de siempre. Con
+ *     `exclusiveService` (CF, M20) un instante que pisa otro servicio del
+ *     profesional (otro paciente) es "otro-servicio" y también se saltea. El
+ *     paso sigue en 15 (`NEXT_FREE_STEP_MIN`, paridad §5.27, CF-D6): el paso
+ *     configurable es del selector, no del "próximo hueco".
  *   • `firstFreeAcrossPractitioners`: "cualquier profesional" — el hueco más
  *     temprano entre los profesionales habilitados para el servicio
  *     (PractitionerService enabled) y, si viene cobertura, que la acepten
@@ -32,6 +36,7 @@ import { toARDateKey } from "@/lib/datetime-ar";
 import { dayWindow } from "@/lib/availability/day";
 import type { ClassifyInstantInput, RangesFor } from "@/lib/availability/classify";
 import type { IntervalCap } from "@/lib/availability/interval-cap";
+import type { PractitionerAgendaRules } from "@/lib/availability/agenda-rules";
 import { classifyInstantAt, fitsInRanges } from "@/lib/availability/classify";
 import {
   NEXT_FREE_HORIZON_DAYS,
@@ -100,7 +105,8 @@ export function nextFreeSlot(input: NextFreeSlotInput): string | null {
   // Solo importan los turnos del cupo (profesional + servicio) y los del paciente. Con tope por intervalo (T3,
   // C-AS3) se conservan TODOS los del profesional: el tope cuenta cualquier servicio, y recortarlos al servicio
   // sugería un horario con el tope lleno. El cupo no cambia: `classifyInstant` filtra el servicio para `used`.
-  const capAll = input.intervalCap != null;
+  // CF (M20): con servicio exclusivo, lo mismo: el choque es justamente con OTRO servicio del profesional.
+  const capAll = input.intervalCap != null || input.exclusiveService === true;
   const bookings = input.bookings.filter(
     (b) =>
       (b.practitionerId === practitionerId && (capAll || b.serviceId === serviceId)) ||
@@ -239,6 +245,9 @@ export type FirstFreeAcrossInput = {
   /** T3 (C-AS3): tope efectivo por profesional (`AvailabilityInput.intervalCaps`). Ausente del mapa o null = sin
    *  tope; sin el mapa, la búsqueda de siempre. */
   intervalCaps?: Readonly<Record<string, IntervalCap | null>>;
+  /** CF (M20): reglas efectivas por profesional (`AvailabilityInput.agendaRules`); de acá sale `exclusiveService`.
+   *  Ausente del mapa / sin el mapa = sin la regla. */
+  agendaRules?: Readonly<Record<string, PractitionerAgendaRules>>;
 };
 
 export type FirstFreeResult = {
@@ -278,6 +287,8 @@ export function firstFreeAcrossPractitioners(input: FirstFreeAcrossInput): First
       bookings: input.bookings,
       now: input.now,
       ...(input.intervalCaps ? { intervalCap: input.intervalCaps[practitionerId] ?? null } : {}),
+      // Solo con la regla: sin ella, ni la clave (carve-out §5.27).
+      ...(input.agendaRules?.[practitionerId]?.exclusiveService ? { exclusiveService: true } : {}),
     });
     if (iso && (!best || Date.parse(iso) < Date.parse(best.iso))) {
       best = { practitionerId, iso, durationMin, cap: eff.cap };

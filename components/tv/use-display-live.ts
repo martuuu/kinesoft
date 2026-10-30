@@ -280,23 +280,13 @@ function reloadForStaleBuild() {
 }
 
 /**
- * Token del canal para la PANTALLA (no el de la app: `mintRealtimeToken` exige Actor). Misma clasificación que
- * `getRealtimeToken` del hub; `realtime-client-state` entra por `import()` junto con el driver.
+ * Token del canal para la PANTALLA (no el de la app: `mintRealtimeToken` exige Actor). Misma clasificación que el hub
+ * (`tokenGetterFromAction`); `realtime-client-state` entra por `import()` junto con el driver. CF-RT (§28 E): una
+ * respuesta sin `{ok}` ya no es «versión nueva» de por sí: es `server_error`, y `stale_build` solo si el server sirve
+ * otro build (`x-build-id` ≠ `NEXT_PUBLIC_BUILD_ID`). La action acá ya estaba bien registrada (import estático, arriba).
  */
 function displayTokenGetter(state: typeof import("@/lib/realtime-client-state")): RealtimeTokenGetter {
-  return async () => {
-    let r: unknown;
-    try {
-      r = await mintDisplayRealtimeToken();
-    } catch (err) {
-      return state.classifyMintThrow(err);
-    }
-    if (!r || typeof r !== "object" || !("ok" in r)) {
-      return { code: "stale_build", reason: "La action del token no respondió" };
-    }
-    const res = r as Awaited<ReturnType<typeof mintDisplayRealtimeToken>>;
-    return res.ok ? res.data : state.classifyMintError(res.error);
-  };
+  return state.tokenGetterFromAction(mintDisplayRealtimeToken);
 }
 
 export type DisplayLive = {

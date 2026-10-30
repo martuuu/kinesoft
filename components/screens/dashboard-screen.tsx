@@ -25,7 +25,6 @@ import { dismissReminder, restoreReminder } from "@/lib/notifications";
 import type { KpiKey, Preferences } from "@/lib/preferences-constants";
 import { effectivePinnedKpis } from "@/lib/dashboard-kpi-options";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
-import { NotificationsBell } from "@/components/dashboard/notifications-bell";
 import { MiniCalendar } from "@/components/dashboard/mini-calendar";
 import { SessionsChart } from "@/components/dashboard/sessions-chart";
 import { RecentPatients } from "@/components/dashboard/recent-patients";
@@ -117,7 +116,8 @@ export function DashboardScreen({
       <aside className={styles.aside} aria-label="Resumen del día">
         {useSidebar ? (
           <div className={`${styles.accountRow} ${styles.oAccount}`}>
-            <NotificationsBell />
+            {/* CF-NOT: con la barra lateral la campana la monta el AppShell en el Sidebar y, bajo 768 px, en la barra móvil
+                (ZF3 A1: pide solo la que se ve). Acá sería una segunda campana visible. */}
             <ProfileMenu name={data.greetingName || USER_NO_NAME} preferences={preferences} revenueScope={data.revenueScope} ownPublicBooking={data.ownPublicBooking} />
           </div>
         ) : (

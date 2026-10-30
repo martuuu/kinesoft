@@ -36,12 +36,18 @@
  *     horario: el server chequea la de la franja y la devuelve en
  *     `defaultRoomId`; null = "Sin sala": no se chequea). Si la sala está
  *     ocupada o bloqueada (`roomBusy`) se suma una línea al aviso.
+ *   • CF-U2 (§28 decisión 3, «la carga manual de la hora exacta ya existe y
+ *     hay que hacerla más visible»): con selector, un botón «¿Otro horario?
+ *     Cargalo a mano» lleva el foco a la HORA de la entrada manual (la fecha
+ *     casi siempre ya es la del día que se mira) y la resalta con un rótulo
+ *     «Fecha y hora exacta» + ayuda. Estado puro en `manualEntryReducer`.
  *   • `onInstantStatus?: (c: InstantCheck | null) => void` — el último
  *     resultado, por si index quiere usarlo (p. ej. preparar el prompt de
  *     bloqueado/fuera de horario). Es un aviso: la decisión final es del
  *     server al crear.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useReducer, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
 import styles from "./booking-modal.module.css";
 import { classifyBookingInstant } from "@/lib/availability-actions";
@@ -49,10 +55,13 @@ import type { InstantCheck } from "@/lib/availability-actions-types";
 import { isoToARLocalInput, localToARIso } from "@/lib/datetime-ar";
 import { roomBusyLiveLine } from "@/lib/booking-modal-state";
 import {
+  MANUAL_ENTRY_INITIAL,
   SLOT_QUERY_DEBOUNCE_MS,
   createSequencer,
   instantStatusView,
   intervalCapLiveNotice,
+  manualEntryReducer,
+  manualEntryView,
   sanitizeDuration,
   type InstantTone,
 } from "@/lib/slot-picker-state";
@@ -115,22 +124,42 @@ export function ScheduleSection({
   onInstantStatus?: (c: InstantCheck | null) => void;
 }) {
   const [local, setLocal] = useState(() => (defaultISO ? isoToARLocalInput(defaultISO) : ""));
+  const localRef = useRef(local);
+  localRef.current = local;
+  const [manual, dispatchManual] = useReducer(manualEntryReducer, MANUAL_ENTRY_INITIAL);
+  const manualView = manualEntryView(manual, !!slotPicker);
+  const manualId = useId();
+  const manualRef = useRef<HTMLDivElement>(null);
 
   // Elegido afuera (picker) → mover la entrada manual. Si ya apunta al mismo
   // instante no se toca (evita pisar segundos/minutos fuera de la grilla de 5').
+  // CF-U2: solo un cambio que vino de AFUERA (un chip, «Usar») apaga el modo
+  // manual; el eco del propio `onInstantChange` llega con el mismo instante y no.
   useEffect(() => {
     if (!value) return;
     const t = Date.parse(value);
     if (Number.isNaN(t)) return;
-    setLocal((cur) => {
-      const curIso = localToIsoOrNull(cur);
-      if (curIso && Date.parse(curIso) === t) return cur;
-      return isoToARLocalInput(value);
-    });
+    const curIso = localToIsoOrNull(localRef.current);
+    if (curIso && Date.parse(curIso) === t) return;
+    setLocal(isoToARLocalInput(value));
+    dispatchManual({ type: "picked" });
   }, [value]);
+
+  // CF-U2: foco en la hora (select «Hora» del `DateTime24Picker`); si no está
+  // (otro control), el primer campo. `FormField` no expone un ref del picker,
+  // por eso se busca dentro del contenedor.
+  useEffect(() => {
+    if (manual.focusNonce === 0) return;
+    const root = manualRef.current;
+    const el =
+      root?.querySelector<HTMLElement>('select[aria-label="Hora"]') ?? root?.querySelector<HTMLElement>("input, select");
+    el?.focus();
+    root?.scrollIntoView?.({ block: "nearest" });
+  }, [manual.focusNonce]);
 
   const onManual = (v: string) => {
     setLocal(v);
+    dispatchManual({ type: "edit" });
     onInstantChange?.(localToIsoOrNull(v));
   };
 
@@ -204,10 +233,34 @@ export function ScheduleSection({
   return (
     <div style={{ display: "grid", gap: 8 }}>
       {slotPicker}
-      <div className={styles.scheduleRow}>
+      {manualView.cta && (
+        <div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-controls={manualId}
+            onClick={() => dispatchManual({ type: "open" })}
+          >
+            {manualView.cta}
+          </Button>
+        </div>
+      )}
+      <div
+        className={styles.scheduleRow}
+        id={manualId}
+        ref={manualRef}
+        data-manual={manualView.highlighted || undefined}
+        style={
+          manualView.highlighted
+            ? { outline: "2px solid var(--sky-300)", outlineOffset: 4, borderRadius: "var(--r-sm)" }
+            : undefined
+        }
+      >
         {/* Controlado: FormField no emite el hidden en ese modo, va abajo. */}
         <FormField
-          label={slotPicker ? "Fecha y hora (o cargá a mano)" : "Fecha y hora"}
+          label={manualView.label}
+          hint={manualView.hint ?? undefined}
           type="datetime-local"
           required
           value={local}
@@ -270,7 +323,7 @@ export function InstantStatusBox({
   iso?: string | null;
   practitionerName?: string | null;
 }) {
-  const view = instantStatusView(check);
+  const view = instantStatusView(check, { practitionerName });
   // T3 (decisión 6, «el 2.º avisa»): informativo, NO cambia el tono (un
   // «Libre» sigue verde: no hay nada que confirmar).
   const capNotice = iso && practitionerName ? intervalCapLiveNotice(check, iso, practitionerName) : null;

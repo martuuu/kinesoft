@@ -12,16 +12,15 @@
  * Security model:
  *   - `email_confirmed_at` obligatorio (`getPortalUser`): sin verificar, alguien se registra con el email de otro.
  *   - staff ≠ paciente (A3b-S-auth, AUDIT §5.22): con Membership en cualquier consultorio, «sin fichas».
- *   - `submitCheckIn` con rate-limit; el check-in ya no escribe `Patient.notes` (ver `submitCheckIn`).
  *   - ES4 S24: lo que se ve por ficha lo decide `portalSectionsFor(ref.modules)` (lib/portal-nav.ts), la misma fuente que
- *     las tabs: plan y turnos del plan solo con `planes`, check-in con `planes` ∧ `evaluaciones`. Antes el portal
- *     mostraba planes y aceptaba check-ins en un consultorio de Clínica general (sin esos módulos) si había filas viejas.
+ *     las tabs: plan y turnos del plan solo con `planes`. Antes el portal mostraba planes en un consultorio de Clínica
+ *     general (sin esos módulos) si había filas viejas.
+ *   - CF (30-oct, §28.1 punto 4): el check-in pre-sesión (`submitCheckIn`, una EVA 0..10 + notas que escribía una
+ *     `EvaScore` y notificaba al profesional) se borró con la EVA de toda la app. Las filas «checkin-…» quedan.
  *   - DTOs por allowlist (`select`, nunca `include` de la fila): sin montos, sin notas del kine, sin email del profesional.
  */
 import { revalidatePath } from "next/cache";
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { z } from "zod";
 // Patient-facing portal: no practitioner Actor. Las fichas salen de `requirePortalPatient` / `listPortalPatients`
 // (por userId) y cada query va acotada por el par patientId + tenantId de ese ref, así que corre en el canal service
 // (BYPASSRLS) — same trust model as public-booking.
@@ -29,14 +28,11 @@ import { prismaService as prisma } from "@/lib/db";
 import { getPortalUser, listPortalPatients, requirePortalPatient } from "@/lib/portal-identity-internal";
 import { linkPortalPatientsOnSignIn } from "@/lib/portal-link-internal";
 import { PORTAL_SECTIONS, portalSectionsFor } from "@/lib/portal-nav";
-import { PORTAL_PROGRAM_ORDER, PORTAL_PROGRAM_WHERE, liveProgramWhere, liveSessionWhere } from "@/lib/plan-predicates";
+import { PORTAL_PROGRAM_ORDER, PORTAL_PROGRAM_WHERE, liveSessionWhere } from "@/lib/plan-predicates";
 import { planSessionOrdinals } from "@/lib/plan-display";
-import { rateLimit, rateLimitedMessage } from "@/lib/rate-limit";
-import { clientIp } from "@/lib/client-ip";
-import { notify, notifyTenantOwners } from "@/lib/notifications-internal";
+import { rateLimit } from "@/lib/rate-limit";
 import { publicPractitionerName } from "@/lib/display-name";
 import type { Prisma } from "@prisma/client";
-import type { ActionResult } from "@/lib/validation";
 import type {
   PortalAuth,
   PortalPatient,
@@ -50,9 +46,6 @@ import type {
 const ACTIVE_PLAN_BOOKING = {
   status: { notIn: ["CANCELLED", "NO_SHOW"] },
 } satisfies Prisma.BookingWhereInput;
-
-/** Check-ins del paciente: `source` «checkin-<sessionId>» (compat) — una EVA del kine con `sessionId` NO cuenta. */
-const CHECKIN_SOURCE_PREFIX = "checkin-";
 
 export async function getPortalAuth(): Promise<PortalAuth> {
   const me = await getPortalUser();
@@ -174,7 +167,7 @@ export async function searchMyPortalPatients(): Promise<void> {
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// Plan timeline + pre-session check-in (Phase 9 surface)
+// Plan timeline (Phase 9 surface)
 // ──────────────────────────────────────────────────────────────────────
 
 /**
@@ -236,21 +229,6 @@ export async function getPortalPlan(tenantSlug: string): Promise<PortalPlanDTO |
     },
   });
   if (!program) return null;
-  const ids = program.sessions.map((s) => s.id);
-  const checkIns = ids.length
-    ? await prisma.evaScore.findMany({
-        where: {
-          patientId: ref.patientId,
-          source: { startsWith: CHECKIN_SOURCE_PREFIX },
-          // S24: por `sessionId` (M1); las filas de antes de S24 solo tienen el `source` «checkin-<id>».
-          OR: [{ sessionId: { in: ids } }, { source: { in: ids.map((id) => CHECKIN_SOURCE_PREFIX + id) } }],
-        },
-        select: { sessionId: true, source: true },
-      })
-    : [];
-  const withCheckIn = new Set(
-    checkIns.map((c) => c.sessionId ?? (c.source ?? "").slice(CHECKIN_SOURCE_PREFIX.length))
-  );
   const ordinals = planSessionOrdinals(program.sessions);
   const sessions = program.sessions
     .map((s) => {
@@ -261,7 +239,6 @@ export async function getPortalPlan(tenantSlug: string): Promise<PortalPlanDTO |
         ordinal: ordinals.get(s.id) ?? s.index,
         scheduledFor: (b?.scheduledFor ?? s.scheduledFor).toISOString(),
         completedAt: s.completedAt?.toISOString() ?? null,
-        hasCheckIn: withCheckIn.has(s.id),
         booking: b
           ? {
               scheduledFor: b.scheduledFor.toISOString(),
@@ -281,128 +258,4 @@ export async function getPortalPlan(tenantSlug: string): Promise<PortalPlanDTO |
     startDate: program.startDate.toISOString(),
     sessions,
   };
-}
-
-// Entrada del check-in: es una action llamable con cualquier payload desde el navegador. Antes un `pain` NaN llegaba
-// a Prisma (500) y un `sessionId` no-string a la query.
-const CheckInInput = z.object({
-  tenantSlug: z.string().min(1).max(64),
-  sessionId: z.string().min(1).max(64),
-  pain: z.number().finite(),
-  notes: z.string().max(4000).optional(),
-});
-
-/**
- * Patient submits a pre-session check-in. Persists as an `EvaScore` keyed
- * by session id.
- *
- * A3b-S-auth: el texto del paciente YA NO se escribe en `Patient.notes`.
- * Antes se anteponía y se cortaba a 4 kB, así que cada check-in largo le
- * truncaba al kine sus propias notas viejas (pérdida de datos clínicos). Ahora
- * va como notificación al profesional asignado (o a OWNER/ADMIN si no hay
- * asignado).
- *
- * ES4 S24:
- * - gate `checkin` (⇐ `planes` ∧ `evaluaciones`): sin esos módulos se rechaza sin escribir;
- * - la EvaScore llena `note` (texto del paciente, ≤ 500) y `sessionId` (M1: «las escrituras nuevas llenan ambos»)
- *   además del `source` «checkin-<id>» que leen las pantallas viejas;
- * - la sesión tiene que estar viva y ser de un plan ACTIVE vivo de ESTA ficha en ESTE consultorio;
- * - «ya enviado» por `sessionId` (o por el `source` de las filas de antes de S24).
- */
-export async function submitCheckIn(input: {
-  tenantSlug: string;
-  sessionId: string;
-  pain: number;
-  notes?: string;
-}): Promise<ActionResult> {
-  // Tight rate limit — a check-in per session is enough; aggressive spam
-  // would be the only reason to exceed this.
-  const rl = await rateLimit(`portal:checkin:${clientIp(headers())}`, {
-    limit: 4,
-    windowMs: 60_000,
-  });
-  if (!rl.ok) return { ok: false, error: rateLimitedMessage(rl.retryAfterMs) };
-
-  const parsed = CheckInInput.safeParse(input);
-  if (!parsed.success) return { ok: false, error: "Revisá los datos del check-in." };
-  const data = parsed.data;
-
-  const ref = await requirePortalPatient(data.tenantSlug);
-  if (!ref) return { ok: false, error: "Sin acceso." };
-  if (!portalSectionsFor(ref.modules).has("checkin")) {
-    return { ok: false, error: "Este consultorio no recibe check-ins por el portal." };
-  }
-  // BO2-D (C-BO1 `publicSurfacesOpen`): un consultorio suspendido / dado de baja (o en solo lectura con
-  // `enforce`) no recibe check-ins: es una ESCRITURA sin Actor (EvaScore + notificación) que nadie del equipo
-  // podría atender. Leer el plan (`getPortalPlan`) NO se corta: la HC del paciente se puede ver siempre.
-  if (!ref.surfacesOpen) {
-    return { ok: false, error: "Tu consultorio no está recibiendo check-ins por ahora. Escribiles directamente." };
-  }
-
-  const sess = await prisma.session.findFirst({
-    where: {
-      id: data.sessionId,
-      ...liveSessionWhere,
-      program: { patientId: ref.patientId, tenantId: ref.tenantId, status: "ACTIVE", ...liveProgramWhere },
-    },
-    select: { id: true, index: true },
-  });
-  // ES4-Z (b): «Sesión no encontrada» no le decía qué hacer (y en General no hay «sesiones»).
-  if (!sess) return { ok: false, error: "No encontramos esa cita de tu plan. Recargá la página." };
-
-  // Per-patient throttle — one check-in per (patient, session) is enough.
-  const existing = await prisma.evaScore.findFirst({
-    where: {
-      patientId: ref.patientId,
-      source: { startsWith: CHECKIN_SOURCE_PREFIX },
-      OR: [{ sessionId: sess.id }, { source: CHECKIN_SOURCE_PREFIX + sess.id }],
-    },
-    select: { id: true },
-  });
-  if (existing) {
-    return { ok: false, error: "Ya enviaste tu check-in para esta sesión." };
-  }
-
-  const pain = Math.min(10, Math.max(0, Math.floor(data.pain)));
-  const patientText = data.notes?.trim().slice(0, 500) || null;
-  await prisma.evaScore.create({
-    data: {
-      patientId: ref.patientId,
-      value: pain,
-      source: CHECKIN_SOURCE_PREFIX + sess.id,
-      sessionId: sess.id,
-      note: patientText,
-    },
-  });
-  const patientName = `${ref.patient.firstName} ${ref.patient.lastName}`.trim();
-  const title = `Check-in de ${patientName} · sesión ${sess.index} · EVA ${pain}/10`;
-  const link = `/pacientes/${ref.patientId}`;
-  const assignedUserId = ref.patient.assignedPractitionerId
-    ? (
-        await prisma.practitioner.findFirst({
-          where: { id: ref.patient.assignedPractitionerId, tenantId: ref.tenantId },
-          select: { userId: true },
-        })
-      )?.userId
-    : null;
-  if (assignedUserId) {
-    await notify({
-      tenantId: ref.tenantId,
-      userId: assignedUserId,
-      kind: "SYSTEM",
-      title,
-      body: patientText ?? undefined,
-      link,
-    });
-  } else {
-    await notifyTenantOwners({
-      tenantId: ref.tenantId,
-      kind: "SYSTEM",
-      title,
-      body: patientText ?? undefined,
-      link,
-    });
-  }
-  revalidatePath(`/portal/c/${data.tenantSlug}`);
-  return { ok: true, data: undefined };
 }

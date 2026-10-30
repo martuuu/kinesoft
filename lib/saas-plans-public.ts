@@ -54,6 +54,10 @@ const VERTICALS: readonly TenantVertical[] = ["GENERAL", "KINESIOLOGY"];
  * VX2-c2: `evoluciones` (núcleo, EV2 cerrada en EV2-Z) entra con su bullet. Para que no se pase del tope de 8 en
  * Individual Kine (y el slice corte «Biblioteca con tus propios ejercicios»), cobros y obras sociales —los dos son
  * núcleo y siempre van juntos— comparten un solo bullet.
+ *
+ * [ZF3] A2 (CF-ZB): se fue «Diagnóstico y evaluaciones». Diagnóstico quedó «Próximamente» y la EVA (evaluaciones) salió
+ * de la app en CF (§28.1 punto 4): /precios prometía las dos. Sin reemplazo: lo que el plan Kine suma de verdad ya
+ * está en los otros bullets. Vuelve cuando Diagnóstico salga de «Próximamente» (guard: `public-claims.test.ts`).
  */
 const MODULE_BULLETS: readonly { modules: readonly TenantModule[]; text: string }[] = [
   { modules: ["agenda"], text: "Agenda de turnos por profesional" },
@@ -62,7 +66,6 @@ const MODULE_BULLETS: readonly { modules: readonly TenantModule[]; text: string 
   { modules: ["facturacion", "obrasSociales"], text: "Cobros de copago y obra social en cada turno" },
   { modules: ["turneroPublico"], text: "Turnero online para que tus pacientes reserven solos" },
   { modules: ["planes", "sesiones"], text: "Planes de tratamiento con seguimiento de sesiones" },
-  { modules: ["diagnostico", "evaluaciones"], text: "Diagnóstico y evaluaciones" },
   { modules: ["ejercicios"], text: "Biblioteca con tus propios ejercicios" },
   { modules: ["plantillas", "favoritos"], text: "Plantillas de plan y ejercicios favoritos" },
   // PV ZF2 (B18): antes «Catálogo de ejercicios de <marca>»; en la tarjeta partía en dos líneas con la marca sola y no
@@ -181,7 +184,11 @@ async function loadRows(): Promise<SaasPlanConfigRow[]> {
 // sobrevive a los deploys) seguía sirviendo la marca vieja en /precios y la landing hasta el `revalidate` de 1 h; el
 // E2E de marca lo vio con el `.next/cache` de un build anterior. Desde PV ZF2 (B18) ningún bullet lleva la marca; la
 // parte se deja (cambiarla no aporta y vuelve a invalidar el cache de un deploy a otro sin motivo).
-const cachedCatalog = unstable_cache(async () => toPublicPlans(await loadRows()), ["saas-plans:public", BRAND_NAME], {
+// [ZF3] A2: por lo mismo, los textos de los bullets van en la clave. Sacar «Diagnóstico y evaluaciones» no cambia el
+// texto de la función cacheada (`toPublicPlans(await loadRows())`): sin esta parte, el Data Cache seguía sirviendo el
+// bullet viejo en /precios hasta 1 h después del deploy. Así cualquier cambio de copy de un bullet invalida solo.
+const BULLETS_KEY = [...MODULE_BULLETS.map((b) => b.text), ...Object.values(PLAN_EXTRA_BULLET)].join("|");
+const cachedCatalog = unstable_cache(async () => toPublicPlans(await loadRows()), ["saas-plans:public", BRAND_NAME, BULLETS_KEY], {
   tags: [SAAS_PLANS_TAG],
   revalidate: ttl.long,
 });

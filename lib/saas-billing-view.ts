@@ -35,6 +35,8 @@ export function planSeatsLabel(plan: SaasPlan, total: { used: number; limit: num
  * Nombre visible de cada módulo en «Plan y uso» y en el drawer (lo que ganás / perdés). `null` = no se lista:
  * `evoluciones` y `reportes` todavía no son pantallas reales (mismo criterio que el catálogo público,
  * `lib/saas-plans-public.ts`: no se promete lo que la app no hace) y `turneroPublico` es un switch de todos los planes.
+ * [ZF3] M10 (CF-ZB): `diagnostico` («Próximamente» desde CF) y `evaluaciones` (la EVA salió de la app, §28.1 punto 4)
+ * tampoco: «Plan y uso» los mostraba como algo que ganás al subir de plan.
  */
 export const MODULE_UI_LABEL: Record<TenantModule, string | null> = {
   agenda: "Agenda",
@@ -48,8 +50,8 @@ export const MODULE_UI_LABEL: Record<TenantModule, string | null> = {
   reportes: null,
   planes: "Planes de tratamiento",
   sesiones: "Seguimiento de sesiones",
-  diagnostico: "Diagnóstico",
-  evaluaciones: "Evaluaciones",
+  diagnostico: null,
+  evaluaciones: null,
   ejercicios: "Biblioteca de ejercicios",
   plantillas: "Plantillas de plan",
   favoritos: "Ejercicios favoritos",

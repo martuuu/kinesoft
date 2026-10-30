@@ -125,6 +125,15 @@ describe("planRowStatus · estados C13 (precedencia del motor)", () => {
   });
 });
 
+describe("[CF-U3] planRowStatus · otro servicio del profesional", () => {
+  it("[CF-U3] otherServiceBusy muestra su copy; capacityFull solo sigue en 'Sobreturno'", () => {
+    const s = planRowStatus(row({ index: 1, flags: flags({ capacityFull: true, otherServiceBusy: true }) }));
+    expect(s.label).toBe("Atiende otro servicio a esa hora");
+    expect(s.kind).toBe("capacity");
+    expect(planRowStatus(row({ index: 1, flags: flags({ capacityFull: true }) })).label).toBe("Sobreturno");
+  });
+});
+
 describe("resolutionOptions · resoluciones por fila", () => {
   it("libre: Crear / Mover (solo con sugerencia) / Dejar sin turno", () => {
     const opts = resolutionOptions(row({ index: 2, suggestion: "2026-10-09T13:30:00.000Z" }));

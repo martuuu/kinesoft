@@ -52,8 +52,13 @@
  * Orden en el DOM (no cambiarlo sin QA): modo, profesional, servicio,
  * paciente, copago, título, fecha/duración (+ slots), varias sesiones,
  * sede/telemedicina, descripción, notas, error, prompts (batch → bloqueado →
- * fuera de horario → superposición → mismo día → sobreturno → tope por
- * intervalo → sala), footer.
+ * fuera de horario → superposición → mismo día → sobreturno → otro servicio →
+ * tope por intervalo → sala), footer.
+ *
+ * CF-U1 (§28, CF-D4): `otherService` del alta → `OtherServicePrompt`
+ * («Cargar como sobreturno» = `allowOtherService`, acumulado con los flags
+ * previos y misma `idempotencyKey`). El lote no lo manda: lo pliega en
+ * sobreturno y solo marca la fecha («Atiende otro servicio»).
  *
  * T3e-2u1 (C-AS3, decisión 6): `intervalCap` del alta → `IntervalCapPrompt`
  * («Cargar como sobreturno» = `allowIntervalCap`); `intervalCapNotice` de un
@@ -107,8 +112,11 @@ import {
   displayDuration,
   effectiveLocationId,
   initialRoomChoice,
+  batchLateOtherServiceCount,
+  batchLateOtherServiceLine,
   intervalCapNoticeOf,
   isBatchSubmit,
+  otherServicePromptOf,
   isServiceEnabledFor,
   reconcileRoomOnLocationChange,
   reconcileServiceOnPractitionerChange,
@@ -140,10 +148,12 @@ import {
   PatientOverlapPrompt,
   RoomBusyPrompt,
   IntervalCapPrompt,
+  OtherServicePrompt,
   focusRoomSelect,
   promptFocusTarget,
   SamePatientPrompt,
   type IntervalCapState,
+  type OtherServiceState,
   type RoomBusyState,
 } from "./conflict-prompts";
 import { usePatientBilling } from "./use-patient-billing";
@@ -271,6 +281,8 @@ export function BookingModal({
   const [roomBusyPrompt, setRoomBusyPrompt] = useState<RoomBusyState | null>(null);
   // T3e-2u1: tope por intervalo lleno (re-llamar con `allowIntervalCap`; queda sobreturno).
   const [intervalCapPrompt, setIntervalCapPrompt] = useState<IntervalCapState | null>(null);
+  // CF-U1: el profesional atiende otro servicio a esa hora (re-llamar con `allowOtherService`; queda sobreturno).
+  const [otherServicePrompt, setOtherServicePrompt] = useState<OtherServiceState | null>(null);
   const clearPrompts = () => {
     setConflict(null);
     setSamePatient(null);
@@ -280,6 +292,7 @@ export function BookingModal({
     setOutOfHoursPrompt(null);
     setRoomBusyPrompt(null);
     setIntervalCapPrompt(null);
+    setOtherServicePrompt(null);
   };
   // Every prompt renders below the form fields inside a scrolling drawer, so
   // bring whichever one appears into view instead of leaving it off-screen.
@@ -297,6 +310,7 @@ export function BookingModal({
     batchConflict ??
     blockedPrompt ??
     outOfHoursPrompt ??
+    otherServicePrompt ??
     intervalCapPrompt ??
     roomBusyPrompt;
   const focusedPrompt = useRef<object | null>(null);
@@ -611,7 +625,15 @@ export function BookingModal({
         setError(null);
         return;
       }
-      // T3 (C-AS3): el tope va justo después del cupo (`FORCE_PROMPT_ORDER`).
+      // CF (CF-D4): otro servicio va entre el cupo y el tope (`FORCE_PROMPT_ORDER`). `allowOverbooking` no lo
+      // cubre: si ya se confirmó el sobreturno del mismo servicio, este aviso igual se pregunta.
+      const otherService = otherServicePromptOf(result);
+      if (otherService) {
+        setOtherServicePrompt({ ...otherService, payload });
+        setError(null);
+        return;
+      }
+      // T3 (C-AS3): el tope va después del cupo y del otro servicio (`FORCE_PROMPT_ORDER`).
       // El server devuelve como mucho un aviso por respuesta: forzar este
       // puede destapar el de paciente o el de sala en el reintento.
       if (result.intervalCap) {
@@ -666,6 +688,9 @@ export function BookingModal({
     if (d.sobreturnos > 0) parts.push(`${d.sobreturnos} como sobreturno`);
     if (d.omitted > 0) parts.push(`${d.omitted} omitidos`);
     if (d.duplicates > 0) parts.push(`${d.duplicates} ya existían`);
+    // CF: el preflight las dio libres y el re-conteo vio otro servicio (se cargó algo en el medio).
+    const late = batchLateOtherServiceCount(d.dates);
+    if (late > 0) parts.push(batchLateOtherServiceLine(late));
     toast.success(d.created > 0 ? "Turnos creados" : "No se creó ningún turno", {
       description: parts.join(" · "),
     });
@@ -1129,6 +1154,20 @@ export function BookingModal({
               onUseSuggestedSlot={() => applyNextFree(conflict.payload, conflict.nextFreeISO)}
               onForceOverbooking={() => confirmWith(conflict.payload, "overbooking")}
               onBack={() => setConflict(null)}
+            />
+          )}
+          {otherServicePrompt && (
+            <OtherServicePrompt
+              promptRef={promptRef}
+              otherService={otherServicePrompt}
+              pending={pending}
+              onForce={() => confirmWith(otherServicePrompt.payload, "otherService")}
+              onBack={() => {
+                setOtherServicePrompt(null);
+                // El aviso tenía el foco; sin esto caía al body del modal. Lo lleva a la hora del form: desde CF el
+                // horario es el `DateTime24Picker` (select «Hora»), ya no hay `input[type="datetime-local"]` (ZB M3).
+                formRef.current?.querySelector<HTMLSelectElement>('select[aria-label="Hora"]')?.focus();
+              }}
             />
           )}
           {intervalCapPrompt && (

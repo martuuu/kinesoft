@@ -18,7 +18,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import * as patientsModule from "@/lib/patients";
-import { getPatientEvaScores } from "@/lib/patients";
 import * as programsModule from "@/lib/programs";
 import { getPatientPlans } from "@/lib/plans-read";
 import {
@@ -75,6 +74,12 @@ describe.skipIf(!RUN)("patients · superficie RPC (P0-S02a, E0)", () => {
     expect((patientsModule as Record<string, unknown>).getPatient).toBeUndefined();
   });
 
+  // CF (§28, decisión 4): la EVA salió de la app; sin llamadores, la lectura y la carga de EVA dejaron de ser endpoints.
+  it("[CF-L1] getPatientEvaScores y recordEvaScore ya no son actions", () => {
+    expect("getPatientEvaScores" in patientsModule).toBe(false);
+    expect("recordEvaScore" in patientsModule).toBe(false);
+  });
+
   it("[P3-S27a] los lectores viejos de planes ya no son actions", () => {
     expect("getPatientProgramsLite" in programsModule).toBe(false);
     expect("getPatientProgramsFull" in programsModule).toBe(false);
@@ -85,7 +90,6 @@ describe.skipIf(!RUN)("patients · superficie RPC (P0-S02a, E0)", () => {
     const plans = await getPatientPlans({ patientId });
     expect(plans.ok).toBe(false);
     expect(JSON.stringify(plans)).not.toMatch(/Plan con HC|Dolor lumbar/);
-    expect(await getPatientEvaScores(patientId)).toEqual([]);
   });
 
   it("[P3-S27a] ASSISTANT sin Consultorio común: ve el plan (nivel admin) sin título ni nada clínico", async () => {
@@ -98,7 +102,6 @@ describe.skipIf(!RUN)("patients · superficie RPC (P0-S02a, E0)", () => {
     expect(plans.data[0].notes).toBeNull();
     // Ni el título ni las notas de la sesión, en ningún campo del payload.
     expect(JSON.stringify(plans)).not.toMatch(/Plan con HC|Dolor lumbar/);
-    expect(await getPatientEvaScores(patientId)).toEqual([]);
   });
 
   it("control: el OWNER (full) sí lee la HC por los mismos lectores", async () => {
@@ -108,6 +111,5 @@ describe.skipIf(!RUN)("patients · superficie RPC (P0-S02a, E0)", () => {
     if (!plans.ok) return;
     expect(plans.data).toHaveLength(1);
     expect(plans.data[0].title).toBe("Plan con HC");
-    expect(await getPatientEvaScores(patientId)).toHaveLength(1);
   });
 });

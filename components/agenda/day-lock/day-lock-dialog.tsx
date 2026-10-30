@@ -17,6 +17,13 @@
  *   3. «done» / «unlocked»: resultado (cancelados, los que no se pudieron
  *      cancelar por tener cobro, lo que queda bloqueado).
  *
+ * CF-LOCK (pedido del cliente «¿está la opción de BLOQUEAR DÍA?»): «Hasta el
+ * día» opcional convierte el candado en un rango (vacaciones, hasta 31 días)
+ * con el mismo flujo de preview → mantener/cancelar. En la lista de bloqueos
+ * del día, un día de un rango se quita solo con «Desbloquear lo marcado»; el
+ * rango entero, con «Quitar todo el bloqueo (lun 3 al vie 7)» (el rango sale de
+ * `dayLockGroupSpans`: la agenda solo conoce los días que está mirando).
+ *
  * Contrato con el server (`lib/time-blocks.ts`): `applyDayLock` recibe los ids
  * que el usuario VIO; si la agenda cambió en el medio devuelve `changed` y acá
  * se re-muestra la lista nueva sin aplicar nada (carrera bloqueo vs alta).
@@ -32,16 +39,19 @@ import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
-import { applyDayLock, previewDayLock, removeDayLock } from "@/lib/time-blocks";
+import { applyDayLock, dayLockGroupSpans, previewDayLock, removeDayLock } from "@/lib/time-blocks";
 import type {
   DayLockAffected,
   DayLockApplyData,
+  DayLockGroupSpan,
   DayLockPreview,
   DayLockPreviewInput,
   DayLockRemainingBlock,
   RemoveDayLockData,
 } from "@/lib/time-blocks-schemas";
 import type { RoomOption } from "@/lib/rooms-types";
+import { addDays, isDayKey } from "@/lib/availability/day";
+import { TIME_BLOCK_MAX_DAYS } from "@/lib/time-blocks-window";
 import {
   DAY_LOCK_REASONS,
   DAY_LOCK_REASON_MAX,
@@ -53,12 +63,16 @@ import {
   buildDayLockScope,
   canLockRoom,
   dayKeyLongLabel,
+  dayLockDaysCount,
+  dayLockGroupRemovals,
+  dayLockRangeSummary,
   dayLockThrownMessage,
   initialDayLockForm,
   isDayLockFormDirty,
   minutesLabel,
   removableBlocks,
   removeDayLockRequests,
+  removeGroupRequest,
   removeSummary,
   roomNameOf,
   withRoomScope,
@@ -127,16 +141,20 @@ export function DayLockAffectedList({
   affected,
   practitioners,
   planesEnabled,
+  showDay = false,
 }: {
   affected: readonly DayLockAffected[];
   practitioners: readonly { id: string; name: string }[];
   planesEnabled: boolean;
+  /** CF-LOCK: en un rango, cada fila lleva su día («lun 3 · 10:00»); sin eso dos turnos de las 10 no se distinguen. */
+  showDay?: boolean;
 }) {
   const inPlan = new Set(planesEnabled ? affected.filter((a) => a.inPlan).map((a) => a.id) : []);
   return (
     <ul style={listStyle} aria-label="Turnos en ese horario">
       {affectedLines(affected, practitioners).map((l) => (
         <li key={l.id} style={rowStyle}>
+          {showDay && <span style={{ color: "var(--navy-500)", minWidth: 48, whiteSpace: "nowrap" }}>{l.day}</span>}
           <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, minWidth: 44 }}>{l.time}</span>
           <span style={{ color: "var(--navy-500)", minWidth: 0, flex: "0 1 34%" }}>{l.practitioner}</span>
           <span style={{ color: "var(--navy-900)", flex: 1 }}>{l.patient}</span>
@@ -398,12 +416,36 @@ export function DayLockDialog({
   // Algo se escribió (bloqueo o desbloqueo): al cerrar se avisa al padre para refrescar.
   const wrote = useRef(false);
 
+  // CF-LOCK: cuántos días tiene cada bloqueo de rango del día (para «Quitar todo el bloqueo (lun 3 al vie 7)»). Si la lectura
+  // falla (p. ej. sin `agenda.viewAll`) no se ofrece el botón: desbloquear el día suelto sigue andando.
+  const [groupSpans, setGroupSpans] = useState<DayLockGroupSpan[]>([]);
+  const groupKey = [...new Set((existingBlocks ?? []).map((b) => b.groupId).filter((g): g is string => !!g))]
+    .sort()
+    .join(",");
+  useEffect(() => {
+    setGroupSpans([]);
+    if (!open || !groupKey) return;
+    let alive = true;
+    dayLockGroupSpans({ groupIds: groupKey.split(",") })
+      .then((r) => {
+        if (alive && r.ok) setGroupSpans(r.data);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [open, groupKey]);
+
   const blocks = useMemo(
-    () => removableBlocks(existingBlocks ?? [], dayKey, ctx),
-    [existingBlocks, dayKey, ctx]
+    () => removableBlocks(existingBlocks ?? [], dayKey, ctx, groupSpans),
+    [existingBlocks, dayKey, ctx, groupSpans]
   );
 
-  // Reset en cada apertura / cambio de día.
+  // Reset en cada apertura / cambio de día. Depende de `initialFormKey` (el form inicial POR VALOR) y no de la identidad
+  // de `initial`: el padre pasaba `practitioners` como array nuevo en cada render → `ctx` e `initial` nuevos → tras el
+  // `revalidatePath` de «Bloquear N días» el efecto volvía a `step="form"` y el «Listo» no se veía nunca (E2E
+  // cf-day-lock, bug previo a CF). Así no depende de que el padre memoice.
+  const initialFormKey = `${dayKey}|${JSON.stringify(initial)}`;
   useEffect(() => {
     if (!open) return;
     setStep("form");
@@ -418,7 +460,7 @@ export function DayLockDialog({
     setToRemove(new Set(blocks.filter((b) => b.removable).map((b) => b.block.id)));
     wrote.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, initial]);
+  }, [open, initialFormKey]);
 
   const dirty = (step === "form" && isDayLockFormDirty(initial, form)) || step === "affected";
 
@@ -428,7 +470,9 @@ export function DayLockDialog({
   }, [onClose, onDone]);
 
   const requestClose = useCallback(async () => {
-    if (pending) return;
+    // En «done» la escritura ya terminó: `pending` (useTransition) sigue en true mientras llega el árbol del
+    // `revalidatePath`, y Esc / la X no hacían nada durante ese rato (el «Listo» sí cerraba, llama a `finish`).
+    if (pending && step !== "done") return;
     if (dirty) {
       const ok = await confirm({
         title: "¿Descartar el bloqueo?",
@@ -561,7 +605,7 @@ export function DayLockDialog({
         title: cancellable === 1 ? "¿Cancelar 1 turno?" : `¿Cancelar ${cancellable} turnos?`,
         // TP-3k: con cobros en la lista, la confirmación repite que esos no se cancelan (y el reintegro va por MP).
         message: [
-          "Se bloquea el día y se cancelan los turnos de la lista. El paciente no recibe aviso: avisale vos.",
+          `${(preview.days ?? 1) > 1 ? "Se bloquean los días" : "Se bloquea el día"} y se cancelan los turnos de la lista. El paciente no recibe aviso: avisale vos.`,
           dayLockPaymentNote(preview.affected),
         ]
           .filter(Boolean)
@@ -609,7 +653,37 @@ export function DayLockDialog({
     });
   };
 
+  /** CF-LOCK: «Quitar todo el bloqueo (…)»: todas las filas del rango, de todos sus días. */
+  const submitRemoveGroup = async (g: { days: number; block: ExistingDayBlock }) => {
+    const ok = await confirm({
+      title: `¿Quitar los ${g.days} días del bloqueo?`,
+      message: "Se desbloquean todos los días de ese bloqueo, no solo este. Los turnos no cambian.",
+      confirmLabel: "Quitar todo el bloqueo",
+      cancelLabel: "Volver",
+    });
+    if (!ok) return;
+    setError(null);
+    start(async () => {
+      try {
+        const r = await removeDayLock(removeGroupRequest(dayKey, g.block, ctx));
+        if (!r.ok) {
+          setError(r.error);
+          return;
+        }
+        wrote.current = true;
+        setRemoved(r.data);
+        setStep("unlocked");
+      } catch (e) {
+        setError(dayLockThrownMessage(e));
+      }
+    });
+  };
+
   const dayLabel = dayKeyLongLabel(dayKey);
+  const groupRemovals = dayLockGroupRemovals(blocks);
+  const formDays = dayLockDaysCount(dayKey, form.endDayKey && form.endDayKey > dayKey ? form.endDayKey : null);
+  const rangeSummary = dayLockRangeSummary(dayKey, form.endDayKey);
+  const scopeDays = scope ? dayLockDaysCount(scope.input.dayKey, scope.input.endDayKey ?? null) : 1;
   const practitionerLine = (ids: string[] | null) =>
     ids === null
       ? "Todo el equipo"
@@ -669,10 +743,26 @@ export function DayLockDialog({
                 ))}
               </ul>
               {removable.length > 0 && (
-                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+                  {groupRemovals.map((g) => (
+                    <Button
+                      key={g.groupId}
+                      type="button"
+                      variant="ghost"
+                      onClick={() => void submitRemoveGroup(g)}
+                      disabled={pending}
+                    >
+                      {g.label}
+                    </Button>
+                  ))}
                   <Button type="button" variant="ghost" onClick={submitRemove} disabled={pending}>
                     {pending ? "Desbloqueando…" : "Desbloquear lo marcado"}
                   </Button>
+                </div>
+              )}
+              {groupRemovals.length > 0 && (
+                <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
+                  «Desbloquear lo marcado» quita solo este día del bloqueo.
                 </div>
               )}
               <hr style={{ border: 0, borderTop: "1px solid rgba(15,30,51,0.08)", margin: "4px 0 0" }} />
@@ -724,6 +814,34 @@ export function DayLockDialog({
                   error={errors.endMin}
                   disabled={pending}
                 />
+              </div>
+            )}
+          </div>
+
+          {/* CF-LOCK: rango de días. `<input type="date">` (excepción de AGENTS §4: es un día de calendario, no un instante). */}
+          <div>
+            <label htmlFor="day-lock-end-day" style={{ ...labelStyle, display: "block" }}>
+              Hasta el día (opcional)
+            </label>
+            <input
+              id="day-lock-end-day"
+              type="date"
+              value={form.endDayKey ?? ""}
+              min={dayKey}
+              max={isDayKey(dayKey) ? addDays(dayKey, TIME_BLOCK_MAX_DAYS - 1) : undefined}
+              onChange={(e) => set("endDayKey", e.target.value || null)}
+              disabled={pending}
+              style={{ ...selectStyle, minWidth: 180 }}
+              aria-invalid={errors.endDayKey ? true : undefined}
+              aria-describedby={errors.endDayKey ? "day-lock-end-day-error" : "day-lock-end-day-hint"}
+            />
+            {errors.endDayKey ? (
+              <div id="day-lock-end-day-error" style={errorStyle}>
+                {errors.endDayKey}
+              </div>
+            ) : (
+              <div id="day-lock-end-day-hint" style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 6 }}>
+                {rangeSummary ?? `Para vacaciones o licencias: hasta ${TIME_BLOCK_MAX_DAYS} días. Vacío = solo este día.`}
               </div>
             )}
           </div>
@@ -870,9 +988,14 @@ export function DayLockDialog({
                 ? "Revisando…"
                 : roomMode
                   ? "Bloquear la sala"
-                  : form.span === "allDay"
-                    ? "Bloquear el día"
-                    : "Bloquear la franja"}
+                  : formDays > 1
+                    ? // ZB B21: con franja, «Bloquear N días» sonaba a días enteros; dice que es la franja de esos días.
+                      form.span === "range"
+                      ? `Bloquear la franja (${formDays} días)`
+                      : `Bloquear ${formDays} días`
+                    : form.span === "allDay"
+                      ? "Bloquear el día"
+                      : "Bloquear la franja"}
             </Button>
           </div>
         </div>
@@ -886,16 +1009,22 @@ export function DayLockDialog({
             </div>
           )}
           <div style={{ fontSize: 14, fontWeight: 700, color: "var(--navy-900)" }}>
-            {affectedHeadline(preview.affected.length, preview.allDay, scopeRoomName)}
+            {affectedHeadline(preview.affected.length, preview.allDay, scopeRoomName, preview.days ?? 1)}
           </div>
           <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
             {scopeRoomName ?? practitionerLine(scope.input.practitionerIds)}
+            {(preview.days ?? 1) > 1 && ` · ${dayLockRangeSummary(preview.dayKey, preview.endDayKey)?.replace(/\.$/, "")}`}
             {preview.allDay
               ? " · todo el día"
               : ` · de ${minutesLabel(scope.input.startMin ?? 0)} a ${minutesLabel(scope.input.endMin ?? 0)}`}
           </div>
           {preview.affected.length > 0 && (
-            <DayLockAffectedList affected={preview.affected} practitioners={practitioners} planesEnabled={planesEnabled} />
+            <DayLockAffectedList
+              affected={preview.affected}
+              practitioners={practitioners}
+              planesEnabled={planesEnabled}
+              showDay={(preview.days ?? 1) > 1}
+            />
           )}
           {preview.affected.length > 0 && (
             <div style={noteStyle}>
@@ -948,7 +1077,7 @@ export function DayLockDialog({
       {step === "done" && applied && (
         <div style={{ display: "grid", gap: 12 }} role="status">
           {(() => {
-            const s = applySummary(applied, { room: scopeRoomId !== null });
+            const s = applySummary(applied, { room: scopeRoomId !== null, days: scopeDays });
             return (
               <>
                 <div style={{ fontSize: 14, fontWeight: 700, color: "var(--navy-900)" }}>{s.headline}</div>
@@ -962,6 +1091,9 @@ export function DayLockDialog({
               <ul style={listStyle}>
                 {affectedLines(applied.cancelled, practitioners).map((l) => (
                   <li key={l.id} style={rowStyle}>
+                    {scopeDays > 1 && (
+                      <span style={{ color: "var(--navy-500)", minWidth: 48, whiteSpace: "nowrap" }}>{l.day}</span>
+                    )}
                     <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, minWidth: 44 }}>{l.time}</span>
                     <span style={{ color: "var(--navy-500)" }}>{l.practitioner}</span>
                     <span style={{ color: "var(--navy-900)", flex: 1 }}>{l.patient}</span>
@@ -979,7 +1111,7 @@ export function DayLockDialog({
                   return (
                     <li key={l.id} style={{ ...rowStyle, flexWrap: "wrap" }}>
                       <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, minWidth: 44 }}>
-                        {l.time}
+                        {scopeDays > 1 ? `${l.day} · ${l.time}` : l.time}
                       </span>
                       <span style={{ color: "var(--navy-900)" }}>{l.patient}</span>
                       <span style={{ fontSize: 12, color: "var(--warn-fg)", flexBasis: "100%" }}>

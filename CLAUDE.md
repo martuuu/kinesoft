@@ -127,6 +127,15 @@
     endurecimiento de PV (no los H1-H6). «M19» = `support_tickets`; ADR-030 = tickets, ADR-031 = inactividad.
     Decisiones con default «D-TK*», «D-LG*», «D-IN*», «D-BR*», «D-HD*» (§27.7). «M1..M7» y «B1..B18» de ZA/ZB son
     hallazgos de los revisores (AUDIT «Ronda PV»), no migraciones. «Tickets» es la etiqueta de `/plataforma/mensajes`.
+  - **§28 del plan (30-oct; «CF» = feedback del primer cliente):** olas «CF-0..CF-5» y «Z». Sesiones «CF-M» (= **M20**),
+    «CF-K», «CF-L», «CF-C», «CF-X», «CF-RT», «CF-NOT», «CF-UI1», «CF-NAV», «CF-E», «CF-W1/W2», «CF-FORM», «CF-EVA1..3»,
+    «CF-MAIL», «CF-LOCK», «CF-P», «CF-A», «CF-PL», «CF-U1/U1b/U2..U5», «CF-E2E» (e «INT» de integrador). Cierre: «ZA/ZB»
+    (revisores) y «ZF1..ZF4» (fixers: no son los ZF1..ZF5 de T4, ni los ZF1..ZF3 de T6/T7, ni los ZF1a/ZF1b/ZF2 de PV,
+    ni TP-ZF). «A1/A2», «M3..M10» y «B11..B22» de ZB son hallazgos (AUDIT «Ronda CF»), no migraciones ni olas A.
+    «CF-D1..12» son decisiones con default (§28.2); **los IDs de test `[CF-D1]`/`[CF-D2]` son del formulario del
+    turnero y chocan con ellos** (no son CF-D1/CF-D2). «M20» = `cf_agenda_rules`; ADR-032 = «no atiende servicios
+    distintos a la vez»; lock nuevo `kinesoft:pday:` (día del profesional, enmienda C2 (1d)). `[CF-L*]` de los tests
+    de EVA no son los `[CF-L1..4]` de locks.
   - «Plan» choca en tres sentidos: plan de tratamiento, plan SaaS del tenant y plan de la obra social.
   - «Vertical» (`Tenant.vertical`: General / Kinesiología) es el tipo de consultorio: no es la «disciplina» de un
     servicio o plan (Kine / Osteo) ni el plan SaaS (`Tenant.plan`). «Kine PRO» = vertical Kinesiología + plan PRO.

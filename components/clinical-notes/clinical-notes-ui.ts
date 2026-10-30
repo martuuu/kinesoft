@@ -49,6 +49,11 @@ export const CLINICAL_NOTES_UI_COPY = {
   void: "Anular",
   history: "Ver versiones anteriores",
   amendHint: "La enmienda se agrega debajo de la ficha original, que queda como estaba.",
+  /**
+   * [CF-UI1 · M] Segunda línea de «Podés editar hasta …»: el cliente entendía que a las 24 h la ficha se bloqueaba. Después
+   * se sigue pudiendo corregir, como enmienda (la original queda como estaba).
+   */
+  editWindowAfterHint: "Después se puede editar, pero queda como enmienda.",
   dirtyMessage: "Tenés una ficha sin guardar. Si cerrás, se pierde.",
   savedCreate: "Ficha guardada",
   savedEdit: "Cambios guardados",

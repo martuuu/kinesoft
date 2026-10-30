@@ -23,7 +23,7 @@ import { canWriteClinical, type Capability, type PatientAccessLevel } from "@/li
 import { findUsablePayerPlan } from "@/lib/catalog-validate";
 import { auditInTx } from "@/lib/audit";
 import { logger } from "@/lib/logger";
-import { notify } from "@/lib/notifications-internal";
+import { notify, notifyTenantOwners } from "@/lib/notifications-internal";
 import { resolveBookingCopagoCents } from "@/lib/billing-internal";
 import { resolveInsurerName } from "@/lib/insurers-internal";
 // P0-S02a (E0): `visibilityForActor` salió con `getPatient`, su único uso acá.
@@ -33,7 +33,6 @@ import {
   patientBookingsAllInTx,
   patientBookingsSummaryInTx,
   patientCoreInTx,
-  patientEvaScoresInTx,
   resolvePatientBillingInTx,
   seesBookings,
   type PatientBilling,
@@ -68,7 +67,6 @@ import {
   PatientAdminUpdate,
   PATIENT_CLINICAL_KEYS,
   CoverageSet,
-  EvaScoreCreate,
   type ActionResult,
   type PatientCreateInput,
   type PatientCreateOptionsInput,
@@ -269,19 +267,9 @@ export async function getPatientBookingsAll(patientId: string, take = 100, curso
   return runWithRls(actor.tenantId, (tx) => patientBookingsAllInTx(tx, actor, patientId, access, take, cursor));
 }
 
-/**
- * EVA scores — chronological. Used by the Evolución tab chart.
- */
-export async function getPatientEvaScores(patientId: string) {
-  const actor = await getActor();
-  // Enmienda EV0 (S22b): EVA es del módulo `evaluaciones`; un consultorio
-  // General no la tiene. Lectura compartida → vacío, no error (C-EV4).
-  // Se mira ANTES del acceso: sin el módulo no se abre ninguna tx.
-  if (!modulesFor(actor.entitlements).has("evaluaciones")) return [];
-  const access = await patientAccessFor(actor, patientId);
-  if (access !== "full") return [];
-  return runWithRls(actor.tenantId, (tx) => patientEvaScoresInTx(tx, actor, patientId, access));
-}
+// CF (§28, decisión 4 de Martin, 30-oct): acá vivían `getPatientEvaScores` y, más abajo, `recordEvaScore`. La EVA
+// salió de toda la app (pestaña, card de Resumen, Seguimiento y portal); sin llamadores, cada una seguía siendo un
+// endpoint RPC en un chunk público que escribía o leía `EvaScore`. Se borran; el modelo y las filas quedan.
 
 // P0-S02a (E0, 04-oct): acá vivía `getPatient`, el wrapper pre-Sprint-16
 // que cargaba toda la HC (planes, sesiones, ejercicios, diagnósticos, EVA,
@@ -289,7 +277,7 @@ export async function getPatientEvaScores(patientId: string) {
 // siendo un endpoint con action-id en un chunk público, y sin gate de acceso
 // (`patientWhere = {}`): un profesional básico o la Secretaria leían la HC
 // completa por RPC. No se reemplaza: cada pantalla usa su lector con gate
-// (`getPatientCore`, `getPatientPlans`, `getPatientEvaScores`…).
+// (`getPatientCore`, `getPatientPlans`…).
 // `tests/integration/patients-rpc-surface.test.ts` impide que vuelva.
 
 /**
@@ -453,14 +441,17 @@ export async function createPatient(
         fieldErrors: { assignTo: ["Profesional inválido"] },
       };
     }
+    // [CF-F2] Antes `notify({ userId: actor.userId })`: el aviso le llegaba SOLO a quien cargaba el paciente y el
+    // titular no se enteraba («el profesional cargó 4 pacientes y los siguientes 2 no aparecían»). Ahora OWNER/ADMIN
+    // activos + el creador, con los filtros de HD-12. Un aviso por paciente. Sin cuerpo: antes iba el email o el DNI,
+    // que ahora leerían también los titulares; el nombre del título alcanza para reconocerlo (el link abre la ficha).
     if (actor.userId) {
-      await notify({
+      await notifyTenantOwners({
         tenantId: actor.tenantId,
-        userId: actor.userId,
         kind: NotificationKind.PATIENT_NEW,
         title: `Nuevo paciente · ${p.firstName} ${p.lastName}`,
-        body: p.email ?? p.documentId ?? undefined,
         link: `/pacientes/${p.id}`,
+        alsoUserId: actor.userId,
       });
     }
     revalidatePath("/pacientes");
@@ -725,46 +716,6 @@ async function setPatientDiagnosisImpl(
 // A2a-S08 (decisión del dueño 30-sep): se quitó `deletePatient`. El borrado
 // definitivo de una ficha arrastraba en cascada turnos, cobros, planes y
 // archivos sin retorno; la única salida es Archivar (`setPatientArchived`).
-
-// BO3-F: el cuerpo va en `recordEvaScoreImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
-// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
-export async function recordEvaScore(...args: Parameters<typeof recordEvaScoreImpl>): Promise<ActionResult<{ id: string }>> {
-  return withReadOnlyResult(() => recordEvaScoreImpl(...args));
-}
-
-// HD-3 (PV §27): Next expone todo export de un `"use server"` como RPC; sin validar, `{ value: 11 }` o `7.5` quedaban
-// guardados (la columna es Int sin CHECK) y ensuciaban la curva de EVA. Reusa `EvaScoreCreate` (0..10 entero) con el
-// `patientId` acotado a 64 (un cuid tiene 25; el tope evita mandar un string enorme a la query del gate).
-const EvaScoreInput = EvaScoreCreate.extend({ patientId: z.string().min(1).max(64) });
-
-async function recordEvaScoreImpl(raw: {
-  patientId: string;
-  value: number;
-  source?: string;
-}): Promise<ActionResult<{ id: string }>> {
-  // Antes de la tx y antes del actor: entrada inválida no abre conexión ni escribe.
-  const parsed = EvaScoreInput.safeParse(raw);
-  if (!parsed.success) return { ok: false, error: "La EVA va de 0 a 10." };
-  const input = parsed.data;
-  // Enmienda EV0 (S22b) tiraba `ForbiddenError` sin el módulo `evaluaciones` (C-EV4). ES4 P4.Z (hallazgo S26b): ahora
-  // devuelve `{ok:false}` como el resto de las actions de la ficha (setPatientDiagnosis): en prod Next redacta el
-  // mensaje de un throw y el cliente veía un error genérico. Sigue sin escribir.
-  const actor = await getActor();
-  if (!modulesFor(actor.entitlements).has("evaluaciones")) {
-    return { ok: false, error: MODULE_DENIED_COPY.evaluaciones };
-  }
-  // Gate + insert en la misma tx (antes eran dos: check y escritura separados).
-  const row = await runWithRls(actor.tenantId, async (tx) => {
-    const denied = await hcAccessError(actor, input.patientId, tx);
-    if (denied) return { error: denied };
-    return tx.evaScore.create({
-      data: { patientId: input.patientId, value: input.value, source: input.source },
-    });
-  });
-  if ("error" in row) return { ok: false, error: row.error };
-  revalidatePath(`/pacientes/${input.patientId}`);
-  return { ok: true, data: { id: row.id } };
-}
 
 // `completeSession` (cierre de sesión en 4 tx, sin gate de acceso ni idempotencia)
 // se borró en A2a: no tenía callers y el cierre vive en

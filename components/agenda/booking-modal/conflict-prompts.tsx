@@ -22,6 +22,9 @@
  * - `IntervalCapPrompt` (T3e-2u1, C-AS3): el profesional llegó a su tope «N
  *   turnos cada X min» → "Usar próximo libre" / "Cargar como sobreturno"
  *   (`allowIntervalCap`, ES sobreturno, decisión 6) / "Volver".
+ * - `OtherServicePrompt` (CF-U1, §28, CF-D4): el profesional ya atiende OTRO
+ *   servicio a esa hora → "Cargar como sobreturno" (`allowOtherService`) /
+ *   "Elegir otro horario". Va entre el cupo y el tope (`FORCE_PROMPT_ORDER`).
  *
  * Orden en que el server los devuelve (lib/bookings.ts#createBooking):
  * bloqueado > fuera de horario > superposición del paciente > mismo día >
@@ -33,6 +36,7 @@ import { useState, type CSSProperties, type MutableRefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import {
+  BATCH_OTHER_SERVICE_LABEL,
   BATCH_ROOM_BUSY_DETAIL,
   BATCH_ROOM_BUSY_LABEL,
   batchCreatableCounts,
@@ -41,10 +45,11 @@ import {
   batchIntervalCappedCounts,
   batchRoomBusyCounts,
   intervalCapPromptCopy,
+  otherServicePromptCopy,
   roomBusyCopy,
   type RoomBusyResult,
 } from "@/lib/booking-modal-state";
-import type { IntervalCapPromptData } from "@/lib/booking-force-flags";
+import type { IntervalCapPromptData, OtherServicePromptData } from "@/lib/booking-force-flags";
 import {
   countSessionStates,
   countsLine,
@@ -65,6 +70,8 @@ import type {
 export type RoomBusyState = RoomBusyResult & { payload: CreatePayload };
 /** T3e-2u1: tope por intervalo lleno (re-llamar con `allowIntervalCap`). */
 export type IntervalCapState = IntervalCapPromptData & { payload: CreatePayload };
+/** CF-U1: el profesional atiende otro servicio a esa hora (re-llamar con `allowOtherService`). */
+export type OtherServiceState = OtherServicePromptData & { payload: CreatePayload };
 
 type PromptRef = MutableRefObject<HTMLDivElement | null>;
 
@@ -188,6 +195,10 @@ export function BatchConflictPrompt({
           // T3: tope solo (fecha libre, sin sala ocupada) = estado de la fila;
           // con otro aviso, va como secundario.
           const capOnly = d.intervalCapped === true && desc.state === "libre" && !roomOnly;
+          // CF-D4: la fecha que pisa otro servicio ya viene plegada en «sobreturno»; el detalle genérico («El cupo de
+          // ese horario está completo») mentía el motivo. Con otro estado (bloqueada, etc.) va como secundario.
+          const otherAsDetail = d.otherServiceBusy === true && desc.state === "sobreturno";
+          const detail = otherAsDetail ? `${BATCH_OTHER_SERVICE_LABEL} a esa hora` : desc.detail;
           return (
             <div key={d.iso}>
               <span className="k-mono">{fmtSlot(d.iso)}</span> ·{" "}
@@ -196,12 +207,13 @@ export function BatchConflictPrompt({
                 ? ` — ${BATCH_INTERVAL_CAP_DETAIL}`
                 : roomOnly
                   ? ` — ${BATCH_ROOM_BUSY_DETAIL}`
-                  : desc.detail
-                    ? ` — ${desc.detail}`
+                  : detail
+                    ? ` — ${detail}`
                     : ""}
               {desc.extra ? ` (${desc.extra.toLowerCase()})` : ""}
               {d.roomBusy === true && !roomOnly ? ` (${BATCH_ROOM_BUSY_LABEL.toLowerCase()})` : ""}
               {d.intervalCapped === true && !capOnly ? ` (${BATCH_INTERVAL_CAP_LABEL.toLowerCase()})` : ""}
+              {d.otherServiceBusy === true && !otherAsDetail ? ` (${BATCH_OTHER_SERVICE_LABEL.toLowerCase()})` : ""}
             </div>
           );
         })}
@@ -626,6 +638,53 @@ export function IntervalCapPrompt({
         </Button>
         <Button type="button" variant="ghost" onClick={onBack} disabled={pending}>
           Volver
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * CF-U1 (§28, decisiones 1 y 2, CF-D4): el profesional ya atiende OTRO servicio (de otro paciente) a esa hora y no
+ * tiene «Atiende servicios distintos a la vez». El staff puede forzarlo: "Cargar como sobreturno" re-llama con
+ * `allowOtherService` (queda sobreturno). Sin botón de próximo libre: el pedido fue mostrarlo como dato y que el
+ * staff elija el horario a mano. El foco va a la salida segura (como el de sala): un Enter de más no carga el
+ * sobreturno.
+ */
+export function OtherServicePrompt({
+  promptRef,
+  otherService,
+  pending,
+  onForce,
+  onBack,
+}: {
+  promptRef: PromptRef;
+  otherService: OtherServicePromptData;
+  pending: boolean;
+  /** Re-llamar con `allowOtherService: true` (más los flags ya confirmados). */
+  onForce: () => void;
+  /** Cierra el aviso y deja el horario a mano. */
+  onBack: () => void;
+}) {
+  const copy = otherServicePromptCopy(otherService);
+  return (
+    <div ref={promptRef} role="alert" style={WARN_BOX}>
+      <div style={{ fontSize: 13, color: "var(--warn-fg)", fontWeight: 700 }}>{copy.title}</div>
+      <div style={{ fontSize: 12, color: "var(--navy-700)", lineHeight: 1.45 }}>
+        {copy.detail}
+        {copy.nextFreeLine && (
+          <>
+            <br />
+            {copy.nextFreeLine}
+          </>
+        )}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        <Button type="button" variant="ghost" onClick={onForce} disabled={pending} style={WARN_GHOST}>
+          {copy.confirmLabel}
+        </Button>
+        <Button type="button" variant="ghost" data-prompt-primary="true" onClick={onBack} disabled={pending}>
+          {copy.backLabel}
         </Button>
       </div>
     </div>
