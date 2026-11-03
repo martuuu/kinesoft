@@ -358,8 +358,8 @@ export function GeneralPanel({
           la cambiás desde «Apariencia», en el menú de tu cuenta.
         </div>
         <PrefRow
-          label="Encabezado de días"
-          hint="Muestra u oculta la tira de días (visible en todas las vistas) y el encabezado de la grilla semanal."
+          label="Tira de días"
+          hint="Muestra u oculta la tira de días arriba de Día, Lista y Recepción. En Semana el encabezado siempre está: es la misma tira, alineada con las columnas."
           on={agenda.agendaShowWeekHeader}
           onChange={(v) => setAgenda("agendaShowWeekHeader", v)}
         />
@@ -687,8 +687,8 @@ function AgendaRulesCard({ tenant, onDirtyChange }: { tenant: TenantSettings; on
       <EyebrowLabel>Reglas de la agenda</EyebrowLabel>
       <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 4, marginBottom: 14, lineHeight: 1.45 }}>
         Cada cuánto se ofrecen horarios al dar un turno y en el turnero online, y con cuánta anticipación se pueden
-        pedir turnos online. Cada profesional puede tener sus propios intervalos en Profesionales, y cada servicio del
-        profesional su propia anticipación.
+        pedir turnos online. Cada profesional puede tener sus propios intervalos en Profesionales y su propia
+        anticipación; si un servicio del profesional tiene la suya, manda esa.
       </div>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 14, flexWrap: "wrap" }}>
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11 }}>

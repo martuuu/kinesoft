@@ -5,7 +5,7 @@
 > lo crítico que sigue valiendo de ellas está resumido en el §2.
 >
 > **Orden:** §1 QA de producción por plan (después del push) → §2 P0 (lo que no puede fallar) → §3 lo vigente de T3 a
-> CF. Marcá cada ítem ✅/❌. **Un 🔴 P0 en ❌ frena el pase a prod.** Desde el reset del 29/30-oct **prod tiene un cliente
+> CF2. Marcá cada ítem ✅/❌. **Un 🔴 P0 en ❌ frena el pase a prod.** Desde el reset del 29/30-oct **prod tiene un cliente
 > vivo**: lo de prod se prueba en consultorios de QA propios, nunca creando ni moviendo turnos en el del cliente.
 
 ## Cómo se corre
@@ -20,7 +20,7 @@
   - **Nunca `npm run dev` pelado** contra algo que no sea el Docker (desde INF-DEV se niega a arrancar contra un
     Supabase remoto) y nunca un Preview que comparta la base de prod (H6).
 - **Fechas siempre con `TZ=UTC`** (`dev:local` ya la fija): en AR-local los bugs de timezone no se ven.
-- **Prod: solo el §1 y el «CF»**, después del push y del postcheck, con los consultorios de `scripts/qa-tenants.ts` (o
+- **Prod: solo el §1, el «CF» y el «CF2»**, después del push y del postcheck, con los consultorios de `scripts/qa-tenants.ts` (o
   uno de QA propio). Nada más del QA se corre contra prod, y nada sobre el consultorio del cliente.
 - Antes de marcar algo como manual, mirá la columna de cobertura: si dice **QA-M** (integración
   `tests/integration/plan-routing-matrix.test.ts`) o **QA-E** / **E2E** (Playwright, `tests/e2e/*.spec.ts`), ya corre
@@ -371,7 +371,7 @@
 
 ---
 
-## §3 · Vigente por tanda (T3 a T7, PV y CF)
+## §3 · Vigente por tanda (T3 a T7, PV, CF y CF2)
 
 ## T3 · Agenda, Secretaria, cobros y módulos (19-oct-2026)
 
@@ -794,7 +794,8 @@ ADR-030 / ADR-031; hallazgos en [AUDIT «Ronda PV»](AUDIT.md#ronda-pv). Los E2E
 - [ ] 2FA nueva sale como «Consultorio Online»; una ya enrolada sigue con el nombre viejo y sus códigos funcionan.
 
 ### `/pacientes` paginado (con más de 50 pacientes)
-- [ ] 50 por página, `?page=`, indicador arriba y paginación abajo; los totales de los pills son de todo el directorio.
+- [ ] 50 por página, `?page=`, indicador arriba y paginación abajo; el total es de todo el directorio (las pastillas de
+  plan salieron en CF2).
 - [ ] Orden (próximo turno, última visita) estable entre páginas; filtro de obra social (`?os=`) pagina sobre lo filtrado.
 - [ ] Secretaría ve la proyección admin paginada igual; una búsqueda nueva vuelve a la página 1.
 - [ ] El export CSV trae **todos**, no solo la página.
@@ -877,3 +878,98 @@ camino feliz en local.
 - [ ] Configuración → Servicios: el campo de precio (MoneyInput) tiene el mismo alto y borde que los demás, con el «$»
   adentro y foco visible, a 1366 y a 390.
 - [ ] Fichas y HC: debajo de «Podés editar hasta…» se lee «Después se puede editar, pero queda como enmienda.»
+
+## CF2 · Feedback de los clientes, 2.ª ronda (02-nov-2026)
+
+Plan §29, **con migración M21** (`cf2_profesional_caja`; en prod antes del push, M20 antes si falta, [RUNBOOK «M21 en
+prod»](MIGRACIONES-RUNBOOK.md)). Diseño en ARCHITECTURE ADR-033 (caja y reparto) y ADR-034 (avisos); hallazgos en
+[AUDIT «Ronda CF2»](AUDIT.md#ronda-cf2). **En prod, después del deploy**, con un consultorio de QA propio (plan Clínica,
+2 sedes, Titular que atiende + 2 profesionales + Secretaria, turnero prendido), nunca sobre el del cliente. Cada pantalla
+a **1366×768** y a **390**. Los E2E `cf2-*` cubren el camino feliz en local (sin push).
+
+### Agenda: de quién es, Semana y Mes
+- [ ] Profesional entra a `/agenda` → título «Tu agenda · <nombre>» y la fecha como subtítulo; Secretaria → «Todos los
+  profesionales (N)». Elegir 1, 2 y 3+ chips → «Agenda de …», «… y …», «3 profesionales: …» (3+: primer nombre +
+  inicial del apellido). Consultorio con un solo profesional: sin cambios.
+- [ ] Elegir profesionales, ir a Pacientes y volver a `/agenda` (sin `?pros=`) → la selección sigue. Un link con
+  `?pros=` le gana. «Por sala» ignora la selección sin borrarla. A 390 los chips scrollean horizontal.
+- [ ] Semana: **un solo** encabezado (la tira, sticky al scrollear), alineado con las columnas, «hoy» con anillo, el
+  candado del día en la tira (bloquear/desbloquear desde ahí). Clic en el día → vista Día de ese día.
+- [ ] Segmento «Mes» (`?view=month`): cantidad de turnos por día de los profesionales elegidos, iniciales, estado
+  bloqueado / parcial / sin atención (con glifo, también a 390). ‹ › mueven un mes; clic en un día → Día. Sin nombres de
+  pacientes; filtros de OS y sala ocultos. El conteo de un día = el de la vista Día con la misma sede.
+- [ ] Mes en vivo: crear un turno desde otra cuenta → la celda suma sin recargar.
+
+### 🔴 P0 · Cobro visible, Recepción y `/sala`
+- [ ] Secretaria cobra un copago en efectivo desde el drawer → la tarjeta de la agenda (Día, Semana, Lista) muestra
+  «Pagado · Efectivo» en < 2 s en otra pestaña. Un atendido o llegado que debe → «Por cobrar». Un online retenido →
+  «Retenido» (en Semana compacta, glifo distinto del de «Por cobrar»).
+- [ ] El Profesional ve el tag solo en **sus** turnos; la Secretaria, en todos.
+- [ ] Recepción: columna «Cobro», chip «Por cobrar · N · $X» (visible y deshabilitado en 0) → «Cobrar» abre el modal
+  con medio de pago; cobrado → la fila cambia y el chip baja. También en un día que no es hoy.
+- [ ] `/sala` Tablero: «Por cobrar · N · $X» en el header (mismo número y total que el chip de Recepción, incluye a los
+  que llegaron y no terminaron) → drawer → cobrar. Lista y Flujo con «Llamados» y el tag «Pagado · medio» junto al
+  estado. Abrir el turno desde `/sala` → `/agenda?…&open=<id>` con el drawer abierto.
+- [ ] Con 2 sedes: selector «Sede» en `/sala` (compartido con la agenda); «Todas las sedes» muestra todo. «¿Otro día? →
+  Recepción» lleva a la agenda en Recepción.
+- [ ] **1366×768 y una pantalla de ≤ 800 de alto:** el header del Tablero en una fila en orden (título → segmentado →
+  buscador → cobro → Sede → link → Pantallas), sin desbordar ni dejar el buscador en 0; < 1280 el link se oculta.
+
+### Pacientes
+- [ ] Sin la columna «Plan activo» ni las pastillas «Con plan / Sin plan» (para nadie); el plan sigue en la ficha.
+- [ ] Columna «Kinesiólogo» (General: «Profesional»): el a cargo primero con la marca «a cargo», «+N» con el resto
+  (tooltip con todos). Un paciente con turno próximo con otro profesional lo suma.
+- [ ] **Secretaria** ve «Última visita» y «Estado» (Activo / Inactivo) con valores, sin notas ni planes. «Último
+  diagnóstico» oculto sin `clinical.read`.
+- [ ] «Última visita» = el último turno pasado no cancelado, ausente ni pendiente (sin marcar «Atendido» igual cuenta);
+  el filtro «Última visita desde/hasta» y el orden dan lo mismo que la columna.
+- [ ] Profesional con acceso básico a un paciente ajeno: ve el a cargo y los de turno próximo, no «Última visita» ni
+  «Estado».
+
+### 🔴 P0 · Caja e Inicio
+- [ ] Titular: nav «Caja» → `/caja` Día y Mes por profesional (Copagos, Online, Obra social, Total, Destina, Recibe,
+  Neto), «Por medio de pago» y «Reparto vigente» en Día. Los totales del Mes = el widget de Ingresos del Inicio.
+- [ ] Secretaria con Mercado Pago apagado: «Caja» está en el nav; `/caja` solo hoy, **sin** columna de OS ni Mes. Inicio:
+  tarjeta «Cobrado hoy» (por profesional, «destina $X», total, hora) → «Ver caja». El widget de Ingresos sigue oculto.
+- [ ] Profesional: solo su fila y lo que recibe, Día y Mes; ningún bruto de otro profesional (mirar el HTML).
+- [ ] Un cobro a las 23:30 AR cae en ese día (no en el siguiente). `/caja` no deja ir al futuro.
+- [ ] A 390: tarjeta por profesional; controles del período de 44 px.
+
+### 🔴 P0 · Reparto con cambio de regla a mitad del día
+- [ ] Configuración → Profesionales → Prof. B → «Reparto»: 20 % a A sobre copagos + online → «Guardar desde ahora».
+  Cobrar un copago de B a las 10:00. A las 15:00 cambiar a 25 % sobre las 3 fuentes; cobrar otro → en `/caja` el de las
+  10:00 queda al 20 % y el nuevo al 25 %. Σ Neto = Σ Total al centavo.
+- [ ] Historial con las dos reglas; «Recibe de» en A (solo lectura). «Dejar de destinar» cierra la vigente.
+- [ ] Quien recibe no puede destinar (se explica); no hay regla a sí mismo. Dos pestañas guardando a la vez → una entra y
+  la otra dice «Cambió mientras lo editabas».
+- [ ] Soporte de Plataforma: no ve la subpestaña ni `/caja`.
+
+### Suspender a un receptor
+- [ ] Con la regla B → A vigente, suspender a A desde Equipo → la regla queda cerrada en ese instante (historial); los
+  cobros de B posteriores ya no descuentan. Reactivar a A **no** la reabre. Lo mismo al quitarlo del equipo o pasarlo a
+  Secretaria. (Hoy el editor y la caja no explican el porqué: backlog «cf2 aviso-receptor-inactivo».)
+
+### Mi agenda y avisos
+- [ ] Profesional → Configuración → «Mi agenda»: switch del turnero propio, anticipación propia (le gana al consultorio,
+  pierde contra la del servicio), teléfono con consentimiento, «Avisarme por mail». Clic en el texto del switch lo cambia.
+- [ ] Reservar un turno online con el mail prendido → llega «Nuevo turno online: <día> <hora>» con «Juan P.», duración y
+  sede, sin servicio; «Ver en la agenda» abre ese día. Un turno cargado por el staff **no** manda nada (solo la campana).
+- [ ] La campana del Titular muestra el turno online en < 2 s (antes llegaba en el polling siguiente).
+- [ ] **Push** (con las claves VAPID en Vercel), en cada uno: **Android Chrome**, **Chrome y Edge de escritorio** y
+  **iPhone con la app instalada** (Safari → Compartir → Agregar a inicio, abrir desde el ícono):
+  - [ ] «Activar en este dispositivo» pide el permiso **recién ahí**; queda en la lista de dispositivos («Chrome en
+    Android», etc.). En iPhone sin instalar, dice que hay que instalar la app.
+  - [ ] «Probar notificación» llega; más de 3 en 5 min → aviso de espera.
+  - [ ] Reserva online → notificación «Nuevo turno online · <día> · <hora> · <Consultorio>», **sin** el nombre del
+    paciente en la pantalla bloqueada; tocarla abre la agenda de ese día (o enfoca la pestaña abierta).
+  - [ ] «Quitar» un dispositivo → deja de recibir. Cerrar sesión en ese navegador → su dispositivo desaparece de la lista;
+    los otros siguen.
+  - [ ] Permiso denegado en el navegador → la tarjeta lo explica, sin botón roto.
+
+### Turnero: contacto dentro de la anticipación
+- [ ] Profesional con anticipación de 1 día, teléfono y consentimiento prendidos, y lugar libre **hoy** dentro de esa
+  ventana → el turnero (con ese profesional elegido) muestra «¿Necesitás un turno antes?» con «WhatsApp» (principal, abre
+  `wa.me` en otra pestaña con el texto) y «Llamar» (`tel:`).
+- [ ] Sin lugar libre hoy, en otro día, con «cualquier profesional» o con el contacto apagado → no aparece. El número no
+  está en el HTML de la página (viene por action).
+- [ ] El Titular, desde Profesionales → Horarios, solo puede ocultarlo; volver a mostrarlo lo hace el profesional.

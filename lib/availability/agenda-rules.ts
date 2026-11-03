@@ -8,8 +8,8 @@
  *   • Paso del selector del staff (`agendaSlotStepMin`) y del turnero (`publicSlotStepMin`): profesional →
  *     consultorio → default. Staff: 15 (CF-D6). Turnero: null = automático por duración (`publicSlotStepFor`, AS-D9),
  *     lo resuelve quien arma la grilla pública (CF-D7), no esta función.
- *   • Anticipación mínima del turnero: `PractitionerService.minLeadMinutes` > `Tenant.publicMinLeadMinutes` > 60
- *     (decisión 6, CF-D8).
+ *   • Anticipación mínima del turnero: `PractitionerService.minLeadMinutes` > `Practitioner.publicMinLeadMinutes`
+ *     (CF2, M21, D-CF2-8) > `Tenant.publicMinLeadMinutes` > 60 (decisión 6, CF-D8).
  *
  * La herencia la decide SOLO este módulo (como `effectiveIntervalCap` para el tope de T3): el loader la aplica una vez
  * por profesional y motor, escrituras y turnero leen el resultado, así no divergen.
@@ -53,10 +53,23 @@ export function effectiveAgendaRules(
 const leadOrNull = (v: number | null | undefined): number | null =>
   typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null;
 
-/** PS ?? tenant ?? 60 (0 es un valor, no "vacío"). */
+/**
+ * PS ?? profesional ?? consultorio ?? 60 (0 es un valor, no "vacío", en cada nivel).
+ *
+ * CF2 (D-CF2-8): el profesional entra entre el servicio y el consultorio. El pedido del cliente fue «yo quiero 3 horas
+ * y el resto del consultorio 1»: sin este nivel había que cargarla servicio por servicio (y un servicio nuevo nacía con
+ * la del consultorio). Va como TERCER argumento opcional, no en el medio: las llamadas de dos argumentos (`[CF-K2]`,
+ * los callers de antes de M21) siguen dando exactamente lo mismo.
+ */
 export function effectivePublicMinLead(
   psMinLead: number | null | undefined,
-  tenantMinLead: number | null | undefined
+  tenantMinLead: number | null | undefined,
+  practitionerMinLead?: number | null
 ): number {
-  return leadOrNull(psMinLead) ?? leadOrNull(tenantMinLead) ?? PUBLIC_DEFAULT_MIN_LEAD_MINUTES;
+  return (
+    leadOrNull(psMinLead) ??
+    leadOrNull(practitionerMinLead) ??
+    leadOrNull(tenantMinLead) ??
+    PUBLIC_DEFAULT_MIN_LEAD_MINUTES
+  );
 }

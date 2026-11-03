@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { Card } from "@/components/ui/card";
 import { IconChevD } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
@@ -31,6 +32,21 @@ import { useAttendedNoteToast } from "./use-attended-note-toast";
 import { RECEPTION_FIT_MQ, measureReceptionBottomGap, receptionScrollMaxHeight } from "./reception-fit";
 import { receptionSections, type ReceptionSectionId } from "./reception-sections";
 import { receptionRowOperable } from "./reception-operable";
+import { formatARS } from "@/lib/format";
+import { porCobrarLabel } from "@/lib/copago-owed";
+import { receptionCanCollect, receptionCollectHandlers, receptionOwedCents, receptionOwedSummary, receptionOwes, type ReceptionCollect } from "./reception-collect";
+
+/**
+ * [CF2-RC] El modal «Registrar cobro» del drawer, en su propio chunk (`ssr:false`): el picker y el modal bajan recién
+ * cuando alguien toca «Cobrar» (mismo patrón que `billing-rows.tsx`). Con `onStale` (CF2) el aviso de turno viejo
+ * lo da Recepción y la lista se refresca, en vez del copy del drawer.
+ */
+const CollectModal = dynamic(() => import("../booking-drawer/collect-modal").then((m) => m.CollectModal), {
+  ssr: false,
+});
+
+/** Filtro de la vista: los de `RECEPTION_FILTERS` más el chip «Por cobrar» (CF2-RC, solo con `collect`). */
+type ViewFilter = ReceptionFilter | "por-cobrar";
 
 /**
  * Modo Recepción de la agenda (B4.5, plan §11.3 punto 4): la lista del día de
@@ -76,6 +92,12 @@ import { receptionRowOperable } from "./reception-operable";
  * - AS-0d: `clinicalNoteViewer.practitionerId` es también el profesional del actor para `receptionRowOperable`
  *   (turno propio con paciente basic = operable, como en el server). Bajo 640 px la lista va en secciones
  *   plegables por estado (`reception-sections.ts`); la tabla de escritorio no cambia.
+ * - [CF2-RC] `collect` (D-CF2-3): viewer del cobro (`ReceptionCollect`, lo arma `agenda-client` con
+ *   `billing.collect`/`billing.collectOwn`). Sin la prop (o null) el markup es el de antes de CF2. Con ella: columna
+ *   «Cobro» (`MoneyBadge`; el tag del copago solo en las filas que el viewer cobra, la plata online para todos),
+ *   «Cobrar» en las que llegaron o fueron atendidas y deben → `CollectModal` lazy; al guardar `onChanged` con la fila
+ *   pagada (`withCopagoPaid`: el cobro no revalida /agenda) y con stale el toast de siempre + `{ stale: true }`. El chip
+ *   «Por cobrar · N · $X» (rótulo y comportamiento del header de /sala, [CF2-ZF1]) filtra las que deben.
  */
 export function ReceptionView({
   dayKey,
@@ -87,6 +109,7 @@ export function ReceptionView({
   onChanged,
   roomById = null,
   clinicalNoteViewer = null,
+  collect = null,
 }: {
   dayKey: string;
   bookings: BookingDTO[];
@@ -97,10 +120,13 @@ export function ReceptionView({
   onChanged: (b: BookingDTO, opts?: { stale?: boolean }) => void;
   roomById?: Readonly<Record<string, { name: string }>> | null;
   clinicalNoteViewer?: { practitionerId: string | null; canReadClinical: boolean } | null;
+  collect?: ReceptionCollect | null;
 }) {
   const toast = useToast();
   const offerNote = useAttendedNoteToast(clinicalNoteViewer);
-  const [filter, setFilter] = useState<ReceptionFilter>("todos");
+  const [filter, setFilter] = useState<ViewFilter>("todos");
+  // [CF2-RC] fila con el modal de cobro abierto (null = cerrado; el modal queda montado para la animación de salida).
+  const [collecting, setCollecting] = useState<BookingDTO | null>(null);
   const [announce, setAnnounce] = useState("");
   // AS-0d: secciones que el usuario plegó/desplegó en el celular (el resto, con el default de `receptionSections`).
   const [toggled, setToggled] = useState<Partial<Record<ReceptionSectionId, boolean>>>({});
@@ -136,8 +162,17 @@ export function ReceptionView({
   // [RX-1f] G1: fuera de hoy no hay demora (ni minutos de sala que corran).
   const entries = useMemo(() => receptionEntriesForDay(merged.rows, clock, dayKey), [merged.rows, clock, dayKey]);
   const counters = useMemo(() => receptionCounters(entries), [entries]);
-  const shown = useMemo(() => filterEntries(entries, filter), [entries, filter]);
-  const sections = useMemo(() => receptionSections(shown, filter, toggled), [shown, filter, toggled]);
+  // Con «Por cobrar» sin `collect` (no debería pasar: el chip no se dibuja) cae en «Todos».
+  const owedOnly = filter === "por-cobrar" && collect != null;
+  const baseFilter: ReceptionFilter = filter === "por-cobrar" ? "todos" : filter;
+  const shown = useMemo(
+    () => (owedOnly ? entries.filter((e) => receptionOwes(collect, e.row)) : filterEntries(entries, baseFilter)),
+    [entries, owedOnly, baseFilter, collect]
+  );
+  // «Por cobrar» abre todas las secciones del celular, como cualquier filtro que no es «Todos» («en-sala» es solo
+  // eso: un valor ≠ «todos» para `receptionSections`).
+  const sections = useMemo(() => receptionSections(shown, owedOnly ? "en-sala" : baseFilter, toggled), [shown, owedOnly, baseFilter, toggled]);
+  const owed = useMemo(() => (collect ? receptionOwedSummary(collect, entries.map((e) => e.row)) : null), [collect, entries]);
   const byPractitioner = useMemo(() => new Map(practitioners.map((p) => [p.id, p])), [practitioners]);
   const isToday = dayKey === dayKeyOf(clock);
   const showRoom = roomById != null && Object.keys(roomById).length > 0;
@@ -238,6 +273,15 @@ export function ReceptionView({
         onAction={handleAction}
         onOpen={onOpenBooking}
         room={showRoom ? roomOf(roomById, e.row) : undefined}
+        collect={
+          collect
+            ? {
+                copago: receptionCanCollect(collect, e.row),
+                owedCents: receptionOwes(collect, e.row) ? receptionOwedCents(e.row) : null,
+                onCollect: setCollecting,
+              }
+            : undefined
+        }
       />
     );
   }
@@ -290,6 +334,23 @@ export function ReceptionView({
             {f.label} <span className="rcp-chip-n">{counters.byFilter[f.id]}</span>
           </button>
         ))}
+        {/* [CF2-RC] Borde punteado como el tag «Por cobrar»: falta algo. [CF2-ZF1] (ZB-7) Mismo rótulo y mismo
+            comportamiento que el botón del header de /sala (`porCobrarLabel`): SIEMPRE visible para quien cobra y
+            deshabilitado en 0. Antes se ocultaba en 0 y la fila de chips saltaba cada vez que alguien pagaba; activo
+            con 0 sigue habilitado para poder soltarlo. */}
+        {owed && (
+          <button
+            type="button"
+            className="rcp-chip rcp-chip-owed"
+            data-chip="por-cobrar"
+            aria-pressed={owedOnly}
+            disabled={owed.count === 0 && !owedOnly}
+            aria-label={`Por cobrar: ${owed.count} ${owed.count === 1 ? "turno" : "turnos"}, ${formatARS(owed.cents)}`}
+            onClick={() => setFilter(owedOnly ? "todos" : "por-cobrar")}
+          >
+            {porCobrarLabel(owed.count, owed.cents)}
+          </button>
+        )}
       </div>
 
       {!canOperate && (
@@ -317,9 +378,9 @@ export function ReceptionView({
           <div className="rcp-scroll" ref={scrollRef}>
           <table className="rcp-table">
             <caption className="rcp-sr">
-              Turnos del {dayLabel}, {RECEPTION_FILTERS.find((f) => f.id === filter)?.label.toLowerCase()}
+              Turnos del {dayLabel}, {owedOnly ? "por cobrar" : RECEPTION_FILTERS.find((f) => f.id === baseFilter)?.label.toLowerCase()}
             </caption>
-            <ReceptionHead showRoom={showRoom} canOperate={canOperate} />
+            <ReceptionHead showRoom={showRoom} canOperate={canOperate} collect={collect != null} />
             <tbody>
               {shown.map(renderRow)}
             </tbody>
@@ -359,7 +420,7 @@ export function ReceptionView({
                     <caption className="rcp-sr">
                       {s.label}, {dayLabel}
                     </caption>
-                    <ReceptionHead showRoom={showRoom} canOperate={canOperate} />
+                    <ReceptionHead showRoom={showRoom} canOperate={canOperate} collect={collect != null} />
                     <tbody>{s.entries.map(renderRow)}</tbody>
                   </table>
                 </div>
@@ -369,11 +430,20 @@ export function ReceptionView({
         </div>
         </>
       )}
+
+      {collect && (
+        <CollectModal
+          booking={collecting}
+          practitionerName={collecting ? (byPractitioner.get(collecting.practitionerId)?.name ?? null) : null}
+          onClose={() => setCollecting(null)}
+          {...(collecting ? receptionCollectHandlers(collecting, onChanged, toast.warning) : { onSaved: () => {}, onStale: () => {} })}
+        />
+      )}
     </section>
   );
 }
 
-function ReceptionHead({ showRoom, canOperate }: { showRoom: boolean; canOperate: boolean }) {
+function ReceptionHead({ showRoom, canOperate, collect }: { showRoom: boolean; canOperate: boolean; collect: boolean }) {
   return (
     <thead>
       <tr>
@@ -384,6 +454,7 @@ function ReceptionHead({ showRoom, canOperate }: { showRoom: boolean; canOperate
         {showRoom && <th scope="col">Sala</th>}
         <th scope="col">Estado</th>
         <th scope="col">Espera</th>
+        {collect && <th scope="col">Cobro</th>}
         {canOperate && (
           <th scope="col" style={{ textAlign: "right" }}>
             Acciones
@@ -443,6 +514,10 @@ const RECEPTION_CSS = `
 .rcp-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rcp-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
 .rcp-wait { font-size: 12px; color: var(--navy-700); white-space: nowrap; }
+.rcp-cobro-in { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; color: var(--navy-700); }
+.rcp-cobro-in:empty::before { content: "—"; color: var(--navy-300); }
+.rcp-chip-owed[aria-pressed="false"] { border-style: dashed; }
+.rcp-chip-owed:disabled { cursor: default; color: var(--navy-500); }
 .rcp-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .rcp-btn { display: inline-flex; align-items: center; padding: 6px 11px; min-height: 32px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid rgba(15,30,51,0.14); background: #fff; color: var(--navy-900); cursor: pointer; white-space: nowrap; }
 .rcp-btn-primary { background: var(--sky-700); border-color: var(--sky-700); color: #fff; }

@@ -140,6 +140,24 @@ export function copagoCollectView(
   return copagoCollectViewFor(booking, canCollectCopago(caps, viewerPractitionerId, booking.practitionerId));
 }
 
+/**
+ * [CF2-AD] El turno después de `setBookingCopagoPaid` (brief CF2 A.2): la action no devuelve la fila, solo el
+ * `updatedAt` nuevo (la próxima acción lo manda como `expectedUpdatedAt`; con el viejo rebotaría por «cambió en otra
+ * sesión») y el medio que quedó. Con medio → PAID; `null` (deshacer) → UNPAID sin medio, lo mismo que escribe
+ * `toggleBilling`. Hace falta porque `toggleBilling` no revalida `/agenda`: sin esto, Recepción de la agenda seguiría
+ * diciendo «Por cobrar» hasta el próximo refresco.
+ *
+ * Genérico (no `BookingDTO`) para no atar este módulo a los tipos de `components/`; la paridad con `applyCopagoPaid`
+ * de /sala (`desk-pay-modal.tsx`) la fija [CF2-AD12]. `paidOnline` no se toca: un cobro a mano nunca es «pagado
+ * online» y a una fila pagada online no se le ofrece cobrar ni deshacer.
+ */
+export function withCopagoPaid<T extends { updatedAt: string; paymentStatus?: PaymentStatus; copagoPaymentMethod?: PaymentMethod | null }>(
+  b: T,
+  r: { updatedAt: Date | string; method: PaymentMethod | null }
+): T {
+  return { ...b, paymentStatus: r.method ? "PAID" : "UNPAID", copagoPaymentMethod: r.method, updatedAt: new Date(r.updatedAt).toISOString() };
+}
+
 const DOW_SHORT = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"] as const;
 
 /**

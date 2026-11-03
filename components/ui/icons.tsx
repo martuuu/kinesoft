@@ -12,7 +12,8 @@ export type IconProps = {
 // y rompe los goldens (p. ej. el de SV09 en agenda-client); el resto lo suma PF1 regrabando a conciencia.
 type InternalProps = IconProps & { children: ReactNode; decorative?: boolean };
 
-function Icon({
+/** Base del set. Exportada para íconos que viven en su propio módulo (`icon-wallet.tsx`). */
+export function Icon({
   size = 18,
   stroke = 1.6,
   fill = "none",
@@ -207,7 +208,7 @@ export const IconPalette = (p: IconProps) => (
 
 // [VX F-b2] Íconos de las superficies públicas (C-F5), copiados de `design_source/vx0/shared.js` `I.*`: trazo 1.8 y
 // 24 px por defecto (el resto del set usa 1.6/18 por la densidad del workspace; se pueden pisar con `size`/`stroke`).
-const VX = { size: 24, stroke: 1.8, decorative: true } as const;
+export const VX = { size: 24, stroke: 1.8, decorative: true } as const;
 export const IconEye = (p: IconProps) => (
   <Icon {...VX} {...p}>
     <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" />

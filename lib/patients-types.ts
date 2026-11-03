@@ -52,6 +52,21 @@ export type PatientRow = {
    * se decide SIEMPRE con `=== "full"`, nunca con `!== "basic"`.
    */
   access: "full" | "admin" | "basic";
+  /**
+   * CF2 (§29, decisión 2 de Martin): profesional a cargo (`Patient.assignedPractitionerId`); null = «Consultorio
+   * común». Opcionales en W2 para que los fixtures y `listPatients` sigan compilando; INT los hace requeridos.
+   */
+  assignedPractitionerId?: string | null;
+  /**
+   * CF2: profesionales de la celda «Kinesiólogo»/«Profesional» = el a cargo primero + los que tienen un turno próximo o
+   * del último mes con el paciente (`patientPractitionerIds`), sin duplicados. Visible también en filas `basic`.
+   */
+  practitionerIds?: string[];
+  /**
+   * CF2 (D-CF2-14): estado que sale de los turnos (`patientActivity`). `null` en filas `basic` (D-CF2-15: «Estado» y
+   * «Última visita» ocultos con acceso básico).
+   */
+  activity?: "active" | "inactive" | "archived" | null;
 };
 
 export type PatientSort =
@@ -69,8 +84,11 @@ export type PatientSort =
  */
 export const PATIENTS_PAGE_SIZE = 50;
 
-/** Contadores de los pills, sobre TODAS las filas visibles del filtro (no solo la página). Sin `planes`, solo `all`. */
-export type PatientsTotals = { all: number; withProgram?: number; withoutProgram?: number };
+/**
+ * Contadores sobre TODAS las filas visibles del filtro (no solo la página). CF2 (decisión 3): sin «con/sin plan»; las
+ * pastillas salieron para todos.
+ */
+export type PatientsTotals = { all: number };
 
 /**
  * HD-10: una página del directorio. `total` = filas visibles para el actor con estos filtros (= `totals.all`);

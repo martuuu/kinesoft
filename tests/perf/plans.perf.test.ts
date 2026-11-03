@@ -60,7 +60,14 @@ import { getPortalAuth } from "@/lib/portal";
 import { requirePortalPatient } from "@/lib/portal-identity-internal";
 import { addDays } from "@/lib/availability/day";
 import { localToARIso } from "@/lib/datetime-ar";
-import { ownerClient, createEphemeralTenant, addPatient, uniqueSuffix, type EphemeralTenant } from "@/tests/helpers/tenant-factory";
+import {
+  ownerClient,
+  createEphemeralTenant,
+  addPatient,
+  addStaff,
+  uniqueSuffix,
+  type EphemeralTenant,
+} from "@/tests/helpers/tenant-factory";
 import { asUser } from "@/tests/helpers/actor";
 import { appRoleBypassesRls } from "@/tests/helpers/db-role";
 import { createAgendaMultiTenant, type AgendaMultiTenant } from "./volume-fixture";
@@ -90,7 +97,10 @@ const BUDGET = {
   agendaPlanProjection: 0,
   requirePortalPatient: 3,
   portalPerTenant: 1,
-  listPatients: 10,
+  // CF2 P-S1 (§29 P.1): 10 → 9. La página ya no lee planes ni sesiones (decisión 3) y próximo turno + última visita +
+  // profesionales salen de UN agregado de turnos (`bookingFactsByPatient`): 8 por apellido, 9 con «Próximo turno» /
+  // «Última visita» (la clave tenant-wide). Mismo techo para la Secretaria (que desde CF2 ve y ordena la última visita).
+  listPatients: 9,
   updateBookingReschedule: 27,
   updateBookingPlan: 28,
   updateBookingPatient: 16, // ZF1 (CF): cambiar el paciente toma pday y cuenta otro servicio (+2)
@@ -503,6 +513,30 @@ describe.skipIf(!RUN)("perf ES4 S26s — Planes, Seguimiento, agenda con planes 
       });
       expect(r.result.total >= 1000 && r.result.rows.length === 50).toBe(true);
       expect(r.statements).toBeLessThanOrEqual(BUDGET.listPatients);
+    }
+  });
+
+  // CF2 P-S1: la Secretaria (filas `admin`) recibe última visita, estado y profesionales, y ordena por última visita
+  // (D-CF2-15): mismo techo en los tres órdenes.
+  it("listPatients — Secretaria sobre 1.000 pacientes: mismo techo en los tres órdenes", async () => {
+    const sec = await addStaff(db, T, "ASSISTANT");
+    asUser(sec.userId);
+    try {
+      for (const [scenario, sort] of [
+        ["p.listPatients.assistant", "lastName.asc"],
+        ["p.listPatients.assistant.upcoming", "upcoming.asc"],
+        ["p.listPatients.assistant.lastVisit", "lastVisit.desc"],
+      ] as const) {
+        const r = await bench(scenario, noPrep, () => listPatients({ sort }), {
+          budget: BUDGET.listPatients,
+          outcome: (x) => `${x.rows.length} de ${x.total} filas`,
+        });
+        expect(r.result.total >= 1000 && r.result.rows.length === 50).toBe(true);
+        expect(r.result.rows.every((row) => row.access === "admin" && row.notes === null)).toBe(true);
+        expect(r.statements).toBeLessThanOrEqual(BUDGET.listPatients);
+      }
+    } finally {
+      asUser(T.userId);
     }
   });
 

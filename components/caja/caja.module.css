@@ -1,0 +1,359 @@
+/* [CF2-PU2] /caja (D-CF2-17): barra de período, tabla por profesional desde 768 px y una tarjeta por profesional
+   debajo (un solo markup, como /cobros: la <table> se reacomoda por CSS y el lector de pantalla no duplica filas). */
+.page {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+/* ── Barra de período ───────────────────────────────────────────────────────────────────────────────────────────── */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  min-width: 0;
+}
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(15, 30, 51, 0.04);
+  border: 1px solid rgba(15, 30, 51, 0.08);
+}
+.segment {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 16px;
+  border-radius: 999px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--navy-500);
+  text-decoration: none;
+}
+.segment:hover {
+  color: var(--navy-900);
+}
+.segment[aria-current="page"] {
+  background: #fff;
+  color: var(--navy-900);
+  box-shadow: 0 1px 2px rgba(15, 30, 51, 0.12);
+}
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.step {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  color: var(--navy-700);
+  border: 1px solid rgba(15, 30, 51, 0.12);
+  background: #fff;
+}
+.step:hover {
+  border-color: rgba(15, 30, 51, 0.3);
+}
+.stepOff {
+  opacity: 0.35;
+}
+.periodBlock {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.periodLabel {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  color: var(--navy-900);
+  overflow-wrap: anywhere;
+}
+.updated {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--navy-500);
+}
+.jumpRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin-left: auto;
+}
+.todayLink {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--sky-700);
+}
+.jump {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.jumpField {
+  display: block;
+  min-width: 0;
+}
+.jumpInput {
+  height: 38px;
+  width: auto;
+  min-width: 150px;
+}
+
+.empty {
+  margin: 0;
+  padding: 16px 20px;
+  border-radius: var(--r-md);
+  background: #fff;
+  border: 1px dashed var(--navy-100);
+  color: var(--navy-500);
+}
+
+/* ── Tabla (≥ 768 px) ───────────────────────────────────────────────────────────────────────────────────────────── */
+.tableWrap {
+  min-width: 0;
+  overflow-x: auto;
+  border-radius: var(--r-md);
+  background: #fff;
+  border: 1px solid rgba(15, 30, 51, 0.08);
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+.table thead th {
+  text-align: left;
+  padding: 10px 12px;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--navy-400);
+  border-bottom: 1px solid rgba(15, 30, 51, 0.08);
+  white-space: nowrap;
+}
+.table tbody th,
+.table tbody td,
+.table tfoot th,
+.table tfoot td {
+  padding: 12px;
+  vertical-align: top;
+  color: var(--navy-700);
+  border-top: 1px solid rgba(15, 30, 51, 0.06);
+  min-width: 0;
+}
+.table thead th.num,
+.num {
+  text-align: right;
+}
+.num {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.num[data-zero] {
+  color: var(--navy-400);
+}
+.cellName {
+  text-align: left;
+  font-weight: 400;
+}
+.name {
+  display: block;
+  font-weight: 600;
+  color: var(--navy-900);
+  overflow-wrap: anywhere;
+}
+.meta {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--navy-500);
+}
+.cellTotal {
+  font-weight: 650;
+  color: var(--navy-900);
+}
+.cellNet {
+  font-weight: 700;
+  color: var(--navy-900);
+}
+.flows {
+  display: grid;
+  gap: 1px;
+  margin-top: 2px;
+}
+.flow {
+  font-size: var(--fs-xs);
+  color: var(--navy-500);
+  white-space: normal;
+}
+.totalsRow th,
+.totalsRow td {
+  background: rgba(15, 30, 51, 0.04);
+  border-top: 1px solid rgba(15, 30, 51, 0.12);
+}
+
+/* ── Día: medios de pago y reparto ──────────────────────────────────────────────────────────────────────────────── */
+.panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-3);
+  min-width: 0;
+}
+.panel {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  padding: 16px 18px;
+  border-radius: var(--r-md);
+  background: #fff;
+  border: 1px solid rgba(15, 30, 51, 0.08);
+  min-width: 0;
+}
+.panelTitle {
+  margin: 0;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--navy-400);
+}
+.panelEmpty,
+.panelHint {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--navy-500);
+}
+.panelHint {
+  font-size: var(--fs-xs);
+}
+.methods,
+.rules {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.method {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.methodName {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--navy-900);
+}
+.methodAmount {
+  font-weight: 650;
+  color: var(--navy-900);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rule {
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--navy-700);
+}
+.rule strong {
+  color: var(--navy-900);
+}
+
+/* ── Tarjeta por profesional (< 768 px; a 390 una columna sin scroll horizontal) ───────────────────────────────── */
+@media (max-width: 767.98px) {
+  .jumpRow {
+    margin-left: 0;
+  }
+  /* ZB-6: en táctil los controles del período (36/34/38 px en escritorio) no llegaban al mínimo de 44 px. */
+  .step {
+    width: 44px;
+    height: 44px;
+  }
+  .segment {
+    min-height: 44px;
+  }
+  .jumpInput {
+    height: 44px;
+  }
+  .tableWrap {
+    overflow: visible;
+    background: transparent;
+    border: 0;
+  }
+  .table,
+  .table tbody,
+  .table tfoot {
+    display: block;
+  }
+  .table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 12px;
+    padding: 14px 16px;
+    margin-bottom: var(--space-2);
+    border-radius: var(--r-md);
+    background: #fff;
+    border: 1px solid rgba(15, 30, 51, 0.08);
+  }
+  .table tbody th,
+  .table tbody td,
+  .table tfoot th,
+  .table tfoot td {
+    display: block;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+  .table .cellName {
+    display: block;
+    grid-column: 1 / -1;
+    padding-bottom: 4px;
+  }
+  /* Cada monto: rótulo a la izquierda, cifra a la derecha (el rótulo sale de `data-label`). */
+  .table td.num {
+    display: flex;
+    grid-column: 1 / -1;
+    justify-content: space-between;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 2px 12px;
+    text-align: right;
+  }
+  .table td.num::before {
+    content: attr(data-label);
+    margin-right: auto;
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    color: var(--navy-500);
+    text-align: left;
+  }
+  .flows {
+    flex-basis: 100%;
+    text-align: right;
+  }
+  .table td.cellNet {
+    padding-top: 6px;
+    border-top: 1px solid rgba(15, 30, 51, 0.08);
+  }
+  .table tr.totalsRow {
+    background: rgba(15, 30, 51, 0.04);
+  }
+}

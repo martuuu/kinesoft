@@ -168,8 +168,6 @@ export const DESK_CSS = `
 .desk-act[data-kind=more] { width: 36px; padding: 0; background: transparent; color: var(--navy-500); }
 .desk-act[data-kind=more]:hover:not(:disabled), .desk-act[data-kind=more][aria-expanded=true] { background: rgba(15,30,51,0.06); color: var(--navy-900); }
 .desk-act[data-block=true] { width: 100%; }
-.desk-paid { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; font-size: 12px; font-weight: 600; color: var(--st-completed-fg); white-space: nowrap; }
-.desk-paid-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 .desk-menu { position: fixed; z-index: 60; min-width: 220px; max-width: calc(100vw - 16px); padding: 6px; border-radius: 12px; background: var(--card-bg); box-shadow: 0 0 0 1px rgba(15,30,51,0.08), 0 18px 40px rgba(15,30,51,0.18); display: grid; gap: 2px; }
 .desk-menu-h { padding: 6px 10px 4px; font-size: 12px; color: var(--navy-500); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

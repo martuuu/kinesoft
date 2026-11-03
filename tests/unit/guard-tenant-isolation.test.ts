@@ -19,6 +19,8 @@
  * MIG (T6+T7, X0): M15 suma SERVICE_ONLY `WhatsAppCredential` y TENANT_READONLY `WhatsApp{Account,Template,Message,
  * Inbound}`; M16 suma TENANT_READONLY `SaasAdjustment`. `ReceptionDisplay` (M17) queda en la categoría por defecto.
  * TK-M (M19 support_tickets) suma SERVICE_ONLY `SupportTicketNote` (notas internas de Plataforma, sin tenantId).
+ * MIG (CF2, M21 cf2_profesional_caja) suma SERVICE_ONLY `PushSubscription` (dispositivos de push web por usuario, sin
+ * tenantId); `PractitionerRevenueShare` queda en la categoría por defecto (policy de tenant).
  */
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -97,6 +99,14 @@ model MpCredential {
 model SupportTicketNote {
   id       String @id
   threadId String
+}
+model PushSubscription {
+  id     String @id
+  userId String
+}
+model PractitionerRevenueShare {
+  id       String @id
+  tenantId String
 }
 ${WA_M16_MODELS.map((m) => `model ${m} {\n  id       String @id\n  tenantId String\n}`).join("\n")}
 ${extra}
@@ -194,6 +204,15 @@ const M16 = M16_TENANT_READONLY.map(readonlySql).join("\n");
 const M19 = `ALTER TABLE "SupportTicketNote" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "SupportTicketNote" FORCE ROW LEVEL SECURITY;`;
 
+// MIG (CF2, M21): los dispositivos de push no los ve la app con ningún GUC (SERVICE_ONLY); el reparto va con la
+// policy de tenant normal.
+const M21 = `ALTER TABLE "PushSubscription" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "PushSubscription" FORCE ROW LEVEL SECURITY;
+ALTER TABLE "PractitionerRevenueShare" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "PractitionerRevenueShare" FORCE ROW LEVEL SECURITY;
+CREATE POLICY "PractitionerRevenueShare_tenant_isolation" ON "PractitionerRevenueShare"
+  USING ("tenantId" = app_current_tenant_id()) WITH CHECK ("tenantId" = app_current_tenant_id());`;
+
 let dirs: string[] = [];
 afterEach(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
@@ -207,6 +226,7 @@ function runGuard(p: {
   m15?: string;
   m16?: string;
   m19?: string;
+  m21?: string;
   extraMigration?: string;
 }) {
   const root = mkdtempSync(join(tmpdir(), "guard-iso-"));
@@ -227,6 +247,7 @@ function runGuard(p: {
   mig("20261024120000_whatsapp_messaging", p.m15 ?? M15);
   mig("20261025120000_saas_mp_subscriptions", p.m16 ?? M16);
   mig("20261027120000_support_tickets", p.m19 ?? M19);
+  mig("20261102120000_cf2_profesional_caja", p.m21 ?? M21);
   if (p.extraMigration) mig("20261016000000_extra", p.extraMigration);
   const r = spawnSync(process.execPath, [SCRIPT], {
     env: { ...process.env, GUARD_ISOLATION_ROOT: root, NO_COLOR: "1" },
@@ -239,13 +260,13 @@ describe("guard de aislamiento · SERVICE_ONLY / TENANT_READONLY (BO0)", () => {
   it("control: el repo de juguete con M7 tal cual pasa", () => {
     const r = runGuard({});
     expect(r.out).toContain("GLOBAL_READONLY (7): ENABLE + FORCE, SELECT-only policies");
-    expect(r.out).toContain("SERVICE_ONLY (10): ENABLE + FORCE, zero policies. TENANT_READONLY (10)");
+    expect(r.out).toContain("SERVICE_ONLY (11): ENABLE + FORCE, zero policies. TENANT_READONLY (10)");
     expect(r.code).toBe(0);
   });
 
   it("[TP-M] MpAccount TENANT_READONLY y MpCredential SERVICE_ONLY en el guard", () => {
     const ok = runGuard({});
-    expect(ok.out).toContain("SERVICE_ONLY (10): ENABLE + FORCE, zero policies. TENANT_READONLY (10)");
+    expect(ok.out).toContain("SERVICE_ONLY (11): ENABLE + FORCE, zero policies. TENANT_READONLY (10)");
     expect(ok.code).toBe(0);
     // La app no escribe cuentas: una policy de escritura en MpAccount rompe el contrato.
     const w = runGuard({
@@ -267,7 +288,7 @@ describe("guard de aislamiento · SERVICE_ONLY / TENANT_READONLY (BO0)", () => {
 
   it("[WA-M] WhatsApp{Account,Template,Message,Inbound} y SaasAdjustment TENANT_READONLY; WhatsAppCredential SERVICE_ONLY", () => {
     const ok = runGuard({});
-    expect(ok.out).toContain("SERVICE_ONLY (10): ENABLE + FORCE, zero policies. TENANT_READONLY (10)");
+    expect(ok.out).toContain("SERVICE_ONLY (11): ENABLE + FORCE, zero policies. TENANT_READONLY (10)");
     expect(ok.code).toBe(0);
     // La app no encola ni marca mensajes: una policy de escritura en la cola rompe el contrato.
     const w = runGuard({
@@ -294,7 +315,7 @@ describe("guard de aislamiento · SERVICE_ONLY / TENANT_READONLY (BO0)", () => {
 
   it("[TK-M] SupportTicketNote SERVICE_ONLY: cualquier policy o la falta de FORCE rompe el contrato", () => {
     const ok = runGuard({});
-    expect(ok.out).toContain("SERVICE_ONLY (10): ENABLE + FORCE, zero policies. TENANT_READONLY (10)");
+    expect(ok.out).toContain("SERVICE_ONLY (11): ENABLE + FORCE, zero policies. TENANT_READONLY (10)");
     expect(ok.code).toBe(0);
     // Las notas internas no las ve el consultorio con ningún GUC: ni una policy de lectura.
     const r = runGuard({
@@ -305,6 +326,25 @@ describe("guard de aislamiento · SERVICE_ONLY / TENANT_READONLY (BO0)", () => {
     const f = runGuard({ m19: M19.replace(`ALTER TABLE "SupportTicketNote" FORCE ROW LEVEL SECURITY;`, "") });
     expect(f.code).toBe(1);
     expect(f.out).toMatch(/SupportTicketNote: RLS not FORCEd/);
+  });
+
+  it("[CF2-MIG] PushSubscription SERVICE_ONLY; PractitionerRevenueShare sin policy de tenant rompe el guard", () => {
+    const ok = runGuard({});
+    expect(ok.out).toContain("SERVICE_ONLY (11): ENABLE + FORCE, zero policies. TENANT_READONLY (10)");
+    expect(ok.code).toBe(0);
+    // Los dispositivos de push no los ve la app con ningún GUC: ni una policy de lectura «por usuario».
+    const r = runGuard({
+      extraMigration: `CREATE POLICY "PushSubscription_read" ON "PushSubscription" FOR SELECT USING (true);`,
+    });
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/PushSubscription: policy "PushSubscription_read" \(FOR SELECT\)/);
+    const f = runGuard({ m21: M21.replace(`ALTER TABLE "PushSubscription" FORCE ROW LEVEL SECURITY;`, "") });
+    expect(f.code).toBe(1);
+    expect(f.out).toMatch(/PushSubscription: RLS not FORCEd/);
+    // El reparto lleva tenantId y no está en ninguna categoría: sin su policy, el guard falla.
+    const n = runGuard({ m21: M21.replace(/CREATE POLICY[\s\S]*$/, "") });
+    expect(n.code).toBe(1);
+    expect(n.out).toMatch(/NO RLS policy and are NOT allowlisted:\s+PractitionerRevenueShare/);
   });
 
   it("[PL-0] falla si una tabla de cobro gana una policy de escritura (la app no puede marcar un pago)", () => {

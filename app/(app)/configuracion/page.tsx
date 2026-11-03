@@ -4,7 +4,7 @@ import { getCapabilities, getMembershipRole } from "@/lib/authz";
 import { modulesFor } from "@/lib/tenant-modules";
 import { loadConfiguracionPage } from "@/lib/configuracion-page-loader";
 import { canWrite, effectiveMode } from "@/lib/tenant-access";
-import { tenantAccessEnforcement } from "@/lib/env";
+import { tenantAccessEnforcement, webPushVapid } from "@/lib/env";
 import { ConfiguracionClient } from "@/components/configuracion/configuracion-client";
 import type { PlanChoice } from "@/components/configuracion/panels/plan-change-drawer";
 import { supportDraftFromNuevo } from "@/components/configuracion/panels/support-draft-logic";
@@ -74,6 +74,7 @@ export default async function ConfiguracionPage({
     myMp,
     previewServicePriceCents,
     whatsapp,
+    miAgenda,
   } = loaded;
   // BO3-F: el soporte entra con `getMembershipRole` = ASSISTANT (su nivel de lectura clínica), que en la UI le
   // apagaba horarios, turnero y la pestaña Usuarios aunque el server se los deja (allowlist `withSupportWritable`,
@@ -151,6 +152,10 @@ export default async function ConfiguracionPage({
       mpReturn={parseMpReturn(searchParams?.mp)}
       // WA-U1: pestaña WhatsApp (null = sin `tenant.sensitive` o `WHATSAPP_MODE=off`: la pestaña no aparece).
       whatsapp={whatsapp}
+      // CF2 (T.C): «Mi agenda» sale de la misma tx del loader (0 queries nuevas). De VAPID viaja SOLO la clave pública
+      // (la que el navegador necesita para `pushManager.subscribe`); la privada y el subject no salen del server.
+      miAgenda={miAgenda}
+      webPushPublicKey={miAgenda ? webPushVapid()?.publicKey ?? null : null}
     />
   );
 }

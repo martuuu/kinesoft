@@ -31,6 +31,7 @@
  */
 import type { BookingDTO } from "@/components/agenda/agenda-utils";
 import { canCollectCopago, type Capability } from "@/lib/capabilities";
+import { copagoOwedCents, deskOwedCents } from "@/lib/copago-owed";
 import { formatARS } from "@/lib/format";
 import {
   RECEPTION_ACTION_LABEL,
@@ -134,28 +135,22 @@ export function chronological<E extends { row: BookingDTO }>(es: ReadonlyArray<E
 const SETTLED: ReadonlySet<string> = new Set(["PAID", "AUTHORIZED", "REFUNDED"]);
 
 /**
- * Lo que FALTA cobrar en el mostrador (T5, §25.8 «Predicados de plata»): copago − seña pagada por Mercado Pago
- * (`onlineDepositCents`, Σ de las señas PAID que mantiene el trigger de M18 y viaja en la fila), con piso 0. Antes la
- * sala sumaba y cobraba el copago entero: con una seña de $ 6.000 en un turno de $ 20.000, «Por cobrar» decía
- * $ 20.000 y la recepción cobraba la seña dos veces.
- *
- * Es la regla de `copagoRemainingCents` (`lib/booking-collect.ts`, la que valida `setBookingCopagoPaid`), fijada con un
- * test de paridad ([TP-3f]). No se importa de ahí a propósito: este módulo viaja en el first load de /sala
- * (`use-sala-live.ts`), con techo +0 en T5, y `booking-collect` arrastra el formateo de fechas del modal. Una seña
- * negativa o no entera es un dato corrupto: se ignora (sumarla AUMENTARÍA lo que se le cobra al paciente).
+ * Lo que FALTA cobrar en el mostrador (copago − seña online, piso 0). [CF2-ZF1] La regla se mudó a
+ * `lib/copago-owed.ts` (sin cambios) para que el tag de la agenda y /sala usen la misma; se re-exporta con su nombre de
+ * siempre porque las caras y los tests de T5 ([TP-3f]) la importan de acá.
  */
-export function deskOwedCents(row: Pick<BookingDTO, "copagoCents" | "onlineDepositCents">): number {
-  const od = row.onlineDepositCents;
-  const deposit = typeof od === "number" && Number.isInteger(od) && od > 0 ? od : 0;
-  return Math.max(0, row.copagoCents - deposit);
-}
+export { deskOwedCents };
 
 /**
- * Debe copago: atendido, con algo que falte cobrar (`deskOwedCents` > 0: una seña que cubre el copago no deja deuda) y
- * sin cobro registrado. Lo pagado entero online llega PAID (`paidOnline`) y cae en `SETTLED`: no se cobra.
+ * Debe copago: el criterio ÚNICO de «Por cobrar» (`copagoOwedCents`, [CF2-ZF1] ZB-1): llegó o fue atendido, no
+ * cancelado ni ausente, sin cobro registrado (FAILED debe; PAID/AUTHORIZED/REFUNDED no; sin `paymentStatus` no se
+ * adivina) y con algo que falte después de la seña. Antes acá era SOLO atendido: la card de la sala decía «Por
+ * cobrar» (`copagoTag`) y no entraba ni en el contador ni en el drawer ni en el chip de la Lista. Lo pagado entero
+ * online llega PAID (`paidOnline`): no se cobra. Mira la fila y no `e.state`: el estado sale de los mismos campos
+ * (`receptionState`), así que no puede divergir del tag.
  */
-export function owesCopago(e: Pick<ReceptionEntry<BookingDTO>, "state" | "row">): boolean {
-  return e.state === "atendido" && deskOwedCents(e.row) > 0 && !SETTLED.has(e.row.paymentStatus ?? "UNPAID");
+export function owesCopago(e: Pick<ReceptionEntry<BookingDTO>, "row">): boolean {
+  return copagoOwedCents(e.row) > 0;
 }
 
 /**
@@ -226,7 +221,12 @@ export function matchesDeskFilter(e: ReceptionEntry<BookingDTO>, f: DeskFilter):
 
 // ── KPIs del header ──────────────────────────────────────────────────────────
 
-export type DeskKpis = { enSala: number; enAtencion: number; demorados: number; terminados: number; total: number };
+/**
+ * [CF2-AD] `llamados` (brief CF2 A.2): cuántos de «En sala» ya fueron llamados y van camino al box. Es un SUBCONJUNTO
+ * de `enSala` (que sigue igual, misma cuenta que el Tablero): el ítem del header lo muestra aparte para que la
+ * recepción vea cuántos faltan entrar sin abrir la lista.
+ */
+export type DeskKpis = { enSala: number; llamados: number; enAtencion: number; demorados: number; terminados: number; total: number };
 
 /**
  * KPIs del header, sobre TODAS las filas del día (no las filtradas). «En sala» incluye a los llamados (misma cuenta
@@ -235,10 +235,11 @@ export type DeskKpis = { enSala: number; enAtencion: number; demorados: number; 
  * cancelados.
  */
 export function deskKpis(entries: ReadonlyArray<ReceptionEntry<BookingDTO>>): DeskKpis {
-  const k: DeskKpis = { enSala: 0, enAtencion: 0, demorados: 0, terminados: 0, total: 0 };
+  const k: DeskKpis = { enSala: 0, llamados: 0, enAtencion: 0, demorados: 0, terminados: 0, total: 0 };
   for (const e of entries) {
     if (e.state === "cancelado") continue;
     k.total += 1;
+    if (e.state === "llamado") k.llamados += 1;
     if (e.state === "en-sala" || e.state === "llamado") k.enSala += 1;
     else if (e.state === "en-atencion") k.enAtencion += 1;
     else if (e.state === "demorado") k.demorados += 1;
@@ -294,8 +295,8 @@ export function attendingEntries<E extends ReceptionEntry<BookingDTO>>(es: Reado
 }
 
 /**
- * Por cobrar: atendidos que deben copago (cronológico) y el total pendiente, en centavos. Con `viewer` (T3), solo las
- * filas que ese viewer cobra (`canCollectRow`): al profesional con `billing.collectOwn` no se le listan ni se le
+ * Por cobrar: los que deben copago (`owesCopago`: llegaron o fueron atendidos, [CF2-ZF1]; cronológico) y el total
+ * pendiente, en centavos. Con `viewer` (T3), solo las filas que ese viewer cobra (`canCollectRow`): al profesional con `billing.collectOwn` no se le listan ni se le
  * suman los copagos de turnos ajenos que no puede registrar. Sin `viewer`, todo lo que se debe (como antes).
  * T5: el total es lo que FALTA (`deskOwedCents`), no el copago: la seña ya entró por Mercado Pago.
  */
@@ -434,9 +435,21 @@ export type DeskPrimary =
  * Botón primario de la fila (prototipo `primary()`): Llegó / Llamar / En atención / Atendido según el estado (la
  * misma `primarySalaAction` del Tablero), solo si el viewer puede hacerla (`salaActions`: rol, «solo hoy»,
  * `canOperate`). Un atendido que debe copago muestra «Cobrar», solo a quien cobra ESA fila (`canCollectRow`).
+ *
+ * [CF2-ZF1] `cash: true` = la fila se dibuja en la lista/carril «Por cobrar» (`cashEntries`), que desde ZB-1 también
+ * trae a los que llegaron y no terminaron: ahí la primaria es «Cobrar» para cualquier fila que debe (en esa lista
+ * «Llamar» no es lo que se vino a hacer). Sin la opción, nada cambia: el atendido sigue siendo el único con «Cobrar»
+ * primario en la tabla y la línea de tiempo.
  */
-export function deskPrimary(e: Pick<DeskEntry, "row" | "state" | "salaActions">, viewer: DeskViewer): DeskPrimary {
-  if (e.state === "atendido") return canCollectRow(viewer, e.row) && owesCopago(e) ? { kind: "collect", label: "Cobrar" } : null;
+export function deskPrimary(
+  e: Pick<DeskEntry, "row" | "state" | "salaActions">,
+  viewer: DeskViewer,
+  opts?: { cash?: boolean }
+): DeskPrimary {
+  const collect = canCollectRow(viewer, e.row) && owesCopago(e);
+  if (e.state === "atendido") return collect ? { kind: "collect", label: "Cobrar" } : null;
+  // Quien no cobra la fila sigue con la transición del estado (no se queda sin botón por estar en la lista).
+  if (opts?.cash && collect) return { kind: "collect", label: "Cobrar" };
   const a = primarySalaAction(e.state);
   return a && e.salaActions.includes(a) ? { kind: "action", action: a, label: RECEPTION_ACTION_LABEL[a] } : null;
 }
@@ -454,6 +467,9 @@ export type DeskMenuItem =
  * Ausente, Deshacer), «Cobrar ahora» para quien cobra y el turno todavía no terminó, «Enviar link de pago» (T5,
  * `canSendPaymentLink`) y el link a la agenda en ese
  * día filtrada por el profesional (`view=timeline`: la vista Día de siempre; `view=day` no existe y caía al default).
+ * CF2 (D-CF2-4): el link lleva `open=<id>` y la agenda abre el drawer de ESE turno (y borra el parámetro). Es un link
+ * y no el drawer adentro de /sala a propósito: las filas de la sala no traen los campos clínicos y el formulario de
+ * edición los borraría al guardar.
  * Acepta un `SalaEntry` del Tablero o un `DeskEntry`.
  */
 export function deskMenuItems(
@@ -469,7 +485,7 @@ export function deskMenuItems(
     items.push({ kind: "collect", label: `Cobrar ahora (${formatARS(deskOwedCents(e.row))})` });
   }
   if (canSendPaymentLink(e, viewer)) items.push({ kind: "payment-link" });
-  const q = new URLSearchParams({ date: dayKey, view: "timeline", pros: e.row.practitionerId });
+  const q = new URLSearchParams({ date: dayKey, view: "timeline", pros: e.row.practitionerId, open: e.row.id });
   items.push({ kind: "agenda", href: `/agenda?${q.toString()}`, label: "Ver turno en la agenda" });
   return items;
 }

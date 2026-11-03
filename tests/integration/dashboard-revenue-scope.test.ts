@@ -206,7 +206,7 @@ describe.skipIf(!RUN)("SR-D5I · ingresos del dashboard por rol", () => {
     expect((await revenue("month")).totalCents).toBe(A_TOTAL + B_TOTAL);
   });
 
-  it("ASSISTANT (Secretaria): getRevenue da error, widget y KPI en null, sin consultar Payment", async () => {
+  it("ASSISTANT (Secretaria): getRevenue da error, widget y KPI en null, sin la SQL de Ingresos", async () => {
     asUser(F.assistant);
     const { result: r } = await measure(() => getRevenue("week"));
     expect(r).toEqual({ ok: false, error: "No tenés acceso a los ingresos del consultorio." });
@@ -216,7 +216,22 @@ describe.skipIf(!RUN)("SR-D5I · ingresos del dashboard por rol", () => {
     expect(d.revenueScope).toBe("none");
     expect(d.revenue).toBeNull();
     expect(d.monthRevenue).toBeNull();
-    expect(touches("Payment")).toEqual([]);
+    // CF2 (D-CF2-16, enmienda acotada de SR-D5I): la Secretaria SÍ ve «Cobrado hoy» (copagos + online de hoy, sin OS).
+    // La única sentencia que toca `Payment` es la de la caja (`collectedGroupsInTx`, CTE `items`); la del widget
+    // (`revenueAmountsInTx`, `"legacyMp"`) sigue sin correr. Lo de hoy del fixture: copago A 20.000 + MP A 100.000 +
+    // copago B 50.000 + MP B 400.000 (todo con fecha de hoy), sin la OS.
+    const payment = touches("Payment");
+    expect(payment).toHaveLength(1);
+    expect(payment[0].query).toContain("WITH items AS");
+    expect(recorded().some((e) => e.query.includes('"legacyMp"'))).toBe(false);
+    expect(d.cashToday?.totalCents).toBe(A_TOTAL + B_TOTAL);
+  });
+
+  it("[CF2-PD-2] solo la Secretaria tiene cashToday: OWNER, ADMIN, BILLING y los profesionales no", async () => {
+    for (const userId of [F.T.userId, F.admin, F.billing, F.A.userId, F.B.userId]) {
+      asUser(userId);
+      expect((await getDashboardData()).cashToday ?? null).toBeNull();
+    }
   });
 
   it("fuga por cache: A → B → OWNER → A con el cache real, cada uno ve su número y la clave lleva el scope", async () => {

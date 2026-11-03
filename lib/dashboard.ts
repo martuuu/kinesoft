@@ -36,6 +36,10 @@ import {
 } from "@/lib/dashboard-revenue";
 import type { ActionResult } from "@/lib/validation";
 import type { Prisma, Role } from "@prisma/client";
+import { dayWindow } from "@/lib/availability/day";
+import { cajaScopeFor, cashTodayFrom } from "@/lib/caja-logic";
+import { collectedGroupsInTx } from "@/lib/caja-internal";
+import type { CashTodayRow, CashTodaySummary, CollectedGroup } from "@/lib/caja-types";
 
 function startOfDay(d: Date) {
   // AR midnight of the AR day containing `d`, anchored to the business tz
@@ -50,6 +54,12 @@ function startOfWeek(d: Date) {
   const day = (toARDow(x) + 6) % 7; // 0 = Monday
   return new Date(x.getTime() - day * 86_400_000);
 }
+
+/** A quién destina un profesional lo de hoy («destina $X a …» de la tarjeta). Sin OS (D-CF2-16). */
+export type CashTodayGiven = { practitionerId: string; practitionerName: string; cents: number };
+export type DashboardCashTodayRow = CashTodayRow & { givenTo: CashTodayGiven[] };
+/** `CashTodaySummary` + el destinatario de lo que destina cada fila (asignable a `CashTodaySummary`). */
+export type DashboardCashToday = Omit<CashTodaySummary, "rows"> & { rows: DashboardCashTodayRow[] };
 
 export type DashboardData = {
   greetingName: string;
@@ -120,6 +130,21 @@ export type DashboardData = {
    * "Tus ingresos…") o `none`. Solo el tipo: el id del profesional no viaja.
    */
   revenueScope: RevenueScopeKind;
+  /**
+   * CF2 (D-CF2-16/17, sesión P-D): tarjeta «Cobrado hoy» de la Secretaria = scope `desk` de la caja (`cajaScopeFor`:
+   * `billing.collect` sin `billing.manage`): copagos + online de HOY por profesional con lo que destina/recibe, sin OS.
+   * `null` para cualquier otro rol (Titular/Admin/Facturación tienen `/caja` y el widget de Ingresos; el profesional,
+   * sus ingresos). Es la única enmienda a SR-D5I: `revenue`/`monthRevenue` siguen `null` para la Secretaria.
+   *
+   * Opcional en el TIPO solo para no tocar los fixtures de render de otras sesiones (`dashboard-modules`, `mb1d`,
+   * `pf1-dashboard`, `revenue-card`): `loadDashboard` SIEMPRE lo setea (objeto o `null`).
+   *
+   * Cache: NO va en `dashboard:counts`. Esa clave es por tenant + token de visibilidad, y la Secretaria comparte el
+   * token `no-practitioner` con Facturación: cacheada ahí, Facturación heredaría la tarjeta, y un cobro (que no
+   * siempre revalida el tag `dashboard`: el webhook de MP no lo hace) quedaría viejo hasta el TTL. Se calcula en la
+   * tx de la página, por request, como los ingresos: nunca más vieja que la carga.
+   */
+  cashToday?: DashboardCashToday | null;
   reminderDismissed: boolean;
   reminderKey: string;
 };
@@ -142,6 +167,7 @@ type DashboardCounts = Omit<
   | "monthRevenue"
   | "revenueScope"
   | "ownPublicBooking"
+  | "cashToday"
 > & {
   // Filas crudas: el enmascarado por acceso se aplica FUERA del cache, por
   // request. Si se hiciera adentro, un share revocado seguiría mostrando el
@@ -591,6 +617,9 @@ async function loadDashboard(
   ]);
   const revenueScope = revenueScopeFor(caps, actor.practitionerId);
   const revenuePid = revenueScope.kind === "own" ? revenueScope.practitionerId : null;
+  // CF2 (D-CF2-16): «Cobrado hoy» solo para el scope `desk` de la caja. El soporte nunca (como `loadCajaPage`; además
+  // `memberCapabilitiesForActor` ya le saca `billing.*`).
+  const withCashToday = !actor.support && cajaScopeFor(caps, actor.practitionerId).kind === "desk";
 
   // A2b-S-vis: "recientes" sale de las sesiones de TODO el tenant y
   // "próximos" puede incluir pacientes asignados a otro profesional. Se
@@ -635,6 +664,11 @@ async function loadDashboard(
           ? monthRevenue
           : await revenueSummaryInTx(tx, tenantId, revenuePid, prefs.dashboard.revenueRange, dayKey);
     const bookingDays = opts.withBookingDays ? await bookingDaysInTx(tx, tenantId, arYear, arMonth - 1) : [];
+    // CF2 (P-D): +1 sentencia en esta tx, 0 tx (C-PF8). Hoy AR (`dayWindow`, nunca el día del host), sin OS: la rama
+    // de la obra social ni se evalúa con `includeInsurer: false`. `now` = la hora que muestra «Actualizado a las …».
+    const cashToday = withCashToday
+      ? cashTodayForDesk(await collectedGroupsInTx(tx, tenantId, dayWindow(dayKey), { includeInsurer: false }), now)
+      : null;
     return {
       accessMap,
       reminderDismissed: !!dismissed && dismissed.dismissedUntil > new Date(),
@@ -645,6 +679,7 @@ async function loadDashboard(
       monthRevenue,
       revenue,
       bookingDays,
+      cashToday,
     };
   });
 
@@ -663,6 +698,7 @@ async function loadDashboard(
     monthRevenue: page.monthRevenue,
     revenue: page.revenue,
     revenueScope: revenueScope.kind,
+    cashToday: page.cashToday,
     recent: counts.recent.map((r) =>
       seesClinical(r.id)
         ? {
@@ -695,6 +731,15 @@ async function loadDashboard(
     ownPublicBooking: page.ownPublicBooking,
   };
   return { data, preferences: prefs, bookingDays: page.bookingDays };
+}
+
+/**
+ * CF2 (P-D → INT-P): la tarjeta «Cobrado hoy» es `cashTodayFrom` tal cual (`lib/caja-logic.ts`): desde INT-P la fila
+ * ya trae a QUIÉN destina (`CashTodayRow.givenTo`, de la misma liquidación `desk`, sin OS ni ceros), así que no se
+ * liquida dos veces. Puro, sobre los grupos ya leídos: 0 sentencias.
+ */
+function cashTodayForDesk(groups: readonly CollectedGroup[], now: Date): DashboardCashToday {
+  return cashTodayFrom(groups, now);
 }
 
 // ──────────────────────────────────────────────────────────────────────

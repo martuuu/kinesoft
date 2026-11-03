@@ -7,8 +7,9 @@ import type { ReactNode } from "react";
  * y la server action del menú de fila (no se invoca).
  *
  *  - `admin` (Secretaria, Admin, Facturación): contacto (email en el title, DNI/teléfono) y obra social como `full`;
- *    NADA clínico aunque la fila viniera con datos (plan, última visita) y sin las acciones que mutan la ficha
- *    (selección masiva, archivar: el server exige `full`).
+ *    NADA clínico aunque la fila viniera con datos (plan) y sin las acciones que mutan la ficha (selección masiva,
+ *    archivar: el server exige `full`). CF2 (D-CF2-14/15): «Estado» y «Última visita» salen de los turnos (no HC) y
+ *    la fila `admin` sí los ve; «Plan activo» salió para todos.
  *  - `basic` sigue igual (sin contacto ni OS) y `full` sigue con todo (controles).
  */
 vi.mock("next/navigation", () => ({
@@ -62,7 +63,7 @@ function row(over: Partial<PatientRow> = {}): PatientRow {
 }
 
 describe("[AS-1b] PatientsList · filas admin", () => {
-  it("admin: contacto y obra social visibles; sin plan, sin selección masiva ni acciones", () => {
+  it("admin: contacto, obra social, estado y última visita visibles; sin plan, sin selección masiva ni acciones", () => {
     // Datos clínicos de más a propósito: la UI no los tiene que pintar en una fila que no es full.
     const html = wrap(
       <PatientsList
@@ -71,26 +72,28 @@ describe("[AS-1b] PatientsList · filas admin", () => {
             activeProgramTitle: "Plan lumbar",
             activePlans: [{ discipline: "KINESIOLOGY", done: 3, totalLive: 10 }],
             lastVisit: new Date("2026-10-01T13:00:00Z"),
+            activity: "inactive",
           }),
         ]}
         archived={false}
+        practitionerNames={{}}
       />
     );
     expect(html).toContain("Ana García · ana@example.test");
     expect(html).toContain("DNI 30111222");
     expect(html).toContain("OSDE");
-    // T3-Z M8: una lista solo de filas admin (Secretaria, Admin, Facturación) no muestra la columna Plan: un
-    // «Sin acceso» en cada fila era ruido y sonaba a error.
     expect(html).not.toContain("Sin acceso");
     expect(html).not.toMatch(/class="[^"]*_cellPlan_/);
     expect(html).not.toContain("Plan lumbar");
     expect(html).not.toContain("3/10");
     expect(html).not.toContain("Seleccionar paciente");
     expect(html).not.toContain('aria-label="Acciones"');
-    expect(html).not.toContain("Inactivo");
+    // CF2: estado y última visita (datos de turnos) sí.
+    expect(html).toContain(">Inactivo<");
+    expect(html).toMatch(/01[\s-]oct/);
   });
 
-  it("[T3-Z M8] mezcla full + admin: la columna Plan queda y la fila admin dice «—», no «Sin acceso»", () => {
+  it("[CF2-U1] mezcla full + admin: ninguna fila pinta plan (la columna salió para todos)", () => {
     const html = wrap(
       <PatientsList
         rows={[
@@ -98,22 +101,25 @@ describe("[AS-1b] PatientsList · filas admin", () => {
           row({ id: "p-full", access: "full", activePlans: [{ discipline: "KINESIOLOGY", done: 1, totalLive: 8 }] }),
         ]}
         archived={false}
+        practitionerNames={{}}
       />
     );
-    expect(html.match(/class="[^"]*_cellPlan_/g)).toHaveLength(2);
+    expect(html).not.toMatch(/class="[^"]*_cellPlan_/);
     expect(html).not.toContain("Sin acceso");
     expect(html).not.toContain("3/10");
-    expect(html).toContain("1/8");
+    expect(html).not.toContain("1/8");
   });
 
   it("admin en un consultorio General: el estado del paciente (no HC) se ve", () => {
-    const html = wrap(<PatientsList rows={[row()]} archived={false} />, GENERAL);
+    const html = wrap(<PatientsList rows={[row({ activity: "active" })]} archived={false} practitionerNames={{}} />, GENERAL);
     expect(html).toContain(">Activo<");
     expect(html).toContain("OSDE");
   });
 
-  it("controles: basic sin contacto ni OS; full con plan, selección y acciones", () => {
-    const basic = wrap(<PatientsList rows={[row({ access: "basic", email: null, obraSocial: null })]} archived={false} />);
+  it("controles: basic sin contacto ni OS; full con selección y acciones (sin plan, CF2)", () => {
+    const basic = wrap(
+      <PatientsList rows={[row({ access: "basic", email: null, obraSocial: null })]} archived={false} practitionerNames={{}} />,
+    );
     expect(basic).not.toContain("ana@example.test");
     expect(basic).not.toContain("OSDE");
 
@@ -121,9 +127,11 @@ describe("[AS-1b] PatientsList · filas admin", () => {
       <PatientsList
         rows={[row({ access: "full", activeProgramTitle: "Plan lumbar", activePlans: [{ discipline: "KINESIOLOGY", done: 3, totalLive: 10 }] })]}
         archived={false}
+        practitionerNames={{}}
       />
     );
-    expect(full).toContain("Plan lumbar");
+    // CF2: el plan queda en la ficha, no en el directorio.
+    expect(full).not.toContain("Plan lumbar");
     expect(full).toContain("Seleccionar paciente");
     expect(full).toContain('aria-label="Acciones"');
   });

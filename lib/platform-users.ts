@@ -48,6 +48,7 @@ import { canSafelyDeleteAuthUser } from "@/lib/access-logic";
 import { emailEqualsFilter, normalizeEmail } from "@/lib/email-match";
 import { isClinicalMember } from "@/lib/roles";
 import { provisionPractitionerAgenda } from "@/lib/agenda-defaults";
+import { closeRevenueSharesForPractitionerInTx } from "@/lib/revenue-share-internal";
 import { tags } from "@/lib/cache-tags";
 import { logger } from "@/lib/logger";
 import {
@@ -212,6 +213,13 @@ export async function setPlatformUserDisabled(raw: unknown): Promise<ActionResul
         where: { id: userId },
         data: disabled ? { disabledAt: new Date(), disabledReason: reason } : { disabledAt: null, disabledReason: null },
       });
+      // CF2-ZF3 (ZA-1): un usuario deshabilitado no es reservable en NINGÚN consultorio: sus reglas de reparto (destina
+      // o recibe) se cierran en `now` en cada uno, en esta misma tx. Habilitarlo no las reabre. Orden por consultorio
+      // (lock Tenant → reparto de cada uno): dos deshabilitados en paralelo no se cruzan los locks.
+      if (disabled) {
+        const pracs = await tx.practitioner.findMany({ where: { userId }, select: { id: true, tenantId: true }, orderBy: { tenantId: "asc" } });
+        for (const p of pracs) await closeRevenueSharesForPractitionerInTx(tx, p.tenantId, p.id, actor.userId, "user.disable");
+      }
       await auditPlatformGlobalInTx(tx, {
         actor: refOf(actor),
         action: disabled ? "platform.user.disable" : "platform.user.enable",

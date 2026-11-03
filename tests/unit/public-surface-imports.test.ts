@@ -35,6 +35,7 @@ const FORBIDDEN_FILES = [
   "components/providers/ui-providers.tsx",
   "components/ui/toast.tsx",
   "components/ui/confirm-dialog.tsx",
+  "components/ui/confirm-dialog-panel.tsx",
   "components/ui/drawer.tsx",
   "components/ui/modal.tsx",
 ];
@@ -181,7 +182,8 @@ describe("[VX F-d] superficies públicas sin framer-motion ni providers de UI (C
   });
 
   it("toast, modal, drawer y confirm-dialog usan `m.*`, no `motion.*` (C-F3.4)", () => {
-    for (const f of ["toast", "modal", "drawer", "confirm-dialog"]) {
+    // [CF2-ZF4] el diálogo de confirmación vive en `confirm-dialog-panel` (lo baja el provider con `import()`).
+    for (const f of ["toast", "modal", "drawer", "confirm-dialog-panel"]) {
       const src = readFileSync(join(ROOT, `components/ui/${f}.tsx`), "utf8");
       expect(src, f).not.toMatch(/<\/?motion\./);
       expect(src, f).not.toMatch(/import\s*\{[^}]*\bmotion\b[^}]*\}\s*from\s*"framer-motion"/);

@@ -130,14 +130,14 @@ describe("[MB-Z-F3 · B2] «Mi perfil público» en «Más» antes del pie de cu
 });
 
 describe("[MB-Z-F3 · B3] targets de 44 px bajo 768 (escritorio sin cambios)", () => {
-  it("Pacientes: pills Todos/Con plan/Sin plan, orden, cobertura y buscador a 44 px; `.seg` de escritorio igual", () => {
+  // CF2 (decisión 3 de Martin): las pills «Todos / Con plan / Sin plan» salieron para todos, y con ellas `.seg`.
+  it("Pacientes: orden, cobertura y buscador a 44 px; sin `.seg` (pills fuera, CF2)", () => {
     const DIR = css("components/patients/patients-directory.module.css");
     const mobile = mobileBlocks(DIR);
-    expect(rule(mobile, ".seg")).toMatch(/min-height:\s*44px/);
+    expect(DIR).not.toMatch(/\.seg\b/);
     expect(mobile).toMatch(/\.sortRow > a[^{]*\{[^}]*min-height:\s*44px/);
     expect(mobile).toMatch(/\.sortRow input:not\(\[type="hidden"\]\)[^{]*\{[^}]*min-height:\s*44px/);
     expect(rule(mobile, ".bareInput")).toMatch(/min-height:\s*44px/);
-    expect(rule(desktopOnly(DIR), ".seg")).not.toMatch(/min-height/);
   });
 
   it("Dashboard: los botones de período (Sesiones e Ingresos) llevan la clase que < 768 sube a 44 px", () => {

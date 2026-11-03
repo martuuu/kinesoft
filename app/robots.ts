@@ -39,6 +39,8 @@ const APP_SEGMENTS = [
   "/configuracion",
   // TP-3g: listado de cobros online. Lo fija `robots-sitemap.test.ts` contra el árbol real de `app/(app)/*`.
   "/cobros",
+  // CF2 (§29): caja del día por profesional (montos cobrados).
+  "/caja",
 ];
 
 const ROBOTS_DISALLOW = [

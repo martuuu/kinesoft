@@ -26,7 +26,7 @@ import { IconMenu } from "@/components/ui/icons";
 import { bottomNavFor } from "@/lib/nav";
 import type { Capability } from "@/lib/capabilities";
 import { useTenantModules } from "./tenant-modules-context";
-import { NAV_ICONS, activeNavHref, useCapSet } from "./sidebar";
+import { NAV_ICONS, activeNavHref, useCapSet, useOnlinePayments } from "./sidebar";
 import styles from "./bottom-nav.module.css";
 
 const loadDrawer = () => import("./mobile-nav-drawer");
@@ -113,7 +113,8 @@ export function BottomNav({
   const search = useSearchParams();
   const { list: modules } = useTenantModules();
   const capSet = useCapSet(caps);
-  const entries = useMemo(() => bottomNavFor(modules, capSet), [modules, capSet]);
+  const onlinePayments = useOnlinePayments();
+  const entries = useMemo(() => bottomNavFor(modules, capSet, { onlinePayments }), [modules, capSet, onlinePayments]);
   const active = activeNavHref(
     entries.flatMap((e) => (e.kind === "link" ? [e.href] : [])),
     pathname,

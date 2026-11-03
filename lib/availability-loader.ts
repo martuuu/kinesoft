@@ -69,6 +69,9 @@ export type LoadedAvailabilityInput = Omit<AvailabilityInput, "bookings" | "room
   agendaRules: Readonly<Record<string, PractitionerAgendaRules>>;
   /** CF (M20): `Tenant.publicMinLeadMinutes` crudo (null = sin configurar → `effectivePublicMinLead`). */
   publicMinLeadMinutes: number | null;
+  /** CF2 (M21, D-CF2-8): siempre cargado, una entrada por profesional de `templates` con su
+   *  `Practitioner.publicMinLeadMinutes` crudo (null = hereda del consultorio). */
+  practitionerMinLead: Readonly<Record<string, number | null>>;
 };
 
 export type LoadAvailabilityParams = {
@@ -98,6 +101,14 @@ export type LoadAvailabilityParams = {
    * se apagó del turnero. Va en el MISMO `where` de la fase 1 (0 sentencias nuevas).
    */
   publicBookingOnly?: boolean;
+  /**
+   * CF2 (A.4, vista Mes): solo lo que lee el candado del día (`dayLockState`: plantillas, excepciones, bloqueos).
+   * Saltea turnos, `practitionerService`, servicios y coberturas: un mes con 6 profesionales traía ~1.000 turnos con
+   * 12 columnas para no usarlos (el resumen los cuenta con su propia query de 3 columnas). Con el flag, `bookings`,
+   * `practitionerServices`, `services` y `practitionerPayers` salen `[]`: NO sirve para slots ni para clasificar.
+   * Fase 1 y las 3 queries de franjas, iguales (mismo `where`, mismo plan): 6-7 sentencias.
+   */
+  rangesOnly?: boolean;
 };
 
 // Día AR ↔ instante y `@db.Date` ↔ DayKey: SOLO los helpers de
@@ -249,6 +260,8 @@ async function loadForRuns(
 ): Promise<LoadedAvailabilityInput> {
   const { tenantId, serviceId, locationId, patientId, from, to } = params;
   const single = runs.length === 1;
+  // CF2 (A.4): sin turnos/servicios/reglas/coberturas (ver `LoadAvailabilityParams.rangesOnly`).
+  const rangesOnly = params.rangesOnly === true;
 
   const windowStart = dayWindow(from).start;
   const windowEnd = dayWindow(to).end; // exclusivo
@@ -302,6 +315,7 @@ async function loadForRuns(
             allowParallelServices: boolean;
             agendaSlotStepMin: number | null;
             publicSlotStepMin: number | null;
+            publicMinLeadMinutes: number | null;
           }[]
         )
       : db.practitioner.findMany({
@@ -319,6 +333,7 @@ async function loadForRuns(
           },
           // T3 (C-AS3): el tope propio viaja en la MISMA sentencia (columnas escalares; 0 sentencias nuevas).
           // CF (M20): servicio exclusivo + pasos propios, también en la misma sentencia.
+          // CF2 (M21, D-CF2-8): anticipación propia del turnero, misma sentencia (0 nuevas; `[CF2-TK]` lo cuenta).
           select: {
             id: true,
             bookingCapMode: true,
@@ -327,6 +342,7 @@ async function loadForRuns(
             allowParallelServices: true,
             agendaSlotStepMin: true,
             publicSlotStepMin: true,
+            publicMinLeadMinutes: true,
           },
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         }),
@@ -367,12 +383,16 @@ async function loadForRuns(
   // `effectiveAgendaRules` (misma razón que el tope: motor, escrituras y turnero no pueden divergir).
   const tenantRules = { agendaSlotStepMin: tenant.agendaSlotStepMin, publicSlotStepMin: tenant.publicSlotStepMin };
   const agendaRules: Record<string, PractitionerAgendaRules> = {};
+  // CF2 (D-CF2-8): crudo, sin resolver. La precedencia PS > profesional > consultorio > 60 depende del SERVICIO, así que
+  // la decide `effectivePublicMinLead` en `resolvePublicOffer`, no el loader (a diferencia del tope y las reglas).
+  const practitionerMinLead: Record<string, number | null> = {};
   for (const p of practitioners) {
     intervalCaps[p.id] = effectiveIntervalCap(
       { mode: p.bookingCapMode, count: p.bookingCapCount, intervalMin: p.bookingCapIntervalMin },
       tenantCap
     );
     agendaRules[p.id] = effectiveAgendaRules(p, tenantRules);
+    practitionerMinLead[p.id] = p.publicMinLeadMinutes;
   }
   const primaryLocationId = primary?.id ?? null;
   const resolveLocation = (id: string | null | undefined): string =>
@@ -460,7 +480,7 @@ async function loadForRuns(
       },
       orderBy: [{ startsAt: "asc" }, { id: "asc" }],
     }),
-    bookingScope.length
+    !rangesOnly && bookingScope.length
       ? db.booking.findMany({
           where: {
             tenantId,
@@ -491,7 +511,7 @@ async function loadForRuns(
           orderBy: [{ scheduledFor: "asc" }, { id: "asc" }],
         })
       : Promise.resolve([]),
-    hasPracs && !serviceUnknown
+    !rangesOnly && hasPracs && !serviceUnknown
       ? db.practitionerService.findMany({
           where: {
             tenantId,
@@ -512,7 +532,7 @@ async function loadForRuns(
           orderBy: [{ practitionerId: "asc" }, { serviceId: "asc" }],
         })
       : Promise.resolve([]),
-    serviceUnknown
+    rangesOnly || serviceUnknown
       ? Promise.resolve([])
       : db.service.findMany({
           where: { tenantId, ...(serviceFilter ? { id: serviceFilter } : {}) },
@@ -522,7 +542,7 @@ async function loadForRuns(
         }),
     // Coberturas por profesional (handoff de B2.1b). Sin fila = activa: lo
     // resuelve el motor (`acceptsInsurer`), no se sintetizan filas acá.
-    hasPracs
+    !rangesOnly && hasPracs
       ? db.practitionerPayer.findMany({
           where: { tenantId, practitionerId: { in: pracIds } },
           select: { practitionerId: true, insurerId: true, active: true, insurer: { select: { isParticular: true } } },
@@ -672,5 +692,6 @@ async function loadForRuns(
     intervalCaps,
     agendaRules,
     publicMinLeadMinutes: tenant.publicMinLeadMinutes,
+    practitionerMinLead,
   };
 }

@@ -9,7 +9,24 @@ import { SALA_COPY, SALA_COUNTERS, type SalaCounters } from "@/lib/sala-board-st
 import type { SalaGroupBy } from "@/lib/preferences-constants";
 // TV-2w2: «Pantallas» (solo con `agenda.operateAll`, vía `DisplaysContext`); el drawer va diferido adentro.
 import { DisplaysButton } from "@/components/sala/displays/displays-button";
+// CF2 (D-CF2-5, handoff A-SL): sede (solo con ≥2) y «¿Otro día?» por contexto, sin props nuevas.
+import { SalaLocationSelect, SalaOtherDayLink } from "./sala-location";
+import { porCobrarLabel } from "@/lib/copago-owed";
 
+/**
+ * [CF2-SB] «Por cobrar · N · $ X» del Tablero: los que deben y el viewer cobra, y lo que FALTA (`cashEntries`; desde
+ * [CF2-ZF1] también los que llegaron y no terminaron, el criterio del tag de la card). null =
+ * el viewer no cobra (sin botón). `onIntent` precarga el chunk del drawer (hover/foco), así abrirlo no espera red.
+ */
+export type SalaHeaderCash = { count: number; totalCents: number; onOpen: () => void; onIntent?: () => void; open?: boolean };
+
+/**
+ * Texto del botón (puro para el test): «Por cobrar · 3 · $ 15.000»; sin nada, «Por cobrar · 0». [CF2-ZF1] (ZB-7) Es
+ * `porCobrarLabel`, el mismo rótulo del chip de Recepción de la agenda.
+ */
+export function salaCashLabel(count: number, totalCents: number): string {
+  return porCobrarLabel(count, totalCents);
+}
 
 /**
  * Header sticky de /sala (SV10a, plan §18.5): título + fecha de hoy AR,
@@ -37,6 +54,7 @@ export function SalaHeader({
   query,
   onQuery,
   status,
+  cash = null,
 }: {
   dayLabel: string;
   counters: SalaCounters;
@@ -48,6 +66,8 @@ export function SalaHeader({
   onQuery: (q: string) => void;
   /** Aviso del tablero que no debe mover el layout (ver arriba); null = nada. */
   status: "no-one-waiting" | null;
+  /** CF2: «Por cobrar» para quien cobra (ver `SalaHeaderCash`); null/ausente = sin botón. */
+  cash?: SalaHeaderCash | null;
 }) {
   const mounted = useRef(false);
   useEffect(() => {
@@ -138,7 +158,31 @@ export function SalaHeader({
             </button>
           )}
         </label>
-        <DisplaysButton />
+        {cash && (
+          // Siempre visible para quien cobra (con 0 también): que aparezca y desaparezca movería la fila de
+          // herramientas cada vez que alguien paga. Con 0 queda deshabilitado (no hay nada que abrir).
+          <button
+            type="button"
+            className="k-btn k-btn-ghost k-btn-sm sala-cash"
+            data-sala-cash=""
+            aria-haspopup="dialog"
+            aria-expanded={cash.open ?? false}
+            disabled={cash.count === 0}
+            onClick={cash.onOpen}
+            onPointerEnter={cash.onIntent}
+            onFocus={cash.onIntent}
+            style={{ flexShrink: 0 }}
+          >
+            <span className="k-mono">{salaCashLabel(cash.count, cash.totalCents)}</span>
+          </button>
+        )}
+        <SalaLocationSelect />
+        <SalaOtherDayLink />
+        {/* [CF2-ZF1] Envuelto para darle `order` en el header de una fila (≤ 800 de alto) sin tocar el `k-btn`
+            genérico; sin permiso queda vacío y `.sala-displays:empty` lo saca del flujo (no suma un gap). */}
+        <span className="sala-displays">
+          <DisplaysButton />
+        </span>
         <div className="sala-status">
           <AnimatePresence initial={false}>
             {status === "no-one-waiting" && (

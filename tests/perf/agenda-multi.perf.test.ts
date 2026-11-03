@@ -68,6 +68,7 @@ import {
   type AgendaAvailability,
 } from "@/lib/availability-actions-types";
 import { buildPractitionerColumns, weekOccupancy, type AgendaZoom } from "@/lib/agenda-layout";
+import { getAgendaMonthSummary } from "@/lib/agenda-month";
 import { addDays } from "@/lib/availability/day";
 import { toBookingDTO } from "@/components/agenda/agenda-utils";
 import { localToARIso } from "@/lib/datetime-ar";
@@ -442,6 +443,34 @@ describe.skipIf(!RUN)("perf B4.6 — agenda multi-profesional (6 profesionales, 
       () => getAgendaAvailability({ from: monday, to: addDays(monday, 6), locationId: T.northLocationId }),
       { outcome: (r) => (r.ok ? "ok" : okOf(r)) },
     );
+  });
+
+  // ── (g) CF2 (A.4/A.5): resumen de la vista Mes ──────────────────────────────
+  // Presupuesto: 1 tx, ≤ 12 sentencias, ≤ 24 kB. 5 semanas alrededor de la semana cargada (lunes − 14 días: el
+  // fixture tiene turnos antes y después). Si dbMs > 40 ms acá, el conteo pasa a GROUP BY raw (brief A.4).
+
+  it("(g) [CF2-MS] getAgendaMonthSummary — 5 semanas, todos", async () => {
+    const from = addDays(monday, -14);
+    const r = await bench("g.getAgendaMonthSummary.5w", () => getAgendaMonthSummary({ from, to: addDays(from, 34) }), {
+      outcome: (r) => (r.ok ? `ok: ${r.data.days.length} días, ${Math.round(JSON.stringify(r.data).length / 102.4) / 10} kB` : okOf(r)),
+    });
+    const row = rows[rows.length - 1];
+    expect(row.transactions).toBe(1);
+    expect(row.statements).toBeLessThanOrEqual(12);
+    expect(r.ok && Buffer.byteLength(JSON.stringify(r.data), "utf8")).toBeLessThanOrEqual(24 * 1024);
+  });
+
+  it("(g) [CF2-MS] getAgendaMonthSummary — 6 semanas, sede principal", async () => {
+    const from = addDays(monday, -14);
+    const r = await bench(
+      "g.getAgendaMonthSummary.6w.primary",
+      () => getAgendaMonthSummary({ from, to: addDays(from, 41), locationId: T.primaryLocationId }),
+      { outcome: (r) => (r.ok ? `ok: ${r.data.days.length} días, ${Math.round(JSON.stringify(r.data).length / 102.4) / 10} kB` : okOf(r)) },
+    );
+    const row = rows[rows.length - 1];
+    expect(row.transactions).toBe(1);
+    expect(row.statements).toBeLessThanOrEqual(12);
+    expect(r.ok && Buffer.byteLength(JSON.stringify(r.data), "utf8")).toBeLessThanOrEqual(24 * 1024);
   });
 
   // ── (c) slots del día ───────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ import { blockExternal, expectedNavFor, loginAs, readPlansFixture, sidebarHrefs 
  * lectura y cupo, contra el server del E2E (GoTrue falso, MP y Meta falsos). Los consultorios extra los arma el
  * global-setup (`support/plans.ts`); el Individual · Kinesiología es el de siempre (el Titular del `storageState`).
  *
- * - El menú esperado se DERIVA (`modulesFor` + `capabilitiesForMember` + `shellNavCaps` + `navFor`, desde la fila real
+ * - El menú esperado se DERIVA (`modulesFor` + `capabilitiesForMember` + `navFor` (con `onlinePayments`), desde la fila real
  *   del tenant y de la membresía) y además se fijan literales (§26.8: un oráculo roto no arrastra la fila).
  * - El copy del muro sale de `minimumPlanFor` + `SAAS_PLAN_LABEL` y se fija también el literal «… está en el plan Clínica».
  * - Solo lectura: `start-server.mjs` FIJA `TENANT_ACCESS_ENFORCEMENT=enforce` después de `...process.env` (el gate

@@ -5,12 +5,29 @@ import { Avatar } from "@/components/ui/avatar";
 import { IconBell, IconCheck, IconHome, IconLogout, IconSettings, IconUsers } from "@/components/ui/icons";
 import { SUPPORT_HELP_HREF } from "./shell-links";
 import { preloadAppearance } from "./appearance-loader";
-import {
-  OWN_TURNERO_OFF_HINT,
-  PublicBookingSwitch,
-} from "@/components/configuracion/panels/practitioners/public-booking-switch";
 import { CHOOSE_TENANT_HREF, useTenantChoice } from "./tenant-switcher";
 import type { TenantOption } from "@/lib/tenant-choice";
+
+/**
+ * [CF2-ZF4] El switch «Aparece en el turnero online» (con su action y el `Switch`) baja aparte: este menú está en el
+ * first load de todas las rutas del equipo y el switch solo se ve con el menú abierto y ficha propia. Se pide en un
+ * idle después de montar (solo con ficha propia) y al pasar el puntero / enfocar / tocar el avatar; al abrir ya está.
+ * Cargado, se dibuja directo (sin `React.lazy`, mismo patrón que `view-options-menu.tsx`).
+ */
+type SwitchModule = typeof import("@/components/configuracion/panels/practitioners/public-booking-switch");
+let switchModule: SwitchModule | undefined;
+let switchLoad: Promise<SwitchModule> | undefined;
+/** Exportada para el render test (`renderToStaticMarkup` no corre effects: el test la espera antes de dibujar). */
+export function loadSwitch() {
+  switchLoad ??= import("@/components/configuracion/panels/practitioners/public-booking-switch").then(
+    (m) => (switchModule = m),
+    (err) => {
+      switchLoad = undefined; // se reintenta en la próxima apertura
+      throw err;
+    }
+  );
+  return switchLoad;
+}
 
 /** DIR-3d (DIR-D11): el perfil del directorio es POR PERSONA y vive fuera de `(app)`, junto a `/cuenta/seguridad`. */
 export const PUBLIC_PROFILE_HREF = "/cuenta/perfil-publico";
@@ -80,6 +97,35 @@ export function TopbarAccountMenu({
   // HD-9: con el directorio apagado (`publicProfile` false) no hay perfil que editar (la página da 404).
   const showPublicProfile = publicProfile && showsPublicProfileEntry(ownPublicBooking !== null, options);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [, setSwitchReady] = useState(Boolean(switchModule));
+  const hasSwitch = ownPublicBooking !== null;
+  const preloadSwitch = () => {
+    if (hasSwitch) void loadSwitch().catch(() => {});
+  };
+
+  // [CF2-ZF4] El switch: en un idle con ficha propia, y sí o sí al abrir.
+  useEffect(() => {
+    if (!hasSwitch || switchModule) return;
+    let alive = true;
+    const go = () =>
+      void loadSwitch().then(
+        () => alive && setSwitchReady(true),
+        () => {}
+      );
+    if (open) {
+      go();
+      return () => {
+        alive = false;
+      };
+    }
+    const ric = typeof window.requestIdleCallback === "function" ? window.requestIdleCallback : null;
+    const id = ric ? ric(go, { timeout: 4000 }) : window.setTimeout(go, 1500);
+    return () => {
+      alive = false;
+      if (ric) window.cancelIdleCallback(id);
+      else window.clearTimeout(id);
+    };
+  }, [hasSwitch, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -102,6 +148,9 @@ export function TopbarAccountMenu({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
+        onPointerEnter={preloadSwitch}
+        onPointerDown={preloadSwitch}
+        onFocus={preloadSwitch}
         aria-haspopup="true"
         aria-expanded={open}
         aria-label={`Menú de cuenta de ${name}`}
@@ -168,12 +217,17 @@ export function TopbarAccountMenu({
               data-own-public-booking
               style={{ padding: "10px 12px", margin: "4px 0", borderTop: "1px solid rgba(15,30,51,0.06)", borderBottom: "1px solid rgba(15,30,51,0.06)" }}
             >
-              <PublicBookingSwitch
-                practitionerId={ownPublicBooking.practitionerId}
-                name={name}
-                enabled={ownPublicBooking.enabled}
-                offHint={OWN_TURNERO_OFF_HINT}
-              />
+              {switchModule ? (
+                <switchModule.PublicBookingSwitch
+                  practitionerId={ownPublicBooking.practitionerId}
+                  name={name}
+                  enabled={ownPublicBooking.enabled}
+                  offHint={switchModule.OWN_TURNERO_OFF_HINT}
+                />
+              ) : (
+                // Sin el chunk todavía (se abrió antes de que llegara la red): el alto del switch, sin control falso.
+                <div aria-hidden className="k-skel" style={{ height: 36, borderRadius: 8 }} />
+              )}
             </div>
           )}
           {canSwitch && (

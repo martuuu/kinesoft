@@ -22,7 +22,8 @@ import {
   IconPlans,
   IconTag,
 } from "@/components/ui/icons";
-import { useCallback, useEffect, useMemo, useState, type ComponentType, type FocusEvent, type PointerEvent, type ReactNode } from "react";
+import { IconWallet } from "@/components/ui/icon-wallet";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ComponentType, type FocusEvent, type PointerEvent, type ReactNode } from "react";
 import { navFor, type NavIconKey, type NavItem } from "@/lib/nav";
 import type { Capability } from "@/lib/capabilities";
 import type { TenantModule } from "@/lib/tenant-modules";
@@ -50,6 +51,7 @@ export const NAV_ICONS: Record<NavIconKey, ComponentType<{ size?: number }>> = {
   plans: IconPlans,
   bookmark: IconBookmark,
   tag: IconTag,
+  wallet: IconWallet,
 };
 
 export const CONFIG_HREF = "/configuracion";
@@ -65,9 +67,23 @@ export const PLATFORM_HREF = "/plataforma";
  */
 export function shellNavItems(
   modules: ReadonlySet<TenantModule>,
-  caps: ReadonlySet<Capability>
+  caps: ReadonlySet<Capability>,
+  onlinePayments = false
 ): NavItem[] {
-  return navFor(modules, caps);
+  return navFor(modules, caps, { onlinePayments });
+}
+
+/**
+ * CF2 (P-NAV): ¿cobros online prendidos (`MP_CONNECT_MODE` ≠ off)? Lo calcula el layout `(app)` y lo monta el AppShell;
+ * lo leen sidebar, topbar, barra inferior y el Drawer «Más» (que arma `SidebarBody`) para esconder «Cobros»
+ * (`onlinePaymentsOnly`). Contexto y no prop: el Drawer recibe `caps` del BottomNav y habría que agregarle otra prop
+ * a toda la cadena por un booleano. Default `false` = falla cerrado (render sueltos sin AppShell: sin «Cobros»).
+ * Reemplaza a `shellNavCaps`, que sacaba `billing.collect` de las caps del shell y con eso escondía «Caja».
+ */
+const OnlinePaymentsContext = createContext(false);
+export const OnlinePaymentsProvider = OnlinePaymentsContext.Provider;
+export function useOnlinePayments(): boolean {
+  return useContext(OnlinePaymentsContext);
 }
 
 /**
@@ -257,7 +273,8 @@ export function SidebarBody({
   const search = useSearchParams();
   const { list: modules } = useTenantModules();
   const capSet = useCapSet(caps);
-  const items = useMemo(() => shellNavItems(modules, capSet), [modules, capSet]);
+  const onlinePayments = useOnlinePayments();
+  const items = useMemo(() => shellNavItems(modules, capSet, onlinePayments), [modules, capSet, onlinePayments]);
   // Configuración va al pie (junto a Plataforma y Cerrar sesión), como antes de EV0.
   const main = items.filter((it) => it.href !== CONFIG_HREF);
   const config = items.find((it) => it.href === CONFIG_HREF) ?? null;

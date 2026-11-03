@@ -68,6 +68,7 @@ describe("[HD-8] error raíz", () => {
             "components/providers/ui-providers.tsx",
             "components/ui/toast.tsx",
             "components/ui/confirm-dialog.tsx",
+            "components/ui/confirm-dialog-panel.tsx",
             "components/ui/drawer.tsx",
             "components/ui/modal.tsx",
           ].includes(f),

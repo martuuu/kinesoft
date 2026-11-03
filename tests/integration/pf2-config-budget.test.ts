@@ -161,7 +161,8 @@ describe.skipIf(!RUN)("[PF2-d] /configuracion: presupuesto de tx e igualdad con 
     console.info(`[PF2-d] /configuracion Titular: ${m.transactions} tx · ${m.statements} sentencias · ${m.dbMs} ms DB`);
     expect(m.transactions).toBeLessThanOrEqual(3);
     // [CF-U4] Las reglas de agenda de M20 (consultorio y profesional) son columnas en los selects de siempre: ninguna
-    // sentencia nueva (42 medidas antes de CF-U4, 30-oct).
+    // sentencia nueva (42 medidas antes de CF-U4, 30-oct). [CF2-TL] «Mi agenda» y la anticipación de Profesionales
+    // (M21) tampoco: columnas de la ficha propia y del select de Profesionales; la del consultorio, de la fila del Tenant.
     expect(m.statements).toBeLessThanOrEqual(42);
 
     asUser(T.userId);
@@ -187,8 +188,11 @@ describe.skipIf(!RUN)("[PF2-d] /configuracion: presupuesto de tx e igualdad con 
     expect(plain(r.locations)).toEqual(plain(locations));
     // T3e-2c (C-AS3): el loader suma a cada fila el tope del profesional y el del consultorio (`bookingCap`, mismas
     // columnas del mismo select); sin eso, la fila es la del lector.
-    // CF-U4: ídem con las reglas de agenda (`agendaRules`).
-    expect(plain(r.scheduleSummary.map(({ bookingCap: _cap, agendaRules: _rules, ...row }) => row))).toEqual(plain(summary));
+    // CF-U4: ídem con las reglas de agenda (`agendaRules`). CF2 (T.A/T.B): ídem con la anticipación (`publicLead`) y
+    // con el contacto en el turnero (`leadContactShown`): no existen en el lector viejo.
+    expect(
+      plain(r.scheduleSummary.map(({ bookingCap: _cap, agendaRules: _rules, publicLead: _lead, leadContactShown: _shown, ...row }) => row))
+    ).toEqual(plain(summary));
     const caps = await db.practitioner.findMany({
       where: { id: { in: summary.map((s) => s.practitionerId) } },
       select: {
@@ -199,10 +203,13 @@ describe.skipIf(!RUN)("[PF2-d] /configuracion: presupuesto de tx e igualdad con 
         allowParallelServices: true,
         agendaSlotStepMin: true,
         publicSlotStepMin: true,
+        publicMinLeadMinutes: true,
       },
     });
     for (const row of r.scheduleSummary) {
       const c = caps.find((x) => x.id === row.practitionerId)!;
+      // [CF2-TL] anticipación cruda del profesional y la del consultorio (= getTenantSettings), del mismo select.
+      expect(row.publicLead).toEqual({ own: c.publicMinLeadMinutes, tenant: settings.publicMinLeadMinutes });
       expect(row.agendaRules).toEqual({
         allowParallelServices: c.allowParallelServices,
         agendaSlotStepMin: c.agendaSlotStepMin,
@@ -260,7 +267,13 @@ describe.skipIf(!RUN)("[PF2-d] /configuracion: presupuesto de tx e igualdad con 
 
   it("Profesional sin delegaciones: 1 tx y solo «Accesos de soporte»", async () => {
     const { result: r, m } = await load(practitionerUserId);
+    console.info(`[PF2-d] /configuracion Profesional: ${m.transactions} tx · ${m.statements} sentencias (app ${m.byClient.app} · service ${m.byClient.service})`);
     expect(m.transactions).toBeLessThanOrEqual(1);
+    // [CF2-TL] 4 medidas antes de CF2 (02-nov, 3 app + 1 service) + 1 DECLARADA: la anticipación del consultorio para
+    // «Usar la del consultorio (N)» de «Mi agenda» (sin `tenant.admin` no se lee la fila del Tenant; ver la cabecera
+    // del loader).
+    expect(m.statements).toBeLessThanOrEqual(5);
+    expect(r.miAgenda?.practitionerId).toBeTruthy();
     expect(r.tenant).toBeNull();
     expect(r.team).toBeNull();
     expect(r.pending).toBeNull();

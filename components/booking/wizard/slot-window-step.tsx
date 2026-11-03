@@ -34,7 +34,7 @@ import {
   windowRangeLabel,
   type WindowNav,
 } from "@/lib/public-wizard-state";
-import { Button } from "@/components/ui/button";
+import { Button, buttonClassName } from "@/components/ui/button";
 import { EmptyBox, StepHeader } from "./shared";
 import s from "../public-booking.module.css";
 
@@ -202,6 +202,7 @@ export function SlotWindowView(p: SlotWindowViewProps) {
   const locName = (id: string | null | undefined) =>
     multiLoc && !p.locationId ? (p.locations.find((l) => l.id === id)?.name ?? null) : null;
   const dateInputId = useId();
+  const leadTitleId = useId();
   const range = w ? windowRangeLabel(w.days.map((d) => d.date)) : "";
 
   return (
@@ -260,6 +261,43 @@ export function SlotWindowView(p: SlotWindowViewProps) {
         <p className={s.windowNotice}>
           Los turnos online se piden con al menos {formatLeadTime(w.minLeadMinutes)} de anticipación.
         </p>
+      )}
+      {/* CF2 (D-CF2-10): hoy hay lugar DENTRO de la anticipación, que el turnero no deja reservar, y el profesional
+          aceptó que lo contacten. Solo los dos links que arma el server (`buildLeadContact`): nunca horarios, para que
+          el paciente coordine con el profesional y no se tome el hueco como un turno confirmado. Sin la clave (lo
+          normal) no se pinta nada: el markup queda el de siempre. `<a>` con `buttonClassName` y no `<Button>`, porque
+          un `<button>` dentro de un `<a>` es HTML inválido; `.k-btn-md` da los 44 px y el `:focus-visible` es global. */}
+      {w?.leadContact && w.minLeadMinutes != null && (
+        <section className={s.leadContact} aria-labelledby={leadTitleId} data-lead-contact="">
+          <h3 id={leadTitleId} className={s.leadContactTitle}>
+            ¿Necesitás un turno antes?
+          </h3>
+          <p className={s.leadContactText}>
+            Por el turnero se reserva con al menos {formatLeadTime(w.minLeadMinutes)} de anticipación.{" "}
+            {w.leadContact.name} puede tener lugar antes: escribile o llamá para coordinar.
+          </p>
+          <div className={s.leadContactActions}>
+            <a
+              href={w.leadContact.waUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              // claim-ok: lib/public-booking-types.ts:192 (link wa.me al celular que cargó el profesional; no es envío automático)
+              aria-label={`Escribir a ${w.leadContact.name} por WhatsApp (se abre en otra pestaña)`}
+              className={buttonClassName({ variant: "primary", size: "md" })}
+            >
+              {/* // claim-ok: lib/public-booking-types.ts:192 */}
+              WhatsApp
+            </a>
+            {/* ZB-4: el texto visible «Llamar» solo no dice a quién; el aria-label lo nombra, como el de WhatsApp. */}
+            <a
+              href={w.leadContact.telUrl}
+              aria-label={`Llamar a ${w.leadContact.name}`}
+              className={buttonClassName({ variant: "ghost", size: "md" })}
+            >
+              Llamar
+            </a>
+          </div>
+        </section>
       )}
       {p.notice && (
         <p className={s.windowNotice} role="status">

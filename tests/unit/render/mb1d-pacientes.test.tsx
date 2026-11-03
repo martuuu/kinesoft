@@ -170,7 +170,7 @@ describe("[MB-1d] directorio a 390", () => {
   it("la celda del checkbox no lleva `display` inline (la card < 768 la esconde por clase)", () => {
     const html = wrap(
       <BulkSelectProvider>
-        <PatientsList rows={[row()]} archived={false} />
+        <PatientsList rows={[row()]} archived={false} practitionerNames={{}} />
       </BulkSelectProvider>,
     );
     const cell = /<span class="[^"]*cellCheck[^"]*"([^>]*)>/.exec(html);
@@ -191,7 +191,7 @@ describe("[MB-1d] directorio a 390", () => {
   });
 
   it("búsqueda sticky < 768, debajo de la barra móvil (sticky en 8 px + 56 de alto)", () => {
-    const html = wrap(<PatientsSearchBar filter="all" totals={{ all: 3, withProgram: 1, withoutProgram: 2 }} />);
+    const html = wrap(<PatientsSearchBar />);
     expect(html).toMatch(/class="[^"]*searchBar/);
     const r = rule(mobileBlocks(DIR_CSS), ".searchBar");
     expect(r).toMatch(/position:\s*sticky/);

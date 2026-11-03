@@ -12,7 +12,7 @@ import { useTenantModules } from "./tenant-modules-context";
 import { TenantSwitcher } from "./tenant-switcher";
 import { TopbarAccountMenu } from "./topbar-account-menu";
 import { openCommandPalette, preloadCommandPalette } from "./command-palette-launcher";
-import { activeNavHref, CONFIG_HREF, PLATFORM_HREF, shellNavItems, useCapSet } from "./sidebar";
+import { activeNavHref, CONFIG_HREF, PLATFORM_HREF, shellNavItems, useCapSet, useOnlinePayments } from "./sidebar";
 
 /**
  * EV0 (EV-S): misma fuente que el sidebar (`navFor` de `lib/nav.ts` vía
@@ -47,14 +47,15 @@ export function TopBar({
   const search = useSearchParams();
   const { list: modules, has } = useTenantModules();
   const capSet = useCapSet(caps);
+  const onlinePayments = useOnlinePayments();
   const links = useMemo(() => {
-    const items = shellNavItems(modules, capSet).map((it) => ({
+    const items = shellNavItems(modules, capSet, onlinePayments).map((it) => ({
       href: it.href,
       label: it.href === CONFIG_HREF ? "Config" : it.label,
     }));
     if (isPlatformAdmin) items.push({ href: PLATFORM_HREF, label: "Plataforma" });
     return items;
-  }, [modules, capSet, isPlatformAdmin]);
+  }, [modules, capSet, onlinePayments, isPlatformAdmin]);
   const active = activeNavHref(
     links.map((it) => it.href),
     pathname,

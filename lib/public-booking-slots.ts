@@ -11,7 +11,7 @@
  *   • `publicDaySlots` (lista + submit) = `workingRanges` (franjas del
  *     profesional, excepción del día, bloqueos RESTADOS: un bloqueo es duro
  *     para el público, decisión 1) + `buildSlots` (paso `PublicOffer.stepMin`, AS-D9 desde T3, anclado a cada
- *     franja, anticipación PS > consultorio > 60 desde CF, tope `maxLeadDays`, cupo
+ *     franja, anticipación PS > profesional (CF2) > consultorio > 60, tope `maxLeadDays`, cupo
  *     profesional + servicio con `isHoldingCapacity`/`overlapBlocks`, §5.18; desde CF también
  *     `otro-servicio` duro si el profesional no atiende servicios distintos a la vez);
  *   • solo servicios habilitados y PUBLIC para ese profesional
@@ -178,7 +178,8 @@ export type PublicOffer = {
   durationMin: number;
   /** null = ilimitado (override + null también). */
   cap: number | null;
-  /** CF (decisión 6, CF-D8): `effectivePublicMinLead(PS, consultorio)` = PS > consultorio > 60 (0 es un valor). */
+  /** CF (decisión 6, CF-D8) + CF2 (D-CF2-8): `effectivePublicMinLead(PS, consultorio, profesional)` = PS > profesional
+   *  > consultorio > 60 (0 es un valor). */
   minLeadMinutes: number;
   /** null = sin tope. */
   maxLeadDays: number | null;
@@ -228,8 +229,14 @@ export function resolvePublicOffer(
     durationMin: eff.durationMin,
     cap: eff.cap,
     // Antes `rule?.minLeadMinutes ?? 60`: sin la anticipación del consultorio. `effectivePublicMinLead` es la única
-    // que decide la precedencia (PS en 0 = «sin anticipación», no cae al consultorio).
-    minLeadMinutes: effectivePublicMinLead(rule?.minLeadMinutes, input.publicMinLeadMinutes),
+    // que decide la precedencia (PS en 0 = «sin anticipación», no cae al consultorio). CF2 (D-CF2-8): la del
+    // profesional viene cruda del loader (`practitionerMinLead`); un input sin el mapa = sin la del profesional (los
+    // oráculos de antes de M21 dan lo mismo).
+    minLeadMinutes: effectivePublicMinLead(
+      rule?.minLeadMinutes,
+      input.publicMinLeadMinutes,
+      input.practitionerMinLead?.[practitionerId]
+    ),
     maxLeadDays: rule?.maxLeadDays ?? null,
     stepMin: rules?.publicStepMin ?? publicSlotStepFor(eff.durationMin),
     exclusiveService: rules?.exclusiveService === true,
@@ -443,6 +450,53 @@ export function publicSlotWindow(
     // pinta el wizard solo si es > 60'). Las salidas vacías de antes de resolver la oferta no la llevan.
     minLeadMinutes: offer.minLeadMinutes,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CF2 (D-CF2-10): ¿hay lugar libre DENTRO de la anticipación?
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Hasta dónde se mira dentro de la anticipación (48 h): «necesitás un turno antes» es para hoy o mañana; con una
+ *  anticipación de semanas, mostrar el teléfono por un hueco de dentro de 10 días es invitar a saltear el turnero. */
+export const LEAD_CONTACT_SCAN_MAX_MINUTES = 2880;
+/** Piso: un hueco a menos de 30' no es coordinable (el paciente no llega) y con anticipación ≤ 30' no hay nada entre
+ *  el piso y lo que el turnero ya ofrece, así que no se muestra el contacto. */
+export const LEAD_CONTACT_MIN_AHEAD_MINUTES = 30;
+
+/**
+ * ¿El profesional tiene algún horario LIBRE que el turnero no deja reservar por la anticipación? = algún slot
+ * `available` de la MISMA oferta pero con anticipación 0, que arranque en [now + 30', now + min(anticipación, 48 h)).
+ *
+ *   • Misma grilla que el turnero (`slotResultsForOffer`): cupo, otro servicio (duro), tope por intervalo, bloqueos,
+ *     sede, paso y `maxLeadDays` del servicio. Solo cambia la anticipación, así «hay lugar» quiere decir lo mismo que
+ *     en la ventana: un hueco que el paciente reservaría si no fuera por la anticipación.
+ *   • Fin abierto: un slot en exactamente now + anticipación ya se reserva online (`buildSlots` corta en «antes de»).
+ *   • Días AR de `now` al del fin (a lo sumo 3 con 48 h): `dayKeyOf` va por `lib/datetime-ar.ts`, así que a las
+ *     23:30 AR (02:30 UTC del día siguiente) mira el día AR de hoy y el de mañana, no el de UTC.
+ *   • Solo booleano: los horarios nunca salen de acá (D-CF2-10: el contacto no es una vía para ver la agenda).
+ *
+ * El caller (`listPublicSlotWindow`) tiene que pasar un input que cubra hoy..hoy+2 (la ventana que arranca hoy carga 6
+ * semanas). Servicio no ofrecido online / profesional sin franjas → false. Puro.
+ */
+export function publicLeadWindowHasFree(
+  input: AvailabilityInput,
+  q: { practitionerId: string; serviceId: string; locationId?: string | null; now: Date }
+): boolean {
+  const offer = resolvePublicOffer(input, q.practitionerId, q.serviceId);
+  if (!offer || offer.minLeadMinutes <= LEAD_CONTACT_MIN_AHEAD_MINUTES) return false;
+  const nowMs = q.now.getTime();
+  const fromMs = nowMs + LEAD_CONTACT_MIN_AHEAD_MINUTES * 60_000;
+  const toMs = nowMs + Math.min(offer.minLeadMinutes, LEAD_CONTACT_SCAN_MAX_MINUTES) * 60_000;
+  const open: PublicOffer = { ...offer, minLeadMinutes: 0 };
+  // `toMs - 1`: un fin justo a medianoche AR no suma un día entero que el fin abierto ya excluye.
+  for (const dayKey of dayKeyRange(dayKeyOf(q.now), dayKeyOf(new Date(toMs - 1)))) {
+    for (const s of slotResultsForOffer(input, open, dayKey, q.locationId ?? null, q.now)) {
+      if (!s.available) continue;
+      const t = Date.parse(s.iso);
+      if (t >= fromMs && t < toMs) return true;
+    }
+  }
+  return false;
 }
 
 type AcrossQuery = { serviceId: string; practitionerIds: ReadonlyArray<string>; insurerId?: string | null };

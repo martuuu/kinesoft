@@ -276,7 +276,7 @@ test("whatsapp 6: BAJA desde el simulador → «Editar paciente» dice «Se dio 
   await page.getByRole("button", { name: "Editar", exact: true }).click();
   const drawer = page.getByRole("dialog", { name: "Editar paciente" });
   await expect(drawer).toBeVisible();
-  await expect(drawer.locator('[data-wa-consent-row="REVOKED"]')).toContainText(/Se dio de baja por WhatsApp el \d{2}\/\d{2}/);
+  await expect(drawer.locator('[data-wa-consent-row="REVOKED"]')).toContainText(/Se dio de baja por WhatsApp el \d{1,2}\/\d{1,2}/); // la app muestra «2/11»: día y mes sin cero
   const db = ownerClient();
   try {
     const p = await db.patient.findUniqueOrThrow({ where: { id: patientId }, select: { waConsent: true, waConsentSource: true } });

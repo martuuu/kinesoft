@@ -269,6 +269,13 @@ export type AgendaViewPrefs = {
    * eligió (nunca `false` en el blob): así las prefs de quien nunca tocó el zoom quedan iguales que antes de T3.
    */
   zoomSet?: true;
+  /**
+   * CF2 (brief §A.1): profesionales que el usuario eligió ver en la agenda (chips / `?pros=`), en orden. Ausente =
+   * nunca eligió (la agenda decide por rol: el profesional de un consultorio multi ve la suya); `[]` = eligió
+   * «Todos». No va en `DEFAULT_AGENDA_VIEW_PREFS` (como `zoomSet`): las prefs de quien nunca tocó los chips quedan
+   * iguales que antes de CF2. Preferencia de pantalla, no FK: la agenda la cruza con los profesionales visibles.
+   */
+  selectedPractitionerIds?: string[];
 };
 
 export const DEFAULT_AGENDA_VIEW_PREFS: AgendaViewPrefs = {

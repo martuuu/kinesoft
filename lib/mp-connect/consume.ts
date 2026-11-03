@@ -8,6 +8,7 @@ import { logger } from "@/lib/logger";
 import { isHoldingCapacity } from "@/lib/booking-capacity";
 import { afterBookingsCommitted } from "@/lib/booking-events-internal";
 import { notifyTenantOwners } from "@/lib/notifications-internal";
+import { notifyPractitionerOfOnlineBooking } from "@/lib/booking-pro-notify-internal";
 import { applyOnlineChargeToBookingInTx } from "@/lib/booking-copago-internal";
 import { findAccountByWebhookRef } from "@/lib/mp-connect/accounts-internal";
 import { mpExpirePreference, withAccountToken, type MpAccountRef } from "@/lib/mp-connect/account-client";
@@ -39,8 +40,9 @@ import {
  *   4. Tx: `Booking FOR UPDATE` → `OnlineCharge FOR UPDATE` (mismo orden que el cobro a mano; el trigger de la seña
  *      escribe Booking con ese lock ya tomado) → idempotencia por (id, estado, reintegrado) en los intentos → monto ±5
  *      centavos → `nextChargeStatus` → comprobante (`receiptColumnsFrom`) → efecto sobre el turno por el escritor único.
- *   5. Después del commit (nunca adentro: un rollback no puede dejar un aviso de algo que no quedó escrito):
- *      `afterBookingsCommitted`, avisos, y al pasar a PAID vencer la preferencia (evita un segundo pago).
+ *   5. Después del commit (nunca adentro: un rollback no puede dejar un aviso de algo que no quedó escrito): la
+ *      campana (`notifyTenantOwners`), `afterBookingsCommitted`, el aviso al profesional si el pago confirmó un turno
+ *      del turnero, y al pasar a PAID vencer la preferencia (evita un segundo pago).
  */
 
 type ConsumeResult = { ok: boolean; status: number; result: "applied" | "replay" | "ignored" | "mismatch" };
@@ -149,6 +151,8 @@ type TxOutcome =
       /** Aprobado de OTRO pago sobre un cobro ya PAID, o sobre un turno ya cobrado. */
       duplicate: boolean;
       bookingWritten: boolean;
+      /** El pago aplicó el efecto `confirm` (PENDING del turnero → CONFIRMED): el turno online recién quedó reservado. */
+      bookingConfirmed: boolean;
       notice: Notice | null;
       charge: { practitionerId: string; patientId: string; createdByUserId: string | null; preferenceId: string | null };
       booking: { id: string; practitionerId: string; scheduledFor: Date; roomId: string | null } | null;
@@ -301,6 +305,7 @@ export async function consumeConnectWebhook(o: {
 
     // ── Efecto sobre el turno (escritor único) ──
     let bookingWritten = false;
+    let bookingConfirmed = false;
     const bookingWasPaid = bk?.paymentStatus === "PAID";
     if (bk && transition) {
       // ¿El copago del turno lo pagó ESTE cobro? Solo entonces su reintegro devuelve el turno a REFUNDED: si lo cobró
@@ -326,6 +331,7 @@ export async function consumeConnectWebhook(o: {
       for (const effect of effects) {
         const r = await applyOnlineChargeToBookingInTx(tx, { tenantId, bookingId: bk.id, effect, copagoBasisCents: c.copagoBasisCents });
         bookingWritten ||= r.written;
+        if (effect === "confirm" && r.written) bookingConfirmed = true;
       }
       // La seña la suma el trigger `online_charge_sync_booking` (mueve `onlineDepositCents` y `updatedAt`).
       if (c.kind === "DEPOSIT" && (from === "PAID" || to === "PAID")) bookingWritten = true;
@@ -380,6 +386,7 @@ export async function consumeConnectWebhook(o: {
       amountMismatch,
       duplicate,
       bookingWritten,
+      bookingConfirmed,
       notice,
       charge: { practitionerId: c.practitionerId, patientId: c.patientId, createdByUserId: c.createdByUserId, preferenceId: c.preferenceId },
       booking: bk ? { id: bk.id, practitionerId: bk.practitionerId, scheduledFor: bk.scheduledFor, roomId: bk.roomId } : null,
@@ -387,6 +394,22 @@ export async function consumeConnectWebhook(o: {
   });
 
   if (outcome.kind === "replay") return { ok: true, status: 200, result: "replay" };
+
+  // CF2 (brief T.C «Orden»): la campana ANTES del evento realtime. El cliente refresca la campana cuando le llega el
+  // evento del turno; con el orden de antes (realtime → notificación) el refresco no encontraba la fila todavía y el
+  // aviso del pago aparecía recién en el próximo refresco. Mismo bug y mismo arreglo que en `submitPublicBooking`.
+  if (outcome.notice) {
+    await notifyTenantOwners({
+      tenantId,
+      kind: NotificationKind.PAYMENT_RECEIVED,
+      title: outcome.notice.title,
+      body: outcome.notice.body,
+      link: `/pacientes/${outcome.charge.patientId}`,
+      alsoPractitionerId: outcome.charge.practitionerId,
+      alsoAgendaOperators: true,
+      alsoUserId: outcome.charge.createdByUserId ?? undefined,
+    });
+  }
 
   // SV/§25.2 hallazgo 6: la agenda se entera por realtime + `updatedAt`. Solo si se escribió el turno.
   if (outcome.bookingWritten && outcome.booking) {
@@ -401,21 +424,10 @@ export async function consumeConnectWebhook(o: {
     ]);
   }
 
-  if (outcome.notice) {
-    await notifyTenantOwners({
-      tenantId,
-      kind: NotificationKind.PAYMENT_RECEIVED,
-      title: outcome.notice.title,
-      body: outcome.notice.body,
-      link: `/pacientes/${outcome.charge.patientId}`,
-      alsoPractitionerId: outcome.charge.practitionerId,
-      alsoAgendaOperators: true,
-      alsoUserId: outcome.charge.createdByUserId ?? undefined,
-    });
-  }
-
   // Al pasar a PAID se vence la preferencia: un segundo pago del mismo link/checkout sería plata a reintegrar. Best
   // effort y DESPUÉS del commit: si MP falla, el cobro ya quedó PAID y un segundo pago igual se registra como duplicado.
+  // CF2-ZF3 (ZA-3): ANTES del aviso al profesional. Ese aviso espera hasta 3 s (mail + push) y, con el orden de antes,
+  // durante ese rato el link seguía cobrable; vencer primero achica la ventana del doble pago a la latencia de MP.
   if (outcome.to === "PAID" && outcome.from !== "PAID" && outcome.charge.preferenceId) {
     try {
       const r = await mpExpirePreference(account, outcome.charge.preferenceId);
@@ -423,6 +435,15 @@ export async function consumeConnectWebhook(o: {
     } catch (err) {
       logger.warn("mp_connect.webhook.expire_failed", { chargeId, error: err instanceof Error ? err.name : "unknown" });
     }
+  }
+
+  // CF2 (D-CF2-11): un REQUIRED no avisa al profesional al reservarse (queda PENDING hasta el pago); lo avisa ESTE
+  // webhook cuando el pago lo confirma. Solo con el efecto `confirm` escrito en esta transición: el replay corta antes
+  // (idempotencia) y un pago sobre un turno ya confirmado (link, duplicado, reintegro) no es un turno nuevo. Sin hint:
+  // el notificador lee las preferencias de la base. Se ESPERA (nunca tira, tope de 3 s): Vercel corta las promesas
+  // sueltas al responder, y la latencia acá la paga MP, no el paciente.
+  if (outcome.bookingConfirmed && outcome.booking) {
+    await notifyPractitionerOfOnlineBooking(tenantId, outcome.booking.id);
   }
 
   if (outcome.amountMismatch) {

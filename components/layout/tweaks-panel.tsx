@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 import { useTweaks, type Palette, type WaitingCue } from "./tweaks-context";
 import { useTenantModules } from "./tenant-modules-context";
 import { IconX } from "@/components/ui/icons";
@@ -195,8 +195,12 @@ export function TweaksPanel({ canReception = false }: { canReception?: boolean }
       </Section>
 
       <Section label="Vista semanal de la agenda">
+        {/* [CF2-WS] D-CF2-6: la pref solo controla la tira de Día, Lista y Recepción; en Semana el encabezado siempre
+            está. ZB-8: mismo nombre que en Configuración («Tira de días») y el hint dice dónde aparece; Recepción
+            solo se nombra a quien la tiene (el resto del panel ya la oculta con `showReception`). */}
         <Toggle
-          label="Encabezado de días"
+          label="Tira de días"
+          hint={showReception ? "Arriba de Día, Lista y Recepción." : "Arriba de Día y Lista."}
           value={agenda.agendaShowWeekHeader}
           onChange={(v) => setAgenda("agendaShowWeekHeader", v)}
         />
@@ -386,13 +390,17 @@ function Radio<T extends string>({
 
 function Toggle({
   label,
+  hint,
   value,
   onChange,
 }: {
   label: string;
+  /** ZB-8: aclaración corta bajo el rótulo (el switch la anuncia con `aria-describedby`). */
+  hint?: string;
   value: boolean;
   onChange: (v: boolean) => void;
 }) {
+  const hintId = useId();
   return (
     <label
       style={{
@@ -405,12 +413,22 @@ function Toggle({
         cursor: "pointer",
       }}
     >
-      {label}
+      {hint ? (
+        <span style={{ display: "grid", gap: 2 }}>
+          {label}
+          <span id={hintId} style={{ fontSize: 11, lineHeight: 1.35, color: "var(--navy-500)" }}>
+            {hint}
+          </span>
+        </span>
+      ) : (
+        label
+      )}
       <button
         type="button"
         role="switch"
         aria-checked={value}
         aria-label={label}
+        aria-describedby={hint ? hintId : undefined}
         onClick={() => onChange(!value)}
         style={{
           width: 36,

@@ -490,3 +490,68 @@ describe("[AS-2g] zoomSet", () => {
     expect(mergeAgendaViewPrefs(set, AgendaViewPrefsPatchSchema.parse({ density: "compact" })).zoomSet).toBe(true);
   });
 });
+
+// [CF2-AP] CF2 (brief §A.1): la selección de profesionales de la agenda se guarda por usuario en el blob. Ausente =
+// nunca eligió (la agenda decide por rol); `[]` = eligió «Todos» y tiene que sobrevivir el round-trip, porque si se
+// confunde con «ausente» a un profesional de consultorio multi que eligió Todos le vuelve a abrir solo su agenda.
+describe("[CF2-AP] selectedPractitionerIds", () => {
+  it("[CF2-AP1] round-trip: patch → merge → sanitize conserva la selección en orden", () => {
+    const merged = mergeAgendaViewPrefs(
+      DEFAULT_AGENDA_VIEW_PREFS,
+      AgendaViewPrefsPatchSchema.parse({ selectedPractitionerIds: ["p2", "p1"] })
+    );
+    expect(merged.selectedPractitionerIds).toEqual(["p2", "p1"]);
+    // Lo que se escribe en la fila es `merged`; al releerla vuelve igual.
+    expect(sanitizeAgendaViewPrefs(JSON.parse(JSON.stringify(merged)))).toEqual(merged);
+    // Otro patch (favoritos, zoom) no la borra.
+    const other = mergeAgendaViewPrefs(merged, AgendaViewPrefsPatchSchema.parse({ density: "compact" }));
+    expect(other.selectedPractitionerIds).toEqual(["p2", "p1"]);
+  });
+
+  it("[CF2-AP2] `[]` (= eligió Todos) se conserva y es distinto de ausente", () => {
+    expect(sanitizeAgendaViewPrefs({ selectedPractitionerIds: [] })).toEqual({
+      ...DEFAULT_AGENDA_VIEW_PREFS,
+      selectedPractitionerIds: [],
+    });
+    const merged = mergeAgendaViewPrefs(
+      { ...DEFAULT_AGENDA_VIEW_PREFS, selectedPractitionerIds: ["p1"] },
+      AgendaViewPrefsPatchSchema.parse({ selectedPractitionerIds: [] })
+    );
+    expect(merged).toHaveProperty("selectedPractitionerIds", []);
+  });
+
+  it("[CF2-AP3] lectura: basura → se descarta (ausente), ids sucios se limpian", () => {
+    for (const v of [null, "p1", 5, { a: 1 }, true, [5, null, ""], ["   "]]) {
+      expect(sanitizeAgendaViewPrefs({ selectedPractitionerIds: v }), JSON.stringify(v)).not.toHaveProperty(
+        "selectedPractitionerIds"
+      );
+    }
+    expect(sanitizeAgendaViewPrefs({ selectedPractitionerIds: ["p1", 7, " p2 ", "p1", ""] }).selectedPractitionerIds).toEqual([
+      "p1",
+      "p2",
+    ]);
+    // Blob sin la clave (todos los anteriores a CF2) y `{}`: iguales que antes.
+    expect(sanitizeAgendaViewPrefs({})).toEqual(DEFAULT_AGENDA_VIEW_PREFS);
+    expect(DEFAULT_AGENDA_VIEW_PREFS).not.toHaveProperty("selectedPractitionerIds");
+  });
+
+  it("[CF2-AP4] tope: lectura recorta a AGENDA_MAX_FAVORITES; escritura rechaza más", () => {
+    const many = Array.from({ length: AGENDA_MAX_FAVORITES + 5 }, (_, i) => `p${i}`);
+    expect(sanitizeAgendaViewPrefs({ selectedPractitionerIds: many }).selectedPractitionerIds).toHaveLength(
+      AGENDA_MAX_FAVORITES
+    );
+    expect(AgendaViewPrefsPatchSchema.safeParse({ selectedPractitionerIds: many }).success).toBe(false);
+    expect(
+      AgendaViewPrefsPatchSchema.safeParse({ selectedPractitionerIds: many.slice(0, AGENDA_MAX_FAVORITES) }).success
+    ).toBe(true);
+  });
+
+  it("[CF2-AP5] escritura estricta: no-array, null e ids inválidos se rechazan; duplicados se colapsan", () => {
+    for (const bad of [null, "p1", [""], [5], ["x".repeat(65)], { 0: "p1" }]) {
+      expect(AgendaViewPrefsPatchSchema.safeParse({ selectedPractitionerIds: bad }).success, JSON.stringify(bad)).toBe(false);
+    }
+    expect(AgendaViewPrefsPatchSchema.parse({ selectedPractitionerIds: ["p1", "p2", "p1"] })).toEqual({
+      selectedPractitionerIds: ["p1", "p2"],
+    });
+  });
+});

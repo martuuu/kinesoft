@@ -3,6 +3,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { fmtHour, roomNameOf, type BookingDTO } from "@/components/agenda/agenda-utils";
 import { formatARS } from "@/lib/format";
+import { deskOwedCents } from "@/lib/copago-owed";
 import { DUR, EASE_OUT } from "@/lib/motion";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { fmtMinutes, waitText } from "@/lib/reception-view-state";
@@ -28,7 +29,7 @@ import {
 import type { SalaLive } from "@/components/sala/sala-live-types";
 import { DESK_COMPACT_MAX, DESK_STACK_MAX } from "./desk-css";
 import { DeskStrip } from "./desk-strip";
-import { DeskMenu, DeskPrimaryAction, DeskStateTag } from "./desk-actions";
+import { DeskCopagoTag, DeskMenu, DeskPrimaryAction, DeskStateTag } from "./desk-actions";
 import { FoldButton } from "@/components/sala/sala-fold";
 
 /**
@@ -281,6 +282,12 @@ export function deskRowSig(e: DeskEntry, v: RowView): string {
     r.obraSocial ?? "",
     r.copagoCents,
     r.paymentStatus ?? "",
+    // [CF2-SD] lo que lee el tag de cobro (`copagoTag`/`cardMoneyBadge`): sin esto, cambiar el medio o entrar una
+    // seña dejaba el tag viejo hasta el próximo cambio de estado.
+    r.copagoPaymentMethod ?? "",
+    r.onlineDepositCents ?? "",
+    r.paidOnline ? "po" : "",
+    r.publicReservation ? "pr" : "",
     r.practitionerId,
     e.state,
     e.waitingMinutes ?? "",
@@ -369,7 +376,10 @@ const DeskListRow = memo(
         </td>
         <td className="c-room">{room ?? <span aria-hidden="true">—</span>}</td>
         <td className="c-state">
-          <DeskStateTag entry={e} />
+          <span className="dl-state">
+            <DeskStateTag entry={e} />
+            <DeskCopagoTag row={b} />
+          </span>
         </td>
         <td className="c-wait">
           <span className="dl-wait desk-mono" data-late={late ? "true" : undefined} title={late ? "Ya pasó la hora del turno" : undefined}>
@@ -558,8 +568,8 @@ function CashCard({ entries, pro, viewer }: { entries: ReadonlyArray<DeskEntry>;
               </div>
             </div>
             <span className="desk-acts">
-              <span className="dl-amount desk-mono">{formatARS(b.copagoCents)}</span>
-              <DeskPrimaryAction entry={e} />
+              <span className="dl-amount desk-mono">{formatARS(deskOwedCents(b))}</span>
+              <DeskPrimaryAction entry={e} cash />
             </span>
           </li>
         );
@@ -683,8 +693,8 @@ const LIST_STACK = `
 .dl-day .dl-chips { order: 3; flex: 1 1 100%; }
 .dl-card[data-collapsed=true] .dl-scroll, .dl-card[data-collapsed=true] .dl-chips { display: none; }
 .dl-card[data-collapsed=true] .dl-card-h { border-bottom: 0; }
-.dl-row:not(:has([data-primary], [data-kind=pay], .desk-paid)) .c-state { grid-column: 2; }
-.dl-row:not(:has([data-primary], [data-kind=pay], .desk-paid)) .c-act { grid-column: 3; grid-row: 2; }
+.dl-row:not(:has([data-primary], [data-kind=pay])) .c-state { grid-column: 2; }
+.dl-row:not(:has([data-primary], [data-kind=pay])) .c-act { grid-column: 3; grid-row: 2; }
 `;
 
 export const DESK_LIST_CSS = `
@@ -714,6 +724,7 @@ export const DESK_LIST_CSS = `
 .dl-row:hover td { background: var(--bg-panel); }
 .dl-row[data-past=true] td { color: var(--navy-500); }
 .dl-row[data-past=true] .dl-name { color: var(--navy-700); font-weight: 550; }
+.dl-state { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; max-width: 100%; min-width: 0; }
 .dl-table .c-time { width: 64px; padding-left: 14px; }
 .dl-table .c-svc { width: 18%; }
 .dl-table .c-pro { width: 44px; }

@@ -7,25 +7,29 @@
 
 ---
 
-## Estado y orden vigente (30-oct-2026) — **manda sobre todo lo de abajo**
+## Estado y orden vigente (02-nov-2026) — **manda sobre todo lo de abajo**
 
 > Prod se reseteó el 29/30-oct ([RESET-PROD.md](RESET-PROD.md)): `db:prod:deploy` aplicó desde cero las 47 del repo
 > (hasta **M19**) y desde ahí prod tiene **un cliente vivo**. Esta sección y las «Mxx en prod» son la referencia técnica
 > de cada migración; [PUSH-DIA.md](PUSH-DIA.md) fue la guía del push de T3..PV.
 
-- **Prod: 47 migraciones** (hasta M19 `20261027120000_support_tickets`). **Local: 48.**
-- **Pendiente en prod: 1**, **M20** `20261030120000_cf_agenda_rules` (tanda CF). Aditiva y compatible con el código que
-  hoy corre en prod: va **antes del push**. Paso a paso en «M20 en prod».
+- **Prod: 47 migraciones** (hasta M19 `20261027120000_support_tickets`) mientras M20 no se aplique. **Local: 49.**
+- **Pendientes en prod: 2**, en este orden: **M20** `20261030120000_cf_agenda_rules` (tanda CF; si ya se aplicó, queda
+  solo M21) y **M21** `20261102120000_cf2_profesional_caja` (tanda CF2). Las dos aditivas y compatibles con el código que
+  hoy corre en prod: van **antes del push**. Paso a paso en «M20 en prod» y «M21 en prod»; un solo `db:prod:deploy`
+  aplica las dos en orden de timestamp.
 - **Sin staging y, desde el reset, sin reset** (hay datos reales): **precheck de solo lectura → backup →
   `db:prod:deploy` → postcheck → push**. Lo corre Martin; el agente verifica la salida que él pega.
 - **Prechecks y postchecks automatizados:** `KINESOFT_CONFIRM_PROD=<ref> npm run db:prod:precheck -- --pre` y
   `… -- --post` (`scripts/prod-precheck.ts`, lógica en `scripts/lib/prod-precheck-core.ts`, una tx READ ONLY, tabla
   PASS/WARN/FAIL sin secretos, exit 1 si hay FAIL). Desde CF el `--pre` **exige M12..M19 presentes** (aplicadas con su
-  checksum y con sus objetos: `pre.state.Mxx` + `pre.Mxx.present`; una pendiente o con otro checksum es FAIL), que la
-  única pendiente sea M20 (`pre.migrations.pending`) y corre `pre.M20.absent` y `pre.M20.crossService`; además los
-  locks y tx largas sobre Tenant/Practitioner (las que altera M20), la Data API, los buckets, `pg_dump` local vs.
-  server y el rol. El `--post` re-verifica M12..M20 objeto por objeto, los md5 de las 5 funciones y el checksum de cada
-  migración contra el sha256 del repo. `--booking-relfilenode` ya no hace falta (M20 no toca Booking).
+  checksum y con sus objetos: `pre.state.Mxx` + `pre.Mxx.present`; una pendiente o con otro checksum es FAIL), que las
+  pendientes sean solo M20 y/o M21 (`pre.migrations.pending`) y corre `pre.M20.absent`, `pre.M20.crossService`,
+  `pre.M21.absent`, `pre.M21.bookingTx` y `pre.M21.bookingCount` (las de una ya aplicada se saltean); además los locks
+  y tx largas sobre Tenant/Practitioner (las que alteran M20 y M21), la Data API, los buckets, `pg_dump` local vs.
+  server y el rol. El `--post` re-verifica M12..M21 objeto por objeto, los md5 de las 6 funciones y el checksum de cada
+  migración contra el sha256 del repo. `--booking-relfilenode` es opcional (M21 crea 2 índices en Booking, que no
+  reescriben la tabla).
 - **`pg_dump` ≥ el server:** el del PATH de Martin es 14.18; antes del `--pre` y del backup,
   `export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"` (el `--pre` marca FAIL `pre.pgdump.version` si no).
 - **Histórico:** el «go-live con reset» del 07-oct (nunca se hizo), las secciones de M3a/M4/M5 que dependían de él, el
@@ -71,7 +75,8 @@ El deploy sale con `WHATSAPP_MODE`, `SAAS_BILLING_MODE`, `MP_CONNECT_MODE` y `DI
 | `20261024120000_whatsapp_messaging` (**M15**) | MIG (X0, las tres en un commit) | **commiteada (`b019d7c`, sin push), aplicada solo en el Docker local (22-oct)**. sha256 de `migration.sql` = `e8637727af84b64b38c303be5dc0d762006baa402fdcd989bace81674471cf0d`. Aditiva, sin backfill (WA-D17), `lock_timeout` 5 s; los 2 `ADD VALUE` de `NotificationKind` van **fuera** de la tx. Objetos: 10 enums `WhatsApp*`; `WhatsAppAccount`/`Template`/`Message`/`Inbound` (TENANT_READONLY) y `WhatsAppCredential` (SERVICE_ONLY); 5 parciales; FKs compuestas; 6 columnas `wa*` en `Patient` y 3 de respuesta en `Booking` (NULL sin DEFAULT) con sus CHECK. Hallazgo A de MIG: `seriesCount IS NOT NULL` explícito. En Prisma `WhatsAppAccount.credentials` es 1:n; la base garantiza 1:1 (`WhatsAppCredential_accountId_key`). Drift aceptado. ADR-029. Orden: «M15 en prod» |
 | `20261025120000_saas_mp_subscriptions` (**M16**) | MIG (X0, las tres en un commit) | **commiteada (`b019d7c`, sin push), aplicada solo en el Docker local (22-oct)**. sha256 de `migration.sql` = `b235454f0ceceef95394d752f1fe879ec2ec0baf6b7f052ae3e253e47f207798`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill (lo hace `scripts/saas-reanchor.ts` después del deploy). Objetos: 2 enums; 19 columnas + 3 CHECK + 2 parciales en `SaasSubscription` (`anchorDay` default 4, `autoDebitAllowed` default true), 4 columnas + 2 CHECK en `SaasCharge`, 3 columnas + CHECK + FK compuesta en `SaasPayment`, `SaasPayment_source_mp_check` recreado más laxo; tabla `SaasAdjustment` (TENANT_READONLY, solo inserción) con `saas_adjustment_guard()` (md5 `fd8790f4959e9f56ea743dead6bb6d2b`) y 2 triggers. Hallazgo A de MIG: `IS NOT NULL` explícito en breakdown/proration. Drift aceptado. ADR-027. Orden: «M16 en prod» |
 | `20261027120000_support_tickets` (**M19**) | TK-M (PV, ola Q0, sola) | **commiteada en `f9099b1` (PV Q0) y aplicada solo en el Docker local (27-oct), sin push**. sha256 de `migration.sql` = `7ac440677f5f80098b6245f1de70b556cc7ea9d4aeeb923b2c6eb9825803f7a2`. Aditiva, una tx, `lock_timeout` 5 s, con backfill de `source` en la misma tx (sin tocar `updatedAt`: no hay trigger). Objetos: enum `SupportTicketSource` (10 valores); `SupportThread.source` / `platformTakenAt` / `platformTakenById` (NULL sin DEFAULT) + CHECKs `SupportThread_source_check` (origen atado al kind; NULL tolerado) y `SupportThread_taken_check` (tomado ⇔ con superadmin); tabla `SupportTicketNote` (notas internas de Plataforma, **SERVICE_ONLY**: ENABLE + FORCE, 0 policies; FK RESTRICT al hilo, CHECK de body 1..2000, índice `(threadId, createdAt)`). «En curso» = OPEN + `platformTakenAt`, sin `ALTER TYPE`. Drift aceptado: CHECKs, ENABLE/FORCE. Verificada objeto por objeto (consulta al catálogo + `tests/integration/m19-support-tickets.test.ts`, 2 roles); `migrate status` al día (47); `guard:isolation` OK (SERVICE_ONLY 10). Orden: «M19 en prod» |
-| `20261030120000_cf_agenda_rules` (**M20**) | CF-M (CF, ola CF-0, sola) | **sin commit (la corrida CF no commitea), aplicada solo en el Docker local (30-oct), sin push**. sha256 de `migration.sql` = `e5d84eec9eba6f11ed6181fc0e18e34b5d220a637808906d445381207ea5b032`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill. Objetos: `Tenant.agendaSlotStepMin` / `publicSlotStepMin` / `publicMinLeadMinutes` y `Practitioner.agendaSlotStepMin` / `publicSlotStepMin` (INTEGER NULL sin DEFAULT = hereda), `Practitioner.allowParallelServices` (BOOLEAN NOT NULL DEFAULT false, solo catálogo: `atthasmissing` t, sin reescritura) + 5 CHECK con `IS NULL OR …` (`{Tenant,Practitioner}_agendaSlotStepMin_check`, `{Tenant,Practitioner}_publicSlotStepMin_check` 15/30/45/60, `Tenant_publicMinLeadMinutes_check` 0..80 640). Drift aceptado: los CHECK. Verificada objeto por objeto (catálogo + `tests/integration/m20-cf-agenda-rules.test.ts`, 2 roles); `migrate status` al día (48); `guard:isolation` OK (sin tablas nuevas). Orden: «M20 en prod» |
+| `20261030120000_cf_agenda_rules` (**M20**) | CF-M (CF, ola CF-0, sola) | **commiteada (`476bdf5`), aplicada solo en el Docker local (30-oct), sin push**. sha256 de `migration.sql` = `e5d84eec9eba6f11ed6181fc0e18e34b5d220a637808906d445381207ea5b032`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill. Objetos: `Tenant.agendaSlotStepMin` / `publicSlotStepMin` / `publicMinLeadMinutes` y `Practitioner.agendaSlotStepMin` / `publicSlotStepMin` (INTEGER NULL sin DEFAULT = hereda), `Practitioner.allowParallelServices` (BOOLEAN NOT NULL DEFAULT false, solo catálogo: `atthasmissing` t, sin reescritura) + 5 CHECK con `IS NULL OR …` (`{Tenant,Practitioner}_agendaSlotStepMin_check`, `{Tenant,Practitioner}_publicSlotStepMin_check` 15/30/45/60, `Tenant_publicMinLeadMinutes_check` 0..80 640). Drift aceptado: los CHECK. Verificada objeto por objeto (catálogo + `tests/integration/m20-cf-agenda-rules.test.ts`, 2 roles); `migrate status` al día (48); `guard:isolation` OK (sin tablas nuevas). Orden: «M20 en prod» |
+| `20261102120000_cf2_profesional_caja` (**M21**) | MIG (CF2, ola W0, sola) | **sin commit (la corrida CF2 no commitea), aplicada solo en el Docker local (02-nov), sin push**. sha256 de `migration.sql` = `48aee329bf97404613044f0ce239e1186ca88f21eae16943448091c8130e588b` (SQL literal del Anexo D del plan §29). Aditiva, una tx, `lock_timeout` 5 s, sin backfill. Objetos: 7 columnas en `Practitioner` (`publicMinLeadMinutes` INTEGER, `contactWhatsapp` TEXT, `contactConsentAt` TIMESTAMP(3), `contactConsentVersion` TEXT: NULL sin DEFAULT; `showContactInLeadWindow`, `notifyBookingEmail`, `notifyBookingPush` BOOLEAN NOT NULL DEFAULT false) + 4 CHECK; tabla `PushSubscription` (SERVICE_ONLY: ENABLE + FORCE, 0 policies; FK a `UserProfile` CASCADE; `endpoint` único; 4 CHECK); tabla `PractitionerRevenueShare` (RLS de tenant, policy `PractitionerRevenueShare_tenant_isolation`; FKs compuestas `giver/receiver_tenant_fkey` a `Practitioner(id, tenantId)` RESTRICT; 4 CHECK; único parcial `PractitionerRevenueShare_giver_open_key`; trigger `PractitionerRevenueShare_guard` → `practitioner_revenue_share_guard()` md5 `dceb9da5179967d39f6b6b0132e96f7a`); 2 índices parciales en `Booking` (`Booking_tenantId_copagoPaidAt_idx`, `Booking_tenantId_insurerPaidAt_idx`). Drift aceptado: CHECKs, parciales, trigger y RLS. Verificada objeto por objeto (catálogo + `tests/integration/m21-cf2.test.ts` `[CF2-MIG1..9]`, 2 roles; bloque «CF2 M21» de `rls-isolation.test.ts`; `--post` del precheck en verde); `migrate status` al día (49); `guard:isolation` OK (`PushSubscription` en SERVICE_ONLY). Orden: «M21 en prod» |
 
 **M6 en prod (IAM-1).** Prod conserva sus datos (decisiones del 14-oct: sin reset y sin staging), así que M6 se aplica
 sobre la base viva:
@@ -951,6 +956,92 @@ WARN. Con `KINESOFT_CONFIRM_PROD=<ref>` delante de los dos precheck y el `pg_dum
 6. Rollback: revertir el código sin tocar M20 (columnas NULL / DEFAULT false sin lector son inocuas: el código viejo
    ignora la regla). Sacar M20 = migración nueva con DROP de los CHECK y las columnas (backup del paso 2).
 
+**M21 en prod (MIG, CF2 · profesional y caja, §29.4).** ⚠️ **Migración nueva**
+(`20261102120000_cf2_profesional_caja`, tanda CF2, ola W0, sola). sha256 de `migration.sql` =
+`48aee329bf97404613044f0ce239e1186ca88f21eae16943448091c8130e588b`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill.
+Va **antes** del push: el código viejo no lee nada nuevo y su INSERT de `Practitioner` toma los DEFAULT (probado en
+`[CF2-MIG2]`). **Si M20 todavía no está en prod, va antes** con su propio paso 0 (aviso al cliente) y su WARN
+`pre.M20.crossService`: el mismo `db:prod:deploy` aplica M20 → M21 en orden; el precheck de abajo cubre las dos.
+Objetos:
+- `Practitioner` + 7 columnas: `publicMinLeadMinutes` (anticipación del turnero del profesional, NULL = hereda:
+  servicio > profesional > consultorio > 60), `contactWhatsapp`, `showContactInLeadWindow`, `contactConsentAt`,
+  `contactConsentVersion` (contacto dentro de la anticipación, opt-in con consentimiento, Ley 25.326),
+  `notifyBookingEmail`, `notifyBookingPush` (avisos de turno online, nacen apagados). 4 CHECK:
+  `Practitioner_{publicMinLeadMinutes,contactWhatsapp,contactConsentVersion,leadContact}_check`.
+- `PushSubscription` (dispositivos de push web por USUARIO, sin `tenantId`): SERVICE_ONLY (ENABLE + FORCE, cero
+  policies: `kinesoft_app` no ve nada), FK a `UserProfile` ON DELETE CASCADE, `endpoint` único, 4 CHECK
+  (`PushSubscription_{endpoint,keys,label,failureCount}_check`).
+- `PractitionerRevenueShare` (reparto de % con vigencia por instante): RLS de tenant
+  (`PractitionerRevenueShare_tenant_isolation`), FKs compuestas `PractitionerRevenueShare_{giver,receiver}_tenant_fkey`
+  → `Practitioner(id, tenantId)` RESTRICT y `PractitionerRevenueShare_tenantId_fkey` RESTRICT, 4 CHECK
+  (`_{bps,sources,not_self,period}_check`), único parcial `PractitionerRevenueShare_giver_open_key` (una vigente por
+  profesional que destina), índices `_tenantId_giver_from_idx` y `_tenantId_receiver_idx`, y el trigger
+  `PractitionerRevenueShare_guard` (función `practitioner_revenue_share_guard()`, md5
+  `dceb9da5179967d39f6b6b0132e96f7a`): solo deja cerrar una vigente; cambiar otra cosa o reabrir rebota con 23514.
+- `Booking` + 2 índices **parciales**: `Booking_tenantId_copagoPaidAt_idx` y `Booking_tenantId_insurerPaidAt_idx` (la
+  caja barre por fecha de cobro).
+Drift aceptado: CHECKs, los 3 parciales, el trigger y ENABLE/FORCE (si `migrate dev` los propone borrar, no se acepta).
+**Locks:** ACCESS EXCLUSIVE breve sobre `Practitioner` (ALTER TABLE, DEFAULT constante = solo catálogo) y **SHARE sobre
+`Booking`** mientras se construyen los 2 índices (sin CONCURRENTLY: van en la tx de la migración). SHARE espera a toda
+tx abierta que haya escrito en Booking y frena las escrituras de turnos mientras dura (con miles de filas, ms). Con una
+tx de más de 5 s encima, el `lock_timeout` corta con P3009 → `migrate resolve --rolled-back
+20261102120000_cf2_profesional_caja` y reintentar (§2.4). **En horario tranquilo** (sin atención del cliente).
+**Orden, sin saltear:** `db:prod:precheck -- --pre` → `db:prod:backup` → `db:prod:deploy` → `db:prod:precheck --
+--post` → push. Con `KINESOFT_CONFIRM_PROD=<ref>` delante de los dos precheck y el `pg_dump` ≥ 17 en el PATH
+(`export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"`).
+1. **Precheck** (`--pre`, solo lectura). Esperado: `pre.migrations.pending` PASS «2 pendientes: M20 → M21» (o «1
+   pendientes: M21» si M20 ya está); `pre.state.M12` … `pre.state.M19` y `pre.Mxx.present` PASS; `pre.state.M21` PASS
+   «pendiente»; `pre.M21.absent` PASS; `pre.M21.bookingTx` PASS «ninguna» (si da **WARN**, esperá a que esas tx
+   terminen y repetí: el deploy caería por `lock_timeout`); `pre.M21.bookingCount` PASS con el conteo (WARN si pasa
+   de 200 000 turnos: el índice tarda segundos); `pre.activity.*` PASS; `pre.repo.checksums` PASS. A mano, lo mismo:
+   ```sql
+   SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'
+     AND ((table_name = 'Practitioner' AND column_name IN ('publicMinLeadMinutes','contactWhatsapp',
+          'showContactInLeadWindow','contactConsentAt','contactConsentVersion','notifyBookingEmail','notifyBookingPush'))
+       OR table_name IN ('PushSubscription','PractitionerRevenueShare'));                         -- 0 filas
+   SELECT indexname FROM pg_indexes WHERE indexname IN ('Booking_tenantId_copagoPaidAt_idx',
+     'Booking_tenantId_insurerPaidAt_idx');                                                       -- 0 filas
+   -- tx de más de 5 s con lock sobre Booking (tienen que ser 0 al deployar)
+   SELECT l.pid, l.mode, l.granted, a.state, extract(epoch FROM now() - a.xact_start)::int AS seg
+     FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+    WHERE l.relation = to_regclass('public."Booking"') AND a.xact_start IS NOT NULL
+      AND now() - a.xact_start > interval '5 seconds';
+   SELECT count(*) FROM "Booking";                                                               -- informativo
+   ```
+2. **Backup:** `npm run db:prod:backup` (con el `pg_dump` ≥ 17 en el PATH).
+3. **Deploy de la migración:** `npm run db:prod:deploy` → `npm run db:prod:status` = «Database schema is up to date!»
+   (49).
+4. **Postcheck** (`--post`): PASS en `post.migrate.status`, `post.migrate.checksums` (M12..M21), `post.grants.app`
+   (17 tablas), `post.M21.objects`, `post.M21.columns`, `post.M21.checks` (12), `post.M21.fks` (4),
+   `post.M21.indexes` (3 parciales + `indisvalid` de los 7, incluidos los 2 de Booking), `post.M21.trigger` (+ md5),
+   `post.M21.rls` y `post.M21.optIn` («mail 0, push 0, contacto 0»). A mano:
+   ```sql
+   SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'Practitioner' AND column_name IN ('publicMinLeadMinutes',
+      'contactWhatsapp','showContactInLeadWindow','contactConsentAt','contactConsentVersion','notifyBookingEmail',
+      'notifyBookingPush');
+   -- 7 filas: los 3 boolean NO false; publicMinLeadMinutes integer, contactConsentAt timestamp, los 2 text: YES sin default
+   SELECT conname, convalidated FROM pg_constraint WHERE conname LIKE 'PushSubscription\_%\_check'
+      OR conname LIKE 'PractitionerRevenueShare\_%\_check' OR conname IN ('Practitioner_publicMinLeadMinutes_check',
+      'Practitioner_contactWhatsapp_check','Practitioner_contactConsentVersion_check','Practitioner_leadContact_check');
+   -- 12 filas, todas t
+   SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+    WHERE c.relname IN ('Booking_tenantId_copagoPaidAt_idx','Booking_tenantId_insurerPaidAt_idx',
+      'PractitionerRevenueShare_giver_open_key');                                                -- 3 filas, todas t
+   SELECT relname, relrowsecurity, relforcerowsecurity,
+          (SELECT count(*) FROM pg_policy p WHERE p.polrelid = c.oid) AS policies
+     FROM pg_class c WHERE relname IN ('PushSubscription','PractitionerRevenueShare');
+   -- PushSubscription t t 0 · PractitionerRevenueShare t t 1
+   SELECT tgname FROM pg_trigger WHERE tgrelid = '"PractitionerRevenueShare"'::regclass AND NOT tgisinternal;
+   -- PractitionerRevenueShare_guard
+   SELECT checksum FROM _prisma_migrations WHERE migration_name = '20261102120000_cf2_profesional_caja';  -- el sha256 de arriba
+   ```
+5. **Push** (Martin). Las claves VAPID del push web van en Vercel antes ([EXTERNAL-CONFIG §0.17](EXTERNAL-CONFIG.md#push-cf2); sin ellas el push queda apagado y
+   el resto anda). Después, QA «CF2» de [QA.md](QA.md).
+6. Rollback: revertir el código sin tocar M21 (columnas con DEFAULT false / NULL, tablas sin lector e índices son
+   inocuos para el código viejo). Sacar M21 = migración nueva con DROP del trigger y su función, las 2 tablas, los
+   índices de Booking, los CHECK y las columnas (backup del paso 2).
+
 **Deploy de BO** (código de `0d058bb`..`c60014f`, después de M7). Las variables nuevas nacen en su default seguro, así
 que el deploy no cambia el comportamiento de nadie salvo lo que se describe abajo.
 1. **Antes del deploy (solo lectura):**
@@ -1158,9 +1249,10 @@ de abajo (el `--pre` del precheck lo confirma contra `_prisma_migrations`):
 | 31 | `20261025120000_saas_mp_subscriptions` | M16: suscripción con débito / MP / transferencia (`anchorDay` default 4, bajada y baja programadas, preapproval pendiente), desglose del cargo, `SaasAdjustment` solo inserción con guard, `SaasPayment_source_mp_check` más laxo | MIG (T6) — **ver «M16 en prod»** · ✅ en prod (reset 29/30-oct) |
 | 32 | `20261027120000_support_tickets` | M19: tickets de soporte en /plataforma: origen del ticket (`SupportThread.source`, enum `SupportTicketSource`, backfill TENANT → TENANT_SUPPORT / LEAD → LANDING), «Tomar» (`platformTakenAt/ById`), notas internas `SupportTicketNote` (SERVICE_ONLY) | TK-M (PV) — **ver «M19 en prod»** · ✅ en prod (reset 29/30-oct) |
 | 33 | `20261030120000_cf_agenda_rules` | M20: reglas de agenda del feedback del cliente: `Practitioner.allowParallelServices` (default false, sin backfill: otro servicio pisado bloquea), paso del selector del staff y del turnero por consultorio y por profesional (`agendaSlotStepMin` / `publicSlotStepMin`), anticipación del turnero por consultorio (`Tenant.publicMinLeadMinutes`); 5 CHECK | CF-M (CF) — **ver «M20 en prod»** · ⏳ pendiente en prod |
+| 34 | `20261102120000_cf2_profesional_caja` | M21: CF2 profesional y caja: anticipación y contacto del profesional en el turnero (`Practitioner.publicMinLeadMinutes`, `contactWhatsapp` + consentimiento + `showContactInLeadWindow`), avisos de turno online (`notifyBookingEmail/Push`), dispositivos de push web (`PushSubscription`, SERVICE_ONLY), reparto de % entre profesionales (`PractitionerRevenueShare` con trigger de solo cierre), 2 índices parciales de caja en `Booking` | MIG (CF2) — **ver «M21 en prod»** · ⏳ pendiente en prod |
 
 **#1-#32 están aplicadas en prod** desde el reset del 29/30-oct (más las 15 de base de [DEPLOYMENT.md](DEPLOYMENT.md):
-47 en total); **#33 (M20) es la pendiente**. Local: 48 (`migrate status` al día).
+47 en total); **#33 (M20) y #34 (M21) son las pendientes**, en ese orden. Local: 49 (`migrate status` al día).
 
 ⚠️ La #7 además crea políticas RLS (`ENABLE`/`FORCE` + `SELECT` en las dos tablas nuevas).
 ⚠️ La #3 falla si ya existieran dos turnos activos del **mismo paciente en el mismo instante**

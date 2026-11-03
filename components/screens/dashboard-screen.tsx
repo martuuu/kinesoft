@@ -30,6 +30,7 @@ import { SessionsChart } from "@/components/dashboard/sessions-chart";
 import { RecentPatients } from "@/components/dashboard/recent-patients";
 import { PinKpiButton } from "@/components/dashboard/pin-kpi-button";
 import { RevenueCard } from "@/components/dashboard/revenue-card";
+import { CashTodayCard } from "@/components/dashboard/cash-today-card";
 import { KPI_STAGGER_MS, dashboardKpis, type KpiIcon, type KpiView } from "@/components/dashboard/kpi-view";
 import styles from "@/components/dashboard/dashboard.module.css";
 import { ProfileMenu, SettingsModalLazy, preloadSettingsModal } from "@/components/global/profile-menu";
@@ -138,6 +139,9 @@ export function DashboardScreen({
             className={styles.oRevenue}
           />
         )}
+        {/* CF2 (D-CF2-17): la Secretaria no tiene widget de Ingresos; en su slot va «Cobrado hoy» (scope `desk` de la
+            caja). `cashToday` es null para cualquier otro rol (`loadDashboard`), así que nunca se ven los dos. */}
+        {data.cashToday && <CashTodayCard summary={data.cashToday} className={styles.oRevenue} />}
       </aside>
     </div>
   );
@@ -331,8 +335,8 @@ function HeroReminder({
         </h2>
         <p className={styles.heroText}>Revisá su evolución y dejá programada el alta o la continuidad.</p>
         <div className={styles.heroActions}>
-          <ButtonLink href="/pacientes?filter=active" variant="ghost" className={styles.heroPrimary}>
-            Revisar pacientes <IconArrow size={14} />
+          <ButtonLink href="/planes" variant="ghost" className={styles.heroPrimary}>
+            Revisar planes <IconArrow size={14} />
           </ButtonLink>
           <button
             type="button"

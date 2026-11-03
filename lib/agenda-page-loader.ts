@@ -34,6 +34,13 @@ import "server-only";
  * Seguridad: `where: { tenantId }` a mano en cada query (en prod la conexión es BYPASSRLS). Las capabilities se
  * resuelven del Actor (sin query): sin `agenda.viewAll` no hay sedes (antes `listLocations` tiraba y la página
  * caía a `[]`); sin el módulo `salas`, sin catálogo de salas (como `listRoomOptions`).
+ *
+ * CF2 (§29 D-CF2-7, brief A.4/A.5) — vista Mes (`?view=month`, la página pasa `monthRange` = `monthGridRange`): las
+ * tx 1 y 3 NO corren (un mes de filas de turnos eran ~600 kB para pintar un número por celda) y en su lugar va UNA tx
+ * con el resumen (`loadAgendaMonthSummaryInTx`, la misma de `getAgendaMonthSummary`): ≤ 2 tx en total con el
+ * bootstrap. `bookings` = [] y `availability` = null; el cliente del Mes pinta `month`. Sin `monthRange`, la Semana
+ * corre EXACTAMENTE como antes (mismas sentencias, mismo payload; `month` = null). Lo fija
+ * `tests/integration/cf2-agenda-month-loader.test.ts`.
  */
 import type { DbClient } from "@/lib/rls";
 import { runWithRls } from "@/lib/rls";
@@ -58,6 +65,9 @@ import type { DayKey } from "@/lib/availability/types";
 import { agendaRowToDTO, encodeAgendaWire, type AgendaWireBooking } from "@/lib/agenda-wire";
 import { logger } from "@/lib/logger";
 import { tenantWhatsAppActiveFor } from "@/lib/whatsapp/active-internal";
+import type { AgendaMonthSummary } from "@/lib/agenda-month-types";
+import { AgendaMonthQuery } from "@/lib/agenda-month-schemas";
+import { loadAgendaMonthSummaryInTx } from "@/lib/agenda-month-internal";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -123,7 +133,16 @@ export type AgendaPageData = AgendaBootstrap & {
    * respondió. Con el modo `off`: false sin ninguna query.
    */
   whatsapp: boolean;
+  /**
+   * CF2 (brief A.4): resumen de la vista Mes (conteos y candado por día y profesional), solo si la página pidió el mes
+   * (`monthRange`) y el viewer tiene `agenda.viewAll` (la misma puerta que `getAgendaMonthSummary`). En Semana, Día,
+   * Lista y Recepción: null.
+   */
+  month: AgendaMonthSummary | null;
 };
+
+/** CF2: rango de la grilla del Mes (`monthGridRange(dayKey)` → `{ from, to }`: lunes a domingo, ≤ 42 días). */
+export type AgendaMonthRange = { from: DayKey; to: DayKey };
 
 /**
  * Lecturas del bootstrap sobre una tx ya abierta. Cada una replica el `where`/orden del lector de antes
@@ -232,10 +251,12 @@ export async function agendaWhatsAppFor(tenantId: string, mode?: WhatsappMode): 
  */
 export async function loadAgendaPage(
   actor: Actor,
-  args: { monday: DayKey; patientId?: string | null }
+  args: { monday: DayKey; patientId?: string | null; monthRange?: AgendaMonthRange | null }
 ): Promise<AgendaPageData> {
   const { monday } = args;
   const sunday = addDays(monday, 6);
+  // CF2: en Mes no se leen los turnos ni la disponibilidad de la semana (ver la cabecera).
+  const isMonth = args.monthRange != null;
 
   // Capabilities del Actor: sin query (la membresía viene en la foto del Actor, PL-1e).
   const capsP = capabilitiesForActor(actor).catch((e) => {
@@ -244,7 +265,9 @@ export async function loadAgendaPage(
   });
   // tx 1. Proyección liviana (B4.1): todos los profesionales y sedes de la semana; los chips y la sede filtran en el
   // cliente.
-  const bookingsP = listAgendaBookings({ from: dayWindow(monday).start, to: dayWindow(sunday).end });
+  const bookingsP = isMonth
+    ? Promise.resolve([] as Awaited<ReturnType<typeof listAgendaBookings>>)
+    : listAgendaBookings({ from: dayWindow(monday).start, to: dayWindow(sunday).end });
   const prefsP = getUserPreferences()
     .then((p) => p.agendaView)
     .catch((e) => {
@@ -258,6 +281,7 @@ export async function loadAgendaPage(
   // tx 3. La disponibilidad depende de la sede guardada: arranca apenas están las prefs y las sedes, en paralelo
   // con los turnos. Sede guardada que ya no existe (archivada) → todas.
   const availabilityP = Promise.all([prefsP, bootP]).then(async ([prefs, boot]) => {
+    if (isMonth) return null;
     const locationId = boot.locations.some((l) => l.id === prefs.locationId) ? prefs.locationId : null;
     try {
       const res = await getAgendaAvailability({ from: monday, to: sunday, locationId });
@@ -272,16 +296,41 @@ export async function loadAgendaPage(
     }
   });
 
+  // CF2, tx 2 del Mes (en lugar de la 1 y la 3). Misma sede que la disponibilidad (la guardada, si sigue existiendo;
+  // si no, todas). En su PROPIA tx y no al final del bootstrap: una sentencia que falla en sedes/salas deja esa tx
+  // abortada y el resumen fallaría con ella. Falla SUELTA, como la disponibilidad: el Mes muestra el estado vacío y el
+  // resto de la página (chips, sedes, catálogo) sigue. El rango se valida con el MISMO zod que la action (lunes,
+  // ≤ 42 días): la página lo arma con `monthGridRange`, pero sin tope un rango mal armado pediría años de turnos.
+  const monthP: Promise<AgendaMonthSummary | null> = !isMonth
+    ? Promise.resolve(null)
+    : Promise.all([prefsP, bootP, capsP]).then(async ([prefs, boot, caps]) => {
+        if (!caps.has("agenda.viewAll")) return null;
+        const locationId = boot.locations.some((l) => l.id === prefs.locationId) ? prefs.locationId : null;
+        const parsed = AgendaMonthQuery.safeParse({ ...args.monthRange, locationId });
+        if (!parsed.success) {
+          logger.warn("agenda.bootstrap.monthRange_invalid", { from: args.monthRange?.from, to: args.monthRange?.to });
+          return null;
+        }
+        const q = { from: parsed.data.from, to: parsed.data.to, locationId: parsed.data.locationId ?? null };
+        try {
+          return await runWithRls(actor.tenantId, (tx) => loadAgendaMonthSummaryInTx(tx, actor, q));
+        } catch (e) {
+          logger.warn("agenda.bootstrap.getAgendaMonthSummary_failed", { err: errMsg(e) });
+          return null;
+        }
+      });
+
   // WA-U2: cuenta de WhatsApp cacheada, fuera de toda tx (ver `agendaWhatsAppFor`).
   const whatsappP = agendaWhatsAppFor(actor.tenantId);
 
-  const [rows, boot, agendaView, caps, availability, whatsapp] = await Promise.all([
+  const [rows, boot, agendaView, caps, availability, whatsapp, month] = await Promise.all([
     bookingsP,
     bootP,
     prefsP,
     capsP,
     availabilityP,
     whatsappP,
+    monthP,
   ]);
   return {
     ...boot,
@@ -297,5 +346,6 @@ export async function loadAgendaPage(
     availability,
     onlineMoney: agendaOnlineMoneyFor(caps, actor),
     whatsapp,
+    month,
   };
 }

@@ -179,7 +179,17 @@ export type PublicSlotWindow = {
   reachedEnd: boolean;
   skippedFrom: string | null /* si avanzó solo: desde qué día no había libres */;
   minLeadMinutes?: number;
+  /** CF2 (D-CF2-10): contacto del profesional cuando HOY hay lugar libre dentro de la anticipación (que el turnero no
+   *  deja reservar). Clave OMITIDA si no corresponde (no `undefined`): la ventana de siempre queda byte a byte igual. */
+  leadContact?: PublicLeadContact;
 };
+
+/**
+ * CF2 (D-CF2-10): lo que el wizard necesita para «¿Necesitás un turno antes?». Solo links ya armados
+ * (`buildLeadContact`, `lib/public-lead-contact.ts`) y el nombre: nunca horarios (el paciente coordina con el
+ * profesional) ni el número suelto en otra clave.
+ */
+export type PublicLeadContact = { name: string; waUrl: string; telUrl: string };
 export type ListPublicSlotWindowInput = { tenantSlug: string; practitionerId: string; serviceId: string; from?: string /* YYYY-MM-DD; default hoy AR */; locationId?: string };
 
 /** Validación server de `ListPublicSlotWindowInput` (viene de un anónimo). Mismos topes que `ListPublicSlotsSchema`. */

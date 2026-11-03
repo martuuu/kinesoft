@@ -87,14 +87,21 @@ export function parseTenantAgendaRules(input: {
   if (!agenda.ok) return { ...agenda, field: "agendaSlotStepMin" };
   const pub = parseSlotStep(input.publicSlotStepMin, "public");
   if (!pub.ok) return { ...pub, field: "publicSlotStepMin" };
-  let lead: number | null = null;
-  if (!isEmpty(input.publicMinLeadMinutes)) {
-    lead = toNonNegativeInt(input.publicMinLeadMinutes);
-    if (lead == null || lead > PUBLIC_MIN_LEAD_MAX_MINUTES) {
-      return { ok: false, error: AGENDA_RULES_COPY.minLead, field: "publicMinLeadMinutes" };
-    }
-  }
-  return { ok: true, data: { agendaSlotStepMin: agenda.value, publicSlotStepMin: pub.value, publicMinLeadMinutes: lead } };
+  const lead = parsePublicMinLead(input.publicMinLeadMinutes);
+  if (!lead.ok) return { ...lead, field: "publicMinLeadMinutes" };
+  return { ok: true, data: { agendaSlotStepMin: agenda.value, publicSlotStepMin: pub.value, publicMinLeadMinutes: lead.value } };
+}
+
+/**
+ * Anticipación mínima del turnero (consultorio o, CF2 D-CF2-8, profesional): vacío = NULL = hereda; si no, entero
+ * 0..`PUBLIC_MIN_LEAD_MAX_MINUTES` (CHECK de M20 / M21). Extraído tal cual de `parseTenantAgendaRules` para que el
+ * setter del profesional (`setPractitionerPublicLead`, CF2 T-S3) valide con el MISMO criterio y copy.
+ */
+export function parsePublicMinLead(v: unknown): { ok: true; value: number | null } | { ok: false; error: string } {
+  if (isEmpty(v)) return { ok: true, value: null };
+  const lead = toNonNegativeInt(v);
+  if (lead == null || lead > PUBLIC_MIN_LEAD_MAX_MINUTES) return { ok: false, error: AGENDA_RULES_COPY.minLead };
+  return { ok: true, value: lead };
 }
 
 /** Lo que se guarda en `Practitioner` (las columnas de M20 del profesional). */

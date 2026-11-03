@@ -32,6 +32,10 @@ vi.mock("@/lib/authz", () => authz);
 vi.mock("@/lib/session", () => ({ getActor: vi.fn(async () => ({ tenantId: "t1", userId: "u1", support: null })) }));
 vi.mock("@/lib/bookings", () => ({ listPractitioners: vi.fn(async () => []) }));
 vi.mock("@/lib/whatsapp-patient-ui-internal", () => ({ tenantWhatsAppActive: vi.fn(async () => false) }));
+// CF2: nombres de la columna de profesionales (lectura cacheada; se mockea como el resto de las lecturas de la página).
+vi.mock("@/lib/practitioner-names-internal", () => ({
+  listPractitionerNames: vi.fn(async () => [{ id: "pr-ana", name: "Ana López", status: "active" }]),
+}));
 
 import PacientesPage from "@/app/(app)/pacientes/page";
 import { PatientsPageIndicator, PatientsPagination, pageRangeLabel } from "@/components/patients/patients-pagination";
@@ -179,7 +183,7 @@ describe("[HD-10] /pacientes: la página no viaja al cambiar filtro u orden", ()
     data.listPatients.mockResolvedValue({
       rows: [row({ id: "p51" }), row({ id: "p52", lastName: "Pérez" })],
       total: 1234,
-      totals: { all: 1234, withProgram: 200, withoutProgram: 1034 },
+      totals: { all: 1234 },
       page: 2,
       pageCount: 25,
     });
@@ -191,9 +195,9 @@ describe("[HD-10] /pacientes: la página no viaja al cambiar filtro u orden", ()
     const html = await renderPage(SP);
     expect(data.listPatients).toHaveBeenCalledWith(expect.objectContaining({ page: 2, insurerKey: "os_1" }));
     expect(html).toContain("Mostrando 51–100 de 1.234");
-    // h1 y pills con separador de miles AR (antes «1234»).
+    // h1 con separador de miles AR (antes «1234»). CF2 (decisión 3): sin pills «Todos / Con plan / Sin plan».
     expect(html).toMatch(/>1\.234<\/span> pacientes/);
-    expect(html).toContain("Todos · 1.234");
+    expect(html).not.toContain("Todos · ");
     const nav = html.slice(html.indexOf('aria-label="Paginación"'));
     const pag = hrefs(nav);
     expect(pag).toHaveLength(2);
@@ -208,7 +212,7 @@ describe("[HD-10] /pacientes: la página no viaja al cambiar filtro u orden", ()
     expect(pag.map((h) => new URL(h, "http://x").searchParams.get("page"))).toEqual([null, "3"]);
   });
 
-  it("orden, archivados, pills, `?os=` y filtros avanzados no arrastran `page`", async () => {
+  it("orden, archivados, `?os=` y filtros avanzados no arrastran `page`", async () => {
     const html = await renderPage(SP);
     const nav = html.indexOf('aria-label="Paginación"');
     // PV ZF2 (M6): el indicador de arriba SÍ lleva `page` (es paginación); se saca de lo que «no arrastra page».
@@ -216,8 +220,8 @@ describe("[HD-10] /pacientes: la página no viaja al cambiar filtro u orden", ()
     expect(top).not.toBe("");
     expect(hrefs(top).map((h) => new URL(h, "http://x").searchParams.get("page"))).toEqual([null, "3"]);
     const outside = hrefs(html.slice(0, nav).replace(top, "")).filter((h) => h.startsWith("/pacientes?"));
-    // 5 órdenes + archivados + 3 pills.
-    expect(outside.length).toBeGreaterThanOrEqual(9);
+    // 5 órdenes + archivados (CF2: las 3 pills salieron).
+    expect(outside.length).toBeGreaterThanOrEqual(6);
     for (const h of outside) expect(new URL(h, "http://x").searchParams.has("page")).toBe(false);
     // Los forms GET (obra social y avanzados) mandan sus hidden: ninguno es `page`.
     expect(html).not.toMatch(/type="hidden" name="page"/);
@@ -233,11 +237,47 @@ describe("[HD-10] /pacientes: la página no viaja al cambiar filtro u orden", ()
     data.listPatients.mockResolvedValue({
       rows: [row()],
       total: 1,
-      totals: { all: 1, withProgram: 0, withoutProgram: 1 },
+      totals: { all: 1 },
       page: 1,
       pageCount: 1,
     });
     const html = await renderPage({});
     expect(html).not.toContain('aria-label="Paginación"');
+  });
+});
+
+describe("[CF2-U1] /pacientes: columnas y filtros de CF2 en la página real", () => {
+  beforeEach(() => {
+    authz.getTenantModules.mockResolvedValue(KINE);
+    data.listPatients.mockReset();
+    data.listPatients.mockResolvedValue({
+      rows: [row({ id: "p1", assignedPractitionerId: "pr-ana", practitionerIds: ["pr-ana"], activity: "active" })],
+      total: 1,
+      totals: { all: 1 },
+      page: 1,
+      pageCount: 1,
+    });
+  });
+
+  it("[CF2-U1-15] encabezado sin «Plan activo» y la celda con el nombre que arma la página", async () => {
+    authz.getCapabilities.mockResolvedValue(new Set(["clinical.read"]));
+    const html = await renderPage({});
+    expect(html).not.toContain("Plan activo");
+    expect(html).toContain(">Nombre y apellido<");
+    expect(html).toContain(">Kinesiólogo<");
+    expect(html).toContain('title="Ana López (a cargo)"');
+  });
+
+  it("[CF2-U1-16] sin clinical.read: «Último diagnóstico» no se ofrece y un `?diagnosisSlug=` de URL no llega al server", async () => {
+    authz.getCapabilities.mockResolvedValue(new Set(["patients.read"]));
+    const html = await renderPage({ diagnosisSlug: "lumbalgia", ageMin: "20" });
+    expect(data.listPatients).toHaveBeenCalledWith(expect.objectContaining({ diagnosisSlug: undefined }));
+    expect(html).not.toContain("Último diagnóstico");
+  });
+
+  it("[CF2-U1-17] `?filter=active` de un link viejo se lee como «todos»", async () => {
+    authz.getCapabilities.mockResolvedValue(new Set(["clinical.read"]));
+    await renderPage({ filter: "active" });
+    expect(data.listPatients).toHaveBeenCalledWith(expect.objectContaining({ filter: "all" }));
   });
 });

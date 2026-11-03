@@ -31,6 +31,7 @@ export const SUPPORT_WRITABLE_FILES: ReadonlySet<string> = new Set([
   "lib/rooms.ts",
   "lib/practitioner-schedule.ts",
   "lib/practitioner-public.ts",
+  "lib/practitioner-self-settings.ts", // CF2 T-S3: solo la anticipación (el contacto y los avisos son personales)
 ]);
 
 export const SUPPORT_WRITABLE_ACTIONS: ReadonlySet<string> = new Set([
@@ -62,6 +63,7 @@ export const SUPPORT_WRITABLE_ACTIONS: ReadonlySet<string> = new Set([
   "lib/practitioner-schedule.ts#setPractitionerBookingCap", // T3e-2c: tope por intervalo del profesional (Horarios)
   "lib/practitioner-schedule.ts#setPractitionerAgendaRules", // CF-A: reglas de agenda del profesional (servicios a la vez, pasos)
   "lib/practitioner-public.ts#setPractitionerPublicBooking",
+  "lib/practitioner-self-settings.ts#setPractitionerPublicLead", // CF2 D-CF2-8: anticipación del turnero del profesional (Horarios)
   // Datos del consultorio, horario del consultorio y turnero (handoff a BO2-D)
   "lib/tenant-settings.ts#setBusinessHours",
   "lib/tenant-settings.ts#setTenantBookingCap", // T3e-2c: tope por intervalo del consultorio

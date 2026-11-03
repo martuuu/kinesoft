@@ -57,6 +57,7 @@ import {
 import { DeskStrip, pulseBadge } from "@/components/sala/desk/desk-strip";
 import {
   DeskActionsProvider,
+  DeskCopagoTag,
   DeskMenu,
   DeskPrimaryAction,
   DeskStateTag,
@@ -135,6 +136,8 @@ function renderRows(viewer: DeskViewer, over: Partial<DeskActionsApi> = {}) {
       {live.entries.map((e) => (
         <div key={e.row.id} data-row={e.row.id}>
           <DeskStateTag entry={e} />
+          {/* [CF2-SD] el «Pagado · medio» pasó de la primaria a este tag, junto al estado. */}
+          <DeskCopagoTag row={e.row} />
           <DeskPrimaryAction entry={e} />
           <DeskMenu entry={e} />
         </div>

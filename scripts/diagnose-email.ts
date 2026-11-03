@@ -81,6 +81,8 @@ import {
   leadReplyEmail,
 } from "../lib/email/templates-support";
 import { paymentLinkEmail } from "../lib/email/templates-payments";
+import { bookingCreatedProEmail } from "../lib/email/templates-bookings";
+import { bookingAgendaUrl, bookingWhenAR, patientShortName } from "../lib/booking-pro-notify-logic";
 
 const TENANT = "Consultorio de prueba";
 
@@ -201,6 +203,17 @@ function samples(base: string): Record<DiagnosableKind, () => RenderedEmail> {
         amountCents: 2_000_000,
         url: link("/pagar/diagnosticoDePrueba012"),
         expiresAt: inAWeek,
+      }),
+    // CF2 (D-CF2-11): aviso al profesional por un turno online. Paciente inventado y turno dentro de una semana; el link
+    // es el mismo que arma el envío real (`bookingAgendaUrl` del día AR del turno).
+    booking_created_pro: () =>
+      bookingCreatedProEmail({
+        tenantName: TENANT,
+        patientShort: patientShortName("Juan", "Prueba"),
+        scheduledFor: inAWeek,
+        durationMin: 45,
+        locationName: "Sede Centro",
+        url: link(bookingAgendaUrl(bookingWhenAR(inAWeek).dayKey)),
       }),
   };
 }

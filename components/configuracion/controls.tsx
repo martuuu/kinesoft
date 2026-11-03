@@ -18,6 +18,7 @@ export type Tab =
   | "usuarios"
   | "plan"
   | "facturacion"
+  | "mi-agenda"
   | "mis-fichas"
   | "mercado-pago"
   | "soporte"
@@ -45,6 +46,8 @@ export const CONFIG_TABS: readonly Tab[] = [
   "plan",
   // PL-3a (PL-D21): `?tab=facturacion` es el link de los mails de cobro (cargo nuevo, vencido, comprobante revisado).
   "facturacion",
+  // CF2 (T.C): `?tab=mi-agenda` = «Configuración › Mi agenda», adonde manda el pie del mail «Nuevo turno online».
+  "mi-agenda",
   // FC-3i: `?tab=mis-fichas` (firma, matrícula y carpeta de respaldo de cada profesional).
   "mis-fichas",
   // TP-3a: `?tab=mercado-pago` = vuelta del callback (cuenta propia) y link de la campana «Reconectá tu Mercado Pago».
@@ -73,6 +76,10 @@ export function parseConfigTab(raw: string | string[] | null | undefined): Tab {
  *  - `fichas` (FC-3i, FC-UI-D3): «Mis fichas» = todo miembro CLÍNICO (atiende y tiene `Practitioner`: honorífico,
  *    matrícula, firma, carpeta de respaldo y diagnósticos propios). Es personal: no depende de «Configuración», así
  *    que un Profesional sin delegaciones la ve (junto con Soporte). Opcional; ausente = no se ve.
+ *  - `miAgenda` (CF2, T.C): «Mi agenda» = el mismo gate que `fichas` (el loader manda sus datos en null a la
+ *    Secretaria, a Facturación y al soporte): switch propio del turnero, anticipación, contacto y avisos. Sin módulo:
+ *    un consultorio General o con el turnero apagado también la ve (los avisos y la anticipación quedan listos).
+ *    Opcional; ausente = no se ve.
  *  - `canExport`: Exportar datos (BO5-C: solo el titular, o el de un consultorio suspendido).
  *  - `directory` (DIR-3c, C-DIR9): Directorio = `tenant.sensitive` con `DIRECTORY_MODE` ≠ off (lo decide el loader: la
  *    pestaña existe si llegaron sus datos). Opcional: sin él (tests viejos, `legacyConfigAccess`) no se ve.
@@ -95,6 +102,7 @@ export type ConfigTabAccess = {
   directory?: boolean;
   sensitive?: boolean;
   fichas?: boolean;
+  miAgenda?: boolean;
   onlinePayments?: boolean;
   myMp?: boolean;
   whatsapp?: boolean;
@@ -142,6 +150,8 @@ const TAB_DEFS: readonly TabDef[] = [
   { key: "usuarios", label: "Usuarios", visible: (a) => a.team && !!a.sensitive },
   { key: "plan", label: "Plan y uso", visible: (a) => a.billing },
   { key: "facturacion", label: "Facturación", visible: (a) => a.billing },
+  // CF2 (T.C): lo personal del turnero y los avisos, primera de las personales (antes de «Mis fichas»).
+  { key: "mi-agenda", label: "Mi agenda", visible: (a) => !!a.miAgenda },
   // FC-3i: lo personal de las fichas, antes de Soporte (para un Profesional sin delegaciones es la pestaña inicial).
   { key: "mis-fichas", label: "Mis fichas", module: "evoluciones", visible: (a) => !!a.fichas },
   // TP-3a (TP-UI-D2): la cuenta propia de Mercado Pago, personal como «Mis fichas».

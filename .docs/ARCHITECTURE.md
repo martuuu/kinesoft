@@ -2125,8 +2125,8 @@ de **inicio**, así que 09:30 + 60' y 10:00 + 60' no la comparten y nada seriali
   (CF-D7). No es `agendaSlotMinutes` (alto de fila de la grilla, solo visual). La hora manual exacta ya existía: se hizo
   visible («¿Otro horario?» en el selector).
 - **Anticipación del turnero por consultorio** (decisión 6; `Tenant.publicMinLeadMinutes`, 0..80 640 = 8 semanas):
-  `effectivePublicMinLead` (`agenda-rules.ts:57`) = `PractitionerService.minLeadMinutes` > consultorio > 60 (0 es un
-  valor). UI en horas/días/semanas (`lib/lead-time.ts`). El tope del servicio pasó de 30 días a 8 semanas. Con
+  `effectivePublicMinLead` (`agenda-rules.ts:64`) = `PractitionerService.minLeadMinutes` > **profesional** (enmienda
+  CF2, M21) > consultorio > 60 (0 es un valor). UI en horas/días/semanas (`lib/lead-time.ts`). El tope del servicio pasó de 30 días a 8 semanas. Con
   anticipación larga el turnero recarga la ventana desde el primer día posible; el texto «al menos N de anticipación»
   solo si es > 60' (CF-D9).
 - **Setters** `setTenantAgendaRules` (`lib/tenant-settings.ts:241`, `requireTenantAdmin`) y `setPractitionerAgendaRules`
@@ -2183,6 +2183,141 @@ que no tenía guard.
 | `lib/realtime-token-action.ts` · `scripts/check-server-actions.mjs` | Fix del realtime y su guard |
 | `components/ui/coming-soon.tsx` | «Próximamente» (Diagnóstico) |
 | `app/favicon.ico` | Favicon con el sello C (íconos versionados `?v=2`) |
+
+## CF2 (02-nov-2026): feedback de los clientes, 2.ª ronda
+
+Plan §29 (brief `wip-20/brief-cf2.md`; olas W0..W6, INT y Z). **En `develop`, sin commitear y sin push.** Una migración:
+**M21** `20261102120000_cf2_profesional_caja`, aditiva y **antes** del deploy ([RUNBOOK «M21 en prod»](MIGRACIONES-RUNBOOK.md));
+si M20 todavía no está en prod, va antes. Hallazgos en [AUDIT «Ronda CF2»](AUDIT.md#ronda-cf2).
+
+### ADR-033 — Caja y reparto entre profesionales (status: ACCEPTED, CF2, 02-nov-2026)
+
+**Contexto.** La Secretaria cobra con medio de pago, pero no había un «Cobrado hoy» por profesional en ningún lado, y
+los consultorios con un kine que le pasa un % a otro (el titular, en general) lo calculaban a mano. Martin (decisión 4,
+§29.1): el reparto es **completo, incluida la OS, configurable por regla** (cada profesional elige sobre cuáles de las 3
+fuentes destina) y **con historial**: un cambio nunca altera lo ya cobrado.
+
+**Decisión** (D-CF2-16..19):
+- **Tabla `PractitionerRevenueShare`** (M21): `giver → receiver`, `shareBps` 1..10 000, `applies{Manual,Online,Insurer}`
+  (al menos una), vigencia `[effectiveFrom, effectiveTo)` **por instante** (sin fechas retroactivas). FKs compuestas a
+  `Practitioner(id, tenantId)`, RLS de tenant, único parcial «una vigente por profesional que destina». **Trigger de solo
+  cierre** (`practitioner_revenue_share_guard`): lo único que se puede actualizar es `effectiveTo` NULL → valor (+
+  `closedById`); cambiar otra cosa o reabrir da 23514. Cambiar una regla = cerrar la vigente en `now` e insertar otra
+  desde `now`, bajo el advisory lock `kinesoft:rshare:<tenant>` (`lib/revenue-share-internal.ts:36`, orden de locks
+  Tenant → reparto) y CAS con `expectedOpenId`. Sin cadenas ni ciclos en v1: quien destina no recibe y viceversa
+  (`validateShareGraph`, `lib/revenue-share-logic.ts:75`); recibe solo un profesional reservable del consultorio. Solo el
+  conflicto del trigger o del único es «Cambió mientras lo editabas»; otro CHECK es error de validación (ZF3, ZA-8,
+  `isRevenueShareConflict` `:199`).
+- **Cálculo al leer, no al cobrar.** No se guarda «lo que le tocó» a nadie: `collectedGroupsInTx`
+  (`lib/caja-internal.ts:77`) es **una** sentencia, CTE `UNION ALL` de las 4 fuentes (MP legado `Payment`,
+  `OnlineCharge` PAID por `approvedAt` al profesional de la carga, copago manual neto de seña por `copagoPaidAt`, OS por
+  `insurerPaidAt` × arancel) + `LEFT JOIN LATERAL` a la regla del profesional vigente **al instante del cobro**
+  (`effectiveFrom ≤ at < COALESCE(effectiveTo, ∞)`), agrupado por día AR (`at − 3 h`). Así la vigencia por instante
+  alcanza para que cambiar una regla a las 15:00 deje el cobro de las 10:00 con la vieja. El reparto lo liquida el puro
+  `settleRevenueShares` (`lib/caja-logic.ts:263`): half-up **por grupo** (profesional × fuente × día × regla),
+  Σ neto = Σ bruto al centavo.
+- **Paridad con Ingresos.** Los predicados de cada fuente son literalmente los de `revenueAmountsInTx`
+  (`lib/dashboard.ts`), que **no se toca**: Σ grupos = el widget de Ingresos, tenant y por profesional
+  (`[CF2-PS2-2]`). Si se cambia un predicado en uno, se cambia en el otro. Consecuencia aceptada: un reintegro reescribe
+  días ya cerrados de la caja, igual que en Ingresos (ZA-7). Reasignar un turno mueve el copago manual y la OS al
+  profesional **actual** del turno; lo online queda en el de la carga (inmutable).
+- **Arancel de OS resuelto al leer (D-CF2-19 = P11):** cobertura vigente de id mayor × `Insurer` del tenant. Si cambia el
+  arancel, cambia lo histórico de OS; congelarlo queda para otra tanda.
+- **Scopes de caja** (`cajaScopeFor`, `lib/caja-logic.ts:50`; aparte de `revenueScopeFor`, que no cambia):
+  `tenant` (`billing.manage`: día y mes, cualquier fecha, 3 fuentes) · `desk` (`billing.collect` sin manage, la
+  Secretaria: solo hoy, copagos + online, **sin OS**: la rama de OS ni se evalúa) · `own` (`billing.collectOwn` +
+  `clinical.read`: su fila y lo que recibe, día y mes; la SQL trae de quien le destina solo los grupos que lo tienen de
+  receptor y `projectCajaForScope` deja únicamente su fila, así que el bruto ajeno nunca sale del server) · `none`
+  (resto y soporte → `/dashboard`). Soporte tampoco lee las reglas (ZF3, ZA-4).
+- **Superficies:** `/caja` (página server, Día/Mes por URL, sin action nueva, `moduleWall("facturacion")`), tarjeta
+  «Cobrado hoy» en el Inicio de la Secretaria dentro de la tx existente (+1 sentencia, 0 tx), nav «Caja» con
+  `navFor(modules, caps, { onlinePayments })` (se fue `shellNavCaps`, que escondía `billing.collect` con MP apagado),
+  subpestaña «Reparto» en Profesionales con `tenant.sensitive`, y la tabla entra en el export del consultorio.
+- **Cierre automático.** Suspender, quitar del equipo, pasar a un rol que no atiende, deshabilitar al bajar de plan o
+  deshabilitar al usuario desde Plataforma **cierra en `now`** las reglas vigentes donde destina o recibe, en la misma tx
+  (`closeRevenueSharesForPractitionerInTx` / `ForUserInTx`, `lib/revenue-share-internal.ts:236,297`; llamadas en
+  `lib/team-internal.ts`, `lib/saas-plan-change-internal.ts:363`, `lib/platform-users.ts:221`). Reactivar no las reabre
+  (ZF3, ZA-1).
+
+**Descartados.** Guardar el reparto al cobrar (otra fila por cobro, con 4 escritores distintos y la OS que se cobra
+después); una regla con fechas editables (reescribiría lo ya liquidado); cadenas A → B → C (v1 sin grafos); que la
+Secretaria vea el mes o la OS (SR-D5I, enmienda acotada abajo).
+
+**Consecuencias.**
+- **Enmienda acotada de SR-D5I:** la Secretaria ve «Cobrado hoy» (copagos + online, con «Destina/Recibe»); el widget de
+  Ingresos le sigue oculto y no ve OS ni el mes.
+- Perf: `/caja` 2 sentencias en una `runWithRls` + `listPractitioners()` cacheado; M21 suma los índices parciales
+  `Booking(tenantId, copagoPaidAt)` y `(tenantId, insurerPaidAt)`.
+- Abiertos: no hay aviso en el editor ni en la caja si el receptor quedó inactivo (la regla ya se cerró, pero no se
+  explica); un Profesional con `tenant.sensitive` puede crear una regla donde otro le destine el 100 % a él (permitido y
+  auditado; alternativa: exigir `billing.manage` u OWNER, decide Martin).
+
+### ADR-034 — Avisos de turno online al profesional: mail + Web Push (status: ACCEPTED, CF2, 02-nov-2026)
+
+**Contexto.** Al reservar online solo se avisaba por la campana, y la fila se escribía **después** del evento realtime:
+el cliente refrescaba la campana y no la encontraba. Martin (decisión 1): mail + push al celular/PC esta tanda,
+WhatsApp y SMS la semana que viene, cada profesional prende los que quiera.
+
+**Decisión** (D-CF2-11, -12, -20):
+- **Orden campana → realtime.** En `submitPublicBooking` (`lib/public-booking.ts:1116`) y en la promoción, y en el
+  webhook de MP (`lib/mp-connect/consume.ts:402`): primero la fila de la campana, después `afterBookingsCommitted`. En el
+  webhook, la preferencia se vence **antes** del aviso al profesional (ZF3, ZA-3: ese aviso espera hasta 3 s y el link
+  seguía cobrable).
+- **Notificador** `notifyPractitionerOfOnlineBooking` (`lib/booking-pro-notify-internal.ts`): nunca tira; tope de 3 s
+  total, y el caller lo **espera** antes de responder (Vercel corta las promesas sueltas y Next 14.2 no tiene `after()`);
+  con los dos canales apagados (default de M21) vuelve con 0 queries. Solo turnos online confirmados (al reservar, o el
+  webhook cuando el pago confirma un REQUIRED), al profesional del turno con membresía activa; exige la key `pub:`, así
+  que un turno del staff nunca avisa (D-CF2-20). Log `booking.pro_notify` solo con ids y outcomes.
+- **Sin PHI.** Mail `booking_created_pro`: «Juan P.», día, hora, duración, sede, sin servicio ni datos clínicos. Push:
+  «Nuevo turno online · lun 3/11 · 10:30 · {Consultorio}», **sin el nombre del paciente** (se ve en la pantalla
+  bloqueada).
+- **`PushSubscription` SERVICE_ONLY, sin `tenantId`** (M21): el dispositivo es del usuario, no del consultorio (un kine
+  en dos consultorios recibe los de los dos). ENABLE + FORCE sin policies; se escribe por `prismaService` con el
+  `userId` de la sesión. Hasta 10 por usuario; se borra con 404/410 o con 5 fallas seguidas (`lib/web-push-internal.ts:105`,
+  TTL 3600, urgencia high, timeout 2,5 s).
+- **VAPID solo en el server.** `WEB_PUSH_VAPID_{PUBLIC,PRIVATE}_KEY` y `_SUBJECT`, nunca `NEXT_PUBLIC_`: la pública le
+  llega al navegador desde el server. Las tres o ninguna (el boot falla con una o dos); sin ninguna, el push queda
+  apagado y el mail sigue. `web-push` se carga con `import()` solo si hay VAPID y dispositivos.
+- **Allowlist de hosts contra SSRF** (`isKnownPushServiceHost`, `lib/web-push-types.ts:62`): el endpoint tiene que ser
+  `https`, sin credenciales ni puerto, y de FCM, Mozilla, Apple o WNS. Sin eso cualquier usuario logueado podía hacer que
+  la lambda pegue a `https://10.0.0.5/…` (SSRF ciego). Un navegador con otro push service queda sin push (le llega el mail).
+- **Service worker** (`public/sw.js`): `push` siempre muestra una notificación (JSON en try/catch) y la URL solo si es
+  del mismo origen (`/x`, nunca `//host`); `notificationclick` enfoca o abre. Sin cache nueva y sin tocar `VERSION`.
+- **Cookie `ks_push_sub`** (httpOnly, declarada en `/privacidad`) = el dispositivo de este navegador. El sign-out
+  (`app/api/auth/sign-out/route.ts`, que también cubre el cierre por inactividad) borra **solo** ese dispositivo del
+  usuario de la sesión y limpia la cookie.
+- **Permiso** solo al tocar «Activar en este dispositivo» en Configuración → «Mi agenda»; en iPhone/iPad hace falta la app
+  instalada (copy propio). «Probar notificación» con rate limit `push:test:<userId>` 3 cada 5 min.
+
+**Enmienda de ADR-032 (anticipación).** `Practitioner.publicMinLeadMinutes` (M21) agrega un nivel: servicio del
+profesional > **profesional** > consultorio > 60' (`effectivePublicMinLead`, tercer argumento opcional, así las llamadas
+de dos argumentos dan lo mismo). La edita el propio profesional o quien tenga `schedule.configure`. El contacto del
+profesional dentro de la anticipación (D-CF2-9/10) es opt-in con consentimiento versionado (`cf2-lead-contact-v1`; otra
+versión no publica el número, ZF3 ZA-2), solo con lugar libre hoy entre ahora+30' y ahora+min(anticipación, 48 h), por
+action con rate limit propio y nunca en «cualquier profesional».
+
+**Descartados.** `PushSubscription` con `tenantId` (duplicaría el dispositivo por consultorio); avisar también los turnos del staff (ruido:
+la campana alcanza); el nombre del paciente en el push.
+
+**Consecuencias.**
+- Martin genera las claves VAPID una vez ([EXTERNAL-CONFIG §0.17](EXTERNAL-CONFIG.md)); **rotarlas invalida todos los
+  dispositivos** (cada profesional lo vuelve a activar). `NEXT_PUBLIC_PWA=off` desregistra el service worker y con él el
+  push.
+- WhatsApp y SMS al profesional: siguiente tanda.
+
+### Módulos nuevos de CF2
+
+| Módulo | Qué es |
+| --- | --- |
+| `lib/caja-{types,logic,internal}.ts` · `app/(app)/caja/` · `components/caja/` · `components/dashboard/cash-today-card.tsx` | Caja (ADR-033) |
+| `lib/revenue-share{,-types,-logic,-schemas,-internal}.ts` · `revenue-share-editor.tsx` | Reparto (ADR-033) |
+| `lib/booking-pro-notify-{logic,internal}.ts` · `lib/email/templates-bookings.ts` · `lib/web-push-{types,internal,actions}.ts` | Avisos (ADR-034) |
+| `lib/practitioner-self-settings{,-logic}.ts` · `lib/public-lead-contact.ts` · `mi-agenda-panel.tsx` · `lead-editor.tsx` · `push-device-card.tsx` | «Mi agenda», anticipación y contacto del profesional |
+| `lib/agenda-month{,-types,-schemas,-internal,-view-state}.ts` · `components/agenda/views/month-view.tsx` | Vista Mes (lazy con SSR, ≤12 sentencias) |
+| `lib/copago-tag.ts` · `lib/copago-owed.ts` · `components/agenda/grid/money-badge.tsx` | Tag de cobro y criterio único de «Por cobrar» (ZF1, ZB-1) |
+| `lib/sala-location-filter.ts` · `components/sala/sala-location.tsx` · `components/sala/sala-cash-drawer.tsx` | Sede y cobro en `/sala` |
+| `lib/practitioner-names-internal.ts` | Nombres de profesionales cacheados (Pacientes) |
+| `components/dashboard/notifications-panel.tsx` · `components/ui/confirm-dialog-panel.tsx` · `components/ui/icon-wallet.tsx` | Chunks diferidos para el first-load (ZF4) |
 
 ## Cache & cookies (what is implemented — updated 30-sep-2026)
 

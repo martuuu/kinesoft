@@ -1,16 +1,25 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { useTweaksOptional } from "@/components/layout/tweaks-context";
 import type { SalaWireRow, SalaPractitioner, SalaRoom, SalaViewer } from "@/lib/sala-board-state";
 import type { DeskViewer } from "@/lib/reception-desk-state";
+import type { BookingDTO } from "@/components/agenda/agenda-utils";
 import type { ReceptionLayout, SalaGroupBy } from "@/lib/preferences-constants";
 import { useSalaLive } from "./use-sala-live";
 import { useAttendedNoteToast } from "@/components/agenda/reception/use-attended-note-toast";
 import { SalaBoardSkeleton, SalaDeskSkeleton } from "./sala-skeleton";
 import { loadBoardFace, loadReceptionDesk, preloadSalaFace } from "./sala-faces";
 import { DisplaysContext } from "./displays/displays-button";
+import { SalaLocationContext, persistSalaLocation, type SalaLocationValue } from "./sala-location-context";
+import {
+  atSalaLocation,
+  salaLocationScope,
+  scopeSalaRooms,
+  scopeSalaRows,
+  type SalaLocationOption,
+} from "@/lib/sala-location-filter";
 
 /*
  * PF1.1-sala (C-PF2): solo se baja la cara elegida. Las tres van con `next/dynamic` CON SSR (el default): el HTML del
@@ -21,6 +30,8 @@ import { DisplaysContext } from "./displays/displays-button";
  * shell y no se pierden la búsqueda ni el filtro por profesional. Su cara interna (`desk-list`/`desk-flow`) es otro
  * chunk; `preloadSalaFace(layout)` lo pide junto con el shell para no encadenar dos idas a la red.
  */
+const NO_LOCATIONS: ReadonlyArray<SalaLocationOption> = [];
+
 const SalaBoardFace = dynamic(() => loadBoardFace().then((mod) => mod.SalaBoardFace), {
   loading: () => <SalaBoardSkeleton />,
 });
@@ -49,6 +60,10 @@ const ReceptionDesk = dynamic(() => loadReceptionDesk().then((mod) => mod.Recept
  * «Cargar evolución» en las tres caras (`useAttendedNoteToast`, vía
  * `onCommitted` del hook). PD-13 intacto: el toast solo usa ids, estado y el
  * nombre que ya viajan en la fila; ningún texto clínico entra a /sala.
+ *
+ * CF2 (D-CF2-5): con ≥2 sedes, `live` se recorta a la sede de `agendaPrefs.locationId` (la de la agenda) ANTES de
+ * llegar a las caras: filas, entradas del escritorio y salas. El hook sigue con el día entero (realtime, polling y
+ * optimistas no cambian, y cambiar de sede no re-pide). El selector lo montan los headers por `SalaLocationContext`.
  */
 export function SalaClient({
   dayKey,
@@ -61,13 +76,16 @@ export function SalaClient({
   initialLayout,
   canReadClinical = false,
   canManageDisplays = false,
+  locations = NO_LOCATIONS,
+  initialLocationId = null,
 }: {
   dayKey: string;
   initialNow: string;
   /** Ya proyectadas en el server (`listSalaBookings`): sin claves clínicas. */
   initialRows: ReadonlyArray<SalaWireRow>;
   practitioners: SalaPractitioner[];
-  rooms: SalaRoom[];
+  /** CF2: con `locationId` (catálogo de `listRoomOptions`) las salas se recortan a la sede elegida. */
+  rooms: Array<SalaRoom & { locationId?: string }>;
   /** `deskViewer(...)` de la page; un `SalaViewer` pelado (tests del Tablero) se toma como «no cobra». */
   viewer: SalaViewer & { canCollect?: boolean; canCollectAll?: boolean };
   initialGroupBy: SalaGroupBy;
@@ -80,6 +98,10 @@ export function SalaClient({
    * `DisplaysContext` y no como prop de cada cara (son chunks aparte). Sin la prop, sin botón.
    */
   canManageDisplays?: boolean;
+  /** CF2: sedes activas (`listLocations`, la page). Con menos de 2 no hay filtro ni selector. */
+  locations?: ReadonlyArray<SalaLocationOption>;
+  /** CF2: `agendaPrefs.locationId` (la misma preferencia que la agenda). */
+  initialLocationId?: string | null;
 }) {
   const { practitionerId, canReception, canOperateAll, canCollect = false, canCollectAll = false } = viewerProp;
   // Identidad estable por valor: `viewer` es dep de `buildBoard`/`deskEntries` en cada render.
@@ -94,13 +116,44 @@ export function SalaClient({
   // En el render (no en un effect): durante la hidratación así sale a la vez que el chunk del shell. Idempotente.
   preloadSalaFace(layout);
   const displays = useMemo(() => ({ canManage: canManageDisplays }), [canManageDisplays]);
+
+  // CF2: sede. Optimista y en silencio (ver `sala-location-context.ts`): el filtro cambia al toque y se guarda de fondo.
+  const [savedLocationId, setSavedLocationId] = useState<string | null>(initialLocationId);
+  const scope = useMemo(() => salaLocationScope(locations, savedLocationId), [locations, savedLocationId]);
+  const setLocationId = useCallback((id: string | null) => {
+    setSavedLocationId(id);
+    void persistSalaLocation(id);
+  }, []);
+  const locationCtx = useMemo<SalaLocationValue | null>(
+    () => (scope ? { ...scope, setLocationId } : null),
+    [scope, setLocationId]
+  );
+  // Memo por pieza: sin sede elegida son los MISMOS arrays del hook y los `useMemo` de las caras no recalculan.
+  const rows = useMemo(() => scopeSalaRows(live.rows, scope) as BookingDTO[], [live.rows, scope]);
+  const entries = useMemo(() => {
+    if (!scope?.locationId) return live.entries;
+    const { locationId, primaryLocationId } = scope;
+    return live.entries.filter((e) => atSalaLocation(e.row, locationId, primaryLocationId));
+  }, [live.entries, scope]);
+  // Del prop (que trae `locationId`) y no de `live.rooms` (tipado sin sede); sin sede elegida, el del hook tal cual.
+  const scopedRooms = useMemo(
+    () => (scope?.locationId ? (scopeSalaRooms(rooms, scope) as SalaRoom[]) : live.rooms),
+    [rooms, live.rooms, scope]
+  );
+  const scoped =
+    rows === live.rows && entries === live.entries && scopedRooms === live.rooms
+      ? live
+      : { ...live, rows, entries, rooms: scopedRooms };
+
   return (
     <DisplaysContext.Provider value={displays}>
-      {layout === "board" ? (
-        <SalaBoardFace live={live} initialGroupBy={initialGroupBy} />
-      ) : (
-        <ReceptionDesk live={live} layout={layout} viewer={viewer} />
-      )}
+      <SalaLocationContext.Provider value={locationCtx}>
+        {layout === "board" ? (
+          <SalaBoardFace live={scoped} initialGroupBy={initialGroupBy} />
+        ) : (
+          <ReceptionDesk live={scoped} layout={layout} viewer={viewer} />
+        )}
+      </SalaLocationContext.Provider>
     </DisplaysContext.Provider>
   );
 }

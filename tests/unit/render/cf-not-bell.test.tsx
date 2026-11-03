@@ -30,7 +30,7 @@ vi.mock("@/lib/notifications", () => ({
 vi.mock("@/lib/preferences", () => ({ updateUserPreferences: async () => ({ ok: true, data: undefined }) }));
 vi.mock("@/lib/practitioner-public", () => ({ setPractitionerPublicBooking: async () => ({ ok: true, data: undefined }) }));
 
-import { NotificationsPanel } from "@/components/dashboard/notifications-bell";
+import { NotificationsPanel } from "@/components/dashboard/notifications-panel";
 import { Sidebar } from "@/components/layout/sidebar";
 import { NotificationsBell } from "@/components/dashboard/notifications-bell";
 import { TenantModulesProvider } from "@/components/layout/tenant-modules-context";

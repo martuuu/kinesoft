@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { listPractitioners } from "@/lib/bookings";
 import { listSalaBookings } from "@/lib/sala-bookings";
 import { listRoomOptions } from "@/lib/rooms";
+import { listLocations } from "@/lib/locations";
 import { getActor } from "@/lib/session";
 import { getCapabilities } from "@/lib/authz";
 import { getUserPreferences } from "@/lib/preferences";
@@ -40,6 +41,10 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
  *   (Tablero, Lista y panel o Flujo) cuando no hay provider de Apariencia, y
  *   el viewer suma `canCollect`/`canCollectAll` (`billing.collect` / `billing.collectOwn`, T3 C-AS2; antes era
  *   `billing.manage`) para el cobro del escritorio; fila por fila decide `canCollectRow`, la regla del server.
+ * - CF2 (D-CF2-5): sedes activas + `agendaPrefs.locationId` (la sede de la agenda). El filtro es de CLIENTE (con ≥2
+ *   sedes, `SalaClient` recorta lo que ven las caras): el loader sigue trayendo el día entero, así cambiar de sede no
+ *   re-pide y el realtime no cambia. `listLocations` exige `agenda.viewAll` (como la agenda: sin ese permiso no hay
+ *   sedes); sin él ni se llama, en vez de tirar y ensuciar el log en cada visita del profesional.
  */
 export default async function SalaPage() {
   // VX-Z: Next renderiza el layout y la página EN PARALELO. Sin el módulo, el layout muestra el muro (o redirige),
@@ -63,11 +68,19 @@ export default async function SalaPage() {
       return { ...DEFAULT_AGENDA_VIEW_PREFS };
     });
 
-  const [bookings, practitioners, rooms, prefs] = await Promise.all([
+  const locationsP = caps.has("agenda.viewAll")
+    ? listLocations().catch((e) => {
+        logger.warn("sala.bootstrap.listLocations_failed", { err: errMsg(e) });
+        return [];
+      })
+    : Promise.resolve([]);
+
+  const [bookings, practitioners, rooms, prefs, locations] = await Promise.all([
     listSalaBookings({ from: start, to: end }),
     listPractitioners(),
     roomsP,
     prefsP,
+    locationsP,
   ]);
 
   return (
@@ -79,7 +92,9 @@ export default async function SalaPage() {
         const name = displayMemberName(p.user.fullName);
         return { id: p.id, name, initials: practitionerInitials(name) };
       })}
-      rooms={rooms.map((r) => ({ id: r.id, name: r.name, capacity: r.capacity }))}
+      rooms={rooms.map((r) => ({ id: r.id, name: r.name, capacity: r.capacity, locationId: r.locationId }))}
+      locations={locations.map((l) => ({ id: l.id, name: l.name, isPrimary: l.isPrimary }))}
+      initialLocationId={prefs.locationId}
       // T5 (TP-3f1): «Enviar link de pago» solo con los cobros online prendidos (0 sentencias).
       viewer={deskViewer(actor.practitionerId ?? null, caps, mpConnectMode() !== "off")}
       initialGroupBy={prefs.salaGroupBy}

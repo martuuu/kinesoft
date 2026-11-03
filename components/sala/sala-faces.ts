@@ -19,6 +19,8 @@ export const loadReceptionDesk = () => import("./desk/reception-desk");
 export const loadDeskList = () => import("./desk/desk-list");
 export const loadDeskFlow = () => import("./desk/desk-flow");
 export const loadDeskPayModal = () => import("./desk/desk-pay-modal");
+/** CF2: drawer «Por cobrar» del Tablero (lo baja la cara recién al abrirlo o con hover/foco en el botón). */
+export const loadSalaCashDrawer = () => import("./sala-cash-drawer");
 
 /** Pide los chunks de una cara (sin await). Solo en el navegador: en el server todo ya está en el bundle. */
 export function preloadSalaFace(layout: ReceptionLayout): void {

@@ -23,9 +23,10 @@
   min-width: 0;
 }
 
+/* ZB-9: navy-300 sobre el fondo de la app no llegaba a AA (4,5:1) en texto de 12 px; navy-500 sí. */
 .eyebrow {
   font-size: var(--fs-xs);
-  color: var(--navy-300);
+  color: var(--navy-500);
   font-weight: 500;
 }
 
@@ -41,6 +42,55 @@
   margin: 2px 0 0;
   /* La fecha larga («miércoles, 15 de octubre») no se corta: baja de línea antes que salirse a 390. */
   overflow-wrap: anywhere;
+}
+
+/* [CF2 · D-CF2-2] Con título de alcance la fecha es subtítulo; el candado y «En vivo» siguen al lado (mismo slot). */
+.subtitleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.subtitle {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--navy-500);
+}
+
+/* Chips debajo del título. En el DOM van entre el título y las acciones: < 768 se ven ahí (antes quedaban debajo de
+   las 2 filas de navegación, lejos de lo que filtran). ≥ 768 pasan a la fila de abajo a todo el ancho (`order`),
+   como antes: al lado del título solo tendrían el hueco que dejan las acciones. */
+.topRowScoped {
+  row-gap: 10px;
+}
+
+.scopeChips {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.scopeChipsLabel {
+  flex-shrink: 0;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--navy-500);
+}
+
+/* `min-width: 0`: sin esto, en el celular la fila sin wrap de los chips estira el header y la página scrollea de costado. */
+.scopeChipsScroll {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (min-width: 768px) {
+  .scopeChips {
+    order: 1;
+  }
 }
 
 .hidden {
@@ -255,9 +305,11 @@
   .title {
     font-size: var(--fs-xl);
   }
-  /* El selector de vista cabe a 390 sin cortar «Recepción»: se achica el relleno, no el texto. */
+  /* El selector de vista cabe a 390 sin cortar «Recepción»: se achica el relleno, no el texto. CF2 (A.4): con «Mes»
+     son 5 segmentos: a 8 px de relleno el grupo mide 291 px con Onest (304 a 10) y deja lugar a «⋯» en la misma fila
+     (291 + 10 + 44 = 345 de los ~354-362 útiles a 390). */
   .segBtn {
-    padding: 0 10px;
+    padding: 0 8px;
   }
   .pillGroup {
     overflow-x: auto;

@@ -183,6 +183,8 @@ model Tenant {
   whatsAppInbounds        WhatsAppInbound[]
   // MPS M16 (saas_mp_subscriptions): ajustes de la suscripción (solo inserción, RESTRICT).
   saasAdjustments         SaasAdjustment[]
+  // CF2 M21 (cf2_profesional_caja): reglas de reparto de % entre profesionales (RESTRICT: explican la caja cobrada).
+  revenueShares           PractitionerRevenueShare[]
 
   @@index([slug])
 }
@@ -270,6 +272,32 @@ model UserProfile {
   publicProfile          ProfessionalPublicProfile?
   // FC M14: favoritos de diagnóstico, por usuario Y consultorio (CASCADE: un favorito no es HC).
   diagnosisFavorites     DiagnosisFavorite[]
+  // CF2 M21: dispositivos con push web (CASCADE: un dispositivo no sobrevive a su usuario).
+  pushSubscriptions      PushSubscription[]
+}
+
+// CF2 M21 (cf2_profesional_caja, §29.4): dispositivo suscripto al push web de un USUARIO (la persona recibe los avisos
+// de todos sus consultorios en el mismo navegador). Sin tenantId → sin policy de tenant ni GUC de usuario →
+// SERVICE_ONLY (ENABLE + FORCE, cero policies; `kinesoft_app` no ve nada, molde ProfessionalPublicProfile): se escribe
+// y lee por el canal service con el userId de la sesión verificada, nunca del input. `endpoint` es único: el mismo
+// navegador re-suscripto actualiza su fila. CHECKs PushSubscription_{endpoint,keys,label,failureCount}_check en la
+// base (https://, ≤1024; claves base64url de tamaño de P-256/auth). Drift aceptado.
+model PushSubscription {
+  id            String    @id @default(cuid())
+  userId        String
+  endpoint      String    @unique
+  p256dh        String
+  auth          String
+  label         String?
+  createdAt     DateTime  @default(now())
+  lastSeenAt    DateTime  @default(now())
+  lastSuccessAt DateTime?
+  // Fallos seguidos de entrega (≠ 404/410, que borran la fila): el que manda decide cuándo descartarlo.
+  failureCount  Int       @default(0)
+
+  user UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 // DIR-1 (M11 public_directory, §20.10, DIR-D12): perfil del directorio público POR
@@ -384,6 +412,24 @@ model Practitioner {
   // No es `Tenant.agendaSlotMinutes` (alto de fila, visual). CHECKs Practitioner_*_check en la base (drift aceptado).
   agendaSlotStepMin     Int?
   publicSlotStepMin     Int?
+  // CF2 M21 (cf2_profesional_caja, §29.4): anticipación mínima del turnero de ESTE profesional, en minutos (0..80 640 =
+  // 8 semanas, CHECK Practitioner_publicMinLeadMinutes_check). Precedencia PractitionerService.minLeadMinutes > esta >
+  // Tenant.publicMinLeadMinutes > 60. NULL = hereda del consultorio. Pedido del cliente: un profesional quiere
+  // anticipación distinta a la del resto sin tocar servicio por servicio.
+  publicMinLeadMinutes    Int?
+  // CF2 M21: contacto del profesional DENTRO de la anticipación (hoy, con lugar libre, el paciente no puede reservar
+  // online pero puede escribirle). WhatsApp en E.164 AR móvil (+549…, CHECK Practitioner_contactWhatsapp_check). Se
+  // muestra solo con opt-in (`showContactInLeadWindow`) Y consentimiento registrado con versión (Ley 25.326: es un dato
+  // personal publicado en una superficie pública). CHECK Practitioner_leadContact_check: el flag exige número + fecha +
+  // versión; Practitioner_contactConsentVersion_check acota la versión a 1..32. Drift aceptado.
+  contactWhatsapp         String?
+  showContactInLeadWindow Boolean   @default(false)
+  contactConsentAt        DateTime?
+  contactConsentVersion   String?
+  // CF2 M21: avisos de turno ONLINE al profesional (opt-in, nacen apagados: nadie recibe mails/push que no pidió).
+  // Mail por Resend; push web a los dispositivos de `UserProfile.pushSubscriptions`.
+  notifyBookingEmail      Boolean   @default(false)
+  notifyBookingPush       Boolean   @default(false)
   createdAt     DateTime @default(now())
 
   tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -411,6 +457,10 @@ model Practitioner {
   // TP M18: su cuenta de Mercado Pago (a lo sumo una viva: único PARCIAL) y los cobros que se le imputan. RESTRICT.
   mpAccounts           MpAccount[]
   onlineCharges        OnlineCharge[]
+  // CF2 M21: reparto de % — reglas donde este profesional DESTINA parte de lo suyo / RECIBE de otro. RESTRICT (la
+  // historia del reparto explica la caja ya cobrada; la baja del profesional es lógica).
+  revenueSharesGiven    PractitionerRevenueShare[] @relation("RevenueShareGiver")
+  revenueSharesReceived PractitionerRevenueShare[] @relation("RevenueShareReceiver")
 
   @@unique([tenantId, userId])
   @@unique([id, tenantId], map: "Practitioner_id_tenantId_key") // EV2 M9: destino de FK compuesta
@@ -2685,6 +2735,37 @@ model WhatsAppInbound {
   @@index([messageId])
 }
 
+// CF2 M21 (cf2_profesional_caja, §29.4): reparto de % entre profesionales. El profesional que DESTINA (giver) cede
+// `shareBps` (1..10 000 = 0,01 %..100 %) de lo que cobra, en las fuentes marcadas (manual, online, obra social), al
+// que RECIBE. Vigencia por INSTANTE, no por día: un cambio a las 15:00 no altera el cobro de las 10:00. Cambiar una
+// regla = cerrar la vigente (effectiveTo + closedById) e insertar otra; el trigger practitioner_revenue_share_guard
+// solo deja cerrar una vigente (el resto es inmutable y nunca se reabre) → lo ya cobrado no se reescribe. RLS de
+// tenant (policy PractitionerRevenueShare_tenant_isolation). FKs COMPUESTAS a Practitioner(id, tenantId): las FK
+// saltean RLS y prod es BYPASSRLS, así un profesional de otro consultorio no entra ni por error. createdById/closedById
+// sin FK (rastro). Drift aceptado: único parcial, CHECKs, trigger y RLS (ver bloque al final).
+model PractitionerRevenueShare {
+  id                     String    @id @default(cuid())
+  tenantId               String
+  giverPractitionerId    String
+  receiverPractitionerId String
+  shareBps               Int
+  appliesManual          Boolean
+  appliesOnline          Boolean
+  appliesInsurer         Boolean
+  effectiveFrom          DateTime
+  effectiveTo            DateTime?
+  createdById            String?
+  closedById             String?
+  createdAt              DateTime  @default(now())
+
+  tenant   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  giver    Practitioner @relation("RevenueShareGiver", fields: [giverPractitionerId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: NoAction, map: "PractitionerRevenueShare_giver_tenant_fkey")
+  receiver Practitioner @relation("RevenueShareReceiver", fields: [receiverPractitionerId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: NoAction, map: "PractitionerRevenueShare_receiver_tenant_fkey")
+
+  @@index([tenantId, giverPractitionerId, effectiveFrom], map: "PractitionerRevenueShare_tenantId_giver_from_idx")
+  @@index([tenantId, receiverPractitionerId], map: "PractitionerRevenueShare_tenantId_receiver_idx")
+}
+
 // ═════════════════════════════════════════════════════════════════════
 // Notifications — per-user feed surfaced in the dashboard bell.
 // Created automatically by domain mutations (booking.create / payment.paid
@@ -3452,3 +3533,18 @@ model PatientChangeRequest {
 //       SaasAdjustment_{sign,applied,proration,text}_check.
 //   • Función saas_adjustment_guard() y sus triggers ("SaasAdjustment_guard", "SaasAdjustment_no_truncate").
 //   • Policy RLS: SaasAdjustment_tenant_read (FOR SELECT).
+
+// ── CF2 M21: DRIFT ACEPTADO ──────────────────────────────────────────────
+// Estos objetos viven SOLO en prisma/migrations/20261102120000_cf2_profesional_caja y
+// Prisma no los expresa. Si `migrate dev` / `migrate diff` propone borrarlos, NO
+// se borran (y `migrate dev` está prohibido en este repo):
+//   • PARCIALES:
+//       PractitionerRevenueShare_giver_open_key  UNIQUE ON PractitionerRevenueShare(tenantId, giverPractitionerId) WHERE effectiveTo IS NULL
+//       Booking_tenantId_copagoPaidAt_idx        ON Booking(tenantId, copagoPaidAt)  WHERE copagoPaidAt  IS NOT NULL
+//       Booking_tenantId_insurerPaidAt_idx       ON Booking(tenantId, insurerPaidAt) WHERE insurerPaidAt IS NOT NULL
+//   • CHECKs: Practitioner_{publicMinLeadMinutes,contactWhatsapp,contactConsentVersion,leadContact}_check,
+//       PushSubscription_{endpoint,keys,label,failureCount}_check,
+//       PractitionerRevenueShare_{bps,sources,not_self,period}_check.
+//   • Función practitioner_revenue_share_guard() y su trigger "PractitionerRevenueShare_guard" (solo cierre).
+//   • RLS: PushSubscription ENABLE + FORCE y CERO policies (SERVICE_ONLY); PractitionerRevenueShare ENABLE + FORCE +
+//       policy PractitionerRevenueShare_tenant_isolation.

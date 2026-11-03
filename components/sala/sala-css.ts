@@ -34,6 +34,12 @@ import { DUR, EASE_OUT } from "@/lib/motion";
  * con el sidebar abierto entran 3 en vez de 2) y cards más densas. Antes: header de 134 px, columnas con
  * `100dvh − 230` y 1 card entera por columna a 1366×625. Escritorio alto: sin cambios.
  *
+ * [CF2-ZF1] (ZB-2) Lo que CF2 sumó a la fila de herramientas (cobro, Sede, «¿Otro día?», «Pantallas») lleva `order` en el
+ * bloque de ≤ 800 px de alto: ahí las filas son `display: contents` y un hijo sin `order` (0) se dibujaba ANTES del
+ * título. `.sala-tools` pasa de nowrap a wrap: con todo eso, en pantalla alta desbordaba y el buscador (flex 1 1 220,
+ * min-width 0) quedaba en 0; con wrap la base del buscador decide el salto. Bajo 1280 px se oculta «¿Otro día?» (como
+ * el compacto del escritorio, `.desk-otherday`): sin espacio, el link es lo que menos se usa (/sala es solo de hoy).
+ *
  * MB-1c · C-MB3 (< 768, antes < 640): una columna, la columna con gente esperando primero (`data-waiting` +
  * `order`), cada columna se pliega con su total (`.sala-col-fold`, solo acá) y todo lo tocable a 44 px.
  *
@@ -73,7 +79,12 @@ export const SALA_CSS = `
 .sala-counter[data-counter=llamados][data-active] .sala-counter-n { color: var(--rc-called-bg); }
 .sala-counter-ph { color: var(--navy-300); }
 
-.sala-tools { justify-content: flex-start; flex-wrap: nowrap; min-height: 38px; }
+.sala-tools { justify-content: flex-start; flex-wrap: wrap; min-height: 38px; }
+.sala-loc, .sala-displays { flex-shrink: 0; }
+.sala-displays { display: inline-flex; }
+.sala-displays:empty { display: none; }
+.sala-otherday { flex-shrink: 0; font-size: 13px; font-weight: 600; color: var(--sky-700); white-space: nowrap; text-decoration: none; }
+.sala-otherday:hover { text-decoration: underline; }
 .sala-seg { position: relative; flex-shrink: 0; display: inline-flex; padding: 3px; border-radius: 999px; background: rgba(15,30,51,0.06); }
 .sala-seg-btn { position: relative; min-height: 32px; padding: 6px 14px; border: none; border-radius: 999px; background: transparent; font: inherit; font-size: 12.5px; font-weight: 600; color: var(--navy-500); cursor: pointer; transition: color ${T_FAST}; }
 .sala-seg-btn[aria-pressed=true] { color: var(--navy-900); }
@@ -163,7 +174,7 @@ export const SALA_CSS = `
 .sala-card[data-state=llamado] .sala-btn[data-kind=primary], .sala-card[data-state=en-atencion] .sala-btn[data-kind=primary] { background: var(--card-bg); border-color: var(--card-bg); color: var(--navy-900); box-shadow: none; }
 .sala-card[data-state=llamado] .sala-btn[data-kind=secondary], .sala-card[data-state=en-atencion] .sala-btn[data-kind=secondary] { background: transparent; border-color: rgba(255,255,255,0.5); color: var(--card-bg); }
 .sala-btn:disabled { opacity: 0.55; cursor: progress; }
-.sala-btn:focus-visible, .sala-seg-btn:focus-visible, .sala-later:focus-visible, .sala-search-clear:focus-visible { outline: 2px solid var(--sky-700); outline-offset: 2px; }
+.sala-btn:focus-visible, .sala-seg-btn:focus-visible, .sala-later:focus-visible, .sala-search-clear:focus-visible, .sala-otherday:focus-visible { outline: 2px solid var(--sky-700); outline-offset: 2px; }
 .sala-card[data-state=llamado] .sala-btn:focus-visible, .sala-card[data-state=en-atencion] .sala-btn:focus-visible, .sala-card[data-state=llamado]:focus-visible, .sala-card[data-state=en-atencion]:focus-visible { outline-color: var(--navy-900); }
 
 .sala-skel { border-radius: 14px; background: rgba(15,30,51,0.05); border: 1px solid rgba(15,30,51,0.04); }
@@ -177,6 +188,10 @@ export const SALA_CSS = `
 @media (prefers-reduced-motion: reduce) {
   .sala-card, .sala-btn, .sala-seg-btn, .sala-search, .sala-search-clear, .sala-col-occ, .sala-later, .sala-col-fold svg { transition: none; }
   .sala-btn:hover:not(:disabled) { transform: none; }
+}
+
+@media (max-width: 1279px) {
+  .sala-otherday { display: none; }
 }
 
 @media (max-width: 767px) {
@@ -221,8 +236,12 @@ export const SALA_CSS = `
   .sala-h1 { font-size: 22px; }
   .sala-seg { order: 2; }
   .sala-search, .sala-skel-search { order: 3; flex: 1 1 180px; max-width: 280px; }
-  .sala-status { order: 4; flex: 1 1 0; }
-  .sala-counters { order: 5; margin-left: auto; flex-wrap: nowrap; gap: 6px; }
+  .sala-cash { order: 4; }
+  .sala-loc { order: 5; }
+  .sala-otherday { order: 6; }
+  .sala-displays { order: 7; }
+  .sala-status { order: 8; flex: 1 1 0; }
+  .sala-counters { order: 9; margin-left: auto; flex-wrap: nowrap; gap: 6px; }
   .sala-counter { display: flex; flex-direction: row-reverse; justify-content: flex-end; align-items: baseline; gap: 6px; min-width: 0; padding: 5px 10px; }
   .sala-counter-n { font-size: 18px; }
   .sala-board { height: 100%; box-sizing: border-box; }

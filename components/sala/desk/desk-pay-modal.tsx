@@ -5,7 +5,7 @@ import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast";
 import type { BookingDTO } from "@/components/agenda/agenda-utils";
 import { setBookingCopagoPaid } from "@/lib/bookings";
-import { COLLECT_COPY, collectImputationLine, collectModalDescription } from "@/lib/booking-collect";
+import { COLLECT_COPY, collectImputationLine, collectModalDescription, withCopagoPaid } from "@/lib/booking-collect";
 import { formatARS } from "@/lib/format";
 import { PAYMENT_METHOD_LABEL, type PaymentMethod } from "@/lib/payment-method";
 import { isStaleError } from "@/lib/reception-view-state";
@@ -21,9 +21,12 @@ const SETTLED: ReadonlySet<string> = new Set(["PAID", "AUTHORIZED", "REFUNDED"])
  * La fila después de registrar el cobro: PAID, el medio y el `updatedAt` nuevo que devolvió el server (la próxima
  * acción de Recepción sobre esta fila lo manda como `expectedUpdatedAt`; con el viejo, la acción rebotaría por
  * «cambió en otra sesión»). `setBookingCopagoPaid` no devuelve la fila: se arma acá.
+ *
+ * [CF2-SD] Delega en `withCopagoPaid` (`lib/booking-collect.ts`), la MISMA fila que arma Recepción de la agenda: antes
+ * esta copia ponía PAID aunque el medio viniera null (deshacer), y las dos superficies podían divergir.
  */
 export function applyCopagoPaid(row: BookingDTO, updatedAt: Date | string, method: PaymentMethod | null): BookingDTO {
-  return { ...row, paymentStatus: "PAID", copagoPaymentMethod: method, updatedAt: new Date(updatedAt).toISOString() };
+  return withCopagoPaid(row, { updatedAt, method });
 }
 
 /**

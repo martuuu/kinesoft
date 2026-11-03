@@ -6,7 +6,7 @@ import Link from "next/link";
 import { IconArrow, IconBell, IconCheck } from "@/components/ui/icons";
 import { fmtHour, type BookingDTO } from "@/components/agenda/agenda-utils";
 import { formatARS } from "@/lib/format";
-import { copagoCollectViewFor } from "@/lib/booking-collect";
+import { MoneyBadge } from "@/components/agenda/grid/money-badge";
 import type { PaymentLinkDrawerProps } from "@/components/payments/payments-ui-types";
 import { RECEPTION_STATE_LABEL, type ReceptionAction } from "@/lib/reception-state";
 import { stateTagText, undoHint } from "@/lib/reception-view-state";
@@ -222,6 +222,21 @@ export function DeskStateTag({ entry }: { entry: Pick<DeskEntry, "state" | "wait
   );
 }
 
+/**
+ * [CF2-SD] Tag de cobro de la fila (plan §29 D-CF2-3, brief CF2 A.2): el mismo `MoneyBadge` de la agenda, al lado del
+ * tag de estado en la Lista y en el Flujo. «Pagado · {medio}» / «Por cobrar» / «Retenido» (`copagoTag`) solo para
+ * quien puede cobrar ESA fila (`canCollectRow`, la regla T3 del server: la Secretaria todo, el profesional lo suyo);
+ * la plata online («Seña» / «Pagado MP») la ve cualquiera, como en la agenda.
+ *
+ * Antes de CF2 el cobro solo se veía en los atendidos (en el lugar de la primaria): el que había pagado por
+ * adelantado o el que estaba en sala debiendo no decían nada hasta terminar. Lee `viewer` del contexto estable, así
+ * que la fila memoizada no necesita el rol en su firma; los campos de plata sí van en `deskRowSig`/`flowRowSig`.
+ */
+export function DeskCopagoTag({ row }: { row: BookingDTO }) {
+  const { viewer } = useDeskActions();
+  return <MoneyBadge b={row} copago={canCollectRow(viewer, row)} />;
+}
+
 // ── Botón primario ───────────────────────────────────────────────────────────
 
 const KIND: Partial<Record<ReceptionAction, "arrive" | "call" | "attend" | "done">> = {
@@ -244,37 +259,18 @@ function ActionIcon({ kind }: { kind: "arrive" | "call" | "attend" | "done" | "p
 
 /**
  * Botón primario de la fila: Llegó / Llamar / En atención / Atendido, o Cobrar para un atendido que debe (solo a
- * quien cobra). Un atendido ya cobrado muestra «Pagado · {medio}» a quien cobra (T3-Z M1: el mismo rótulo que el
- * drawer y Facturación, de `copagoCollectViewFor`; antes decía «Cobrado» sin medio). Sin
- * primaria, nada: el menú ⋯ tiene el resto.
+ * quien cobra). Sin primaria, nada: el menú ⋯ tiene el resto. «Cobrar» nombra lo que FALTA (copago − seña online).
  *
- * TP-3f: pagado entero por un cobro online (`paidOnline`, del cable `po`) → «Pagado por Mercado Pago», sin deshacer.
- * `copagoCollectViewFor` lo reconoce por `copagoCollectedById === null` (el webhook nunca lleva quién cobró); la fila de
- * la sala no trae esa columna, así que se traduce desde `paidOnline`: true → null, si no → undefined (no se adivina, y
- * un «Mercado Pago» registrado a mano sigue diciendo «Pagado · Mercado Pago»). «Cobrar» nombra lo que FALTA.
+ * [CF2-SD] Hasta CF2 un atendido ya cobrado mostraba acá «Pagado · {medio}» (T3-Z M1) o «Pagado por Mercado Pago»
+ * (TP-3f). Eso pasó a `DeskCopagoTag`, junto al estado y en TODA fila: así el que pagó por adelantado o el que llegó y
+ * debe se ven sin esperar a que termine el turno, y el atendido no lo dice dos veces.
  */
-export function DeskPrimaryAction({ entry, block = false }: { entry: DeskEntry; block?: boolean }) {
+export function DeskPrimaryAction({ entry, block = false, cash = false }: { entry: DeskEntry; block?: boolean; cash?: boolean }) {
   const api = useDeskActions();
-  const p = deskPrimary(entry, api.viewer);
+  const p = deskPrimary(entry, api.viewer, { cash });
   const b = entry.row;
   const pending = api.pendingIds.has(b.id);
-  if (!p) {
-    const settled = b.paymentStatus === "PAID" || b.paymentStatus === "AUTHORIZED";
-    // T3: el «Pagado» solo a quien cobra ESTA fila (`canCollectRow`, la regla del server): al profesional no le
-    // informa el cobro de un turno ajeno que no puede tocar.
-    if (entry.state === "atendido" && canCollectRow(api.viewer, b) && b.copagoCents > 0 && settled) {
-      const paidLabel = copagoCollectViewFor({ ...b, copagoCollectedById: b.paidOnline ? null : undefined }, false).label ?? "Pagado";
-      return (
-        <span className="desk-paid" title={paidLabel}>
-          <span className="desk-act-ico" aria-hidden="true">
-            <IconCheck size={16} />
-          </span>
-          <span className="desk-paid-t">{paidLabel}</span>
-        </span>
-      );
-    }
-    return null;
-  }
+  if (!p) return null;
   if (p.kind === "collect") {
     return (
       <button

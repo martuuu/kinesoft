@@ -56,9 +56,10 @@ describe("[CF-I1] navFor por rol: lo clínico solo con clinical.read", () => {
 });
 
 describe("[CF-I3] atajos del ⌘K por capabilities", () => {
-  const ALL = ["/dashboard", "/agenda", "/pacientes", "/planes", "/diagnostico", "/seguimiento", "/biblioteca"];
+  // CF2 (P-NAV): + «Caja», que ven las tres capabilities de cobro (el Profesional por `billing.collectOwn`).
+  const ALL = ["/dashboard", "/agenda", "/pacientes", "/planes", "/diagnostico", "/seguimiento", "/biblioteca", "/caja"];
 
-  it("Profesional / Titular que atiende en Kine: los siete atajos de siempre", () => {
+  it("Profesional / Titular que atiende en Kine: los siete atajos de siempre + Caja", () => {
     expect(hrefs(shortcutsFor(KINE, PRACTITIONER))).toEqual(ALL);
     expect(hrefs(shortcutsFor(KINE, OWNER_CLINICAL))).toEqual(ALL);
   });
@@ -67,8 +68,8 @@ describe("[CF-I3] atajos del ⌘K por capabilities", () => {
     ["ASSISTANT", capabilitiesFor("ASSISTANT")],
     ["BILLING", capabilitiesFor("BILLING")],
     ["Titular que no atiende", OWNER_NOT_CLINICAL],
-  ])("%s: solo Inicio, Agenda y Pacientes", (_name, caps) => {
-    expect(hrefs(shortcutsFor(KINE, caps))).toEqual(["/dashboard", "/agenda", "/pacientes"]);
+  ])("%s: solo Inicio, Agenda, Pacientes y Caja", (_name, caps) => {
+    expect(hrefs(shortcutsFor(KINE, caps))).toEqual(["/dashboard", "/agenda", "/pacientes", "/caja"]);
   });
 
   it("sin caps falla cerrado (como navFor)", () => {

@@ -10,7 +10,7 @@ import {
   type CobrosFilters,
 } from "@/lib/cobros-view";
 import { isChargePeriod } from "@/lib/online-charges-view";
-import { bottomNavFor, NAV_ITEMS, navFor, shellNavCaps } from "@/lib/nav";
+import { bottomNavFor, NAV_ITEMS, navFor } from "@/lib/nav";
 import { capabilitiesFor } from "@/lib/capabilities";
 import { modulesFor } from "@/lib/tenant-modules";
 import type { OnlineChargeView } from "@/lib/online-payments-types";
@@ -168,7 +168,9 @@ describe("[TP-3g] estado en texto y acciones por fila", () => {
 describe("[TP-3g] nav con billing.collect (PRACTITIONER no)", () => {
   const kine = modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] });
   const general = modulesFor({ vertical: "GENERAL", plan: "INDIVIDUAL", publicBookingEnabled: false, moduleGrants: [], moduleRevokes: [] });
-  const hrefs = (role: Parameters<typeof capabilitiesFor>[0], m = kine) => navFor(m, capabilitiesFor(role)).map((i) => i.href);
+  // CF2 (P-NAV): «Cobros» es `onlinePaymentsOnly`; estos casos son con cobros online prendidos (el modo apagado, abajo).
+  const ON = { onlinePayments: true } as const;
+  const hrefs = (role: Parameters<typeof capabilitiesFor>[0], m = kine) => navFor(m, capabilitiesFor(role), ON).map((i) => i.href);
 
   it("OWNER, ADMIN, Secretaría y Facturación ven «Cobros» (TP-UI-D7: siempre, aunque no haya cobros)", () => {
     for (const r of ["OWNER", "ADMIN", "ASSISTANT", "BILLING"] as const) expect(hrefs(r), r).toContain("/cobros");
@@ -177,25 +179,25 @@ describe("[TP-3g] nav con billing.collect (PRACTITIONER no)", () => {
 
   it("PRACTITIONER no (tiene `billing.collectOwn`, no `billing.collect`); sin caps tampoco (falla cerrado)", () => {
     expect(hrefs("PRACTITIONER")).not.toContain("/cobros");
-    expect(navFor(kine).map((i) => i.href)).not.toContain("/cobros");
+    expect(navFor(kine, undefined, ON).map((i) => i.href)).not.toContain("/cobros");
   });
 
   it("la entrada se llama «Cobros» y no es atajo del ⌘K (tiene capability)", () => {
-    const it = navFor(kine, capabilitiesFor("OWNER")).find((i) => i.href === "/cobros");
+    const it = navFor(kine, capabilitiesFor("OWNER"), ON).find((i) => i.href === "/cobros");
     expect(it?.label).toBe("Cobros");
     expect(it?.capability).toBe("billing.collect");
     expect(it?.icon).toBe("tag");
   });
 
-  it("[TP-3z] con MP_CONNECT_MODE=off el shell no ve `billing.collect` (`shellNavCaps`): «Cobros» no está en ningún nav", () => {
-    const owner = [...capabilitiesFor("OWNER")];
-    const off = new Set(shellNavCaps(owner, false));
-    expect(navFor(kine, off).map((i) => i.href)).not.toContain("/cobros");
-    expect(bottomNavFor(kine, off).some((e) => e.kind === "link" && e.href === "/cobros")).toBe(false);
-    // Es lo ÚNICO que cambia: si otra entrada del shell empezara a depender de `billing.collect`, esto lo frena.
-    expect(navFor(kine, off).map((i) => i.href)).toEqual(navFor(kine, new Set(owner)).map((i) => i.href).filter((h) => h !== "/cobros"));
-    expect(NAV_ITEMS.filter((i) => i.capability === "billing.collect").map((i) => i.href)).toEqual(["/cobros"]);
-    // Con el modo prendido, las mismas caps.
-    expect(shellNavCaps(owner, true)).toEqual(owner);
+  it("[TP-3z] con MP_CONNECT_MODE=off «Cobros» no está en ningún nav (CF2: `onlinePaymentsOnly`, ya no `shellNavCaps`)", () => {
+    const owner = capabilitiesFor("OWNER");
+    const off = { onlinePayments: false } as const;
+    expect(navFor(kine, owner, off).map((i) => i.href)).not.toContain("/cobros");
+    expect(bottomNavFor(kine, owner, off).some((e) => e.kind === "link" && e.href === "/cobros")).toBe(false);
+    // Es lo ÚNICO que cambia con el modo: «Caja» (también de cobro, D-CF2-16) sigue; si otra entrada empezara a depender
+    // del modo, esto lo frena.
+    expect(navFor(kine, owner, off).map((i) => i.href)).toEqual(navFor(kine, owner, ON).map((i) => i.href).filter((h) => h !== "/cobros"));
+    expect(navFor(kine, owner, off).map((i) => i.href)).toContain("/caja");
+    expect(NAV_ITEMS.filter((i) => i.onlinePaymentsOnly).map((i) => i.href)).toEqual(["/cobros"]);
   });
 });

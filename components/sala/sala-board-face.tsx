@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { AnimatePresence, m } from "framer-motion";
 import { DUR, EASE_IN_OUT, EASE_OUT } from "@/lib/motion";
 import { useToast } from "@/components/ui/toast";
@@ -15,6 +16,15 @@ import { SalaBoard } from "./sala-board";
 import { SALA_CSS } from "./sala-css";
 import type { SalaLiveWithBoard } from "./use-sala-live";
 import { salaDayLabel } from "./sala-day-label";
+import { cashEntries, canCollectRow } from "@/lib/reception-desk-state";
+import { MoneyViewerContext } from "@/components/agenda/grid/money-viewer-context";
+import { loadSalaCashDrawer } from "./sala-faces";
+
+/*
+ * CF2 (D-CF2-3): el drawer «Por cobrar» no está en el primer pintado: va sin SSR y se monta la primera vez que se abre
+ * (su chunk se precarga con hover/foco en el botón). Adentro trae el `DeskPayModal` del escritorio, también diferido.
+ */
+const SalaCashDrawer = dynamic(() => loadSalaCashDrawer().then((mod) => mod.SalaCashDrawer), { ssr: false });
 
 /*
  * PF1.1-sala (C-PF2): la cara Tablero vive en su propio módulo para que `SalaClient` la baje con `next/dynamic` solo
@@ -60,6 +70,31 @@ export function SalaBoardFace({ live, initialGroupBy }: { live: SalaLiveWithBoar
 
   const dayLabel = salaDayLabel(dayKey);
 
+  // [CF2-SB] Cobro a la vista. `canCollectRow` es la regla T3 del server (Secretaria todo, profesional lo suyo): la
+  // card la lee por `MoneyViewerContext` y pinta el tag; el header suma «Por cobrar · N · $ X» (`cashEntries`, lo que
+  // FALTA). Quien no cobra no ve ni lo uno ni lo otro.
+  const canSeeMoney = useMemo(() => (practitionerId: string) => canCollectRow(viewer, { practitionerId }), [viewer]);
+  const cash = useMemo(() => (viewer.canCollect ? cashEntries(live.entries, viewer) : null), [live.entries, viewer]);
+  const [cashOpen, setCashOpen] = useState(false);
+  const [cashMounted, setCashMounted] = useState(false);
+  const closeCash = useCallback(() => setCashOpen(false), []);
+  const headerCash = useMemo(
+    () =>
+      cash
+        ? {
+            count: cash.entries.length,
+            totalCents: cash.totalCents,
+            open: cashOpen,
+            onOpen: () => {
+              setCashMounted(true);
+              setCashOpen(true);
+            },
+            onIntent: () => void loadSalaCashDrawer().catch(() => {}),
+          }
+        : null,
+    [cash, cashOpen]
+  );
+
   async function handleGroupBy(next: SalaGroupBy) {
     const prev = groupBy;
     setGroupBy(next);
@@ -88,106 +123,112 @@ export function SalaBoardFace({ live, initialGroupBy }: { live: SalaLiveWithBoar
   return (
     // MB-Z-F2: con «Barra superior» (Apariencia) el alto fijo del monitor bajo descuenta la barra (sala-css). La tweak
     // arranca en «sidebar» en el server y en el cliente y se hidrata de localStorage en un effect: sin mismatch.
-    <div className="sala" data-chrome={chrome}>
-      <style>{SALA_CSS}</style>
+    <MoneyViewerContext.Provider value={canSeeMoney}>
+      <div className="sala" data-chrome={chrome}>
+        <style>{SALA_CSS}</style>
 
-      {/* Bloque sticky: header + banda de llamado colgada como overlay (A2):
-          la banda flota sobre el tablero en vez de empujarlo, así las cards
-          con `layout` no saltan al aparecer ni a los 8 s al irse. */}
-      <div className="sala-top">
-        <SalaHeader
-          dayLabel={dayLabel}
-          counters={counters}
-          groupBy={effectiveGroupBy}
-          canGroupByRoom={canGroupByRoom}
-          onGroupBy={handleGroupBy}
-          query={query}
-          onQuery={setQuery}
-          status={fullBoard.empty === "no-one-waiting" && !query.trim() && !waitingForDay ? "no-one-waiting" : null}
-        />
+        {/* Bloque sticky: header + banda de llamado colgada como overlay (A2):
+            la banda flota sobre el tablero en vez de empujarlo, así las cards
+            con `layout` no saltan al aparecer ni a los 8 s al irse. */}
+        <div className="sala-top">
+          <SalaHeader
+            dayLabel={dayLabel}
+            counters={counters}
+            groupBy={effectiveGroupBy}
+            canGroupByRoom={canGroupByRoom}
+            onGroupBy={handleGroupBy}
+            query={query}
+            onQuery={setQuery}
+            status={fullBoard.empty === "no-one-waiting" && !query.trim() && !waitingForDay ? "no-one-waiting" : null}
+            cash={headerCash}
+          />
 
-        {/* La región existe siempre (un aria-live que se monta junto con su
-            texto no se anuncia en todos los lectores). `mode="wait"`: dos
-            llamados seguidos no apilan dos bandas; la vieja sale y entra la
-            nueva en el mismo lugar. */}
-        <div className="sala-call" role="status" aria-live="polite" aria-atomic="true">
-          <AnimatePresence mode="wait" initial={false}>
-            {call && (
-              <m.div
-                key={call.key}
-                className="sala-call-inner"
-                initial={{ opacity: 0, y: -8, scale: 0.97 }}
-                animate={{ opacity: 1, y: 0, scale: 1, transition: { duration: DUR.base, ease: EASE_OUT } }}
-                exit={{ opacity: 0, y: -6, scale: 0.98, transition: { duration: DUR.fast, ease: EASE_IN_OUT } }}
-              >
-                <span className="sala-call-icon" aria-hidden="true">
-                  <IconBell size={18} />
-                </span>
-                <span className="sala-call-text">{call.text}</span>
-              </m.div>
-            )}
-          </AnimatePresence>
-        </div>
-      </div>
-      <div className="sala-sr" aria-live="polite">
-        {live.announce}
-      </div>
-
-      {waitingForDay ? (
-        <div className="sala-empty" aria-busy="true">
-          <strong>Cargando los turnos de hoy…</strong>
-        </div>
-      ) : fullBoard.empty === "no-bookings" ? (
-        // VX0-b R2: antes era una card de 120 px con el texto solo y el resto
-        // de la pantalla vacía. Ahora dice qué hacer: ir a la agenda o cargar
-        // un turno (solo quien opera la Recepción; BILLING no carga turnos).
-        <div className="sala-empty sala-empty-day">
-          <span className="sala-empty-icon" aria-hidden="true">
-            <IconCal size={22} />
-          </span>
-          <strong>{SALA_COPY.noBookings}</strong>
-          <p className="sala-empty-text">Cuando se cargue un turno para hoy, aparece acá en vivo.</p>
-          <div className="sala-empty-actions">
-            <Link href="/agenda" className="k-btn k-btn-ghost sala-empty-btn">
-              Ir a la agenda
-            </Link>
-            {viewer.canReception && (
-              <Link href="/agenda?new=1" className="k-btn k-btn-primary sala-empty-btn">
-                <IconPlus size={13} /> Nuevo turno
-              </Link>
-            )}
+          {/* La región existe siempre (un aria-live que se monta junto con su
+              texto no se anuncia en todos los lectores). `mode="wait"`: dos
+              llamados seguidos no apilan dos bandas; la vieja sale y entra la
+              nueva en el mismo lugar. */}
+          <div className="sala-call" role="status" aria-live="polite" aria-atomic="true">
+            <AnimatePresence mode="wait" initial={false}>
+              {call && (
+                <m.div
+                  key={call.key}
+                  className="sala-call-inner"
+                  initial={{ opacity: 0, y: -8, scale: 0.97 }}
+                  animate={{ opacity: 1, y: 0, scale: 1, transition: { duration: DUR.base, ease: EASE_OUT } }}
+                  exit={{ opacity: 0, y: -6, scale: 0.98, transition: { duration: DUR.fast, ease: EASE_IN_OUT } }}
+                >
+                  <span className="sala-call-icon" aria-hidden="true">
+                    <IconBell size={18} />
+                  </span>
+                  <span className="sala-call-text">{call.text}</span>
+                </m.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
-      ) : noMatches ? (
-        <p className="sala-note">{SALA_COPY.noMatches}</p>
-      ) : (
-        // «Por profesional | Por sala»: fade corto del tablero entero en vez
-        // de un remonte seco (las columnas son otras; deslizarlas no explica
-        // nada). `mode="wait"`: nunca se ven los dos tableros a la vez.
-        <AnimatePresence mode="wait" initial={false}>
-          <m.div
-            key={effectiveGroupBy}
-            className="sala-fade"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1, transition: { duration: DUR.fast, ease: EASE_OUT } }}
-            exit={{ opacity: 0, transition: { duration: DUR.fast, ease: EASE_IN_OUT } }}
-          >
-            <SalaBoard
-              columns={board.columns}
-              now={clock}
-              groupBy={effectiveGroupBy}
-              practitioners={practitioners}
-              rooms={rooms}
-              pendingIds={live.pendingIds}
-              pulses={live.pulses}
-              changes={live.changes}
-              laterOpen={laterOpen}
-              onToggleLater={toggleLater}
-              onAction={live.onBoardAction}
-            />
-          </m.div>
-        </AnimatePresence>
-      )}
-    </div>
+        <div className="sala-sr" aria-live="polite">
+          {live.announce}
+        </div>
+
+        {waitingForDay ? (
+          <div className="sala-empty" aria-busy="true">
+            <strong>Cargando los turnos de hoy…</strong>
+          </div>
+        ) : fullBoard.empty === "no-bookings" ? (
+          // VX0-b R2: antes era una card de 120 px con el texto solo y el resto
+          // de la pantalla vacía. Ahora dice qué hacer: ir a la agenda o cargar
+          // un turno (solo quien opera la Recepción; BILLING no carga turnos).
+          <div className="sala-empty sala-empty-day">
+            <span className="sala-empty-icon" aria-hidden="true">
+              <IconCal size={22} />
+            </span>
+            <strong>{SALA_COPY.noBookings}</strong>
+            <p className="sala-empty-text">Cuando se cargue un turno para hoy, aparece acá en vivo.</p>
+            <div className="sala-empty-actions">
+              <Link href="/agenda" className="k-btn k-btn-ghost sala-empty-btn">
+                Ir a la agenda
+              </Link>
+              {viewer.canReception && (
+                <Link href="/agenda?new=1" className="k-btn k-btn-primary sala-empty-btn">
+                  <IconPlus size={13} /> Nuevo turno
+                </Link>
+              )}
+            </div>
+          </div>
+        ) : noMatches ? (
+          <p className="sala-note">{SALA_COPY.noMatches}</p>
+        ) : (
+          // «Por profesional | Por sala»: fade corto del tablero entero en vez
+          // de un remonte seco (las columnas son otras; deslizarlas no explica
+          // nada). `mode="wait"`: nunca se ven los dos tableros a la vez.
+          <AnimatePresence mode="wait" initial={false}>
+            <m.div
+              key={effectiveGroupBy}
+              className="sala-fade"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1, transition: { duration: DUR.fast, ease: EASE_OUT } }}
+              exit={{ opacity: 0, transition: { duration: DUR.fast, ease: EASE_IN_OUT } }}
+            >
+              <SalaBoard
+                columns={board.columns}
+                now={clock}
+                groupBy={effectiveGroupBy}
+                practitioners={practitioners}
+                rooms={rooms}
+                pendingIds={live.pendingIds}
+                pulses={live.pulses}
+                changes={live.changes}
+                laterOpen={laterOpen}
+                onToggleLater={toggleLater}
+                onAction={live.onBoardAction}
+              />
+            </m.div>
+          </AnimatePresence>
+        )}
+      </div>
+      {/* Hermano de `.sala` (como el modal del escritorio con `.desk`): el Drawer y el Modal van por portal igual, pero
+          así ningún contenedor de la cara les ancla el `position: fixed`. */}
+      {cashMounted && <SalaCashDrawer open={cashOpen} onClose={closeCash} live={live} />}
+    </MoneyViewerContext.Provider>
   );
 }

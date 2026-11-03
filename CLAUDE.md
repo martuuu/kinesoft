@@ -136,6 +136,16 @@
     turnero y chocan con ellos** (no son CF-D1/CF-D2). «M20» = `cf_agenda_rules`; ADR-032 = «no atiende servicios
     distintos a la vez»; lock nuevo `kinesoft:pday:` (día del profesional, enmienda C2 (1d)). `[CF-L*]` de los tests
     de EVA no son los `[CF-L1..4]` de locks.
+  - **§29 del plan (02-nov; «CF2» = feedback de los clientes, 2.ª ronda):** olas «W0..W6», «INT» y «Z». Sesiones «MIG»
+    (W0, = **M21**), agenda y sala «A-K/A-P/A-$/A-WS/A-MS/A-SL/A-LD/A-HD/A-MV/A-MU/A-RC/A-SB/A-SD/A-AG1/A-AG2», turnero y
+    avisos «T-K/T-P/T-SE/T-S1/T-S3/T-S4/T-L/T-S2X/T-U1/T-U2/T-U3», pacientes y caja «P-K/P-PL/P-NAV/P-X/P-S1/P-S2/P-S3/
+    P-U1/P-U2/P-U4/P-D», e «INT-P». Cierre: «ZA/ZB» (revisores) y «ZF1..ZF4» (fixers: **no** son los ZF1..ZF5 de T4, ni
+    los ZF1..ZF3 de T6/T7, ni los ZF1a/ZF1b/ZF2 de PV, ni los ZF1..ZF4 de CF, ni TP-ZF). «ZA-1..8» y «ZB-1..13» son
+    hallazgos de los revisores (AUDIT «Ronda CF2»). «D-CF2-1..20» son decisiones con default (§29.2; no son las CF-D* de
+    CF). «M21» = `cf2_profesional_caja`; ADR-033 = caja y reparto, ADR-034 = avisos mail + Web Push; lock nuevo
+    `kinesoft:rshare:` (reparto por tenant). IDs de test `[CF2-<sesión><n>]` (ej. `[CF2-TS1-3]`, `[CF2-ZF3-1a]`); no
+    existe `[CF2-D*]`. «Caja» (`/caja`) no es «Cobros» (`/cobros`, los online de T5); «Reparto» es el % entre
+    profesionales, no el arancel de la OS.
   - «Plan» choca en tres sentidos: plan de tratamiento, plan SaaS del tenant y plan de la obra social.
   - «Vertical» (`Tenant.vertical`: General / Kinesiología) es el tipo de consultorio: no es la «disciplina» de un
     servicio o plan (Kine / Osteo) ni el plan SaaS (`Tenant.plan`). «Kine PRO» = vertical Kinesiología + plan PRO.

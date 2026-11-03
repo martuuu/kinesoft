@@ -6,9 +6,11 @@ import { DUR, EASE_OUT } from "@/lib/motion";
 import { Button, buttonClassName } from "@/components/ui/button";
 import { IconChevL, IconChevR, IconPlus } from "@/components/ui/icons";
 import type { AgendaPlanScope, AgendaVisibility } from "@/lib/agenda-filters";
-import type { ViewSegment } from "@/lib/agenda-client-state";
+import type { ScopeHeading, ViewSegment } from "@/lib/agenda-client-state";
+import { dayKeyOf, instantAt } from "@/lib/availability/day";
 import type { AgendaViewZoom } from "@/lib/preferences-constants";
 import { ViewOptionsMenu } from "./view-options-menu";
+import { AgendaScopeHeading } from "./agenda-scope-heading";
 import styles from "./agenda-toolbar.module.css";
 
 export type { AgendaView } from "@/lib/agenda-client-state";
@@ -17,6 +19,7 @@ export type AgendaDensity = "comfortable" | "compact";
 const SEGMENT_LABEL: Record<ViewSegment, string> = {
   day: "Día",
   week: "Semana",
+  month: "Mes",
   list: "Lista",
   reception: "Recepción",
 };
@@ -68,6 +71,14 @@ const SEGMENT_LABEL: Record<ViewSegment, string> = {
  *   2 filas (navegación · vista + «⋯»); controles a 44 px (target táctil).
  * - Monitores bajos (≥ 768 y ≤ 760 px de alto): sin el rótulo «Agenda» y título más chico, para que la grilla
  *   muestre ≥ 6 h a 1366×625.
+ *
+ * CF2 (D-CF2-2, brief A.1 y A.4):
+ * - `scopeHeading`: con varios profesionales el h1 es el título de alcance (`AgendaScopeHeading`) y la fecha baja a
+ *   subtítulo con el `dayLock` («En vivo» incluido). Los `practitionerChips` suben debajo del título con la etiqueta
+ *   «Profesionales» (en el DOM antes de las acciones: < 768 se ven ahí; ≥ 768 el CSS los pasa a la fila de abajo a
+ *   todo el ancho, como antes). Sin slot (o `null`: un solo profesional) el markup es el de siempre, byte a byte.
+ * - `segment === "month"`: «Mes anterior»/«Mes siguiente» llaman a `onNavigateMonths` (si no viene, a
+ *   `onNavigateWeeks`, para no romper mientras no se cablea) y la fecha es el mes («noviembre de 2026»).
  */
 export function AgendaToolbar({
   anchor,
@@ -77,6 +88,7 @@ export function AgendaToolbar({
   hiddenLabel,
   onShowAll,
   onNavigateWeeks,
+  onNavigateMonths,
   onToday,
   practitioners,
   practitionerFilterId,
@@ -97,6 +109,7 @@ export function AgendaToolbar({
   onPlanScopeChange,
   insurerFilter,
   insurerHiddenLabel,
+  scopeHeading,
 }: {
   anchor: Date;
   segment: ViewSegment;
@@ -105,6 +118,8 @@ export function AgendaToolbar({
   hiddenLabel: string | null;
   onShowAll: () => void;
   onNavigateWeeks: (deltaWeeks: -1 | 1) => void;
+  /** CF2 (A.4): ±1 mes en la vista Mes. Opcional: sin él, Mes navega con `onNavigateWeeks`. */
+  onNavigateMonths?: (deltaMonths: -1 | 1) => void;
   onToday: () => void;
   practitioners: { id: string; name: string }[];
   practitionerFilterId: string | null;
@@ -126,19 +141,36 @@ export function AgendaToolbar({
   onPlanScopeChange?: (s: AgendaPlanScope) => void;
   insurerFilter?: React.ReactNode;
   insurerHiddenLabel?: string | null;
+  /** CF2 (D-CF2-2): título de alcance; `null`/ausente = un solo profesional, el encabezado de siempre. */
+  scopeHeading?: ScopeHeading | null;
 }) {
   const [moreOpen, setMoreOpen] = useState(false);
+  const dateLabel =
+    segment === "month"
+      ? agendaMonthTitle(anchor)
+      : anchor.toLocaleDateString("es-AR", { weekday: "long", day: "2-digit", month: "long", timeZone: "America/Argentina/Buenos_Aires" });
+  const scoped = !!scopeHeading;
   return (
     <header className={styles.header}>
-      <div className={styles.topRow}>
+      <div className={scoped ? `${styles.topRow} ${styles.topRowScoped}` : styles.topRow}>
         <div className={styles.titleBlock}>
-          <div className={styles.eyebrow}>Agenda</div>
-          <div className={styles.titleRow}>
-            <h1 className={`k-display ${styles.title}`}>
-              {anchor.toLocaleDateString("es-AR", { weekday: "long", day: "2-digit", month: "long", timeZone: "America/Argentina/Buenos_Aires" })}
-            </h1>
-            {dayLock}
-          </div>
+          {/* ZB-9: con título de alcance («Agenda de Laura Pérez», «Todos los profesionales (5)») el eyebrow «Agenda»
+              repetía lo que el h1 ya dice; solo queda arriba de la fecha cuando ella es el título. */}
+          {!scoped && <div className={styles.eyebrow}>Agenda</div>}
+          {scopeHeading ? (
+            <>
+              <AgendaScopeHeading heading={scopeHeading} />
+              <div className={styles.subtitleRow}>
+                <span className={styles.subtitle}>{dateLabel}</span>
+                {dayLock}
+              </div>
+            </>
+          ) : (
+            <div className={styles.titleRow}>
+              <h1 className={`k-display ${styles.title}`}>{dateLabel}</h1>
+              {dayLock}
+            </div>
+          )}
           {hiddenLabel && (
             <div role="status" className={styles.hidden}>
               <span>{hiddenLabel}</span>
@@ -153,19 +185,17 @@ export function AgendaToolbar({
             </div>
           )}
         </div>
-        <div className={styles.actions}>
-          {/* Navegación de semana: los tres controles a 36 px de alto. */}
-          <div className={`k-glass ${styles.pillGroup}`}>
-            <button type="button" onClick={() => onNavigateWeeks(-1)} aria-label="Semana anterior" className={styles.navBtn}>
-              <IconChevL size={14} />
-            </button>
-            <button type="button" onClick={onToday} className={`${styles.navBtn} ${styles.navBtnText}`}>
-              Hoy
-            </button>
-            <button type="button" onClick={() => onNavigateWeeks(1)} aria-label="Semana siguiente" className={styles.navBtn}>
-              <IconChevR size={14} />
-            </button>
+        {scoped && practitionerChips && (
+          <div className={styles.scopeChips}>
+            {/* Rótulo visible; el grupo de chips ya tiene su nombre accesible («Profesionales a mostrar»). */}
+            <span className={styles.scopeChipsLabel} aria-hidden="true">
+              Profesionales
+            </span>
+            <div className={styles.scopeChipsScroll}>{practitionerChips}</div>
           </div>
+        )}
+        <div className={styles.actions}>
+          <AgendaNavGroup segment={segment} onNavigateWeeks={onNavigateWeeks} onNavigateMonths={onNavigateMonths} onToday={onToday} />
 
           {/* Selector de vista */}
           <div className={`k-glass ${styles.pillGroup}`} role="group" aria-label="Vista de la agenda">
@@ -259,7 +289,48 @@ export function AgendaToolbar({
           </div>
         </div>
       </div>
-      {practitionerChips}
+      {!scoped && practitionerChips}
     </header>
+  );
+}
+
+/**
+ * Título del Mes («noviembre de 2026»). Del día 15 al mediodía AR del mes del ancla: lejos de cualquier borde de mes
+ * en cualquier zona del host (en Vercel el host es UTC; el 31 a la noche AR ya es el 1 del mes siguiente en UTC).
+ */
+export function agendaMonthTitle(anchor: Date): string {
+  const mid = instantAt(`${dayKeyOf(anchor).slice(0, 7)}-15`, 12 * 60);
+  return mid.toLocaleDateString("es-AR", { month: "long", year: "numeric", timeZone: "America/Argentina/Buenos_Aires" });
+}
+
+/**
+ * Navegación ‹ Hoy › (los tres controles a 36 px de alto). Sin hooks: se exporta para probar el click en el árbol
+ * real sin jsdom. En Mes son ±1 mes (CF2, A.4); en el resto, ±1 semana como siempre (mismo markup).
+ */
+export function AgendaNavGroup({
+  segment,
+  onNavigateWeeks,
+  onNavigateMonths,
+  onToday,
+}: {
+  segment: ViewSegment;
+  onNavigateWeeks: (deltaWeeks: -1 | 1) => void;
+  onNavigateMonths?: (deltaMonths: -1 | 1) => void;
+  onToday: () => void;
+}) {
+  const month = segment === "month";
+  const nav = month && onNavigateMonths ? onNavigateMonths : onNavigateWeeks;
+  return (
+    <div className={`k-glass ${styles.pillGroup}`}>
+      <button type="button" onClick={() => nav(-1)} aria-label={month ? "Mes anterior" : "Semana anterior"} className={styles.navBtn}>
+        <IconChevL size={14} />
+      </button>
+      <button type="button" onClick={onToday} className={`${styles.navBtn} ${styles.navBtnText}`}>
+        Hoy
+      </button>
+      <button type="button" onClick={() => nav(1)} aria-label={month ? "Mes siguiente" : "Semana siguiente"} className={styles.navBtn}>
+        <IconChevR size={14} />
+      </button>
+    </div>
   );
 }

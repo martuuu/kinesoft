@@ -4,7 +4,9 @@ import type { ReactNode } from "react";
 import { IconActivity, IconBell, IconCheck, IconClock, IconUsers, IconX } from "@/components/ui/icons";
 import { PractitionerBadge } from "@/components/agenda/grid/practitioner-badge";
 import { bookingPlanMarks } from "@/components/agenda/grid/booking-card";
+import { MoneyBadge } from "@/components/agenda/grid/money-badge";
 import { DisciplineChip } from "@/components/planes/discipline-chip";
+import { formatARS } from "@/lib/format";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import {
   RECEPTION_ACTION_LABEL,
@@ -97,6 +99,7 @@ export function ReceptionRow({
   onAction,
   onOpen,
   room,
+  collect,
 }: {
   entry: ReceptionDayEntry<BookingDTO>;
   /** Acciones a mostrar (ya filtradas por día con `visibleActions`). */
@@ -112,6 +115,12 @@ export function ReceptionRow({
   onAction: (b: BookingDTO, action: ReceptionAction) => void;
   onOpen: (b: BookingDTO) => void;
   room?: { name: string } | null;
+  /**
+   * [CF2-RC] Columna «Cobro». `undefined` = la vista no la muestra (sin viewer de cobro: la fila es la de antes de
+   * CF2). `copago` = el viewer cobra esta fila y ve el tag del copago (si no, solo la plata online de `MoneyBadge`).
+   * `owedCents` != null = debe y el viewer la cobra: botón «Cobrar» (abre el `CollectModal` de la vista).
+   */
+  collect?: { copago: boolean; owedCents: number | null; onCollect: (b: BookingDTO) => void };
 }) {
   const b = entry.row;
   const time = fmtHour(new Date(b.scheduledFor));
@@ -127,6 +136,10 @@ export function ReceptionRow({
   // campo (proyecciones viejas) se asume operable; el server decide igual.
   // AS-0d: la vista pasa `operable` con el turno propio sumado (el server lo acepta aunque el paciente sea basic).
   const operable = operableProp ?? b.canOperate !== false;
+  // [CF2-ZF1] (ZB-7) «Cobrar» con la jerarquía de /sala (`deskPrimary`): es el PRIMARIO cuando es lo único que queda
+  // por hacer en la fila (el atendido que debe, o quien cobra sin operar la fila); al lado de una transición primaria
+  // («Llamar», «En atención») queda secundario, como el «Cobrar ahora» del menú ⋯ de /sala. Un solo primario por fila.
+  const collectPrimary = !(canOperate && operable && !cancelled && primary);
 
   return (
     <tr
@@ -202,6 +215,25 @@ export function ReceptionRow({
       <td data-label="Espera" className="k-mono rcp-wait">
         {wait ?? <span style={{ color: "var(--navy-300)" }}>—</span>}
       </td>
+      {collect && (
+        <td data-label="Cobro" className="rcp-cobro">
+          {/* Vacío (sin plata online ni tag) = «—» por CSS (`.rcp-cobro-in:empty`): MoneyBadge no pinta nada. */}
+          <span className="rcp-cobro-in">
+            <MoneyBadge b={b} copago={collect.copago} />
+            {collect.owedCents != null && !cancelled && (
+              <button
+                type="button"
+                className={collectPrimary ? "rcp-btn rcp-btn-primary" : "rcp-btn"}
+                disabled={pending}
+                onClick={() => collect.onCollect(b)}
+                aria-label={`Cobrar ${formatARS(collect.owedCents)}: ${who}`}
+              >
+                Cobrar
+              </button>
+            )}
+          </span>
+        </td>
+      )}
       {canOperate && (
       <td data-label="Acciones" className="rcp-actions-cell">
         {!cancelled && operable ? (
@@ -224,9 +256,9 @@ export function ReceptionRow({
                 {RECEPTION_ACTION_LABEL[a]}
               </button>
             ))}
-            {/* PL-F1c: acá había un «Cobrar» deshabilitado («Próximamente»). Se quitó por la regla de Martin del
-                16-oct (nada de botones a medio hacer). El cobro desde recepción es C0 (Secretaria): vuelve cuando
-                abra el drawer en el cobro del copago de verdad. */}
+            {/* PL-F1c quitó el «Cobrar» deshabilitado que había acá. [CF2-RC] El cobro volvió, de verdad, en la columna
+                «Cobro» (no acá): cobrar no es una transición de recepción y lo decide `billing.collect*`, no
+                `agenda.reception`; un viewer que cobra sin operar la fila igual tiene que poder cobrar. */}
           </div>
         ) : (
           <span style={{ color: "var(--navy-300)" }}>—</span>

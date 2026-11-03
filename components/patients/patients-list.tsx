@@ -3,77 +3,16 @@
 import Link from "next/link";
 import { Avatar } from "@/components/ui/avatar";
 import { Tag } from "@/components/ui/tag";
-import { BulkSelectCheckbox } from "@/components/patients/bulk-select";
+import { BulkSelectCheckbox, BulkSelectPageCheckbox } from "@/components/patients/bulk-select";
 import { PatientRowActions } from "@/components/patients/patient-row-actions";
-import { DisciplineChip } from "@/components/planes/discipline-chip";
-import { disciplineLabel } from "@/lib/plan-display";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
-import { patientsGridColumns } from "@/components/patients/patients-grid";
-import type { PatientListPlanChip, PatientRow } from "@/lib/patients-types";
+import {
+  patientsGridColumns,
+  practitionerCellView,
+  practitionerColumnLabel,
+} from "@/components/patients/patients-grid";
+import type { PatientRow } from "@/lib/patients-types";
 import styles from "./patients-directory.module.css";
-
-/**
- * Texto de un chip de plan del directorio (S32, puro). Mismo formato que el
- * hero del perfil (`heroPlanChipText`): "3/10" = realizadas / sesiones vivas,
- * y el aria lo dice entero con la disciplina, porque el color no puede ser el
- * único canal (AGENTS §5). Sin título (PHI, PD-11).
- */
-export function patientListPlanChipText(chip: PatientListPlanChip): { progress: string; ariaLabel: string } {
-  const disc = chip.discipline ? `Plan de ${disciplineLabel(chip.discipline)}` : "Plan";
-  return {
-    progress: `${chip.done}/${chip.totalLive}`,
-    ariaLabel: `${disc}: ${chip.done} de ${chip.totalLive} ${chip.totalLive === 1 ? "sesión realizada" : "sesiones realizadas"}`,
-  };
-}
-
-/**
- * Columna «Plan activo» (S32): un chip por plan ACTIVE y vivo (Kine y Osteo
- * pueden convivir). Con un solo plan, debajo va su título; con dos o más, solo
- * los chips (un título suelto no diría de cuál es).
- */
-function PlanCell({ plans, title }: { plans: PatientListPlanChip[]; title: string | null }) {
-  // ES4-Z: navy-500 (navy-300 no llegaba a 4.5:1 sobre el fondo de la fila).
-  if (plans.length === 0) return <span style={{ color: "var(--navy-500)" }}>Sin plan activo</span>;
-  return (
-    <div style={{ minWidth: 0 }}>
-      <ul
-        aria-label="Planes en curso"
-        style={{ display: "flex", gap: 4, flexWrap: "wrap", listStyle: "none", margin: 0, padding: 0 }}
-      >
-        {plans.map((c, i) => {
-          const { progress, ariaLabel } = patientListPlanChipText(c);
-          return (
-            <li
-              key={`${c.discipline ?? "NONE"}-${i}`}
-              data-testid="patients-plan-chip"
-              aria-label={ariaLabel}
-              style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
-            >
-              <DisciplineChip discipline={c.discipline} size="xs" />
-              <span className="k-mono" aria-hidden style={{ fontSize: 11, fontWeight: 700, color: "var(--sky-700)" }}>
-                {progress}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
-      {plans.length === 1 && title && (
-        <div
-          style={{
-            fontSize: 11.5,
-            color: "var(--navy-700)",
-            marginTop: 2,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {title}
-        </div>
-      )}
-    </div>
-  );
-}
 
 /**
  * Línea secundaria de la fila (D11 de VX0-b): DNI o teléfono, que sirven para distinguir homónimos al escanear. El
@@ -92,55 +31,116 @@ export function rowEnterDelayMs(index: number): number {
 }
 
 /**
+ * Encabezado del directorio (CF2). Vivía en `app/(app)/pacientes/page.tsx`; se mudó acá porque el rótulo de la columna
+ * de profesionales depende de la vertical (`useTenantModules().vertical`) y así encabezado y filas leen la MISMA
+ * grilla y el MISMO rótulo en el mismo archivo (si se desalinean, cada celda cae bajo el título equivocado).
+ * `selectableIds` = filas `full` de la página (las únicas que el server deja archivar en lote).
+ */
+export function PatientsListHead({ selectableIds }: { selectableIds: string[] }) {
+  const { vertical } = useTenantModules();
+  return (
+    <div className={styles.head} style={{ gridTemplateColumns: patientsGridColumns() }}>
+      <span>
+        <BulkSelectPageCheckbox ids={selectableIds} />
+      </span>
+      <span>Nombre y apellido</span>
+      <span>Obra social</span>
+      <span>Próx. turno</span>
+      <span>Última visita</span>
+      <span>{practitionerColumnLabel(vertical)}</span>
+      <span className={styles.right}>Estado</span>
+      <span />
+    </div>
+  );
+}
+
+/**
+ * Celda «Kinesiólogo»/«Profesional» (CF2, decisión 2 de Martin). Dos líneas como mucho (a cargo primero con la marca
+ * «a cargo», un segundo nombre) y «+N» para el resto. El `title` los dice todos (mouse) y el texto `k-sr-only` también
+ * (lectores): un `aria-label` en un `div` genérico lo ignoran los lectores (ARIA lo prohíbe en `generic`), así que la
+ * lista visible va `aria-hidden` y el nombre completo se lee una sola vez.
+ */
+function PractitionersCell({
+  row,
+  names,
+  label,
+}: {
+  row: Pick<PatientRow, "practitionerIds" | "assignedPractitionerId">;
+  names: Readonly<Record<string, string>>;
+  label: string;
+}) {
+  const view = practitionerCellView(row.practitionerIds ?? [], row.assignedPractitionerId, names);
+  return (
+    <div className={styles.cellPros} title={view.empty ? undefined : view.full}>
+      <span className={styles.cardLabel}>{label}:</span>
+      {view.empty ? (
+        <span className={styles.prosEmpty}>{view.full}</span>
+      ) : (
+        <>
+          <span className="k-sr-only">{view.full}</span>
+          <span aria-hidden className={styles.prosList}>
+            {view.visible.map((v, i) => (
+              <span key={`${v.name}-${i}`} className={styles.pro}>
+                <span className={styles.ellipsis}>{v.name}</span>
+                {v.assigned && <span className={styles.proAssigned}>a cargo</span>}
+                {i === view.visible.length - 1 && view.extra > 0 && (
+                  <span className={styles.proMore}>+{view.extra}</span>
+                )}
+              </span>
+            ))}
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Rótulo de «Estado» (D-CF2-14: sale de los turnos, no de la HC). Sin `activity` (fila vieja), la vista manda. */
+function StateTag({ activity, archived }: { activity: PatientRow["activity"]; archived: boolean }) {
+  const a = activity ?? (archived ? "archived" : null);
+  if (a === "active") return <Tag tone="lime">Activo</Tag>;
+  if (a === "inactive") return <Tag tone="soft">Inactivo</Tag>;
+  if (a === "archived") return <Tag tone="soft">Archivado</Tag>;
+  return <Tag tone="soft">—</Tag>;
+}
+
+/**
  * Filas del directorio (client boundary: checkbox de selección y acciones por fila).
  *
- * PF1.1 (C-PF1.2): la entrada escalonada era framer (`staggerList`/`staggerItem`) y el SSR pintaba las filas con
- * `opacity: 0` hasta hidratar. Ahora es CSS (`.k-enter-fade` + `animation-delay` por fila): se ve sin JS y
+ * PF1.1 (C-PF1.2): la entrada escalonada es CSS (`.k-enter-fade` + `animation-delay` por fila): se ve sin JS y
  * `prefers-reduced-motion` la apaga. El `key` del contenedor (firma ordenada de ids) re-monta la lista al buscar,
- * filtrar u ordenar, así la entrada se repite como antes.
+ * filtrar u ordenar, así la entrada se repite.
  *
- * D2 (VX0-b): la grilla y su versión card (< 768) viven en `patients-directory.module.css`; las columnas siguen
- * saliendo de `patientsGridColumns` (compartidas con el encabezado de la página), inline.
+ * CF2 (§29): mismas columnas para todos los roles y verticales (`patientsGridColumns()`); «Plan activo» salió
+ * (decisión 3 de Martin) y entró la columna de profesionales (decisión 2). «Estado» y «Última visita» salen de los
+ * turnos (D-CF2-14/15): los ve también la Secretaria (fila `admin`); la fila `basic` muestra «—» en los dos.
+ * `practitionerNames` = id → nombre de TODOS los profesionales del consultorio (`listPractitionerNames()` en la página).
  */
 export function PatientsList({
   rows,
   archived,
+  practitionerNames,
 }: {
   rows: PatientRow[];
   archived: boolean;
+  practitionerNames: Readonly<Record<string, string>>;
 }) {
   const signature = rows.map((r) => r.id).join(",");
-  // EV1-B: sin `planes` (General) no hay columna de plan y el «Estado» deja de
-  // ser "tiene plan activo" (que ahí sería siempre «Inactivo") para ser el del
-  // paciente: Activo o Archivado según la vista.
-  const plansEnabled = useTenantModules().has("planes");
-  // T3-Z M8: la columna «Plan activo» solo sale si ALGUNA fila es `full`. Una lista solo de filas `admin`/`basic`
-  // (Secretaria, Admin, Facturación) la mostraba entera con «Sin acceso», que es ruido y sonaba a error. El
-  // encabezado de `app/(app)/pacientes/page.tsx` aplica la MISMA regla (si no, las celdas se corren de título).
-  // El tono del avatar y el «Estado» siguen leyendo `plansEnabled`: eso no depende de que haya columna.
-  const showPlanColumn = plansEnabled && rows.some((r) => r.access === "full");
-  const cols: React.CSSProperties = { gridTemplateColumns: patientsGridColumns(showPlanColumn) };
+  const prosLabel = practitionerColumnLabel(useTenantModules().vertical);
+  const cols: React.CSSProperties = { gridTemplateColumns: patientsGridColumns() };
 
   return (
     <div key={signature}>
       {rows.map((p, i) => {
         const fullName = `${p.firstName} ${p.lastName}`;
         const isBasic = p.access === "basic";
-        // T3c-1b (§23.5): lo clínico (plan, última visita, estado del plan) y las acciones que mutan la ficha
-        // (selección masiva, archivar: exigen `full` en el server) van con `=== "full"`. Una fila `admin`
-        // (Secretaria, Admin, Facturación) muestra contacto y obra social como `full`, pero no HC.
+        // T3c-1b (§23.5): las acciones que mutan la ficha (selección masiva, archivar: exigen `full` en el server) van
+        // con `=== "full"`. Una fila `admin` (Secretaria, Admin, Facturación) muestra contacto, obra social, estado y
+        // última visita (CF2: datos de turnos, no HC), pero no archiva.
         const isFull = p.access === "full";
-        // S32: "tiene plan" = al menos un chip (plan ACTIVE y vivo); avatar,
-        // celda y «Estado» leen lo mismo.
-        const hasPlan = (p.activePlans?.length ?? 0) > 0;
-        // Basic rows: muted styling, no plan info, no insurer line,
-        // no archive action (the row's owner controls that), no
-        // bulk-select (those mutate PHI).
-        const tone: "sky" | "lime" | "navy" = !isFull || !plansEnabled
-          ? "sky"
-          : hasPlan
-            ? "lime"
-            : "sky";
+        // CF2: el tono lima del avatar acompaña a «Activo» (antes era «tiene plan»); el texto del estado es el canal
+        // principal, el color solo lo refuerza (AGENTS §5).
+        const tone: "sky" | "lime" = !isBasic && p.activity === "active" ? "lime" : "sky";
         const insurer = isBasic || !p.obraSocial || p.obraSocial.toLowerCase() === "particular" ? "—" : p.obraSocial;
         return (
           <div
@@ -166,18 +166,6 @@ export function PatientsList({
                 <div className={styles.sub}>{patientRowSubline(p)}</div>
               </div>
             </Link>
-            {showPlanColumn && (
-            <div className={styles.cellPlan} style={{ minWidth: 0 }}>
-              {isFull ? (
-                <PlanCell plans={p.activePlans ?? []} title={p.activeProgramTitle} />
-              ) : isBasic ? (
-                <Tag tone="soft">Sin acceso</Tag>
-              ) : (
-                // T3-Z M8: `admin` ve la ficha administrativa; el plan es HC y no le corresponde, no le «falta acceso».
-                <span style={{ color: "var(--navy-400)" }}>—</span>
-              )}
-            </div>
-            )}
             <div
               className={`${styles.cellInsurer} ${styles.ellipsis}`}
               title={insurer === "—" ? undefined : insurer}
@@ -200,36 +188,23 @@ export function PatientsList({
                 : "—"}
             </div>
             <div className={`${styles.cellLast} ${styles.nowrap} k-mono`} style={{ fontSize: 12, color: "var(--navy-500)" }}>
-              {!isFull
-                ? "—"
-                : p.lastVisit
-                  ? p.lastVisit.toLocaleDateString("es-AR", {
-                      day: "2-digit",
-                      month: "short",
-                      timeZone: "America/Argentina/Buenos_Aires",
-                    })
-                  : "—"}
+              {/* D-CF2-15: con acceso básico «Última visita» va oculta. */}
+              {!isBasic && p.lastVisit
+                ? p.lastVisit.toLocaleDateString("es-AR", {
+                    day: "2-digit",
+                    month: "short",
+                    timeZone: "America/Argentina/Buenos_Aires",
+                  })
+                : "—"}
             </div>
+            <PractitionersCell row={p} names={practitionerNames} label={prosLabel} />
             <div className={styles.cellState} style={{ display: "flex", justifyContent: "flex-end" }}>
-              {isBasic ? (
-                <Tag tone="soft">—</Tag>
-              ) : !plansEnabled ? (
-                // Sin `planes` el estado es el del paciente (no HC): `admin` también lo ve.
-                archived ? <Tag tone="soft">Archivado</Tag> : <Tag tone="lime">Activo</Tag>
-              ) : !isFull ? (
-                <Tag tone="soft">—</Tag>
-              ) : hasPlan ? (
-                <Tag tone="lime">Activo</Tag>
-              ) : (
-                <Tag tone="soft">Inactivo</Tag>
-              )}
+              {isBasic ? <Tag tone="soft">—</Tag> : <StateTag activity={p.activity} archived={archived} />}
             </div>
             {!isFull ? (
               <span className={styles.cellActions} />
             ) : (
-              // S32a (handoff): el diálogo de archivar nombra al paciente. `livePlanCount`
-              // queda en null (pregunta siempre): `activePlans` cuenta solo ACTIVE y
-              // L9 también pausa/cancela planes PAUSED.
+              // S32a (handoff): el diálogo de archivar nombra al paciente.
               <span className={styles.cellActions}>
                 <PatientRowActions patientId={p.id} archived={archived} patientName={fullName} />
               </span>
@@ -240,3 +215,4 @@ export function PatientsList({
     </div>
   );
 }
+

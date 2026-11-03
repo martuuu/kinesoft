@@ -5,10 +5,9 @@ import { Card } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
 import { Modal } from "@/components/ui/modal";
 import { toARDateKey, toARMinutes } from "@/lib/datetime-ar";
-import { dowOfDayKey } from "@/lib/availability/day";
 import { animatedPulseIds, splitCountByPractitioner, waitingPulse, type AggregatedDayLock } from "@/lib/agenda-client-state";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
-import { DAYS, fmtHour, fmtMoney, osLabel, buildSlots, roomNameOf, slotLabel, slotOf, type BookingDTO } from "../agenda-utils";
+import { fmtHour, fmtMoney, osLabel, buildSlots, roomNameOf, slotLabel, slotOf, type BookingDTO } from "../agenda-utils";
 import { StatusTag } from "@/components/ui/status-tag";
 import { paymentHoldState } from "@/lib/agenda-filters";
 import { anyHighlightMatch, type AgendaHighlight } from "@/lib/agenda-highlight";
@@ -16,6 +15,7 @@ import { PractitionerBadge } from "../grid/practitioner-badge";
 import { MoneyBadge, PlanMarks, WaitingDot, bookingStatusTone, planLooseSplit, planLooseSplitText, waitingHostProps } from "../grid/booking-card";
 import { BLOCKED_STRIPES } from "../grid/unavailable-overlay";
 import { normalizeSlotMinutes, type AgendaSlotMinutes } from "@/lib/tenant-settings-constants";
+import { WeekStrip } from "./week-strip";
 import styles from "./views.module.css";
 
 /**
@@ -197,8 +197,10 @@ function WeekBookingLine({
       <span style={{ fontSize: 11, fontWeight: 600, minWidth: 0, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {b.patientName}
       </span>
-      {/* [TP-3e] La Semana muestra la seña: el badge corto entra en la línea de 22 px (cede el nombre, con elipsis). */}
-      <MoneyBadge b={b} />
+      {/* [TP-3e] La Semana muestra la seña: el badge corto entra en la línea de 22 px (cede el nombre, con elipsis).
+          [CF2-MU] `compact`: el tag del copago va como glifo (✓ / $) con el texto entero en el `aria-label`; «Pagado ·
+          Transferencia» no entra en 22 px. El modal de la celda (arriba) lo muestra entero. */}
+      <MoneyBadge b={b} compact />
       {pulse && <WaitingDot pulse={pulse} animated={pulseAnimated} size="sm" />}
       {practitioner && (
         <span className="k-mono" aria-hidden="true" style={{ fontSize: 9, fontWeight: 700, color: "var(--navy-500)", flexShrink: 0 }}>
@@ -220,6 +222,9 @@ function WeekBookingLine({
  *   parcial → solo las filas bloqueadas para todos los visibles.
  * - `renderDayLock(dayKey)`: el candado del header de cada día (lo arma
  *   `agenda-client` con el `DayLockButton` de B4.4 según capability).
+ *   [CF2-WS] El header es la tira `WeekStrip variant="columns"` (único
+ *   encabezado de la Semana, D-CF2-6): el candado va como hermano del botón
+ *   del día, nunca adentro.
  * - `roomById` (SR): catálogo de salas; con él, el modal de la celda suma la
  *   sala como texto ("10:00 · Kinesiología · 45 min · Consultorio 2"). La
  *   celda (solo conteo) no cambia. El caller lo pasa solo cuando la sala
@@ -234,7 +239,6 @@ export function WeekGridView({
   bookings,
   onEdit,
   businessHours,
-  showHeader,
   showSaturday,
   showSunday,
   highlight,
@@ -244,12 +248,17 @@ export function WeekGridView({
   renderDayLock,
   roomById = null,
   now,
+  onPickDay,
 }: {
   weekDays: ReadonlyArray<string>;
   bookings: BookingDTO[];
   onEdit: (b: BookingDTO) => void;
   businessHours: { start: number; end: number; slotMinutes: number };
-  showHeader: boolean;
+  /**
+   * @deprecated [CF2-WS] D-CF2-6: en Semana el encabezado siempre está; la pref `agendaShowWeekHeader` solo controla
+   * la tira picker de Día/Lista (la decide `agenda-client`). Se acepta y se ignora hasta que el caller deje de pasarla.
+   */
+  showHeader?: boolean;
   showSaturday: boolean;
   showSunday: boolean;
   /** Resaltado de la leyenda: las celdas con algún turno que coincide se levantan; el resto se atenúa. */
@@ -261,6 +270,8 @@ export function WeekGridView({
   roomById?: Readonly<Record<string, { name: string }>> | null;
   /** [HF-2a] Reloj de minuto de la agenda (latido «En sala»). Sin él, `new Date()` al render. */
   now?: Date;
+  /** [CF2-WS] Click en un día del encabezado → abrir ese día en Día. Sin él, el día no es un botón. */
+  onPickDay?: (dayKey: string) => void;
 }) {
   const clock = now ?? new Date();
   // [HF-2a] D-HF5: solo los 12 que más esperan laten; el resto, punto fijo.
@@ -293,7 +304,20 @@ export function WeekGridView({
     () => new Map(visibleDays.map((d, i) => [d, i])),
     [visibleDays]
   );
-  const gridCols = `52px repeat(${visibleDays.length}, 1fr)`;
+  // [CF2-WS] `minmax(0, 1fr)` (antes `1fr`): con `1fr` una columna con contenido largo se ensanchaba y el encabezado
+  // (otra grilla) ya no quedaba alineado. Es el mismo template que la tira `columns`.
+  const gridCols = `52px repeat(${visibleDays.length}, minmax(0, 1fr))`;
+  // [CF2-WS] Conteo por día del encabezado: los mismos turnos que dibuja la grilla (el `bookingsByDay` de `agenda-client`
+  // también sale de `visibleBookings`), y hoy AR del reloj de la agenda.
+  const dayCounts = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const b of bookings) {
+      const k = toARDateKey(new Date(b.scheduledFor));
+      m[k] = (m[k] ?? 0) + 1;
+    }
+    return m;
+  }, [bookings]);
+  const todayKey = toARDateKey(clock);
 
   // overflow modal state: null = closed, otherwise the slot's bookings + label
   const [overflow, setOverflow] = useState<{ bookings: BookingDTO[]; label: string } | null>(null);
@@ -333,50 +357,28 @@ export function WeekGridView({
   return (
     <>
       <Card className={styles.weekGrid} style={{ padding: 14, height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
-        {showHeader && (
-          <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 6, marginBottom: 6 }}>
-            <div />
-            {visibleDays.map((dayIdx) => {
-              const arKey = weekDays[dayIdx];
-              // Derive the weekday label from the column's actual AR date so
-              // the name and the number can never disagree. With a correct AR
-              // Monday this equals DAYS[dayIdx].
-              const label = DAYS[(dowOfDayKey(arKey) + 6) % 7];
-              const lock = dayLocks?.[arKey];
-              return (
-                <div
-                  key={dayIdx}
-                  data-day-status={lock?.status}
-                  title={lock && lock.status !== "open" && lock.detail ? lock.detail : undefined}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: 6,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    color: "var(--navy-500)",
-                    padding: "6px 0",
-                    minWidth: 0,
-                  }}
-                >
-                  <span>
-                    {label} {Number(arKey.slice(8, 10))}
-                  </span>
-                  {renderDayLock?.(arKey)}
-                </div>
-              );
-            })}
-          </div>
-        )}
+        {/* [CF2-WS] Una sola caja con scroll: el encabezado (sticky) y la grilla scrollean juntos y comparten columnas.
+            Antes el scroll era solo de la grilla y el header quedaba afuera: con barra vertical las columnas se corrían. */}
+        <div data-week-scroll style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+        <WeekStrip
+          variant="columns"
+          weekDays={weekDays}
+          dayKey={todayKey}
+          todayKey={todayKey}
+          counts={dayCounts}
+          showSaturday={showSaturday}
+          showSunday={showSunday}
+          onPick={onPickDay}
+          dayLocks={dayLocks}
+          renderDayLock={renderDayLock}
+        />
         <div
+          data-week-body
           style={{
-            flex: 1,
             display: "grid",
             gridTemplateColumns: gridCols,
             gridTemplateRows: `repeat(${SLOTS.length}, ${ROW}px)`,
             gap: 6,
-            overflow: "auto",
           }}
         >
           {SLOTS.map((s, i) => (
@@ -578,6 +580,7 @@ export function WeekGridView({
               </button>
             );
           })}
+        </div>
         </div>
       </Card>
 

@@ -324,6 +324,15 @@ export type AvailabilityInput = {
    * (PS > consultorio > 60; 0 es un valor).
    */
   publicMinLeadMinutes?: number | null;
+  /**
+   * CF2 (M21, D-CF2-8): anticipación mínima del turnero de cada PROFESIONAL cargado (`Practitioner.publicMinLeadMinutes`),
+   * cruda: null = hereda del consultorio; un profesional ausente del mapa, también. La efectiva de cada servicio la
+   * decide `effectivePublicMinLead(ps.minLeadMinutes, publicMinLeadMinutes, esto[pid])` (PS > profesional > consultorio
+   * > 60; 0 es un valor). Mapa APARTE (como `intervalCaps`) y no una clave de `PractitionerAgendaRules`: esas reglas se
+   * comparan con `toEqual` en `[CF-K1]` y en `cf-u4-config-agenda-rules`, y la anticipación solo la lee el turnero.
+   * Opcional para los callers puros; el loader siempre lo carga, en el select de profesionales que ya corría.
+   */
+  practitionerMinLead?: Readonly<Record<string, number | null>>;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

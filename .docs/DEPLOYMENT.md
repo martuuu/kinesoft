@@ -113,8 +113,9 @@ frena el deploy). Hasta A0b cada Preview migraba también y compartía la base d
 | 14 | `20260725120000_rls_policies` |
 | 15 | `20260730120000_service_max_concurrent` |
 
-Las 31 siguientes, con qué hace cada una y su estado en prod: [MIGRACIONES-RUNBOOK §2 «Tabla de migraciones»](MIGRACIONES-RUNBOOK.md).
-Prod tiene **40** (hasta M11); **pendientes: M12 → M14 → M18 → M17 → M15 → M16** ([PUSH-DIA.md](PUSH-DIA.md) A y D).
+Las 34 siguientes, con qué hace cada una y su estado en prod: [MIGRACIONES-RUNBOOK §2 «Tabla de migraciones»](MIGRACIONES-RUNBOOK.md).
+Prod tiene **47** (hasta M19, desde el reset del 29/30-oct); **pendientes: M20 → M21** (CF y CF2), antes del push
+([RUNBOOK «Estado y orden vigente»](MIGRACIONES-RUNBOOK.md)). Local: 49.
 
 ## Variables de entorno
 
@@ -162,6 +163,14 @@ contraseñas.
 | `NEXT_PUBLIC_SUPPORT_EMAIL` | P | sin setear | Martin | no | Canal de soporte público (banda de acceso, /suspendido) |
 | `PLATFORM_INBOX_EMAIL` | P | sin setear (los mensajes quedan en /plataforma) | Martin | no | Aviso por mail de mensajes y leads |
 
+### Web Push (CF2, avisos de turno online al profesional)
+
+| Variable | Scope | Default seguro | Quién | Secreta | Nota |
+| --- | --- | --- | --- | --- | --- |
+| `WEB_PUSH_VAPID_PUBLIC_KEY` | P | sin setear (push apagado, aviso al boot; el mail sigue) | Martin | no (pero server-only, nunca `NEXT_PUBLIC_`) | `npx web-push generate-vapid-keys --json`, 87 caracteres. [EXTERNAL-CONFIG §0.17](EXTERNAL-CONFIG.md#push-cf2) |
+| `WEB_PUSH_VAPID_PRIVATE_KEY` | P | sin setear | Martin | **sí** (Sensitive) | 43 caracteres. Las tres o ninguna: con una o dos el boot falla. **Rotarlas invalida todos los dispositivos** |
+| `WEB_PUSH_VAPID_SUBJECT` | P | sin setear | Martin | no | `mailto:<soporte>` o `https://…` |
+
 ### Observabilidad y rate limit
 
 | Variable | Scope | Default seguro | Quién | Secreta | Nota |
@@ -179,7 +188,7 @@ contraseñas.
 | `SIGNUP_MODE` | P | `open` | Martin | no | `assisted` = alta solo desde /plataforma |
 | `MAINTENANCE_MODE` / `MAINTENANCE_MESSAGE` | P | `off` / sin setear | Martin | no | `on` = 503 a todo salvo webhooks, health y crons. El mensaje es público (280) |
 | `DIRECTORY_MODE` | P | `off` | Martin | no | `off`/`preview`/`public` (directorio público) |
-| `NEXT_PUBLIC_PWA` | P | sin setear (= prendido) | Martin | no | `off` desregistra los service workers (emergencia, MB-D6) |
+| `NEXT_PUBLIC_PWA` | P | sin setear (= prendido) | Martin | no | `off` desregistra los service workers (emergencia, MB-D6) y con ellos corta el Web Push (CF2). Dejarla sin setear; el build siempre la define (vacía, ZF4) |
 | `PATIENT_FILES_SIGNED_UPLOAD` | P | sin setear (= prendido) | Martin | no | `0`/`false`/`off` apaga la subida firmada de archivos (FC-2f) |
 | `SUPERADMIN_2FA_BYPASS` | P | **sin setear** | Martin | no | `<userId>@AAAA-MM-DD[,…]`, falla cerrado (HF-3). Solo temporal; se borra al terminar |
 

@@ -2,6 +2,7 @@
 
 import { IconStar } from "@/components/ui/icons";
 import { PractitionerBadge } from "./grid/practitioner-badge";
+import styles from "./practitioner-chips.module.css";
 
 /**
  * Selector multi-profesional de la agenda (B4.2, plan §11.3 punto 1: "chips
@@ -21,6 +22,12 @@ import { PractitionerBadge } from "./grid/practitioner-badge";
  * - Click en un chip suelto → lo suma o lo saca (multi-select).
  * - Si se saca el último, o quedan todos marcados → vuelve a "Todos".
  * - "Favoritos" selecciona exactamente los favoritos (deshabilitado sin favoritos).
+ *
+ * CF2 (D-CF2-2, brief A.1) · `layout`:
+ * - `"wrap"` (default): el markup de siempre (fila que baja de línea, chips de 32).
+ * - `"heading"`: debajo del título de alcance. Chips de 36 (el alto de los controles del toolbar) y, < 768, una sola
+ *   fila con scroll horizontal: con 5+ profesionales el wrap empujaba la grilla 2-3 filas abajo en el celular. El CSS
+ *   va en este módulo (chunk diferido), no en el toolbar del first load.
  *
  * Identidad no cromática: iniciales (`PractitionerBadge`), nunca un color por
  * profesional (AGENTS §5). Activo = badge relleno navy + borde, y
@@ -50,13 +57,16 @@ export function PractitionerChips({
   onChange,
   favoriteIds = [],
   onToggleFavorite,
+  layout = "wrap",
 }: {
   practitioners: ReadonlyArray<PractitionerChip>;
   selectedIds: ReadonlyArray<string>;
   onChange: (ids: string[]) => void;
   favoriteIds?: ReadonlyArray<string>;
   onToggleFavorite?: (practitionerId: string) => void;
+  layout?: "wrap" | "heading";
 }) {
+  const h = layout === "heading" ? 36 : 32;
   const allIds = practitioners.map((p) => p.id);
   const selected = selectedIds.filter((id) => allIds.includes(id));
   const all = selected.length === 0;
@@ -69,7 +79,9 @@ export function PractitionerChips({
     <div
       role="group"
       aria-label="Profesionales a mostrar"
-      style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}
+      {...(layout === "heading"
+        ? { className: styles.row }
+        : { style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" } })}
     >
       <button
         type="button"
@@ -77,7 +89,7 @@ export function PractitionerChips({
         aria-label={`Todos los profesionales, ${total} ${total === 1 ? "turno" : "turnos"}`}
         onClick={() => onChange([])}
         className="k-tap-m"
-        style={chipStyle(all)}
+        style={chipStyle(all, h)}
       >
         Todos <Count n={total} active={all} />
       </button>
@@ -89,7 +101,7 @@ export function PractitionerChips({
         className="k-tap-m"
         title={favs.length === 0 ? "Marcá profesionales con la estrella para armar tus favoritos" : undefined}
         onClick={() => onChange(favs.length === allIds.length ? [] : allIds.filter((id) => favs.includes(id)))}
-        style={{ ...chipStyle(favsActive), opacity: favs.length === 0 ? 0.5 : 1, cursor: favs.length === 0 ? "default" : "pointer" }}
+        style={{ ...chipStyle(favsActive, h), opacity: favs.length === 0 ? 0.5 : 1, cursor: favs.length === 0 ? "default" : "pointer" }}
       >
         <IconStar size={12} fill={favsActive ? "currentColor" : "none"} /> Favoritos{" "}
         {favs.length > 0 && <Count n={favTotal} active={favsActive} />}
@@ -106,7 +118,7 @@ export function PractitionerChips({
             data-chip={p.id}
             className="k-tap-m"
             style={{
-              ...chipStyle(on),
+              ...chipStyle(on, h),
               padding: 0,
               gap: 0,
               overflow: "hidden",
@@ -189,12 +201,12 @@ function Count({ n, active }: { n: number; active: boolean }) {
   );
 }
 
-function chipStyle(active: boolean): React.CSSProperties {
+function chipStyle(active: boolean, height: number): React.CSSProperties {
   return {
     display: "inline-flex",
     alignItems: "center",
     gap: 6,
-    height: 32,
+    height,
     padding: "0 12px",
     borderRadius: 999,
     fontSize: 12.5,

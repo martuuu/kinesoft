@@ -45,7 +45,7 @@ vi.mock("@/lib/practitioner-public", () => ({ setPractitionerPublicBooking: asyn
 
 import ReportesPage from "@/app/(app)/reportes/page";
 import { TopBar } from "@/components/layout/topbar";
-import { TopbarAccountMenu } from "@/components/layout/topbar-account-menu";
+import { TopbarAccountMenu, loadSwitch } from "@/components/layout/topbar-account-menu";
 import { AppShell } from "@/components/layout/app-shell";
 import { TenantModulesProvider } from "@/components/layout/tenant-modules-context";
 import { TenantChoiceProvider } from "@/components/layout/tenant-switcher";
@@ -142,7 +142,9 @@ describe("[PL-F1c] barra superior (chrome «Barra superior»)", () => {
     expect(render(true)).toMatch(/<a href="\/elegir-consultorio" role="menuitem"[^>]*>.*Cambiar de consultorio/);
   });
 
-  it("[PL-F] menú de cuenta: «Ayuda y soporte» para todos y el switch del turnero propio solo si atiende", () => {
+  it("[PL-F] menú de cuenta: «Ayuda y soporte» para todos y el switch del turnero propio solo si atiende", async () => {
+    // [CF2-ZF4] el switch baja aparte (idle / hover / al abrir): sin effects, el test lo espera antes de dibujar.
+    await loadSwitch();
     const render = (own: { practitionerId: string; enabled: boolean } | null) =>
       renderToStaticMarkup(
         <TenantModulesProvider modules={KINE}>

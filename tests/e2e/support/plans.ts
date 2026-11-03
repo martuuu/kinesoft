@@ -4,7 +4,7 @@ import { expect, type Browser, type BrowserContext, type Page } from "@playwrigh
 import type { PrismaClient, SaasPlan, TenantVertical } from "@prisma/client";
 import { addPatient, addRoom, addStaff, createEphemeralTenant, deleteTenantDeep, ownerClient } from "../../helpers/tenant-factory";
 import { modulesFor, type TenantEntitlements, type TenantModule } from "../../../lib/tenant-modules";
-import { NAV_ITEMS, navFor, shellNavCaps } from "../../../lib/nav";
+import { NAV_ITEMS, navFor } from "../../../lib/nav";
 import { capabilitiesForMember } from "../../../lib/capabilities";
 import { E2E_BASE_URL, E2E_PASSWORD, E2E_STATE_DIR } from "./e2e-constants.mjs";
 
@@ -169,8 +169,8 @@ export function plansSessionFiles(fx: PlansFixture): string[] {
 
 /**
  * El menú que el layout `(app)` tiene que mostrar para ESTE usuario en ESTE consultorio: entitlements y membresía leídos
- * de la base local → `modulesFor` + `capabilitiesForMember` → `shellNavCaps` (cobros online prendidos: el E2E corre con
- * `MP_CONNECT_MODE=fake`) → `navFor`. Es lo mismo que arma `app/(app)/layout.tsx`, desde las funciones puras.
+ * de la base local → `modulesFor` + `capabilitiesForMember` → `navFor` con `onlinePayments: true` (cobros online prendidos: el E2E corre con
+ * `MP_CONNECT_MODE=fake`). Es lo mismo que arma `app/(app)/layout.tsx`, desde las funciones puras.
  */
 export async function expectedNavFor(tenantId: string, userId: string): Promise<string[]> {
   const db = ownerClient();
@@ -190,8 +190,7 @@ export async function expectedNavFor(tenantId: string, userId: string): Promise<
       moduleGrants: t.moduleGrants as TenantModule[],
       moduleRevokes: t.moduleRevokes as TenantModule[],
     };
-    const caps = shellNavCaps([...capabilitiesForMember(m)], true);
-    return navFor(modulesFor(ents), new Set(caps)).map((i) => i.href);
+    return navFor(modulesFor(ents), capabilitiesForMember(m), { onlinePayments: true }).map((i) => i.href);
   } finally {
     await db.$disconnect();
   }

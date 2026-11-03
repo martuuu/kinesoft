@@ -53,11 +53,37 @@ describe("[PF1.1-sala] /sala baja solo la cara elegida (C-PF2)", () => {
 
   it("los cargadores apuntan a los módulos de cada cara (tsc fija que exporten lo que se usa)", () => {
     const src = read("components/sala/sala-faces.ts");
-    for (const mod of ["./sala-board-face", "./desk/reception-desk", "./desk/desk-list", "./desk/desk-flow", "./desk/desk-pay-modal"]) {
+    for (const mod of [
+      "./sala-board-face",
+      "./desk/reception-desk",
+      "./desk/desk-list",
+      "./desk/desk-flow",
+      "./desk/desk-pay-modal",
+      "./sala-cash-drawer",
+    ]) {
       expect(src).toContain(`import("${mod}")`);
     }
     // El módulo de cargadores no arrastra ninguna cara por import estático.
     expect(staticImports(src).filter((s) => !s.startsWith("@/lib/"))).toEqual([]);
+  });
+
+  it("[CF2-SB7] el Tablero baja el drawer «Por cobrar» diferido y sin SSR; el drawer, el modal de cobro también", () => {
+    const face = read("components/sala/sala-board-face.tsx");
+    for (const mod of ["sala-cash-drawer", "desk-pay-modal", "booking-collect", "collect-modal"]) {
+      expect(staticImports(face).filter((s) => s.includes(mod)), mod).toEqual([]);
+    }
+    expect(face).toMatch(/const SalaCashDrawer = dynamic\([^\n]*\{ ssr: false \}\)/);
+    expect(face.match(/ssr:\s*false/g)?.length ?? 0).toBe(1);
+    const drawer = read("components/sala/sala-cash-drawer.tsx");
+    expect(staticImports(drawer).filter((s) => s.includes("desk-pay-modal"))).toEqual([]);
+    expect(drawer).toMatch(/const DeskPayModal = dynamic\([^\n]*\{ ssr: false \}\)/);
+  });
+
+  it("[CF2-SB8] reception-desk-state (first load de /sala) no suma imports: ni badges ni booking-collect", () => {
+    const imports = staticImports(read("lib/reception-desk-state.ts"));
+    // [CF2-ZF1] `copago-owed`: el criterio único de «Por cobrar» (ZB-1). Es chico y solo importa `format` (ya estaba).
+    expect(imports.sort()).toEqual(["@/lib/capabilities", "@/lib/copago-owed", "@/lib/format", "@/lib/reception-state", "@/lib/sala-board-state"]);
+    expect(staticImports(read("lib/copago-owed.ts"))).toEqual(["@/lib/format"]);
   });
 
   it("precargar en el server es un no-op (sin window no hay red que adelantar)", () => {

@@ -46,6 +46,8 @@ import { listAgendaBookings } from "@/lib/bookings";
 import { useRealtime } from "@/components/providers/realtime-provider";
 import { LiveIndicator } from "@/components/realtime/live-indicator";
 import { BookingFlashContext } from "./grid/booking-card";
+import { MoneyViewerContext } from "./grid/money-viewer-context";
+import { canCollectCopago } from "@/lib/capabilities";
 import { updateAgendaViewPrefs } from "@/lib/preferences";
 import {
   DEFAULT_AGENDA_VIEW_PREFS,
@@ -81,8 +83,10 @@ import {
   isDayScoped,
   mergeBookingOverrides,
   roomsInScope,
+  scopeHeadingOf,
   segmentOf,
   shiftDayKey,
+  shiftMonthDay,
   showModeToggle,
   showInsurerFilter,
   showPractitionerInitials,
@@ -94,9 +98,12 @@ import {
   type AgendaFilters,
   type AgendaView,
   type AggregatedDayLock,
+  type SelectionSource,
   type ViewSegment,
 } from "@/lib/agenda-client-state";
 import type { DayLockState } from "@/lib/availability/types";
+import type { AgendaMonthSummary } from "@/lib/agenda-month-types";
+import type { ReceptionCollect } from "./reception/reception-collect";
 import { sameHighlight, toggleHighlight, type AgendaHighlight } from "@/lib/agenda-highlight";
 import type { Discipline } from "@/lib/plans-constants";
 import {
@@ -157,6 +164,10 @@ const WeekGridView = dynamic(() => import("./views/week-grid-view").then((m) => 
 const ListView = dynamic(() => import("./views/list-view").then((m) => m.ListView));
 // MB-1a: la Semana del celular (lista por día) en su chunk; con SSR, si la vista inicial es Semana llega renderizada.
 const WeekDayList = dynamic(() => import("./views/week-day-list").then((m) => m.WeekDayList));
+// CF2 (D-CF2-7, brief A.4): la vista Mes en su chunk y CON SSR (default de `next/dynamic`). Con SSR el módulo entra al
+// grafo del server de /agenda y `getAgendaMonthSummary` ("use server") queda registrada en el manifiesto de actions
+// (lección CF-RT: una action que solo alcanza un chunk `ssr:false` puede no registrarse y la llamada falla en prod).
+const MonthView = dynamic(() => import("./views/month-view").then((m) => m.MonthView));
 // MB-Z-F2: los mismos `import()` de las vistas (el bundler los deduplica con los de `dynamic()`), para saber CUÁNDO
 // llegó cada chunk y tener el módulo a mano. Hasta entonces `SsrHold` deja quieto el HTML del server (CLS, ver
 // `views/view-chunks.ts`). Ya cargado, el cliente dibuja el componente directo (`preferLoaded`): pasar por el
@@ -169,6 +180,7 @@ type ViewModules = {
   "week-list"?: typeof import("./views/week-day-list");
   list?: typeof import("./views/list-view");
   reception?: typeof import("./reception/reception-view");
+  month?: typeof import("./views/month-view");
 };
 /** Módulos de vista ya cargados en esta pestaña (el registro del bundler también es por página). */
 const viewModules: ViewModules = {};
@@ -179,6 +191,7 @@ const VIEW_CHUNK_LOADERS: Record<AgendaViewChunk, () => Promise<unknown>> = {
   "week-list": () => import("./views/week-day-list").then((m) => void (viewModules["week-list"] = m)),
   list: () => import("./views/list-view").then((m) => void (viewModules.list = m)),
   reception: () => import("./reception/reception-view").then((m) => void (viewModules.reception = m)),
+  month: () => import("./views/month-view").then((m) => void (viewModules.month = m)),
 };
 const loadedViewChunks = new Set<AgendaViewChunk>();
 function loadViewChunks(chunks: readonly AgendaViewChunk[]): Promise<void> {
@@ -206,6 +219,7 @@ const RoomDayPanelC = preferLoaded(RoomDayPanel, () => viewModules.room?.RoomDay
 const WeekGridViewC = preferLoaded(WeekGridView, () => viewModules["week-grid"]?.WeekGridView);
 const ListViewC = preferLoaded(ListView, () => viewModules.list?.ListView);
 const WeekDayListC = preferLoaded(WeekDayList, () => viewModules["week-list"]?.WeekDayList);
+const MonthViewC = preferLoaded(MonthView, () => viewModules.month?.MonthView);
 const RoomFilterC = preferLoaded(RoomFilter, () => roomFilterModule?.RoomFilter);
 // [AS-2o] Select de obra social: mismo patrón que `RoomFilter` (SSR + `SsrHold` + `preferLoaded`). Solo existe con ≥1
 // obra social no Particular; diferido para no sumar al first load de /agenda (T3: delta ≤ +0,6 kB por sesión).
@@ -300,8 +314,21 @@ export type Props = {
   weekStartKey: string;
   autoCreate?: boolean;
   autoCreatePatientId?: string | null;
-  /** Chips elegidos al cargar (`?pros=` o el `?practitioner=` viejo); vacío = todos. */
+  /**
+   * Chips elegidos al cargar; vacío = todos. [CF2-AG1] D-CF2-1: la página los resuelve con `initialPractitionerSelection`
+   * (URL > guardada > rol); antes eran solo los de `?pros=` / el `?practitioner=` viejo.
+   */
   initialSelectedIds?: string[];
+  /**
+   * [CF2-AG1] De dónde salió `initialSelectedIds`. Con `saved` / `default` la agenda escribe `?pros=` una vez al montar
+   * (`withProsParam`) para que un refresh o un link copiado muestren lo mismo. Ausente = `url` (nada que escribir).
+   */
+  initialSelectionSource?: SelectionSource;
+  /**
+   * [CF2-AG1] `?open=<id>` (link «Ver turno» de /sala): si el turno está en la semana cargada, el drawer arranca abierto
+   * y el parámetro se saca de la URL (como `?new=1`), así un refresh no lo vuelve a abrir.
+   */
+  openBookingId?: string | null;
   /**
    * [AS-2o] `?os=` crudo de la URL (id de obra social o "particular"). Lo valida el cliente contra `insurers`
    * (`effectiveInsurerFilter`): uno desconocido se ignora y se saca de la URL. Ausente = se lee de la URL al montar.
@@ -356,6 +383,11 @@ export type Props = {
    * false = el drawer de siempre, sin el chunk. El badge «Confirmó» / «Pidió cancelar» de la card no depende de esto.
    */
   whatsapp?: boolean;
+  /**
+   * CF2 (brief A.4): resumen de la vista Mes que trajo el loader (`?view=month`, ≤ 2 tx, sin las filas de la semana).
+   * null/ausente = la vista lo pide sola (`MonthView` con `getAgendaMonthSummary`). Solo se lee en Mes.
+   */
+  initialMonth?: AgendaMonthSummary | null;
 } & Partial<AgendaBootstrapProps>;
 
 type AgendaHours = { start: number; end: number; slotMinutes: number };
@@ -425,6 +457,82 @@ export function dayLockExistingBlocks(availability: AgendaAvailability, dayKey: 
     .map((b) => ({ ...b, groupId: null, practitionerId: null, allDay: false }));
   return [...people, ...rooms];
 }
+/**
+ * [CF2-AG1] D-CF2-1: espera entre el último clic en los chips y el guardado de la selección. Quien arma «Ana + Bruno»
+ * hace 2-3 clics seguidos: sin la espera eran 2-3 escrituras de `UserPreferences` (y la del medio podía llegar
+ * última y dejar guardado un estado intermedio).
+ */
+export const SELECTION_SAVE_DEBOUNCE_MS = 800;
+
+/**
+ * [CF2-AG1] Guardado de la selección de profesionales: SOLO lo dispara un clic (`schedule`), con debounce, y en
+ * silencio. Silencio a propósito, distinto de `persistPrefs`: la selección ya está aplicada y en la URL, y un fallo
+ * (red, soporte en solo lectura) no merece un toast ni volver atrás los chips; en el peor caso la próxima vez abre con
+ * la guardada anterior. `flush` guarda ya lo pendiente (al desmontar: un clic y salir de /agenda antes de 800 ms no
+ * se pierde). Puro (sin React) para probarlo con timers falsos.
+ */
+export function createSelectionSaver(save: (ids: string[]) => unknown, delayMs = SELECTION_SAVE_DEBOUNCE_MS) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let pending: string[] | null = null;
+  const fire = () => {
+    timer = undefined;
+    const ids = pending;
+    pending = null;
+    if (!ids) return;
+    try {
+      Promise.resolve(save(ids)).catch(() => {});
+    } catch {
+      /* silencioso: ver arriba */
+    }
+  };
+  return {
+    schedule(ids: string[]) {
+      pending = ids;
+      if (timer !== undefined) clearTimeout(timer);
+      timer = setTimeout(fire, delayMs);
+    },
+    flush() {
+      if (timer === undefined) return;
+      clearTimeout(timer);
+      fire();
+    },
+  };
+}
+
+/**
+ * [CF2-AG1] La URL con `?pros=` de una selección que NO vino de la URL (guardada o rol), o null si no hay nada que
+ * escribir (selección «Todos» o la URL ya dice lo mismo). Toca solo `pros` (y saca el `?practitioner=` viejo, que si
+ * estaba era inválido: si no, habría ganado): `?os=`, `?view=`, `?date=` quedan como están.
+ */
+export function withProsParam(href: string, ids: ReadonlyArray<string>): string | null {
+  if (ids.length === 0) return null;
+  const url = new URL(href);
+  const pros = ids.join(",");
+  if (url.searchParams.get("pros") === pros && !url.searchParams.has("practitioner")) return null;
+  url.searchParams.set("pros", pros);
+  url.searchParams.delete("practitioner");
+  return url.toString();
+}
+
+/** [CF2-AG1] La URL sin `?open=` (ya se abrió el drawer, o el turno no está en la semana), o null si no lo tenía. */
+export function withoutOpenParam(href: string): string | null {
+  const url = new URL(href);
+  if (!url.searchParams.has("open")) return null;
+  url.searchParams.delete("open");
+  return url.toString();
+}
+
+/**
+ * CF2 (brief A.4, guardas obligatorias): ¿la vista vive de los datos de la SEMANA (`initialAvailability` +
+ * `listAgendaBookings`)? Todas menos Mes. En Mes el loader no trae ni turnos ni disponibilidad (`bookings` = [],
+ * `availability` = null) y `MonthView` pide y escucha su propio resumen: si la agenda siguiera con lo suyo, el effect de
+ * disponibilidad vería `null` y pediría `getAgendaAvailability` de la semana en cada visita al Mes, y el canal en vivo
+ * re-pediría la semana entera (o haría `router.refresh()` con un candado) por cada cambio, para nada.
+ */
+export function agendaWeekDataOn(view: AgendaView): boolean {
+  return view !== "month";
+}
+
 /** Reloj fijo para cálculos sin turnos (filas bloqueadas): el "ahora" solo
  *  importa para la reserva pública vencida, y ahí no hay turnos. */
 const NO_CLOCK = new Date(0);
@@ -444,10 +552,16 @@ export function AgendaClient(props: Props) {
   const modules = useTenantModules();
   const roomsOn = modules.has("salas");
   const waitingRoomOn = modules.has("salaEspera");
+  // CF2 (A-K): el Mes es de quien ve la agenda de todos (`agenda.viewAll`, la puerta de `getAgendaMonthSummary`). La
+  // página ya lo resuelve así; esto cubre lo que llega igual (como «Por sala» y Recepción de arriba).
+  const canMonth = (props.capabilities ?? []).includes("agenda.viewAll");
   const view: AgendaView =
-    (props.view === "room" && (!roomsOn || !props.rooms?.length)) || (props.view === "reception" && !waitingRoomOn)
+    (props.view === "room" && (!roomsOn || !props.rooms?.length)) ||
+    (props.view === "reception" && !waitingRoomOn) ||
+    (props.view === "month" && !canMonth)
       ? "timeline"
       : props.view;
+  const weekDataOn = agendaWeekDataOn(view);
   const [creating, setCreating] = useState<null | {
     defaultISO?: string;
     defaultPatientId?: string | null;
@@ -460,7 +574,13 @@ export function AgendaClient(props: Props) {
   // se deriva de la lista viva (abajo, `editingBooking`). Antes guardaba una
   // copia fija: con la agenda en vivo, un turno movido por otra sesión seguía
   // mostrando la hora vieja.
-  const [editing, setEditingState] = useState<{ id: string; updatedAt: string } | null>(null);
+  // [CF2-AG1] `?open=<id>`: arranca abierto si el turno está en la semana cargada (`props.bookings` es la semana
+  // entera, sin filtros). En el estado inicial y no en un effect: el primer render ya lo trae (el drawer es `ssr:false`,
+  // así que el HTML del server no cambia) y no hay un render intermedio con el drawer cerrado.
+  const [editing, setEditingState] = useState<{ id: string; updatedAt: string } | null>(() => {
+    const b = props.openBookingId ? props.bookings.find((x) => x.id === props.openBookingId) : undefined;
+    return b ? { id: b.id, updatedAt: b.updatedAt } : null;
+  });
   const setEditing = useCallback(
     (b: BookingDTO | null) => setEditingState(b ? { id: b.id, updatedAt: b.updatedAt } : null),
     []
@@ -526,11 +646,14 @@ export function AgendaClient(props: Props) {
   const planScope: AgendaPlanScope | null = plansEnabled ? planScopeOf(highlight) : null;
   const setPlanScope = (scope: AgendaPlanScope) => setHighlight(planScopeHighlight(scope));
   // Server-backed per-user agenda preferences, controlled from the Tweaks
-  // panel + /configuracion. `agendaShowWeekHeader` drives the day-header
-  // chrome — the day strip (every view) AND the week-grid header row.
+  // panel + /configuracion. [CF2-AG1] D-CF2-6: `agendaShowWeekHeader` («Tira de días») solo prende o
+  // apaga la tira picker de arriba en las vistas de un día. La Semana tiene UN encabezado, el de su grilla (la tira en
+  // variante `columns`, sticky y alineada con las columnas), y siempre está: antes eran dos (esta tira afuera y la fila
+  // propia de la grilla, desalineada) y la pref apagaba los dos.
   const tweaks = useTweaks();
   const { agenda } = tweaks;
-  const showDayHeader = agenda.agendaShowWeekHeader;
+  // CF2 (A.4): en Mes tampoco (la grilla del mes ya es el selector de días; la tira hablaría de otra semana).
+  const showDayHeader = agenda.agendaShowWeekHeader && view !== "month";
   // MB-1a (C-MB4): el alto fijo de la agenda descuenta el chrome de Apariencia (sidebar o barra superior).
   const chrome = tweaks.t?.dashChrome === "topbar" ? "topbar" : undefined;
 
@@ -586,6 +709,19 @@ export function AgendaClient(props: Props) {
     window.history.replaceState(null, "", next.toString());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // [CF2-AG1] `?open=<id>` (mismo criterio que `?new=1`): el drawer ya arrancó abierto (estado inicial de `editing`); el
+  // parámetro se saca SIEMPRE, también si el turno no estaba en la semana (otro día, borrado): un refresh no tiene que
+  // reintentar ni abrir un turno viejo.
+  useEffect(() => {
+    if (!props.openBookingId) return;
+    try {
+      const next = withoutOpenParam(window.location.href);
+      if (next) window.history.replaceState(null, "", next);
+    } catch {
+      /* sin history: queda el parámetro, el drawer ya se abrió */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Capabilities y profesionales ───────────────────────────────────────────
   const caps = useMemo(() => capabilitySet(props.capabilities), [props.capabilities]);
@@ -594,7 +730,25 @@ export function AgendaClient(props: Props) {
   const canLockAny = caps.has("agenda.manageBlocks") || caps.has("agenda.manageOwnBlocks");
   // Quién puede cargar salas (Configuración › Sedes): copy del vacío de "Por sala" (SRZ B3).
   const canConfigureRooms = caps.has("tenant.admin") || caps.has("schedule.configure");
+  // [CF2-AG1] D-CF2-3: quién ve el tag de cobro del copago («Pagado · Efectivo» / «Por cobrar») en tarjetas, Semana y
+  // Lista: quien puede cobrar ESE turno, con la misma regla que el server (`canCollectCopago`, T3: la Secretaria todo,
+  // el profesional lo suyo). Lo leen los `MoneyBadge` por `MoneyViewerContext` (no se baja por cada vista). Mostrar es
+  // UX: la barrera sigue siendo `toggleBilling`.
+  const canSeeMoney = useMemo(
+    () => (practitionerId: string) => canCollectCopago(caps, ownPractitionerId, practitionerId),
+    [caps, ownPractitionerId]
+  );
   const practitionerCount = props.practitioners.length;
+  // [CF2-RC] Viewer del cobro en Recepción (handoff A-RC): estable por identidad para no re-renderizar las filas.
+  const receptionCollect = useMemo<ReceptionCollect | null>(
+    () =>
+      caps.has("billing.collect")
+        ? { all: true, practitionerId: ownPractitionerId }
+        : caps.has("billing.collectOwn")
+          ? { all: false, practitionerId: ownPractitionerId }
+          : null,
+    [caps, ownPractitionerId]
+  );
 
   const badges = useMemo(
     () =>
@@ -646,6 +800,27 @@ export function AgendaClient(props: Props) {
   const insurerFilterReady = useChunkReady(insurerFilterOn, insurerFilterLoaded, loadInsurerFilter);
 
   const [selectedIds, setSelectedIdsState] = useState<string[]>(props.initialSelectedIds ?? []);
+  // [CF2-AG1] D-CF2-1: la selección se recuerda por usuario (`agendaPrefs.selectedPractitionerIds`), pero SOLO la que
+  // el usuario eligió con un clic: ni la inicial (URL / guardada / rol), ni un link compartido, ni «Por sala» (que
+  // esconde los chips y no llama al setter) la escriben. Si no, abrir un link con `?pros=` de otro pisaba la guardada.
+  const selectionSaver = useMemo(
+    () => createSelectionSaver((ids) => updateAgendaViewPrefs({ selectedPractitionerIds: ids })),
+    []
+  );
+  useEffect(() => () => selectionSaver.flush(), [selectionSaver]);
+  // Vino de la guardada o del rol: `?pros=` una vez, así un refresh, «Hoy» o un link copiado muestran lo mismo aunque
+  // la guardada cambie en otra pestaña. Una de la URL ya está ahí.
+  useEffect(() => {
+    if (props.initialSelectionSource !== "saved" && props.initialSelectionSource !== "default") return;
+    try {
+      const next = withProsParam(window.location.href, props.initialSelectedIds ?? []);
+      if (next) window.history.replaceState(null, "", next);
+    } catch {
+      /* sin history: la selección vale igual para esta pestaña */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  /** Clic en los chips (o en el select de respaldo del toolbar): aplica, va a la URL y se guarda con debounce. */
   const setSelectedIds = (ids: string[]) => {
     setSelectedIdsState(ids);
     // En la URL (sin navegar): un refresh o un link conserva la selección.
@@ -654,6 +829,7 @@ export function AgendaClient(props: Props) {
     } catch {
       /* sin history: la selección vale para esta pestaña */
     }
+    selectionSaver.schedule(ids);
   };
   const visiblePracs = useMemo(() => visiblePractitioners(ordered, selectedIds), [ordered, selectedIds]);
   const initialsById = useMemo(
@@ -681,6 +857,8 @@ export function AgendaClient(props: Props) {
   }, [props.initialAvailability]);
   const locationId = prefs.locationId;
   useEffect(() => {
+    // CF2: en Mes no hay semana que pedir (ver `agendaWeekDataOn`).
+    if (!weekDataOn) return;
     const want = { from: weekStartKey, locationId };
     if (availabilityMatches(availability, want)) return;
     const key = `${weekStartKey}|${locationId ?? ""}`;
@@ -702,7 +880,7 @@ export function AgendaClient(props: Props) {
       // Si este efecto se descarta antes de responder, el próximo puede volver a pedir.
       if (requested.current === key) requested.current = null;
     };
-  }, [availability, weekStartKey, locationId]);
+  }, [availability, weekStartKey, locationId, weekDataOn]);
 
   const primaryLocationId =
     availability?.primaryLocationId ?? props.locations?.find((l) => l.isPrimary)?.id ?? null;
@@ -816,6 +994,8 @@ export function AgendaClient(props: Props) {
   }, []);
   const { subscribe, onResync } = rt;
   useEffect(() => {
+    // CF2: en Mes el canal lo escucha `MonthView` (re-pide su resumen); acá ni se suscribe (ver `agendaWeekDataOn`).
+    if (!weekDataOn) return;
     // A lo sumo un refetch en vuelo y uno pendiente, por más lotes que lleguen.
     const coalescer = createRefetchCoalescer(refetchLive);
     const offBatch = subscribe((batch) => {
@@ -835,7 +1015,7 @@ export function AgendaClient(props: Props) {
       offResync();
       coalescer.dispose();
     };
-  }, [subscribe, onResync, refetchLive, router]);
+  }, [subscribe, onResync, refetchLive, router, weekDataOn]);
   // C9 compacto en el cable (`toBookingDTO`): acá vuelven los neutros y la
   // disciplina del servicio, así las vistas y el drawer leen `programId: null`
   // (suelto) y no `undefined` ("esta proyección no trae C9").
@@ -971,11 +1151,15 @@ export function AgendaClient(props: Props) {
     return countPlanScope(scope);
   }, [plansEnabled, visibleBookings, view, dayKey]);
 
+  // CF2 (A.4): en Mes los conteos de los chips son los del mes y los devuelve `MonthView` (`onCounts`): acá no hay
+  // turnos del mes (el loader solo trae el resumen). Hasta que llegan, 0 (igual en el server y al hidratar).
+  const [monthCounts, setMonthCounts] = useState<Record<string, number> | null>(null);
   // Conteo de los chips: el día (o la semana en Semana), en la sede elegida.
   const chipCounts = useMemo(() => {
+    if (view === "month") return monthCounts ?? {};
     const scope = isDayScoped(view) ? locBookings.filter((b) => toARDateKey(b.scheduledFor) === dayKey) : locBookings;
     return countByPractitioner(scope);
-  }, [locBookings, view, dayKey]);
+  }, [locBookings, view, dayKey, monthCounts]);
   // Conteos del filtro de sala: todos los filtros menos el de sala, con el
   // mismo alcance que los chips (el día, o la semana en Semana).
   // B1 (SRZ): "Todas las salas" = los no cancelados de esa base, no la suma
@@ -1061,8 +1245,13 @@ export function AgendaClient(props: Props) {
   );
 
   const weekDays = useMemo(() => weekDayKeys(weekStartKey), [weekStartKey]);
+  // [CF2-AG1] D-CF2-6: también en las vistas de un día, para que la tira picker muestre qué días de la semana están
+  // bloqueados (solo lo muestra; el candado interactivo sigue junto al título). Siete `aggregateDayLock` por render.
   const weekLocks = useMemo(
-    () => (view === "week" ? Object.fromEntries(weekDays.map((k) => [k, dayLockOf(k) ?? undefined])) : {}),
+    () =>
+      view === "week" || isDayScoped(view)
+        ? Object.fromEntries(weekDays.map((k) => [k, dayLockOf(k) ?? undefined]))
+        : {},
     [view, weekDays, dayLockOf]
   );
   const weekBlocked = useMemo(
@@ -1163,7 +1352,23 @@ export function AgendaClient(props: Props) {
   const go = (next: { view?: AgendaView; dayKey?: string }) =>
     router.push(agendaHref({ view: next.view ?? view, dayKey: next.dayKey ?? dayKey, selectedIds, insurerKey }));
   const segment = segmentOf(view);
-  const segments: ViewSegment[] = canReception ? ["day", "week", "list", "reception"] : ["day", "week", "list"];
+  // CF2 (A.4, A-K): Día / Semana / Mes / Lista / Recepción. «Mes» solo con `agenda.viewAll` (la puerta del resumen).
+  const segments: ViewSegment[] = [
+    "day",
+    "week",
+    ...(canMonth ? (["month"] as const) : []),
+    "list",
+    ...(canReception ? (["reception"] as const) : []),
+  ];
+  // CF2 (D-CF2-2): QUÉ agenda se mira, como título («Tu agenda · …», «Agenda de …», «Todos los profesionales (N)»).
+  // null con un solo profesional: el toolbar queda byte a byte como antes (la fecha es el h1).
+  const scopeHeading = useMemo(
+    () => scopeHeadingOf({ view, selectedIds, ordered, ownPractitionerId }),
+    [view, selectedIds, ordered, ownPractitionerId]
+  );
+  // CF2 (A.4): sin turnos de la semana no hay filtros de obra social ni de sala (filtran filas que el Mes no tiene) ni
+  // leyenda de servicios/plan (resalta tarjetas). La sede sí: el resumen se pide por sede.
+  const isMonth = view === "month";
   const onModeChange = (mode: AgendaMode) => {
     if (mode !== prefs.mode) persistPrefs({ mode });
     go({ view: dayViewFor(mode, practitionerCount, roomCount) });
@@ -1227,6 +1432,9 @@ export function AgendaClient(props: Props) {
         hiddenLabel={hiddenLabel}
         onShowAll={() => setVisibility(DEFAULT_AGENDA_VISIBILITY)}
         onNavigateWeeks={(w) => go({ dayKey: shiftDayKey(dayKey, w * 7) })}
+        // CF2 (A.4): ±1 mes con el día acotado al último del mes de destino (31-ene + 1 = 28-feb, `shiftMonthDay`).
+        onNavigateMonths={(d) => go({ dayKey: shiftMonthDay(dayKey, d) })}
+        scopeHeading={scopeHeading}
         onToday={() => go({ dayKey: toARDateKey(new Date()) })}
         // SRZ M2: en "Por sala" ni chips ni el select de respaldo (filtrarían
         // lo que la sala tiene que mostrar entero).
@@ -1257,6 +1465,8 @@ export function AgendaClient(props: Props) {
           multi && view !== "room" ? (
             <SsrHold ready={practitionerChipsReady}>
               <PractitionerChipsC
+                // CF2 (D-CF2-2): debajo del título de alcance, alto 36 y scroll horizontal en mobile.
+                layout="heading"
                 practitioners={ordered.map((p) => ({ ...p, count: chipCounts[p.id] ?? 0 }))}
                 selectedIds={selectedIds}
                 onChange={setSelectedIds}
@@ -1271,7 +1481,7 @@ export function AgendaClient(props: Props) {
         locationFilter={
           <>
             <LocationFilter locations={props.locations ?? EMPTY} value={locationId} onChange={onLocationChange} />
-            {roomCount >= 2 && (
+            {roomCount >= 2 && !isMonth && (
               <SsrHold ready={roomFilterReady}>
                 <RoomFilterC
                   rooms={scopeRooms}
@@ -1297,12 +1507,13 @@ export function AgendaClient(props: Props) {
         }
         // [AS-2g] La «Franja» se ve en todos los modos (antes solo Por profesional/sala) y marca la de la vista:
         // en Día/Semana, la del consultorio hasta que el usuario elige una (`zoomSet`, que escribe esta elección).
-        zoom={agendaGridZoom(view, prefs, tenantHours.slotMinutes)}
+        // CF2 (A.4): en Mes no hay filas ni tarjetas: sin «Franja» ni alcance de plan en el menú Vista.
+        zoom={isMonth ? null : agendaGridZoom(view, prefs, tenantHours.slotMinutes)}
         onZoomChange={(zoom) => persistPrefs(zoomChoicePatch(zoom))}
-        planScope={planScope}
+        planScope={isMonth ? null : planScope}
         onPlanScopeChange={setPlanScope}
         insurerFilter={
-          insurerFilterOn ? (
+          insurerFilterOn && !isMonth ? (
             <SsrHold ready={insurerFilterReady}>
               <InsurerFilterC insurers={props.insurers} value={insurerKey} onChange={setInsurer} />
             </SsrHold>
@@ -1311,7 +1522,8 @@ export function AgendaClient(props: Props) {
         insurerHiddenLabel={insurerHiddenLabel}
       />
 
-      {showDayHeader && (
+      {/* [CF2-AG1] D-CF2-6: en Semana no va la tira de afuera; el encabezado es el de la grilla (ver `weekLocks`). */}
+      {showDayHeader && view !== "week" && (
         <WeekStrip
           weekDays={weekDays}
           dayKey={dayKey}
@@ -1319,6 +1531,7 @@ export function AgendaClient(props: Props) {
           showSaturday={agenda.agendaShowSaturday}
           showSunday={agenda.agendaShowSunday}
           onPick={(k) => go({ dayKey: k })}
+          dayLocks={weekLocks}
         />
       )}
 
@@ -1333,159 +1546,180 @@ export function AgendaClient(props: Props) {
       >
         {/* SV09: las cards leen el flash del contexto (no se pasa por cada vista). */}
         <BookingFlashContext.Provider value={flashIds}>
-          {/* PF1.1 (C-PF1.2): la entrada de la vista es CSS (`.k-page-in`, 120 ms, sin animación con movimiento
-              reducido). Antes era `motion.div` con `AnimatePresence mode="wait"`: además de meter framer completo en
-              el first load, el `initial={{ opacity: 0 }}` dejaba la vista SSR invisible hasta hidratar (LCP) y el
-              «wait» demoraba cada cambio de día/vista lo que duraba la salida. El `key` remonta igual que antes. */}
-          <div key={`${view}-${dayKey}`} className="k-page-in" style={{ height: "100%" }}>
-            {/* MB-Z-F2: congela el HTML del server de la vista dinámica hasta su chunk (CLS; `views/view-chunks.ts`). */}
-            <SsrHold ready={viewReady} wrap={agendaViewChunks(view).length > 0}>
-              {view === "timeline" && (
-                <TimelineView
-                  bookings={todayList}
-                  dayKey={dayKey}
-                  onCreate={(iso) => setCreating({ defaultISO: iso })}
-                  onEdit={setEditing}
-                  density={prefs.density}
-                  businessHours={hours}
-                  highlight={highlight}
-                  practitionerById={initialsById}
-                  now={now}
-                  blockedRows={todayBlocked}
-                  dayLocked={todayLock?.status === "locked" ? { detail: todayLock.detail } : null}
-                  roomById={cardRooms}
-                />
-              )}
-              {view === "practitioner" && practitionerLayout && (
-                <PractitionerDayViewC
-                  dayKey={dayKey}
-                  layout={practitionerLayout}
-                  practitioners={visiblePracs}
-                  zoom={prefs.zoom}
-                  density={prefs.density}
-                  now={now}
-                  // IAM-4b: la columna «Otros» no es un profesional: el turno nuevo
-                  // sale sin profesional de columna (cae al default o hay que elegir).
-                  onSlotClick={(practitionerId, iso) =>
-                    setCreating(
-                      practitionerId === OTHERS_COLUMN_ID ? { defaultISO: iso } : { defaultISO: iso, practitionerId }
-                    )
-                  }
-                  onBookingClick={setEditing}
-                  highlight={highlight}
-                  lockStateByPractitioner={availability ? lockStatesOf(dayKey) : undefined}
-                  onDayLockClick={
-                    canLockAny && availability
-                      ? (pid) =>
-                          pid === OTHERS_COLUMN_ID
-                            ? toast.info("«Otros» junta turnos de quien no tiene agenda: no se bloquea.")
-                            : openDayLock(dayKey, pid)
-                      : undefined
-                  }
-                  roomById={cardRooms}
-                />
-              )}
-              {view === "room" && (
-                <RoomDayPanelC
-                  dayKey={dayKey}
-                  scopeRooms={scopeRooms}
-                  roomId={roomId}
-                  bookings={visibleBookings}
-                  availability={availability}
-                  blocks={blocks}
-                  locationId={locationId}
-                  primaryLocationId={primaryLocationId}
-                  zoom={prefs.zoom}
-                  density={prefs.density}
-                  now={now}
-                  layoutNow={layoutNow}
-                  fallback={tenantWindow}
-                  onSlotClick={(id, iso) => setCreating(roomSlotCreating(id, iso))}
-                  onBookingClick={setEditing}
-                  highlight={highlight}
-                  practitionerById={roomPractitionerById}
-                  canConfigureRooms={canConfigureRooms}
-                  fallbackLocationName={
-                    locationId == null ? (props.locations?.find((l) => l.id === primaryLocationId)?.name ?? null) : null
-                  }
-                />
-              )}
-              {view === "week" && (
-                <WeekGridViewC
-                  weekDays={weekDays}
-                  now={now}
-                  bookings={visibleBookings}
-                  onEdit={setEditing}
-                  businessHours={hours}
-                  showHeader={agenda.agendaShowWeekHeader}
-                  showSaturday={agenda.agendaShowSaturday}
-                  showSunday={agenda.agendaShowSunday}
-                  highlight={highlight}
-                  practitioners={initialsById ? visiblePracs : null}
-                  dayLocks={weekLocks}
-                  blockedByDay={weekBlocked}
-                  renderDayLock={(k) => renderDayLock(k, weekLocks[k] ?? null, true)}
-                  roomById={cardRooms}
-                />
-              )}
-              {/* MB-1a (C-MB3 / MB-D10): < 768 la Semana es una lista por día (la grilla se oculta por CSS). */}
-              {view === "week" && (
-                <WeekDayListC
-                  weekDays={weekDays}
-                  showSaturday={agenda.agendaShowSaturday}
-                  showSunday={agenda.agendaShowSunday}
-                  bookings={visibleBookings}
-                  onEdit={setEditing}
-                  highlight={highlight}
-                  practitionerById={initialsById}
-                  roomById={cardRooms}
-                  dayLocks={weekLocks}
-                  renderDayLock={(k) => renderDayLock(k, weekLocks[k] ?? null, true)}
-                  anchorDayKey={dayKey}
-                  now={now}
-                />
-              )}
-              {view === "list" && (
-                <ListViewC
-                  bookings={todayList}
-                  onEdit={setEditing}
-                  highlight={highlight}
-                  practitionerById={initialsById}
-                  now={now}
-                  roomById={cardRooms}
-                />
-              )}
-              {view === "reception" && (
-                <ReceptionViewC
-                  dayKey={dayKey}
-                  bookings={todayList}
-                  practitioners={visiblePracs}
-                  now={now}
-                  canOperate={canReception}
-                  // EV2-3c: toast «Cargar evolución» al marcar «Atendido» un turno propio.
-                  clinicalNoteViewer={{ practitionerId: ownPractitionerId, canReadClinical: caps.has("clinical.read") }}
-                  // La columna "Sala" depende solo de que haya salas (la Secretaria
-                  // deriva al paciente aunque haya un solo consultorio).
-                  roomById={rooms.length > 0 ? roomById : null}
-                  onOpenBooking={setEditing}
-                  onChanged={(b, opts) => {
-                    markOwn(b.id);
-                    setOverrides((o) => ({ ...o, [b.id]: b }));
-                    // PF-0d: en el OK `markReceptionAction` hace `revalidatePath`
-                    // y la respuesta de la action ya trae el árbol RSC nuevo de
-                    // /agenda (`props.bookings` cambia solo): un `router.refresh()`
-                    // acá era un segundo render entero (+203 ms, PERF.md §PF-0).
-                    // refresh-ok: "cambió en otra sesión" — la action NO revalida, hay que traer la versión vigente.
-                    if (opts?.stale) router.refresh();
-                  }}
-                />
-              )}
-            </SsrHold>
-          </div>
+          <MoneyViewerContext.Provider value={canSeeMoney}>
+            {/* PF1.1 (C-PF1.2): la entrada de la vista es CSS (`.k-page-in`, 120 ms, sin animación con movimiento
+                reducido). Antes era `motion.div` con `AnimatePresence mode="wait"`: además de meter framer completo en
+                el first load, el `initial={{ opacity: 0 }}` dejaba la vista SSR invisible hasta hidratar (LCP) y el
+                «wait» demoraba cada cambio de día/vista lo que duraba la salida. El `key` remonta igual que antes. */}
+            <div key={`${view}-${dayKey}`} className="k-page-in" style={{ height: "100%" }}>
+              {/* MB-Z-F2: congela el HTML del server de la vista dinámica hasta su chunk (CLS; `views/view-chunks.ts`). */}
+              <SsrHold ready={viewReady} wrap={agendaViewChunks(view).length > 0}>
+                {view === "timeline" && (
+                  <TimelineView
+                    bookings={todayList}
+                    dayKey={dayKey}
+                    onCreate={(iso) => setCreating({ defaultISO: iso })}
+                    onEdit={setEditing}
+                    density={prefs.density}
+                    businessHours={hours}
+                    highlight={highlight}
+                    practitionerById={initialsById}
+                    now={now}
+                    blockedRows={todayBlocked}
+                    dayLocked={todayLock?.status === "locked" ? { detail: todayLock.detail } : null}
+                    roomById={cardRooms}
+                  />
+                )}
+                {view === "practitioner" && practitionerLayout && (
+                  <PractitionerDayViewC
+                    dayKey={dayKey}
+                    layout={practitionerLayout}
+                    practitioners={visiblePracs}
+                    zoom={prefs.zoom}
+                    density={prefs.density}
+                    now={now}
+                    // IAM-4b: la columna «Otros» no es un profesional: el turno nuevo
+                    // sale sin profesional de columna (cae al default o hay que elegir).
+                    onSlotClick={(practitionerId, iso) =>
+                      setCreating(
+                        practitionerId === OTHERS_COLUMN_ID ? { defaultISO: iso } : { defaultISO: iso, practitionerId }
+                      )
+                    }
+                    onBookingClick={setEditing}
+                    highlight={highlight}
+                    lockStateByPractitioner={availability ? lockStatesOf(dayKey) : undefined}
+                    onDayLockClick={
+                      canLockAny && availability
+                        ? (pid) =>
+                            pid === OTHERS_COLUMN_ID
+                              ? toast.info("«Otros» junta turnos de quien no tiene agenda: no se bloquea.")
+                              : openDayLock(dayKey, pid)
+                        : undefined
+                    }
+                    roomById={cardRooms}
+                  />
+                )}
+                {view === "room" && (
+                  <RoomDayPanelC
+                    dayKey={dayKey}
+                    scopeRooms={scopeRooms}
+                    roomId={roomId}
+                    bookings={visibleBookings}
+                    availability={availability}
+                    blocks={blocks}
+                    locationId={locationId}
+                    primaryLocationId={primaryLocationId}
+                    zoom={prefs.zoom}
+                    density={prefs.density}
+                    now={now}
+                    layoutNow={layoutNow}
+                    fallback={tenantWindow}
+                    onSlotClick={(id, iso) => setCreating(roomSlotCreating(id, iso))}
+                    onBookingClick={setEditing}
+                    highlight={highlight}
+                    practitionerById={roomPractitionerById}
+                    canConfigureRooms={canConfigureRooms}
+                    fallbackLocationName={
+                      locationId == null ? (props.locations?.find((l) => l.id === primaryLocationId)?.name ?? null) : null
+                    }
+                  />
+                )}
+                {view === "week" && (
+                  <WeekGridViewC
+                    weekDays={weekDays}
+                    onPickDay={(k) => go({ view: dayViewFor(prefs.mode, practitionerCount, roomCount), dayKey: k })}
+                    now={now}
+                    bookings={visibleBookings}
+                    onEdit={setEditing}
+                    businessHours={hours}
+                    showSaturday={agenda.agendaShowSaturday}
+                    showSunday={agenda.agendaShowSunday}
+                    highlight={highlight}
+                    practitioners={initialsById ? visiblePracs : null}
+                    dayLocks={weekLocks}
+                    blockedByDay={weekBlocked}
+                    renderDayLock={(k) => renderDayLock(k, weekLocks[k] ?? null, true)}
+                    roomById={cardRooms}
+                  />
+                )}
+                {/* MB-1a (C-MB3 / MB-D10): < 768 la Semana es una lista por día (la grilla se oculta por CSS). */}
+                {view === "week" && (
+                  <WeekDayListC
+                    weekDays={weekDays}
+                    showSaturday={agenda.agendaShowSaturday}
+                    showSunday={agenda.agendaShowSunday}
+                    bookings={visibleBookings}
+                    onEdit={setEditing}
+                    highlight={highlight}
+                    practitionerById={initialsById}
+                    roomById={cardRooms}
+                    dayLocks={weekLocks}
+                    renderDayLock={(k) => renderDayLock(k, weekLocks[k] ?? null, true)}
+                    anchorDayKey={dayKey}
+                    now={now}
+                  />
+                )}
+                {view === "list" && (
+                  <ListViewC
+                    bookings={todayList}
+                    onEdit={setEditing}
+                    highlight={highlight}
+                    practitionerById={initialsById}
+                    now={now}
+                    roomById={cardRooms}
+                  />
+                )}
+                {view === "month" && (
+                  <MonthViewC
+                    initial={props.initialMonth ?? null}
+                    anchorDayKey={dayKey}
+                    todayKey={toARDateKey(now)}
+                    selectedPractitionerIds={selectedIds}
+                    practitioners={ordered}
+                    locationId={locationId}
+                    hideNoShow={!visibility.showNoShow}
+                    showSaturday={agenda.agendaShowSaturday}
+                    showSunday={agenda.agendaShowSunday}
+                    onPickDay={(k) => go({ view: dayViewFor(prefs.mode, practitionerCount, roomCount), dayKey: k })}
+                    onCounts={setMonthCounts}
+                  />
+                )}
+                {view === "reception" && (
+                  <ReceptionViewC
+                    dayKey={dayKey}
+                    bookings={todayList}
+                    practitioners={visiblePracs}
+                    now={now}
+                    canOperate={canReception}
+                    // [CF2-RC] D-CF2-3: «Cobrar» en la fila, con la misma regla que el server (`canCollectCopago`): la
+                    // Secretaria (`billing.collect`) todo, el profesional (`billing.collectOwn`) lo suyo; sin cobro, null
+                    // (el markup de antes).
+                    collect={receptionCollect}
+                    // EV2-3c: toast «Cargar evolución» al marcar «Atendido» un turno propio.
+                    clinicalNoteViewer={{ practitionerId: ownPractitionerId, canReadClinical: caps.has("clinical.read") }}
+                    // La columna "Sala" depende solo de que haya salas (la Secretaria
+                    // deriva al paciente aunque haya un solo consultorio).
+                    roomById={rooms.length > 0 ? roomById : null}
+                    onOpenBooking={setEditing}
+                    onChanged={(b, opts) => {
+                      markOwn(b.id);
+                      setOverrides((o) => ({ ...o, [b.id]: b }));
+                      // PF-0d: en el OK `markReceptionAction` hace `revalidatePath`
+                      // y la respuesta de la action ya trae el árbol RSC nuevo de
+                      // /agenda (`props.bookings` cambia solo): un `router.refresh()`
+                      // acá era un segundo render entero (+203 ms, PERF.md §PF-0).
+                      // refresh-ok: "cambió en otra sesión" — la action NO revalida, hay que traer la versión vigente.
+                      if (opts?.stale) router.refresh();
+                    }}
+                  />
+                )}
+              </SsrHold>
+            </div>
+          </MoneyViewerContext.Provider>
         </BookingFlashContext.Provider>
       </div>
 
-      {(hasServiceLegend || plansEnabled) && (
+      {(hasServiceLegend || plansEnabled) && !isMonth && (
         <div
           style={{
             display: "flex",

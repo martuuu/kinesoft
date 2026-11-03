@@ -18,19 +18,14 @@
  * Foco (PF1-Z-F2): el panel es un `useFocusTrap` (Tab cicla adentro y, al cerrar, el foco vuelve al elemento que lo
  * abrió). Antes no había trap: tras Esc/Cancelar el foco quedaba en <body> y Tab seguía por la página con el Drawer de
  * abajo abierto.
+ *
+ * [CF2-ZF4] El diálogo (`ConfirmDialog`, con framer, `Button` y el trap) vive en `./confirm-dialog-panel` y baja con
+ * `import()`: este provider está en el first load de todas las rutas con sesión y el diálogo solo se ve al confirmar.
+ * Se pide en un idle apenas monta y, si alguien confirma antes de que llegue, al pedir la confirmación (la promesa ya
+ * era asíncrona: el diálogo aparece cuando está el chunk). Si el chunk no baja, la confirmación resuelve `false` (nunca
+ * queda colgada ni ejecuta la acción sin confirmar) y se reintenta en la próxima.
  */
-import { AnimatePresence, m } from "framer-motion";
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
-import { Button } from "@/components/ui/button";
-import { useFocusTrap } from "@/hooks/use-focus-trap";
-import { backdropVariants, modalVariants } from "@/lib/motion";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 type ConfirmTone = "default" | "danger";
 
@@ -46,8 +41,24 @@ type ConfirmFn = (opts: ConfirmOptions) => Promise<boolean>;
 
 const ConfirmContext = createContext<ConfirmFn | null>(null);
 
+type DialogModule = typeof import("./confirm-dialog-panel");
+let dialogModule: DialogModule | undefined;
+let dialogLoad: Promise<DialogModule> | undefined;
+/** Exportada para los render tests (`renderToStaticMarkup` no corre effects). */
+export function loadConfirmDialog(): Promise<DialogModule> {
+  dialogLoad ??= import("./confirm-dialog-panel").then(
+    (mod) => (dialogModule = mod),
+    (err) => {
+      dialogLoad = undefined;
+      throw err;
+    }
+  );
+  return dialogLoad;
+}
+
 export function ConfirmProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<ConfirmOptions | null>(null);
+  const [, setDialogReady] = useState(Boolean(dialogModule));
   const resolver = useRef<((v: boolean) => void) | null>(null);
 
   const confirm = useCallback<ConfirmFn>((opts) => {
@@ -66,10 +77,40 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
   const cancel = useCallback(() => settle(false), [settle]);
   const accept = useCallback(() => settle(true), [settle]);
 
+  // [CF2-ZF4] El diálogo: en un idle al montar y, sí o sí, cuando llega una confirmación sin el chunk.
+  const pendingConfirm = state !== null;
+  useEffect(() => {
+    if (dialogModule) return;
+    let alive = true;
+    const go = () =>
+      loadConfirmDialog().then(
+        () => alive && setDialogReady(true),
+        (err: unknown) => {
+          if (!alive || !pendingConfirm) return;
+          console.error("[confirm] no se pudo cargar el diálogo:", err);
+          settle(false);
+        }
+      );
+    if (pendingConfirm) {
+      void go();
+      return () => {
+        alive = false;
+      };
+    }
+    const ric = typeof window.requestIdleCallback === "function" ? window.requestIdleCallback : null;
+    const id = ric ? ric(() => void go().catch(() => {}), { timeout: 4000 }) : window.setTimeout(() => void go().catch(() => {}), 1500);
+    return () => {
+      alive = false;
+      if (ric) window.cancelIdleCallback(id);
+      else window.clearTimeout(id);
+    };
+  }, [pendingConfirm, settle]);
+
+  const Dialog = dialogModule?.ConfirmDialog;
   return (
     <ConfirmContext.Provider value={confirm}>
       {children}
-      <ConfirmDialog state={state} onCancel={cancel} onConfirm={accept} />
+      {Dialog ? <Dialog state={state} onCancel={cancel} onConfirm={accept} /> : null}
     </ConfirmContext.Provider>
   );
 }
@@ -78,124 +119,4 @@ export function useConfirm(): ConfirmFn {
   const ctx = useContext(ConfirmContext);
   if (!ctx) throw new Error("useConfirm must be used inside <ConfirmProvider>");
   return ctx;
-}
-
-/**
- * PF1-Z-F2 (puro, para el test): foco inicial en el botón de aceptar. No se usa `autoFocus`: React lo aplica en el
- * commit, ANTES del efecto del trap, y el trap guardaba como «elemento a devolver» al propio botón del confirm (que se
- * desmonta) en vez del que abrió el diálogo. Así el trap captura primero al que abrió y después se enfoca el botón.
- */
-export function focusConfirmAccept(
-  panel: { querySelector(sel: string): { focus(): void } | null } | null
-): void {
-  panel?.querySelector("[data-confirm-accept]")?.focus();
-}
-
-export function ConfirmDialog({
-  state,
-  onCancel,
-  onConfirm,
-}: {
-  state: ConfirmOptions | null;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const danger = state?.tone === "danger";
-  const open = !!state;
-  // Orden de efectos (importa): primero el del trap (guarda `document.activeElement` = el que abrió y enfoca el
-  // primer focuseable), después este, que pasa el foco a «Confirmar» como hacía el viejo `autoFocus`.
-  const trapRef = useFocusTrap<HTMLDivElement>(open);
-  useEffect(() => {
-    if (open) focusConfirmAccept(trapRef.current);
-    // `trapRef` es estable (useRef).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-  // Esc cierra SOLO este diálogo (A2b-S-ui). Antes el keydown del backdrop no
-  // frenaba el evento y el listener de `window` del Drawer de abajo también lo
-  // veía: un Esc cancelaba la confirmación Y cerraba el drawer (perdiendo el
-  // formulario). Se escucha en fase de CAPTURA sobre `window` — corre antes que
-  // cualquier listener en burbuja (Drawer, menús) — y se corta la propagación.
-  // Enter queda en manos del botón enfocado: el viejo handler de Enter en el
-  // backdrop confirmaba aunque el foco estuviera en "Cancelar".
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      e.stopPropagation();
-      onCancel();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [open, onCancel]);
-  return (
-    <AnimatePresence>
-      {state && (
-        <m.div
-          key="confirm-backdrop"
-          role="dialog"
-          aria-modal
-          aria-label={state.title}
-          onClick={onCancel}
-          variants={backdropVariants}
-          initial="initial"
-          animate="animate"
-          exit="exit"
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(15,30,51,0.45)",
-            backdropFilter: "blur(4px)",
-            zIndex: "var(--z-confirm)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 20,
-          }}
-        >
-          <m.div
-            ref={trapRef}
-            tabIndex={-1}
-            data-confirm-panel
-            className="k-glass-strong"
-            onClick={(e) => e.stopPropagation()}
-            variants={modalVariants}
-            style={{
-              width: "min(420px, 100%)",
-              borderRadius: 20,
-              padding: 22,
-            }}
-          >
-            <h2 className="k-display" style={{ fontSize: 18, margin: 0, fontWeight: 700, color: "var(--navy-900)" }}>
-              {state.title}
-            </h2>
-            {state.message && (
-              <p style={{ marginTop: 8, marginBottom: 0, fontSize: 13.5, color: "var(--navy-500)", lineHeight: 1.5 }}>
-                {state.message}
-              </p>
-            )}
-            {/* MB-0d (C-MB2): misma fila que `ModalActions` (sin importar modal.tsx: este archivo va en los providers de la raíz); < 640 apilada a ancho completo y 44 px (antes dos botones
-                chicos lado a lado en el celular). Escritorio: igual (flex a la derecha, gap 8, 20 arriba). */}
-            <div className="k-modal-actions">
-              <Button variant="ghost" onClick={onCancel}>
-                {state.cancelLabel ?? "Cancelar"}
-              </Button>
-              <Button
-                variant="primary"
-                onClick={onConfirm}
-                data-confirm-accept
-                style={
-                  danger
-                    ? { background: "var(--danger-fg)", boxShadow: "0 4px 14px rgba(159,31,31,0.3)" }
-                    : undefined
-                }
-              >
-                {state.confirmLabel ?? "Confirmar"}
-              </Button>
-            </div>
-          </m.div>
-        </m.div>
-      )}
-    </AnimatePresence>
-  );
 }

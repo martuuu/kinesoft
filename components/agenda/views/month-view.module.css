@@ -1,0 +1,217 @@
+/*
+ * CF2 (§29 D-CF2-7, brief A.4) — vista Mes. CSS Module (C-PF5.7): los @media no van inline.
+ * Color: el fondo de la celda es el ESTADO del día (rayado = bloqueado, gris = sin atención), como la grilla; el
+ * profesional va por iniciales (canal no cromático, AGENTS §5). El rayado es el mismo `BLOCKED_STRIPES` de
+ * `grid/unavailable-overlay.tsx`, copiado para no sumar ese módulo al chunk.
+ */
+
+.card {
+  padding: 14px;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+}
+
+.grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.head,
+.week {
+  display: grid;
+  grid-template-columns: repeat(var(--month-cols, 7), minmax(0, 1fr));
+  gap: 6px;
+}
+
+.head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--card-bg);
+  padding-bottom: 2px;
+}
+
+/* ZB-10: era 10 px navy-500 a opacidad .75 (≈4,3:1, no AA). Sin opacidad navy-500 da ~8:1 sobre la card. */
+.headDay {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--navy-500);
+  text-align: center;
+}
+
+/* Un botón por día. `min-height` 96 px en desktop: entra número + cantidad + 2 líneas de iniciales (6 profesionales). */
+.cell {
+  position: relative;
+  min-width: 0;
+  min-height: 96px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 30, 51, 0.06);
+  background-color: rgba(15, 30, 51, 0.02);
+  color: var(--navy-700);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+  font: inherit;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.cell:hover {
+  border-color: rgba(15, 30, 51, 0.16);
+  background-color: rgba(15, 30, 51, 0.045);
+}
+
+.cell:focus-visible {
+  outline: 2px solid var(--sky-700);
+  outline-offset: 2px;
+}
+
+/* Hoy: anillo (como la Semana, `.stripCell[data-today]`), sin relleno: el rayado y el texto siguen legibles. */
+.cell[data-today] {
+  box-shadow: inset 0 0 0 2px var(--sky-700);
+}
+.cell[data-today] .num {
+  color: var(--sky-700);
+}
+
+/* Días de la semana anterior/siguiente que completan la grilla. */
+.cell[data-in-month="false"] {
+  opacity: 0.45;
+}
+
+.cell[data-day-status="locked"] {
+  background-image: repeating-linear-gradient(135deg, rgba(15, 30, 51, 0.07) 0 6px, rgba(15, 30, 51, 0.015) 6px 12px);
+}
+
+.cell[data-day-status="off"] {
+  background-color: rgba(15, 30, 51, 0.045);
+  color: var(--navy-500);
+}
+
+.top {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  line-height: 1;
+}
+
+.num {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--navy-900);
+}
+
+.glyph {
+  display: inline-flex;
+  opacity: 0.8;
+}
+
+.count {
+  font-size: 12px;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+.count strong {
+  font-weight: 700;
+  color: var(--navy-900);
+}
+
+.state {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--navy-500);
+  line-height: 1;
+}
+
+.people {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 6px;
+}
+
+.person {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.personCount {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--navy-700);
+}
+
+.skelCell {
+  min-height: 96px;
+  border-radius: 12px;
+}
+
+.note {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--navy-500);
+}
+
+.error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px 4px;
+  font-size: 14px;
+  color: var(--navy-700);
+}
+.error p {
+  margin: 0;
+}
+
+/* Mobile (< 768): 7 columnas a ~50 px en 390. Celda mínima de 44 px (blanco táctil), número + glifo + cantidad. El
+   desglose y las palabras salen de la vista (el aria-label del botón sigue diciendo todo). */
+@media (max-width: 767px) {
+  .card {
+    padding: 8px;
+  }
+  .grid,
+  .head,
+  .week {
+    gap: 3px;
+  }
+  .cell {
+    min-height: 44px;
+    padding: 4px 2px;
+    align-items: center;
+    text-align: center;
+    gap: 2px;
+    border-radius: 8px;
+  }
+  .num {
+    font-size: 13px;
+  }
+  /* ZB-10: el glifo (candado / sin atención) se queda: sin las palabras es lo único, además del fondo, que dice el
+     estado del día a la vista. */
+  .count {
+    font-size: 11px;
+  }
+  .word,
+  .state,
+  .people {
+    display: none;
+  }
+  .skelCell {
+    min-height: 44px;
+    border-radius: 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cell {
+    transition: none;
+  }
+}

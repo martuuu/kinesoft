@@ -41,6 +41,7 @@ import { liveProgramWhere } from "@/lib/plan-predicates";
 import { displayUserName } from "@/lib/display-name";
 import { normalizeEmail } from "@/lib/email-match";
 import { isClinicalMember } from "@/lib/roles";
+import { closeRevenueSharesForUserInTx } from "@/lib/revenue-share-internal";
 import {
   ensureClinicalPractitionerInTx,
   invitationSeatKind,
@@ -358,6 +359,8 @@ export async function applyPlanChangeInTx(
       data: { disabledAt: now, disabledById: ctx.actorUserId, disabledReason: "PLAN_DOWNGRADE" },
     });
     if (upd.count !== toDisable.length) throw new PlanChangeRaceError();
+    // CF2-ZF3 (ZA-1): un deshabilitado deja de recibir/destinar un % desde ahora (subir de plan no lo reabre).
+    for (const m of toDisable) await closeRevenueSharesForUserInTx(tx, tenantId, m.userId, ctx.actorUserId, "plan.downgrade");
     const emails = toDisable.map((m) => normalizeEmail(m.user.email));
     revokedInvites += (
       await tx.invitation.updateMany({

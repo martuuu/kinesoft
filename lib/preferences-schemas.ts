@@ -77,7 +77,15 @@ export function sanitizeAgendaViewPrefs(
   const out: AgendaViewPrefs = room.success ? { ...parsed, roomId: room.data } : parsed;
   // [AS-2g] `zoomSet` solo si es `true` (cualquier otra cosa = no eligió = se omite, como `roomId`): un blob roto no
   // puede cambiarle la grilla de Día/Semana a nadie.
-  return ("zoomSet" in o ? o.zoomSet : defaults.zoomSet) === true ? { ...out, zoomSet: true } : out;
+  const withZoom: AgendaViewPrefs =
+    ("zoomSet" in o ? o.zoomSet : defaults.zoomSet) === true ? { ...out, zoomSet: true } : out;
+  // [CF2-AP] `selectedPractitionerIds`: solo si es array. `[]` se conserva (= eligió «Todos», distinto de ausente).
+  // Un array no vacío que queda vacío al limpiarlo es un blob roto, no una elección: se omite (= nunca eligió), así
+  // la basura no le cambia a nadie la agenda que ve por rol.
+  const rawSel = "selectedPractitionerIds" in o ? o.selectedPractitionerIds : defaults.selectedPractitionerIds;
+  if (!Array.isArray(rawSel)) return withZoom;
+  const sel = cleanIds(rawSel);
+  return rawSel.length > 0 && sel.length === 0 ? withZoom : { ...withZoom, selectedPractitionerIds: sel };
 }
 
 /** Escritura: patch parcial, estricto (campos desconocidos o fuera de dominio → error). */
@@ -98,6 +106,11 @@ export const AgendaViewPrefsPatchSchema = z
     receptionLayout: receptionLayoutSchema,
     // [AS-2g] Lo manda el menú «Vista» al elegir un zoom; `false` no existe (sin elegir = ausente).
     zoomSet: z.literal(true),
+    // [CF2-AP] La manda el clic en los chips (debounce); `[]` = «Todos». Sin null: volver a «nunca eligió» no existe.
+    selectedPractitionerIds: z
+      .array(idSchema)
+      .max(AGENDA_MAX_FAVORITES)
+      .transform((ids) => Array.from(new Set(ids))),
   })
   .partial()
   .strict();

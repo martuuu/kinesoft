@@ -112,6 +112,11 @@ const SERVICE_ONLY = new Set([
   // columnas de SupportThread (cuyo SELECT es del tenant). Las escribe y lee solo lib/platform-inbox.ts por el
   // canal service, detrás de requirePlatformAdmin.
   "SupportTicketNote",
+  // CF2 M21 (cf2_profesional_caja, §29.4): dispositivos de push web de un USUARIO (sin tenantId: la persona recibe los
+  // avisos de todos sus consultorios en el mismo navegador). Sin GUC de usuario para filtrarlo: lo escribe y lee solo
+  // el canal service con el userId de la sesión verificada (molde ProfessionalPublicProfile). PractitionerRevenueShare
+  // NO va acá: lleva tenantId y la policy de tenant normal.
+  "PushSubscription",
 ]);
 
 // BO0 (M7): tablas con tenantId que el consultorio LEE pero que solo escribe la

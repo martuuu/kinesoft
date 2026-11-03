@@ -300,7 +300,11 @@ const nextConfig = {
   reactStrictMode: true,
   // CF-RT: el id que compara el cliente (ver `buildIdFrom`). Sin id no se define: `process.env.NEXT_PUBLIC_BUILD_ID`
   // queda `undefined` en el bundle y el probe responde «no se sabe».
-  env: BUILD_ID ? { NEXT_PUBLIC_BUILD_ID: BUILD_ID } : {},
+  // [CF2-ZF4] `NEXT_PUBLIC_PWA` (interruptor MB-D6, `components/pwa/sw-register.tsx`) SIEMPRE definido: sin la variable,
+  // Next no reemplaza `process.env.NEXT_PUBLIC_PWA` y webpack mete el polyfill de `process` (~0,8 kB gz) en el layout
+  // `(app)` y `(platform)`, es decir en el first load de todas las rutas con sesión. "" se comporta igual que ausente
+  // (solo "off" desregistra).
+  env: { NEXT_PUBLIC_PWA: process.env.NEXT_PUBLIC_PWA ?? "", ...(BUILD_ID ? { NEXT_PUBLIC_BUILD_ID: BUILD_ID } : {}) },
   experimental: {
     // PL-2b (PL-D22): el comprobante de pago viaja en el cuerpo de la server action (≤ 4 MB + campos del form). El
     // default de Next (1 MB) lo cortaba antes de llegar a la validación; 4.5 MB deja el margen del multipart y sigue

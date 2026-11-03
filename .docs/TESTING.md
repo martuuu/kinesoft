@@ -444,6 +444,40 @@ su alcance queda vacío (anti falso verde).
   apagada. `tests/perf/plans.perf.test.ts` no tiene JSON de referencia: `compare.ts` no lo vigila (AUDIT «Ronda CF»).
 - `vitest --project unit` no existe en este repo: `npm test` o `npx vitest run <archivos>`.
 
+### Patrones nuevos de CF2 (caja, reparto y avisos, M21, 02-nov-2026)
+
+- **IDs `[CF2-<sesión><n>]`** (ej. `[CF2-TS1-3]`, `[CF2-ZF3-1a]`); no se usa `CF2-D*` para no chocar con D-CF2-1..20.
+- **Fixture de la caja** `tests/helpers/caja-fixture.ts` (`seedCajaFixture(t, { now })` + `normalizeCajaGroups`): sobre
+  un tenant de `createEphemeralTenant`, siembra por el canal owner 3 profesionales (A recibe, B destina, C sin regla),
+  cobros de las 4 fuentes (copago manual con y sin medio, seña online previa, `OnlineCharge` PAID/REINTEGRADO/ACTIVE,
+  `Payment` legado, OS con arancel y una cobertura vieja que no debe usarse), un cobro a las 23:30 AR del día anterior y
+  un turno reasignado; reparto B → A al 20 % que se **cierra a las 13:00 AR** y se reabre al 25 % (el cobro de
+  13:00:00.000 cae en la nueva). Los `expected.day/month` están **calculados a mano** (con la cuenta en el comentario),
+  nunca con el código bajo test; incluyen un empate .5 (half-up) y el caso donde redondear por medio da un centavo
+  menos que por grupo. Usar `now` ≥ 16:30 AR. Lo reusan `cf2-caja`, `cf2-caja-page` y `cf2-dashboard-cash` (y lo valida `cf2-caja-fixture`), y fija la
+  paridad Σ grupos = `revenueAmountsInTx` (`[CF2-PS2-2]`). Reglas sueltas: `addRevenueShare` de la factory.
+- **Web Push mockeado: solo `web-push`** (es la red: el POST cifrado al push service). `vi.mock("web-push", …)` con un
+  `sendNotification` programable por endpoint (`ok`, `status` 404/410/500 como `{ statusCode }` de `WebPushError`, o
+  `hang` para el timeout) y un contador de cargas, que prueba el `import()` diferido: con VAPID y sin dispositivos, o con
+  los canales apagados, `web-push` **ni se carga** (`[CF2-TP8]`, `[CF2-TS1-1]`). VAPID por `vi.stubEnv` con claves P-256
+  reales generadas en el test (`createECDH("prime256v1")`); `webPushVapid()` lee el env en cada llamada. El sender,
+  `prismaService` y `PushSubscription` son los reales (`cf2-push-sender`, corre igual en los dos roles porque escribe
+  por el canal service). El E2E corre sin VAPID: el push queda para el QA manual en dispositivos reales.
+- **Orden campana → realtime** (`[CF2-TS1-2]`): el fake del publisher afirma que la fila de `Notification` ya existe
+  cuando sale el evento; arrancó `it.fails`.
+- **Reparto en los dos roles** (`cf2-revenue-share`): gate, ids de otro consultorio, grafo (propio, mutuo, cadena),
+  cerrar + abrir con audit, CAS, carreras (`[CF2-PS3-7..9]`: gana exactamente una; un escritor sin lock cae por el único
+  parcial y la tx entera se revierte) y export. CHECKs y trigger de solo cierre en `m21-cf2`; cierre al suspender/quitar/bajar de
+  plan/deshabilitar (`cf2-zf3-revenue-share-members`, con soporte por cookie real). `m21-cf2` además verifica los
+  objetos de M21 (`[CF2-MIG1..9]`) y que el INSERT viejo de `Practitioner` toma los DEFAULT.
+- **E2E `cf2-*`** (`tests/e2e/cf2-{agenda,cobro,caja,pacientes,mi-agenda}.spec.ts`, fixture `tests/e2e/support/cf2.ts`:
+  `createCf2Tenant` / `deleteCf2Tenant`): cada spec arma **su** consultorio Clínica con Titular «Laura Pérez»,
+  profesional «Martín Gómez» y Secretaria con la factory (nunca seeds) y lo borra al final; no toca el global-setup.
+- **Guard de first-load** `tests/unit/cf2-first-load-guard.test.ts`: recorre los imports estáticos de la agenda (BFS) y
+  pone tope a lo que suma el tag de cobro (1.100 B, `[CF2-MU10]`); `[CF2-MU8]` comprueba que el recorrido no pasa en
+  vacío. Las piezas pesadas nuevas (Mes, modal de cobro de Recepción, drawer de `/sala`, panel de la campana, diálogo de
+  `useConfirm`) van por chunk diferido (ZF4).
+
 ### Build local (`next build`) — siempre con el env local explícito
 
 Dos problemas. `.env.local` define `NODE_ENV`, y `next build` con ese valor falla en el prerender. Y, más grave, `next build`

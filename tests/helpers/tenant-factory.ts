@@ -212,6 +212,11 @@ export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Prom
   // Booking → Room es RESTRICT y los turnos ya se borraron arriba.
   // TV M17 (reception_displays): las pantallas cascadean de Tenant y de Location; explícito para que un fallo tire.
   await db.receptionDisplay.deleteMany({ where: { tenantId } });
+  // CF2 M21 (cf2_profesional_caja): PractitionerRevenueShare es RESTRICT hacia Tenant y hacia Practitioner (FKs
+  // compuestas; la historia del reparto explica la caja cobrada): sin esto, el cascade Tenant → Practitioner tira 23503.
+  // El trigger de solo cierre es BEFORE UPDATE: el DELETE pasa sin modo réplica. PushSubscription no tiene tenantId y
+  // cascadea del UserProfile (abajo).
+  await db.practitionerRevenueShare.deleteMany({ where: { tenantId } });
   await db.tenant.delete({ where: { id: tenantId } });
   // IAM-1 (M6): un usuario puede ser profesional en VARIOS consultorios.
   // Practitioner → UserProfile es RESTRICT, así que el perfil de quien sigue
@@ -512,6 +517,43 @@ export async function addRoom(
     },
   });
   return { roomId: room.id, locationId };
+}
+
+/**
+ * CF2 M21: regla de reparto de % (owner, BYPASSRLS: el fixture no pasa por la action ni por su advisory lock). Por
+ * defecto aplica a las 3 fuentes, vigente desde hace 1 h y abierta (`effectiveTo` null). Los CHECKs, el único parcial
+ * «una vigente por profesional» y el trigger de solo cierre corren igual: un fixture inválido tira, no se esconde.
+ */
+export async function addRevenueShare(
+  prisma: PrismaClient,
+  t: EphemeralTenant,
+  data: {
+    giverPractitionerId: string;
+    receiverPractitionerId: string;
+    shareBps: number;
+    appliesManual?: boolean;
+    appliesOnline?: boolean;
+    appliesInsurer?: boolean;
+    effectiveFrom?: Date;
+    effectiveTo?: Date | null;
+  }
+): Promise<string> {
+  const row = await prisma.practitionerRevenueShare.create({
+    data: {
+      tenantId: t.tenantId,
+      giverPractitionerId: data.giverPractitionerId,
+      receiverPractitionerId: data.receiverPractitionerId,
+      shareBps: data.shareBps,
+      appliesManual: data.appliesManual ?? true,
+      appliesOnline: data.appliesOnline ?? true,
+      appliesInsurer: data.appliesInsurer ?? true,
+      effectiveFrom: data.effectiveFrom ?? new Date(Date.now() - 3_600_000),
+      effectiveTo: data.effectiveTo ?? null,
+      createdById: t.userId,
+    },
+    select: { id: true },
+  });
+  return row.id;
 }
 
 /**

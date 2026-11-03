@@ -22,6 +22,8 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
 import {
+  addPractitioner,
+  addRevenueShare,
   addRoom,
   createEphemeralTenant,
   sweepOrphanTestTenants,
@@ -1807,6 +1809,126 @@ describe.skipIf(!RUN || BYPASS)("[MIG] RLS pantallas, WhatsApp y ajustes SaaS (M
       await expect(
         app.receptionDisplay.create({ data: { tenantId: A.tenantId, name: "Sin GUC", createdByUserId: A.userId } })
       ).rejects.toThrow(/row-level security/i);
+    } finally {
+      await app.$disconnect();
+    }
+  });
+});
+
+// CF2 M21 (cf2_profesional_caja, §29.4): PractitionerRevenueShare va con la policy de tenant por defecto (ALL); el
+// reparto de un consultorio no se ve ni se toca desde otro, ni sin GUC. PushSubscription es SERVICE_ONLY: la app no
+// ve ni los dispositivos de su propio usuario. Los CHECKs, el único parcial, el trigger y las FKs compuestas (la red
+// bajo BYPASSRLS) se prueban en m21-cf2.test.ts.
+describe.skipIf(!RUN || BYPASS)("RLS reparto y push (CF2 M21, app role)", () => {
+  const prismaOwner = new PrismaClient({
+    datasources: { db: { url: process.env.DIRECT_URL ?? process.env.DATABASE_URL } },
+  });
+
+  let A: EphemeralTenant;
+  let B: EphemeralTenant;
+  let a2: string;
+  let b2: string;
+  let shareA: string;
+  let shareB: string;
+  let pushA: string;
+
+  beforeAll(async () => {
+    A = await createEphemeralTenant(prismaOwner);
+    B = await createEphemeralTenant(prismaOwner);
+    a2 = (await addPractitioner(prismaOwner, A)).practitionerId;
+    b2 = (await addPractitioner(prismaOwner, B)).practitionerId;
+    shareA = await addRevenueShare(prismaOwner, A, { giverPractitionerId: A.practitionerId, receiverPractitionerId: a2, shareBps: 3000 });
+    shareB = await addRevenueShare(prismaOwner, B, { giverPractitionerId: B.practitionerId, receiverPractitionerId: b2, shareBps: 2500 });
+    pushA = (
+      await prismaOwner.pushSubscription.create({
+        data: { userId: A.userId, endpoint: `https://push.example.com/${randomUUID()}`, p256dh: "B".repeat(87), auth: "a".repeat(22) },
+      })
+    ).id;
+  });
+
+  afterAll(async () => {
+    await A?.cleanup();
+    await B?.cleanup();
+    await prismaOwner.pushSubscription.deleteMany({ where: { id: pushA } });
+    await prismaOwner.$disconnect();
+  });
+
+  it("[CF2-MIG] PractitionerRevenueShare: A ve el suyo y no el de B (y B no ve el de A)", async () => {
+    const seenByA = await runWithRls(A.tenantId, (tx) =>
+      tx.practitionerRevenueShare.findMany({ where: { id: { in: [shareA, shareB] } }, select: { id: true } })
+    );
+    expect(seenByA.map((r) => r.id)).toEqual([shareA]);
+    expect(await runWithRls(B.tenantId, (tx) => tx.practitionerRevenueShare.count({ where: { id: shareA } }))).toBe(0);
+  });
+
+  it("[CF2-MIG] PractitionerRevenueShare: A no inserta en B (WITH CHECK) ni cierra ni borra el de B (0 filas)", async () => {
+    await expect(
+      runWithRls(A.tenantId, (tx) =>
+        tx.practitionerRevenueShare.create({
+          data: {
+            tenantId: B.tenantId,
+            giverPractitionerId: b2,
+            receiverPractitionerId: B.practitionerId,
+            shareBps: 100,
+            appliesManual: true,
+            appliesOnline: false,
+            appliesInsurer: false,
+            effectiveFrom: new Date(),
+          },
+        })
+      )
+    ).rejects.toThrow(/row-level security/i);
+    const counts = await runWithRls(A.tenantId, async (tx) => [
+      (await tx.practitionerRevenueShare.updateMany({ where: { id: shareB }, data: { effectiveTo: new Date() } })).count,
+      (await tx.practitionerRevenueShare.deleteMany({ where: { id: shareB } })).count,
+    ]);
+    expect(counts).toEqual([0, 0]);
+    expect((await prismaOwner.practitionerRevenueShare.findUniqueOrThrow({ where: { id: shareB } })).effectiveTo).toBeNull();
+  });
+
+  it("[CF2-MIG] intra-tenant: A cierra la vigente e inserta otra (la policy no es deny-all)", async () => {
+    const created = await runWithRls(A.tenantId, async (tx) => {
+      await tx.practitionerRevenueShare.update({ where: { id: shareA }, data: { effectiveTo: new Date(), closedById: A.userId } });
+      return tx.practitionerRevenueShare.create({
+        data: {
+          tenantId: A.tenantId,
+          giverPractitionerId: A.practitionerId,
+          receiverPractitionerId: a2,
+          shareBps: 4000,
+          appliesManual: true,
+          appliesOnline: true,
+          appliesInsurer: false,
+          effectiveFrom: new Date(),
+          createdById: A.userId,
+        },
+      });
+    });
+    expect(created).toMatchObject({ tenantId: A.tenantId, shareBps: 4000, effectiveTo: null });
+    expect(await prismaOwner.practitionerRevenueShare.count({ where: { tenantId: A.tenantId } })).toBe(2);
+  });
+
+  it("[CF2-MIG] PushSubscription (SERVICE_ONLY): la app no ve, no escribe ni borra, ni el dispositivo propio", async () => {
+    await expect(
+      runWithRls(A.tenantId, (tx) =>
+        tx.pushSubscription.create({
+          data: { userId: A.userId, endpoint: `https://push.example.com/${randomUUID()}`, p256dh: "B".repeat(87), auth: "a".repeat(22) },
+        })
+      )
+    ).rejects.toThrow(/row-level security/i);
+    const counts = await runWithRls(A.tenantId, async (tx) => [
+      await tx.pushSubscription.count({ where: { userId: A.userId } }),
+      (await tx.pushSubscription.updateMany({ where: { id: pushA }, data: { failureCount: 9 } })).count,
+      (await tx.pushSubscription.deleteMany({ where: { id: pushA } })).count,
+    ]);
+    expect(counts).toEqual([0, 0, 0]);
+    expect((await prismaOwner.pushSubscription.findUniqueOrThrow({ where: { id: pushA } })).failureCount).toBe(0);
+  });
+
+  it("[CF2-MIG] sin GUC (fuera de runWithRls): 0 repartos y 0 dispositivos visibles", async () => {
+    const app = new PrismaClient();
+    try {
+      expect(await app.practitionerRevenueShare.count({ where: { id: { in: [shareA, shareB] } } })).toBe(0);
+      expect(await app.pushSubscription.count()).toBe(0);
     } finally {
       await app.$disconnect();
     }

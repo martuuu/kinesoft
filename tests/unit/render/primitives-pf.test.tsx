@@ -84,7 +84,7 @@ describe("[PF1.0-b] capas: --z-drawer < --z-modal < --z-confirm < --z-toast", ()
   });
 
   it("los números de ConfirmDialog (80) y Toast (90) coinciden con sus tokens (hasta que los adopten por handoff)", () => {
-    expect(read("components/ui/confirm-dialog.tsx")).toMatch(new RegExp(`zIndex:\\s*(${zToken("z-confirm")}|"var\\(--z-confirm\\)")`));
+    expect(read("components/ui/confirm-dialog-panel.tsx")).toMatch(new RegExp(`zIndex:\\s*(${zToken("z-confirm")}|"var\\(--z-confirm\\)")`));
     expect(read("components/ui/toast.tsx")).toMatch(new RegExp(`zIndex:\\s*(${zToken("z-toast")}|"var\\(--z-toast\\)")`));
   });
 });

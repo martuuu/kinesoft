@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ConfirmDialog, focusConfirmAccept } from "@/components/ui/confirm-dialog";
+import { ConfirmDialog, focusConfirmAccept } from "@/components/ui/confirm-dialog-panel";
 
 const noop = () => {};
 

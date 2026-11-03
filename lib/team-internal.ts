@@ -48,6 +48,7 @@ import {
 } from "@/lib/plan-catalog";
 import type { PlanLimitOverrides, PlanLimits } from "@/lib/saas-plans-types";
 import { provisionPractitionerAgenda } from "@/lib/agenda-defaults";
+import { closeRevenueSharesForPractitionerInTx, closeRevenueSharesForUserInTx } from "@/lib/revenue-share-internal";
 import { issueAccessLink } from "@/lib/identity/access-link";
 import { logger } from "@/lib/logger";
 import { sendEmail } from "@/lib/email";
@@ -1010,6 +1011,10 @@ export async function changeMemberRoleInTx(
     data: { role: nextRole, clinical: nextClinical, ...(grantsChanged ? nextGrants : {}) },
   });
   if (upd.count !== 1) throw new RoleChangeRaceError();
+  // CF2-ZF3 (ZA-1): a un rol que no atiende deja de ser reservable, así que tampoco recibe ni destina un % desde ahora.
+  if (isClinicalMember(m) && !nextIsClinical) {
+    await closeRevenueSharesForUserInTx(tx, tenantId, m.userId, ctx.actorUserId, "member.nonClinical");
+  }
   let demoted: number | undefined;
   if (transfer) {
     // §20.17 (el Administrador/a nunca atiende): el Titular anterior queda con «Configuración» delegada y, según
@@ -1092,6 +1097,8 @@ export async function suspendMemberInTx(
     where: { tenantId, email: normalizeEmail(m.user.email), acceptedAt: null, revokedAt: null },
     data: { revokedAt: input.now, revokedById: ctx.actorUserId },
   });
+  // CF2-ZF3 (ZA-1): un suspendido deja de recibir (y de destinar) un % desde ahora; reactivar no lo reabre.
+  if (prac) await closeRevenueSharesForPractitionerInTx(tx, tenantId, prac.id, ctx.actorUserId, "member.suspend");
   await teamAuditInTx(tx, ctx, {
     action: "membership.suspend",
     entity: "Membership",
@@ -1199,6 +1206,8 @@ export async function setMemberClinicalInTx(
     data: { clinical: i.clinical },
   });
   if (upd.count !== 1) throw new RoleChangeRaceError();
+  // CF2-ZF3 (ZA-1): «no atiende» = deja de ser reservable: sus reglas de reparto se cierran desde ahora.
+  if (!i.clinical) await closeRevenueSharesForUserInTx(tx, tenantId, m.userId, ctx.actorUserId, "member.nonClinical");
   await teamAuditInTx(tx, ctx, {
     action: "membership.clinical.change",
     entity: "Membership",
@@ -1289,6 +1298,8 @@ export async function removeMemberInTx(
   }
   const del = await tx.membership.deleteMany({ where: { id: m.id, tenantId } });
   if (del.count !== 1) return fail("Miembro no encontrado.");
+  // CF2-ZF3 (ZA-1): fuera del equipo, sus reglas de reparto se cierran en `now` (el Practitioner queda: historia).
+  if (prac) await closeRevenueSharesForPractitionerInTx(tx, tenantId, prac.id, ctx.actorUserId, "member.remove");
   await teamAuditInTx(tx, ctx, {
     action: "membership.remove",
     entity: "Membership",

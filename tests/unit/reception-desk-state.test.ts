@@ -207,14 +207,16 @@ describe("[RX-0] filtros", () => {
 });
 
 describe("[RX-0] owesCopago", () => {
-  const e = (over: Partial<BookingDTO>, state: DeskEntry["state"] = "atendido") => ({
-    state,
-    row: dto("x", "09:00", { status: "COMPLETED", copagoCents: 600_000, ...over }),
-  });
-  it("atendido con copago y sin cobro → debe (UNPAID, FAILED o sin paymentStatus)", () => {
+  const e = (over: Partial<BookingDTO>) => {
+    const row = dto("x", "09:00", { status: "COMPLETED", copagoCents: 600_000, ...over });
+    return deskEntries([row], NOW, SECRETARIA)[0];
+  };
+  it("atendido con copago y sin cobro → debe (UNPAID o FAILED)", () => {
     expect(owesCopago(e({ paymentStatus: "UNPAID" }))).toBe(true);
     expect(owesCopago(e({ paymentStatus: "FAILED" }))).toBe(true);
-    expect(owesCopago(e({ paymentStatus: undefined }))).toBe(true);
+  });
+  it("[CF2-ZF1-1] sin paymentStatus no se adivina (criterio único con `copagoTag`): no debe", () => {
+    expect(owesCopago(e({ paymentStatus: undefined }))).toBe(false);
   });
   it("PAID, AUTHORIZED y REFUNDED no deben", () => {
     for (const p of ["PAID", "AUTHORIZED", "REFUNDED"] as const) expect(owesCopago(e({ paymentStatus: p })), p).toBe(false);
@@ -222,19 +224,50 @@ describe("[RX-0] owesCopago", () => {
   it("0 centavos no debe", () => {
     expect(owesCopago(e({ copagoCents: 0, paymentStatus: "UNPAID" }))).toBe(false);
   });
-  it("no atendido no debe (todavía)", () => {
-    for (const s of ["por-llegar", "en-sala", "en-atencion", "ausente", "cancelado"] as const) {
-      expect(owesCopago(e({ paymentStatus: "UNPAID" }, s)), s).toBe(false);
+  it("[CF2-ZF1-1] llegó y no terminó (en sala, llamado, en atención) → debe; por llegar, demorado, ausente o cancelado → no", () => {
+    const arrived = { status: "CONFIRMED" as const, arrivedAt: at("08:55"), paymentStatus: "UNPAID" as const };
+    const owes = {
+      "en-sala": e(arrived),
+      llamado: e({ ...arrived, calledAt: at("09:01") }),
+      "en-atencion": e({ ...arrived, attendingAt: at("09:02") }),
+    };
+    for (const [state, entry] of Object.entries(owes)) {
+      expect(entry.state).toBe(state);
+      expect(owesCopago(entry), state).toBe(true);
     }
+    const not = {
+      "por-llegar": deskEntries([dto("x", "11:30", { copagoCents: 600_000, paymentStatus: "UNPAID" })], NOW, SECRETARIA)[0],
+      demorado: e({ status: "CONFIRMED", paymentStatus: "UNPAID" }),
+      ausente: e({ ...arrived, status: "NO_SHOW" }),
+      cancelado: e({ ...arrived, status: "CANCELLED" }),
+    };
+    for (const [state, entry] of Object.entries(not)) {
+      expect(entry.state).toBe(state);
+      expect(owesCopago(entry), state).toBe(false);
+    }
+  });
+  it("[CF2-ZF1-5] primaria: «Cobrar» del atendido sin cambios; en la lista «Por cobrar» (`cash`) también para el que llegó", () => {
+    const done = e({ paymentStatus: "UNPAID" });
+    const inRoom = e({ status: "CONFIRMED", arrivedAt: at("08:55"), paymentStatus: "UNPAID" });
+    const COBRA = SECRETARIA_COBRA;
+    const inRoomCobra = deskEntries([inRoom.row], NOW, COBRA)[0];
+    expect(deskPrimary(deskEntries([done.row], NOW, COBRA)[0], COBRA)).toEqual({ kind: "collect", label: "Cobrar" });
+    // En la tabla y la línea de tiempo, el que está en la sala sigue con su transición («Llamar»).
+    expect(deskPrimary(inRoomCobra, COBRA)).toEqual({ kind: "action", action: "llamar", label: "Llamar" });
+    expect(deskPrimary(inRoomCobra, COBRA, { cash: true })).toEqual({ kind: "collect", label: "Cobrar" });
+    // `cash` no inventa cobros: quien no cobra la fila, o una fila que no debe, sigue igual.
+    expect(deskPrimary(inRoomCobra, KINE, { cash: true })).toEqual(deskPrimary(inRoomCobra, KINE));
+    const notOwing = deskEntries([dto("y", "10:30", { arrivedAt: at("10:25") })], NOW, COBRA)[0];
+    expect(deskPrimary(notOwing, COBRA, { cash: true })).toEqual(deskPrimary(notOwing, COBRA));
   });
 });
 
 describe("[RX-0] deskKpis", () => {
   it("llamados dentro de En sala; terminados = atendidos + ausentes; cancelados fuera del total", () => {
-    expect(deskKpis(deskEntries(ALL, NOW, OWNER))).toEqual({ enSala: 2, enAtencion: 1, demorados: 1, terminados: 2, total: 7 });
+    expect(deskKpis(deskEntries(ALL, NOW, OWNER))).toEqual({ enSala: 2, llamados: 1, enAtencion: 1, demorados: 1, terminados: 2, total: 7 });
   });
   it("vacío → ceros", () => {
-    expect(deskKpis([])).toEqual({ enSala: 0, enAtencion: 0, demorados: 0, terminados: 0, total: 0 });
+    expect(deskKpis([])).toEqual({ enSala: 0, llamados: 0, enAtencion: 0, demorados: 0, terminados: 0, total: 0 });
   });
 });
 
@@ -287,7 +320,8 @@ describe("[RX-0] listas del panel y carriles", () => {
     const es = deskEntries(
       [
         ROWS.atendido,
-        dto("t2", "08:00", { status: "COMPLETED", copagoCents: 450_050 }),
+        // [CF2-ZF1-1] con `paymentStatus` (el cable siempre lo trae): sin él, el criterio único no adivina.
+        dto("t2", "08:00", { status: "COMPLETED", copagoCents: 450_050, paymentStatus: "UNPAID" }),
         dto("pagado", "08:30", { status: "COMPLETED", copagoCents: 600_000, paymentStatus: "PAID" }),
         ROWS.ausente,
         ROWS.cancelado,
@@ -447,7 +481,7 @@ describe("[RX-0] botón primario y menú ⋯", () => {
       { kind: "action", action: "en-atencion", label: "En atención" },
       { kind: "action", action: "atendido", label: "Atendido" },
       { kind: "action", action: "deshacer", label: "Deshacer" },
-      { kind: "agenda", href: "/agenda?date=2026-10-15&view=timeline&pros=p1", label: "Ver turno en la agenda" },
+      { kind: "agenda", href: "/agenda?date=2026-10-15&view=timeline&pros=p1&open=enSala", label: "Ver turno en la agenda" },
     ]);
   });
 
@@ -525,7 +559,7 @@ describe("[RX-0] día AR: un turno a las 23:30 AR no se corre al día siguiente 
     expect(deskPrimary(e, SECRETARIA)).toMatchObject({ action: "llego" });
     expect(byId(soonEntries([e], LATE_NOW))).toEqual(["noche"]); // 30' justos
     const agenda = deskMenuItems(e, SECRETARIA, dayKeyOf(LATE_NOW)).find((i) => i.kind === "agenda");
-    expect(agenda).toMatchObject({ href: "/agenda?date=2026-10-15&view=timeline&pros=p1" });
+    expect(agenda).toMatchObject({ href: "/agenda?date=2026-10-15&view=timeline&pros=p1&open=noche" });
   });
   it("un turno de mañana AR (00:10 del 16) no se marca hoy", () => {
     const [e] = deskEntries([dto("manana", "00:10", { scheduledFor: at("00:10", "2026-10-16") })], LATE_NOW, SECRETARIA);

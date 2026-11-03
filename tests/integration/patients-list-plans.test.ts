@@ -20,6 +20,9 @@
  *  - Sin `planes` (General) no se consulta ni `TreatmentProgram` ni `Session`
  *    (el tenant TIENE un plan sembrado: si el gate faltara, aparecería).
  *  - Fila `basic` (otro kine sin asignación ni share): sin chips (PHI).
+ *  - CF2 (§29, decisión 3 de Martin): el plan salió de la PÁGINA de Pacientes. Los chips y «Plan activo» se hidratan solo
+ *    en `mode: "all"` (el export CSV, `listPatientsDirectory(…, "all")`); la página no lee TreatmentProgram ni Session.
+ *    Los casos de chips corren por esa vía. «Última visita» ya no sale de las sesiones (D-CF2-15: turnos).
  *
  * Símbolo real (`listPatients`) contra la DB; solo se mockea la sesión y se
  * instrumentan los clientes Prisma. Corre con `kinesoft_app` y con el owner.
@@ -34,6 +37,7 @@ vi.mock("@/lib/db", async (importOriginal) => {
 
 import type { PrismaClient, Discipline } from "@prisma/client";
 import { listPatients } from "@/lib/patients";
+import { listPatientsDirectory } from "@/lib/patients-list-internal";
 import { measure, type QueryEvent } from "@/tests/helpers/query-counter";
 import {
   ownerClient,
@@ -54,6 +58,8 @@ function recorded(): QueryEvent[] {
 }
 const touches = (table: string) => recorded().filter((e) => e.query.includes(`"${table}"`));
 const ids = (rows: { id: string }[]) => rows.map((r) => r.id);
+/** La vía que todavía hidrata planes: el export (`mode: "all"`). */
+const exportRows = (q: string) => listPatientsDirectory({ q }, "all");
 
 describe.skipIf(!RUN)("S32 · listado de pacientes con planes por disciplina", () => {
   let db: PrismaClient;
@@ -163,7 +169,7 @@ describe.skipIf(!RUN)("S32 · listado de pacientes con planes por disciplina", (
 
   it("[S32] chips por disciplina: uno por plan ACTIVE vivo, con realizadas / sesiones vivas", async () => {
     asUser(K.userId);
-    const rows = (await listPatients({ q: sfx })).rows;
+    const rows = (await exportRows(sfx)).rows;
     const both = rows.find((r) => r.id === pBoth)!;
     // Más reciente primero (Osteo se creó después), igual que «Plan activo».
     expect(both.activePlans).toEqual([
@@ -173,15 +179,15 @@ describe.skipIf(!RUN)("S32 · listado de pacientes con planes por disciplina", (
     expect(both.activeProgramTitle).toBe("Plan cervical");
     expect(both.sessionsDone).toBe(0);
     expect(both.sessionsTotal).toBe(2);
-    // «Última visita» = última sesión viva realizada de los planes activos (la archivada no).
-    expect(both.lastVisit?.toISOString()).toBe(kineDoneAt.toISOString());
+    // CF2 (D-CF2-15): «Última visita» sale de los turnos, no de las sesiones: sin turnos, null aunque haya realizadas.
+    expect(both.lastVisit).toBeNull();
 
     expect(rows.find((r) => r.id === pNoDisc)!.activePlans).toEqual([{ discipline: null, done: 0, totalLive: 1 }]);
   });
 
   it("[S32] `liveProgramWhere`: un plan ACTIVE archivado y un COMPLETED no son plan activo", async () => {
     asUser(K.userId);
-    const rows = (await listPatients({ q: sfx })).rows;
+    const rows = (await exportRows(sfx)).rows;
     for (const id of [pArchivedActive, pCompleted, pPlain]) {
       const r = rows.find((x) => x.id === id)!;
       expect(r.activePlans).toEqual([]);
@@ -199,7 +205,7 @@ describe.skipIf(!RUN)("S32 · listado de pacientes con planes por disciplina", (
 
   it("[S32] sin N+1: una sola consulta agregada sobre Session, constante con más pacientes", async () => {
     asUser(K.userId);
-    const { m: before } = await measure(() => listPatients({ q: sfx }));
+    const { m: before } = await measure(() => exportRows(sfx));
     expect(touches("Session")).toHaveLength(1);
     expect(touches("Session")[0].query).toMatch(/GROUP BY/i);
 
@@ -209,15 +215,24 @@ describe.skipIf(!RUN)("S32 · listado de pacientes con planes por disciplina", (
       await plan(K, { patientId: p, title: `Plan K${i}`, discipline: "KINESIOLOGY", sessions: [{}, {}] });
       await plan(K, { patientId: p, title: `Plan O${i}`, discipline: "OSTEOPATHY", sessions: [{}] });
     }
-    const { result, m: after } = await measure(() => listPatients({ q: sfx }));
+    const { result, m: after } = await measure(() => exportRows(sfx));
     expect(result.rows.length).toBe(8);
     expect(after.statements).toBe(before.statements);
     expect(touches("Session")).toHaveLength(1);
   });
 
+  it("[CF2-PS1] la página (no el export) no lee planes ni sesiones y no trae chips", async () => {
+    asUser(K.userId);
+    const { result } = await measure(() => listPatients({ q: sfx }));
+    expect(touches("TreatmentProgram")).toEqual([]);
+    expect(touches("Session")).toEqual([]);
+    const both = result.rows.find((r) => r.id === pBoth)!;
+    expect(both).toMatchObject({ access: "full", activePlans: [], activeProgramTitle: null, sessionsTotal: 0 });
+  });
+
   it("[S32] fila basic (otro kine sin asignación ni share): sin chips", async () => {
     asUser(other.userId);
-    const row = (await listPatients({ q: sfx })).rows.find((r) => r.id === pBoth)!;
+    const row = (await exportRows(sfx)).rows.find((r) => r.id === pBoth)!;
     expect(row.access).toBe("basic");
     expect(row.activePlans).toEqual([]);
     expect(row.activeProgramTitle).toBeNull();
@@ -225,7 +240,7 @@ describe.skipIf(!RUN)("S32 · listado de pacientes con planes por disciplina", (
 
   it("[S32] GENERAL (sin `planes`): no consulta planes ni sesiones y no hay chips", async () => {
     asUser(G.userId);
-    const { result } = await measure(() => listPatients({}));
+    const { result } = await measure(() => listPatientsDirectory({}, "all"));
     const row = result.rows.find((r) => r.id === gPatient)!;
     expect(row.activePlans).toEqual([]);
     expect(touches("TreatmentProgram")).toEqual([]);

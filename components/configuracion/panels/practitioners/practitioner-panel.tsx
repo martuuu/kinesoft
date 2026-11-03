@@ -24,6 +24,14 @@
  * «Atiende servicios distintos a la vez» y los intervalos de la agenda y del turnero). Mismo patrón: en línea, con el
  * dirty-guard del shell, y solo si la fila trae `agendaRules`.
  *
+ * CF2 (§29, T.A/T.B; D-CF2-8/9): debajo de las reglas, la anticipación del turnero del profesional
+ * (`PractitionerLeadEditor`, solo si la fila trae `publicLead`; mismo dirty-guard) y, para `tenant.sensitive` con el
+ * contacto del profesional prendido (`leadContactShown`), el «Ocultar su contacto del turnero».
+ *
+ * CF2 (§29 P.3, decisión 4 + D-CF2-18): sub-pestaña «Reparto» (`RevenueShareEditor`) SOLO con `tenant.sensitive`: el %
+ * que un profesional le destina a otro es plata del equipo (la action exige lo mismo). Carga lazy al montar
+ * (`listRevenueShares`), en línea y con el mismo dirty-guard.
+ *
  * Layout: tarjetas que se acomodan solas (grid auto-fill) arriba y el detalle
  * abajo; en un celular quedan apiladas sin necesitar un breakpoint.
  */
@@ -53,15 +61,18 @@ import { PayersEditor } from "./payers-editor";
 import { PublicBookingSwitch } from "./public-booking-switch";
 import { SpecialtiesEditor } from "./specialties-editor";
 import { PractitionerAgendaRulesEditor, type PractitionerAgendaRulesView } from "./agenda-rules-editor";
+import { PractitionerLeadContactHide, PractitionerLeadEditor, type PractitionerPublicLeadView } from "./lead-editor";
+import { RevenueShareEditor } from "./revenue-share-editor";
 import type { TeamMemberRow } from "@/lib/invitations-types";
 
-type SubTab = "horarios" | "excepciones" | "servicios" | "coberturas" | "especialidades";
+type SubTab = "horarios" | "excepciones" | "servicios" | "coberturas" | "especialidades" | "reparto";
 const SUB_TABS: { key: SubTab; label: string }[] = [
   { key: "horarios", label: "Horarios" },
   { key: "excepciones", label: "Excepciones" },
   { key: "servicios", label: "Servicios" },
   { key: "coberturas", label: "Coberturas" },
   { key: "especialidades", label: "Especialidades" },
+  { key: "reparto", label: "Reparto" },
 ];
 
 /** DIR-3c: lo que necesita el editor de especialidades (del loader de `/configuracion`). */
@@ -71,12 +82,15 @@ export type PractitionerSpecialtiesData = {
 };
 
 /**
- * Fila del resumen con el tope (T3e-2c) y las reglas de agenda (CF-U4). Opcionales: el tipo base de
- * `configuracion-client` no los declara (el loader sí los trae, `ConfiguracionScheduleRow`).
+ * Fila del resumen con el tope (T3e-2c), las reglas de agenda (CF-U4) y la anticipación del turnero (CF2). Opcionales:
+ * el tipo base de `configuracion-client` no los declara (el loader sí los trae, `ConfiguracionScheduleRow`).
+ * `leadContactShown`: el profesional muestra su contacto dentro de la anticipación (`showContactInLeadWindow`).
  */
 export type PractitionerPanelRow = PractitionerScheduleSummaryRow & {
   bookingCap?: PractitionerBookingCapView;
   agendaRules?: PractitionerAgendaRulesView;
+  publicLead?: PractitionerPublicLeadView;
+  leadContactShown?: boolean;
 };
 
 export function PractitionerPanel({
@@ -122,8 +136,12 @@ export function PractitionerPanel({
   const [speDirty, setSpeDirty] = useState(false);
   const [capDirty, setCapDirty] = useState(false);
   const [rulesDirty, setRulesDirty] = useState(false);
-  const dirty = svcDirty || payDirty || speDirty || capDirty || rulesDirty;
-  const subTabs = specialties ? SUB_TABS : SUB_TABS.filter((t) => t.key !== "especialidades");
+  const [leadDirty, setLeadDirty] = useState(false);
+  const [shareDirty, setShareDirty] = useState(false);
+  const dirty = svcDirty || payDirty || speDirty || capDirty || rulesDirty || leadDirty || shareDirty;
+  const subTabs = SUB_TABS.filter(
+    (t) => (t.key !== "especialidades" || !!specialties) && (t.key !== "reparto" || sensitive)
+  );
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -155,6 +173,8 @@ export function PractitionerPanel({
       setSpeDirty(false);
       setCapDirty(false);
       setRulesDirty(false);
+      setLeadDirty(false);
+      setShareDirty(false);
       go();
     },
     [dirty, confirm]
@@ -322,6 +342,25 @@ export function PractitionerPanel({
                 onDirtyChange={setRulesDirty}
               />
             )}
+            {/* CF2 (D-CF2-8): anticipación propia del turnero («Usar la del consultorio» = NULL). */}
+            {sub === "horarios" && selected.publicLead && (
+              <PractitionerLeadEditor
+                key={`lead-${selected.practitionerId}`}
+                practitionerId={selected.practitionerId}
+                practitionerName={selected.name}
+                own={selected.publicLead.own}
+                tenant={selected.publicLead.tenant}
+                onDirtyChange={setLeadDirty}
+              />
+            )}
+            {/* CF2 (D-CF2-9): el titular solo apaga el contacto; prenderlo es del profesional (Mi agenda). */}
+            {sub === "horarios" && sensitive && selected.leadContactShown && (
+              <PractitionerLeadContactHide
+                key={`lead-contact-${selected.practitionerId}`}
+                practitionerId={selected.practitionerId}
+                practitionerName={selected.name}
+              />
+            )}
             {sub === "horarios" && (
               <ScheduleEditor
                 key={selected.practitionerId}
@@ -365,6 +404,15 @@ export function PractitionerPanel({
                 initial={specialties.byPractitioner[selected.practitionerId] ?? []}
                 readOnly={support}
                 onDirtyChange={setSpeDirty}
+              />
+            )}
+            {sub === "reparto" && sensitive && (
+              <RevenueShareEditor
+                key={selected.practitionerId}
+                practitionerId={selected.practitionerId}
+                practitionerName={selected.name}
+                readOnly={support}
+                onDirtyChange={setShareDirty}
               />
             )}
           </div>

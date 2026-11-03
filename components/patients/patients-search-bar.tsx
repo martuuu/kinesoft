@@ -1,30 +1,17 @@
 "use client";
 
-import Link from "next/link";
 import { useDebouncedSearchParam } from "@/hooks/use-debounced-search-param";
 import { Card } from "@/components/ui/card";
 import { IconSearch } from "@/components/ui/icons";
-import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import styles from "./patients-directory.module.css";
 
-/** HD-10: con el directorio paginado los totales pasan el millar («Todos · 1.234»): separador AR. */
-const COUNT = new Intl.NumberFormat("es-AR");
-
-type Filter = "all" | "active" | "no-program" | "archived";
-
-export function PatientsSearchBar({
-  filter,
-  totals,
-}: {
-  filter: Filter;
-  /** Sin `planes` la página manda solo `all` (EV1-B). */
-  totals: { all: number; withProgram?: number; withoutProgram?: number };
-}) {
+/**
+ * Buscador del directorio. CF2 (decisión 3 de Martin): las pastillas «Todos / Con plan / Sin plan» salieron para
+ * todos (el plan queda en la ficha); el total ya está en el h1 de la página y «Ver archivados» en la fila de orden,
+ * así que el componente ya no recibe `filter` ni `totals`.
+ */
+export function PatientsSearchBar() {
   const [q, setQ, flush] = useDebouncedSearchParam("q", 300, ["page"]);
-  // EV1-B: sin `planes` (General) los pills «Con plan/Sin plan» no tienen
-  // sentido y uno solo («Todos») no filtra nada: se va el grupo entero. El
-  // total ya está en el título de la página.
-  const plansEnabled = useTenantModules().has("planes");
   return (
     // MB-1d (C-MB3): `.searchBar` la vuelve sticky < 768, debajo de la barra móvil.
     <Card glass className={styles.searchBar} style={{ padding: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
@@ -77,39 +64,6 @@ export function PatientsSearchBar({
           }}
         />
       </div>
-      {plansEnabled && (
-      <div
-        style={{
-          display: "flex",
-          gap: 4,
-          padding: 3,
-          borderRadius: 999,
-          background: "rgba(15,30,51,0.04)",
-        }}
-      >
-        {(
-          [
-            ["all", `Todos · ${COUNT.format(totals.all)}`],
-            ["active", `Con plan · ${COUNT.format(totals.withProgram ?? 0)}`],
-            ["no-program", `Sin plan · ${COUNT.format(totals.withoutProgram ?? 0)}`],
-          ] as const
-        ).map(([key, label]) => {
-          const on = key === filter;
-          return (
-            <Link
-              key={key}
-              href={`/pacientes?filter=${key}${q ? `&q=${encodeURIComponent(q)}` : ""}`}
-              scroll={false}
-              aria-current={on ? "page" : undefined}
-              // La sombra del seleccionado va por clase: un `boxShadow` inline pisaba el anillo de foco global.
-              className={`${styles.seg} ${on ? styles.segOn : ""}`}
-            >
-              {label}
-            </Link>
-          );
-        })}
-      </div>
-      )}
     </Card>
   );
 }

@@ -8,8 +8,8 @@
  *    el profesional a cargo.». BILLING (admin sin `editAdmin`) no edita.
  *  - `setPatientCoverage` / `setPatientDefaultCopago`: `full` o `admin` + `editAdmin`. `getPatientBillingPreview`:
  *    `full` o `admin` (BILLING incluido).
- *  - `listPatients`: proyección `admin` con contacto, nacimiento, DNI, obra social y próximo turno; sin notas, planes
- *    ni última visita.
+ *  - `listPatients`: proyección `admin` con contacto, nacimiento, DNI, obra social y próximo turno; sin notas ni planes.
+ *    CF2 (D-CF2-15): la última visita y el estado salen de la agenda y la Secretaria los ve (`cf2-patients-directory`).
  *  - `createPatient` / `assignPatientToPractitioner`: el profesional elegido tiene que ser reservable y no estar
  *    deshabilitado (`bookablePractitionerWhere(..., { includeDisabledFilter: true })`).
  *  - Pedidos del portal: deciden `full` o `admin` + `editAdmin` (Facturación afuera).
@@ -31,6 +31,7 @@ import {
   updatePatient,
 } from "@/lib/patients";
 import { exportPatientsCsv } from "@/lib/patients-export-internal";
+import { listPatientsDirectory } from "@/lib/patients-list-internal";
 import { getActor } from "@/lib/session";
 import { decidePatientPortalRequest, listPatientPortalRequests } from "@/lib/patient-portal-requests";
 import { proposePayerPlan } from "@/lib/catalog";
@@ -315,7 +316,7 @@ describe.skipIf(!RUN)("[AS-1b] pacientes editados por Secretaria/Admin, portal y
 
   // ── listPatients ───────────────────────────────────────────────────────
 
-  it("[AS-1b] listPatients proyección admin: contacto, DNI, nacimiento, OS y próximo turno; sin notas, planes ni última visita", async () => {
+  it("[AS-1b] listPatients proyección admin: contacto, DNI, nacimiento, OS y próximo turno; sin notas ni planes", async () => {
     const tag = uniqueSuffix();
     const osde = await addInsurer(db, A, { name: `OSDE-${tag}` });
     const listPhone = ph();
@@ -344,17 +345,20 @@ describe.skipIf(!RUN)("[AS-1b] pacientes editados por Secretaria/Admin, portal y
       activeProgramTitle: null,
       sessionsTotal: 0,
       sessionsDone: 0,
+      // Sin turnos pasados todavía (el único es a futuro); con uno, la Secretaria lo vería (CF2 D-CF2-15).
       lastVisit: null,
+      activity: "active",
     });
     expect(row!.documentId).toBeTruthy();
     expect(row!.dateOfBirth?.toISOString().slice(0, 10)).toBe("1985-01-20");
     expect(+row!.upcomingAt!).toBe(+upcoming);
 
-    // Control: el titular (full) ve las notas y el plan.
+    // Control: el titular (full) ve las notas; el plan, en el export (CF2 decisión 3: salió de la página).
     asUser(A.userId);
     const full = (await listPatients({ q: tag })).rows.find((r) => r.id === id);
     expect(full).toMatchObject({ access: "full", notes: "Nota clínica" });
-    expect(full!.activePlans).toHaveLength(1);
+    const exported = (await listPatientsDirectory({ q: tag }, "all")).rows.find((r) => r.id === id);
+    expect(exported!.activePlans).toHaveLength(1);
   });
 
   // ── pedidos del portal ─────────────────────────────────────────────────

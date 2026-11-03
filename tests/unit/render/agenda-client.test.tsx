@@ -64,6 +64,9 @@ vi.mock("@/lib/patient-documents", () => proxy());
 // pasan por `lib/authz` (React `cache`).
 vi.mock("@/lib/online-charges-read", () => proxy());
 vi.mock("@/lib/payment-links", () => proxy());
+// [CF2-AG2] La vista Mes (diferida, la carga el mock de `next/dynamic`) llama a `getAgendaMonthSummary` ("use server" →
+// `lib/authz` → React `cache`): es la red.
+vi.mock("@/lib/agenda-month", () => proxy());
 
 import { AgendaClient, type Props } from "@/components/agenda/agenda-client";
 import type { BookingDTO } from "@/components/agenda/agenda-utils";

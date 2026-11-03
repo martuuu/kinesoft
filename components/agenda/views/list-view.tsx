@@ -175,14 +175,19 @@ export function ListView({
             </div>
             <div className={`k-mono ${styles.cellCopago}`} style={{ fontSize: 12, color: "var(--navy-700)", fontWeight: 600 }}>
               {fmtMoney(b.copagoCents)}
+              {/* [CF2-MU] La plata del turno junto al monto (CF2 A.2, D-CF2-3): «Por cobrar» / «Pagado · Efectivo» para
+                  quien puede cobrar ese turno (`MoneyViewerContext`), o «Seña» / «Pagado MP». Un solo badge por fila
+                  (la precedencia es de `MoneyBadge`). Antes de CF2 la seña iba bajo el estado: ahora toda la plata se lee
+                  en la misma columna. Va inline, sin caja propia: la columna es de 90 px, así que el badge baja solo a
+                  la línea de abajo (y «Pagado · Transferencia» parte en dos dentro del borde en vez de desbordar a
+                  «Duración»); sin badge la celda queda byte a byte como antes (golden `off-list` de agenda-client). */}
+              <MoneyBadge b={b} />
             </div>
             <div className={`k-mono ${styles.cellDuration}`} style={{ fontSize: 12, color: "var(--navy-500)" }}>
               {b.durationMin} min
             </div>
             <div className={styles.cellStatus} style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
               <StatusTag s={b.status} hold={paymentHoldState(b, clock)} />
-              {/* [TP-3e] «Seña» / «Pagado MP» junto al estado: el mismo badge con borde de la card (no pinta la fila). */}
-              <MoneyBadge b={b} />
               {isPastUnclosed(b, clock) && (
                 <span
                   data-badge="sin-cerrar"

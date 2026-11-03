@@ -38,10 +38,12 @@ describe("[MB-0c] bottomNavFor (C-MB1)", () => {
     expect(labels(e)).toEqual(["Inicio", "Agenda", "Sala", "Pacientes", "Más"]);
   });
 
-  it("profesional sin sala (General sin Clínica): Inicio, Agenda, Pacientes y «Más» (no hay con qué completar)", () => {
+  // CF2 (P-NAV): antes no había con qué completar y eran 3 + «Más»; ahora el siguiente de navFor es «Caja»
+  // (`billing.collectOwn`).
+  it("profesional sin sala (General sin Clínica): Inicio, Agenda, Pacientes, Caja y «Más»", () => {
     const e = bottomNavFor(GENERAL_CONSULTORIO, capabilitiesFor("PRACTITIONER"));
     check(e);
-    expect(labels(e)).toEqual(["Inicio", "Agenda", "Pacientes", "Más"]);
+    expect(labels(e)).toEqual(["Inicio", "Agenda", "Pacientes", "Caja", "Más"]);
   });
 
   it("profesional Kine sin sala (Consultorio): completa con el siguiente de navFor en su orden (Planes)", () => {

@@ -294,8 +294,10 @@ describe("nav único (C-EV2)", () => {
       "/seguimiento",
       "/biblioteca",
       "/terapia-manual",
-      // [TP-3g] Cobros online: con `billing.collect`, antes de Configuración.
-      "/cobros",
+      // CF2 (D-CF2-17): «Caja», con cualquier capability de cobro y sin depender de los cobros online.
+      "/caja",
+      // [TP-3g] Cobros online: con `billing.collect`, antes de Configuración. CF2: solo con cobros online
+      // (`onlinePaymentsOnly`): este `navFor` va sin opts (falla cerrado), así que no aparece.
       "/configuracion",
     ]);
   });
@@ -329,6 +331,8 @@ describe("nav único (C-EV2)", () => {
       { id: "nav:diagnostico", category: "shortcut", label: "Diagnóstico", href: "/diagnostico" },
       { id: "nav:seguimiento", category: "shortcut", label: "Seguimiento", href: "/seguimiento" },
       { id: "nav:biblioteca", category: "shortcut", label: "Ejercicios", href: "/biblioteca" },
+      // CF2 (P-NAV): atajo «Caja».
+      { id: "nav:caja", category: "shortcut", label: "Caja", href: "/caja" },
     ]);
   });
 
@@ -338,7 +342,7 @@ describe("nav único (C-EV2)", () => {
   });
 
   it("shortcutsFor: General sin atajos clínicos", () => {
-    expect(shortcutsFor(general, ownerCaps).map((s) => s.href)).toEqual(["/dashboard", "/agenda", "/pacientes"]);
+    expect(shortcutsFor(general, ownerCaps).map((s) => s.href)).toEqual(["/dashboard", "/agenda", "/pacientes", "/caja"]);
   });
 });
 

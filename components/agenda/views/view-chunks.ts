@@ -12,7 +12,7 @@
  * 360) subía a y≈354 y volvía a bajar. En escritorio la Semana no se movía porque su contenedor tiene alto fijo;
  * Lista sí (0,03-0,05). `SsrHold` (`./ssr-hold.tsx`) congela el HTML del server hasta que estos chunks están.
  */
-export type AgendaViewChunk = "practitioner" | "room" | "week-grid" | "week-list" | "list" | "reception";
+export type AgendaViewChunk = "practitioner" | "room" | "week-grid" | "week-list" | "list" | "reception" | "month";
 
 /** Día (`timeline`) es import estático: no espera nada. Una vista desconocida tampoco (no se congela). */
 export const AGENDA_VIEW_CHUNKS: Readonly<Record<string, readonly AgendaViewChunk[]>> = {
@@ -23,6 +23,9 @@ export const AGENDA_VIEW_CHUNKS: Readonly<Record<string, readonly AgendaViewChun
   week: ["week-grid", "week-list"],
   list: ["list"],
   reception: ["reception"],
+  // CF2 (D-CF2-7, brief A.4): el Mes es un modo más (la mayoría nunca lo abre) y su grilla + modelo de celda no van al
+  // first load de /agenda (≤ 178 kB). Con SSR, como las otras: si es la vista inicial llega renderizada.
+  month: ["month"],
 };
 
 export function agendaViewChunks(view: string): readonly AgendaViewChunk[] {

@@ -24,7 +24,11 @@ vi.mock("@/lib/practitioner-public", () => proxy());
 vi.mock("@/lib/practitioner-schedule", () => proxy());
 vi.mock("@/lib/practitioner-services", () => proxy());
 vi.mock("@/lib/practitioner-payers", () => proxy());
+// CF2 (T-U2): la anticipación del turnero y el «Ocultar su contacto» de Horarios.
+vi.mock("@/lib/practitioner-self-settings", () => proxy());
 vi.mock("@/lib/directory-settings", () => proxy());
+// CF2 (P-U4): la sub-pestaña «Reparto» (con `sensitive`) importa las actions del reparto.
+vi.mock("@/lib/revenue-share", () => proxy());
 
 import type { ReactElement } from "react";
 import type { TenantVertical } from "@prisma/client";

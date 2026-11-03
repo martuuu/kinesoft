@@ -112,7 +112,7 @@ describe.skipIf(!RUN)("P0.Z · hallazgos del revisor (b) de ES1", () => {
         patientId: pDx,
         practitionerId: T.practitionerId,
         serviceId: T.serviceId,
-        scheduledFor: new Date(ar("2030-02-01", "10:00")),
+        scheduledFor: new Date(ar("2026-02-01", "10:00")),
         durationMin: 45,
         status: "COMPLETED",
         idempotencyKey: key(),
@@ -159,7 +159,7 @@ describe.skipIf(!RUN)("P0.Z · hallazgos del revisor (b) de ES1", () => {
     const masked = [
       { insurerKey: osPz },
       { ageMin: 40, ageMax: 60 },
-      { lastVisitFrom: "2030-01-15", lastVisitTo: "2030-02-15" },
+      { lastVisitFrom: "2026-01-15", lastVisitTo: "2026-02-15" },
       { q: dxEmail },
     ];
     asUser(other.userId);

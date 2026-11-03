@@ -70,9 +70,12 @@ import {
   firstPublicSlotAcross,
   publicDaySlots,
   publicLeadDay,
+  publicLeadWindowHasFree,
   publicSlotWindow,
   resolvePublicOffer,
 } from "@/lib/public-booking-slots";
+import { buildLeadContact, LEAD_CONTACT_CONSENT_VERSION } from "@/lib/public-lead-contact";
+import { notifyPractitionerOfOnlineBooking, type ProNotifyOutcome } from "@/lib/booking-pro-notify-internal";
 import {
   PUBLIC_BOOKING_SWITCH_SELECT,
   PUBLIC_PARTICULAR_CHARGE_NOTE,
@@ -99,6 +102,7 @@ import {
   type ListPublicSlotsInput,
   type PublicClinic,
   type PublicFirstSlot,
+  type PublicLeadContact,
   type PublicSlot,
   type PublicSlotWindow,
   type PublicBookingStatus,
@@ -342,21 +346,34 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
  * turnero apagado también null (EV0): cubre `listPublicSlots` y
  * `findFirstPublicSlot`, que si no seguían exponiendo la densidad de agenda de
  * un consultorio que no toma turnos online.
+ *
+ * CF2 (D-CF2-10, brief T.B): devuelve `{ tenant, practitioner }` con lo que necesita el contacto dentro de la
+ * anticipación (`leadContact` de `listPublicSlotWindow`): el nombre del consultorio y el número / opt-in /
+ * consentimiento del profesional, como columnas de las MISMAS dos lecturas de siempre (0 sentencias nuevas). El
+ * nombre del profesional NO: `user: { select }` es una relación y Prisma 5 (sin `relationJoins`) la trae con un SELECT
+ * aparte, medido +1 sentencia en CADA ventana (14 → 15, `[CF2-TS1-L8]`). Se lee solo cuando el contacto sale.
+ * Sin profesional («cualquier profesional») `practitioner` es null: ahí nunca hay contacto.
  */
 async function resolvePublicTarget(tenantSlug: string, practitionerId: string | null) {
   const tenant = await prisma.tenant.findUnique({
     where: { slug: tenantSlug },
-    select: { id: true, ...PUBLIC_BOOKING_SWITCH_SELECT },
+    select: { id: true, name: true, ...PUBLIC_BOOKING_SWITCH_SELECT },
   });
   if (!tenant || !isPublicTurneroOpen(tenant)) return null;
-  if (practitionerId) {
-    const p = await prisma.practitioner.findFirst({
-      where: { id: practitionerId, ...publicPractitionerWhere(tenant.id) },
-      select: { id: true },
-    });
-    if (!p) return null;
-  }
-  return tenant;
+  if (!practitionerId) return { tenant, practitioner: null };
+  const practitioner = await prisma.practitioner.findFirst({
+    where: { id: practitionerId, ...publicPractitionerWhere(tenant.id) },
+    select: {
+      id: true,
+      contactWhatsapp: true,
+      showContactInLeadWindow: true,
+      contactConsentAt: true,
+      contactConsentVersion: true,
+      userId: true,
+    },
+  });
+  if (!practitioner) return null;
+  return { tenant, practitioner };
 }
 
 /**
@@ -380,8 +397,9 @@ export async function listPublicSlots(raw: ListPublicSlotsInput): Promise<Public
   if (!parsed.success || !isDayKey(parsed.data.date)) return [];
   const input = parsed.data;
 
-  const tenant = await resolvePublicTarget(input.tenantSlug, input.practitionerId);
-  if (!tenant) return [];
+  const target = await resolvePublicTarget(input.tenantSlug, input.practitionerId);
+  if (!target) return [];
+  const { tenant } = target;
 
   // Día anclado a la pared AR (no al host: en Vercel es UTC). Ids ajenos al
   // tenant (servicio, sede) el loader los descarta → lista vacía.
@@ -434,8 +452,10 @@ export async function listPublicSlotWindow(raw: ListPublicSlotWindowInput): Prom
   const scanEnd = addDays(fromDay, PUBLIC_WINDOW_SCAN_DAYS - 1);
   const lastDay = scanEnd < maxDay ? scanEnd : maxDay;
 
-  const tenant = await resolvePublicTarget(input.tenantSlug, input.practitionerId);
-  if (!tenant) return empty;
+  const target = await resolvePublicTarget(input.tenantSlug, input.practitionerId);
+  // `practitionerId` es obligatorio en el schema: con target, el profesional siempre vino (el `?.` es para el tipo).
+  if (!target?.practitioner) return empty;
+  const { tenant, practitioner } = target;
 
   const load = (from: string, to: string) =>
     loadAvailabilityInputs(prisma, {
@@ -449,6 +469,42 @@ export async function listPublicSlotWindow(raw: ListPublicSlotWindowInput): Prom
   let scanFrom = fromDay;
   let scanLast = lastDay;
   let availability = await load(scanFrom, scanLast);
+  // CF2 (D-CF2-10): ¿hay lugar libre HOY dentro de la anticipación? Con el input de ESTA primera carga y ANTES de la
+  // recarga de abajo: la primera arranca hoy y cubre 6 semanas (hoy..hoy+2 que mira `publicLeadWindowHasFree`); la
+  // recarga arranca en el día de anticipación y ya no ve los huecos de hoy. Solo para la ventana de hoy (la de
+  // «Siguientes ›» no lo necesita) y solo con opt-in + número + consentimiento: el chequeo puro va al final porque es
+  // el único que recorre slots. Recién con todo eso se gasta el rate limit propio (una IP que pide la ventana de hoy
+  // en loop no saca el número más de 20 veces cada 10 min); excedido → se omite EN SILENCIO (la ventana sale igual,
+  // el wizard muestra lo de siempre). El número nunca va a un log.
+  let leadContact: PublicLeadContact | null = null;
+  if (
+    fromDay === today &&
+    practitioner.showContactInLeadWindow &&
+    practitioner.contactWhatsapp &&
+    practitioner.contactConsentAt &&
+    // CF2-ZF3 (ZA-2): el consentimiento vale para el texto que aceptó. Si `LEAD_CONTACT_CONSENT_VERSION` cambia (otro
+    // texto legal), el número no sale hasta que vuelva a aceptar en Configuración → Mi agenda (que re-sella solo si la
+    // versión no es la vigente, `practitioner-self-settings-logic.ts`). Antes bastaba con que hubiera una fecha.
+    practitioner.contactConsentVersion === LEAD_CONTACT_CONSENT_VERSION &&
+    publicLeadWindowHasFree(availability, {
+      practitionerId: input.practitionerId,
+      serviceId: input.serviceId,
+      locationId: input.locationId ?? null,
+      now,
+    })
+  ) {
+    const lrl = await rateLimit(`pub:leadcontact:${callerIp()}`, { limit: 20, windowMs: 600_000 });
+    if (lrl.ok) {
+      // +1 lectura SOLO acá (contacto que sale, ya con el rate limit gastado), no en cada ventana: ver `resolvePublicTarget`.
+      const user = await prisma.userProfile.findUnique({ where: { id: practitioner.userId }, select: { fullName: true } });
+      leadContact = buildLeadContact({
+        // DIR-0: el nombre público nunca cae al email (`publicPractitionerName`), igual que en `getPublicClinic`.
+        name: publicPractitionerName(user?.fullName),
+        e164: practitioner.contactWhatsapp,
+        tenantName: tenant.name,
+      });
+    }
+  }
   // CF (decisión 6): la anticipación del consultorio llega a 8 semanas y la búsqueda mira 6. Si el día de
   // anticipación cae en los últimos `PUBLIC_WINDOW_DAYS` de lo cargado (o después), lo cargado no alcanza para 5
   // hábiles: se vuelve a cargar desde ese día. SOLO en ese caso (+1 carga): con los 60' de siempre cae hoy o mañana y
@@ -467,7 +523,7 @@ export async function listPublicSlotWindow(raw: ListPublicSlotWindowInput): Prom
       }
     }
   }
-  return publicSlotWindow(availability, {
+  const out = publicSlotWindow(availability, {
     practitionerId: input.practitionerId,
     serviceId: input.serviceId,
     fromDay: scanFrom,
@@ -475,6 +531,8 @@ export async function listPublicSlotWindow(raw: ListPublicSlotWindowInput): Prom
     locationId: input.locationId ?? null,
     now,
   });
+  // Clave OMITIDA si no hay contacto (no `undefined`): la ventana de siempre queda igual byte a byte.
+  return leadContact ? { ...out, leadContact } : out;
 }
 
 /**
@@ -498,8 +556,9 @@ export async function findFirstPublicSlot(raw: FirstPublicSlotInput): Promise<Pu
   const today = toARDateKey(now);
   const fromDay = input.fromDate && isDayKey(input.fromDate) && input.fromDate > today ? input.fromDate : today;
 
-  const tenant = await resolvePublicTarget(input.tenantSlug, null);
-  if (!tenant) return null;
+  const target = await resolvePublicTarget(input.tenantSlug, null);
+  if (!target) return null;
+  const { tenant } = target;
   if (input.insurerId) {
     // Una cobertura ajena/inactiva no filtra nada en el motor (sin fila =
     // aceptada): mejor no ofrecer que ofrecer a quien no la acepta.
@@ -646,6 +705,9 @@ class PublicSlotGoneError extends Error {}
  *     promoción de TP-0 (`promoteHeldPublicBookingInTx`), que no toca un PENDING con cobro vivo.
  *   - Aviso `BOOKING_CREATED` (H-TP3) una vez, después del commit que lo dejó CONFIRMED; nunca en replay. Un REQUIRED
  *     lo avisa el webhook al confirmarse con el pago.
+ *   - CF2 (T.C «Orden»): campana → mail/push al profesional del turno sin await (`notifyPractitionerOfOnlineBooking`,
+ *     D-CF2-11; solo turnos online confirmados, nunca los del staff, D-CF2-20) → `afterBookingsCommitted` → preferencia
+ *     de MP → esperar el mail/push antes de responder. Igual en la promoción de un PENDING legado.
  */
 export async function submitPublicBooking(
   raw: SubmitPublicBookingInput
@@ -698,11 +760,16 @@ export async function submitPublicBooking(
   // deshabilitado o PRIVATE para él se podía reservar armando el request).
   if (!service) return { ok: false, error: "Servicio no encontrado." };
 
+  // CF2 (T.C): + las preferencias de aviso del profesional en la MISMA lectura (0 sentencias nuevas): con los dos
+  // canales apagados (el default) `notifyPractitionerOfOnlineBooking` vuelve sin tocar la base.
   const practitioner = await prisma.practitioner.findFirst({
     where: { id: data.practitionerId, ...publicPractitionerWhere(tenant.id) },
-    select: { id: true },
+    select: { id: true, userId: true, notifyBookingEmail: true, notifyBookingPush: true },
   });
   if (!practitioner) return { ok: false, error: "Profesional no encontrado." };
+  const proNotifyHint = {
+    prefs: { userId: practitioner.userId, email: practitioner.notifyBookingEmail, push: practitioner.notifyBookingPush },
+  };
 
   const scheduledFor = new Date(data.scheduledFor);
   if (Number.isNaN(scheduledFor.getTime())) {
@@ -736,6 +803,12 @@ export async function submitPublicBooking(
   let waOutcome: TurneroWaConsentOutcome | null = null;
   /** ZF2: la ficha del replay / gemelo, para recalcular el flag con lo que quedó escrito. */
   let replayPatientId: string | null = null;
+  /**
+   * CF2 (T.C «Orden»): mail/push al profesional del turno, arrancado después del commit y SIN await (corre en paralelo
+   * con el realtime y la preferencia de MP); se ESPERA antes de cada return (Vercel corta lo suelto al responder).
+   * Nunca tira y tiene tope propio de 3 s. null = esta llamada no avisa (replay, gemelo, REQUIRED sin pagar).
+   */
+  let proNotify: Promise<ProNotifyOutcome> | null = null;
   if (prior) {
     const sameAttempt =
       prior.tenantId === tenant.id &&
@@ -1034,6 +1107,20 @@ export async function submitPublicBooking(
       createdHere = true;
       born = { decision: created.decision, chargeId: created.chargeId };
       if (waOutcome === "saved" && !created.waSaved) waOutcome = "not_saved";
+      // CF2 (T.C «Orden», bug): la campana ANTES del realtime. El cliente refresca la campana cuando le llega el evento
+      // del turno; antes la fila se escribía después de `afterBookingsCommitted` (y de la preferencia de MP) y el
+      // refresco no la encontraba: el aviso aparecía recién en el polling siguiente. Solo si el turno quedó RESERVADO:
+      // un REQUIRED (PENDING) lo avisa el webhook cuando el pago lo confirma. OPTIONAL «Pagar ahora» ya nace CONFIRMED
+      // (pague o no, MP caído incluido), así que se avisa acá.
+      if (created.status === "CONFIRMED") {
+        await notifyPublicReservation(tenant.id, {
+          practitionerId: data.practitionerId,
+          scheduledFor,
+          serviceName: service.name,
+          who,
+        });
+        proNotify = notifyPractitionerOfOnlineBooking(tenant.id, created.id, proNotifyHint);
+      }
       // SV06a · Sala de Espera realtime: una sola llamada por commit, JUSTO
       // después de la tx y ANTES de crear la preferencia. Por qué ahí:
       //   - fuera de la tx (contrato del hook): adentro, un rollback dejaba un
@@ -1142,37 +1229,28 @@ export async function submitPublicBooking(
     logDone("checkout");
     return { ok: true, data: { bookingId, next: "checkout", initPoint, amountCents, ...waFlag } };
   };
-  /** BOOKING_CREATED (H-TP3) del alta de esta llamada, cuando el turno quedó RESERVADO (nunca en un replay). */
-  const notifyCreated = async () => {
-    if (!createdHere) return;
-    await notifyPublicReservation(tenant.id, {
-      practitionerId: data.practitionerId,
-      scheduledFor,
-      serviceName: service.name,
-      who,
-    });
-  };
-
-  // ── Alta de esta llamada.
+  // ── Alta de esta llamada. La campana (BOOKING_CREATED, H-TP3) ya salió arriba, antes del realtime; acá solo se
+  // espera el mail/push del profesional (`proNotify`, null con REQUIRED) antes de cada return.
   if (born) {
     if (born.decision.kind !== "charge" || !born.chargeId) {
-      await notifyCreated();
+      await proNotify;
       return reserved();
     }
     const required = born.decision.required;
     const pref = await openTurneroPreference({ tenantId: tenant.id, chargeId: born.chargeId, mode: required ? "REQUIRED" : "OPTIONAL" });
     if (pref.ok) {
-      // OPTIONAL: el turno ya está reservado (CONFIRMED) aunque no pague → se avisa ahora. REQUIRED: lo avisa el
-      // webhook cuando el pago confirma el turno.
-      if (!required) await notifyCreated();
+      await proNotify;
       return checkout(pref.initPoint, born.decision.amountCents);
     }
     // TP-D29: REQUIRED no se degrada. El turno queda PENDING con su cobro vivo (sin preferencia) y el reintento del
     // paciente (misma key) vuelve a pedir la preferencia con EL MISMO cobro.
-    if (required) return { ok: false, error: PAYMENT_UNAVAILABLE_ERROR };
+    if (required) {
+      await proNotify;
+      return { ok: false, error: PAYMENT_UNAVAILABLE_ERROR };
+    }
     // OPTIONAL: el paciente eligió pagar ahora pero MP no responde → reservado sin cobro y aviso.
     await cancelTurneroChargeWithoutPreference({ tenantId: tenant.id, chargeId: born.chargeId });
-    await notifyCreated();
+    await proNotify;
     return reserved("payment-unavailable");
   }
 
@@ -1240,8 +1318,16 @@ export async function submitPublicBooking(
     return { ok: false, error: GENERIC_SUBMIT_ERROR };
   }
   switch (promotion.kind) {
-    case "promoted":
-      // Otro commit: su propio evento realtime y el aviso.
+    case "promoted": {
+      // Otro commit: su propio aviso y su evento realtime. Mismo orden que el alta (CF2, T.C): campana → mail/push sin
+      // await → realtime → esperar mail/push. El profesional es el del intento (`sameAttempt` lo exige arriba).
+      await notifyPublicReservation(tenant.id, {
+        practitionerId: promotion.ref.practitionerId,
+        scheduledFor: promotion.ref.scheduledFor,
+        serviceName: service.name,
+        who,
+      });
+      const promotedNotify = notifyPractitionerOfOnlineBooking(tenant.id, promotion.ref.id, proNotifyHint);
       await afterBookingsCommitted(tenant.id, [
         {
           bookingId: promotion.ref.id,
@@ -1251,13 +1337,9 @@ export async function submitPublicBooking(
           kind: "booking",
         },
       ]);
-      await notifyPublicReservation(tenant.id, {
-        practitionerId: promotion.ref.practitionerId,
-        scheduledFor: promotion.ref.scheduledFor,
-        serviceName: service.name,
-        who,
-      });
+      await promotedNotify;
       return reserved();
+    }
     case "already-confirmed":
       return reserved();
     case "cancelled":

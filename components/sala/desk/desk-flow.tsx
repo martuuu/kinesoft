@@ -4,6 +4,7 @@ import { memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } fro
 import { fmtHour, roomNameOf, type BookingDTO } from "@/components/agenda/agenda-utils";
 import { toARMinutes } from "@/lib/datetime-ar";
 import { formatARS } from "@/lib/format";
+import { deskOwedCents } from "@/lib/copago-owed";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { fmtMinutes } from "@/lib/reception-view-state";
 import { filterByQuery } from "@/lib/sala-board-state";
@@ -23,7 +24,7 @@ import {
 } from "@/lib/reception-desk-state";
 import type { SalaLive } from "@/components/sala/sala-live-types";
 import { DESK_COMPACT_MAX, DESK_STACK_MAX } from "./desk-css";
-import { DeskMenu, DeskPrimaryAction, DeskStateTag, deskRowLabel, useDeskActions } from "./desk-actions";
+import { DeskCopagoTag, DeskMenu, DeskPrimaryAction, DeskStateTag, deskRowLabel, useDeskActions } from "./desk-actions";
 import { DeskStrip } from "./desk-strip";
 import { FoldButton } from "@/components/sala/sala-fold";
 
@@ -98,6 +99,7 @@ const NARROW_RULES = `
 .desk-tl-row { grid-template-columns: 40px minmax(0, 1fr); row-gap: 2px; padding: 4px 6px; }
 .desk-tl-s { grid-column: 2; }
 .desk-tl-s:empty { display: none; }
+.desk-tl-row .desk-tl-s { justify-content: flex-start; }
 .desk-flow-sub[data-hint=true] { display: none; }
 `;
 
@@ -160,7 +162,9 @@ export const DESK_FLOW_CSS = `
 .desk-tk-meta { flex-wrap: nowrap; }
 .desk-tk-pro { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .desk-tk-meta .desk-tk-room { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.desk-tk-end { margin-left: auto; }
+.desk-tk-end { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.desk-tl-s { display: inline-flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.desk-tk-wait [role=img] { align-self: center; }
 .desk-tk-m .desk-tag { height: 20px; font-size: 11px; padding: 0 7px; }
 .desk-flag { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 6px; font-size: 11px; font-weight: 650; background: var(--st-pending-bg); color: var(--st-pending-fg); }
 .desk-tk-wait { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--navy-500); }
@@ -173,7 +177,6 @@ export const DESK_FLOW_CSS = `
 .desk-tk-a { display: flex; gap: 6px; align-items: center; min-width: 0; }
 .desk-tk-a .desk-act { flex: 1 1 0; min-width: 0; }
 .desk-tk-a .desk-act[data-kind=more] { flex: 0 0 36px; }
-.desk-tk-a .desk-paid { flex: 1 1 0; }
 
 @container desk (max-width: ${DESK_COMPACT_MAX}px) {${COMPACT_RULES}}
 @container desk (max-width: ${NARROW_MAX}px) {${NARROW_RULES}}
@@ -465,6 +468,11 @@ export function flowRowSig(e: DeskEntry, v: FlowView): string {
     r.obraSocial ?? "",
     r.copagoCents,
     r.paymentStatus ?? "",
+    // [CF2-SD] lo que lee el tag de cobro (`DeskCopagoTag`), como en `deskRowSig`.
+    r.copagoPaymentMethod ?? "",
+    r.onlineDepositCents ?? "",
+    r.paidOnline ? "po" : "",
+    r.publicReservation ? "pr" : "",
     r.practitionerId,
     r.canOperate ? "c" : "",
     e.state,
@@ -502,7 +510,11 @@ const TimelineRow = memo(function TimelineRow({ entry: e, view: v }: { sig: stri
         </span>
         <span className="desk-sr">, con {v.pro.name}</span>
       </span>
-      <span className="desk-tl-s">{e.state === "por-llegar" ? null : <DeskStateTag entry={e} />}</span>
+      {/* [CF2-SD] estado (salvo «por llegar», que es la fila sin marca) y el tag de cobro: el prepago se ve antes de llegar. */}
+      <span className="desk-tl-s">
+        {e.state === "por-llegar" ? null : <DeskStateTag entry={e} />}
+        <DeskCopagoTag row={b} />
+      </span>
     </li>
   );
 }, sameSig);
@@ -547,6 +559,7 @@ const FlowTicket = memo(function FlowTicket({ kind, entry: e, view: v }: { sig: 
           {b.obraSocial ? <span>{b.obraSocial}</span> : null}
           {b.isOverbooked ? <span className="desk-flag">Sobreturno</span> : null}
           <span className="desk-tk-end">
+            <DeskCopagoTag row={b} />
             {e.state === "demorado" ? <DeskStateTag entry={e} /> : <span className="desk-mono">en {fmtMinutes(v.minutes ?? 0)}</span>}
           </span>
         </div>
@@ -560,6 +573,7 @@ const FlowTicket = memo(function FlowTicket({ kind, entry: e, view: v }: { sig: 
         {meta}
         <div className="desk-tk-wait">
           {e.state === "llamado" ? <DeskStateTag entry={e} /> : null}
+          <DeskCopagoTag row={b} />
           <span>
             Espera <b className="desk-mono">{fmtMinutes(w)}</b>
           </span>
@@ -574,11 +588,13 @@ const FlowTicket = memo(function FlowTicket({ kind, entry: e, view: v }: { sig: 
     const end = new Date(new Date(b.scheduledFor).getTime() + b.durationMin * 60_000);
     content = (
       <>
-        {head(<span className="desk-tk-amount desk-mono">{formatARS(b.copagoCents)}</span>)}
+        {head(<span className="desk-tk-amount desk-mono">{formatARS(deskOwedCents(b))}</span>)}
         <div className="desk-tk-m">
           {b.obraSocial ? <span>{b.obraSocial}</span> : null}
           <span>
-            {cashKind(b.obraSocial)} · terminó {fmtHour(end)}
+            {cashKind(b.obraSocial)}
+            {/* [CF2-ZF1] (ZB-1) el carril «Por cobrar» también trae a quien llegó y no terminó: «terminó» solo si terminó. */}
+            {e.state === "atendido" ? ` · terminó ${fmtHour(end)}` : null}
           </span>
         </div>
         {meta}
@@ -590,6 +606,7 @@ const FlowTicket = memo(function FlowTicket({ kind, entry: e, view: v }: { sig: 
         {head(time)}
         {meta}
         <div className="desk-tk-wait">
+          <DeskCopagoTag row={b} />
           <span>
             En atención <b className="desk-mono">{fmtMinutes(v.minutes ?? 0)}</b>
           </span>
@@ -602,7 +619,7 @@ const FlowTicket = memo(function FlowTicket({ kind, entry: e, view: v }: { sig: 
       <span className="desk-tk-bar" aria-hidden="true" style={{ background: b.serviceColor ?? SERVICE_COLOR_FALLBACK }} />
       {content}
       <div className="desk-tk-a">
-        <DeskPrimaryAction entry={e} />
+        <DeskPrimaryAction entry={e} cash={kind === "cash"} />
         {kind === "wait" ? <AttendNow entry={e} /> : null}
         <DeskMenu entry={e} />
       </div>

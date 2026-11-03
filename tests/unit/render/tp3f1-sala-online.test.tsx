@@ -42,6 +42,7 @@ import type { BookingDTO } from "@/components/agenda/agenda-utils";
 import {
   DESK_SEND_LINK_LABEL,
   DeskActionsProvider,
+  DeskCopagoTag,
   DeskPrimaryAction,
   paymentLinkTargetOf,
   type DeskActionsApi,
@@ -76,6 +77,8 @@ function primary(row: BookingDTO, viewer: DeskViewer = SECRETARIA) {
   const [entry] = deskEntries([row], NOW, viewer);
   return renderToStaticMarkup(
     <DeskActionsProvider value={api(viewer)}>
+      {/* [CF2-SD] lo pagado lo dice el tag de cobro (antes, la primaria de un atendido). */}
+      <DeskCopagoTag row={entry.row} />
       <DeskPrimaryAction entry={entry} />
     </DeskActionsProvider>
   );

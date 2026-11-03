@@ -1,0 +1,32 @@
+/*
+ * [CF2 · D-CF2-2] Chips de profesional debajo del título de alcance (`layout="heading"`). Escritorio: fila que baja de
+ * línea, como siempre. < 768: una sola fila con scroll horizontal (con 5+ profesionales el wrap empujaba la grilla
+ * 2-3 filas abajo). Chunk diferido: este CSS no suma al first load de /agenda.
+ */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Los chips no se achican: el que no entra queda detrás del scroll, entero. */
+.row > * {
+  flex-shrink: 0;
+}
+
+@media (max-width: 767px) {
+  .row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    /* El anillo de foco (box-shadow) no se corta arriba ni abajo dentro de la caja con overflow. */
+    padding: 2px 0;
+  }
+  .row::-webkit-scrollbar {
+    display: none;
+  }
+}

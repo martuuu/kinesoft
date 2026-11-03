@@ -52,7 +52,7 @@ vi.mock("@/lib/notifications", () => ({
 }));
 
 import { AppShell } from "@/components/layout/app-shell";
-import { Sidebar } from "@/components/layout/sidebar";
+import { OnlinePaymentsProvider, Sidebar } from "@/components/layout/sidebar";
 import { TenantModulesProvider } from "@/components/layout/tenant-modules-context";
 import {
   SHELL_DEFAULT_AGENDA,
@@ -160,6 +160,8 @@ describe("[PF1.0-a] grafo estático del shell de (app)", () => {
       "components/layout/mobile-nav-drawer.tsx",
       "components/global/profile-menu.tsx",
       "components/ui/drawer.tsx",
+      // [CF2-ZF4] el desplegable de la campana baja aparte (idle / hover / al abrir).
+      "components/dashboard/notifications-panel.tsx",
     ]) {
       expect(g.files.has(f), `${f}: ${g.chain(f)}`).toBe(false);
     }
@@ -264,9 +266,12 @@ describe("[PF1.0-a] mobile clase A (S1) y sidebar (S3, S4)", () => {
   });
 
   it("S3: cada sección del nav tiene un ícono distinto (también Plataforma en el pie)", () => {
+    // CF2 (P-NAV): con cobros online prendidos, así entra «Cobros» (`onlinePaymentsOnly`) y están TODAS las entradas.
     const html = renderToStaticMarkup(
       <TenantModulesProvider modules={KINE}>
-        <Sidebar collapsed caps={OWNER} isPlatformAdmin />
+        <OnlinePaymentsProvider value>
+          <Sidebar collapsed caps={OWNER} isPlatformAdmin />
+        </OnlinePaymentsProvider>
       </TenantModulesProvider>
     );
     const items = Array.from(html.matchAll(/<a [^>]*aria-label="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g), (m) => ({
@@ -327,7 +332,7 @@ describe("[PF1.0-a] Apariencia: cada opción viva tiene un lector (§20.18)", ()
   });
 
   const week = ["2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18"];
-  const grid = (p: { showHeader: boolean; showSaturday: boolean; showSunday: boolean }) =>
+  const grid = (p: { showSaturday: boolean; showSunday: boolean }) =>
     renderToStaticMarkup(
       <WeekGridView
         weekDays={week}
@@ -339,21 +344,30 @@ describe("[PF1.0-a] Apariencia: cada opción viva tiene un lector (§20.18)", ()
       />
     );
 
+  // [CF2-WS] `minmax(0, 1fr)` (antes `1fr`): la grilla y su encabezado (la tira `columns`) comparten el template.
   it("Sábado y Domingo → columnas de la grilla semanal", () => {
-    expect(grid({ showHeader: true, showSaturday: false, showSunday: false })).toContain("repeat(5, 1fr)");
-    expect(grid({ showHeader: true, showSaturday: true, showSunday: false })).toContain("repeat(6, 1fr)");
-    expect(grid({ showHeader: true, showSaturday: true, showSunday: true })).toContain("repeat(7, 1fr)");
+    expect(grid({ showSaturday: false, showSunday: false })).toContain("52px repeat(5, minmax(0, 1fr))");
+    expect(grid({ showSaturday: true, showSunday: false })).toContain("52px repeat(6, minmax(0, 1fr))");
+    expect(grid({ showSaturday: true, showSunday: true })).toContain("52px repeat(7, minmax(0, 1fr))");
   });
 
-  it("Encabezado de días → cambia lo que pinta la grilla semanal", () => {
-    const on = grid({ showHeader: true, showSaturday: true, showSunday: true });
-    const off = grid({ showHeader: false, showSaturday: true, showSunday: true });
-    expect(on).not.toBe(off);
+  // [CF2-WS] D-CF2-6: «Encabezado de días» ya NO cambia la grilla semanal (en Semana el encabezado siempre está; lo
+  // fija `[CF2-WS5]` en cf2-week-header.test.tsx). Su lector pasa a ser la tira picker de Día/Lista en `agenda-client`
+  // (cableado por A-AG1 con el handoff de A-WS).
+  it("[CF2-W6] Tira de días → la pref apaga la tira picker; en Semana no hay tira de afuera", () => {
+    const code = src("components/agenda/agenda-client.tsx");
+    // En Semana el encabezado es el de la grilla: la tira de afuera no se dibuja (era un segundo encabezado).
+    expect(code).toMatch(/showDayHeader\s*&&\s*view\s*!==\s*"week"\s*&&\s*\(\s*<WeekStrip/);
+    // El picker muestra el candado de cada día (no interactivo).
+    expect(code).toMatch(/<WeekStrip[^/]*?dayLocks=\{weekLocks\}/);
+    // Clic en un día del encabezado de Semana → ese día en Día; la pref ya no viaja a la grilla.
+    expect(code).toMatch(/<WeekGridViewC[^/]*?onPickDay=\{/);
+    expect(code).not.toContain("showHeader={agenda.agendaShowWeekHeader}");
   });
 
   it("la agenda pasa las tres preferencias del contexto a sus vistas (TweaksProvider → agenda-client → vistas)", () => {
     const code = src("components/agenda/agenda-client.tsx");
-    expect(code).toContain("showHeader={agenda.agendaShowWeekHeader}");
+    expect(code).toContain("agenda.agendaShowWeekHeader");
     expect(code).toContain("showSaturday={agenda.agendaShowSaturday}");
     expect(code).toContain("showSunday={agenda.agendaShowSunday}");
   });

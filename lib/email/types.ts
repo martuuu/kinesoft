@@ -58,7 +58,10 @@ export type EmailKind =
   | "billing_plan_change" // cambio de plan programado / aplicado / no aplicado / subida
   // HD-11 (PV): el titular canceló el débito automático desde Mercado Pago. Kind propio: antes se reusaba
   // `billing_debit_failed` sin fecha (decía «No pudimos debitar», falso) y `buildMail` lo descartaba.
-  | "billing_debit_cancelled";
+  | "billing_debit_cancelled"
+  // CF2 (§29, D-CF2-11): al profesional del turno, «Nuevo turno online» (si prendió el aviso por mail en Configuración ›
+  // Mi agenda). Solo «Juan P.», día, hora, duración y sede: sin servicio (puede ser clínico), DNI, teléfono ni notas.
+  | "booking_created_pro";
 
 /**
  * Por dónde salió (o no) un mail:

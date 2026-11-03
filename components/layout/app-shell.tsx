@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, type ReactNode } from "react";
 import dynamic from "next/dynamic";
-import { Sidebar } from "./sidebar";
+import { OnlinePaymentsProvider, Sidebar } from "./sidebar";
 import { TopBar } from "./topbar";
 import { NotificationsBell } from "@/components/dashboard/notifications-bell";
 import { MobileBar } from "./mobile-bar";
@@ -79,6 +79,10 @@ import { IdleLogout } from "./idle-logout";
  * HD-9 (§27): `publicProfile` = el directorio público no está apagado (`directoryMode() !== "off"`, lo calcula el
  * layout). Viaja por `TenantChoiceProvider` hasta el menú de cuenta y el «Más»: con el directorio apagado, «Mi perfil
  * público» llevaba a una página de algo que no existe para nadie.
+ *
+ * CF2 (P-NAV): `onlinePayments` = cobros online prendidos (`mpConnectMode() !== "off"`, lo calcula el layout). Viaja
+ * por `OnlinePaymentsProvider` (sidebar.tsx) a sidebar, topbar, barra inferior y su Drawer: sin él no hay «Cobros»
+ * (`onlinePaymentsOnly`). Antes el layout sacaba `billing.collect` de `caps` (`shellNavCaps`), que escondía «Caja».
  */
 /** HF-1c: ¿arranca el motor de avisos de llegada? Canal realtime y módulo `salaEspera`, los dos. */
 export function arrivalAlertsLive(realtime: Pick<RealtimeBootstrap, "driver">, modules: readonly TenantModule[]): boolean {
@@ -111,7 +115,10 @@ export function AppShell({
   ownPublicBooking = null,
   idle = null,
   publicProfile = false,
+  onlinePayments = false,
 }: {
+  /** CF2: cobros online prendidos (`MP_CONNECT_MODE` ≠ off). false = sin «Cobros» en el nav. */
+  onlinePayments?: boolean;
   /** IN: cierre por inactividad (sesión «de navegador»). null = persistente, sin cierre. */
   idle?: { minutes: number; sessionTag: string; serverNowMs: number } | null;
   /** HD-9: directorio público prendido (preview/public): se ofrece «Mi perfil público». */
@@ -170,6 +177,7 @@ export function AppShell({
       publicProfile={publicProfile}
     >
       <TenantModulesProvider modules={modules} vertical={vertical}>
+        <OnlinePaymentsProvider value={onlinePayments}>
         <RealtimeProvider bootstrap={realtime}>
           <ArrivalAlerts viewer={alertViewer} initialPrefs={initialAlertPrefs} live={arrivalAlertsLive(realtime, modules)}>
             <div
@@ -225,6 +233,7 @@ export function AppShell({
             </div>
           </ArrivalAlerts>
         </RealtimeProvider>
+        </OnlinePaymentsProvider>
       </TenantModulesProvider>
     </TenantChoiceProvider>
   );

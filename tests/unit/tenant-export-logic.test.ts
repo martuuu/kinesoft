@@ -119,6 +119,15 @@ describe("[BO5-C] allowlist de columnas", () => {
     expect(EXPORT_ENTITIES as readonly string[]).not.toContain("diagnosisFavorites");
   });
 
+  it("[CF2-PS3-11] reparto (M21): practitionerRevenueShares con todas sus columnas (menos tenantId), después de las especialidades", () => {
+    expect(EXPORT_FIELDS.practitionerRevenueShares).toEqual([
+      "id", "giverPractitionerId", "receiverPractitionerId", "shareBps", "appliesManual", "appliesOnline",
+      "appliesInsurer", "effectiveFrom", "effectiveTo", "createdById", "closedById", "createdAt",
+    ]);
+    const i = EXPORT_ENTITIES.indexOf("practitionerSpecialties");
+    expect(EXPORT_ENTITIES[i + 1]).toBe("practitionerRevenueShares");
+  });
+
   it("rate limit: 3 por hora", () => {
     expect(TENANT_EXPORT_RATE_LIMIT).toEqual({ limit: 3, windowMs: 3_600_000 });
   });

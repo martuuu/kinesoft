@@ -48,6 +48,8 @@ const COOKIES: { name: string; what: string }[] = [
   { name: "kine_wa_signup", what: "protege la conexión de un número de WhatsApp Business; se borra al terminar." },
   { name: "kine_tv", what: "identifica una pantalla de sala de espera vinculada al consultorio." },
   { name: "ks_recovery", what: "permite usar una sola vez el link para restablecer tu contraseña." },
+  // claim-ok: lib/web-push-types.ts PUSH_SUB_COOKIE (la setea savePushSubscription, la borra el sign-out)
+  { name: "ks_push_sub", what: "recuerda qué dispositivo activó los avisos de turnos, para borrarlo cuando cerrás sesión." },
 ];
 
 export const AAIP_ACCESS_NOTICE =

@@ -10,13 +10,16 @@
  *   3. visibilidad (`isDirectoryVisible`, movido tal cual a `lib/patients-list-logic.ts`);
  *   4. las claves de orden que dependen de filas relacionadas, SOLO si el orden las pide, agregadas para todo el
  *      tenant con un `groupBy` (sin N+1 ni un IN de todos los ids): «Próximo turno» = `MIN(scheduledFor)` de turnos
- *      futuros no cancelados; «Última visita» = `MAX(completedAt)` de sesiones vivas de planes activos (Kine) o
- *      `MAX(scheduledFor)` de turnos COMPLETED (General). La clave de «Última visita» solo vale en filas `full`;
- *   5. `totals` sobre las filas visibles; 6. recorte; 7. hidratación de ≤ 50 ids (próximo turno, cobertura vigente,
- *      planes y sesiones), reusando lo que el orden ya agregó para el tenant.
- * Presupuesto (`tests/perf/plans.perf.test.ts`, `BUDGET.listPatients = 10`): con la hidratación literal del brief
- * (`patient.findMany` + `baseInclude` + `programsInclude` sobre la página) eran 11 sentencias; los escalares van en la
- * fase 1 y la hidratación lee directo de Booking/Coverage/TreatmentProgram (sin releer Patient) → 10.
+ *      futuros no cancelados; «Última visita» = `MAX(scheduledFor)` de turnos pasados no cancelados, ausentes ni PENDING
+ *      (CF2 D-CF2-15, todos los verticales). La clave de «Última visita» vale en filas `full` y `admin` (las basic no
+ *      la muestran);
+ *   5. `totals` sobre las filas visibles; 6. recorte; 7. hidratación de ≤ 50 ids: los hechos de turnos por paciente ×
+ *      profesional (`bookingFactsByPatient`, 1 `$queryRaw`: próximo turno, última visita, profesionales recientes) y la
+ *      cobertura vigente. Los planes y sesiones SOLO en `mode: "all"` (el CSV usa «Plan activo»): CF2 decisión 3, el
+ *      plan salió de la página.
+ * Presupuesto (`tests/perf/plans.perf.test.ts`, `BUDGET.listPatients = 9`): HD-10 dejó 10 (fase 1 + acceso + próximo
+ * turno + cobertura + planes + sesiones); CF2 cambia próximo turno por los hechos agregados y saca planes y sesiones de
+ * la página → 8 en el orden por apellido y 9 con «Próximo turno» / «Última visita» (la clave tenant-wide).
  *
  * `server-only` y no en `lib/patients.ts` ("use server"): una export de ahí es un endpoint RPC, y la vía sin paginar
  * (`all`) no tiene que poder pedirla un cliente. El actor se resuelve ACÁ con `getActor()` (como siempre hizo
@@ -34,15 +37,22 @@ import { PARTICULAR_INSURER_KEY } from "@/lib/patients-os-filter";
 import { liveProgramWhere, liveSessionWhere } from "@/lib/plan-predicates";
 import { toARDateKey } from "@/lib/datetime-ar";
 import {
+  PATIENT_LAST_VISIT_EXCLUDED_STATUSES,
   clampPatientsPage,
-  directoryTotals,
+  directoryTotalsAll,
   dobBoundsForAge,
+  foldPatientBookingFacts,
   isDirectoryVisible,
+  lastVisitBookingWhere,
   normalizeAgeBound,
   normalizeDirectoryQuery,
   parseLastVisitBound,
+  patientActivity,
+  patientPractitionerIds,
   sortByDateKey,
   type DirectoryRowAccess,
+  type PatientBookingFactRow,
+  type PatientBookingFacts,
 } from "@/lib/patients-list-logic";
 import {
   PATIENTS_PAGE_SIZE,
@@ -95,25 +105,16 @@ export async function listPatientsDirectory(
   const dob = dobBoundsForAge(toARDateKey(now), ageMin, ageMax);
   const dobWhere: Prisma.PatientWhereInput = dob ? { dateOfBirth: dob } : {};
 
-  // Last-visit range — patients with at least one COMPLETED booking
-  // whose scheduledFor falls in the window. HD-14: las puntas son 00:00 y
-  // 23:59:59.999 AR (antes `new Date("…T00:00:00")` en el TZ del host).
+  // «Última visita desde/hasta»: pacientes con al menos un turno PASADO no cancelado, ausente ni PENDING en la ventana (CF2
+  // D-CF2-15: el mismo criterio que la columna y el orden; antes exigía COMPLETED y un consultorio que nunca marca
+  // «Atendido» no encontraba a nadie). HD-14: las puntas son 00:00 y 23:59:59.999 AR (antes `new Date("…T00:00:00")`
+  // en el TZ del host). `bookings` es la relación del paciente, ya acotado por `where.tenantId`; el turno también lleva
+  // su `tenantId` (INT-P): la FK `Booking.patientId` no mira el tenant y en prod (BYPASSRLS) un turno de otro
+  // consultorio que apunte al paciente lo haría entrar, igual que el agregado de la columna (`[CF2-PS1-5]`).
   const lvFrom = parseLastVisitBound(opts.lastVisitFrom, "from");
   const lvTo = parseLastVisitBound(opts.lastVisitTo, "to");
   const lastVisitWhere: Prisma.PatientWhereInput =
-    lvFrom || lvTo
-      ? {
-          bookings: {
-            some: {
-              status: "COMPLETED",
-              scheduledFor: {
-                ...(lvFrom ? { gte: lvFrom } : {}),
-                ...(lvTo ? { lte: lvTo } : {}),
-              },
-            },
-          },
-        }
-      : {};
+    lvFrom || lvTo ? { bookings: { some: { tenantId: actor.tenantId, ...lastVisitBookingWhere(now, lvFrom, lvTo) } } } : {};
 
   // Diagnosis filter — patient has a clinical case whose top-rank
   // diagnosis matches the given condition slug. We use `some` on the
@@ -172,8 +173,9 @@ export async function listPatientsDirectory(
           ],
         }
       : {}),
-    // S32: «Con plan» / «Sin plan» con el MISMO predicado que la columna y el
-    // contador del pill (plan ACTIVE y vivo, `liveProgramWhere`).
+    // S32: «Con plan» / «Sin plan» (plan ACTIVE y vivo, `liveProgramWhere`). CF2 (decisión 3): las pastillas salieron
+    // y `/pacientes` normaliza `?filter=` a `all | archived`; queda acá por compatibilidad con un llamador RPC viejo
+    // (sigue siendo filtro clínico: solo filas `full`).
     ...(filter === "active"
       ? { programs: { some: activeLiveProgramWhere } }
       : filter === "no-program"
@@ -213,9 +215,9 @@ export async function listPatientsDirectory(
 
   return runWithRls(actor.tenantId, async (tx) => {
     // ── 1. Fase liviana sobre TODOS los matches ───────────────────────────────
-    // Los escalares de la proyección vienen acá (no se relee Patient para la página: era la sentencia 11). El conteo
-    // de planes activos y vivos es un subselect de la misma sentencia; la cobertura vigente solo con `?os=` (la
-    // visibilidad la necesita para todas las filas; sin `?os=` se lee solo para la página).
+    // Los escalares de la proyección vienen acá (no se relee Patient para la página: era la sentencia 11). La cobertura
+    // vigente solo con `?os=` (la visibilidad la necesita para todas las filas; sin `?os=` se lee solo para la página).
+    // CF2: sale el conteo de planes activos (`_count.programs`, era para los pills «Con/Sin plan») y entra el a cargo.
     const light = await tx.patient.findMany({
       where,
       orderBy,
@@ -229,7 +231,7 @@ export async function listPatientsDirectory(
         phone: true,
         dateOfBirth: true,
         notes: true,
-        _count: plansOn ? { select: { programs: { where: activeLiveProgramWhere } } } : undefined,
+        assignedPractitionerId: true,
         coverages: insurerKey ? coverageSelect : undefined,
       },
     });
@@ -257,65 +259,28 @@ export async function listPatientsDirectory(
 
     // ── 4. Claves de orden agregadas para el tenant (solo si el orden las pide) ─
     let upcomingAll: Map<string, Date> | null = null;
-    let lastCompletedAll: Map<string, Date> | null = null;
-    let programsAll: ProgramChip[] | null = null;
-    let sessionAggAll: Map<string, SessionAgg> | null = null;
+    let lastSeenAll: Map<string, Date> | null = null;
     if (visible.length > 0 && sort === "upcoming.asc") {
       upcomingAll = await upcomingByPatient(tx, actor.tenantId, now);
     }
-    // «Última visita» solo ordena filas `full`: sin ninguna visible (Secretaría, kine en básico) no se agrega nada y
-    // queda el orden SQL.
-    if (sort === "lastVisit.desc" && visible.some((p) => accessOf(p.id) === "full")) {
-      if (plansOn) {
-        // Kine: última sesión viva realizada de CUALQUIER plan activo y vivo. Los planes activos del tenant (para el
-        // mapa programa → paciente) y el agregado de sesiones por plan: con esto la página no vuelve a consultar ni
-        // planes ni sesiones. `_max(completedAt)` ignora NULL: es la última realizada.
-        const [programs, agg] = await Promise.all([
-          tx.treatmentProgram.findMany({
-            where: { tenantId: actor.tenantId, ...activeLiveProgramWhere },
-            orderBy: programOrder,
-            select: programChipSelect,
-          }),
-          sessionAggByProgram(tx, { tenantId: actor.tenantId, ...activeLiveProgramWhere }),
-        ]);
-        programsAll = programs;
-        sessionAggAll = agg;
-      } else {
-        lastCompletedAll = await lastCompletedByPatient(tx, actor.tenantId);
-      }
+    // «Última visita» ordena filas `full` y `admin` (las dos la ven, D-CF2-15): sin ninguna (kine con todo en básico)
+    // no se agrega nada y queda el orden SQL.
+    if (sort === "lastVisit.desc" && visible.some((p) => accessOf(p.id) !== "basic")) {
+      lastSeenAll = await lastSeenByPatient(tx, actor.tenantId, now);
     }
-    const lastVisitOfPatient = (id: string, programs: ProgramChip[], agg: Map<string, SessionAgg>, lastCompleted: Map<string, Date>) => {
-      if (!plansOn) return lastCompleted.get(id) ?? null;
-      let lastDone: Date | null = null;
-      for (const pr of programs) {
-        const at = agg.get(pr.id)?.lastDoneAt ?? null;
-        if (at && (!lastDone || at > lastDone)) lastDone = at;
-      }
-      return lastDone;
-    };
-    const programsByPatientAll = programsAll ? groupPrograms(programsAll) : null;
 
     let ordered = visible;
     if (upcomingAll) {
       const m = upcomingAll;
       ordered = sortByDateKey(visible, (p) => m.get(p.id), "asc");
-    } else if (sort === "lastVisit.desc" && (programsByPatientAll || lastCompletedAll)) {
-      const progs = programsByPatientAll ?? new Map<string, ProgramChip[]>();
-      const agg = sessionAggAll ?? new Map<string, SessionAgg>();
-      const last = lastCompletedAll ?? new Map<string, Date>();
-      // Solo filas `full`: una basic/admin no muestra la última visita, y ordenar por ella la delataba.
-      ordered = sortByDateKey(
-        visible,
-        (p) => (accessOf(p.id) === "full" ? lastVisitOfPatient(p.id, progs.get(p.id) ?? [], agg, last) : null),
-        "desc",
-      );
+    } else if (lastSeenAll) {
+      const m = lastSeenAll;
+      // Una fila basic no muestra la última visita: ordenar por ella la delataba (va al final, en el orden SQL).
+      ordered = sortByDateKey(visible, (p) => (accessOf(p.id) === "basic" ? null : m.get(p.id)), "desc");
     }
 
     // ── 5. Totales sobre las visibles · 6. recorte ────────────────────────────
-    const totals = directoryTotals(
-      visible.map((p) => ({ access: accessOf(p.id), activePlanCount: p._count?.programs ?? 0 })),
-      plansOn,
-    );
+    const totals = directoryTotalsAll(visible);
     const total = visible.length;
     const { page, pageCount, start } =
       mode === "all"
@@ -325,13 +290,15 @@ export async function listPatientsDirectory(
     if (slice.length === 0) return { rows: [], total, totals, page, pageCount };
 
     // ── 7. Hidratación de la página ───────────────────────────────────────────
-    // Solo lo que la proyección de cada fila muestra: cobertura para full/admin (basic sale con `obraSocial: null`),
-    // planes, sesiones y última visita para full. Lo que el orden ya agregó para el tenant se reusa.
+    // Lo que la proyección de cada fila muestra: los hechos de turnos (todas las filas: el próximo turno y los
+    // profesionales se ven también en basic), la cobertura para full/admin (basic sale con `obraSocial: null`) y,
+    // solo en el export (`mode: "all"`), planes y sesiones de las filas full.
     const pageIds = slice.map((p) => p.id);
     const fullIds = pageIds.filter((id) => accessOf(id) === "full");
     const coverageIds = insurerKey ? [] : pageIds.filter((id) => accessOf(id) !== "basic");
-    const [upcoming, coverages, programs, sessionAgg, lastCompleted] = await Promise.all([
-      upcomingAll ?? upcomingByPatient(tx, actor.tenantId, now, pageIds),
+    const withPlans = mode === "all" && plansOn && fullIds.length > 0;
+    const [factRows, coverages, programs, sessionAgg] = await Promise.all([
+      bookingFactsByPatient(tx, actor.tenantId, now, pageIds),
       coverageIds.length > 0
         ? tx.coverage.findMany({
             // Coverage no tiene `tenantId`: `patientId` sale de la fase 1 (ya acotada al tenant) y además se exige por
@@ -341,28 +308,21 @@ export async function listPatientsDirectory(
             select: coverageSelect.select,
           })
         : Promise.resolve([] as CoverageLite[]),
-      !plansOn || fullIds.length === 0
-        ? Promise.resolve([] as ProgramChip[])
-        : programsAll
-          ? Promise.resolve(programsAll)
-          : tx.treatmentProgram.findMany({
-              where: { tenantId: actor.tenantId, patientId: { in: fullIds }, ...activeLiveProgramWhere },
-              orderBy: programOrder,
-              select: programChipSelect,
-            }),
-      // S32: sesiones por plan activo de la página, en una sola consulta agregada (sin N+1).
-      !plansOn || fullIds.length === 0
-        ? Promise.resolve(new Map<string, SessionAgg>())
-        : sessionAggAll
-          ? Promise.resolve(sessionAggAll)
-          : sessionAggByProgram(tx, { tenantId: actor.tenantId, patientId: { in: fullIds }, ...activeLiveProgramWhere }),
-      // EV1-B: sin `planes`, «última visita» = último turno COMPLETED (la misma definición que el filtro).
-      plansOn || fullIds.length === 0
-        ? Promise.resolve(new Map<string, Date>())
-        : lastCompletedAll
-          ? Promise.resolve(lastCompletedAll)
-          : lastCompletedByPatient(tx, actor.tenantId, fullIds),
+      withPlans
+        ? tx.treatmentProgram.findMany({
+            where: { tenantId: actor.tenantId, patientId: { in: fullIds }, ...activeLiveProgramWhere },
+            orderBy: programOrder,
+            select: programChipSelect,
+          })
+        : Promise.resolve([] as ProgramChip[]),
+      // S32: sesiones por plan activo, en una sola consulta agregada (sin N+1).
+      withPlans
+        ? sessionAggByProgram(tx, { tenantId: actor.tenantId, patientId: { in: fullIds }, ...activeLiveProgramWhere })
+        : Promise.resolve(new Map<string, SessionAgg>()),
     ]);
+    const facts = foldPatientBookingFacts(factRows, now);
+    const NO_FACTS: PatientBookingFacts = { nextAt: null, lastVisitAt: null, recentPractitionerIds: [], upcomingPractitionerIds: [] };
+    const archivedView = filter === "archived";
 
     const coverageOf = new Map<string, CoverageLite>();
     if (insurerKey) {
@@ -373,16 +333,25 @@ export async function listPatientsDirectory(
     } else {
       for (const c of coverages) if (!coverageOf.has(c.patientId)) coverageOf.set(c.patientId, c);
     }
-    const programsByPatient = programsByPatientAll ?? groupPrograms(programs);
+    const programsByPatient = groupPrograms(programs);
 
     const rows = slice.map((p): PatientRow => {
       const access = accessOf(p.id);
-      const upcomingAt = upcoming.get(p.id) ?? null;
+      const f = facts.get(p.id) ?? NO_FACTS;
+      const upcomingAt = f.nextAt;
+      // CF2 (decisión 2): el a cargo + los profesionales con turno próximo o del último mes. En las filas full/admin;
+      // la basic lleva solo el a cargo + los del próximo turno (ZA-6, abajo): el kine en básico lo necesita para derivar,
+      // pero «del último mes» era la última visita que esa fila oculta.
+      const practitionerIds = patientPractitionerIds(p.assignedPractitionerId, f.recentPractitionerIds);
+      // D-CF2-14/15: última visita y estado salen de los turnos (no de la HC), así que `full` y `admin` los ven.
+      const lastVisit = f.lastVisitAt;
+      const activity = patientActivity({ archivedView, nextAt: f.nextAt, lastVisitAt: f.lastVisitAt }, now);
       // PD-13: `admin` (rol sin clinical.read) no ve HC. T3c-1b (§23.5): lo que
       // la recepción necesita para llamar y cobrar (contacto, nacimiento, DNI,
       // obra social, próximo turno, lo mismo que `PatientAdminCore` en el
-      // perfil) y NADA clínico: notas, planes y última visita quedan vacíos. La
-      // UI decide HC con `=== "full"`.
+      // perfil) y NADA clínico: notas y planes quedan vacíos. CF2 (D-CF2-15):
+      // la última visita y el estado sí (salen de la agenda, que la recepción
+      // ya ve). La UI decide HC con `=== "full"`.
       if (access === "admin") {
         const coverage = coverageOf.get(p.id);
         return {
@@ -399,15 +368,18 @@ export async function listPatientsDirectory(
           sessionsTotal: 0,
           sessionsDone: 0,
           activePlans: [],
-          lastVisit: null,
+          lastVisit,
           upcomingAt,
           obraSocial: coverage?.insurerRef?.name ?? coverage?.insurer ?? "Particular",
           access: "admin",
+          assignedPractitionerId: p.assignedPractitionerId,
+          practitionerIds,
+          activity,
         };
       }
-      // Basic rows expose ONLY name + DNI + next booking. Every other
+      // Basic rows expose ONLY name + DNI + next booking (+ CF2: a cargo y los del próximo turno). Every other
       // field is nulled out so a basic-access kine can't even infer
-      // medical history by glancing at the directory.
+      // medical history by glancing at the directory. D-CF2-15: sin última visita ni estado.
       if (access !== "full") {
         return {
           id: p.id,
@@ -427,12 +399,16 @@ export async function listPatientsDirectory(
           upcomingAt,
           obraSocial: null,
           access: "basic",
+          assignedPractitionerId: p.assignedPractitionerId,
+          // CF2-ZF3 (ZA-6): el a cargo + quienes tienen turno próximo; sin «visto en el último mes» (delataba la visita).
+          practitionerIds: patientPractitionerIds(p.assignedPractitionerId, f.upcomingPractitionerIds),
+          activity: null,
         };
       }
       // S32: un chip por plan activo y vivo (más reciente primero; P0-S02a: `id` desempata). Un plan sin sesiones
-      // vivas no tiene fila en el `groupBy` → 0/0.
+      // vivas no tiene fila en el `groupBy` → 0/0. CF2: solo en el export (`mode: "all"`); en la página quedan vacíos.
       const NO_SESSIONS: SessionAgg = { totalLive: 0, done: 0, lastDoneAt: null };
-      const progs = plansOn ? (programsByPatient.get(p.id) ?? []) : [];
+      const progs = programsByPatient.get(p.id) ?? [];
       const activePlans: PatientListPlanChip[] = progs.map((pr) => {
         const a = sessionAgg.get(pr.id) ?? NO_SESSIONS;
         return { discipline: pr.discipline, done: a.done, totalLive: a.totalLive };
@@ -454,11 +430,15 @@ export async function listPatientsDirectory(
         sessionsTotal: progAgg.totalLive,
         sessionsDone: progAgg.done,
         activePlans,
-        // «Última visita» (Kine) = la última sesión viva realizada de CUALQUIER plan activo.
-        lastVisit: lastVisitOfPatient(p.id, progs, sessionAgg, lastCompleted),
+        // CF2 D-CF2-15: «Última visita» = último turno pasado no cancelado, ausente ni PENDING, también en Kine (antes era la
+        // última sesión realizada de un plan activo: un paciente sin plan quedaba sin visita aunque viniera cada semana).
+        lastVisit,
         upcomingAt,
         obraSocial: coverage?.insurerRef?.name ?? coverage?.insurer ?? "Particular",
         access: "full",
+        assignedPractitionerId: p.assignedPractitionerId,
+        practitionerIds,
+        activity,
       };
     });
     return { rows, total, totals, page, pageCount };
@@ -466,20 +446,19 @@ export async function listPatientsDirectory(
 }
 
 /**
- * Próximo turno (no cancelado, desde `now`) por paciente. Sin `patientIds`: todo el tenant (clave de orden); con
- * `patientIds`: solo la página.
+ * Próximo turno (no cancelado, desde `now`) por paciente, para TODO el tenant: la clave del orden «Próximo turno». La
+ * página lo lee de `bookingFactsByPatient` (mismo predicado que `nextAt`).
  */
 async function upcomingByPatient(
   tx: Prisma.TransactionClient,
   tenantId: string,
   now: Date,
-  patientIds?: string[],
 ): Promise<Map<string, Date>> {
   const agg = await tx.booking.groupBy({
     by: ["patientId"],
     where: {
       tenantId,
-      ...(patientIds ? { patientId: { in: patientIds } } : {}),
+      patientId: { not: null },
       scheduledFor: { gte: now },
       status: { not: "CANCELLED" },
     },
@@ -490,20 +469,63 @@ async function upcomingByPatient(
   return out;
 }
 
-/** Último turno COMPLETED por paciente (General). Sin `patientIds`: todo el tenant. */
-async function lastCompletedByPatient(
+/**
+ * CF2 D-CF2-15: última visita (último turno pasado no cancelado, ausente ni PENDING) por paciente, para TODO el tenant: la clave
+ * del orden «Última visita». Mismo predicado que el filtro (`lastVisitBookingWhere`) y que `lastSeenAt` de
+ * `bookingFactsByPatient`.
+ */
+async function lastSeenByPatient(
   tx: Prisma.TransactionClient,
   tenantId: string,
-  patientIds?: string[],
+  now: Date,
 ): Promise<Map<string, Date>> {
   const agg = await tx.booking.groupBy({
     by: ["patientId"],
-    where: { tenantId, ...(patientIds ? { patientId: { in: patientIds } } : {}), status: "COMPLETED" },
+    where: { tenantId, patientId: { not: null }, ...lastVisitBookingWhere(now, undefined, undefined) },
     _max: { scheduledFor: true },
   });
   const out = new Map<string, Date>();
   for (const a of agg) if (a.patientId && a._max.scheduledFor) out.set(a.patientId, a._max.scheduledFor);
   return out;
+}
+
+/**
+ * CF2 (P.1) · hechos de turnos por paciente × profesional en UN `$queryRaw` agrupado (el `groupBy` de Prisma no
+ * expresa tres agregados con `FILTER` distintos en una sentencia: serían tres). Lo pliega `foldPatientBookingFacts`:
+ *  - `nextAt` = MIN(scheduledFor) de turnos ≥ now no cancelados (el «Próximo turno» de siempre);
+ *  - `lastCompletedAt` = MAX de COMPLETED (compatibilidad; ya no es la «última visita»);
+ *  - `lastSeenAt` = MAX de turnos < now que no son CANCELLED, NO_SHOW ni PENDING (D-CF2-15; la lista sale de
+ *    `PATIENT_LAST_VISIT_EXCLUDED_STATUSES`, la misma del filtro).
+ * `tenantId` a mano: en prod la conexión es BYPASSRLS y la FK `Booking.patientId` no mira el tenant, así que un turno de
+ * otro consultorio que apunte a un paciente de este no tiene que colarse (test `[CF2-PS1-5]`). `scheduledFor` es
+ * `timestamp(3)` en UTC: el borde viaja como ISO y se lleva a la hora de pared UTC (molde de `lib/dashboard.ts`), sin
+ * depender del TimeZone de la sesión. Sin `patientIds`: todo el tenant.
+ */
+export async function bookingFactsByPatient(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  now: Date,
+  patientIds?: readonly string[],
+): Promise<PatientBookingFactRow[]> {
+  if (patientIds && patientIds.length === 0) return [];
+  const $now = now.toISOString();
+  const excluded = [...PATIENT_LAST_VISIT_EXCLUDED_STATUSES] as string[];
+  const scope = patientIds
+    ? Prisma.sql`AND b."patientId" = ANY(${[...patientIds]})`
+    : Prisma.sql`AND b."patientId" IS NOT NULL`;
+  return tx.$queryRaw<PatientBookingFactRow[]>`
+    SELECT b."patientId", b."practitionerId",
+      MIN(b."scheduledFor") FILTER (
+        WHERE b."scheduledFor" >= (${$now}::timestamptz AT TIME ZONE 'UTC') AND b."status" <> 'CANCELLED'
+      ) AS "nextAt",
+      MAX(b."scheduledFor") FILTER (WHERE b."status" = 'COMPLETED') AS "lastCompletedAt",
+      MAX(b."scheduledFor") FILTER (
+        WHERE b."scheduledFor" < (${$now}::timestamptz AT TIME ZONE 'UTC')
+          AND NOT (b."status"::text = ANY(${excluded}::text[]))
+      ) AS "lastSeenAt"
+    FROM "Booking" b
+    WHERE b."tenantId" = ${tenantId} ${scope}
+    GROUP BY b."patientId", b."practitionerId"`;
 }
 
 /**

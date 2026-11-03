@@ -8,8 +8,9 @@ import { listPractitioners } from "@/lib/bookings";
 import { tenantWhatsAppActive } from "@/lib/whatsapp-patient-ui-internal";
 import { displayMemberName } from "@/lib/display-name";
 import { newPatientMode } from "@/components/patients/patient-form-payload";
-import { patientsGridColumns } from "@/components/patients/patients-grid";
+import { listPractitionerNames } from "@/lib/practitioner-names-internal";
 import type { PatientSort } from "@/lib/patients-types";
+import { normalizeDirectoryFilter } from "@/lib/patients-list-logic";
 import { Card } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import directory from "@/components/patients/patients-directory.module.css";
@@ -17,14 +18,10 @@ import { ButtonLink, buttonClassName } from "@/components/ui/button";
 import { IconUsers } from "@/components/ui/icons";
 import { NewPatientButton } from "@/components/patients/new-patient-button";
 import { PatientsSearchBar } from "@/components/patients/patients-search-bar";
-import { PatientsList } from "@/components/patients/patients-list";
+import { PatientsList, PatientsListHead } from "@/components/patients/patients-list";
 import { AdvancedPatientFilters } from "@/components/patients/advanced-filters";
 import { InsurerFilterSelect } from "@/components/patients/insurer-filter-select";
-import {
-  BulkActionBar,
-  BulkSelectPageCheckbox,
-  BulkSelectProvider,
-} from "@/components/patients/bulk-select";
+import { BulkActionBar, BulkSelectProvider } from "@/components/patients/bulk-select";
 import { PatientsPageIndicator, PatientsPagination } from "@/components/patients/patients-pagination";
 
 /** Separador de miles AR en el conteo del h1 («1.234 pacientes»). */
@@ -35,7 +32,8 @@ export const dynamic = "force-dynamic";
 
 type SP = {
   q?: string;
-  filter?: "all" | "active" | "no-program" | "archived";
+  /** CF2 (decisión 3): solo `archived` filtra; `active`/`no-program` de un link viejo se leen como `all`. */
+  filter?: string;
   sort?: PatientSort;
   /** T3e-2p: id del catálogo o `particular` (antes `?insurer=` de texto, que ya no se lee). */
   os?: string;
@@ -57,19 +55,20 @@ const SORT_OPTIONS: { value: PatientSort; label: string }[] = [
 ];
 
 export default async function PacientesPage({ searchParams }: { searchParams: SP }) {
-  // EV1-B: el directorio se arma por módulos. Sin `planes` (General) no hay
-  // columna de plan, ni pills «Con plan/Sin plan», ni totales por plan; sin
-  // `diagnostico`, no hay filtro por diagnóstico. Un `?filter=active` o
-  // `?diagnosisSlug=` que llegue por URL se normaliza acá para la UI (el pill
-  // y los links no lo arrastran) y `listPatients` también lo ignora: esconder
-  // es UX, la barrera es el server.
-  const modules = await getTenantModules();
-  const plansEnabled = modules.has("planes");
-  const diagnosisEnabled = modules.has("diagnostico");
+  // EV1-B: sin `diagnostico` (General) no hay filtro por diagnóstico. CF2 (decisión 3 de Martin): la columna de plan
+  // y las pastillas «Con plan/Sin plan» salieron para todos. Un `?filter=active` o `?diagnosisSlug=` que llegue por
+  // URL se normaliza acá para la UI (los links no lo arrastran) y `listPatients` también lo ignora: esconder es UX, la
+  // barrera es el server.
+  // CF2: sin `clinical.read` tampoco hay «Último diagnóstico» (HC); el slug de un link compartido se descarta acá
+  // para que la lista no quede vacía sin un filtro visible que lo explique.
+  // `capsP` se reusa abajo (alta de la recepción): una sola promesa de capabilities por request.
+  const capsP = getCapabilities();
+  const [modules, capsForFilters] = await Promise.all([getTenantModules(), capsP]);
+  const clinicalRead = capsForFilters.has("clinical.read");
+  const diagnosisEnabled = modules.has("diagnostico") && clinicalRead;
   const q = searchParams.q ?? "";
-  const rawFilter = (searchParams.filter ?? "all") as NonNullable<SP["filter"]>;
-  const filter: NonNullable<SP["filter"]> =
-    !plansEnabled && (rawFilter === "active" || rawFilter === "no-program") ? "all" : rawFilter;
+  // CF2 (decisión 3 de Martin): las pastillas «Con plan / Sin plan» salieron para todos; `?filter=` ≠ `archived` → `all`.
+  const filter = normalizeDirectoryFilter(searchParams.filter);
   const sort = (searchParams.sort ?? "lastName.asc") as PatientSort;
   const os = searchParams.os?.trim() ?? "";
   const ageMin = searchParams.ageMin ? Number(searchParams.ageMin) : undefined;
@@ -84,10 +83,11 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
   // T3d-1u: la lista de profesionales del alta de la recepción sale de `listPractitioners` (cacheada por tag
   // `practitioners`, reservables y sin suspender: el mismo filtro que valida `createPatient`). Solo se pide en ese modo,
   // y en paralelo con el resto (encadenada a las capabilities, que ya están en el cache del request).
-  const capsP = getCapabilities();
   // WA-U3: casilla de WhatsApp del alta. Con `WHATSAPP_MODE=off`, 0 sentencias; con cuenta, cacheada por tag.
   // HD-10: `listPatients` devuelve UNA página (50) con `total` y `totals` calculados sobre todas las filas visibles.
-  const [patientsPage, facets, insurers, caps, actor, assigneeRows, whatsappActive] = await Promise.all([
+  // CF2 (decisión 2): nombres de TODOS los profesionales (también suspendidos y quitados) para la celda
+  // «Kinesiólogo»/«Profesional»; cacheado por tag `practitioners`, 0 sentencias en caliente.
+  const [patientsPage, facets, insurers, caps, actor, assigneeRows, whatsappActive, practitionerNameRows] = await Promise.all([
     listPatients({
       q,
       filter,
@@ -108,7 +108,11 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
       newPatientMode(c, { support: !!a.support }) === "admin" ? listPractitioners() : null
     ),
     getActor().then((a) => tenantWhatsAppActive(a.tenantId)),
+    listPractitionerNames(),
   ]);
+  const practitionerNames: Record<string, string> = Object.fromEntries(
+    practitionerNameRows.map((p) => [p.id, p.name]),
+  );
   // T3d-1u (plan §23.5): sin clinical.read, `createPatient` exige `assignTo` (el profesional a cargo). Antes (P0-S07sp)
   // el botón se escondía para la Secretaria y ella daba de alta solo desde el modal del turno; ahora el alta de la
   // recepción pide «Profesional a cargo» obligatorio y no tiene notas ni diagnóstico. Facturación sigue sin alta.
@@ -118,11 +122,8 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
     createMode === "admin"
       ? (assigneeRows ?? []).map((p) => ({ id: p.id, name: displayMemberName(p.user.fullName) }))
       : undefined;
-  // S32 / ES4-Z: «Con plan» / «Sin plan» cuentan solo filas `full` con el mismo predicado que el filtro. HD-10: los
-  // calcula el server sobre TODAS las filas visibles (`directoryTotals`), no sobre la página.
   const osOptions = insurers.filter((i) => !i.isParticular).map((i) => ({ id: i.id, name: i.name }));
   const patients = patientsPage.rows;
-  const totals = patientsPage.totals;
 
   // HD-10: `page` NO es parte del estado que se arrastra. Solo la paginación la pone (`baseQS({ page })`); cualquier otro
   // link (orden, archivados) y los forms GET (`preserved` de la OS, `preservedParams` de los avanzados) salen sin ella:
@@ -151,8 +152,6 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
     return qs ? `?${qs}` : "";
   };
 
-  // T3-Z M8: misma regla que PatientsList (sin filas full, la columna Plan no se muestra y el encabezado no se corre).
-  const showPlanColumn = plansEnabled && patients.some((p) => p.access === "full");
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       {/* PF1.1 (C-PF5.3): `PageHeader` (eyebrow + h1 + acciones). El conteo queda en el h1 con el color de marca. */}
@@ -189,7 +188,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
         }
       />
 
-      <PatientsSearchBar filter={filter} totals={totals} />
+      <PatientsSearchBar />
 
       {/* Sort + advanced filters row */}
       <div
@@ -263,6 +262,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
       <AdvancedPatientFilters
         conditions={facets.conditions}
         preservedParams={{ q, filter, sort, os }}
+        clinicalRead={clinicalRead}
         current={{
           ageMin: searchParams.ageMin,
           ageMax: searchParams.ageMax,
@@ -282,22 +282,9 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
         // provider sobrevive a la navegación suave y «Archivar» se llevaría filas que ya no se ven).
         <BulkSelectProvider key={baseQS({ page: String(patientsPage.page) })}>
         <Card style={{ padding: 0, overflow: "hidden" }}>
-          <div
-            className={directory.head}
-            style={{ gridTemplateColumns: patientsGridColumns(showPlanColumn) }}
-          >
-            <span>
-              <BulkSelectPageCheckbox ids={patients.filter((p) => p.access === "full").map((p) => p.id)} />
-            </span>
-            <span>Paciente</span>
-            {showPlanColumn && <span>Plan activo</span>}
-            <span>Obra social</span>
-            <span>Próx. turno</span>
-            <span>Última visita</span>
-            <span className={directory.right}>Estado</span>
-            <span />
-          </div>
-          <PatientsList rows={patients} archived={filter === "archived"} />
+          {/* CF2: el encabezado vive junto a las filas (mismo rótulo por vertical y misma grilla). */}
+          <PatientsListHead selectableIds={patients.filter((p) => p.access === "full").map((p) => p.id)} />
+          <PatientsList rows={patients} archived={filter === "archived"} practitionerNames={practitionerNames} />
         </Card>
         <BulkActionBar archivedView={filter === "archived"} />
         </BulkSelectProvider>

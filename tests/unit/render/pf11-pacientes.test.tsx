@@ -86,7 +86,7 @@ describe("[PF1.1] C-PF1: sin `motion.` en pacientes; la entrada es CSS", () => {
   });
 
   it("las filas se pintan visibles en el SSR (sin opacity:0 inline) con entrada CSS escalonada y tope", () => {
-    const html = wrap(<PatientsList rows={[row(), row({ id: "p2", lastName: "Pérez" })]} archived={false} />);
+    const html = wrap(<PatientsList rows={[row(), row({ id: "p2", lastName: "Pérez" })]} archived={false} practitionerNames={{}} />);
     expect(html).not.toMatch(/opacity:0/);
     expect(html.match(/k-enter-fade/g)?.length).toBe(2);
     expect(html).toContain("animation-delay:35ms");
@@ -97,7 +97,7 @@ describe("[PF1.1] C-PF1: sin `motion.` en pacientes; la entrada es CSS", () => {
 
 describe("[PF1.1] D2/D11: directorio", () => {
   it("la fila no muestra el email (queda en el title); la segunda línea es DNI o teléfono", () => {
-    const html = wrap(<PatientsList rows={[row()]} archived={false} />);
+    const html = wrap(<PatientsList rows={[row()]} archived={false} practitionerNames={{}} />);
     expect(html).toContain("DNI 30111222");
     expect(html).not.toMatch(/>ana@example\.test</);
     expect(html).toContain('title="Ana García · ana@example.test"');
@@ -106,7 +106,7 @@ describe("[PF1.1] D2/D11: directorio", () => {
   });
 
   it("las celdas llevan las clases de la card < 768 y rótulos que solo existen en mobile", () => {
-    const html = wrap(<PatientsList rows={[row({ upcomingAt: new Date("2026-10-20T13:00:00Z") })]} archived={false} />);
+    const html = wrap(<PatientsList rows={[row({ upcomingAt: new Date("2026-10-20T13:00:00Z") })]} archived={false} practitionerNames={{}} />);
     expect(html).toContain("Cobertura:");
     expect(html).toContain("Próx. turno:");
     const css = src("components/patients/patients-directory.module.css");

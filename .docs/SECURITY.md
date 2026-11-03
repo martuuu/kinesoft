@@ -812,7 +812,9 @@ Diseño en [ARCHITECTURE.md §Salas (SR)](ARCHITECTURE.md); orden de locks en AD
     (que se comparte por visibilidad de pacientes). Test de fuga con cache real (`useRealUnstableCache()`, afirma los
     `keyParts`; TESTING.md).
   - Atribución al profesional **actual** del turno: si un turno cobrado se reasigna, la plata se muda con él (no hay
-    "cobrado por" congelado). El filtro del OWNER por profesional → C0.
+    "cobrado por" congelado). El desglose por profesional está en `/caja` (CF2).
+  - **Enmienda CF2 (02-nov, D-CF2-16):** la Secretaria ve «Cobrado hoy» (Inicio y `/caja` scope `desk`: solo hoy,
+    copagos + online, **sin OS**, con «Destina/Recibe»); el widget de Ingresos le sigue oculto. Detalle en §28.
   - Si la Secretaria guarda el picker de KPI, pierde una `monthRevenue` fijada (nunca la vio). `/reportes` es un
     placeholder sin datos; los "próximos turnos" muestran el copago por turno (operativo, no se tocó).
 - **Facturación (SR-D4F):** los cancelados/ausentes con cobro se ven siempre y suman en "percibido"
@@ -1338,7 +1340,7 @@ BYPASSRLS). HD-6: sin `RESEND_API_KEY`/`EMAIL_FROM` el build de Production falla
 roles `kinesoft_*` no cambian (`[BR-9]`, `tests/unit/br-brand.test.tsx:213`): renombrarlas rompería secretos sellados,
 códigos de vínculo y sesiones.
 
-## 27. Feedback del cliente (CF, 30-oct-2026; en develop, sin push)
+## 27. Feedback del cliente (CF, 30-oct-2026; commiteada en `476bdf5`, sin push)
 
 Diseño en [ARCHITECTURE ADR-032 y «Realtime»](ARCHITECTURE.md); hallazgos en [AUDIT «Ronda CF»](AUDIT.md#ronda-cf).
 - **Superficies clínicas por capability.** Planes, Diagnóstico, Seguimiento, Ejercicios y Terapia manual piden
@@ -1355,3 +1357,24 @@ Diseño en [ARCHITECTURE ADR-032 y «Realtime»](ARCHITECTURE.md); hallazgos en 
   turnero no conoce al paciente al listar, así que la excepción «mismo paciente» es solo del staff).
 - **Mails.** El motivo técnico del rechazo de la invitación al portal solo lo ven Titular y Admin; el link que se muestra
   es el del portal, nunca un magic link.
+
+## 28. Caja, reparto y avisos al profesional (CF2, 02-nov-2026; en develop, sin push)
+
+Diseño en [ARCHITECTURE ADR-033 y ADR-034](ARCHITECTURE.md); hallazgos en [AUDIT «Ronda CF2»](AUDIT.md#ronda-cf2).
+- **Caja por scope** (`cajaScopeFor`, `lib/caja-logic.ts:50`): `tenant` (`billing.manage`), `desk` (Secretaria: hoy,
+  sin OS: la rama de OS ni se evalúa), `own` (su fila y lo que recibe; la SQL trae de quien le destina solo los grupos
+  que lo tienen de receptor y `projectCajaForScope` corta el resto: el bruto ajeno no sale del server), `none` (resto y
+  soporte). `"tenantId" = $t` a mano en cada rama de la `UNION ALL` y en la regla.
+- **Reparto.** Escribe quien tenga `tenant.sensitive`; soporte no lee ni escribe. Ids de profesionales validados contra
+  el tenant y receptor reservable; FKs compuestas `(id, tenantId)`; trigger de solo cierre; advisory lock por tenant;
+  audit en la tx. Las reglas se cierran solas al suspender, quitar, pasar a no clínico o deshabilitar.
+- **Contacto del profesional en el turnero.** Lo carga y lo prende solo el propio profesional (del actor, nunca del
+  input), con consentimiento versionado (Ley 25.326); el titular solo puede apagarlo. Sale por action, no en el HTML,
+  con rate limit `pub:leadcontact:<ip>` (excedido: se omite en silencio) y nunca se loguea el número.
+- **Web Push.** `PushSubscription` SERVICE_ONLY sin `tenantId`; endpoint con allowlist de hosts de push services
+  (`isKnownPushServiceHost`, `lib/web-push-types.ts:62`: sin credenciales, sin puerto, solo FCM/Mozilla/Apple/WNS) para
+  que nadie use la lambda de proxy contra hosts internos (SSRF ciego). VAPID solo en el server. Payload sin nombre del
+  paciente ni datos clínicos; URL del click solo del mismo origen (`public/sw.js`). Cookie httpOnly `ks_push_sub`
+  (declarada en `/privacidad`); el sign-out borra solo el dispositivo de esa cookie y de ese usuario.
+- **Mail al profesional.** «Juan P.», día, hora, duración y sede; sin servicio ni datos clínicos. El log
+  `booking.pro_notify` lleva solo ids y outcomes.

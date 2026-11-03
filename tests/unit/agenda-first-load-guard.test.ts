@@ -108,6 +108,7 @@ describe("[AS-0z] 0z3: UI de la agenda que no se ve al cargar va diferida", () =
 describe("[TP-3e] card, Lista y Semana: solo el badge mínimo de T5", () => {
   const CARD_FILES = [
     "components/agenda/grid/booking-card.tsx",
+    "components/agenda/grid/money-badge.tsx",
     "components/agenda/views/list-view.tsx",
     "components/agenda/views/week-grid-view.tsx",
   ];
@@ -121,7 +122,11 @@ describe("[TP-3e] card, Lista y Semana: solo el badge mínimo de T5", () => {
   }
 
   it("la card usa el badge mínimo (anti-false-green: el guard mira un import que existe)", () => {
-    expect(staticValueSpecifiers(read("components/agenda/grid/booking-card.tsx"))).toContain("@/lib/booking-money-badge");
+    // [CF2-MU] El `MoneyBadge` se mudó a `grid/money-badge.tsx` (CF2 A.2) y `booking-card` lo re-exporta: el badge
+    // mínimo de T5 se importa desde ahí. El peso del tag del copago lo mide `cf2-first-load-guard.test.ts`.
+    expect(staticValueSpecifiers(read("components/agenda/grid/booking-card.tsx"))).toContain("./money-badge");
+    expect(staticValueSpecifiers(read("components/agenda/grid/money-badge.tsx"))).toContain("@/lib/booking-money-badge");
+    expect(staticValueSpecifiers(read("components/agenda/grid/money-badge.tsx")).filter((s) => T5_HEAVY.test(s))).toEqual([]);
     expect(T5_HEAVY.test("@/lib/booking-money-view")).toBe(true);
     expect(T5_HEAVY.test("@/components/payments/booking-money-section")).toBe(true);
     expect(T5_HEAVY.test("@/lib/booking-money-badge")).toBe(false);

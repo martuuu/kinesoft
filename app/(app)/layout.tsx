@@ -8,7 +8,6 @@ import type { Palette } from "@/lib/preferences-constants";
 import { AppShell } from "@/components/layout/app-shell";
 import { getAccessSnapshot, getSessionBlock, tryGetActor } from "@/lib/session";
 import { mpConnectMode, tenantAccessEnforcement } from "@/lib/env";
-import { shellNavCaps } from "@/lib/nav";
 import { AccessBanner, bannerAudienceFor } from "@/components/layout/access-banner";
 import { ReadOnlyWriteGuard } from "@/components/layout/read-only-write-guard";
 import { canWrite, effectiveMode } from "@/lib/tenant-access";
@@ -176,7 +175,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // el actor tiene ficha (misma query que `lib/dashboard.ts`); el soporte no tiene ficha propia en el destino.
   // PF-Z (`layout-app-tx-en-serie`): arranca en paralelo con las preferencias; antes esperaba a que terminaran y
   // sumaba una ida y vuelta a la base al primer byte de TODAS las páginas.
-  // TP-3z: cobros online prendidos (0 sentencias). Con el modo `off` no hay «Cobros» ni «Mi Mercado Pago».
+  // TP-3z: cobros online prendidos (0 sentencias). Con el modo `off` no hay «Cobros» ni «Mi Mercado Pago» (CF2: «Caja» sí).
   const onlinePayments = mpConnectMode() !== "off";
   let practitionerId: string | null = null;
   if (!actor.support) practitionerId = actor.practitionerId;
@@ -207,8 +206,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // Secretaria con «Configuración» no lo veía. Es la misma función que usan las actions.
   const capSet = await capabilitiesForActor(actor);
   const caps = Array.from(capSet);
-  // TP-3z: sin cobros online, el shell no ve `billing.collect` → no hay «Cobros» en el nav (`shellNavCaps`).
-  const navCaps = shellNavCaps(caps, onlinePayments);
   // SV07b: qué driver realtime usa este actor (off/local/supabase) y, con
   // supabase, la URL y la anon key públicas. Se le pasan las caps ya calculadas
   // para no releer la membresía; el token del canal lo pide el cliente aparte.
@@ -255,7 +252,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           ownPublicBooking={ownPublicBooking}
           modules={modules}
           vertical={actor.entitlements.vertical}
-          caps={navCaps}
+          caps={caps}
+          // CF2 (P-NAV): sin cobros online no hay «Cobros» en el nav (`onlinePaymentsOnly`). Antes se sacaba
+          // `billing.collect` de `caps` (`shellNavCaps`), y eso le habría escondido «Caja» a la Secretaria.
+          onlinePayments={onlinePayments}
           realtime={realtime}
           alertViewer={alertViewer}
           initialAlertPrefs={initialAlertPrefs}

@@ -6,7 +6,7 @@
  * Oráculo (§26.8): la expectativa se DERIVA de `modulesFor` / `minimumPlanFor` (`lib/tenant-modules.ts`), de
  * `capabilitiesForMember` (`lib/capabilities.ts`) y de los cupos de `PLAN_DEFAULTS` (`lib/saas-plans-logic.ts`); no se
  * copia la matriz a mano. Lo que se ejecuta es el símbolo de prod: el `layout.tsx` de cada segmento (que llama a
- * `moduleWall`), `navFor` + `shellNavCaps` como los usa `app/(app)/layout.tsx`, `getSeatUsageInTx` + `canAddSeat` (lo que
+ * `moduleWall`), `navFor` (con `opts.onlinePayments`) como lo usa `app/(app)/layout.tsx`, `getSeatUsageInTx` + `canAddSeat` (lo que
  * frena una invitación), `runWithRls`/`createClinicalNote`/`getPatientTimeline` con `TENANT_ACCESS_ENFORCEMENT=enforce`,
  * `resolveDisplaySession` de `/tv` y el escritor único de entitlements (source `platform`) para los overrides.
  * Además se fijan 8 casos literales críticos, para que un oráculo roto no arrastre a la matriz entera.
@@ -30,7 +30,7 @@ import { runWithRls } from "@/lib/rls";
 import { getActor, getSessionBlock, tryGetActor } from "@/lib/session";
 import { capabilitiesForActor } from "@/lib/authz";
 import { moduleWall, type ModuleWallResult } from "@/lib/module-wall";
-import { navFor, shellNavCaps } from "@/lib/nav";
+import { navFor } from "@/lib/nav";
 import { mpConnectMode } from "@/lib/env";
 import { capabilitiesForMember, type Capability } from "@/lib/capabilities";
 import {
@@ -184,16 +184,19 @@ function expectedNav(mods: ReadonlySet<TenantModule>, caps: ReadonlySet<Capabili
   if (clinical && mods.has("diagnostico")) out.push("/diagnostico");
   if (clinical && mods.has("sesiones")) out.push("/seguimiento");
   if (clinical && mods.has("ejercicios")) out.push("/biblioteca", "/terapia-manual");
+  // CF2: «Caja» con cualquier capability de cobro, prendido o no el cobro online.
+  if (mods.has("facturacion") && (caps.has("billing.manage") || caps.has("billing.collect") || caps.has("billing.collectOwn"))) out.push("/caja");
   if (onlinePayments && caps.has("billing.collect")) out.push("/cobros");
   if (caps.has("tenant.admin")) out.push("/configuracion");
   return out;
 }
 
-/** El menú como lo arma `app/(app)/layout.tsx`: caps del actor → `shellNavCaps` (modo de cobros online) → `navFor`. */
+/** El menú como lo arma `app/(app)/layout.tsx`: caps del actor + `opts.onlinePayments` (modo de cobros online) → `navFor`. */
 async function realNav(): Promise<string[]> {
   const actor = await getActor();
-  const caps = shellNavCaps([...(await capabilitiesForActor(actor))], mpConnectMode() !== "off");
-  return navFor(modulesFor(actor.entitlements), new Set(caps)).map((i) => i.href);
+  return navFor(modulesFor(actor.entitlements), await capabilitiesForActor(actor), {
+    onlinePayments: mpConnectMode() !== "off",
+  }).map((i) => i.href);
 }
 
 const ENTS = (vertical: TenantVertical, plan: SaasPlan, o: Partial<TenantEntitlements> = {}): TenantEntitlements => ({
@@ -380,7 +383,7 @@ describe.skipIf(!RUN)("[QA-M] matriz de routing por plan × vertical × rol", ()
   // CF-NAV (§28, decisión 7): Facturación no tiene `clinical.read` → tampoco Planes/Diagnóstico/Seguimiento/Ejercicios.
   it("[QA-M] literal 7: menú de Facturación en Clínica Kine: sin Sala (no recepciona), sin lo clínico, con Cobros, sin Configuración", async () => {
     asUser(cell("CLINICA", "KINESIOLOGY").users.BILLING!);
-    expect(await realNav()).toEqual(["/dashboard", "/agenda", "/pacientes", "/cobros"]);
+    expect(await realNav()).toEqual(["/dashboard", "/agenda", "/pacientes", "/caja", "/cobros"]);
   });
 
   it("[CF-I2] literal 7b: la Secretaría en Clínica Kine rebota de las cinco pantallas clínicas; el Profesional entra", async () => {
@@ -389,14 +392,14 @@ describe.skipIf(!RUN)("[QA-M] matriz de routing por plan × vertical × rol", ()
       expect(await wallAs("CLINICA", "KINESIOLOGY", "PRACTITIONER", l as Layout)).toBe("ok");
     }
     asUser(cell("CLINICA", "KINESIOLOGY").users.ASSISTANT!);
-    expect(await realNav()).toEqual(["/dashboard", "/agenda", "/sala", "/pacientes", "/cobros"]);
+    expect(await realNav()).toEqual(["/dashboard", "/agenda", "/sala", "/pacientes", "/caja", "/cobros"]);
   });
 
   it("[QA-M] literal 8: menú del Titular en Individual General: solo el núcleo + Cobros + Configuración; sin cobros online, sin Cobros", async () => {
     asUser(cell("INDIVIDUAL", "GENERAL").users.OWNER_CLIN!);
-    expect(await realNav()).toEqual(["/dashboard", "/agenda", "/pacientes", "/cobros", "/configuracion"]);
+    expect(await realNav()).toEqual(["/dashboard", "/agenda", "/pacientes", "/caja", "/cobros", "/configuracion"]);
     process.env.MP_CONNECT_MODE = "off";
-    expect(await realNav()).toEqual(["/dashboard", "/agenda", "/pacientes", "/configuracion"]);
+    expect(await realNav()).toEqual(["/dashboard", "/agenda", "/pacientes", "/caja", "/configuracion"]);
   });
 
   // ── (b) menú, la matriz completa, con y sin cobros online ─────────────────────────────────────────────────────────

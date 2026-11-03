@@ -370,6 +370,31 @@
   font-size: var(--fs-sm);
   color: var(--navy-700);
 }
+/* CF2 (D-CF2-10): «¿Necesitás un turno antes?», mismo tono que `.windowNotice` (es una aclaración, no un error). */
+.leadContact {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--r-md);
+  background: rgba(31, 79, 190, 0.06);
+  border: 1px solid rgba(31, 79, 190, 0.18);
+  color: var(--navy-700);
+}
+.leadContactTitle {
+  margin: 0;
+  font-size: var(--fs-base);
+  font-weight: 700;
+  color: var(--navy-900);
+}
+.leadContactText {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+.leadContactActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
 .windowDays {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

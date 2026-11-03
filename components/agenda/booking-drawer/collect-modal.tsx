@@ -137,6 +137,7 @@ export function CollectModal({
   practitionerName = null,
   onClose,
   onSaved,
+  onStale,
 }: {
   /** null = cerrado (el Modal queda montado para la animación de salida). */
   booking: DrawerBooking | null;
@@ -147,6 +148,11 @@ export function CollectModal({
   practitionerName?: string | null;
   onClose: () => void;
   onSaved: (r: CollectResult) => void;
+  /**
+   * CF2 (A-RC): quien lo monta fuera del drawer (Recepción) muestra su propio aviso y refresca la lista; sin esto sale
+   * el copy del drawer («Cerrá el turno y abrilo…»), que en una lista no aplica.
+   */
+  onStale?: () => void;
 }) {
   const toast = useToast();
   const [saving, setSaving] = useState(false);
@@ -190,7 +196,8 @@ export function CollectModal({
       return;
     }
     if (isStaleError(res.error)) {
-      toast.warning("El turno cambió en otra sesión", { description: "Cerrá el turno y abrilo de nuevo para ver lo último." });
+      if (onStale) onStale();
+      else toast.warning("El turno cambió en otra sesión", { description: "Cerrá el turno y abrilo de nuevo para ver lo último." });
       onClose();
       return;
     }

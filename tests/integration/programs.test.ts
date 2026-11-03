@@ -27,7 +27,7 @@ import { setProgramStatus, deleteSession } from "@/lib/programs";
 import { createPlan, previewPlan } from "@/lib/plans";
 import { updatePlanDetails } from "@/lib/plans-lifecycle";
 import type { PlanCreateInput, PlanPreview, PlanRowResolution } from "@/lib/plans-types";
-import { listPatients } from "@/lib/patients";
+import { listPatientsDirectory } from "@/lib/patients-list-internal";
 import { toARDateKey } from "@/lib/datetime-ar";
 import {
   ownerClient,
@@ -299,7 +299,8 @@ describe.skipIf(!RUN)("programas · server (P0-S02a)", () => {
     // orden físico (el primero insertado) y elegía este.
     await makeProgram(p, { title: "Viejo", createdAt: new Date("2030-01-01T12:00:00Z") });
     await makeProgram(p, { title: "Nuevo", createdAt: new Date("2030-03-01T12:00:00Z") });
-    const rows = (await listPatients({ q: lastName })).rows;
+    // CF2: la página ya no hidrata planes (solo el modo "all", que usa el CSV).
+    const rows = (await listPatientsDirectory({ q: lastName }, "all")).rows;
     const row = rows.find((r) => r.id === p);
     expect(row?.activeProgramTitle).toBe("Nuevo");
   });

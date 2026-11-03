@@ -15,7 +15,7 @@
  * las 22:00 AR = 01:00 UTC del día siguiente) corría el día. Con DayKeys la
  * aritmética es de calendario y no depende de la TZ del host.
  */
-import { addDays, dayKeyOf, dayWindow, dowOfDayKey, isDayKey } from "@/lib/availability/day";
+import { addDays, dayKeyDiff, dayKeyOf, dayWindow, dowOfDayKey, isDayKey } from "@/lib/availability/day";
 import type { DayKey, DayLockState } from "@/lib/availability/types";
 import { canManageBlocksFor, CAPABILITIES, type Capability } from "@/lib/capabilities";
 import type { AgendaMode } from "@/lib/preferences-constants";
@@ -35,9 +35,20 @@ import type { RealtimeAgendaMessage } from "@/lib/realtime-events";
  * - `reception`: Recepción del día (lista operativa de todos).
  * - `room` (SR-U3): Día por sala (columnas = salas de la sede). Es el modo
  *   "Por sala"; solo existe si hay al menos una sala activa en el alcance.
+ * - `month` (CF2, D-CF2-7): Mes v1, grilla lunes-domingo con cantidad de turnos y
+ *   estado del día por celda (clic → Día). No depende del modo ni de la cantidad
+ *   de profesionales: con uno solo también tiene sentido.
  */
-export type AgendaView = "timeline" | "week" | "list" | "practitioner" | "reception" | "room";
-export const AGENDA_VIEWS: ReadonlyArray<AgendaView> = ["timeline", "week", "list", "practitioner", "reception", "room"];
+export type AgendaView = "timeline" | "week" | "list" | "practitioner" | "reception" | "room" | "month";
+export const AGENDA_VIEWS: ReadonlyArray<AgendaView> = [
+  "timeline",
+  "week",
+  "list",
+  "practitioner",
+  "reception",
+  "room",
+  "month",
+];
 
 export type ViewContext = {
   /** `agendaPrefs.mode` del usuario (cómo prefiere ver el Día). */
@@ -106,13 +117,13 @@ export function resolveAgendaView(raw: string | null | undefined, ctx: ViewConte
   return v;
 }
 
-/** Vistas de UN día (el título y el candado del día hablan de ese día). */
+/** Vistas de UN día (el título y el candado del día hablan de ese día). Semana y Mes no. */
 export function isDayScoped(v: AgendaView): boolean {
-  return v !== "week";
+  return v !== "week" && v !== "month";
 }
 
-/** Segmento activo del selector Día / Semana / Lista / Recepción. */
-export type ViewSegment = "day" | "week" | "list" | "reception";
+/** Segmento activo del selector Día / Semana / Mes / Lista / Recepción. */
+export type ViewSegment = "day" | "week" | "month" | "list" | "reception";
 export function segmentOf(v: AgendaView): ViewSegment {
   if (v === "timeline" || v === "practitioner" || v === "room") return "day";
   return v;
@@ -177,6 +188,44 @@ export function shiftDayKey(dayKey: DayKey, delta: number): DayKey {
   return addDays(dayKey, delta);
 }
 
+// CF2 (D-CF2-7) · Mes. Aritmética de calendario sobre "YYYY-MM-DD" con `Date.UTC` (etiquetas sin hora, como
+// `addDays`): no depende de la TZ del host. Lo prueba `tests/unit/cf2-agenda-state.test.ts` en TZ=UTC y AR.
+
+/** Días del mes `m` (1-12) del año `y`. `Date.UTC(y, m, 0)` = el día 0 del mes siguiente = el último de `m`. */
+function daysInMonth(y: number, m: number): number {
+  return new Date(Date.UTC(y, m, 0)).getUTCDate();
+}
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/**
+ * Grilla del Mes: de lunes a domingo, las semanas que cubren el mes de `dayKey`. Un mes de 28 días que arranca en
+ * lunes da 4; uno de 31 que arranca en sábado o domingo, 6 (el máximo = `AGENDA_MONTH_MAX_DAYS` = 42 del server).
+ * `monthKey` = "YYYY-MM" (el título y la clave del refetch).
+ */
+export function monthGridRange(dayKey: DayKey): { monthKey: string; from: DayKey; to: DayKey; weeks: 4 | 5 | 6 } {
+  const monthKey = dayKey.slice(0, 7);
+  const last = daysInMonth(Number(dayKey.slice(0, 4)), Number(dayKey.slice(5, 7)));
+  const from = weekStartKey(`${monthKey}-01`);
+  const to = addDays(weekStartKey(`${monthKey}-${pad2(last)}`), 6);
+  const weeks = (dayKeyDiff(from, to) + 1) / 7;
+  return { monthKey, from, to, weeks: weeks as 4 | 5 | 6 };
+}
+
+/**
+ * Ancla movida `delta` meses (toolbar «Mes anterior» / «Mes siguiente»). El día se acota al último del mes de
+ * destino: 31-ene +1 → 28-feb (29 en bisiesto). Sin el clamp, `Date.UTC(2027, 1, 31)` desborda a 3-mar y el «Mes
+ * siguiente» saltearía febrero.
+ */
+export function shiftMonthDay(dayKey: DayKey, delta: number): DayKey {
+  const y = Number(dayKey.slice(0, 4));
+  const m0 = Number(dayKey.slice(5, 7)) - 1 + delta;
+  const ny = y + Math.floor(m0 / 12);
+  const nm = (((m0 % 12) + 12) % 12) + 1;
+  const d = Math.min(Number(dayKey.slice(8, 10)), daysInMonth(ny, nm));
+  return `${ny}-${pad2(nm)}-${pad2(d)}`;
+}
+
 /** Ids del parámetro `?pros=a,b` (o el `?practitioner=` viejo) que existen en el consultorio. */
 export function parseSelectedPractitioners(
   params: { pros?: string | null; practitioner?: string | null },
@@ -189,6 +238,103 @@ export function parseSelectedPractitioners(
   }
   // Todos marcados = "Todos" (mismo criterio que `nextSelection`).
   return out.length === validIds.length ? [] : out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CF2 (D-CF2-1, D-CF2-2) · Selección recordada y título de alcance
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** De dónde salió la selección inicial: `agenda-client` agrega `?pros=` una vez si no vino de la URL. */
+export type SelectionSource = "url" | "saved" | "default";
+
+/** Ids válidos sin repetir, en el orden dado; los desconocidos (archivados, de otro consultorio) se descartan. */
+function validUnique(raw: ReadonlyArray<string>, validIds: ReadonlyArray<string>): string[] {
+  const out: string[] = [];
+  for (const id of raw.map((s) => s.trim())) {
+    if (id && validIds.includes(id) && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+/**
+ * Selección de profesionales al abrir la agenda (D-CF2-1). Prioridad:
+ * 1. `?pros=` con al menos un id válido; si no, el `?practitioner=` legado (un link compartido manda);
+ * 2. la guardada (`agendaPrefs.selectedPractitionerIds`) filtrada a los válidos. `[]` guardado = eligió «Todos» y se
+ *    respeta; una guardada con TODOS los ids inválidos (los profesionales ya no están) cuenta como «nunca eligió»;
+ * 3. el rol: un profesional en un consultorio con varios ve su agenda (`[own]`); la Secretaria y el resto, Todos.
+ * Una selección que cubre a todos colapsa a `[]`, la misma regla que `parseSelectedPractitioners`: así la URL no
+ * arrastra la lista completa y un profesional nuevo aparece sin tocar nada.
+ */
+export function initialPractitionerSelection(p: {
+  url: { pros?: string | null; practitioner?: string | null };
+  saved: ReadonlyArray<string> | undefined;
+  ownPractitionerId: string | null;
+  validIds: ReadonlyArray<string>;
+}): { ids: string[]; source: SelectionSource } {
+  const collapse = (ids: string[]) => (ids.length === p.validIds.length ? [] : ids);
+  const fromPros = p.url.pros ? validUnique(p.url.pros.split(","), p.validIds) : [];
+  if (fromPros.length > 0) return { ids: collapse(fromPros), source: "url" };
+  const fromLegacy = p.url.practitioner ? validUnique([p.url.practitioner], p.validIds) : [];
+  if (fromLegacy.length > 0) return { ids: collapse(fromLegacy), source: "url" };
+  if (p.saved) {
+    if (p.saved.length === 0) return { ids: [], source: "saved" };
+    const fromSaved = validUnique(p.saved, p.validIds);
+    if (fromSaved.length > 0) return { ids: collapse(fromSaved), source: "saved" };
+  }
+  const own = p.ownPractitionerId;
+  if (own && p.validIds.includes(own) && isMultiPractitioner(p.validIds.length)) {
+    return { ids: [own], source: "default" };
+  }
+  return { ids: [], source: "default" };
+}
+
+/** Título de alcance del encabezado (D-CF2-2). `people` = los profesionales en alcance, en el orden de la agenda. */
+export type ScopeHeading = {
+  kind: "one" | "some" | "all" | "room";
+  title: string;
+  people: ReadonlyArray<{ id: string; name: string; initials: string }>;
+};
+
+/** «Laura P.»: primer nombre + inicial del último apellido. Un nombre de una sola palabra queda como está. */
+function shortName(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return parts[0] ?? name;
+  return `${parts[0]} ${parts[parts.length - 1].charAt(0).toUpperCase()}.`;
+}
+
+/**
+ * Qué agenda se está mirando, como título (D-CF2-2): «Tu agenda · Laura Pérez», «Agenda de Laura Pérez», «Agenda de
+ * Laura Pérez y Martín Gómez», «3 profesionales: Laura P., Martín G., Ana R.», «Todos los profesionales (5)». «Por
+ * sala» ignora la selección (las columnas son salas, se ven todos) sin pisarla. Con un solo profesional devuelve
+ * `null`: el encabezado queda como siempre (la fecha como título). Los ids seleccionados que no están en `ordered` se
+ * ignoran; si no queda ninguno, es «Todos».
+ */
+export function scopeHeadingOf(p: {
+  view: AgendaView;
+  selectedIds: ReadonlyArray<string>;
+  ordered: ReadonlyArray<{ id: string; name: string; initials: string }>;
+  ownPractitionerId: string | null;
+}): ScopeHeading | null {
+  const all = p.ordered;
+  if (!isMultiPractitioner(all.length)) return null;
+  if (p.view === "room") return { kind: "room", title: "Por sala · todos los profesionales", people: all };
+  const picked = all.filter((x) => p.selectedIds.includes(x.id));
+  if (picked.length === 0 || picked.length === all.length) {
+    return { kind: "all", title: `Todos los profesionales (${all.length})`, people: all };
+  }
+  if (picked.length === 1) {
+    const [one] = picked;
+    const title = one.id === p.ownPractitionerId ? `Tu agenda · ${one.name}` : `Agenda de ${one.name}`;
+    return { kind: "one", title, people: picked };
+  }
+  if (picked.length === 2) {
+    return { kind: "some", title: `Agenda de ${picked[0].name} y ${picked[1].name}`, people: picked };
+  }
+  return {
+    kind: "some",
+    title: `${picked.length} profesionales: ${picked.map((x) => shortName(x.name)).join(", ")}`,
+    people: picked,
+  };
 }
 
 /**
@@ -930,3 +1076,4 @@ export function createRefetchCoalescer(run: () => Promise<void>): { request(): v
     },
   };
 }
+

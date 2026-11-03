@@ -3,9 +3,10 @@
  * Corre igual en TZ=UTC y en TZ=America/Argentina/Buenos_Aires: nada depende del TZ del host.
  */
 import { describe, it, expect } from "vitest";
+// CF2 (decisión 3): `directoryTotals` («con/sin plan») se borró; su reemplazo `directoryTotalsAll` vive en
+// tests/unit/cf2-patients-logic.test.ts.
 import {
   clampPatientsPage,
-  directoryTotals,
   dobBoundsForAge,
   isDirectoryVisible,
   normalizeAgeBound,
@@ -148,18 +149,5 @@ describe("[HD-10] sortByDateKey", () => {
     const copy = items.map((x) => x.id);
     sortByDateKey(items, (x) => x.k, "asc");
     expect(items.map((x) => x.id)).toEqual(copy);
-  });
-});
-
-describe("[HD-10] directoryTotals", () => {
-  it("con planes: «con/sin plan» cuentan solo filas full", () => {
-    const rows = [
-      { access: "full" as const, activePlanCount: 2 },
-      { access: "full" as const, activePlanCount: 0 },
-      { access: "admin" as const, activePlanCount: 1 },
-      { access: "basic" as const, activePlanCount: 0 },
-    ];
-    expect(directoryTotals(rows, true)).toEqual({ all: 4, withProgram: 1, withoutProgram: 1 });
-    expect(directoryTotals(rows, false)).toEqual({ all: 4 });
   });
 });

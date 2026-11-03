@@ -8,9 +8,9 @@ import type { ReactNode } from "react";
  * `TenantModulesProvider` de cada vertical; solo se mockea el router de Next y
  * la server action del menú de fila (`setPatientArchived`, no se invoca).
  *
- *  - GENERAL: sin columna de plan, sin pills «Con plan/Sin plan», sin
- *    «Último diagnóstico», estado = Activo/Archivado.
- *  - Kine PRO (golden): todo como antes de EV1.
+ *  - GENERAL: sin «Último diagnóstico».
+ *  - CF2 (§29): sin columna de plan ni pills «Con plan/Sin plan» en ninguna
+ *    vertical; estado desde `activity`.
  */
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
@@ -62,22 +62,25 @@ function row(over: Partial<PatientRow> = {}): PatientRow {
 }
 
 describe("[EV1-B] PatientsList", () => {
-  it("GENERAL: sin columna de plan, estado Activo y grid de 7 columnas", () => {
-    const html = wrap(GENERAL, <PatientsList rows={[row()]} archived={false} />);
+  // CF2 (§29, decisión 3 de Martin): «Plan activo» salió para todos; la grilla es una sola (8 columnas) y el «Estado»
+  // sale de `activity` (D-CF2-14) en las dos verticales. El detalle de la celda de profesionales vive en
+  // `cf2-patients-list.test.tsx`.
+  it("GENERAL: sin columna de plan, estado Activo desde activity y grid de 8 columnas", () => {
+    const html = wrap(GENERAL, <PatientsList rows={[row({ activity: "active" })]} archived={false} practitionerNames={{}} />);
     expect(html).not.toContain("Sin plan activo");
     expect(html).not.toContain("Inactivo");
-    expect(html).toContain("Activo");
-    expect(html).toContain(patientsGridColumns(false));
-    expect(patientsGridColumns(false).split(" ")).toHaveLength(7);
+    expect(html).toContain(">Activo<");
+    expect(html).toContain(patientsGridColumns());
+    expect(patientsGridColumns().split(" ")).toHaveLength(8);
   });
 
   it("GENERAL: en la vista de archivados el estado es «Archivado»", () => {
-    const html = wrap(GENERAL, <PatientsList rows={[row()]} archived />);
+    const html = wrap(GENERAL, <PatientsList rows={[row({ activity: "archived" })]} archived practitionerNames={{}} />);
     expect(html).toContain("Archivado");
     expect(html).not.toContain(">Activo<");
   });
 
-  it("Kine (golden, S32): chips por disciplina, sesiones y Activo/Inactivo = tiene plan", () => {
+  it("[CF2-U1] Kine: sin chips de plan aunque la fila traiga planes; Activo/Inactivo desde activity, no del plan", () => {
     const html = wrap(
       KINE_PRO,
       <PatientsList
@@ -88,53 +91,34 @@ describe("[EV1-B] PatientsList", () => {
             sessionsTotal: 10,
             sessionsDone: 3,
             activePlans: [{ discipline: "KINESIOLOGY", done: 3, totalLive: 10 }],
+            // Tiene plan pero ningún turno reciente: el estado NO es «Activo» (D-CF2-14: sale de los turnos).
+            activity: "inactive",
           }),
-          row({ id: "p2", firstName: "Beto", activePlans: [] }),
-          row({
-            id: "p3",
-            firstName: "Caro",
-            activeProgramTitle: "Plan cervical",
-            activePlans: [
-              { discipline: "OSTEOPATHY", done: 0, totalLive: 6 },
-              { discipline: "KINESIOLOGY", done: 2, totalLive: 8 },
-            ],
-          }),
+          row({ id: "p2", firstName: "Beto", activePlans: [], activity: "active" }),
         ]}
         archived={false}
+        practitionerNames={{}}
       />
     );
-    expect(html).toContain("Plan lumbar");
-    expect(html).toContain("3/10");
-    expect(html).toContain("Plan de Kinesiología: 3 de 10 sesiones realizadas");
-    expect(html).toContain("Plan de Osteopatía: 0 de 6 sesiones realizadas");
-    // Con dos planes no va el título (no diría de cuál es).
-    expect(html).not.toContain("Plan cervical");
-    expect(html.match(/data-testid="patients-plan-chip"/g)).toHaveLength(3);
-    expect(html).toContain("Sin plan activo");
-    expect(html).toContain("Activo");
-    expect(html).toContain("Inactivo");
-    expect(html).toContain(patientsGridColumns(true));
-    expect(patientsGridColumns(true)).toBe("28px 1.6fr 1fr 1fr 1.2fr 100px 90px 40px");
+    expect(html).not.toContain("Plan lumbar");
+    expect(html).not.toContain("3/10");
+    expect(html).not.toContain("patients-plan-chip");
+    expect(html).not.toContain("Sin plan activo");
+    expect(html).toContain(">Activo<");
+    expect(html).toContain(">Inactivo<");
+    expect(html).toContain(patientsGridColumns());
   });
 });
 
 describe("[EV1-B] PatientsSearchBar", () => {
-  it("GENERAL: sin pills «Con plan/Sin plan»", () => {
-    const html = wrap(GENERAL, <PatientsSearchBar filter="all" totals={{ all: 4 }} />);
-    expect(html).not.toContain("Con plan");
-    expect(html).not.toContain("Sin plan");
-    expect(html).not.toContain("filter=active");
-    expect(html).toContain("Buscar paciente");
-  });
-
-  it("Kine (golden): pills con totales", () => {
-    const html = wrap(
-      KINE_PRO,
-      <PatientsSearchBar filter="all" totals={{ all: 4, withProgram: 1, withoutProgram: 3 }} />
-    );
-    expect(html).toContain("Todos · 4");
-    expect(html).toContain("Con plan · 1");
-    expect(html).toContain("Sin plan · 3");
+  it("[CF2-U1] sin pills «Con plan/Sin plan» en ninguna vertical (decisión 3)", () => {
+    for (const m of [GENERAL, KINE_PRO]) {
+      const html = wrap(m, <PatientsSearchBar />);
+      expect(html).not.toContain("Con plan");
+      expect(html).not.toContain("Sin plan");
+      expect(html).not.toContain("filter=active");
+      expect(html).toContain("Buscar paciente");
+    }
   });
 });
 
@@ -147,14 +131,14 @@ describe("[EV1-B] AdvancedPatientFilters", () => {
   };
 
   it("GENERAL: sin «Último diagnóstico»", () => {
-    const html = wrap(GENERAL, <AdvancedPatientFilters {...props} />);
+    const html = wrap(GENERAL, <AdvancedPatientFilters {...props} clinicalRead />);
     expect(html).toContain("Edad mínima");
     expect(html).not.toContain("Último diagnóstico");
     expect(html).not.toContain('name="diagnosisSlug"');
   });
 
   it("Kine (golden): con «Último diagnóstico»", () => {
-    const html = wrap(KINE_PRO, <AdvancedPatientFilters {...props} />);
+    const html = wrap(KINE_PRO, <AdvancedPatientFilters {...props} clinicalRead />);
     expect(html).toContain("Último diagnóstico");
     expect(html).toContain("Lumbalgia");
   });

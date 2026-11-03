@@ -11,7 +11,8 @@
  * (`getDashboardPageData`, mismos argumentos: ninguno), con el cache en pass-through (frío: todo se recalcula)
  * y con el Map real de `unstable_cache` (caliente: segunda carga del mismo actor). Va con los dos roles (RLS
  * aplicado y owner BYPASSRLS) y con tres actores (titular con ingresos del consultorio, profesional con
- * ingresos propios y la Secretaria sin ingresos), porque cada uno toma un camino distinto.
+ * ingresos propios y la Secretaria sin ingresos), porque cada uno toma un camino distinto. CF2 (P-D): la Secretaria
+ * suma la tarjeta «Cobrado hoy» (`collectedGroupsInTx`) como UNA sentencia más en la tx de la página, sin tx nueva.
  *
  * También fija dos cambios de resultado de PF2-a (handoff de PF1.1-dashboard, brief-pf §3.2):
  *   - `adherencePct` es `null` sin turnos con resultado en la semana (antes 100: «100 % de adherencia» en un
@@ -152,7 +153,7 @@ describe.skipIf(!RUN)("PF2-a · /dashboard ≤ 2 tx en frío, ≤ 1 en caliente"
     [
       ["titular (ingresos del consultorio)", K.userId],
       ["profesional (ingresos propios)", kine.userId],
-      ["Secretaria (sin ingresos)", assistant],
+      ["Secretaria (sin ingresos, con «Cobrado hoy»)", assistant],
     ] as const;
 
   it("frío (cache de counts vacío): ≤ 2 tx por carga, para cada rol", async () => {
@@ -171,6 +172,23 @@ describe.skipIf(!RUN)("PF2-a · /dashboard ≤ 2 tx en frío, ≤ 1 en caliente"
       const { m } = await measure(() => getDashboardPageData());
       expect(m.transactions, `${label}: ${m.transactions} tx / ${m.statements} sentencias`).toBeLessThanOrEqual(1);
     }
+  });
+
+  it("[CF2-PD-3] Secretaria: «Cobrado hoy» entra en el presupuesto y es igual en frío y en caliente", async () => {
+    asUser(assistant);
+    const cold = await measure(() => getDashboardPageData());
+    expect(cold.m.transactions).toBeLessThanOrEqual(2);
+    // El copago de $1.500 cobrado hoy por el profesional (sin regla de reparto).
+    expect(cold.result.data.cashToday).toMatchObject({
+      totalCents: 150_000,
+      rows: [{ practitionerId: kine.practitionerId, grossCents: 150_000, givenCents: 0, receivedCents: 0, netCents: 150_000 }],
+    });
+    expect(cold.result.data.revenue).toBeNull();
+    useRealUnstableCache();
+    await getDashboardPageData();
+    const warm = await measure(() => getDashboardPageData());
+    expect(warm.m.transactions).toBeLessThanOrEqual(1);
+    expect({ ...warm.result.data.cashToday, computedAt: "" }).toEqual({ ...cold.result.data.cashToday, computedAt: "" });
   });
 
   it("con el widget en Semana (preferencia guardada) el presupuesto no cambia", async () => {

@@ -6,7 +6,8 @@
  *    ignora (devuelve lo mismo que "all"), no se hace el include de programs
  *    (un paciente con un plan ACTIVE heredado sale con `activeProgramTitle`
  *    null y 0 sesiones: el efecto observable de no consultar la relación) y
- *    "última visita" sale del último turno COMPLETED.
+ *    "última visita" sale de los turnos (CF2 D-CF2-15: último turno pasado no
+ *    cancelado ni ausente; un COMPLETED cuenta).
  *  - Sin `diagnostico`: `diagnosisSlug` se ignora.
  *  - Búsqueda (`q`): `%` y `_` son literales (la obra social filtra por id desde T3e-2p). Prisma 5
  *    no escapa `contains` (param `"%%%"` medido contra el Docker).
@@ -18,6 +19,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { listPatients } from "@/lib/patients";
+import { listPatientsDirectory } from "@/lib/patients-list-internal";
 import {
   ownerClient,
   createEphemeralTenant,
@@ -110,14 +112,15 @@ describe.skipIf(!RUN)("EV1-B · listPatients por módulos + ILIKE", () => {
 
   it("[EV1-B] GENERAL: sin include de programs (plan ACTIVE heredado no aparece)", async () => {
     asUser(G.userId);
-    const row = (await listPatients({})).rows.find((r) => r.id === g.withPlan);
+    // Por el export (`mode: "all"`): la única vía que todavía hidrata planes (CF2); sin `planes` tampoco.
+    const row = (await listPatientsDirectory({}, "all")).rows.find((r) => r.id === g.withPlan);
     expect(row).toBeDefined();
     expect(row!.access).toBe("full");
     expect(row!.activeProgramTitle).toBeNull();
     expect(row!.sessionsTotal).toBe(0);
   });
 
-  it("[EV1-B] GENERAL: «última visita» = último turno COMPLETED", async () => {
+  it("[EV1-B] GENERAL: «última visita» = último turno pasado (un COMPLETED cuenta; CF2 D-CF2-15)", async () => {
     asUser(G.userId);
     const rows = (await listPatients({ sort: "lastVisit.desc" })).rows;
     const plain = rows.find((r) => r.id === g.plain);
@@ -139,7 +142,9 @@ describe.skipIf(!RUN)("EV1-B · listPatients por módulos + ILIKE", () => {
     expect(noProgram).toContain(k.plain);
     expect(noProgram).not.toContain(k.withPlan);
     expect(ids((await listPatients({ diagnosisSlug: k.condSlug })).rows)).toEqual([k.withPlan]);
-    const row = (await listPatients({})).rows.find((r) => r.id === k.withPlan);
+    // CF2 (decisión 3): el plan salió de la página; lo sigue hidratando el export (`mode: "all"`).
+    expect((await listPatients({})).rows.find((r) => r.id === k.withPlan)!.activeProgramTitle).toBeNull();
+    const row = (await listPatientsDirectory({}, "all")).rows.find((r) => r.id === k.withPlan);
     expect(row!.activeProgramTitle).toBe("Plan kine");
   });
 

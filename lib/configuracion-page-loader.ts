@@ -52,6 +52,13 @@ import "server-only";
  * destino del popup del alta (`signupDialogTarget`, para validar `event.origin`) y si el que mira conecta (Titular).
  * La cuenta, las plantillas y el cupo de pruebas los pide el panel al montar (`getWhatsAppPanel`): quien no abre la
  * pestaña no paga la lectura y el presupuesto de PF2 no cambia.
+ *
+ * CF2 (§29, brief T.A/T.C, M21): la pestaña personal «Mi agenda» (switch propio del turnero, anticipación, contacto
+ * dentro de la anticipación, avisos de turnos online) sale de la MISMA lectura del profesional propio que «Mis fichas»
+ * (columnas sumadas al select: 0 sentencias). La anticipación del consultorio («Usar la del consultorio (N)») viene de
+ * la fila del Tenant con `tenant.admin` (0 sentencias); el Profesional sin delegaciones no lee esa fila y paga +1 (4 → 5
+ * medidas el 02-nov en pf2-config-budget, declarada ahí). Los dispositivos de push NO se leen acá: el panel los pide al
+ * montar (como WhatsApp). En Profesionales, cada fila del resumen trae `publicLead` del select de siempre.
  */
 import { runWithRls, type DbClient } from "@/lib/rls";
 // DIR-3c: solo para `ProfessionalPublicProfile` (SERVICE_ONLY, DIR-D12); ver la cabecera.
@@ -168,6 +175,41 @@ export type PractitionerAgendaRulesView = {
 export type ConfiguracionScheduleRow = PractitionerScheduleSummaryRow & {
   bookingCap: PractitionerBookingCapView;
   agendaRules: PractitionerAgendaRulesView;
+  /** CF2 (T.A): anticipación del turnero, CRUDA (NULL = hereda). Columna del mismo select: 0 sentencias. */
+  publicLead: PractitionerPublicLeadView;
+  /** CF2 (T.B): el profesional muestra su contacto en el turnero → el titular ve «Ocultar su contacto». */
+  leadContactShown: boolean;
+};
+
+/**
+ * CF2 (T.A, M21): anticipación mínima del turnero de un profesional (`Practitioner.publicMinLeadMinutes`) y la del
+ * consultorio (`Tenant.publicMinLeadMinutes`), CRUDAS: NULL = «Usar la del consultorio» / «el default (1 hora)». Como
+ * `agendaRules`, no se resuelve acá: el editor tiene que distinguir «hereda» de «eligió el mismo valor». La herencia
+ * efectiva (servicio > profesional > consultorio > 60) la decide `effectivePublicMinLead`.
+ */
+export type PractitionerPublicLeadView = { own: number | null; tenant: number | null };
+
+/**
+ * CF2 (T.C): pestaña personal «Mi agenda» del que mira (null = no es miembro clínico con `Practitioner`, o es soporte:
+ * el mismo gate que «Mis fichas»). Todo es del profesional PROPIO (`actor.practitionerId`, nunca de un input).
+ *   - `publicBookingEnabled`: su switch del turnero (el mismo dato que lee el layout para el menú de cuenta);
+ *     `tenantPublicBookingEnabled`: el del consultorio (apagado = el propio no tiene efecto; de `actor.entitlements`).
+ *   - `publicMinLeadMinutes` / `tenantPublicMinLeadMinutes`: crudos, como `PractitionerPublicLeadView`.
+ *   - Contacto dentro de la anticipación (T.B): número E.164, opt-in y fecha del consentimiento (ISO o null).
+ *   - Avisos de turnos online: mail y push (los dispositivos NO vienen acá: el panel los pide al montar).
+ */
+export type ConfiguracionMiAgendaData = {
+  practitionerId: string;
+  name: string;
+  publicBookingEnabled: boolean;
+  tenantPublicBookingEnabled: boolean;
+  publicMinLeadMinutes: number | null;
+  tenantPublicMinLeadMinutes: number | null;
+  contactWhatsapp: string | null;
+  showContactInLeadWindow: boolean;
+  contactConsentAt: string | null;
+  notifyBookingEmail: boolean;
+  notifyBookingPush: boolean;
 };
 
 /** FC-3i: estado de un asset del consultorio (logo, firma) sin la clave de Storage. */
@@ -196,6 +238,8 @@ export type ConfiguracionTxData = {
   directory: DirectoryTxPart | null;
   /** FC-3i: «Mis fichas» (miembro clínico con `Practitioner`, nunca el soporte). */
   fichas: ConfiguracionFichasData | null;
+  /** CF2 (T.C): «Mi agenda» (mismo gate que `fichas`). */
+  miAgenda: ConfiguracionMiAgendaData | null;
   /** FC-3i: logo del consultorio en General (`tenant.sensitive`); null = sin la tarjeta. */
   logo: PracticeAssetFlag | null;
   /** TP-3a: pestaña «Cobros online» (= `getOnlinePaymentsSettings()`); null = sin `tenant.sensitive`. */
@@ -222,6 +266,12 @@ type Gates = {
   /** FC-3i (FC-UI-D3): «Mis fichas» = miembro clínico con `Practitioner`. El soporte nunca (no es miembro). */
   fichas: boolean;
   /**
+   * CF2 (T.C): «Mi agenda» = el MISMO gate que `fichas` (miembro clínico con `Practitioner`, nunca soporte). Es
+   * personal: no depende de «Configuración». No depende del turnero del consultorio: el profesional puede dejar su
+   * anticipación y sus avisos listos antes de que el Titular lo prenda (la UI lo avisa con `tenantPublicBookingEnabled`).
+   */
+  miAgenda: boolean;
+  /**
    * TP-3a: «Cobros online» = `tenant.sensitive` (lo mismo que `getOnlinePaymentsSettings`; soporte la ve en solo
    * lectura). `tenant.admin` también, porque la lista de profesionales sale de la consulta de Profesionales, que corre
    * con `tenant.admin` (hoy uno no existe sin el otro, como en `directory`).
@@ -245,6 +295,8 @@ function gatesFor(actor: Actor, caps: ReadonlySet<Capability>): Gates {
   const tenantAdmin = caps.has("tenant.admin");
   const sensitive = caps.has("tenant.sensitive");
   const onlineOn = mpConnectMode() !== "off";
+  const clinicalSelf =
+    !actor.support && !!actor.practitionerId && !!actor.membership && isClinicalMember(actor.membership);
   return {
     tenantAdmin,
     sensitive,
@@ -255,7 +307,8 @@ function gatesFor(actor: Actor, caps: ReadonlySet<Capability>): Gates {
     // `tenantAdmin` también: la pestaña se arma sobre la fila del Tenant, que se lee con `tenant.admin`. Hoy
     // `tenant.sensitive` sin `tenant.admin` no existe (los dos vienen de «Configuración»), pero no se asume.
     directory: tenantAdmin && sensitive && directoryMode() !== "off",
-    fichas: !actor.support && !!actor.practitionerId && !!actor.membership && isClinicalMember(actor.membership),
+    fichas: clinicalSelf,
+    miAgenda: clinicalSelf,
     // TP-3z (decisión del orquestador, regla de Martin «lo que no tiene funcionalidad se quita»): con
     // `MP_CONNECT_MODE=off` las dos pestañas no existen (ni sus lecturas: las cuentas no se piden).
     onlinePayments: tenantAdmin && sensitive && onlineOn,
@@ -337,7 +390,8 @@ export async function loadConfiguracionInTx(
   const tenantId = actor.tenantId;
   const today = dayKeyToDbDate(toARDateKey(now));
   // FC-3i: ya chequeado no-null (guard IAM-4a: nunca `actor.practitionerId` crudo como valor de una clave).
-  const myPractitionerId: string | null = g.fichas ? actor.practitionerId : null;
+  // CF2 (T.C): «Mi agenda» lee la MISMA fila (mismo gate que «Mis fichas»).
+  const myPractitionerId: string | null = g.fichas || g.miAgenda ? actor.practitionerId : null;
   // TP-3a: ídem (`g.myMp` ya exige `actor.practitionerId`).
   const myMpPractitionerId: string | null = g.myMp ? actor.practitionerId : null;
 
@@ -360,6 +414,7 @@ export async function loadConfiguracionInTx(
     me,
     policyRow,
     mpRows,
+    tenantLeadRow,
   ] = await Promise.all([
       // = getTenantSettings (lib/tenant-settings.ts); además da el horario del consultorio para el resumen de
       // horarios (= `tenantHours` de lib/practitioner-schedule.ts): una sentencia menos.
@@ -420,6 +475,9 @@ export async function loadConfiguracionInTx(
               allowParallelServices: true,
               agendaSlotStepMin: true,
               publicSlotStepMin: true,
+              // CF2 (T.A, M21): anticipación del turnero de la ficha, en el mismo select (editor de W5).
+              publicMinLeadMinutes: true,
+              showContactInLeadWindow: true,
               user: { select: { fullName: true, email: true } },
               schedules: {
                 where: { tenantId, OR: [{ validUntil: null }, { validUntil: { gte: today } }] },
@@ -483,10 +541,25 @@ export async function loadConfiguracionInTx(
       g.sensitive
         ? tx.tenant.findFirst({ where: { id: tenantId }, select: { logoStorageKey: true, logoUpdatedAt: true } })
         : null,
-      g.fichas && myPractitionerId
+      // FC-3i «Mis fichas» + CF2 (T.C) «Mi agenda»: la fila del profesional propio, UNA sentencia para las dos
+      // pestañas (las columnas de M21 se suman al select de siempre: 0 sentencias).
+      (g.fichas || g.miAgenda) && myPractitionerId
         ? tx.practitioner.findFirst({
             where: { id: myPractitionerId, tenantId },
-            select: { honorific: true, licenseNumber: true, signatureStorageKey: true, signatureUpdatedAt: true },
+            select: {
+              honorific: true,
+              licenseNumber: true,
+              signatureStorageKey: true,
+              signatureUpdatedAt: true,
+              // CF2: el switch propio del turnero (= lo que lee el layout) y las 6 columnas de M21.
+              publicBookingEnabled: true,
+              publicMinLeadMinutes: true,
+              contactWhatsapp: true,
+              showContactInLeadWindow: true,
+              contactConsentAt: true,
+              notifyBookingEmail: true,
+              notifyBookingPush: true,
+            },
           })
         : null,
       // TP-3a: = la lectura de la política de `getOnlinePaymentsSettings` (lib/booking-payment-policy.ts).
@@ -522,6 +595,13 @@ export async function loadConfiguracionInTx(
             },
           })
         : [],
+      // CF2 (T.C): la anticipación del consultorio para «Usar la del consultorio (N)». Con `tenant.admin` ya viene en
+      // la fila del Tenant de arriba (0 sentencias); el Profesional sin delegaciones no la lee, así que acá va +1
+      // (declarada en pf2-config-budget). No se suma como relación al select de la ficha: sin `relationJoins` Prisma 5
+      // la manda igual como sentencia aparte, y un raw con JOIN reescribiría la lectura de «Mis fichas».
+      g.miAgenda && myPractitionerId && !g.tenantAdmin
+        ? tx.tenant.findFirst({ where: { id: tenantId }, select: { publicMinLeadMinutes: true } })
+        : null,
     ]);
 
   let tenant: TenantSettings | null = null;
@@ -582,6 +662,8 @@ export async function loadConfiguracionInTx(
           publicSlotStepMin: p.publicSlotStepMin,
           tenant: { agendaSlotStepMin: tenantRow.agendaSlotStepMin, publicSlotStepMin: tenantRow.publicSlotStepMin },
         },
+        publicLead: { own: p.publicMinLeadMinutes, tenant: tenantRow.publicMinLeadMinutes },
+        leadContactShown: p.showContactInLeadWindow,
       };
     });
   }
@@ -640,7 +722,7 @@ export async function loadConfiguracionInTx(
     supportSessions: supportRows ? supportRows.map(toSupportSessionRow) : null,
     directory,
     logo: logoRow ? { has: !!logoRow.logoStorageKey, updatedAt: logoRow.logoUpdatedAt?.toISOString() ?? null } : null,
-    fichas: me
+    fichas: g.fichas && me
       ? {
           me: {
             honorific: (me.honorific as Honorific | null) ?? null,
@@ -650,6 +732,23 @@ export async function loadConfiguracionInTx(
           backupScope: { tenantId, userId: actor.userId },
         }
       : null,
+    miAgenda:
+      g.miAgenda && me && myPractitionerId
+        ? {
+            practitionerId: myPractitionerId,
+            // El nombre del actor (el mismo que ve en la agenda y el menú de cuenta): 0 sentencias.
+            name: actor.practitionerName,
+            publicBookingEnabled: me.publicBookingEnabled,
+            tenantPublicBookingEnabled: actor.entitlements.publicBookingEnabled,
+            publicMinLeadMinutes: me.publicMinLeadMinutes,
+            tenantPublicMinLeadMinutes: tenantRow ? tenantRow.publicMinLeadMinutes : (tenantLeadRow?.publicMinLeadMinutes ?? null),
+            contactWhatsapp: me.contactWhatsapp,
+            showContactInLeadWindow: me.showContactInLeadWindow,
+            contactConsentAt: me.contactConsentAt ? me.contactConsentAt.toISOString() : null,
+            notifyBookingEmail: me.notifyBookingEmail,
+            notifyBookingPush: me.notifyBookingPush,
+          }
+        : null,
     onlinePayments,
     myMp,
     previewServicePriceCents: g.onlinePayments ? previewServicePriceOf(services) : null,
@@ -742,7 +841,8 @@ export async function loadConfiguracionPage(
   // todo `tenant.admin` la tiene (lib/capabilities.ts), pero si la matriz cambia, el resultado sigue siendo el mismo.
   if (caps.has("tenant.admin") && !caps.has("agenda.viewAll")) throw new ForbiddenError(AGENDA_READ_MSG);
   const g = gatesFor(actor, caps);
-  const needsTx = g.tenantAdmin || g.rooms || g.support || g.sensitive || g.fichas || g.onlinePayments || g.myMp;
+  const needsTx =
+    g.tenantAdmin || g.rooms || g.support || g.sensitive || g.fichas || g.miAgenda || g.onlinePayments || g.myMp;
   const empty: ConfiguracionTxData = {
     tenant: null,
     insurers: [],
@@ -757,6 +857,7 @@ export async function loadConfiguracionPage(
     supportSessions: null,
     directory: null,
     fichas: null,
+    miAgenda: null,
     logo: null,
     onlinePayments: null,
     myMp: null,

@@ -103,6 +103,13 @@ export const EXPORT_FIELDS = {
   ],
   practitionerPayers: ["id", "practitionerId", "insurerId", "active", "createdAt"],
   practitionerSpecialties: ["id", "practitionerId", "specialtyId"],
+  // CF2 P.3 (M21, D-CF2-18): reglas de reparto de %, vigentes y cerradas (el historial es lo que explica la caja de
+  // meses pasados). Todas las columnas menos `tenantId` (implícito, como en el resto). `createdById`/`closedById` son
+  // ids opacos del equipo (cruzan con `team.userId`, como `auditEvents.actorId`).
+  practitionerRevenueShares: [
+    "id", "giverPractitionerId", "receiverPractitionerId", "shareBps", "appliesManual", "appliesOnline",
+    "appliesInsurer", "effectiveFrom", "effectiveTo", "createdById", "closedById", "createdAt",
+  ],
   patients: [
     "id", "assignedPractitionerId", "firstName", "lastName", "email", "phone", "dateOfBirth", "documentId", "notes",
     "diagnosisTitle", "diagnosisNote", "archivedAt", "createdAt", "updatedAt",

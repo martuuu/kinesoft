@@ -23,6 +23,22 @@ const trimmedOrUndefined = (v: unknown) => (typeof v === "string" ? emptyAsUndef
 export const WHATSAPP_GRAPH_VERSION_DEFAULT = "v23.0";
 const WHATSAPP_GRAPH_VERSION_SHAPE = /^v\d{2}\.0$/;
 
+// CF2 (D-CF2-12): forma de las claves VAPID (lo que emite `web-push generate-vapid-keys`). La pública es un punto P-256
+// sin comprimir (65 bytes, el primero 0x04 → «B» en base64url); la privada, 32 bytes. Se valida acá y no importando
+// `web-push` (pesa y es solo del server; este módulo también entra en bundles de cliente). El mensaje no trae la clave.
+const VAPID_PUBLIC_SHAPE = /^B[A-Za-z0-9_-]{86}$/;
+const VAPID_PRIVATE_SHAPE = /^[A-Za-z0-9_-]{43}$/;
+function isVapidSubject(v: string): boolean {
+  if (/^mailto:[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(v)) return true;
+  if (!/^https:\/\/\S+$/.test(v)) return false;
+  try {
+    return new URL(v).hostname.length > 0;
+  } catch {
+    return false;
+  }
+}
+const WEB_PUSH_KEYS = ["WEB_PUSH_VAPID_PUBLIC_KEY", "WEB_PUSH_VAPID_PRIVATE_KEY", "WEB_PUSH_VAPID_SUBJECT"] as const;
+
 const schema = z.object({
   DATABASE_URL: z.string().url().optional(),
   DIRECT_URL: z.string().url().optional(),
@@ -267,6 +283,30 @@ const schema = z.object({
     z.enum(["whatsapp_business_app_onboarding"]).optional()
   ),
 
+  // CF2 (§29, D-CF2-12, brief T.C «Env»): claves VAPID del push web a los profesionales («Avisos de turnos online»).
+  // SERVER-ONLY las tres, también la pública: el navegador la recibe del server al suscribirse (`webPushVapid()`), así
+  // que nunca `NEXT_PUBLIC_` (rotarla no pide redeploy del bundle). Se generan UNA vez con
+  // `npx web-push generate-vapid-keys`; rotarlas deja mudos a todos los dispositivos ya suscriptos (sus suscripciones
+  // quedan atadas a la pública vieja: el push service responde 401/403 y el sender las descarta a las 5 fallas).
+  //   WEB_PUSH_VAPID_PUBLIC_KEY   punto P-256 sin comprimir, base64url sin relleno (87 caracteres, empieza con «B»).
+  //   WEB_PUSH_VAPID_PRIVATE_KEY  escalar P-256, base64url sin relleno (43 caracteres).
+  //   WEB_PUSH_VAPID_SUBJECT      `mailto:alguien@dominio` o `https://…`: el contacto que ven los push services (Apple
+  //                               rechaza el push sin uno válido).
+  // Regla (`webPushRules`): si hay una, las tres, en cualquier entorno. En Production sin ninguna solo se avisa
+  // (RECOMMENDED_IN_PRODUCTION): sin push los avisos siguen saliendo por mail. Recortadas por lo de HF-1a.
+  WEB_PUSH_VAPID_PUBLIC_KEY: z.preprocess(
+    trimmedOrUndefined,
+    z.string().regex(VAPID_PUBLIC_SHAPE, "no tiene forma de clave pública VAPID (base64url de 87, empieza con «B»)").optional()
+  ),
+  WEB_PUSH_VAPID_PRIVATE_KEY: z.preprocess(
+    trimmedOrUndefined,
+    z.string().regex(VAPID_PRIVATE_SHAPE, "no tiene forma de clave privada VAPID (base64url de 43)").optional()
+  ),
+  WEB_PUSH_VAPID_SUBJECT: z.preprocess(
+    trimmedOrUndefined,
+    z.string().refine(isVapidSubject, "tiene que ser mailto:alguien@dominio o una URL https://").optional()
+  ),
+
   // Interruptores que ya se leían por `process.env` (INF-ENV los suma al schema para el inventario, sin validar la
   // forma: sus lectores ya tratan cualquier valor y frenar un deploy por ellos sería peor que el valor raro).
   //   SUPERADMIN_2FA_BYPASS        HF-3 (D-HF7): `<userId>@AAAA-MM-DD[,…]`; `lib/two-factor-bypass.ts` falla cerrado.
@@ -405,6 +445,24 @@ function whatsappRules(e: z.infer<typeof schema>, ctx: z.RefinementCtx): void {
 }
 
 /**
+ * CF2 (D-CF2-12): las claves VAPID van juntas, en cualquier entorno. Con una o dos el push no puede firmar (y una
+ * pública sin su privada haría suscribir navegadores que nunca reciben nada): mejor que el deploy no salga a que la
+ * pantalla diga «activado» y no llegue ningún aviso. Ninguna = push apagado (en Production, un aviso al boot).
+ */
+function webPushRules(e: z.infer<typeof schema>, ctx: z.RefinementCtx): void {
+  const present = WEB_PUSH_KEYS.filter((k) => e[k]);
+  if (present.length === 0 || present.length === WEB_PUSH_KEYS.length) return;
+  for (const key of WEB_PUSH_KEYS) {
+    if (e[key]) continue;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [key],
+      message: `falta: las claves de push web van las tres juntas (hay ${present.join(", ")})`,
+    });
+  }
+}
+
+/**
  * OPS-1c · guard de Preview (OPS-D1). Por qué: hasta A0b los Preview compartían la base de prod y migraban (AUDIT
  * H6); el scope Preview → staging (OPS-0) se configura a mano en Vercel y un «copiar de Production» lo deshace sin que
  * nada avise. Con el guard, un build de Preview que apunta al proyecto de prod sale ROJO en vez de dejar un deploy
@@ -482,10 +540,13 @@ const RECOMMENDED_IN_PRODUCTION = [
   "UPSTASH_REDIS_REST_URL",
   "UPSTASH_REDIS_REST_TOKEN",
   "SENTRY_DSN",
+  // CF2 (D-CF2-12): sin ellas no sale ningún push («Avisos de turnos online» queda solo por mail).
+  ...WEB_PUSH_KEYS,
 ] as const;
 
 const productionSchema = schema.superRefine((e, ctx) => {
   previewTargetsProd(e, ctx);
+  webPushRules(e, ctx);
   mpConnectRules(e, ctx);
   whatsappRules(e, ctx);
   if (e.VERCEL_ENV !== "production") return;
@@ -640,6 +701,9 @@ export const env = parseEnv({
   SUPERADMIN_2FA_BYPASS: process.env.SUPERADMIN_2FA_BYPASS,
   NEXT_PUBLIC_PWA: process.env.NEXT_PUBLIC_PWA,
   PATIENT_FILES_SIGNED_UPLOAD: process.env.PATIENT_FILES_SIGNED_UPLOAD,
+  WEB_PUSH_VAPID_PUBLIC_KEY: process.env.WEB_PUSH_VAPID_PUBLIC_KEY,
+  WEB_PUSH_VAPID_PRIVATE_KEY: process.env.WEB_PUSH_VAPID_PRIVATE_KEY,
+  WEB_PUSH_VAPID_SUBJECT: process.env.WEB_PUSH_VAPID_SUBJECT,
 });
 
 /**
@@ -791,6 +855,23 @@ export function platformInboxEmail(): string | null {
  */
 export function isVercelProduction(): boolean {
   return process.env.VERCEL_ENV?.trim() === "production";
+}
+
+export type WebPushVapid = { publicKey: string; privateKey: string; subject: string };
+
+/**
+ * CF2 (D-CF2-12): claves VAPID vigentes, leídas de `process.env` en cada llamada (los tests las cambian en caliente y
+ * `env` se congela al importar). `null` = push apagado: falta alguna o la forma no da (el boot ya lo rechazó; acá no se
+ * tira en medio del submit del turnero). SOLO server: la privada nunca sale de acá (`lib/web-push-internal.ts`), y la
+ * pública le llega al navegador por la action que arma la suscripción.
+ */
+export function webPushVapid(): WebPushVapid | null {
+  const publicKey = process.env.WEB_PUSH_VAPID_PUBLIC_KEY?.trim();
+  const privateKey = process.env.WEB_PUSH_VAPID_PRIVATE_KEY?.trim();
+  const subject = process.env.WEB_PUSH_VAPID_SUBJECT?.trim();
+  if (!publicKey || !privateKey || !subject) return null;
+  if (!VAPID_PUBLIC_SHAPE.test(publicKey) || !VAPID_PRIVATE_SHAPE.test(privateKey) || !isVapidSubject(subject)) return null;
+  return { publicKey, privateKey, subject };
 }
 
 export const isProd = env.NODE_ENV === "production";

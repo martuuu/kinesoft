@@ -63,11 +63,62 @@
   line-height: 1;
 }
 
+/* [CF2-WS] Candado en la tira (D-CF2-6). El rayado es el mismo `BLOCKED_STRIPES` de `grid/unavailable-overlay.tsx`
+   (la columna bloqueada de la grilla): va acá y no importado para no sumar ese módulo al first load de /agenda (la tira
+   picker es estática en `agenda-client`). `background-image` para que se apile sobre el vidrio / el sky del elegido. */
+.stripDay[data-day-status="locked"],
+.stripCell[data-day-status="locked"] {
+  background-image: repeating-linear-gradient(135deg, rgba(15, 30, 51, 0.07) 0 6px, rgba(15, 30, 51, 0.015) 6px 12px);
+}
+
+.stripGlyph {
+  display: inline-flex;
+  align-self: center;
+  opacity: 0.8;
+}
+
+.stripBlocked {
+  font-weight: 700;
+}
+
+/* Variante `columns`: encabezado único de la Semana, adentro de la card (sin vidrio: el blur dentro de una card blanca
+   no se ve y cuesta). El día es el botón; el candado, su hermano a la derecha (nunca botón dentro de botón). */
+.stripCell {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding-right: 4px;
+  border-radius: 12px;
+  background-color: rgba(15, 30, 51, 0.03);
+  border: 1px solid rgba(15, 30, 51, 0.05);
+}
+
+.stripCell .stripDay {
+  flex: 1;
+  background: transparent;
+}
+
+/* Hoy: anillo + número en sky. Relleno sky-700 como en el picker dejaba el candado (navy, inline) sin contraste. */
+.stripColumns .stripDay[aria-current="date"] {
+  background: transparent;
+  color: var(--navy-500);
+  box-shadow: none;
+}
+.stripColumns .stripDay[aria-current="date"] .stripNum {
+  color: var(--sky-700);
+}
+.stripCell[data-today] {
+  box-shadow: inset 0 0 0 2px var(--sky-700);
+}
+
 /* A 390 con 5-7 días cada botón mide ~48 px: queda el número de turnos sin la palabra. */
 @media (max-width: 479px) {
   .stripDay {
     padding: 0 2px;
   }
+  /* «Bloqueado» no entra en ~48 px: queda el glifo + rayado (el texto sigue para el lector). */
+  .stripBlocked,
   .stripWord {
     position: absolute;
     width: 1px;
@@ -133,6 +184,10 @@
   .cellCopago {
     grid-area: copago;
     align-self: center;
+  }
+  /* CF2 (A-MU): en la fila mobile el tag de cobro no queda pegado al monto. */
+  .cellCopago > [data-badge] {
+    margin-left: 4px;
   }
   .cellStatus {
     grid-area: status;

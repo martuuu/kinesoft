@@ -89,6 +89,8 @@ const PAGE: Record<ExportEntity, (tx: Tx, tenantId: string, args: PageArgs, sinc
     tx.practitionerPayer.findMany({ where: { tenantId }, select: selectOf("practitionerPayers"), ...a }).then(asRows),
   practitionerSpecialties: (tx, tenantId, a) =>
     tx.practitionerSpecialty.findMany({ where: { tenantId }, select: selectOf("practitionerSpecialties"), ...a }).then(asRows),
+  practitionerRevenueShares: (tx, tenantId, a) =>
+    tx.practitionerRevenueShare.findMany({ where: { tenantId }, select: selectOf("practitionerRevenueShares"), ...a }).then(asRows),
   // Todos: activos y archivados (es el export completo, no el directorio).
   patients: (tx, tenantId, a) =>
     tx.patient.findMany({ where: { tenantId }, select: selectOf("patients"), ...a }).then(asRows),

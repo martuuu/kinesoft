@@ -31,7 +31,7 @@ vi.mock("@/components/pwa/sw-register", () => ({ SwRegister: () => <i data-sw-re
 
 import { Drawer, drawerOpenMark } from "@/components/ui/drawer";
 import { Modal, ModalActions } from "@/components/ui/modal";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog-panel";
 import { ToastRegion } from "@/components/ui/toast";
 import { PlatformShell } from "@/components/plataforma/platform-shell";
 

@@ -16,8 +16,15 @@ export function AdvancedPatientFilters({
   conditions,
   preservedParams,
   current,
+  clinicalRead,
 }: {
   conditions: ConditionOption[];
+  /**
+   * CF2 (§29): el actor tiene `clinical.read`. Sin eso (Secretaria, Admin, Facturación) «Último diagnóstico» no se
+   * ofrece: el diagnóstico es HC y el server ya acota ese filtro a filas `full` (`clinicalFilter`), así que para ese
+   * rol el select solo podía vaciar la lista.
+   */
+  clinicalRead: boolean;
   /** Hidden inputs to preserve (q, filter, sort, insurer). */
   preservedParams: Record<string, string | undefined>;
   current: {
@@ -30,7 +37,7 @@ export function AdvancedPatientFilters({
 }) {
   // EV1-B: sin `diagnostico` (General) no hay «Último diagnóstico»: el select
   // quedaba vacío (sin condiciones) y `listPatients` ignora el slug igual.
-  const diagnosisEnabled = useTenantModules().has("diagnostico");
+  const diagnosisEnabled = useTenantModules().has("diagnostico") && clinicalRead;
   const initialOpen =
     !!(current.ageMin || current.ageMax || current.diagnosisSlug || current.lastVisitFrom || current.lastVisitTo);
   const [open, setOpen] = useState(initialOpen);

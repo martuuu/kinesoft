@@ -38,7 +38,8 @@ export type NavIconKey =
   | "settings" // IconSettings
   | "plans" // IconPlans (Planes)
   | "bookmark" // IconBookmark (Plataforma)
-  | "tag"; // IconTag (Cobros)
+  | "tag" // IconTag (Cobros)
+  | "wallet"; // IconWallet (Caja)
 
 export type NavItem = {
   href: string;
@@ -48,6 +49,18 @@ export type NavItem = {
   module?: TenantModule;
   /** Sin la capability del rol, la entrada no aparece. */
   capability?: Capability;
+  /**
+   * CF2 (D-CF2-16): basta UNA de estas capabilities. «Caja» la ven Titular/Admin/Facturación (`billing.manage`), la
+   * Secretaria (`billing.collect`) y el Profesional (`billing.collectOwn`, solo lo suyo); con `capability` sola habría
+   * que duplicar la entrada por rol.
+   */
+  anyCapability?: readonly Capability[];
+  /**
+   * CF2: la entrada existe solo con cobros online prendidos (`MP_CONNECT_MODE` ≠ off, `opts.onlinePayments`). Reemplaza
+   * a `shellNavCaps`, que le sacaba `billing.collect` al shell entero: con «Caja» detrás de esa capability, la
+   * Secretaria de un consultorio sin Mercado Pago se quedaba sin caja.
+   */
+  onlinePaymentsOnly?: true;
   /**
    * Label del atajo en ⌘K; sin `shortcut`, la entrada no es atajo. Igual al
    * `label` del nav: con "Dashboard"/"Biblioteca" el ⌘K nombraba distinto la
@@ -126,8 +139,21 @@ export const NAV_ITEMS: readonly NavItem[] = [
   // muestra el estado vacío). Sin módulo: cobrar no depende del plan. El Profesional NO la ve en el nav (Anexo C 3g):
   // con `billing.collectOwn` puede abrir /cobros y ve solo lo suyo, pero sus cobros los encuentra en el turno y en
   // Facturación del paciente. Sin `shortcut` → no es atajo del ⌘K.
-  // TP-3z: ícono propio (`tag`). Sin cobros online (`MP_CONNECT_MODE=off`) no aparece: lo saca `shellNavCaps`.
-  { href: "/cobros", label: "Cobros", icon: "tag", capability: "billing.collect" },
+  // CF2 (D-CF2-16/17): «Caja» = lo cobrado por profesional (día/mes, reparto). Módulo `facturacion` (CORE: todo plan
+  // la tiene; el layout de /caja pone `moduleWall("facturacion")`). Cualquiera de las tres capabilities de cobro: la
+  // página decide el alcance (`billing.manage` todo, `billing.collect` hoy sin OS, `billing.collectOwn` lo propio).
+  // Va antes de «Cobros» y NO depende de los cobros online: copagos en efectivo hay siempre.
+  {
+    href: "/caja",
+    label: "Caja",
+    icon: "wallet",
+    module: "facturacion",
+    anyCapability: ["billing.manage", "billing.collect", "billing.collectOwn"],
+    shortcut: "Caja",
+  },
+  // TP-3z: ícono propio (`tag`). CF2: sin cobros online (`MP_CONNECT_MODE=off`) no aparece por `onlinePaymentsOnly`
+  // (antes `shellNavCaps` sacaba `billing.collect` del shell, y con eso habría escondido «Caja» a la Secretaria).
+  { href: "/cobros", label: "Cobros", icon: "tag", capability: "billing.collect", onlinePaymentsOnly: true },
   // PL-F1b: «Reportes» salió del nav y del ⌘K (regla de Martin: lo que no tiene funcionalidad se saca). La página era
   // un placeholder («Pendiente para una iteración posterior»); la ruta la redirige a /dashboard. El módulo `reportes`
   // queda en la matriz; su ícono `chart` lo usa Seguimiento desde PF1.0-a.
@@ -137,35 +163,31 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { href: "/configuracion", label: "Configuración", icon: "settings", capability: "tenant.admin" },
 ];
 
+/** CF2: opciones del shell que no son ni módulos ni capabilities. Sin `onlinePayments` falla cerrado (como sin caps). */
+export type NavOpts = { onlinePayments?: boolean };
+
 function allowed(
   it: NavItem,
   modules: ReadonlySet<TenantModule>,
-  caps: ReadonlySet<Capability> | undefined
+  caps: ReadonlySet<Capability> | undefined,
+  opts: NavOpts | undefined
 ): boolean {
   if (it.module && !modules.has(it.module)) return false;
   // Falla cerrado: sin caps conocidas, una entrada que exige capability no se muestra.
   if (it.capability && !caps?.has(it.capability)) return false;
+  if (it.anyCapability && !it.anyCapability.some((c) => caps?.has(c))) return false;
+  // Solo esconde UI: las actions de cobros online chequean el modo y la capability con el actor real.
+  if (it.onlinePaymentsOnly && !opts?.onlinePayments) return false;
   return true;
-}
-
-/**
- * TP-3z (decisión del orquestador, regla de Martin «lo que no tiene funcionalidad se quita»): las capabilities que el
- * layout `(app)` le pasa al shell. Con `MP_CONNECT_MODE=off` se saca `billing.collect`, cuyo ÚNICO uso en el shell es
- * la entrada «Cobros» del nav (sidebar, barra superior, barra inferior y su Drawer). Se resuelve en el server para no
- * sumar un flag al contexto ni props al chrome: /agenda no tiene margen (§25.11) y cada byte del layout va a todas las
- * rutas staff. Solo esconde UI: las actions chequean su capability con el actor real, no con esta lista. Si el shell
- * empezara a usar `billing.collect` para otra cosa, esto hay que cambiarlo (lo fija `tp3g-cobros-view.test.ts`).
- */
-export function shellNavCaps<C extends string>(caps: readonly C[], onlinePayments: boolean): C[] {
-  return onlinePayments ? [...caps] : caps.filter((c) => c !== "billing.collect");
 }
 
 /** Entradas visibles para los módulos del tenant (y las capabilities del rol). */
 export function navFor(
   modules: ReadonlySet<TenantModule>,
-  caps?: ReadonlySet<Capability>
+  caps?: ReadonlySet<Capability>,
+  opts?: NavOpts
 ): NavItem[] {
-  return NAV_ITEMS.filter((it) => allowed(it, modules, caps));
+  return NAV_ITEMS.filter((it) => allowed(it, modules, caps, opts));
 }
 
 /**
@@ -187,9 +209,10 @@ export type BottomNavEntry =
  */
 export function bottomNavFor(
   modules: ReadonlySet<TenantModule>,
-  caps?: ReadonlySet<Capability>
+  caps?: ReadonlySet<Capability>,
+  opts?: NavOpts
 ): BottomNavEntry[] {
-  const items = navFor(modules, caps);
+  const items = navFor(modules, caps, opts);
   const picked: NavItem[] = [];
   for (const href of BOTTOM_NAV_PRIORITY) {
     const it = items.find((x) => x.href === href);
@@ -221,8 +244,12 @@ function shortcutId(href: string): string {
  * conocía el rol y una entrada con capability nunca era atajo; con Planes/Diagnóstico/Seguimiento/Ejercicios detrás de
  * `clinical.read` eso los habría sacado para todos. Sin caps falla cerrado, igual que `navFor`.
  */
-export function shortcutsFor(modules: ReadonlySet<TenantModule>, caps?: ReadonlySet<Capability>): SearchHit[] {
-  return NAV_ITEMS.filter((it) => it.shortcut !== undefined && allowed(it, modules, caps)).map((it) => ({
+export function shortcutsFor(
+  modules: ReadonlySet<TenantModule>,
+  caps?: ReadonlySet<Capability>,
+  opts?: NavOpts
+): SearchHit[] {
+  return NAV_ITEMS.filter((it) => it.shortcut !== undefined && allowed(it, modules, caps, opts)).map((it) => ({
     id: shortcutId(it.href),
     category: "shortcut" as const,
     label: it.shortcut as string,

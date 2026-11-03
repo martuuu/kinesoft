@@ -2,9 +2,11 @@ import { getActor } from "@/lib/session";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { practitionerInitials, practitionerOrder } from "@/lib/agenda-layout";
 import {
+  dayViewFor,
   effectiveRoomFilter,
+  initialPractitionerSelection,
+  monthGridRange,
   parseDayKeyParam,
-  parseSelectedPractitioners,
   resolveAgendaView,
   roomsInScope,
   weekStartKey,
@@ -27,6 +29,8 @@ type SP = {
   pros?: string;
   /** T3e-2o: filtro por obra social (id del catálogo o `particular`). */
   os?: string;
+  /** [CF2-AG1] Turno a abrir en el drawer (link «Ver turno» de /sala); la agenda lo abre y lo saca de la URL. */
+  open?: string;
 };
 
 export default async function AgendaPage({ searchParams }: { searchParams: SP }) {
@@ -36,10 +40,23 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
   // `toARDateKey` lo corregía, acá queda explícito).
   const dayKey = parseDayKeyParam(searchParams.date, toARDateKey(new Date()));
   const monday = weekStartKey(dayKey);
+  // CF2 (D-CF2-7, brief A.4/A.5): en Mes el loader NO lee los turnos ni la disponibilidad de la semana y en su lugar
+  // trae el resumen de la grilla del mes (lunes a domingo, ≤ 42 días): ≤ 2 tx en total.
+  const monthRange = searchParams.view === "month" ? monthGridRange(dayKey) : null;
 
   // PF2-c (C-PF8): ≤ 3 tx (turnos, bootstrap en una, disponibilidad) y sin el directorio de pacientes; el detalle,
   // las fallas sueltas y el cable compacto de los turnos están en `lib/agenda-page-loader.ts`.
   const actor = await getActor();
+  let data = await loadAgendaPage(actor, { monday, patientId: searchParams.patient ?? null, monthRange });
+  // CF2 (A-K): el Mes es de `agenda.viewAll` (la puerta de `getAgendaMonthSummary`; hoy la tienen todos los roles con
+  // membresía). Sin ella `?view=month` cae al Día y el loader, que con `monthRange` no leyó la semana, devolvió los
+  // turnos vacíos: se vuelve a pedir la semana como siempre. Se decide con las capabilities que ya trae el loader (sin
+  // query) y no antes: el camino normal no paga un await más. El pedido doble solo pasa con un link a Mes de alguien sin
+  // la capability.
+  const canMonth = data.capabilities.includes("agenda.viewAll");
+  if (monthRange && !canMonth) {
+    data = await loadAgendaPage(actor, { monday, patientId: searchParams.patient ?? null });
+  }
   const {
     bookings,
     services,
@@ -54,7 +71,8 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
     availability,
     onlineMoney,
     whatsapp,
-  } = await loadAgendaPage(actor, { monday, patientId: searchParams.patient ?? null });
+    month,
+  } = data;
 
   // Preferencias contra lo que existe hoy: un favorito dado de baja o una sede
   // archivada no se arrastran (el JSON se guardó en otro momento).
@@ -73,7 +91,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
     locationId,
     ...(roomId != null ? { roomId } : {}),
   };
-  const view = resolveAgendaView(searchParams.view, {
+  const resolvedView = resolveAgendaView(searchParams.view, {
     mode: agendaPrefs.mode,
     practitionerCount: practitioners.length,
     // PL-2f (PL-D6): la vista Recepción es de la Sala de Espera (Clínica / Libre). Sin el módulo, `?view=reception`
@@ -84,6 +102,22 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
     canReception: capabilities.includes("agenda.reception") && waitingRoomEnabled(actor.entitlements),
     roomCount: scopeRooms.length,
   });
+  const view =
+    resolvedView === "month" && !canMonth
+      ? dayViewFor(agendaPrefs.mode, practitioners.length, scopeRooms.length)
+      : resolvedView;
+  // [CF2-AG1] D-CF2-1: selección inicial URL > guardada > rol (`initialPractitionerSelection`). Se resuelve ACÁ y no en
+  // el cliente: el server no ve `window.location` y el primer render del cliente tiene que dar lo mismo que el HTML
+  // (si no, los chips y la grilla saltan al hidratar). `source` le dice a la agenda si tiene que escribir `?pros=` (vino
+  // de la guardada o del rol) para que un refresh o un link copiado muestren lo mismo. La guardada va cruda (sin el
+  // filtro de favoritos de arriba): la función ya descarta los ids que no existen y distingue `[]` de «nunca eligió».
+  const selection = initialPractitionerSelection({
+    url: { pros: searchParams.pros, practitioner: searchParams.practitioner },
+    saved: rawPrefs.selectedPractitionerIds,
+    // `?? null` explícito (guard [IAM-4a]): null = el actor no atiende → nunca «su agenda» por defecto, cae a Todos.
+    ownPractitionerId: actor.practitionerId ?? null,
+    validIds: practitionerIds,
+  });
 
   return (
     <AgendaFromWire
@@ -93,10 +127,11 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
       autoCreate={searchParams.new === "1"}
       initialInsurerFilter={searchParams.os ?? null}
       autoCreatePatientId={searchParams.patient ?? null}
-      initialSelectedIds={parseSelectedPractitioners(
-        { pros: searchParams.pros, practitioner: searchParams.practitioner },
-        practitionerIds
-      )}
+      initialSelectedIds={selection.ids}
+      initialSelectionSource={selection.source}
+      openBookingId={searchParams.open ?? null}
+      // CF2 (A.4): el resumen del Mes (null fuera de Mes, o si falló: `MonthView` lo pide sola).
+      initialMonth={view === "month" ? month : null}
       viewer={{ userId: actor.userId, practitionerId: actor.practitionerId }}
       // PF2-c: cable compacto (`lib/agenda-wire.ts`); `AgendaFromWire` lo devuelve a `BookingDTO` con `services` y
       // `locations` de acá abajo, que son el catálogo con el que se codificó.

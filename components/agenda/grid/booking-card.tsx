@@ -6,11 +6,11 @@ import { PAYMENT_HOLD_LABEL, paymentHoldState } from "@/lib/agenda-filters";
 import { receptionCardBadge, waitingPulse, type WaitingPulse } from "@/lib/agenda-client-state";
 import { highlightState, type AgendaHighlight } from "@/lib/agenda-highlight";
 import { isOutOfPlan, planChip } from "@/lib/plan-display";
-import { cardMoneyBadge } from "@/lib/booking-money-badge";
 import type { Discipline } from "@/lib/plans-constants";
 import { DisciplineChip } from "@/components/planes/discipline-chip";
 import { fmtHour, type BookingDTO } from "../agenda-utils";
 import { PractitionerBadge } from "./practitioner-badge";
+import { MoneyBadge } from "./money-badge";
 
 // ─── Planes en la agenda (S19a, ES3 · V1-D18 · V2 de PLANES C13b) ────────────
 
@@ -102,29 +102,14 @@ const outOfPlanStyle: CSSProperties = {
 };
 
 /**
- * [TP-3e] Plata online del turno en la card (§25.10 «Agenda», TP-UI-D4): solo «Seña» o «Pagado MP». Mini-badge con
- * BORDE y sin relleno: el fondo de la card sigue siendo el estado (AGENTS §5; un relleno verde se leería «Atendido»).
- * El texto visible es corto (entra en la línea de 22 px de la Semana) y el nombre accesible es el completo («Seña
- * pagada por Mercado Pago: $ 6.000»), como el punto de espera (`WaitingDot`): `role="img"` para que el `aria-label`
- * cuente en el nombre del botón que lo contiene.
- *
- * La regla vive en `cardMoneyBadge` (`lib/booking-money-badge.ts`, pura y testeada): acá solo se pinta. Es lo único
- * de T5 que entra estático al first load de `/agenda` (techo +0,3 kB, `online-payments-first-load-guard.test.ts`), así
- * que va escrito al mínimo, medido con `next build` (TP-3e): un solo export (Card, Lista y Semana lo usan igual), sin
- * `title` ni color propio (el borde toma `currentColor`, el gris de la segunda línea) y el texto completo no se repite
- * en el tooltip de la card. Sin `od`/`po` en el cable da `null` y la card queda con los mismos nodos que antes de T5.
+ * [TP-3e] Plata online del turno en la card (§25.10 «Agenda», TP-UI-D4): «Seña» / «Pagado MP», mini-badge con BORDE y
+ * sin relleno (el fondo de la card sigue siendo el estado, AGENTS §5). [CF2-MU] El componente vive ahora en
+ * `./money-badge.tsx` (CF2 A.2, D-CF2-3), que además pinta el tag del copago («Pagado · Efectivo» / «Por cobrar») para
+ * quien puede cobrar ese turno (`MoneyViewerContext`). Se re-exporta desde acá para no tocar los imports de la Lista,
+ * la Semana y los tests de TP-3e. Sin provider el markup es el de TP-3e, byte a byte
+ * (`tests/unit/render/cf2-mu-agenda-money.test.tsx` [CF2-MU2]).
  */
-export function MoneyBadge({ b }: { b: BookingDTO }) {
-  // `onlineDepositCents`/`paidOnline` llegan por el cable (`od`/`po`, C-TP10).
-  const m = cardMoneyBadge(b);
-  return (
-    m && (
-      <span role="img" data-badge={m[0]} aria-label={m[2]} style={{ ...miniBadge, border: "1px solid", lineHeight: "12px" }}>
-        {m[1]}
-      </span>
-    )
-  );
-}
+export { MoneyBadge } from "./money-badge";
 
 /**
  * WA-U2 (T6 §26.5, WA-D21): lo que el paciente respondió por WhatsApp al aviso de ESTE horario (cable `rp` →

@@ -10,6 +10,10 @@ import { cookies } from "next/headers";
 import { sessionModeCookie } from "@/lib/supabase/session-mode";
 import { SUPABASE_COOKIE_OPTIONS } from "@/lib/supabase/cookie-options";
 import { IDLE_COOKIE } from "@/lib/idle-logout";
+// Canal service: `PushSubscription` es SERVICE_ONLY (M21). El `userId` de la sesión va a mano en el WHERE.
+import { prismaService } from "@/lib/db";
+import { getSessionUser } from "@/lib/session-user";
+import { PUSH_SUB_COOKIE } from "@/lib/web-push-types";
 
 export const runtime = "nodejs";
 
@@ -34,6 +38,7 @@ export async function POST(req: Request) {
   } catch (err) {
     logger.warn("support.end_on_logout_failed", { error: err instanceof Error ? err.name : "unknown" });
   }
+  await forgetThisBrowserPushDevice();
   const supabase = getSupabaseServerClient();
   // HD-2 (§27): con GoTrue caído (`/auth/v1/logout` 5xx, red cortada) supabase-js devuelve `{ error }` y NO borra la
   // sesión local (`_signOut` solo sigue de largo con 401/403/404): la persona tocaba «Cerrar sesión», llegaba al login
@@ -72,4 +77,38 @@ export async function POST(req: Request) {
   cookies().set(sessionPref.name, sessionPref.value, sessionPref.options);
   const next = safeNext(new URL(req.url).searchParams.get("next"), "/login");
   return NextResponse.redirect(new URL(next, env.NEXT_PUBLIC_APP_URL), { status: 303 });
+}
+
+/**
+ * CF2 (§29, D-CF2-12; brief T.C «Sign-out»): el dispositivo de push de ESTE navegador (cookie `ks_push_sub`, la deja
+ * `savePushSubscription`) se borra al cerrar sesión. Si no, el celular o la PC compartida seguía recibiendo los avisos de
+ * turnos de quien ya se fue (la suscripción del navegador sobrevive al logout). Cubre el cierre por inactividad: el
+ * cliente postea a esta misma ruta.
+ *
+ * - ANTES del `signOut`: necesita el usuario de la sesión. `getSessionUser` (verificación local del JWT, sin red en el
+ *   caso normal) y solo si hay cookie: un sign-out sin push no paga nada.
+ * - `id` = cookie Y `userId` = usuario de la sesión: la cookie la puede pisar cualquiera en su navegador; con un id
+ *   ajeno no borra nada. Sin sesión (token vencido) tampoco: queda la fila, que el sender descarta cuando el push
+ *   service la rechace (404/410) o a las 5 fallas.
+ * - Nunca rompe el sign-out: la base caída deja la fila, pero la sesión se cierra igual. El log no lleva el endpoint
+ *   (es una URL-capacidad) ni el mensaje del error (Prisma puede citar valores).
+ * - La cookie se limpia siempre, con las mismas opciones con que se escribe (si no coinciden, el navegador no la pisa).
+ */
+async function forgetThisBrowserPushDevice(): Promise<void> {
+  const deviceId = cookies().get(PUSH_SUB_COOKIE)?.value ?? "";
+  if (!deviceId) return;
+  try {
+    // Un cuid mide 25; el tope solo evita mandar basura larga a la base.
+    const user = deviceId.length <= 64 ? await getSessionUser() : null;
+    if (user) await prismaService.pushSubscription.deleteMany({ where: { id: deviceId, userId: user.id } });
+  } catch (err) {
+    logger.warn("push.sign_out_cleanup_failed", { error: err instanceof Error ? err.name : "unknown" });
+  }
+  cookies().set(PUSH_SUB_COOKIE, "", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: 0,
+  });
 }

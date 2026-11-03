@@ -53,6 +53,8 @@ import { listOpenSessions } from "@/lib/sessions";
 import { listAllTags, listExercises, loadFilterFacets } from "@/lib/exercises";
 import { gatingForActor } from "@/lib/plan-gating";
 import { getActor } from "@/lib/session";
+import { memberCapabilitiesForActor } from "@/lib/authz";
+import { loadCajaPage } from "@/lib/caja-internal";
 import { localToARIso, toARDateKey, toARDow } from "@/lib/datetime-ar";
 import { ownerClient } from "@/tests/helpers/tenant-factory";
 import { asUser } from "@/tests/helpers/actor";
@@ -213,6 +215,15 @@ describe.skipIf(!RUN)("perf baseline — cargas de página y write-paths", () =>
     const actor = await getActor();
     const monday = weekStartKey(toARDateKey(new Date()));
     await bench("agenda.page", () => loadAgendaPage(actor, { monday, patientId: null }));
+  });
+
+  // CF2 · P-S2: `/caja` del Titular (scope tenant, las 3 fuentes). Presupuesto: 1 tx con 2 sentencias (grupos + reglas)
+  // + el roster (`listPractitioners`, cacheado en prod; acá el cache es passthrough y se cuenta su query y su actor).
+  it("GET /caja (loadCajaPage: día y mes del Titular, CF2 · P-S2)", async () => {
+    const actor = await getActor();
+    const caps = await memberCapabilitiesForActor(actor);
+    await bench("caja.day", () => loadCajaPage(actor, caps, {}));
+    await bench("caja.month", () => loadCajaPage(actor, caps, { vista: "mes" }));
   });
 
   it("GET /agenda — payload de la semana (agendaPayloadBytes, regla estricta de PF2)", async () => {

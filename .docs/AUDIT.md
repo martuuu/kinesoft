@@ -1073,10 +1073,18 @@ migración M19** (`20261027120000_support_tickets`, solo en local). Tickets, leg
 «Consultorio Online» y HD-1..18; tabla [«Ronda PV»](#ronda-pv) en §2; §5.4 y §5.27 enmendados.
 
 **Ronda 37 · CF (30-oct-2026):** feedback del primer cliente en producción (plan §28). **Con migración M20**
-(`20261030120000_cf_agenda_rules`, solo en local; orden para prod en RUNBOOK «M20 en prod»). En `develop`, **sin
-commitear y sin push**. Regla «no atiende servicios distintos a la vez» (ADR-032), pasos y anticipación, realtime que
+(`20261030120000_cf_agenda_rules`, solo en local; orden para prod en RUNBOOK «M20 en prod»). Commiteada en `476bdf5`,
+**sin push**. Regla «no atiende servicios distintos a la vez» (ADR-032), pasos y anticipación, realtime que
 nunca anduvo, EVA fuera, menú de la Secretaría, candado de varios días; tabla [«Ronda CF»](#ronda-cf) en §2; §5.27,
 §5.28, §5.40 y §5.43 enmendados. Gate final (ZG) ✅ 30-oct (detalle en la Ronda CF).
+
+**Ronda 38 · CF2 (02-nov-2026):** feedback de los clientes, 2.ª ronda (plan §29). **Con migración M21**
+(`20261102120000_cf2_profesional_caja`, solo en local; orden para prod en RUNBOOK «M21 en prod», M20 antes si falta). En
+`develop` sobre `476bdf5`, **sin commitear y sin push**. Título y selección de la agenda, cobro visible en agenda,
+Recepción y `/sala`, encabezado único de Semana, vista Mes, anticipación y contacto del profesional en el turnero, avisos
+de turno online por mail y Web Push (ADR-034), Pacientes sin plan y con profesionales, caja por profesional y reparto de %
+(ADR-033); tabla [«Ronda CF2»](#ronda-cf2) en §2. Enmiendas: SR-D5I (la Secretaria ve «Cobrado hoy») y criterio de
+«Última visita».
 
 ## Cómo leer la severidad
 
@@ -1778,7 +1786,7 @@ cerraron los fixers F1-F3b o el integrador, con test primero, y se verificó en 
 | perfil-seguimiento-ux-es3 | baja | B | turnos-view / facturacion-view · tabs-bar.tsx · components/seguimiento/session-detail.tsx:149 | 🟢 | F3b — tablas de Turnos/Facturación con scroll interno en mobile; pestañas del perfil como `nav` + `aria-current`; `?agendar=1` se limpia al montar |
 | copy-completado-finalizado | baja | B | components/planes/plan-booking-groups.ts:193 | 🟢 | F2 — "Completado" vs "Finalizado": unificado en "Finalizado" (PLANES C13) |
 | tests-titulo-no-podian-fallar | baja | B (tests) | plan-card.test · planes.test · facturacion-plan.test | 🟢 | F2 + F3b — los tests de "sin título" para la Secretaria usaban fixtures sin título; ahora con un título secreto que no tiene que aparecer |
-| ingresos-visibles-a-todo-rol | baja | B (SR; era C0) | lib/dashboard-revenue.ts:152 (`revenueScopeFor`) · lib/dashboard.ts:679 | 🟢 SR (Ronda 19) | **SR-D5I** (decisión 5 de Martin): `billing.manage` ve todo el consultorio, PRACTITIONER lo suyo, la Secretaria nada (widget, KPI y picker ocultos; `getRevenue` → error sin consultar). Clave de cache con el scope; test de fuga con cache real que afirma los `keyParts`. Filtro del OWNER por profesional → C0 |
+| ingresos-visibles-a-todo-rol | baja | B (SR; era C0) | lib/dashboard-revenue.ts:152 (`revenueScopeFor`) · lib/dashboard.ts:679 | 🟢 SR (Ronda 19) | **SR-D5I** (decisión 5 de Martin): `billing.manage` ve todo el consultorio, PRACTITIONER lo suyo, la Secretaria nada (widget, KPI y picker ocultos; `getRevenue` → error sin consultar). Clave de cache con el scope; test de fuga con cache real que afirma los `keyParts`. Filtro del OWNER por profesional: `/caja` (CF2). **Enmienda CF2 (02-nov, D-CF2-16):** la Secretaria ve «Cobrado hoy» (Inicio y `/caja` solo hoy, copagos + online, sin OS ni mes, con «Destina/Recibe»); el widget de Ingresos le sigue oculto |
 | facturacion-cancelados-con-cobro | baja | B (SR; era C0) | components/planes/plan-booking-groups.ts:242 (`isBillingVisible`) · facturacion-view.tsx | 🟢 SR (Ronda 19) | **SR-D4F** (decisión 4 de Martin): cancelados y ausentes con cobro visibles **siempre**, agrupada o no, y en "percibido" (REFUNDED/AUTHORIZED visibles) |
 | programs-sobrevivientes | baja | B | lib/programs.ts (`setProgramStatus`, `deleteProgram`, `deleteSession`) | ⚪ decidido | Decisión 2 de Martin (08-oct): **se quedan** (gate `planes`, sin bypass del motor, sin callers de app); no se retiran en EV1 |
 | bulk-exercises-rango-por-index | baja | C1 | lib/sessions.ts (`bulkAddSessionExercises`) | 🔴 | **C1** — el rango filtra por `index`, no por ordinal (`fromOrdinal`); `firstSinTurno` de `PlanListRow` ya no hace falta |
@@ -1825,7 +1833,7 @@ FX2b drawer/modal/PlanCard, FX3 editor y KPI) o el orquestador en el gate, y se 
 | por-sala-filtro-sin-sala | baja | C1 | components/agenda/views/room-day-panel.tsx | 🔴 | **C1** — con el filtro "Sin sala", "Por sala" dibuja las salas vacías más "Sin sala"; mostrar solo esa columna |
 | bundle-sr-sobre-criterio | baja | C1 | `/agenda` 204,5 kB · `/configuracion` 216,2 kB | 🟢 | **PF1-Z (16-oct)** — `/agenda` 175,7 · `/configuracion` 140,7 kB (paneles y `WeekDrawer` diferidos en PF1.1). [PERF.md §Bundle](PERF.md) |
 | dashboard-counts-tx-paralelas | baja | C1 (perf) | lib/dashboard.ts (`getDashboardPageData`) | 🟢 PF2-a | 15-16 tx en frío → **2** (≤ 1 caliente): los counts en una tx propia dentro de `unstable_cache` (`pf2-dashboard-budget`) |
-| ingresos-filtro-owner-por-profesional | baja | C0 | dashboard (widget de ingresos) | 🔴 | **C0** — el OWNER ve el total del consultorio; filtrar por profesional queda para C0 (SR-D5I) |
+| ingresos-filtro-owner-por-profesional | baja | C0 | dashboard (widget de ingresos) · app/(app)/caja/ | 🟢 CF2 (`/caja`) | El widget sigue con el total del consultorio; el desglose por profesional (Día/Mes, 3 fuentes, reparto) está en `/caja` (ADR-033, «Ronda CF2») |
 
 ### Hallazgos de SV (SVZ, 13/14-oct-2026)
 
@@ -2646,8 +2654,7 @@ aunque la TV también anda con polling, y el chip «Plan Clínica» (sala de esp
 
 ### <a id="ronda-cf"></a>Ronda CF (30-oct): feedback del primer cliente en producción (M20, ADR-032)
 
-Ronda 37. Plan §28 (brief `wip-20/brief-cf.md`; olas CF-0..CF-5 y Z), en `develop` **sin commitear y sin push** (la
-corrida no commitea). M20 `20261030120000_cf_agenda_rules` aplicada solo en el Docker local; en prod va **antes** del push
+Ronda 37. Plan §28 (brief `wip-20/brief-cf.md`; olas CF-0..CF-5 y Z), commiteada en `476bdf5`, **sin push**. M20 `20261030120000_cf_agenda_rules` aplicada solo en el Docker local; en prod va **antes** del push
 ([RUNBOOK «M20 en prod»](MIGRACIONES-RUNBOOK.md)). Diseño en ARCHITECTURE ADR-032, enmienda C2 (1d) de ADR-004 y
 «Realtime: la action del token no estaba registrada». Auditoría de solo lectura (3 Explore + 1 Plan) sobre los 14 puntos
 del cliente; revisores **ZA** (locks, concurrencia, TZ, `where tenantId`, realtime) y **ZB** (UI, copy, a11y a 390 y
@@ -2712,10 +2719,100 @@ un día = solo ese día (CF-LOCK D2/D3) · ⌘K sin `clinical.read` no busca eje
 | cf limpieza-eva | — | C | lib/validation.ts:324 · components/landing/specialty.module.css (`.eva`) · comentarios del check-in (tenant-access:109, platform-tenant-lifecycle:120, public-booking-internal:82, portal-identity-internal:7,54, sessions-internal:132) | 🔴 cosmético | Restos sin uso de la EVA |
 | cf firstfree-paso-15 | — | Martin | lib/availability/next-free.ts | 🟡 decide Martin | Ver decisiones (rec.: aceptar) |
 
+### <a id="ronda-cf2"></a>Ronda CF2 (02-nov): feedback de los clientes, 2.ª ronda (M21, ADR-033/034)
+
+Ronda 38. Plan §29 (brief `wip-20/brief-cf2.md`; olas W0..W6, INT y Z), en `develop` sobre `476bdf5` **sin commitear y
+sin push** (la corrida no commitea). M21 `20261102120000_cf2_profesional_caja` aplicada solo en el Docker local; en prod
+va **antes** del push, con M20 antes si todavía falta ([RUNBOOK «M21 en prod»](MIGRACIONES-RUNBOOK.md)). Diseño en
+ARCHITECTURE ADR-033 (caja y reparto), ADR-034 (avisos mail + Web Push) y la enmienda de anticipación de ADR-032.
+Relevamiento de solo lectura (3 Explore + 3 Plan) sobre los 9 pedidos; revisores **ZA** (plata, reparto, RLS en 2 roles,
+TZ, `where tenantId`, carreras, consentimiento, PHI en mail/push, cookie, rate limits) y **ZB** (UI, densidad de la
+Secretaria, a11y, copy, 390 y 1366×768); fixers ZF1..ZF4. **Gate ZG (02-nov) ✅: tsc app+scripts 0 · unit 8780/8780 en UTC y AR · guard:isolation · migrate status 49 al día · integración app 4079 ✓ / owner 4024 ✓ (el `pf2-config-budget` del Titular se corrigió al cierre; `tp2o-mp-connect` falló 1 vez con el rol app y pasa solo 16/16: carrera intermitente conocida de MP Connect) · perf sin regresiones (62 escenarios, 32 nuevos; `listPatients` ≤9) · build seguro + `perf:bundle` ok (/agenda 177,4 · /sala 157,8 · /dashboard 148,9 · /caja 137,7 · turnero 115,0 kB) · `check:actions` 434 en el manifest (448) · 0 `supabase.co` en `.next/static` · E2E 88 ✓ / 5 skip.**
+
+**Lo implementado (§29.0/§29.3)**
+
+| Slug | Sev | Ubicación | Estado | Cierre |
+|---|---|---|---|---|
+| cf2 agenda-de-quien-es | media | lib/agenda-client-state.ts (`initialPractitionerSelection`, `scopeHeadingOf`) · components/agenda/agenda-scope-heading.tsx · agenda-toolbar.tsx · practitioner-chips.tsx | 🟢 A-K/A-P/A-HD/A-AG1/A-AG2 | Título «Tu agenda · Laura Pérez» / «Agenda de …» / «Todos los profesionales (N)» con la fecha de subtítulo; chips «Profesionales» debajo; la selección se guarda en `agendaPrefs` (URL > guardada > rol, D-CF2-1/2) |
+| cf2 cobro-invisible | media | lib/copago-tag.ts · lib/copago-owed.ts · components/agenda/grid/money-badge.tsx · reception-view/row.tsx · components/sala/* | 🟢 A-$/A-MU/A-RC/A-SB/A-SD + ZF1 | «Pagado · Efectivo» / «Por cobrar» / «Retenido» en tarjeta, Semana, Lista, Recepción y los 3 layouts de `/sala`, para quien puede cobrar ese turno (D-CF2-3). Recepción cobra (`CollectModal` lazy) con chip «Por cobrar · N · $X»; el Tablero de `/sala` tiene «Por cobrar» + drawer |
+| cf2 recepcion-vs-sala | media | lib/sala-location-filter.ts · components/sala/sala-location.tsx · desk-header.tsx | 🟢 A-SL/A-SB/A-SD | `/sala`: filtro de sede (≥2 sedes), «Llamados» en Lista/Flujo, link al turno (`/agenda?…&open=`, D-CF2-4), «¿Otro día? → Recepción» (sigue siendo solo de hoy, D-CF2-5) |
+| cf2 semana-dos-encabezados | baja | components/agenda/views/week-strip.tsx · week-grid-view.tsx | 🟢 A-WS/A-AG1 | Un solo encabezado (la tira, con candado, «hoy» y columnas alineadas, sticky); clic en el día → Día (D-CF2-6). `[CF2-W6]` dado vuelta |
+| cf2 vista-mes | media | lib/agenda-month{,-internal}.ts · components/agenda/views/month-view.tsx · lib/agenda-page-loader.ts | 🟢 A-MS/A-MV/A-LD/A-AG2 | Celdas con cantidad, iniciales y estado del día; clic → Día (D-CF2-7). Una tx, ≤12 sentencias; `/agenda?view=month` en ≤2 tx sin `listAgendaBookings`; chunk lazy con SSR |
+| cf2 anticipacion-por-profesional | media | lib/availability/agenda-rules.ts:64 · lib/practitioner-self-settings.ts:50 · lead-editor.tsx | 🟢 T-K/T-S3/T-U2 | PS > profesional > consultorio > 60 (D-CF2-8; enmienda de ADR-032) |
+| cf2 contacto-profesional | media | lib/public-lead-contact.ts · lib/public-booking.ts:480 · lib/public-booking-slots.ts (`publicLeadWindowHasFree`) · slot-window-step.tsx | 🟢 T-K/T-S1/T-S3/T-U3 + ZF3 | WhatsApp/llamar al profesional solo con lugar libre hoy dentro de la anticipación, opt-in con consentimiento versionado (D-CF2-9/10); por action con rate limit `pub:leadcontact` |
+| cf2 avisos-turno-online | **alta** | lib/booking-pro-notify-internal.ts · lib/web-push-{types,internal,actions}.ts · public/sw.js · app/api/auth/sign-out/route.ts | 🟢 T-P/T-SE/T-S1/T-S4/T-S2X/T-U1 | Mail + Web Push al profesional del turno (ADR-034). **Bug de orden:** la campana se escribía después del realtime (submit y webhook) → ahora antes |
+| cf2 avisarme-muerto | baja | components/configuracion/panels/practitioners/services-editor.tsx | 🟢 T-U2 | El «Avisarme» por servicio sale de la UI (nadie lo leía); la columna queda para una tanda de *contract* (D-CF2-13) |
+| cf2 pacientes-profesional-y-plan | media | lib/patients-list-{internal,logic}.ts · lib/practitioner-names-internal.ts · components/patients/* | 🟢 P-PL/P-S1/P-U1 | Columna «Kinesiólogo»/«Profesional» (a cargo + turnos próximos o del último mes, decisión 2 de Martin); fuera la columna y los filtros de plan (decisión 3); `listPatients` 10 → 9 sentencias |
+| cf2 secretaria-sin-ultima-visita | media | lib/patients-list-logic.ts (`patientActivity`, `lastVisitBookingWhere`) | 🟢 P-S1 + INT-P | La Secretaria ve «Última visita» y «Estado» (D-CF2-14/15, criterio abajo) |
+| cf2 caja-y-reparto | **alta** (plata) | lib/caja-{logic,internal}.ts · lib/revenue-share*.ts · app/(app)/caja/ · cash-today-card.tsx · revenue-share-editor.tsx | 🟢 P-K/P-X/P-S2/P-S3/P-NAV/P-U2/P-U4/P-D + ZF3 | `/caja` Día/Mes por profesional, «Cobrado hoy» en el Inicio de la Secretaria, reparto de % por regla con vigencia por instante (ADR-033). Paridad Σ grupos = Ingresos |
+
+**Enmiendas**
+- **SR-D5I** (fila `ingresos-visibles-a-todo-rol`): la Secretaria ve «Cobrado hoy» (Inicio y `/caja` solo hoy, copagos +
+  online, **sin OS**, con «Destina/Recibe»); **sin** widget de Ingresos ni mes (D-CF2-16).
+- **«Última visita»** (D-CF2-15 + INT-P): el último turno **pasado** que no fue cancelado, ausente ni **pendiente** (una
+  reserva online impaga no es visita); no exige «Atendido». Mismo criterio en la columna, el filtro y el orden, para todos
+  los roles. El filtro también exige el `tenantId` del turno (hallazgo A de INT-P: con owner, una FK cruzada podía
+  colarse; arreglado con test). Precheck opcional en prod, cuántas visitas cambian por excluir PENDING:
+  `SELECT count(*) FROM "Booking" WHERE status='PENDING' AND "patientId" IS NOT NULL AND "scheduledFor" < now() AND "idempotencyKey" NOT LIKE 'pub:%';`
+- **Estado del paciente** (D-CF2-14): Activo = turno próximo o visita en 90 días; Inactivo = ninguna; Archivado = la
+  vista de archivados. Sale de los turnos, no de la HC. Con acceso básico: «Kinesiólogo» visible (a cargo + turno próximo,
+  ZF3), «Última visita» y «Estado» ocultos.
+
+**Revisores (ZA / ZB) → fixers ZF1..ZF4** (verificados en el archivo)
+
+| Slug | Sev | Ubicación | Estado | Cierre |
+|---|---|---|---|---|
+| za-1 reparto-con-receptor-inactivo | media | lib/revenue-share-internal.ts:236,297 · lib/team-internal.ts:1016,1101,1210,1302 · lib/saas-plan-change-internal.ts:363 · lib/platform-users.ts:221 | 🟢 ZF3 (`[CF2-ZF3-1a..f]`) | Suspender, quitar, pasar a rol que no atiende, deshabilitar al bajar de plan o desde Plataforma cierra en `now` las reglas donde destina o recibe; reactivar no las reabre. **Queda abierto** el aviso en editor/caja (abajo) |
+| za-2 consentimiento-version | baja | lib/public-booking.ts:485 | 🟢 ZF3 (`[CF2-ZF3-2]`) | El número solo se publica con `contactConsentVersion` = `LEAD_CONTACT_CONSENT_VERSION` |
+| za-3 webhook-vence-tarde | baja | lib/mp-connect/consume.ts:429 | 🟢 ZF3 (`[CF2-ZF3-3]`) | La preferencia se vence antes del aviso al profesional (hasta 3 s) |
+| za-4 soporte-lee-reparto | baja | lib/revenue-share.ts:16 | 🟢 ZF3 (`[CF2-ZF3-4]`) | Soporte no lee el reparto, como no ve la caja |
+| za-5 creada-por-sin-membresia | baja | lib/caja-internal.ts:187 | 🟢 ZF3 (`[CF2-ZF3-5]`) | «Creada por» null si ya no es miembro, igual que `listRevenueSharesInTx` |
+| za-6 basic-infiere-visita | baja | lib/patients-list-internal.ts:403 · lib/patients-list-logic.ts:221 | 🟢 ZF3 (`[CF2-ZF3-6]`) | Fila basic: solo a cargo + turno próximo (el «visto en el último mes» delataba la visita) |
+| za-7 reintegro-reescribe-caja | baja | lib/caja-internal.ts (paridad con `revenueAmountsInTx`) | 🟡 documentado | Un reintegro cambia días ya cerrados de la caja, igual que Ingresos. Aceptado por paridad (ADR-033) |
+| za-8 conflicto-23514 | baja | lib/revenue-share-internal.ts:193 | 🟢 ZF3 (`[CF2-ZF3-8]`) | Solo el trigger de solo cierre (o el único) es «Cambió mientras lo editabas»; otro CHECK no |
+| zb-1 por-cobrar-tres-criterios | **alta** | lib/copago-owed.ts · lib/reception-desk-state.ts:145 · sala-cash-drawer.tsx | 🟢 ZF1 (`[CF2-ZF1-1*]`) | Un solo predicado (`copagoOwedCents`): llegó o fue atendido y debe, para tag, chip, contador y drawer de `/sala`; la primaria «Cobrar» del atendido no cambió |
+| zb-2 header-tablero-800 | **alta** | components/sala/sala-css.ts · sala-header.tsx:181 | 🟢 ZF1 (`[CF2-ZF1-2a..e]`) | `order` a cobro, Sede y «¿Otro día?»; `.sala-tools` hace wrap; el link no se parte y se oculta < 1280 |
+| zb-3 glifo-retenido | media | components/agenda/grid/money-badge.tsx:19 | 🟢 ZF1 | «Retenido» ya no usa el `$` de «Por cobrar» en Semana compacta |
+| zb-4 turnero-copy-llamar | media | slot-window-step.tsx:291 | 🟢 ZF2 | «escribile o llamá para coordinar»; «Llamar» con aria-label «Llamar a {nombre}» |
+| zb-5 rotulo-kinesiologo | media | components/patients/patients-grid.ts:22 | 🔴 **decide Martin** | La columna dice «Kinesiólogo» también a osteópatas (rec.: «Profesional») |
+| zb-6 caja-tactil-44 | media | components/caja/caja.module.css:277 | 🟢 ZF2 | Controles del período a 44 px en táctil |
+| zb-7 por-cobrar-dos-formatos | media | lib/copago-owed.ts:57 · reception-view.tsx:337 · sala-header.tsx:24 | 🟢 ZF1 (`[CF2-ZF1-4a..d]`) | Rótulo único «Por cobrar · N · $X», visible y deshabilitado en 0; «Cobrar» primario cuando es lo único que queda |
+| zb-8..13 copy-y-aa | baja | tweaks-panel.tsx:199 · agenda-toolbar.tsx:157 · month-view.module.css:37,197 · mi-agenda-panel.tsx:48 · revenue-share-editor.tsx:528 · cash-today-card.tsx:71 | 🟢 ZF2 | «Tira de días» con un solo nombre; eyebrow «Agenda» oculto con título de alcance; Mes AA y glifo de «Sin atención» también en mobile; switches de «Mi agenda» con `<label>`; «Sin cambios» navy-400; vacío del Inicio = el de `/caja` |
+| zf4 first-load | — | components/dashboard/notifications-panel.tsx · components/ui/confirm-dialog-panel.tsx · components/ui/icon-wallet.tsx · topbar-account-menu.tsx · next.config.mjs:303 | 🟢 ZF4 | Para el tope de bundle: panel de la campana, diálogo de `useConfirm` y switch del turnero del menú en chunks diferidos (idle + al abrir); `NEXT_PUBLIC_PWA` siempre definido en el build (sin él entraba el polyfill de `process`, ~0,8 kB) |
+
+**Decisiones con default de CF2** (D-CF2-1..20 en §29.2; rigen si Martin no dice otra cosa). Más, de las sesiones: la
+regla nueva arranca con las 3 fuentes marcadas y quien recibe no puede destinar (P-U4) · guardar una regla idéntica no
+abre otra; a un suspendido se le puede cerrar o cambiar la regla (P-S3) · cobros de $0 no forman grupo; la OS cuenta solo
+si el `Insurer` es del tenant (P-S2) · reasignar atribuye copago manual y OS al profesional actual (P-X) · `/caja` no
+avanza al futuro y «Día» desde Mes lleva a hoy (P-U2) · «Recibe $X» sin decir de quién en la tarjeta del Inicio (P-D) ·
+activar un dispositivo prende la preferencia de push (T-U1) · consentimiento del teléfono al prender, al cambiar el número
+prendido o con versión vieja; apagar conserva número y sello; soporte cambia la anticipación pero no el contacto ni los
+avisos (T-S3) · «Ocultar su contacto del turnero» del titular es un botón que solo apaga (T-U2) · en el turnero WhatsApp
+es el botón principal (T-U3) · «Mi agenda» se ve aunque el turnero esté apagado o en General (T-L) · el contacto suma 1
+query solo cuando se muestra (T-S1) · «Por cobrar» también en FAILED, REFUNDED sin tag, AUTHORIZED «Retenido» (A-$) ·
+«Cobrar» en Recepción también en días que no son hoy (A-RC) · en `/sala` el «Pagado · medio» pasa a un tag junto al
+estado (A-SD) · con «Todas las sedes» la banda «Pase…», el anuncio y el anillo de llegada no filtran por sede (A-SL) ·
+«hoy» en la tira de Semana con anillo sky (A-WS) · selección guardada que queda vacía = «nunca eligió» (A-P) · título
+con 3+: primer nombre + inicial del apellido (A-K) · glifo nuevo de «Sin atención» en el Mes (ZF2) · el tag de cobro
+suma ~0,6 kB al first load de `/agenda` (objetivo 0,4; rec.: aceptarlo, hay margen hasta 180) (A-MU).
+
+**Abierto (backlog de CF2)**
+
+| Slug | Sev | Bloque | Ubicación | Estado | Detalle / destino |
+|---|---|---|---|---|---|
+| cf2 aviso-receptor-inactivo | baja | C | revenue-share-editor.tsx · caja-view.tsx | 🔴 abierto | La regla se cierra sola (ZF3), pero el editor y la caja no explican por qué dejó de descontarse (ZA-1, parte UI) |
+| cf2 reintegro-reescribe-dias | — | — | lib/caja-internal.ts | 🟡 aceptado | Paridad con Ingresos (ZA-7). Congelar la caja por día = otra tanda, junto con congelar el arancel de OS (D-CF2-19) |
+| cf2 rotulo-kinesiologo | media | Martin | components/patients/patients-grid.ts:22 | 🔴 decide Martin | ZB-5: «Kinesiólogo» también para osteópatas → rec. «Profesional» |
+| cf2 reparto-autoasignado | — | Martin | lib/revenue-share.ts (gate `tenant.sensitive`) | 🟡 decide Martin | Un Profesional con «Configuración» puede crear una regla donde otro le destine el 100 % a él: permitido por D-CF2-18 y auditado. Alternativa: exigir `billing.manage` u OWNER |
+| cf2 texto-consentimiento | — | Martin | lib/public-lead-contact.ts:28 | 🟡 revisar | Redacción del consentimiento del teléfono (`cf2-lead-contact-v1`); cambiarla = subir la versión (re-aceptar) |
+| cf2 avisarme-contract | baja | C | `PractitionerService.notifyOnBooking` | 🔴 abierto | La columna queda sin lector: se dropea en una tanda de *contract* (D-CF2-13) |
+| cf2 sala-tools-anchos-medios | baja | QA | components/sala/sala-css.ts | 🟡 QA visual | Con 2 sedes, `.sala-tools` tiene 6 elementos: revisar en anchos medios (A-SB) |
+| cf2 wa-sms-profesional | — | B | — | ⏸ siguiente | WhatsApp y SMS al profesional: diferidos por Martin a la semana que viene |
+
 ### Resumen del checklist (al 2026-09-29)
 
 > **Histórico.** Los conteos son del 29-sep y no se recuentan: el estado vivo está en cada tabla de ronda (la última,
-> «Ronda T6/T7»).
+> «Ronda CF2»).
 
 93 filas en total (26 confirmados + 62 menores + 5 ítems nuevos). No incluye los hallazgos de la
 auditoría del 23-sep ni los de A2/A3 (tabla de arriba). *Los conteos de abajo son del 29-sep; los cierres

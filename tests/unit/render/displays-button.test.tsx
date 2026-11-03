@@ -15,6 +15,9 @@ vi.mock("next/dynamic", () => ({
   },
 }));
 
+// CF2: los headers montan el selector de sede, que guarda la preferencia con la action real.
+vi.mock("@/lib/preferences", () => ({ updateAgendaViewPrefs: vi.fn(), updateUserPreferences: vi.fn() }));
+
 import { DisplaysButton, DisplaysContext } from "@/components/sala/displays/displays-button";
 import { DeskHeader } from "@/components/sala/desk/desk-header";
 import { SalaHeader } from "@/components/sala/sala-header";
@@ -26,7 +29,7 @@ const deskHeader = (
   <DeskHeader
     dayKey="2026-10-22"
     clock={new Date("2026-10-22T13:00:00Z")}
-    kpis={{ enSala: 0, enAtencion: 0, demorados: 0, terminados: 0, total: 0 }}
+    kpis={{ enSala: 0, llamados: 0, enAtencion: 0, demorados: 0, terminados: 0, total: 0 }}
     query=""
     onQuery={() => {}}
     searchRef={{ current: null }}

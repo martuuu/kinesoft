@@ -5,7 +5,7 @@
  *
  * Qué servicios del consultorio atiende el profesional y con qué reglas:
  * duración propia, visibilidad en el turnero online, anticipación mínima y
- * máxima, cupo propio y aviso al reservar. Lo lee el motor de disponibilidad
+ * máxima y cupo propio. Lo lee el motor de disponibilidad
  * (`lib/availability/*` vía el loader); los campos vacíos HEREDAN (del
  * servicio o del canal), por eso el placeholder muestra lo heredado.
  *
@@ -20,7 +20,17 @@
  * profesional/pestaña con filas sin guardar.
  *
  * Layout: grilla tipo tabla en desktop; en < 640 px cada servicio es una card
- * apilada con etiquetas visibles (la fila tiene 8 columnas: no entra).
+ * apilada con etiquetas visibles (la fila tiene 7 columnas: no entra).
+ *
+ * CF2 (§29, T.C): sale la columna del aviso al reservar. El aviso de los turnos online
+ * pasa a ser del profesional (mail / push en Configuración › Mi agenda), no por
+ * servicio: el switch por servicio no mandaba nada que el profesional viera.
+ * La columna `notifyOnBooking` sigue en la base y el borrador manda el valor
+ * guardado (`rowToDraft` → `draftToInput`), así que guardar otra celda no lo
+ * apaga solo.
+ *
+ * La anticipación vacía hereda la del profesional (CF2, D-CF2-8) y, si no
+ * tiene, la del consultorio: el hint lo dice.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Card } from "@/components/ui/card";
@@ -253,7 +263,6 @@ export function ServicesEditor({
             <span>Anticipación mínima</span>
             <span>Hasta</span>
             <span>Cupo por horario</span>
-            <span>Avisarme</span>
             <span />
           </div>
           <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
@@ -425,7 +434,7 @@ function ServiceRowEditor({
         {errors.minLead ? (
           <FieldError id={`${idp}-lead-err`} msg={errors.minLead} />
         ) : (
-          <span id={`${idp}-lead-hint`} className="pse-hint">Vacío: la del consultorio</span>
+          <span id={`${idp}-lead-hint`} className="pse-hint">Vacío: la del profesional o la del consultorio</span>
         )}
       </div>
 
@@ -497,17 +506,6 @@ function ServiceRowEditor({
           <span className="pse-hint">Del servicio: {serviceCap}</span>
         )}
         <FieldError id={`${idp}-cap-err`} msg={errors.maxConcurrent} />
-      </div>
-
-      {/* Avisarme */}
-      <div className="pse-cell">
-        <span className="pse-label">Avisarme cuando reserven</span>
-        <MiniSwitch
-          on={d.notifyOnBooking}
-          onChange={() => set({ notifyOnBooking: !d.notifyOnBooking })}
-          label={`Avisarme cuando reserven ${n}`}
-          disabled={off || saving}
-        />
       </div>
 
       {/* Acción + estado */}
@@ -616,12 +614,12 @@ function MiniSwitch({
 // grilla puede no entrar: el contenedor scrollea horizontal en vez de apretar
 // los inputs. Debajo de 640 px cada fila es una card apilada con etiquetas.
 const PSE_COLS =
-  "minmax(150px,1.4fr) 110px 140px 170px 120px minmax(170px,1fr) 90px 110px";
+  "minmax(150px,1.4fr) 110px 140px 170px 120px minmax(170px,1fr) 110px";
 const PSE_CSS = `
 .pse .pse-scroll { overflow-x: auto; }
 .pse .pse-head, .pse .pse-row {
   display: grid; grid-template-columns: ${PSE_COLS}; gap: 12px; align-items: start;
-  min-width: 1080px; padding: 12px 20px;
+  min-width: 990px; padding: 12px 20px;
 }
 .pse .pse-head {
   font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;

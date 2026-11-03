@@ -14,6 +14,7 @@ Estado: 🔴 pendiente · 🟡 en progreso · 🟢 hecho.
 > **Día del push (T3-T7): [PUSH-DIA.md](PUSH-DIA.md)** dice qué consola va antes (paso C: buckets y Data API) y en qué
 > orden se activa el resto después (paso G: Resend → Upstash → Sentry/CSP → Google → suscripción §0.14 → MP Connect
 > §0.12 → WhatsApp §0.13 → TV §0.15).
+> CF2 (02-nov) suma el Web Push: §0.17.
 
 ---
 
@@ -535,6 +536,32 @@ lo que queda son las consolas, que muestran el nombre que tengan cargado:
 7. **Identificadores que NO cambian** (`tests/unit/br-brand.test.tsx:213`): cookies `kine_*`/`ks_*`, claves
    `kinesoft:*` (locks, HMAC, secret-box), roles `kinesoft_*`, envs `KINESOFT_*`, dominio `kinesoft.app`, plantillas de
    WhatsApp y migraciones. No hay nada que renombrar en Supabase ni en Vercel.
+
+### <a id="push-cf2"></a>0.17 CF2 — Web Push de los avisos de turno online (02-nov-2026) 🔴
+
+**Con migración M21** (`cf2_profesional_caja`, [RUNBOOK «M21 en prod»](MIGRACIONES-RUNBOOK.md)), que no pide consola.
+Diseño en ARCHITECTURE ADR-034. **Sin estas tres variables el push queda apagado** (en Configuración → «Mi agenda» no
+aparece «Activar en este dispositivo») y el resto anda: los avisos por mail salen igual.
+
+1. **Generar las claves una sola vez**, en tu máquina: `npx web-push generate-vapid-keys --json` → `publicKey` (87
+   caracteres, empieza con «B») y `privateKey` (43). Guardalas en el gestor de contraseñas.
+2. **Vercel → Production** (las tres juntas: con una o dos el boot falla):
+
+   | Variable | Valor | Tipo |
+   |---|---|---|
+   | `WEB_PUSH_VAPID_PUBLIC_KEY` | `publicKey` | normal (server-only: el navegador la recibe del server, **nunca** `NEXT_PUBLIC_`) |
+   | `WEB_PUSH_VAPID_PRIVATE_KEY` | `privateKey` | **Sensitive** |
+   | `WEB_PUSH_VAPID_SUBJECT` | `mailto:<casilla de soporte>` (o `https://…`) | normal (Apple exige uno válido) |
+
+   Después, **redeploy**. Van antes del push de CF2 o en cualquier momento después (se leen en cada envío).
+3. **No rotarlas** salvo filtración: las suscripciones quedan atadas a la clave pública, así que rotar **invalida todos
+   los dispositivos** activados (cada profesional lo vuelve a activar desde «Mi agenda»; mientras, le llega el mail).
+4. **`NEXT_PUBLIC_PWA`: dejarla sin setear** (§0.7). `off` desregistra el service worker y con él se corta el push.
+5. Nada que configurar en Google, Apple ni Microsoft: el endpoint de cada navegador ya es de su push service (la app
+   solo acepta FCM, Mozilla, Apple y WNS). En iPhone/iPad el push necesita la app instalada (Compartir → Agregar a
+   inicio): avisalo a los clientes junto con «cada profesional activa sus avisos y su teléfono en Configuración → Mi
+   agenda» y «el reparto lo configura el Titular en Profesionales → Reparto» (plan §29.8).
+6. QA en [QA «CF2»](QA.md) (Android Chrome, Chrome/Edge de escritorio, iPhone con la app instalada).
 
 ### 1. Hosting / plataforma de despliegue — Vercel
 - **Qué configura:** proyecto en Vercel (región `gru1` ya fijada en `vercel.json`); env vars de prod;

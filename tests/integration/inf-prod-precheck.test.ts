@@ -3,13 +3,14 @@
  * siempre conecta con el owner, como el script con DIRECT_URL). El SCRIPT no se corre: lo corre Martin contra prod.
  *
  * Qué se fija:
- *  - `--post` sobre la base local (las 48 migraciones aplicadas) da PASS en todo; el único SKIP admitido es el de la
+ *  - `--post` sobre la base local (las 49 migraciones aplicadas) da PASS en todo; el único SKIP admitido es el de la
  *    Data API (en el Docker no existen los roles `anon`/`authenticated` de Supabase) y el de Storage.
- *  - `--pre` (CF, 30-oct: M12..M19 ya están en prod desde el reset; la pendiente es solo M20): exige M12..M19
- *    PRESENTES (aplicadas con su checksum y con sus objetos: PASS) y, como en el Docker M20 también está aplicada, la
- *    marca «ya aplicada» y saltea sus prechecks en vez de dar FAIL por «el objeto ya existe».
- *  - Con `evaluateApplied`, los prechecks de M20 corren igual: `pre.M20.absent` da FAIL nombrando las columnas y
- *    `pre.M20.crossService` (el SQL literal del brief) detecta un par de servicios distintos pisados armado a propósito.
+ *  - `--pre` (CF, 30-oct: M12..M19 ya están en prod desde el reset; las pendientes son M20 y M21 de CF2): exige
+ *    M12..M19 PRESENTES (aplicadas con su checksum y con sus objetos: PASS) y, como en el Docker M20 y M21 también
+ *    están aplicadas, las marca «ya aplicada» y saltea sus prechecks en vez de dar FAIL por «el objeto ya existe».
+ *  - Con `evaluateApplied`, los prechecks de M20 y M21 corren igual: `pre.M20.absent` / `pre.M21.absent` dan FAIL
+ *    nombrando lo que encontraron, `pre.M20.crossService` (el SQL literal del brief) detecta un par de servicios
+ *    distintos pisados armado a propósito y los de Booking de M21 (tx largas, tamaño) corren sin error.
  *  - Todo corre en UNA transacción READ ONLY: un write adentro rebota (25006).
  *  - El chequeo de `pg_dump` compara la versión local contra la del server (el backup con un pg_dump viejo falla).
  *  - La tabla impresa no lleva la URL de conexión.
@@ -73,11 +74,24 @@ describe.skipIf(!RUN)("[INF-S] prod-precheck (núcleo) contra el Docker local", 
     for (const id of ["post.M20.objects", "post.M20.columns", "post.M20.checks", "post.M20.parallel"]) {
       expect(post.rows.find((r) => r.id === id)?.status, id).toBe("PASS");
     }
+    // [CF2-MIG] M21 objeto por objeto (incluido indisvalid de los 2 índices de Booking y el md5 del guard).
+    const m21 = post.rows.filter((r) => r.group === "M21").map((r) => r.id).sort();
+    expect(m21).toEqual([
+      "post.M21.checks",
+      "post.M21.columns",
+      "post.M21.fks",
+      "post.M21.indexes",
+      "post.M21.objects",
+      "post.M21.optIn",
+      "post.M21.rls",
+      "post.M21.trigger",
+    ]);
+    for (const id of m21) expect(post.rows.find((r) => r.id === id)?.status, id).toBe("PASS");
   });
 
-  it("[INF-S] --pre en local: M12..M19 PRESENTES (PASS, checksum y objetos); M20 ya aplicada y sus prechecks se saltean", () => {
+  it("[INF-S] --pre en local: M12..M19 PRESENTES (PASS, checksum y objetos); M20 y M21 ya aplicadas y sus prechecks se saltean", () => {
     expect(APPLIED_MIGRATIONS.map((m) => m.key)).toEqual(["M12", "M14", "M18", "M17", "M15", "M16", "M19"]);
-    expect(PENDING_MIGRATIONS.map((m) => m.key)).toEqual(["M20"]);
+    expect(PENDING_MIGRATIONS.map((m) => m.key)).toEqual(["M20", "M21"]);
     const pending = pre.rows.find((r) => r.id === "pre.migrations.pending");
     expect(pending?.status).toBe("PASS");
     expect(pending?.detail).toMatch(/0 pendientes/);
@@ -90,12 +104,18 @@ describe.skipIf(!RUN)("[INF-S] prod-precheck (núcleo) contra el Docker local", 
       expect(pre.rows.find((r) => r.id === `pre.${m.key}.present`)?.status, m.key).toBe("PASS");
       expect(pre.rows.some((r) => r.id === `pre.${m.key}.absent`), m.key).toBe(false);
     }
-    const st = pre.rows.find((r) => r.id === "pre.state.M20");
-    expect(st?.status).toBe("WARN");
-    expect(st?.detail).toMatch(/ya aplicada/);
-    const objs = pre.rows.filter((r) => r.group === "M20" && r.id !== "pre.state.M20");
-    expect(objs.map((r) => r.id).sort()).toEqual(["pre.M20.absent", "pre.M20.crossService"]);
-    expect(objs.every((r) => r.status === "SKIP")).toBe(true);
+    const PRE_IDS: Record<string, string[]> = {
+      M20: ["pre.M20.absent", "pre.M20.crossService"],
+      M21: ["pre.M21.absent", "pre.M21.bookingCount", "pre.M21.bookingTx"],
+    };
+    for (const key of ["M20", "M21"]) {
+      const st = pre.rows.find((r) => r.id === `pre.state.${key}`);
+      expect(st?.status, key).toBe("WARN");
+      expect(st?.detail, key).toMatch(/ya aplicada/);
+      const objs = pre.rows.filter((r) => r.group === key && r.id !== `pre.state.${key}`);
+      expect(objs.map((r) => r.id).sort(), key).toEqual(PRE_IDS[key]);
+      expect(objs.every((r) => r.status === "SKIP"), key).toBe(true);
+    }
     expect(pre.rows.find((r) => r.id === "pre.migrations.failed")?.status).toBe("PASS");
     expect(pre.rows.find((r) => r.id === "pre.role.bypassrls")?.status).toBe("PASS");
     expect(pre.rows.find((r) => r.id === "pre.server.version")?.status).toBe("PASS");
@@ -105,7 +125,7 @@ describe.skipIf(!RUN)("[INF-S] prod-precheck (núcleo) contra el Docker local", 
     expect(fails, JSON.stringify(fails, null, 2)).toEqual([]);
   });
 
-  it("[INF-S] el SQL de los prechecks de M20 corre sin errores (evaluado sobre la ya aplicada)", async () => {
+  it("[INF-S] el SQL de los prechecks de M20 y M21 corre sin errores (evaluado sobre las ya aplicadas)", async () => {
     const forced = await runProdPrecheck({
       db,
       mode: "pre",
@@ -122,6 +142,16 @@ describe.skipIf(!RUN)("[INF-S] prod-precheck (núcleo) contra el Docker local", 
     expect(absent?.detail).toMatch(/Practitioner\.allowParallelServices/);
     // El informativo corre: PASS (nadie) o WARN (lista), nunca FAIL.
     expect(["PASS", "WARN"]).toContain(forced.rows.find((r) => r.id === "pre.M20.crossService")?.status);
+    // [CF2-MIG] M21: el «no existe» nombra columnas, tablas y función; Booking (tx > 5 s, tamaño) nunca da FAIL.
+    const absent21 = forced.rows.find((r) => r.id === "pre.M21.absent");
+    expect(absent21?.status).toBe("FAIL");
+    expect(absent21?.detail).toMatch(/ya existen/);
+    expect(absent21?.detail).toMatch(/tabla PractitionerRevenueShare/);
+    expect(absent21?.detail).toMatch(/Practitioner\.notifyBookingPush/);
+    for (const id of ["pre.M21.bookingTx", "pre.M21.bookingCount"]) {
+      expect(["PASS", "WARN"], id).toContain(forced.rows.find((r) => r.id === id)?.status);
+    }
+    expect(forced.rows.find((r) => r.id === "pre.M21.bookingCount")?.detail).toMatch(/\d+ turnos \(\d+ con copagoPaidAt, \d+ con insurerPaidAt\)/);
   });
 
   it("[INF-S] pre.M20.crossService lista a quien tiene servicios distintos pisados (y no el mismo paciente ni cancelados)", async () => {

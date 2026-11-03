@@ -113,8 +113,9 @@ describe.skipIf(!RUN)("HD-10 · /pacientes paginado", () => {
     });
     await db.booking.createMany({ data: bookings });
 
-    // «Última visita» (Kine): i % 4 === 1 tiene un plan ACTIVE con una sesión realizada; cuanto más chico i, más
-    // reciente. i = 2 tiene un plan COMPLETED con una sesión realizada (no es plan activo: no cuenta).
+    // Planes: i % 4 === 1 tiene un plan ACTIVE con una sesión realizada; i = 2 uno COMPLETED. CF2 (D-CF2-15): la
+    // «Última visita» ya no sale de las sesiones sino de los turnos (abajo); los planes quedan para el filtro clínico,
+    // el diagnóstico y el export.
     const past = new Date(Math.floor((Date.now() - 24 * HOUR) / HOUR) * HOUR);
     const planned: { i: number; status: "ACTIVE" | "COMPLETED" }[] = [];
     for (let i = 1; i <= N; i += 4) planned.push({ i, status: "ACTIVE" });
@@ -149,6 +150,33 @@ describe.skipIf(!RUN)("HD-10 · /pacientes paginado", () => {
         ],
       });
     }
+
+    // «Última visita» (CF2 D-CF2-15, todos los verticales): i % 4 === 1 tiene un turno PASADO CONFIRMED (nadie marcó
+    // «Atendido»); cuanto más chico i, más reciente. i = 2 tiene un ausente más reciente que todos (no cuenta).
+    const visits = [];
+    for (let i = 1; i <= N; i += 4) {
+      visits.push({
+        tenantId: K.tenantId,
+        patientId: byIndex[i],
+        practitionerId: K.practitionerId,
+        serviceId: K.serviceId,
+        scheduledFor: new Date(past.getTime() - i * HOUR),
+        durationMin: 45,
+        status: "CONFIRMED" as const,
+        idempotencyKey: randomUUID(),
+      });
+    }
+    visits.push({
+      tenantId: K.tenantId,
+      patientId: byIndex[2],
+      practitionerId: K.practitionerId,
+      serviceId: K.serviceId,
+      scheduledFor: new Date(past.getTime() + HOUR / 2),
+      durationMin: 45,
+      status: "NO_SHOW" as const,
+      idempotencyKey: randomUUID(),
+    });
+    await db.booking.createMany({ data: visits });
 
     // `?os=`: los pares tienen OS A vigente; i % 10 === 1 tuvo OS A y hoy tiene OS B (el pre-filtro SQL los trae,
     // la cobertura vigente los saca). Ids explícitos: la vigente es la de id mayor (`orderBy id desc`).
@@ -206,13 +234,13 @@ describe.skipIf(!RUN)("HD-10 · /pacientes paginado", () => {
     const got = [...p1.rows, ...p2.rows, ...p3.rows].map((r) => r.id);
     expect(new Set(got).size).toBe(N);
     expect(got).toEqual(byIndex.slice(1));
-    // `totals` sobre TODAS las visibles (no la página): 30 con plan activo, 90 sin.
-    expect(p2.totals).toEqual({ all: N, withProgram: 30, withoutProgram: 90 });
-    // La página hidrata lo de siempre: chips de plan, sesiones y última visita de la fila full.
+    // `totals` sobre TODAS las visibles (no la página). CF2 (decisión 3): sin «con/sin plan».
+    expect(p2.totals).toEqual({ all: N });
+    // La página hidrata cobertura, próximo turno y última visita; el plan ya no (CF2: solo el export).
     const r1 = p1.rows.find((r) => r.id === byIndex[1])!;
     expect(r1.access).toBe("full");
-    expect(r1.activePlans).toEqual([{ discipline: null, done: 1, totalLive: 2 }]);
-    expect(r1.activeProgramTitle).toBe("Plan 1");
+    expect(r1.activePlans).toEqual([]);
+    expect(r1.activeProgramTitle).toBeNull();
     expect(r1.obraSocial).toBe(`OS B ${sfx}`);
     expect(r1.lastVisit).not.toBeNull();
     expect(p1.rows.find((r) => r.id === byIndex[3])!.upcomingAt).not.toBeNull();
@@ -245,14 +273,14 @@ describe.skipIf(!RUN)("HD-10 · /pacientes paginado", () => {
     expect(rows.find((r) => r.id === byIndex[1])!.upcomingAt).toBeNull();
   });
 
-  it("[HD-10] «Última visita» (Kine): las páginas concatenadas = el orden completo, solo planes activos", async () => {
+  it("[HD-10] «Última visita» (Kine, CF2 D-CF2-15): las páginas concatenadas = el orden completo, sin ausentes", async () => {
     asUser(K.userId);
     const { rows } = await allPages({ sort: "lastVisit.desc" });
     const withLast: string[] = [];
     for (let i = 1; i <= N; i += 4) withLast.push(byIndex[i]);
     const rest = byIndex.slice(1).filter((id) => !withLast.includes(id));
     expect(rows.map((r) => r.id)).toEqual([...withLast, ...rest]);
-    // i = 2: su plan está COMPLETED → sin última visita.
+    // i = 2: solo un ausente (y un plan COMPLETED con una sesión realizada) → sin última visita.
     expect(rows.find((r) => r.id === byIndex[2])!.lastVisit).toBeNull();
   });
 
@@ -263,9 +291,10 @@ describe.skipIf(!RUN)("HD-10 · /pacientes paginado", () => {
     expect(rows).toHaveLength(N);
     for (const r of rows) {
       expect(r.access).toBe("admin");
-      expect(r.lastVisit).toBeNull();
       expect(r.activePlans).toEqual([]);
       expect(r.notes).toBeNull();
+      // CF2 (D-CF2-15): la última visita sale de la agenda, no de la HC: la Secretaria la ve.
+      expect(r.lastVisit === null).toBe(idx(r.id) % 4 !== 1);
     }
     expect(rows.find((r) => r.id === byIndex[4])!.obraSocial).toBe(`OS A ${sfx}`);
     expect(rows.find((r) => r.id === byIndex[3])!.upcomingAt).not.toBeNull();
@@ -275,19 +304,21 @@ describe.skipIf(!RUN)("HD-10 · /pacientes paginado", () => {
       expect(r).toMatchObject({ rows: [], total: 0, pageCount: 1 });
       expect(r.totals.all).toBe(0);
     }
-    // «Última visita» no ordena por un dato que no ve: queda el orden de apellido.
+    // CF2 (D-CF2-15): «Última visita» ordena igual que para el titular (mismo criterio para todos los roles).
     const lv = await allPages({ sort: "lastVisit.desc" });
-    expect(lv.rows.map((r) => r.id)).toEqual(byIndex.slice(1));
+    const withLast: string[] = [];
+    for (let i = 1; i <= N; i += 4) withLast.push(byIndex[i]);
+    expect(lv.rows.map((r) => r.id)).toEqual([...withLast, ...byIndex.slice(1).filter((id) => !withLast.includes(id))]);
   });
 
   it("[HD-10] kine en básico + diagnosisSlug: sin filas básicas ni conteo", async () => {
     asUser(otherKine.userId);
     const dx = (await listPatients({ diagnosisSlug: condSlug })) as PatientsPage;
     expect(dx).toMatchObject({ rows: [], total: 0, pageCount: 1 });
-    expect(dx.totals).toEqual({ all: 0, withProgram: 0, withoutProgram: 0 });
+    expect(dx.totals).toEqual({ all: 0 });
     const all = (await listPatients({})) as PatientsPage;
     expect(all.total).toBe(N);
-    expect(all.totals).toEqual({ all: N, withProgram: 0, withoutProgram: 0 });
+    expect(all.totals).toEqual({ all: N });
     expect(all.rows.every((r) => r.access === "basic" && r.obraSocial === null && r.lastVisit === null)).toBe(true);
     // Control: el kine a cargo (titular) sí filtra por diagnóstico.
     asUser(K.userId);
@@ -312,6 +343,8 @@ describe.skipIf(!RUN)("HD-10 · /pacientes paginado", () => {
     const lines = csv.trim().split("\n").slice(1);
     expect(lines).toHaveLength(N);
     for (const id of byIndex.slice(1)) expect(csv).toContain(id);
+    // CF2: el plan salió de la página pero el export lo sigue hidratando (`mode: "all"`).
+    expect(lines.find((l) => l.includes(byIndex[1]))).toContain("Plan 1");
   });
 
   it("[HD-14] edad a las 23:30 AR con el host en UTC: quien cumple mañana todavía no tiene la edad nueva", async () => {

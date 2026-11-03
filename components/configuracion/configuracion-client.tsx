@@ -15,7 +15,11 @@ import type { PractitionerScheduleSummaryRow } from "@/lib/practitioner-schedule
 import type { SupportSessionRow } from "@/lib/support-session-internal";
 import type { TenantPlanUsageView } from "@/lib/tenant-plan-usage-logic";
 import type { BillingOverview } from "@/lib/saas-billing-types";
-import type { ConfiguracionDirectoryData, ConfiguracionWhatsAppData } from "@/lib/configuracion-page-loader";
+import type {
+  ConfiguracionDirectoryData,
+  ConfiguracionMiAgendaData,
+  ConfiguracionWhatsAppData,
+} from "@/lib/configuracion-page-loader";
 import { PageHeader } from "@/components/ui/page-header";
 import { SkelForm } from "@/components/ui/skeleton";
 import styles from "./configuracion.module.css";
@@ -53,6 +57,7 @@ const PANEL_LOADERS = {
   plan: () => import("./panels/plan-tab"),
   facturacion: () => import("./panels/billing-panel"),
   "mis-fichas": () => import("./panels/fichas-panel"),
+  "mi-agenda": () => import("./panels/mi-agenda-panel"),
   soporte: () => Promise.all([import("./panels/support-messages-panel"), import("./panels/support-access-panel")]),
   exportar: () => import("./panels/export-panel"),
   "cobros-online": () => import("./panels/online-payments-panel"),
@@ -96,6 +101,8 @@ const SupportAccessPanel = dynamic(() => import("./panels/support-access-panel")
 });
 // FC-3i: «Mis fichas» (firma, matrícula, carpeta de respaldo, diagnósticos propios), su propio chunk.
 const FichasPanel = dynamic(() => import("./panels/fichas-panel").then((m) => m.FichasPanel), { loading: PanelSkeleton });
+// CF2 (T.C): «Mi agenda» (turnero propio, contacto dentro de la anticipación, avisos), su propio chunk.
+const MiAgendaPanel = dynamic(() => import("./panels/mi-agenda-panel").then((m) => m.MiAgendaPanel), { loading: PanelSkeleton });
 const ExportPanel = dynamic(() => import("./panels/export-panel").then((m) => m.ExportPanel), { loading: PanelSkeleton });
 // TP-3a (§25.11, techo de /configuracion +0,5 kB): «Cobros online» y «Mi Mercado Pago» fuera del JS inicial, en UN
 // solo chunk (`online-payments-panel` re-exporta `MyMpPanel`). Cada chunk diferido nuevo suma ~20 B al runtime de
@@ -191,6 +198,13 @@ type Props = {
    * (Titular). null/ausente = sin pestaña. Los datos de la cuenta los pide el panel al montar.
    */
   whatsapp?: ConfiguracionWhatsAppData | null;
+  /**
+   * CF2 (T.C): «Mi agenda» del que mira (mismo gate que «Mis fichas»). null/ausente = sin pestaña (Secretaria,
+   * Facturación, un Titular/Admin que no atiende, soporte).
+   */
+  miAgenda?: ConfiguracionMiAgendaData | null;
+  /** CF2 (T.C): clave PÚBLICA VAPID para `pushManager.subscribe`; null = push sin configurar en el server. */
+  webPushPublicKey?: string | null;
 };
 
 export function ConfiguracionClient(props: Props) {
@@ -204,6 +218,7 @@ export function ConfiguracionClient(props: Props) {
   const onlinePayments = props.onlinePayments ?? null;
   const myMp = props.myMp ?? null;
   const whatsapp = props.whatsapp ?? null;
+  const miAgenda = props.miAgenda ?? null;
   const access: ConfigTabAccess = {
     ...props.access,
     canExport,
@@ -212,6 +227,7 @@ export function ConfiguracionClient(props: Props) {
     onlinePayments: onlinePayments !== null,
     myMp: myMp !== null,
     whatsapp: whatsapp !== null,
+    miAgenda: miAgenda !== null,
   };
   const visible = visibleConfigTabs(access, props.modules);
   const [tab, setTabRaw] = useState<Tab>(() => initialConfigTab(props.initialTab, visible));
@@ -226,6 +242,8 @@ export function ConfiguracionClient(props: Props) {
   const [paymentsDirty, setPaymentsDirty] = useState(false);
   // CF-ZF4 (B18): el tope y las reglas de la agenda de General también se editan en línea.
   const [generalDirty, setGeneralDirty] = useState(false);
+  // CF2 (T.C): la anticipación propia y el contacto de «Mi agenda» también se editan en línea.
+  const [miAgendaDirty, setMiAgendaDirty] = useState(false);
   // TP-3a: el aviso de `?mp=` es de la vuelta del callback: se ve una vez, en la pestaña a la que volvió, y se apaga al
   // cambiar de pestaña (volver no lo vuelve a mostrar). Sacarlo de la URL (que un refresh no lo repita) lo hacen las
   // dos pestañas de Mercado Pago al montar (`useDropMpReturnParam`, TP-ZF3): acá era una copia en el JS inicial.
@@ -236,7 +254,7 @@ export function ConfiguracionClient(props: Props) {
   const setTab = useCallback(
     async (t: Tab) => {
       if (t === tab) return;
-      if (generalDirty || practitionerDirty || directoryDirty || fichasDirty || paymentsDirty) {
+      if (generalDirty || practitionerDirty || directoryDirty || fichasDirty || paymentsDirty || miAgendaDirty) {
         const where = generalDirty
           ? "General"
           : practitionerDirty
@@ -245,7 +263,9 @@ export function ConfiguracionClient(props: Props) {
               ? "Directorio"
               : fichasDirty
                 ? "Mis fichas"
-                : "Cobros online";
+                : miAgendaDirty
+                  ? "Mi agenda"
+                  : "Cobros online";
         const ok = await confirm({
           title: "¿Descartar los cambios sin guardar?",
           message: `Tenés cambios sin guardar en ${where}. Si cambiás de pestaña, se pierden.`,
@@ -259,6 +279,7 @@ export function ConfiguracionClient(props: Props) {
         setDirectoryDirty(false);
         setFichasDirty(false);
         setPaymentsDirty(false);
+        setMiAgendaDirty(false);
       }
       setTabRaw(t);
       setMpReturn(null);
@@ -274,7 +295,7 @@ export function ConfiguracionClient(props: Props) {
         /* sin history: la pestaña vale igual */
       }
     },
-    [tab, generalDirty, practitionerDirty, directoryDirty, fichasDirty, paymentsDirty, confirm]
+    [tab, generalDirty, practitionerDirty, directoryDirty, fichasDirty, paymentsDirty, miAgendaDirty, confirm]
   );
   const can = (t: Tab) => visible.includes(t);
   // «Accesos de soporte»: PL-F1b (decisión de Martin, 16-oct), cualquier miembro, si la página pudo leerlos. Antes
@@ -354,6 +375,14 @@ export function ConfiguracionClient(props: Props) {
           backupScope={fichas.backupScope}
           readOnly={!!props.readOnly}
           onDirtyChange={setFichasDirty}
+        />
+      )}
+      {tab === "mi-agenda" && can("mi-agenda") && miAgenda && (
+        <MiAgendaPanel
+          data={miAgenda}
+          vapidPublicKey={props.webPushPublicKey ?? null}
+          readOnly={!!props.readOnly}
+          onDirtyChange={setMiAgendaDirty}
         />
       )}
       {tab === "cobros-online" && can("cobros-online") && onlinePayments && (
