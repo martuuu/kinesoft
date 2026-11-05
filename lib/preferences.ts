@@ -24,10 +24,14 @@ import {
   type AgendaViewPrefs,
   type DashboardPrefs,
   type KpiKey,
-  type Palette,
   type Preferences,
 } from "@/lib/preferences-constants";
 import { KPI_OPTIONS } from "@/lib/dashboard-kpi-options";
+import { runWithRls } from "@/lib/rls";
+import { isAppPalette, isBrandPalette, paletteAllowedForTenant } from "@/lib/brand-palettes";
+
+/** BR-P: copy del rechazo de una paleta de marca ajena (la UI no la ofrece; esto es la red del server). */
+const BRAND_PALETTE_FORBIDDEN = "Esa paleta es la de otro consultorio.";
 
 export async function getUserPreferences(): Promise<Preferences> {
   const actor = await getActor();
@@ -40,7 +44,10 @@ export async function getUserPreferences(): Promise<Preferences> {
       )
     : DEFAULT_PREFERENCES.pinnedKpis;
   return {
-    palette: (row.palette as Palette) ?? DEFAULT_PREFERENCES.palette,
+    // BR-P: la columna es TEXT sin CHECK; antes se casteaba a ciegas (un valor viejo o editado a mano llegaba al
+    // `data-palette`). Ahora un valor desconocido cae al default. Una paleta de marca se devuelve tal cual: si este
+    // consultorio no la tiene, la pinta como sky el layout (`effectivePalette`), sin perderla para el otro consultorio.
+    palette: isAppPalette(row.palette) ? row.palette : DEFAULT_PREFERENCES.palette,
     pinnedKpis: pinned.length ? pinned : DEFAULT_PREFERENCES.pinnedKpis,
     sidebarCollapsed: row.sidebarCollapsed ?? DEFAULT_PREFERENCES.sidebarCollapsed,
     agendaShowWeekHeader: row.agendaShowWeekHeader ?? DEFAULT_PREFERENCES.agendaShowWeekHeader,
@@ -63,9 +70,17 @@ export async function updateUserPreferences(
   // BO1-A (C-BO3): escritura fuera de `runWithRls` (UserPreferences no tiene RLS) → corte explícito.
   const readOnly = writableError(actor);
   if (readOnly) return { ok: false, error: readOnly };
-  const palettes: Palette[] = ["sky", "mint", "coral", "violet"];
-  if (patch.palette && !palettes.includes(patch.palette)) {
+  if (patch.palette !== undefined && !isAppPalette(patch.palette)) {
     return { ok: false, error: "Paleta inválida." };
+  }
+  // BR-P: una paleta de marca (hoy «tmp») solo la guarda un miembro del consultorio que la tiene asignada
+  // (`Tenant.palette`, la pone Plataforma). La UI no se la ofrece a nadie más; esto es la red del server. Una lectura
+  // de una fila (PK) y solo cuando el patch trae una de marca: elegir Celeste/Verde/… sigue sin queries de más.
+  if (isBrandPalette(patch.palette)) {
+    const tenant = await runWithRls(actor.tenantId, (tx) =>
+      tx.tenant.findFirst({ where: { id: actor.tenantId }, select: { palette: true } })
+    );
+    if (!paletteAllowedForTenant(patch.palette, tenant?.palette)) return { ok: false, error: BRAND_PALETTE_FORBIDDEN };
   }
   if (patch.pinnedKpis) {
     if (patch.pinnedKpis.length > 6) return { ok: false, error: "Máx 6 KPIs fijados." };

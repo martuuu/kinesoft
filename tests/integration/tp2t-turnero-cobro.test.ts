@@ -517,7 +517,7 @@ describe.skipIf(!RUN)("[TP-2t] turnero con cobro online", () => {
     // Sin cobro: null.
     const plain = await submitPublicBooking(input({ slot: await freeSlot() }));
     if (!plain.ok) throw new Error(plain.error);
-    expect(await getPublicBookingStatus(plain.data.bookingId)).toMatchObject({ onlineCharge: null, onlinePayment: false, amountCents: PRICE });
+    expect(await getPublicBookingStatus(plain.data.bookingId)).toMatchObject({ onlineCharge: null, onlinePayment: false, amountCents: PARTICULAR }); // CF3: el status cotiza como particular
 
     // FULL pendiente → pagado.
     await setPaymentPolicy(db, T.tenantId, { mode: "REQUIRED", chargeKind: "COPAGO" });

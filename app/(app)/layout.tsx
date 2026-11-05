@@ -4,8 +4,13 @@ import type { Role } from "@prisma/client";
 import { headers } from "next/headers";
 import { TweaksProvider } from "@/components/layout/tweaks-context";
 import { UIProviders } from "@/components/providers/ui-providers";
-import type { Palette } from "@/lib/preferences-constants";
 import { AppShell } from "@/components/layout/app-shell";
+// Solo el TIPO: un valor de un módulo `"use client"` llega acá como client reference (ver shell-tenant-choice.ts).
+import type { TenantBrand } from "@/components/layout/tenant-brand-context";
+import { effectivePalette, palettesForTenant } from "@/lib/brand-palettes";
+import type { Palette } from "@/lib/preferences-constants";
+import { tenantLogoUrl } from "@/lib/tenant-logo";
+import { ownPhotoUrlFor } from "@/lib/user-photo-logic";
 import { getAccessSnapshot, getSessionBlock, tryGetActor } from "@/lib/session";
 import { mpConnectMode, tenantAccessEnforcement } from "@/lib/env";
 import { AccessBanner, bannerAudienceFor } from "@/components/layout/access-banner";
@@ -105,6 +110,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // Rol de la membresía activa: ya se lee para el gate de onboarding; se
   // reusa para las capabilities del nav (EV-S) sin otra query.
   let role: Role | null = null;
+  // CF3 (BR-L): logo y paleta del consultorio activo para el shell, de la MISMA fila que el gate (0 sentencias).
+  let brandRow: { palette: string; logoUpdatedAt: Date | null } = { palette: "sky", logoUpdatedAt: null };
   if (!actor) {
     gate = decideAppGate({
       hasSession: !!snapshot,
@@ -123,18 +130,32 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     // en cada página). Soporte (sin membresía en el destino) y el actor demo (sin foto) siguen leyéndolos.
     const fromSnapshot = !actor.support ? snapshot?.memberships.find((m) => m.tenantId === actor.tenantId) : undefined;
     const t = fromSnapshot
-      ? { completed: !!fromSnapshot.tenant.onboardingCompletedAt, role: fromSnapshot.role }
+      ? {
+          completed: !!fromSnapshot.tenant.onboardingCompletedAt,
+          role: fromSnapshot.role,
+          palette: fromSnapshot.tenant.palette,
+          logoUpdatedAt: fromSnapshot.tenant.logoUpdatedAt,
+        }
       : await runWithRls(actor.tenantId, async (tx) => {
           const [tenant, m] = await Promise.all([
-            tx.tenant.findUnique({ where: { id: actor.tenantId }, select: { onboardingCompletedAt: true } }),
+            // CF3 (BR-L): + `palette` en la misma sentencia.
+            tx.tenant.findUnique({ where: { id: actor.tenantId }, select: { onboardingCompletedAt: true, palette: true } }),
             tx.membership.findUnique({
               where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
               select: { role: true },
             }),
           ]);
-          return { completed: !!tenant?.onboardingCompletedAt, role: m?.role ?? null };
+          // Soporte y demo: sin logo. La ruta del logo exige sesión y membresía usable en el consultorio, y el soporte
+          // no es miembro del destino (el demo no tiene sesión): la URL daría 404/401.
+          return {
+            completed: !!tenant?.onboardingCompletedAt,
+            role: m?.role ?? null,
+            palette: tenant?.palette ?? "sky",
+            logoUpdatedAt: null,
+          };
         });
     role = t.role;
+    brandRow = { palette: t.palette, logoUpdatedAt: t.logoUpdatedAt };
     gate = decideAppGate({
       hasSession: !!snapshot,
       hasActor: true,
@@ -191,6 +212,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         p ? { practitionerId: p.id, enabled: p.publicBookingEnabled, myMp: onlinePayments } : null
       )
     : Promise.resolve(null);
+  // CF3b PH-U1 (M24, contrato FOTO): la foto PROPIA para el avatar del shell (`/api/me/photo?v=`, `ownPhotoUrlFor` de
+  // PH-S). CF3 ZF4a: sale de la foto de acceso (`snapshot.profile.photoUpdatedAt`, misma sentencia que el resto del
+  // perfil en `loadAccessMemberships`) → 0 sentencias; antes era una lectura aparte de `UserProfile` por carga completa.
+  // La foto es la de la SESIÓN (nunca de un input). Soporte y demo, sin foto: el demo no tiene sesión (la ruta da 401) y
+  // el soporte mira un consultorio del que no es miembro (su foto de acceso es la suya, no la del consultorio).
+  const userPhotoUrl: string | null = snapshot && !actor.support ? ownPhotoUrlFor(snapshot.profile) : null;
   // Seed the Tweaks context with the user's persisted agenda preferences so
   // the week view + the Tweaks panel render the right state on first paint.
   // `actor` no es null acá (redirect de arriba), así que `prefsP` tampoco.
@@ -224,13 +251,23 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     callAlert: prefs.agendaView.callAlert,
   };
   const shellChoice = shellTenantChoice(!!actor.support, choice.options, switchTenant);
+  // CF3 (BR-L, pedido de Martin del 05-nov): marca del consultorio activo para el shell (`TenantBrandProvider` en el
+  // AppShell): un profesional en varios consultorios ve en cuál está. `v` del logo = `logoUpdatedAt`: subir o borrar el
+  // logo en Configuración cambia la URL; la action revalida y su respuesta re-renderiza este layout (Next 14.2: una
+  // server action sin header `RSC` se renderiza desde la raíz), así que no hace falta invalidar nada más.
+  const brand: TenantBrand = {
+    name: actor.tenantName,
+    logoUrl: tenantLogoUrl(actor.tenantId, brandRow.logoUpdatedAt),
+    palette: brandRow.palette,
+  };
   const enforcement = tenantAccessEnforcement();
   return (
     <UIProviders>
       {/* VX F-d: paleta sin flash. Corre antes del primer pintado del shell (está antes en el HTML) y pone
           `data-palette` en <html> con la misma precedencia que `hydrateTweaks`; sin esto, una paleta distinta de sky
           pintaba sky hasta que hidrataba `TweaksProvider`. */}
-      <script dangerouslySetInnerHTML={{ __html: paletteScript(prefs.palette) }} />
+      {/* BR-P: con la paleta del consultorio (`brand.palette`): la de marca solo se pinta en su consultorio. */}
+      <script dangerouslySetInnerHTML={{ __html: paletteScript(prefs.palette, brand.palette) }} />
       <TweaksProvider
         initialAgenda={{
           agendaShowWeekHeader: prefs.agendaShowWeekHeader,
@@ -240,6 +277,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         // PL-F1c: la paleta guardada en el server manda desde el primer render (antes solo la aplicaba el dashboard
         // al montarse, y pisaba lo elegido en Tweaks).
         initialPalette={prefs.palette}
+        // BR-P: `Tenant.palette` del consultorio activo: decide si una paleta de marca («tmp») se puede pintar acá.
+        tenantPalette={brand.palette}
         // RX-0 (C-RX2): cara de /sala (`agendaPrefs.receptionLayout`, ya sanitizada) para que Apariencia y el
         // escritorio arranquen con la elegida, sin flash.
         initialReceptionLayout={prefs.agendaView.receptionLayout}
@@ -273,6 +312,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           idle={idle.kind === "on" ? idle.idle : null}
           // HD-9 (§27): con el directorio apagado, «Mi perfil público» no se ofrece (la página da 404). 0 sentencias.
           publicProfile={directoryMode() !== "off"}
+          brand={brand}
+          // CF3b PH-U1: avatar con la foto propia (null = iniciales). Ver `userPhotoP`.
+          userPhotoUrl={userPhotoUrl}
         >
           {/* BO1-A: prueba por vencer, gracia o solo lectura (modo REAL; visible con `banner`/`enforce`). BO3-F: en
               soporte habla en tercera persona del consultorio (el superadmin no es el titular) y suma suspendido/baja,
@@ -296,21 +338,24 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
 /**
  * VX F-d: script inline de paleta sin flash. MISMAS claves y valores que `components/layout/tweaks-context.tsx`
- * (`STORAGE_KEY` = "kinesoft:tweaks", `PALETTES`, default "sky") y la misma precedencia que `hydrateTweaks`: la
- * paleta del server (`UserPreferences.palette`) gana; si no hay, la de `localStorage`; si no, sky. Todo en
- * `try/catch`: con el storage bloqueado (Safari privado) o el JSON roto queda la del server o sky, nunca un error.
+ * (`STORAGE_KEY` = "kinesoft:tweaks", default "sky") y la misma precedencia que `hydrateTweaks`: la paleta del server
+ * (`UserPreferences.palette`) gana; si no hay, la de `localStorage`; si no, sky. Todo en `try/catch`: con el storage
+ * bloqueado (Safari privado) o el JSON roto queda la del server o sky, nunca un error.
  * Si cambia una clave o una paleta en `tweaks-context.tsx`, se cambia acá también.
- * La paleta del server es un valor del enum; igual pasa por la lista y por `JSON.stringify` (no se concatena texto
- * libre dentro de un <script>). `<html>` necesita `suppressHydrationWarning` en el root: este script le agrega el
- * atributo antes de que React hidrate.
+ * BR-P: la lista `P` es la de ESTE consultorio (`palettesForTenant(Tenant.palette)`: las generales + su paleta de
+ * marca, si tiene). Una de marca guardada por el usuario en OTRO consultorio llega como sky (`effectivePalette`) y,
+ * como el server ya trajo un valor, no cae al localStorage (que podría tener la misma de marca): igual que
+ * `hydrateTweaks`.
+ * La paleta del server es un valor de la lista; igual pasa por `JSON.stringify` (no se concatena texto libre dentro de
+ * un <script>). `<html>` necesita `suppressHydrationWarning` en el root: este script le agrega el atributo antes de que
+ * React hidrate.
  */
-const PALETTE_VALUES: readonly Palette[] = ["sky", "mint", "coral", "violet"];
-
-function paletteScript(serverPalette: Palette | null | undefined): string {
-  const server = serverPalette && PALETTE_VALUES.includes(serverPalette) ? serverPalette : null;
+function paletteScript(serverPalette: Palette | null | undefined, tenantPalette: string): string {
+  const allowed = palettesForTenant(tenantPalette);
+  const server = serverPalette ? effectivePalette(serverPalette, tenantPalette) : null;
   return (
     "(function(){var P=" +
-    JSON.stringify(PALETTE_VALUES) +
+    JSON.stringify(allowed) +
     ";var p=" +
     JSON.stringify(server) +
     ';if(!p){try{var r=JSON.parse(window.localStorage.getItem("kinesoft:tweaks")||"null");' +

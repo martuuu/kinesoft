@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomBytes } from "node:crypto";
 import type { PrismaClient, Role } from "@prisma/client";
-import { getTenantPlanUsage } from "@/lib/tenant-plan-usage";
+import { PLAN_USAGE_FORBIDDEN, getTenantPlanUsage } from "@/lib/tenant-plan-usage";
 import { updateTenantBasics, getTenantSettings } from "@/lib/tenant-settings";
 import { TENANT_BASICS_STALE_ERROR } from "@/components/configuracion/config-copy";
 import { asUser } from "@/tests/helpers/actor";
@@ -163,7 +163,7 @@ describe.skipIf(!RUN)("[BO3-F] getTenantPlanUsage", () => {
   it("PRACTITIONER y Secretaria no la ven (tenant.admin)", async () => {
     for (const u of [practitionerUserId, assistantUserId]) {
       asUser(u);
-      await expect(getTenantPlanUsage()).rejects.toThrow("Solo OWNER/ADMIN ven el plan del consultorio.");
+      await expect(getTenantPlanUsage()).rejects.toThrow(PLAN_USAGE_FORBIDDEN);
     }
   });
 
@@ -174,7 +174,7 @@ describe.skipIf(!RUN)("[BO3-F] getTenantPlanUsage", () => {
     });
     try {
       asUser(assistantUserId);
-      await expect(getTenantPlanUsage()).rejects.toThrow("Solo OWNER/ADMIN ven el plan del consultorio.");
+      await expect(getTenantPlanUsage()).rejects.toThrow(PLAN_USAGE_FORBIDDEN);
     } finally {
       await db.membership.update({
         where: { userId_tenantId: { userId: assistantUserId, tenantId: T.tenantId } },

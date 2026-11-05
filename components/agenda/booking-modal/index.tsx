@@ -156,7 +156,7 @@ import {
   type OtherServiceState,
   type RoomBusyState,
 } from "./conflict-prompts";
-import { usePatientBilling } from "./use-patient-billing";
+import { practitionerChangePlan, usePatientBilling } from "./use-patient-billing";
 import type {
   BatchConflictState,
   BatchPayload,
@@ -386,19 +386,29 @@ export function BookingModal({
     onCopagoInput,
     fetchBilling,
     loadPatientBilling,
-  } = usePatientBilling({ defaultPatientId, patients, isGuest, serviceId });
+  } = usePatientBilling({ defaultPatientId, patients, isGuest, serviceId, practitionerId });
 
-  const applyService = (id: string) => {
+  // CF3 (PR-U, D-CF3-1): `pid` explícito al cambiar de profesional (el estado todavía es el anterior en este render).
+  const applyService = (id: string, pid: string = practitionerId) => {
     setServiceId(id);
     // Elegir servicio vuelve a la duración por defecto (comportamiento de
     // siempre: "Osteopatía 60' tiene que poner 60").
     setDurationOverride(null);
-    if (!isGuest && selectedPatient) fetchBilling(selectedPatient.id, id);
+    if (!isGuest && selectedPatient) fetchBilling(selectedPatient.id, id, pid);
   };
   const onPractitionerChange = (id: string) => {
+    // CF3 (PR-U): el monto sugerido depende del profesional (su precio, D-CF3-1): se vuelve a consultar una sola vez,
+    // con el servicio ya re-conciliado.
+    const plan = practitionerChangePlan({
+      current: practitionerId,
+      next: id,
+      serviceId,
+      reconciledServiceId: reconcileServiceOnPractitionerChange(serviceId, enabledServiceIds, id),
+    });
+    if (!plan) return;
     setPractitionerId(id);
-    const next = reconcileServiceOnPractitionerChange(serviceId, enabledServiceIds, id);
-    if (next !== serviceId) applyService(next);
+    if (plan.serviceChanged) applyService(plan.serviceId, id);
+    else if (!isGuest && selectedPatient) fetchBilling(selectedPatient.id, plan.serviceId, id);
   };
   const visibleServices = useMemo(
     () => servicesForPractitioner(services, enabledServiceIds, practitionerId, serviceId),

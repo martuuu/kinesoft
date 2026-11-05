@@ -43,6 +43,8 @@ export async function getTenantTeamForPlatform(tenantId: string): Promise<Platfo
           // PL-3b: permisos delegados («Configuración» / «Planes y pagos»), los mismos que ve el Titular.
           grantSettings: true,
           grantBilling: true,
+          // CF3b (M23): «Co-titular», para que el superadmin vea quién lo es antes de transferir o tocar permisos.
+          grantCoOwner: true,
           acceptedAt: true,
           disabledAt: true,
           user: {
@@ -106,6 +108,7 @@ export async function getTenantTeamForPlatform(tenantId: string): Promise<Platfo
       clinical: isClinicalMember(m),
       grantSettings: m.grantSettings,
       grantBilling: m.grantBilling,
+      grantCoOwner: m.grantCoOwner,
       publicBookingEnabled: isClinicalMember(m) ? (m.user.practitioners[0]?.publicBookingEnabled ?? null) : null,
     })),
     invitations: data.invitations.map((i) => ({

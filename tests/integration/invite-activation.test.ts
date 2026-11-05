@@ -429,6 +429,32 @@ describe.skipIf(!RUN)("IAM-2b activación desde /invite/<token>", () => {
       }
     });
 
+    // CF3 ZF5 (B): re-entrar por una invitación nueva recalcula los permisos desde la invitación (IAM-4c) y eso incluye
+    // «Co-titular» (M23): no se hereda. Antes el `update` del upsert no lo tocaba: un co-titular suspendido que volvía
+    // como Profesional seguía co-titular (un Admin con «Configuración» lo reactivaba con poderes que solo da el
+    // principal), y si volvía como Administrador/a la escritura chocaba con el CHECK `Membership_coOwner_role_check`
+    // (23514) y la aceptación fallaba con un genérico.
+    it("[CF3-ZF5-2] un co-titular suspendido que vuelve por invitación entra SIN co-titular (como Profesional o como Admin)", async () => {
+      const t = await createEphemeralTenant(db, { plan: "PRO", saasPlan: "CLINICA" });
+      const { addPractitioner } = await import("@/tests/helpers/tenant-factory");
+      try {
+        for (const role of ["PRACTITIONER", "ADMIN"] as const) {
+          const co = await addPractitioner(db, t, "PRACTITIONER");
+          await db.membership.update({
+            where: { userId_tenantId: { userId: co.userId, tenantId: t.tenantId } },
+            data: { grantCoOwner: true, disabledAt: new Date(), disabledReason: "MANUAL" },
+          });
+          const inv = await invite(t, { email: `${co.userId}@test.local`, role });
+          asUser(co.userId);
+          expect(await acceptInvite(inv.raw, true), role).toEqual({ ok: true, data: undefined });
+          const m = await db.membership.findUniqueOrThrow({ where: { userId_tenantId: { userId: co.userId, tenantId: t.tenantId } } });
+          expect(m, role).toMatchObject({ role, grantCoOwner: false, disabledAt: null });
+        }
+      } finally {
+        await t.cleanup();
+      }
+    });
+
     it("staff ≠ paciente: una identidad vinculada a una ficha se rechaza", async () => {
       const s = uniqueSuffix();
       const uid = `test-user-portal-${s}`;

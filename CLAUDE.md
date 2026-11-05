@@ -146,6 +146,28 @@
     `kinesoft:rshare:` (reparto por tenant). IDs de test `[CF2-<sesión><n>]` (ej. `[CF2-TS1-3]`, `[CF2-ZF3-1a]`); no
     existe `[CF2-D*]`. «Caja» (`/caja`) no es «Cobros» (`/cobros`, los online de T5); «Reparto» es el % entre
     profesionales, no el arancel de la OS.
+  - **§30 del plan (04-nov; «CF3» = feedback de los clientes, 3.ª ronda):** olas «W0..W5» y «Z». Bloques «PR» (precio por
+    profesional), «AU» (autoconfiguración), «SH» (compartir desde el perfil) y «SD» (sede digital). Sesiones «MIG» (W0, =
+    **M22**), «PR-K/PR-T/PR-C1/PR-C2/PR-P/PR-U/PR-W», «AU-S/AU-C/AU-U1/AU-U2», «SH-L/SH-S/SH-U»,
+    «SD-P/SD-R/SD-K/SD-S/SD-C/SD-U/SD-M» e «INT». Cierre: «ZA/ZB» (revisores) y «ZF1..ZF3» (fixers: **no** son los ZF de T4,
+    T6/T7, PV, CF ni CF2, ni TP-ZF). «M1..M3» y «B1..B6» de ZA/ZB son hallazgos (AUDIT «Ronda CF3»), no migraciones.
+    «D-CF3-1..13» son decisiones con default (§30.2; no son las CF-D* ni las D-CF2-*). IDs de test `[CF3-<sesión><n>]`
+    (ej. `[CF3-ZF1-3]`, `[CF3-MIG5]`, `[CF3-SDR]`). «M22» = `cf3_precios_sede`; ADR-035 = precio por profesional, ADR-036 =
+    sede digital. **«Sede» / «sitio web»** en CF3 es la página pública `/<slug>` (`app/(sede)/`, `Tenant.siteEnabled`,
+    Configuración → «Sitio web»): **no** es la `Location` («sede» física, Configuración → Sedes, filtro «Sede» de `/sala`).
+  - **CF3b (05-nov; decisiones de Martin sobre CF3, misma §30):** sesiones «BR-L» (logo en la app), «BR-P» (paletas),
+    «BR-H» (encabezado de la sede), «SV» (servicios con «Para todo el consultorio»), «MIG2» (= **M23**) y «MIG3»
+    (= **M24**), «CT-K1/CT-K2/CT-U/CT-L/CT-I» (co-titular y matrícula; CT-I = integrador) y «PH-S/PH-U1/PH-U2» (foto).
+    Cierre: «ZA2» (revisor) y «ZF4a/ZF4b/ZF5» (fixers: **no** son los ZF4/ZF5 de T4 ni de CF/CF2, ni los ZF1..ZF3 de
+    CF3). «BR-*» de CF3b no son las «BR-a..d/Z» del renombre de PV; «SV» no es la corrida de Sala de Espera realtime;
+    «CT-*» no son los C-* de ningún bloque; «D1..D3» de CT-K2 son defaults de sesión, no decisiones de Martin. IDs de
+    test `[CF3-<sesión><n>]` (ej. `[CF3-ZF4a1]`, `[CF3-ZF5-7]`, `[CF3-MIG2-5]`, `[CF3-BRL…]`) o `[<sesión>-<n>]`
+    (`[PH-S-11]`, `[BR-P-1]`, `[CT-K1…]`). «M23» = `cf3_co_titular`, «M24» = `cf3_practitioner_photo`; ADR-037 =
+    co-titular y matrícula, ADR-038 = foto de la persona y marca del consultorio. **«Co-titular»** (`Membership.grantCoOwner`) es un PROFESIONAL
+    con lo del Titular salvo la suscripción, la titularidad y el principal: «Titular principal» = la membresía OWNER.
+    «Matrícula» de CF3b es la de la PERSONA (`UserProfile.license*`, dato de seguridad, no se publica): no es
+    `Practitioner.licenseNumber` (por consultorio, pública) ni la del directorio. «TMP» como paleta (`Tenant.palette =
+    "tmp"`, «de marca») no es el consultorio TMP en sí.
   - «Plan» choca en tres sentidos: plan de tratamiento, plan SaaS del tenant y plan de la obra social.
   - «Vertical» (`Tenant.vertical`: General / Kinesiología) es el tipo de consultorio: no es la «disciplina» de un
     servicio o plan (Kine / Osteo) ni el plan SaaS (`Tenant.plan`). «Kine PRO» = vertical Kinesiología + plan PRO.

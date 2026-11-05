@@ -230,9 +230,19 @@ describe.skipIf(!RUN)("[PF-0b] sesión con JWT local", () => {
       where: { userId_tenantId: { userId: u, tenantId: A.tenantId } },
       data: { clinical: false, grantSettings: true, grantBilling: true },
     });
-    await db.userProfile.update({ where: { id: u }, data: { twoFactorEmail: true } });
+    // CF3 ZF4a (handoff de PH-U1): la foto de la persona (M24) viaja en la MISMA sentencia para el avatar del shell.
+    const photoAt = new Date("2026-11-05T15:30:00.123Z");
+    await db.userProfile.update({
+      where: { id: u },
+      data: { twoFactorEmail: true, photoStorageKey: `users/${u}/photo/0123456789abcdef01234567.png`, photoUpdatedAt: photoAt },
+    });
     // T3b-1k2 (M12): overrides de módulos NO vacíos (y desordenados en la fila: la sentencia los devuelve ordenados).
     await db.tenant.update({ where: { id: A.tenantId }, data: { moduleGrants: ["salas", "plantillas"], moduleRevokes: ["diagnostico"] } });
+    // CF3 (BR-L): logo y paleta del shell, con valores NO default (la sentencia los trae; la clave del logo no).
+    await db.tenant.update({
+      where: { id: A.tenantId },
+      data: { logoStorageKey: `${A.tenantId}/logo/x.png`, logoUpdatedAt: new Date("2026-11-05T12:00:00Z"), palette: "coral" },
+    });
 
     const got = await loadAccessMemberships(u);
     const ref = await db.userProfile.findUniqueOrThrow({
@@ -244,6 +254,7 @@ describe.skipIf(!RUN)("[PF-0b] sesión con JWT local", () => {
         disabledAt: true,
         twoFactorTotp: true,
         twoFactorEmail: true,
+        photoUpdatedAt: true,
         memberships: {
           select: {
             tenantId: true,
@@ -253,6 +264,8 @@ describe.skipIf(!RUN)("[PF-0b] sesión con JWT local", () => {
             clinical: true,
             grantSettings: true,
             grantBilling: true,
+            // CT-K1 (M23): co-titular, de la misma sentencia.
+            grantCoOwner: true,
             tenant: {
               select: {
                 id: true,
@@ -264,6 +277,8 @@ describe.skipIf(!RUN)("[PF-0b] sesión con JWT local", () => {
                 moduleGrants: true,
                 moduleRevokes: true,
                 onboardingCompletedAt: true,
+                logoUpdatedAt: true,
+                palette: true,
                 status: true,
                 subscriptionStatus: true,
                 trialEndsAt: true,
@@ -292,8 +307,12 @@ describe.skipIf(!RUN)("[PF-0b] sesión con JWT local", () => {
       isPlatformAdmin: false,
       disabledAt: null,
       twoFactor: { totp: ref.twoFactorTotp, email: ref.twoFactorEmail },
+      photoUpdatedAt: ref.photoUpdatedAt,
     });
     expect(got.profile?.twoFactor).toEqual({ totp: false, email: true });
+    // [CF3-ZF4a3] la fecha con sus milisegundos (es la `?v=` de la URL inmutable del avatar) y nunca la clave del objeto.
+    expect(got.profile?.photoUpdatedAt?.getTime()).toBe(photoAt.getTime());
+    expect(Object.keys(got.profile ?? {})).not.toContain("photoStorageKey");
     expect([...got.memberships].sort((a, b) => (a.tenantId < b.tenantId ? -1 : 1))).toEqual(expected);
     expect(got.memberships).toHaveLength(3);
     expect(got.preferredTenantId).toBeNull();
@@ -301,7 +320,7 @@ describe.skipIf(!RUN)("[PF-0b] sesión con JWT local", () => {
 
   it("perfil sin membresías → perfil con lista vacía; usuario inexistente → null", async () => {
     const u = await newUser();
-    expect(await loadAccessMemberships(u)).toMatchObject({ profile: { email: `${u}@test.local` }, memberships: [] });
+    expect(await loadAccessMemberships(u)).toMatchObject({ profile: { email: `${u}@test.local`, photoUpdatedAt: null }, memberships: [] });
     expect(await loadAccessMemberships(randomUUID())).toEqual({ profile: null, memberships: [], preferredTenantId: null });
   });
 });

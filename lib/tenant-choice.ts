@@ -21,8 +21,28 @@ import { getVerifiedSessionUser } from "@/lib/session-user";
 import { ForbiddenError, UnauthenticatedError, getAccessSnapshot, loadAccessMemberships, usableAccessMemberships } from "@/lib/session";
 import { logger } from "@/lib/logger";
 import { safeNext } from "@/lib/safe-next";
+import { tenantLogoUrl } from "@/lib/tenant-logo";
+import { isCoOwner } from "@/lib/roles-core";
 
-export type TenantOption = { tenantId: string; name: string; slug: string; role: Role; vertical: TenantVertical };
+export type TenantOption = {
+  tenantId: string;
+  name: string;
+  slug: string;
+  role: Role;
+  vertical: TenantVertical;
+  /**
+   * CF3 (BR-L): URL del logo de ESE consultorio (`/api/consultorio/logo?t=&v=`, `tenantLogoUrl`), armada de la misma
+   * foto (0 sentencias); null = sin logo. Opcional en el tipo: los render tests y el actor demo arman opciones sin él.
+   */
+  logoUrl?: string | null;
+  /**
+   * CT-INT (CF3b, M23): «Co-titular» en ESE consultorio (`isCoOwner` sobre la misma foto, 0 sentencias). Lo usa el
+   * rótulo del selector y de /elegir-consultorio (`tenantOptionRoleLabel` de lib/co-owner-types.ts, la versión liviana
+   * de `memberRoleLabel`: el selector va en el first load de todas las rutas y `lib/roles.ts` arrastra el copy de los
+   * roles). Opcional: ausente = no.
+   */
+  coOwner?: boolean;
+};
 
 /**
  * Consultorios a los que puede entrar la sesión (solo membresías USABLES: aceptadas, sin `disabledAt` y con
@@ -48,6 +68,8 @@ export async function getTenantChoiceState(): Promise<{
       slug: m.tenant.slug,
       role: m.role,
       vertical: m.tenant.vertical,
+      logoUrl: tenantLogoUrl(m.tenantId, m.tenant.logoUpdatedAt),
+      coOwner: isCoOwner(m),
     }))
     // Orden estable para la pantalla y el selector: por nombre (no por el orden de la query).
     .sort((a, b) => a.name.localeCompare(b.name, "es") || (a.tenantId < b.tenantId ? -1 : 1));

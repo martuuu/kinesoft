@@ -12,12 +12,18 @@ import { runWithRls, type DbClient } from "@/lib/rls";
 import { getActor, type Actor } from "@/lib/session";
 import { getMemberAccess, memberCapabilitiesForActor } from "@/lib/authz";
 import { isClinicalMember } from "@/lib/roles";
+import { isOversightMember } from "@/lib/roles-core";
 import { modulesFor } from "@/lib/tenant-modules";
 import { visibilityForActor, bulkPatientAccess } from "@/lib/visibility";
 import { liveProgramWhere, liveSessionWhere } from "@/lib/plan-predicates";
 import { planSessionOrdinals } from "@/lib/plan-display";
 import { getUserPreferences } from "@/lib/preferences";
-import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
+import {
+  getParticularCopagoCents,
+  loadPractitionerPricesInTx,
+  practitionerPriceKey,
+  resolveBookingCopagoCents,
+} from "@/lib/billing-internal";
 import { tags, ttl } from "@/lib/cache-tags";
 import { toARDateKey, toARDow, localToARIso, arIsoWeekKey } from "@/lib/datetime-ar";
 import { formatARS } from "@/lib/format";
@@ -35,7 +41,7 @@ import {
   type RevenueSummary,
 } from "@/lib/dashboard-revenue";
 import type { ActionResult } from "@/lib/validation";
-import type { Prisma, Role } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { dayWindow } from "@/lib/availability/day";
 import { cajaScopeFor, cashTodayFrom } from "@/lib/caja-logic";
 import { collectedGroupsInTx } from "@/lib/caja-internal";
@@ -210,15 +216,14 @@ function dashboardScopeFor(actor: { practitionerId: string | null }, seesAll: bo
  * (`SHARED_VIEW_PENDING`). La membresía sale del Actor (`getMemberAccess`, misma fila de la foto: cero queries);
  * sin fila, el mismo default que `memberTier` (PRACTITIONER clínico).
  */
-/** Los mismos de `memberTier` (lib/visibility.ts): un miembro clínico con estos roles ve todo. */
-const OVERSIGHT_ROLES: ReadonlySet<Role> = new Set<Role>(["OWNER", "ADMIN"]);
-
 async function countsScopeTokenFor(actor: Actor): Promise<string> {
   const own = actor.practitionerId ?? NO_PRACTITIONER_SCOPE;
   if (actor.support) return own;
   const m = (await getMemberAccess(actor)) ?? { role: "PRACTITIONER" as const, clinical: true };
   if (!isClinicalMember(m)) return own;
-  if (OVERSIGHT_ROLES.has(m.role)) return "all";
+  // El mismo predicado que `memberTier` (lib/visibility.ts), co-titular incluido (CT-INT, H2): si no coincidieran, los
+  // counts del dashboard no serían lo que `visibilityForActor` le abre. CF3 ZF4a: antes era una copia de OVERSIGHT_ROLES.
+  if (isOversightMember(m)) return "all";
   return `${SHARED_VIEW_PENDING}${own}`;
 }
 
@@ -440,9 +445,28 @@ const _loadDashboardCounts = unstable_cache(
         },
         orderBy: { scheduledFor: "asc" },
         take: 3,
-        include: {
-          patient: { include: { coverages: { include: { insurerRef: true }, orderBy: { id: "desc" }, take: 1 } } },
-          service: true,
+        // CF3 ZF1 (B5): solo lo que arma la línea (nombre, servicio, escalera del copago). Antes `include` traía la fila
+        // entera del paciente (DNI, teléfono, notas…) y del servicio a un snapshot cacheado. Misma sentencia.
+        select: {
+          id: true,
+          patientId: true,
+          practitionerId: true,
+          serviceId: true,
+          scheduledFor: true,
+          guestName: true,
+          copagoCents: true,
+          patient: {
+            select: {
+              firstName: true,
+              lastName: true,
+              coverages: {
+                select: { insurer: true, copagoCents: true, insurerRef: { select: { name: true, copagoCents: true, isParticular: true } } },
+                orderBy: { id: "desc" },
+                take: 1,
+              },
+            },
+          },
+          service: { select: { name: true, priceCents: true } },
         },
       });
       // SR-D5I: los ingresos del mes (S14r) ya NO van acá. Este cache se
@@ -451,6 +475,15 @@ const _loadDashboardCounts = unstable_cache(
       // scope de la plata: un PRACTITIONER con `sharedPatientView` caía en la
       // entrada "all" del OWNER. Salen de la tx de la página (`revenueSummaryInTx`).
       const particularCopago = await getParticularCopagoCents(tenantId, tx);
+      // CF3 PR-C2 (D-CF3-1): precio del profesional de los ≤ 3 próximos turnos, en una sentencia y solo si hay turnos
+      // (el presupuesto del dashboard es de transacciones, pf2-dashboard-budget: esta va en la misma tx). CF3 ZF1 (M1):
+      // también los invitados, que se cobran con la escalera del particular (= lo que congela `toggleBilling`).
+      // Este snapshot cachea con TTL `micro` y el tag del dashboard: un precio nuevo se ve al vencer, como el resto.
+      const practitionerPrices = await loadPractitionerPricesInTx(
+        tx,
+        tenantId,
+        nextAppts.map((b) => ({ practitionerId: b.practitionerId, serviceId: b.serviceId }))
+      );
 
       const bars = ["L", "M", "M", "J", "V", "S", "D"].map((d, i) => {
         const dayStart = new Date(weekStart.getTime() + i * DAY_MS);
@@ -518,8 +551,11 @@ const _loadDashboardCounts = unstable_cache(
             const insurer = coverage?.insurerRef;
             // Only the real insurer name surfaces — particular/uninsured
             // turnos drop the segment (never print the word "Particular").
-            const os = insurer?.name ?? coverage?.insurer ?? "";
-            const obraSocial = os.toLowerCase() === "particular" ? "" : os;
+            // CF3 ZF1 (B5): la fila «Particular» del catálogo se reconoce por `isParticular`, no por el nombre (un
+            // consultorio que la renombra la veía impresa). El nombre solo queda para la cobertura de texto libre
+            // sin fila (legado), que no tiene el flag.
+            const os = insurer ? (insurer.isParticular ? "" : insurer.name) : coverage?.insurer ?? "";
+            const obraSocial = !insurer && os.toLowerCase() === "particular" ? "" : os;
             const copagoCents = resolveBookingCopagoCents({
               bookingOverride: b.copagoCents,
               coverageOverride: coverage?.copagoCents ?? null,
@@ -527,6 +563,8 @@ const _loadDashboardCounts = unstable_cache(
               insurerCopago: insurer ? insurer.copagoCents : null,
               particularCopago,
               servicePriceCents: b.service.priceCents,
+              practitionerPriceCents: practitionerPrices.get(practitionerPriceKey(b.practitionerId, b.serviceId)) ?? null,
+              insurerIsParticular: insurer?.isParticular === true,
             });
             // HD-14: el formatter compartido (como la agenda), no un `toLocaleString` propio: con centavos muestra
             // «$ 1.500,50» y no el redondeo a pesos (HD-15).

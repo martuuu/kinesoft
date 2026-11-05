@@ -16,6 +16,8 @@
  * «No ve historias clínicas» ↔ sin `clinical.read`.
  */
 import type { Role, TenantVertical } from "@prisma/client";
+import { roleLabel } from "@/lib/role-label";
+import { isCoOwner } from "@/lib/roles-core";
 
 /** Jerarquía, de más a menos permisos. Es el orden del selector de rol de un miembro. */
 export const ROLE_ORDER: readonly Role[] = ["OWNER", "ADMIN", "PRACTITIONER", "ASSISTANT", "BILLING"];
@@ -61,7 +63,25 @@ export function roleDescription(role: Role, vertical?: TenantVertical | null): s
 
 // T3a-0z2: los predicados clínicos viven en `lib/roles-core.ts` (sin copy) para que `lib/capabilities.ts` no arrastre
 // las etiquetas de este archivo al first-load de /agenda. Se re-exportan para no tocar a los ~30 importadores.
-export { CLINICAL_ROLES, isClinicalRole, isClinicalMember } from "@/lib/roles-core";
+export { CLINICAL_ROLES, isClinicalRole, isClinicalMember, isPrincipalOwner, isCoOwner } from "@/lib/roles-core";
+
+/**
+ * CT-K1 (CF3b): etiqueta de «Co-titular». No es un rol (`Role` sigue siendo PRACTITIONER): es una marca de la
+ * membresía (`grantCoOwner`). Para pintar la fila de un miembro usá `memberRoleLabel`, no `roleLabel` + un if suelto.
+ */
+export const CO_OWNER_LABEL = "Co-titular";
+
+/**
+ * Etiqueta de un MIEMBRO (rol + marcas de la membresía): «Co-titular» si lo es; si no, `roleLabel` de siempre (con
+ * «(sin agenda)» para el Titular que no atiende). Una sola regla para Usuarios, el selector y Plataforma.
+ */
+export function memberRoleLabel(
+  m: { role: Role; clinical?: boolean; grantCoOwner?: boolean },
+  vertical?: TenantVertical | null
+): string {
+  if (isCoOwner(m)) return CO_OWNER_LABEL;
+  return roleLabel(m.role, vertical, { clinical: m.clinical });
+}
 
 /**
  * Roles que se pueden invitar (OWNER no: se transfiere, no se invita). El

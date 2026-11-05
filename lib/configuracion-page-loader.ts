@@ -59,6 +59,17 @@ import "server-only";
  * la fila del Tenant con `tenant.admin` (0 sentencias); el Profesional sin delegaciones no lee esa fila y paga +1 (4 → 5
  * medidas el 02-nov en pf2-config-budget, declarada ahí). Los dispositivos de push NO se leen acá: el panel los pide al
  * montar (como WhatsApp). En Profesionales, cada fila del resumen trae `publicLead` del select de siempre.
+ *
+ * CF3b CT-L (M23): la sección «Matrícula» de «Mi agenda» lee la matrícula de la PERSONA (`UserProfile.license*`) con
+ * `ownLicenseInTx` dentro de la misma tx: +1 sentencia DECLARADA para todo el que recibe «Mi agenda» (Titular 42 → 43,
+ * Profesional 5 → 6 en pf2-config-budget). No sale gratis: sumarla como relación (`user`) al select de la ficha propia
+ * Prisma 5 la manda igual como sentencia aparte (sin `relationJoins`), y la foto de acceso (`getAccessSnapshot`, que ya
+ * lee el `UserProfile`) es de lib/session.ts y correría en CADA request. El `userId` es el del Actor (la sesión), nunca
+ * un input; `UserProfile` no tiene RLS ni `tenantId`.
+ *
+ * CF3b PH-S (M24): la sección de la foto de «Mi agenda» (`miAgenda.photo`) no suma sentencias: la foto de la persona
+ * (`UserProfile.photoUpdatedAt`) viaja en esa MISMA lectura (`ownLicenseAndPhotoInTx` reemplaza a `ownLicenseInTx` con
+ * las columnas de las dos) y `showPhotoPublic` es una columna más del select del profesional propio.
  */
 import { runWithRls, type DbClient } from "@/lib/rls";
 // DIR-3c: solo para `ProfessionalPublicProfile` (SERVICE_ONLY, DIR-D12); ver la cabecera.
@@ -84,7 +95,9 @@ import { getPublicPlanCatalog } from "@/lib/saas-plans-public";
 import type { TenantSettings } from "@/lib/tenant-settings";
 import type { InsurerRow } from "@/lib/insurers-types";
 import type { ServiceRow } from "@/lib/services-types";
-import type { InvitationRow, TeamMemberRow } from "@/lib/invitations-types";
+import type { InvitationRow } from "@/lib/invitations-types";
+// CF3b (CT-U): la fila del equipo con «Co-titular» y la matrícula (lib/invitations-read.ts).
+import type { TeamMemberView } from "@/lib/co-owner-types";
 import type { CustomConditionRow } from "@/lib/conditions";
 import type { LocationRow } from "@/lib/locations-schemas";
 import type { RoomRow } from "@/lib/rooms-schemas";
@@ -104,6 +117,10 @@ import {
   type MpConnectMode,
   type OnlinePaymentsSettingsView,
 } from "@/lib/mp-connect-types";
+import { bookingHref } from "@/lib/public-booking-links";
+// CF3b PH-S: la matrícula (CT-L) y la foto de la persona salen de UNA lectura de UserProfile (ver la cabecera).
+import { ownLicenseAndPhotoInTx } from "@/lib/user-photo-internal";
+import type { UserLicenseView } from "@/lib/user-license-logic";
 
 /** Mismo texto que `READ_MSG` de lib/locations.ts y lib/practitioner-schedule.ts (lo que tiraban sus lectores). */
 const AGENDA_READ_MSG = "No tenés permiso para ver la agenda del consultorio.";
@@ -179,6 +196,10 @@ export type ConfiguracionScheduleRow = PractitionerScheduleSummaryRow & {
   publicLead: PractitionerPublicLeadView;
   /** CF2 (T.B): el profesional muestra su contacto en el turnero → el titular ve «Ocultar su contacto». */
   leadContactShown: boolean;
+  /** CF3: switch propio del turnero (link directo de la ficha, D-CF3-12). */
+  publicBookingEnabled: boolean;
+  /** CF3: WhatsApp para pacientes con obra social prendido (D-CF3-5). */
+  insuredContactShown: boolean;
 };
 
 /**
@@ -197,6 +218,11 @@ export type PractitionerPublicLeadView = { own: number | null; tenant: number | 
  *   - `publicMinLeadMinutes` / `tenantPublicMinLeadMinutes`: crudos, como `PractitionerPublicLeadView`.
  *   - Contacto dentro de la anticipación (T.B): número E.164, opt-in y fecha del consentimiento (ISO o null).
  *   - Avisos de turnos online: mail y push (los dispositivos NO vienen acá: el panel los pide al montar).
+ *   - CF3 (§30, D-CF3-3/5/12; M22): `showPublicPrice` y `showContactForInsured` (los dos switches propios) y el link
+ *     propio del turnero: `tenantSlug` y `bookingUrl` = `bookingHref(slug, practitionerId)` (RELATIVO: el origin solo
+ *     existe en el browser, la UI lo completa como `general-panel.tsx:849-853`). El estado honesto del link sale de
+ *     `tenantPublicBookingEnabled` + `ownPublicBookingEnabled` (= `publicBookingEnabled`, alias con el nombre de D-CF3-12).
+ *     0 sentencias: el slug viene en el Actor y las columnas de M22 se suman al select de siempre.
  */
 export type ConfiguracionMiAgendaData = {
   practitionerId: string;
@@ -210,6 +236,24 @@ export type ConfiguracionMiAgendaData = {
   contactConsentAt: string | null;
   notifyBookingEmail: boolean;
   notifyBookingPush: boolean;
+  /** CF3: alias de `publicBookingEnabled` (el switch propio), con el nombre del brief D-CF3-12. */
+  ownPublicBookingEnabled: boolean;
+  showPublicPrice: boolean;
+  showContactForInsured: boolean;
+  tenantSlug: string;
+  /** `/c/<slug>/booking?pro=<id>` (relativo). */
+  bookingUrl: string;
+  /**
+   * CF3b CT-L (M23): la matrícula de la PERSONA (`UserProfile`, no del profesional de este consultorio) para la sección
+   * «Matrícula». `{ license: null, updatedAt: null }` = no cargó. +1 sentencia (ver la cabecera).
+   */
+  license: UserLicenseView;
+  /**
+   * CF3b PH-S (M24, contrato FOTO): la foto de la PERSONA (`url` = `/api/me/photo?v=<ms>`, la misma del avatar; null =
+   * no subió) y `showPublic` = `Practitioner.showPhotoPublic` de ESTE consultorio (si sale en su turnero y su sede).
+   * 0 sentencias: la foto viaja en la lectura de `UserProfile` de la matrícula y el flag en el select del profesional.
+   */
+  photo: { url: string | null; showPublic: boolean };
 };
 
 /** FC-3i: estado de un asset del consultorio (logo, firma) sin la clave de Storage. */
@@ -226,7 +270,7 @@ export type ConfiguracionTxData = {
   insurers: InsurerRow[];
   services: ServiceRow[];
   /** `null` = sin acceso a Usuarios (la pestaña no se muestra), como el `unlessForbidden` de antes. */
-  team: TeamMemberRow[] | null;
+  team: TeamMemberView[] | null;
   pending: InvitationRow[] | null;
   practitioners: { id: string; name: string }[];
   customConditions: CustomConditionRow[];
@@ -415,6 +459,7 @@ export async function loadConfiguracionInTx(
     policyRow,
     mpRows,
     tenantLeadRow,
+    ownProfile,
   ] = await Promise.all([
       // = getTenantSettings (lib/tenant-settings.ts); además da el horario del consultorio para el resumen de
       // horarios (= `tenantHours` de lib/practitioner-schedule.ts): una sentencia menos.
@@ -478,6 +523,7 @@ export async function loadConfiguracionInTx(
               // CF2 (T.A, M21): anticipación del turnero de la ficha, en el mismo select (editor de W5).
               publicMinLeadMinutes: true,
               showContactInLeadWindow: true,
+              showContactForInsured: true,
               user: { select: { fullName: true, email: true } },
               schedules: {
                 where: { tenantId, OR: [{ validUntil: null }, { validUntil: { gte: today } }] },
@@ -559,6 +605,11 @@ export async function loadConfiguracionInTx(
               contactConsentAt: true,
               notifyBookingEmail: true,
               notifyBookingPush: true,
+              // CF3 (M22): los dos switches propios de «Mi agenda». Columnas del mismo select: 0 sentencias.
+              showPublicPrice: true,
+              showContactForInsured: true,
+              // CF3b PH-S (M24): el opt-in de la foto en el turnero y la sede de este consultorio. Mismo select: 0 sentencias.
+              showPhotoPublic: true,
             },
           })
         : null,
@@ -602,6 +653,10 @@ export async function loadConfiguracionInTx(
       g.miAgenda && myPractitionerId && !g.tenantAdmin
         ? tx.tenant.findFirst({ where: { id: tenantId }, select: { publicMinLeadMinutes: true } })
         : null,
+      // CF3b CT-L (M23): la matrícula de la PERSONA para «Mi agenda» (+1 declarada; ver la cabecera). `actor.userId` =
+      // la sesión (el soporte no llega: `g.miAgenda` lo excluye). CF3b PH-S: + la foto de la persona en la MISMA
+      // lectura (`ownLicenseAndPhotoInTx`, misma vista de matrícula que `ownLicenseInTx`): 0 sentencias nuevas.
+      g.miAgenda && myPractitionerId ? ownLicenseAndPhotoInTx(tx, actor.userId) : null,
     ]);
 
   let tenant: TenantSettings | null = null;
@@ -664,6 +719,9 @@ export async function loadConfiguracionInTx(
         },
         publicLead: { own: p.publicMinLeadMinutes, tenant: tenantRow.publicMinLeadMinutes },
         leadContactShown: p.showContactInLeadWindow,
+        // CF3 PR-U (D-CF3-12): link directo de la ficha y «Ocultar su WhatsApp para obras sociales» (mismo select).
+        publicBookingEnabled: p.publicBookingEnabled,
+        insuredContactShown: p.showContactForInsured,
       };
     });
   }
@@ -747,6 +805,15 @@ export async function loadConfiguracionInTx(
             contactConsentAt: me.contactConsentAt ? me.contactConsentAt.toISOString() : null,
             notifyBookingEmail: me.notifyBookingEmail,
             notifyBookingPush: me.notifyBookingPush,
+            ownPublicBookingEnabled: me.publicBookingEnabled,
+            showPublicPrice: me.showPublicPrice,
+            showContactForInsured: me.showContactForInsured,
+            // El slug VIGENTE (el del Actor, el mismo que usa el layout); un alias viejo redirige igual (308).
+            tenantSlug: actor.tenantSlug,
+            bookingUrl: bookingHref(actor.tenantSlug, myPractitionerId),
+            license: ownProfile?.license ?? { license: null, updatedAt: null },
+            // CF3b PH-S: la foto de la persona (avatar, `/api/me/photo?v=`) y el opt-in de ESTE consultorio.
+            photo: { url: ownProfile?.photoUrl ?? null, showPublic: me.showPhotoPublic },
           }
         : null,
     onlinePayments,

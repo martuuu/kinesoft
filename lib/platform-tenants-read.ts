@@ -365,6 +365,8 @@ export async function getPlatformTenantDetail(rawId: string): Promise<PlatformTe
       whatsapp: true,
       publicEmail: true,
       sharedPatientView: true,
+      siteEnabled: true,
+      palette: true,
       updatedAt: true,
       // T3b-1k2 (M12): overrides de Plataforma para el set efectivo de módulos (misma sentencia del detalle).
       moduleGrants: true,
@@ -428,6 +430,8 @@ export async function getPlatformTenantDetail(rawId: string): Promise<PlatformTe
     whatsapp: t.whatsapp,
     publicEmail: t.publicEmail,
     sharedPatientView: t.sharedPatientView,
+    siteEnabled: t.siteEnabled,
+    palette: t.palette,
     modules: TENANT_MODULES.filter((m) => modules.has(m)),
     moduleGrants: overrides.moduleGrants,
     moduleRevokes: overrides.moduleRevokes,

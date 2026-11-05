@@ -278,6 +278,11 @@ export async function joinTenantInTx(
       role: inv.role,
       clinical,
       ...grants,
+      // CF3 ZF5 (B): «Co-titular» (M23) tampoco se hereda: lo da SOLO el principal (`setMemberCoOwner`, con step-up), y
+      // una invitación la puede mandar un Admin con «Configuración». Antes quedaba el `grantCoOwner` viejo: un
+      // co-titular suspendido que volvía como Profesional seguía co-titular, y si volvía como Administrador/a la
+      // escritura chocaba con el CHECK `Membership_coOwner_role_check` (23514) y la aceptación fallaba con un genérico.
+      grantCoOwner: false,
       disabledAt: null,
       disabledById: null,
       disabledReason: null,

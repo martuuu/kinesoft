@@ -29,6 +29,12 @@ export type PublicClinic = {
   /** VX2-d1: horario resumido de las franjas reales («Lun a vie 8 a 19 · Sáb 9 a 13», `summarizeOpeningHours`).
    *  null/ausente = sin franjas vigentes: el turnero no muestra horario (antes decía «lun-sáb 8 a 19hs» fijo). */
   openingSummary?: string | null;
+  /**
+   * CF3b PH-S (handoff de PH-U2): logo del consultorio, `/<slug>/logo?v=<logoUpdatedAt ms>` (ruta pública que sirve
+   * con la sede publicada o el turnero abierto); null/ausente = sin logo. Lo pinta `PractitionerStep` chico sobre la
+   * foto de cada profesional. Opcional para los fixtures viejos.
+   */
+  logoUrl?: string | null;
   practitioners: {
     id: string;
     name: string;
@@ -43,6 +49,10 @@ export type PublicClinic = {
     /** B3.2: coberturas que acepta (ids de `PublicClinic.insurers`).
      *  Sin fila `PractitionerPayer` = aceptada; Particular siempre. */
     acceptedInsurerIds?: string[];
+    /** CF3b PH-S (M24, contrato FOTO): `/api/public/pro-photo/<id>?v=<ms>` SOLO con `Practitioner.showPhotoPublic`
+     *  (opt-in de este consultorio) y una foto subida; null/ausente = iniciales. Nunca `UserProfile.avatarUrl`.
+     *  Opcional para los fixtures viejos. */
+    photoUrl?: string | null;
   }[];
   services: {
     id: string;
@@ -89,7 +99,38 @@ export type PublicClinic = {
    * setea el server; es opcional solo por los fixtures viejos (ausente = false).
    */
   whatsappNotices?: boolean;
+  /**
+   * CF3 (D-CF3-1/3, contrato PR-T ↔ PR-P): lo que paga un PARTICULAR nuevo con ESE profesional, por servicio:
+   * `particularQuotes[practitionerId][serviceId]` = `particularQuoteCents` de `lib/copago.ts` (precio del profesional →
+   * «Particular» del consultorio → precio del servicio), la misma rama sin cobertura de `resolveBookingCopagoCents`
+   * que usa el submit. Un profesional con `showPublicPrice=false` NO aparece (el precio no viaja en el HTML); un
+   * servicio que no ofrece, tampoco. Ausente = payload viejo → el wizard muestra `priceCents` como siempre
+   * (`particularQuoteFor`). Nunca trae copagos de obras sociales.
+   */
+  particularQuotes?: Record<string /* practitionerId */, Record<string /* serviceId */, number>>;
+  /**
+   * CF3 (D-CF3-5): profesional con opt-in `showContactForInsured` (y consentimiento v2 vigente sobre su número). Solo
+   * el booleano: el número NO viaja en el HTML, lo trae `getInsuredContact` (con rate limit) cuando el paciente con
+   * obra social llega al resumen. Clave ausente = false.
+   */
+  insuredContactAvailable?: Record<string /* practitionerId */, boolean>;
+  /**
+   * CF3 (D-CF3-5): teléfono público del consultorio (`Tenant.phone`, el mismo que publica el directorio) para el
+   * fallback «Consultá tu cobertura con el consultorio» de un paciente con obra social. null/ausente = no hay: solo el
+   * texto.
+   */
+  clinicPhone?: string | null;
 };
+
+/**
+ * CF3 (D-CF3-5): resultado de `getInsuredContact(slug, practitionerId)` (PR-P). Solo links ya armados y el nombre
+ * (mismo criterio que `PublicLeadContact`). `none` = sin opt-in, sin consentimiento, profesional no reservable o slug
+ * ajeno (un único valor a propósito: no dice cuál); `rate_limited` = superó el tope. En los dos casos el wizard cae a
+ * «Consultá tu cobertura con el consultorio.» (`insuredCoverageText(null, …)`).
+ */
+export type PublicInsuredContact =
+  | { ok: true; name: string; waUrl: string; telUrl: string }
+  | { ok: false; reason: "none" | "rate_limited" };
 
 /**
  * C-TP8: `PublicClinic.onlinePayment`. Nunca trae nada de la cuenta (es público) ni copagos de obras sociales.

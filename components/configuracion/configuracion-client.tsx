@@ -53,6 +53,7 @@ const PANEL_LOADERS = {
   "obras-sociales": () => import("./panels/insurers-panel"),
   diagnosticos: () => import("./panels/diagnosticos-panel"),
   directorio: () => import("./panels/directory-panel"),
+  "sitio-web": () => import("./panels/site-panel"),
   usuarios: () => import("./panels/users-panel"),
   plan: () => import("./panels/plan-tab"),
   facturacion: () => import("./panels/billing-panel"),
@@ -92,6 +93,9 @@ const InsurersPanel = dynamic(() => import("./panels/insurers-panel").then((m) =
 const DiagnosticosPanel = dynamic(() => import("./panels/diagnosticos-panel").then((m) => m.DiagnosticosPanel), { loading: PanelSkeleton });
 // DIR-3c: pestaña «Directorio» (C-DIR9), su propio chunk como las demás.
 const DirectoryPanel = dynamic(() => import("./panels/directory-panel").then((m) => m.DirectoryPanel), { loading: PanelSkeleton });
+// CF3 (D-CF3-10, SD-C): «Sitio web» (la sede pública `/<slug>`), su propio chunk. El panel lee sus datos al montar
+// (`getSiteSettings`): el loader de la página no suma sentencias por esta pestaña.
+const SitePanel = dynamic(() => import("./panels/site-panel").then((m) => m.SitePanel), { loading: PanelSkeleton });
 const UsersPanel = dynamic(() => import("./panels/users-panel").then((m) => m.UsersPanel), { loading: PanelSkeleton });
 const PlanTab = dynamic(() => import("./panels/plan-tab").then((m) => m.PlanTab), { loading: PanelSkeleton });
 const BillingPanel = dynamic(() => import("./panels/billing-panel").then((m) => m.BillingPanel), { loading: PanelSkeleton });
@@ -171,6 +175,11 @@ type Props = {
   initialSupportDraft?: SupportDraft | null;
   /** BO-Z B6: consultorios bloqueados de los que es titular (export desde acá). */
   exportBlocked?: ExportBlockedTenant[];
+  /**
+   * CT-INT (CF3b, H4): puede bajar el export del consultorio ACTIVO = `account.export` (Titular principal o
+   * co-titular), calculado por la página. Reemplaza al `role === "OWNER"`, que no veía al co-titular. Ausente = no.
+   */
+  exportActive?: boolean;
   /** BO-Z B6: `?tenant=` de la URL (link del mail de pedido de export). */
   exportRequestedTenantId?: string | null;
   /**
@@ -205,13 +214,17 @@ type Props = {
   miAgenda?: ConfiguracionMiAgendaData | null;
   /** CF2 (T.C): clave PÚBLICA VAPID para `pushManager.subscribe`; null = push sin configurar en el server. */
   webPushPublicKey?: string | null;
+  /** CF3 (D-CF3-12): nombre del consultorio para el texto de «Compartir por WhatsApp» de «Mi agenda» (del Actor). */
+  clinicName?: string;
 };
 
 export function ConfiguracionClient(props: Props) {
   const exportBlocked = props.exportBlocked ?? [];
   // BO5-C: solo el titular; soporte (que llega como ADMIN) nunca baja PHI (plan §19.5). BO-Z B6: también quien es
-  // titular de un consultorio suspendido aunque en el activo sea ADMIN (ve solo el botón del suspendido).
-  const canExport = !props.support && (props.role === "OWNER" || exportBlocked.length > 0);
+  // titular de un consultorio suspendido aunque en el activo sea ADMIN (ve solo el botón del suspendido). CT-INT
+  // (H4): «titular» = `account.export` (principal o co-titular) por `exportActive`, no por el rol.
+  const exportActive = !props.support && !!props.exportActive;
+  const canExport = !props.support && (exportActive || exportBlocked.length > 0);
   const directory = props.directory ?? null;
   const sensitive = !!props.access.sensitive;
   const fichas = props.fichas ?? null;
@@ -244,6 +257,8 @@ export function ConfiguracionClient(props: Props) {
   const [generalDirty, setGeneralDirty] = useState(false);
   // CF2 (T.C): la anticipación propia y el contacto de «Mi agenda» también se editan en línea.
   const [miAgendaDirty, setMiAgendaDirty] = useState(false);
+  // CF3 (SD-C): la frase y la descripción de «Sitio web» también se editan en línea.
+  const [siteDirty, setSiteDirty] = useState(false);
   // TP-3a: el aviso de `?mp=` es de la vuelta del callback: se ve una vez, en la pestaña a la que volvió, y se apaga al
   // cambiar de pestaña (volver no lo vuelve a mostrar). Sacarlo de la URL (que un refresh no lo repita) lo hacen las
   // dos pestañas de Mercado Pago al montar (`useDropMpReturnParam`, TP-ZF3): acá era una copia en el JS inicial.
@@ -254,7 +269,7 @@ export function ConfiguracionClient(props: Props) {
   const setTab = useCallback(
     async (t: Tab) => {
       if (t === tab) return;
-      if (generalDirty || practitionerDirty || directoryDirty || fichasDirty || paymentsDirty || miAgendaDirty) {
+      if (generalDirty || practitionerDirty || directoryDirty || fichasDirty || paymentsDirty || miAgendaDirty || siteDirty) {
         const where = generalDirty
           ? "General"
           : practitionerDirty
@@ -265,7 +280,9 @@ export function ConfiguracionClient(props: Props) {
                 ? "Mis fichas"
                 : miAgendaDirty
                   ? "Mi agenda"
-                  : "Cobros online";
+                  : siteDirty
+                    ? "Sitio web"
+                    : "Cobros online";
         const ok = await confirm({
           title: "¿Descartar los cambios sin guardar?",
           message: `Tenés cambios sin guardar en ${where}. Si cambiás de pestaña, se pierden.`,
@@ -280,6 +297,7 @@ export function ConfiguracionClient(props: Props) {
         setFichasDirty(false);
         setPaymentsDirty(false);
         setMiAgendaDirty(false);
+        setSiteDirty(false);
       }
       setTabRaw(t);
       setMpReturn(null);
@@ -295,7 +313,7 @@ export function ConfiguracionClient(props: Props) {
         /* sin history: la pestaña vale igual */
       }
     },
-    [tab, generalDirty, practitionerDirty, directoryDirty, fichasDirty, paymentsDirty, miAgendaDirty, confirm]
+    [tab, generalDirty, practitionerDirty, directoryDirty, fichasDirty, paymentsDirty, miAgendaDirty, siteDirty, confirm]
   );
   const can = (t: Tab) => visible.includes(t);
   // «Accesos de soporte»: PL-F1b (decisión de Martin, 16-oct), cualquier miembro, si la página pudo leerlos. Antes
@@ -322,10 +340,13 @@ export function ConfiguracionClient(props: Props) {
           sensitive={sensitive}
           support={props.support}
           logo={sensitive ? props.logo ?? null : null}
+          // CF3b (ZF4b): quien no ve «Plan y uso» (sin `account.billing`: Admin sin «Planes y pagos», co-titular) lee
+          // «pedile al titular que amplíe el plan» en vez de un link a una pestaña que no tiene.
+          seesPlan={!!props.access.billing}
           onDirtyChange={setGeneralDirty}
         />
       )}
-      {tab === "sedes" && can("sedes") && <LocationsPanel locations={props.locations} rooms={props.rooms} />}
+      {tab === "sedes" && can("sedes") && <LocationsPanel locations={props.locations} rooms={props.rooms} seesPlan={!!props.access.billing} />}
       {tab === "profesionales" && can("profesionales") && (
         <PractitionerPanel
           summary={props.scheduleSummary}
@@ -339,16 +360,19 @@ export function ConfiguracionClient(props: Props) {
             directory ? { catalog: directory.specialtyCatalog, byPractitioner: directory.specialtiesByPractitioner } : null
           }
           support={props.support}
+          // CF3 PR-U (D-CF3-12): link del turnero de cada profesional en Profesionales.
+          turnero={props.tenant ? { slug: props.tenant.slug, clinicName: props.tenant.name } : null}
         />
       )}
       {tab === "servicios" && can("servicios") && (
-        <ServicesPanel services={props.services} practitioners={props.practitioners} />
+        <ServicesPanel services={props.services} practitioners={props.practitioners} ownPractitionerId={miAgenda?.practitionerId ?? null} />
       )}
       {tab === "obras-sociales" && can("obras-sociales") && <InsurersPanel insurers={props.insurers} />}
       {tab === "diagnosticos" && can("diagnosticos") && <DiagnosticosPanel conditions={props.customConditions} />}
       {tab === "directorio" && can("directorio") && directory && (
         <DirectoryPanel directory={directory} support={props.support} onDirtyChange={setDirectoryDirty} />
       )}
+      {tab === "sitio-web" && can("sitio-web") && <SitePanel onDirtyChange={setSiteDirty} />}
       {tab === "usuarios" && can("usuarios") && (
         <UsersPanel team={props.team} pending={props.pending} viewerRole={props.role} seats={props.planUsage?.seats} />
       )}
@@ -383,6 +407,10 @@ export function ConfiguracionClient(props: Props) {
           vapidPublicKey={props.webPushPublicKey ?? null}
           readOnly={!!props.readOnly}
           onDirtyChange={setMiAgendaDirty}
+          clinicName={props.clinicName ?? ""}
+          // CF3: quien tiene «Configuración» ya trae sedes (y salas, con `schedule.configure`) en el loader; sin eso
+          // (`tenantAdmin` false → `locations` vacío) el panel las pide al montar la semana.
+          agendaCatalog={props.access.tenantAdmin ? { locations: props.locations, rooms: props.rooms } : null}
         />
       )}
       {tab === "cobros-online" && can("cobros-online") && onlinePayments && (
@@ -431,7 +459,7 @@ export function ConfiguracionClient(props: Props) {
         <ExportPanel
           blocked={exportBlocked}
           requestedTenantId={props.exportRequestedTenantId}
-          showActive={props.role === "OWNER"}
+          showActive={exportActive}
         />
       )}
     </div>

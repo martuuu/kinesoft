@@ -45,7 +45,7 @@ export function PaymentChoice({
   if (payment.mode === "REQUIRED") {
     return (
       <p className={s.payNote}>
-        Para confirmar el turno se paga con Mercado Pago{payment.coverageDependent ? ". " : ": "}{paymentAmountText(payment)}.
+        Para confirmar el turno se paga con Mercado Pago{payment.coverageDependent || payment.amountHidden ? ". " : ": "}{paymentAmountText(payment)}.
       </p>
     );
   }
@@ -72,6 +72,9 @@ export function PaymentChoice({
 /** Título por caso: el interstitial reemplaza al paso «Tus datos», y el foco va a este título (ZB-2). */
 const INTERSTITIAL_COPY = {
   amount: { title: "Antes de ir a Mercado Pago", subtitle: "El monto cambió con tus datos.", cta: "Continuar a Mercado Pago" },
+  // CF3 (D-CF3-3): precio oculto del profesional. El wizard no mostró ningún número, así que no «cambió»: es la primera
+  // vez que se ve, y se ve siempre antes de Mercado Pago (nunca un monto falso en el resumen).
+  hidden: { title: "Antes de ir a Mercado Pago", subtitle: "Este es el monto a pagar.", cta: "Continuar a Mercado Pago" },
   unavailable: { title: "Tu turno quedó reservado", subtitle: "Ya está agendado.", cta: "Ver mi turno" },
   reserved: { title: "Tu turno quedó reservado", subtitle: "Con tus datos, este turno no se cobra online.", cta: "Ver mi turno" },
 } as const;
@@ -81,7 +84,7 @@ export function PaymentInterstitial({
   amountCents,
   onContinue,
 }: {
-  kind: "amount" | "unavailable" | "reserved";
+  kind: "amount" | "hidden" | "unavailable" | "reserved";
   amountCents: number | null;
   onContinue: () => void;
 }) {
@@ -96,7 +99,9 @@ export function PaymentInterstitial({
             ? PAY_COPY.optionalUnavailable
             : kind === "reserved"
               ? "No hace falta pagar online: lo arreglás en el consultorio."
-              : `Con tus datos, el monto a pagar es ${formatARS(amountCents ?? 0)}. Lo vas a ver así en Mercado Pago.`}
+              : kind === "hidden"
+                ? `El monto a pagar es ${formatARS(amountCents ?? 0)}. Lo vas a ver así en Mercado Pago.`
+                : `Con tus datos, el monto a pagar es ${formatARS(amountCents ?? 0)}. Lo vas a ver así en Mercado Pago.`}
         </span>
       </div>
       <Button variant="primary" size="md" onClick={onContinue}>

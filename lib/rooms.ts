@@ -9,7 +9,7 @@
  *     nombre de `Booking.roomId` se resuelve en el cliente desde este catálogo,
  *     SR "UI"), igual que los nombres de las sedes. No hay PHI.
  *   - `includeArchived` (Configuración) y toda escritura: `schedule.configure`
- *     (OWNER/ADMIN), como sedes y horarios: la sala define dónde se atiende.
+ *     (permiso «Configuración»), como sedes y horarios: la sala define dónde se atiende.
  *   - PL-2f (C-PL1, PL-D7): módulo `salas` (Clínica / Libre, las dos verticales). Sin él, las escrituras tiran
  *     `ForbiddenError(MODULE_DENIED_COPY.salas)` y las lecturas devuelven `[]` (regla de `lib/authz.ts`: una
  *     lectura compartida no rompe la pantalla). Las salas que el consultorio cargó en Clínica «duermen»: no se
@@ -65,7 +65,7 @@ import {
 } from "@/lib/rooms-schemas";
 import type { ActionResult } from "@/lib/validation";
 
-const WRITE_MSG = "Solo OWNER/ADMIN pueden configurar las salas.";
+const WRITE_MSG = "Solo quien tiene permiso de «Configuración» puede configurar las salas.";
 const NOT_FOUND = "Sala no encontrada.";
 const BAD_LOCATION = "La sede no existe o está archivada.";
 const LOCATION_ARCHIVED = "La sede de esta sala está archivada. Restaurá la sede primero.";

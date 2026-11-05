@@ -29,7 +29,7 @@ import { prismaService } from "@/lib/db";
 import { requirePlatformAdmin, type PlatformActor } from "@/lib/platform-actor";
 import { auditPlatformInTx } from "@/lib/audit";
 import type { PlatformActorRef } from "@/lib/platform-audit-types";
-import { tags, tenantEntitlementTags } from "@/lib/cache-tags";
+import { CLINIC_SITES_TAG, tags, tenantEntitlementTags } from "@/lib/cache-tags";
 import { applyTenantEntitlementsInTx } from "@/lib/tenant-entitlements-internal";
 import {
   changeTenantSlugInTx,
@@ -64,6 +64,10 @@ function ref(actor: PlatformActor): PlatformActorRef {
 /** Después del commit: el acceso y los módulos se resuelven por request, pero layouts y tags cacheados no. */
 function revalidateTenant(tenantId: string): void {
   for (const tag of tenantEntitlementTags(tenantId)) revalidateTag(tag);
+  // CF3 (SD-S, Anexo R): suspender, dar de baja o reactivar cierra/abre la sede digital `/<slug>`. Su snapshot ya
+  // cuelga de `global:directory` (en `tenantEntitlementTags`); el tag propio va explícito para que sacar el directorio
+  // de esa lista no deje la sede de un suspendido publicada. La página `/<slug>` la cubre el `revalidatePath` de "/".
+  revalidateTag(CLINIC_SITES_TAG);
   revalidatePath("/plataforma", "layout");
   revalidatePath("/", "layout");
 }
@@ -184,6 +188,10 @@ export async function updatePlatformTenantProfile(raw: unknown): Promise<Result>
     revalidatePath("/plataforma", "layout");
     // Nombre en el shell del consultorio; contacto en Configuración y en la página «Turnos online no disponibles».
     revalidatePath("/", "layout");
+    // CF3 (SD-S, Anexo R): nombre, teléfono y WhatsApp salen en la sede digital y en el directorio (snapshots globales
+    // de 10 min, data cache: el revalidatePath de arriba no los toca). Antes el directorio quedaba con el dato viejo.
+    revalidateTag(CLINIC_SITES_TAG);
+    revalidateTag(tags.directory());
   }
   return { ok: true, data: { updatedAt: res.updatedAt.toISOString() } };
 }
@@ -235,6 +243,11 @@ export async function changePlatformTenantSlug(raw: unknown): Promise<Result> {
     // DIR-2c: el snapshot del directorio guarda `/consultorios/<slug>` y los `bookingHref` con el slug (C-DIR3); con el
     // viejo, los links del directorio irían por el redirect del alias hasta el próximo rebuild (10 min).
     revalidateTag(tags.directory());
+    // CF3 (SD-S, Anexo R): la sede digital pasa de `/<viejo>` (ahora alias → 308) a `/<nuevo>`; su snapshot guarda el
+    // slug, los alias y los `bookingUrl`.
+    revalidateTag(CLINIC_SITES_TAG);
+    revalidatePath(`/${res.from}`);
+    revalidatePath(`/${res.to}`);
   }
   return { ok: true, data: { updatedAt: res.updatedAt.toISOString() } };
 }

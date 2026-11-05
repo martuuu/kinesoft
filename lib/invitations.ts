@@ -39,12 +39,13 @@ import type { Role } from "@prisma/client";
 import { z } from "zod";
 import { runWithRls } from "@/lib/rls";
 import { getActor, writableError, type Actor } from "@/lib/session";
-import { capabilitiesForActor, requireAccountOwner, requireTenantSensitive } from "@/lib/authz";
+import { capabilitiesForActor, requireAccountManage, requireAccountOwner, requireTenantSensitive } from "@/lib/authz";
 import { requireStepUp } from "@/lib/two-factor-step-up";
 import { withSupportWritable } from "@/lib/support-writable";
 import { withReadOnlyResult } from "@/lib/read-only-result";
 import { tags } from "@/lib/cache-tags";
 import {
+  PRINCIPAL_ONLY_MESSAGE,
   ROLE_CHANGE_RACE_MESSAGE,
   RoleChangeRaceError,
   changeMemberRoleInTx,
@@ -53,6 +54,7 @@ import {
   revokeInvitationInTx,
   runTeamTx,
   setMemberClinicalInTx,
+  setMemberCoOwnerInTx,
   setMemberGrantsInTx,
   suspendMemberInTx,
   teamCreateInvitation,
@@ -85,6 +87,9 @@ import { listPendingInvitationsInTx, listTeamMembersInTx } from "@/lib/invitatio
  * Quien no es Titular actúa con los límites del ADMIN (`actorRole: "ADMIN"`): no toca la membresía del Titular, no lo
  * transfiere y no recibe la URL de la invitación (es una credencial: le alcanza con «Reenviar»). El Titular sale de
  * `account.owner` (solo el OWNER, nunca por delegación).
+ * CF3b (M23): el co-titular tiene `tenant.sensitive` (lo del Titular) pero NO `account.owner` (CT-K1), así que entra
+ * acá como ADMIN: gestiona a los demás como el Titular y nada sobre el principal (las reglas del co-titular viven en
+ * `lib/team-internal.ts`, cabecera de `PRINCIPAL_ONLY_MESSAGE`).
  */
 async function requireTeamManager(): Promise<{ actor: Actor; role: "OWNER" | "ADMIN" }> {
   const actor = await getActor();
@@ -161,10 +166,13 @@ const IdInput = z.string().min(1).max(64);
 const RoleInput = z.enum(["OWNER", "ADMIN", "PRACTITIONER", "ASSISTANT", "BILLING"]);
 
 const TRANSFER_VIA_ACTION_MESSAGE = "Para transferir la titularidad usá «Transferir titularidad»: pide confirmar con tu código.";
-const OWNER_ONLY_MESSAGE = "Solo el titular de la cuenta puede hacer esto.";
+// CF3b: desde M23 hay co-titulares, así que lo que es SOLO del OWNER dice «principal» (el co-titular también es titular).
+const OWNER_ONLY_MESSAGE = PRINCIPAL_ONLY_MESSAGE;
+const MANAGE_ONLY_MESSAGE = "Solo el titular o un co-titular pueden delegar permisos.";
 
 const ClinicalInput = z.object({ membershipId: IdInput, clinical: z.boolean() }).strict();
 const GrantsInput = z.object({ membershipId: IdInput, grantSettings: z.boolean(), grantBilling: z.boolean() }).strict();
+const CoOwnerInput = z.object({ membershipId: IdInput, enabled: z.boolean() }).strict();
 
 /*
  * BO2-B (C-BO8): de acá para abajo, wrappers delgados. Las reglas (quién puede qué, CAS, cupos, audit, mail)
@@ -373,9 +381,16 @@ async function removeMemberImpl(membershipId: string): Promise<ActionResult> {
  * `withReadOnlyResult`: en solo lectura vuelve el copy, no un error redactado.
  */
 
-/** Atrapa la carrera del CAS de los núcleos (otro cambio ganó en el medio) y la devuelve con su copy. */
-async function runOwnerTx(actor: Actor, fn: Parameters<typeof runTeamTx<ActionResult>>[1]): Promise<ActionResult> {
-  const ctx = tenantCtx(actor, "OWNER");
+/**
+ * Atrapa la carrera del CAS de los núcleos (otro cambio ganó en el medio) y la devuelve con su copy. `role`: "OWNER"
+ * para lo que pasó `requireAccountOwner`; CF3b: "ADMIN" para el co-titular que delega (`setMemberGrants`).
+ */
+async function runOwnerTx(
+  actor: Actor,
+  fn: Parameters<typeof runTeamTx<ActionResult>>[1],
+  role: "OWNER" | "ADMIN" = "OWNER"
+): Promise<ActionResult> {
+  const ctx = tenantCtx(actor, role);
   try {
     return await runTeamTx(ctx, fn);
   } catch (err) {
@@ -416,18 +431,45 @@ async function setMemberClinicalImpl(raw: SetMemberClinicalInput): Promise<Actio
 /**
  * Permisos delegados por miembro (PL-D5): «Puede cambiar la Configuración» (`grantSettings`) y «Puede ver y cambiar
  * el plan y los pagos» (`grantBilling`). Nunca sobre el Titular (`setMemberGrantsInTx` lo rechaza).
+ * CF3b (CT-K1, `account.manage`): también el co-titular, solo «Configuración» y solo sobre quien no es el principal ni
+ * otro co-titular (el núcleo lo corta y relee la marca en la tx). Lo decide la membresía, no esta barrera: el ctx del
+ * co-titular va como ADMIN (sin `account.owner`), igual que en `requireTeamManager`.
  */
 export async function setMemberGrants(...args: Parameters<typeof setMemberGrantsImpl>): ReturnType<typeof setMemberGrantsImpl> {
   return withReadOnlyResult(() => setMemberGrantsImpl(...args));
 }
 
 async function setMemberGrantsImpl(raw: SetMemberGrantsInput): Promise<ActionResult> {
-  const { actor } = await requireAccountOwner(OWNER_ONLY_MESSAGE);
+  const { actor, caps } = await requireAccountManage(MANAGE_ONLY_MESSAGE);
   const parsed = GrantsInput.safeParse(raw);
   if (!parsed.success) return { ok: false, error: "Datos inválidos" };
   await requireStepUp(actor);
+  const role = caps.has("account.owner") ? "OWNER" : "ADMIN";
+  const ctx = tenantCtx(actor, role);
+  const r = await runOwnerTx(actor, (tx) => setMemberGrantsInTx(tx, ctx, parsed.data), role);
+  if (r.ok) revalidateTeam(actor.tenantId, false);
+  return r;
+}
+
+/**
+ * «Co-titular» (CF3b, M23; decisión de Martin del 05-nov): el Titular PRINCIPAL se lo da o se lo saca a un Profesional
+ * activo del consultorio. Solo `account.owner` (ni el co-titular, ni el Administrador/a, ni soporte: el copy es
+ * «Esto lo puede hacer solo el titular principal.») y con step-up, como el resto de los permisos delegados. Prender
+ * apaga «Planes y pagos» en la misma escritura. Reglas, CAS y audit en `setMemberCoOwnerInTx`.
+ * Sin `expectedUpdatedAt`: `Membership` no tiene `updatedAt`; `enabled` es el estado final (idempotente) y una carrera
+ * vuelve con `ROLE_CHANGE_RACE_MESSAGE`.
+ */
+export async function setMemberCoOwner(...args: Parameters<typeof setMemberCoOwnerImpl>): ReturnType<typeof setMemberCoOwnerImpl> {
+  return withReadOnlyResult(() => setMemberCoOwnerImpl(...args));
+}
+
+async function setMemberCoOwnerImpl(membershipId: string, enabled: boolean): Promise<ActionResult> {
+  const { actor } = await requireAccountOwner(PRINCIPAL_ONLY_MESSAGE);
+  const parsed = CoOwnerInput.safeParse({ membershipId, enabled });
+  if (!parsed.success) return { ok: false, error: "Datos inválidos" };
+  await requireStepUp(actor);
   const ctx = tenantCtx(actor, "OWNER");
-  const r = await runOwnerTx(actor, (tx) => setMemberGrantsInTx(tx, ctx, parsed.data));
+  const r = await runOwnerTx(actor, (tx) => setMemberCoOwnerInTx(tx, ctx, parsed.data));
   if (r.ok) revalidateTeam(actor.tenantId, false);
   return r;
 }

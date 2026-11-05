@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useId, useRef, useState, useTransition, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import { Card } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
@@ -17,9 +17,27 @@ import type { HeroPlanChip, PatientHeroProps } from "@/components/planes/plan-ed
 import { disciplineLabel } from "@/lib/plan-display";
 import type { PatientArchivePlansAction } from "@/lib/plans-lifecycle-state";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
+import { WhatsAppIcon } from "@/components/ui/brand-icons";
+import type { Capability } from "@/lib/capabilities";
+import type { ContactPaymentLinkInput } from "@/components/patients/contact-actions-logic";
 import type { PatientWithRelations, InsurerOption, PractitionerOption } from "./types";
 
 import heroStyles from "./hero.module.css";
+import contactStyles from "@/components/patients/contact-actions.module.css";
+
+/**
+ * CF3 (D-CF3-8, SH-U): menú del teléfono (WhatsApp, llamar, copiar, recordatorios, turnero, link de pago, portal).
+ * DIFERIDO: acá queda solo el botón; el panel, su lectura (`getPatientShareBundle`) y el `PaymentLinkDrawer` bajan
+ * con `import()` al primer click (precarga en hover/foco). `/pacientes/[id]` está a ≈10 kB de su techo de 180.
+ */
+const loadContactActions = () => import("@/components/patients/contact-actions");
+function preloadContactActions() {
+  void loadContactActions().catch(() => {});
+}
+const ContactActionsPanel = dynamic(() => loadContactActions().then((m) => m.ContactActionsPanel), {
+  ssr: false,
+  loading: () => null,
+});
 /** PF1.1 (C-PF2): «Editar paciente» diferido; `preloadEditPatient` lo baja en hover/foco del botón. */
 const loadEditPatient = () => import("./edit-patient-drawer");
 function preloadEditPatient() {
@@ -93,6 +111,8 @@ export function PatientHero({
   editRequest = 0,
   whatsappActive = false,
   canSeeEmailReason = false,
+  capabilities = [],
+  viewerPractitionerId = null,
 }: PatientHeroProps & {
   /**
    * PF1.1 (D6): contador que sube cuando otra superficie de la ficha pide «Editar paciente» (el «Cargar diagnóstico»
@@ -106,6 +126,10 @@ export function PatientHero({
    * de «Enviar al portal» (`link_*`, `provider_error:…`), que es lo que se busca en Resend. El resto ve solo el copy.
    */
   canSeeEmailReason?: boolean;
+  /** CF3 (SH-U): capabilities del MIEMBRO, para a quién se le puede hacer un link de pago desde el teléfono. */
+  capabilities?: readonly Capability[];
+  /** CF3 (SH-U): `actor.practitionerId` (`billing.collectOwn` cobra solo lo suyo). */
+  viewerPractitionerId?: string | null;
 }) {
   // Modals lifted here — outside the <Card glass> — so backdrop-filter
   // on the card doesn't create a stacking context that traps position:fixed.
@@ -116,6 +140,9 @@ export function PatientHero({
   const [askPlans, setAskPlans] = useState(false);
   const livePlanCount = plansEnabled ? plans.length : 0;
   const practitionerFact = usePractitionerFactLabel();
+  // CF3 (SH-U): el estado de «Enviar al portal» sube acá para que el menú del teléfono dispare el MISMO flujo que el
+  // botón (mismo aviso, mismo «Enviando…»).
+  const portal = usePortalInvite(patient.id);
 
   // L9: el diálogo junta la elección; la action va acá (single, no bulk).
   const archiveWithPlans = async (plansAction: PatientArchivePlansAction): Promise<ArchivePatientResult> => {
@@ -156,7 +183,19 @@ export function PatientHero({
             </span>
           </div>
           <div style={{ display: "flex", gap: 24, marginTop: 12, fontSize: 12, color: "var(--navy-500)", flexWrap: "wrap" }}>
-            <HeroFact label="Tel." value={patient.phone ?? "—"} />
+            <HeroFact
+              label="Tel."
+              value={
+                <PatientPhoneAction
+                  patientId={patient.id}
+                  patientName={`${patient.firstName} ${patient.lastName}`}
+                  phone={patient.phone}
+                  paymentLink={{ practitioners, capabilities, viewerPractitionerId }}
+                  onPortalInvite={portal.send}
+                  portalLinked={!!patient.userId}
+                />
+              }
+            />
             <HeroFact label="Email" value={patient.email ?? "—"} />
             <HeroFact label="Cobertura" value={coverageLabel} />
             <HeroFact
@@ -179,6 +218,7 @@ export function PatientHero({
           onAskArchivePlans={() => setAskPlans(true)}
           onEdit={() => setEditing(true)}
           canSeeEmailReason={canSeeEmailReason}
+          portal={portal}
         />
       </Card>
 
@@ -236,6 +276,7 @@ export function PatientAdminHero({
   canEdit = false,
   insurers = [],
   whatsappActive = false,
+  paymentLink = null,
 }: {
   patient: PatientAdminCore;
   canBook: boolean;
@@ -244,6 +285,11 @@ export function PatientAdminHero({
   insurers?: InsurerOption[];
   /** WA-U3: la Secretaría registra el consentimiento de WhatsApp desde «Editar datos». */
   whatsappActive?: boolean;
+  /**
+   * CF3 (SH-U): candidatos del link de pago del menú del teléfono (los profesionales de sus turnos) y el permiso del
+   * miembro. null = sin link de pago. El portal no se ofrece: exige `full`.
+   */
+  paymentLink?: ContactPaymentLinkInput | null;
 }) {
   const [editing, setEditing] = useState(false);
   const age = patient.dateOfBirth
@@ -270,7 +316,17 @@ export function PatientAdminHero({
             </span>
           </div>
           <div style={{ display: "flex", gap: 24, marginTop: 12, fontSize: 12, color: "var(--navy-500)", flexWrap: "wrap" }}>
-            <HeroFact label="Tel." value={patient.phone ?? "—"} />
+            <HeroFact
+              label="Tel."
+              value={
+                <PatientPhoneAction
+                  patientId={patient.id}
+                  patientName={`${patient.firstName} ${patient.lastName}`}
+                  phone={patient.phone}
+                  paymentLink={paymentLink}
+                />
+              }
+            />
             <HeroFact label="Email" value={patient.email ?? "—"} />
             <HeroFact label="Cobertura" value={coverageLabel} />
             <HeroFact label={practitionerFact} value={patient.assignedPractitionerName ?? "Consultorio común"} />
@@ -323,6 +379,7 @@ function PatientHeroActions({
   onAskArchivePlans,
   onEdit,
   canSeeEmailReason,
+  portal,
 }: {
   patient: PatientWithRelations;
   insurers: InsurerOption[];
@@ -335,6 +392,7 @@ function PatientHeroActions({
   onAskArchivePlans: () => void;
   onEdit: () => void;
   canSeeEmailReason: boolean;
+  portal: PortalInviteState;
 }) {
   const confirm = useConfirm();
   const [archiving, startArchive] = useTransition();
@@ -390,17 +448,7 @@ function PatientHeroActions({
     });
   };
 
-  const [portalSending, startPortal] = useTransition();
-  const [portalResult, setPortalResult] = useState<PortalInviteResult | null>(null);
-
-  const sendToPortal = () => {
-    setPortalResult(null);
-    startPortal(async () => {
-      const r = await sendPatientPortalInvite({ patientId: patient.id });
-      if (r.ok) setPortalResult({ ok: true, ...r.data });
-      else setPortalResult({ ok: false, error: r.error });
-    });
-  };
+  const { sending: portalSending, result: portalResult, send: sendToPortal } = portal;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
@@ -484,6 +532,94 @@ function PatientHeroActions({
   );
 }
 
+type PortalInviteState = { sending: boolean; result: PortalInviteResult | null; send: () => void };
+
+/** «Enviar al portal» del hero completo (botón y menú del teléfono comparten este estado). */
+function usePortalInvite(patientId: string): PortalInviteState {
+  const [sending, start] = useTransition();
+  const [result, setResult] = useState<PortalInviteResult | null>(null);
+  const send = () => {
+    setResult(null);
+    start(async () => {
+      const r = await sendPatientPortalInvite({ patientId });
+      if (r.ok) setResult({ ok: true, ...r.data });
+      else setResult({ ok: false, error: r.error });
+    });
+  };
+  return { sending, result, send };
+}
+
+/**
+ * CF3 (D-CF3-8, SH-U): el teléfono del paciente como botón (ícono de WhatsApp) que abre el menú de contacto. Lo usan el
+ * hero (`full` y `admin`) y «Datos» del perfil admin. Sin teléfono cargado queda «—» (no hay a quién mandarle nada; el
+ * link sin destinatario de cada turno sigue en Turnos y en el drawer).
+ *
+ * El número se ve tal cual (es el mismo dato que antes era texto plano: `full` y `admin` ya lo ven). Lo que el menú
+ * ofrece lo decide el server al abrir (`getPatientShareBundle`): el botón no habilita nada por sí mismo.
+ */
+export function PatientPhoneAction({
+  patientId,
+  patientName,
+  phone,
+  paymentLink = null,
+  onPortalInvite,
+  portalLinked = false,
+}: {
+  patientId: string;
+  patientName: string;
+  phone: string | null | undefined;
+  paymentLink?: ContactPaymentLinkInput | null;
+  onPortalInvite?: () => void;
+  portalLinked?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  // El panel se monta al primer click y queda montado: el `PaymentLinkDrawer` que abre vive en él.
+  const [armed, setArmed] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuId = useId();
+  const shown = (phone ?? "").trim();
+  if (!shown) return <>—</>;
+  return (
+    <span className={contactStyles.wrap}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className={contactStyles.trigger}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        aria-label={`Contactar al paciente: ${shown}`}
+        data-testid="patient-phone-action"
+        onClick={() => {
+          setArmed(true);
+          setOpen((v) => !v);
+        }}
+        onPointerEnter={preloadContactActions}
+        onFocus={preloadContactActions}
+      >
+        <WhatsAppIcon size={14} brand />
+        <span>{shown}</span>
+      </button>
+      {armed && (
+        <ContactActionsPanel
+          open={open}
+          onClose={(restoreFocus) => {
+            setOpen(false);
+            if (restoreFocus) triggerRef.current?.focus();
+          }}
+          menuId={menuId}
+          triggerRef={triggerRef}
+          patientId={patientId}
+          patientName={patientName}
+          displayedPhone={shown}
+          paymentLink={paymentLink}
+          onPortalInvite={onPortalInvite}
+          portalLinked={portalLinked}
+        />
+      )}
+    </span>
+  );
+}
 
 /** Lo que devuelve `sendPatientPortalInvite`, aplanado para el aviso del hero. */
 export type PortalInviteResult =
@@ -591,7 +727,7 @@ function usePractitionerFactLabel(): string {
   return useTenantModules().vertical === "KINESIOLOGY" ? "Kine" : "Profesional";
 }
 
-function HeroFact({ label, value }: { label: string; value: string }) {
+function HeroFact({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div>
       <div

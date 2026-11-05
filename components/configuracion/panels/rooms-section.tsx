@@ -57,6 +57,7 @@ import type { RoomArchiveBlockers as Blockers, RoomRow } from "@/lib/rooms-types
 import { archiveRoom, createRoom, restoreRoom, updateRoom } from "@/lib/rooms";
 import { ErrorBox } from "../controls";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
+import { planUpsellCopy } from "@/lib/tenant-modules";
 
 // [PF1.1-config · C-PF4] Sin `router.refresh()` después de las actions de este archivo: todas revalidan `/configuracion`
 // y la respuesta de la action ya trae el árbol nuevo (un refresh era un segundo render entero, PF-0d).
@@ -66,7 +67,10 @@ import { useTenantModules } from "@/components/layout/tenant-modules-context";
 export const ROOMS_COPY = {
   title: "Salas",
   lead: "Consultorios, boxes y gimnasios de esta sede. Asigná una sala a cada franja para que nadie se pise.",
-  upsell: "Las salas vienen con los planes Clínica y Libre. El plan se cambia en Configuración → Plan y uso.",
+  // CF3 (ZF4b): el texto sale de `lib/tenant-modules.ts` (el mismo 403 de las actions), con sus dos cierres: quien ve
+  // «Plan y uso» lee dónde se cambia; quien no (co-titular, Admin sin «Planes y pagos»), que se lo pida al titular.
+  upsell: planUpsellCopy("salas", true),
+  upsellAskOwner: planUpsellCopy("salas", false),
   add: "Nueva sala",
   empty: "Esta sede todavía no tiene salas. Cargalas si querés saber quién atiende dónde.",
   drawerNew: "Nueva sala",
@@ -215,15 +219,22 @@ type RoomsSectionProps = {
   locationName: string;
   /** Todas las salas del consultorio (archivadas incluidas); se filtran por sede acá. */
   rooms: readonly RoomRow[];
+  /**
+   * CF3 (ZF4b): quien mira ve «Plan y uso» (`account.billing` y no co-titular, la misma regla que la pestaña en
+   * `controls.tsx`). Decide el cierre del aviso sin el módulo. Ausente = true (el aviso de siempre).
+   */
+  seesPlan?: boolean;
 };
 
-export function RoomsSection(props: RoomsSectionProps) {
+export function RoomsSection({ seesPlan = true, ...props }: RoomsSectionProps) {
   // PL-2f: el gate va en un componente aparte para no cortar los hooks de la sección.
   if (!useTenantModules().has("salas")) {
     return (
       <section aria-label={`Salas de ${props.locationName}`} style={{ display: "grid", gap: 4, minWidth: 0 }}>
         <EyebrowLabel>{ROOMS_COPY.title}</EyebrowLabel>
-        <div style={{ fontSize: 12, color: "var(--navy-500)" }}>{ROOMS_COPY.upsell}</div>
+        <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
+          {seesPlan ? ROOMS_COPY.upsell : ROOMS_COPY.upsellAskOwner}
+        </div>
       </section>
     );
   }

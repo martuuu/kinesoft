@@ -86,12 +86,14 @@ const DETAIL_KEYS = [
   "moduleGrants", // T3c-1p: overrides de Plataforma (nombres de módulo)
   "moduleRevokes", // T3c-1p
   "modules",
+  "palette", // BR-P: colores de la sede y del turnero (no es PHI)
   "phone",
   "price", // T3c-1p: precio del plan / a medida / efectivo (centavos, datos del negocio)
   "publicBookingPath",
   "publicEmail",
   "recentPlatformEvents",
   "sharedPatientView",
+  "siteEnabled", // CF3 SD-S
   "taxId", // BO3-B
   "updatedAt",
   "whatsapp",

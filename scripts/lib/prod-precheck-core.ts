@@ -1,10 +1,11 @@
 /**
  * INF-S · núcleo de `scripts/prod-precheck.ts` (plan §26.7, decisión 1 de Martin del 22-oct): prechecks y postchecks
  * de SOLO LECTURA del día del push. Nació para las 7 de T3..PV (M12 → M14 → M18 → M17 → M15 → M16 → M19); desde el
- * reset de prod (29/30-oct) esas 7 ya están aplicadas allá y las pendientes son **M20** (CF, `cf_agenda_rules`; si
- * todavía no se aplicó) y **M21** (CF2, `cf2_profesional_caja`, 02-nov): el `--pre` exige que M12..M19 estén PRESENTES
- * (aplicadas con su checksum y con sus objetos) y corre los prechecks de las pendientes; el `--post` verifica las 9
- * objeto por objeto.
+ * reset de prod (29/30-oct) esas 7 ya están aplicadas allá, M20 (CF) y M21 (CF2) se aplicaron el 02-nov con el push de
+ * `c288e5d`, y las pendientes son **M22** (CF3, `cf3_precios_sede`, 04-nov), **M23** (CF3b, `cf3_co_titular`, 05-nov) y
+ * **M24** (CF3b, `cf3_practitioner_photo`, 05-nov), que van en el MISMO `db:prod:deploy`: el `--pre` exige que M12..M21
+ * estén PRESENTES (aplicadas con su checksum y con sus objetos) y corre los prechecks de M22, M23 y M24; el `--post`
+ * verifica las 12 objeto por objeto.
  *
  * Por qué existe: hasta T5 cada migración tenía su bloque de SQL suelto en el RUNBOOK y Martin lo copiaba a mano en el
  * SQL editor de Supabase, uno por uno, comparando a ojo contra el comentario («-- 0 filas», «-- = el md5 de M9»). Con
@@ -30,9 +31,6 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { Prisma, PrismaClient } from "@prisma/client";
-// ZF1 (B2 de ZA): el «desde» del precheck de M20 es un día AR: `toISOString().slice(0, 10)` daba el día UTC (un turno
-// de las 21:30 AR salía con el día siguiente). Relativo, como `qa-tenants-core.ts`: el script corre con tsx sin alias.
-import { toARDateKey } from "../../lib/datetime-ar";
 
 export type CheckStatus = "PASS" | "WARN" | "FAIL" | "SKIP";
 export type CheckRow = { id: string; group: string; title: string; status: CheckStatus; detail: string };
@@ -43,6 +41,8 @@ export type PrecheckMode = "pre" | "post";
  * guarda en `_prisma_migrations` (sha256 del `migration.sql`): RUNBOOK para M12/M14/M18, handoff de MIG para el resto.
  * CF (30-oct): YA APLICADAS en prod (reset del 29/30-oct, las 47 del repo). Siguen acá porque su checksum y sus objetos
  * son contrato: el `--pre` las exige presentes y el `--post` las re-verifica.
+ * CF3 (04-nov): M20 y M21 también (push de CF2 del 02-nov, `c288e5d`); sus prechecks de «no existe» y de Booking se
+ * borraron (ya no hay nada que aplicar: con M20/M21 exigidas, un «pendiente» es FAIL de `pre.state.*`).
  */
 export const APPLIED_MIGRATIONS = [
   { key: "M12", name: "20261020120000_agenda_secretaria_config", sha256: "a0849c4d28c7154acb3b9a0cf47075bbbde608161d32d126d7ae9d85f9fd7485" },
@@ -53,16 +53,18 @@ export const APPLIED_MIGRATIONS = [
   { key: "M16", name: "20261025120000_saas_mp_subscriptions", sha256: "b235454f0ceceef95394d752f1fe879ec2ec0baf6b7f052ae3e253e47f207798" },
   // PV (27-oct): tickets de Plataforma. Sumada a la misma tanda porque va en el mismo push (decisión de Martin).
   { key: "M19", name: "20261027120000_support_tickets", sha256: "7ac440677f5f80098b6245f1de70b556cc7ea9d4aeeb923b2c6eb9825803f7a2" },
+  { key: "M20", name: "20261030120000_cf_agenda_rules", sha256: "e5d84eec9eba6f11ed6181fc0e18e34b5d220a637808906d445381207ea5b032" },
+  { key: "M21", name: "20261102120000_cf2_profesional_caja", sha256: "48aee329bf97404613044f0ce239e1186ca88f21eae16943448091c8130e588b" },
 ] as const;
 /**
- * Las pendientes en prod de esta salida (CF, 30-oct): solo M20. sha256 verificado en local (CF-M, `migrate deploy`
- * sobre el Docker; = `_prisma_migrations.checksum`).
+ * Las pendientes en prod de esta salida (CF3): M22 (04-nov), M23 (CF3b, 05-nov, co-titular y matrícula) y M24 (CF3b,
+ * 05-nov, foto de la persona), en ese orden y en un solo `db:prod:deploy`. sha256 verificado en local (MIG, MIG2 y MIG3
+ * de CF3, `migrate deploy` sobre el Docker; = `_prisma_migrations.checksum`).
  */
 export const PENDING_MIGRATIONS = [
-  { key: "M20", name: "20261030120000_cf_agenda_rules", sha256: "e5d84eec9eba6f11ed6181fc0e18e34b5d220a637808906d445381207ea5b032" },
-  // CF2 (02-nov): MIG, `migrate deploy` sobre el Docker; = `_prisma_migrations.checksum` local. Si M20 sigue pendiente
-  // en prod, el mismo `db:prod:deploy` aplica las dos en orden de timestamp (M20 → M21).
-  { key: "M21", name: "20261102120000_cf2_profesional_caja", sha256: "48aee329bf97404613044f0ce239e1186ca88f21eae16943448091c8130e588b" },
+  { key: "M22", name: "20261104120000_cf3_precios_sede", sha256: "82ac0f6fdc7d8998264720f1b0347b4a69c77a5dcb4c995032f2bd557fb2c238" },
+  { key: "M23", name: "20261105120000_cf3_co_titular", sha256: "35ddd0dc4e658a72bdf1a4f617f93f367e492edde6ce6067e9e765eb2c41efa6" },
+  { key: "M24", name: "20261105130000_cf3_practitioner_photo", sha256: "cbb3d8383ff96e0d1afdf8c957aa3bded28fc8ba2cfb0d11f73b7fbb6ffd0e30" },
 ] as const;
 /** Todas las que el precheck conoce, en orden de aplicación (checksums del --pre/--post y orden de la tabla impresa). */
 export const TRACKED_MIGRATIONS = [...APPLIED_MIGRATIONS, ...PENDING_MIGRATIONS] as const;
@@ -79,6 +81,8 @@ export const EXPECTED_MD5 = {
   saas_adjustment_guard: "fd8790f4959e9f56ea743dead6bb6d2b",
   // CF2 M21: trigger de solo cierre del reparto (md5 del Docker local tras `migrate deploy`).
   practitioner_revenue_share_guard: "dceb9da5179967d39f6b6b0132e96f7a",
+  // CF3b M23: la base estampa UserProfile.licenseUpdatedAt (md5 del Docker local tras `migrate deploy`).
+  user_profile_license_stamp: "112d2ddbe23470c7762896c6987f721f",
 } as const;
 
 export type PrecheckOptions = {
@@ -92,7 +96,7 @@ export type PrecheckOptions = {
   /** `--post`: el relfilenode de `Booking` que anotó el `--pre` (M18 no tiene que reescribir la tabla). */
   bookingRelfilenode?: number | null;
   /**
-   * Solo tests: corre los prechecks de `--pre` de las PENDIENTES (M20, M21) aunque ya estén aplicadas. En el Docker
+   * Solo tests: corre los prechecks de `--pre` de las PENDIENTES (M22, M23, M24) aunque ya estén aplicadas. En el Docker
    * están aplicadas y sin esto su SQL no se ejecutaría nunca antes del día del push (el «no existe» da FAIL, que es lo
    * esperado; lo que se valida es que ninguna consulta tire).
    */
@@ -493,21 +497,6 @@ const M20_CHECKS = [
   "Practitioner_agendaSlotStepMin_check",
   "Practitioner_publicSlotStepMin_check",
 ] as const;
-/**
- * Profesionales con turnos vivos (desde 7 días atrás) de servicios DISTINTOS que se pisan, de pacientes distintos (o sin
- * paciente). SQL literal del brief CF §A.1. Con M20 + el código de CF esos pares pasan a ser «otro servicio ocupado»
- * (CF-D1, sin backfill): los turnos ya cargados no se tocan, pero el próximo que se pise avisa (staff) o no se ofrece
- * (turnero). Es la lista a quien prenderle «Atiende servicios distintos a la vez» si trabaja así.
- */
-const M20_CROSS_SERVICE_SQL = `WITH b AS (SELECT "id","tenantId","practitionerId","serviceId","patientId","scheduledFor",
-  "scheduledFor" + make_interval(mins => "durationMin") AS "endsAt" FROM "Booking"
-  WHERE "status" <> 'CANCELLED' AND "scheduledFor" >= now() - interval '7 days')
-SELECT t."slug", b1."practitionerId", count(*) AS pares, min(b1."scheduledFor") AS primero
-FROM b b1 JOIN b b2 ON b2."tenantId"=b1."tenantId" AND b2."practitionerId"=b1."practitionerId"
- AND b2."serviceId"<>b1."serviceId" AND b2."id">b1."id" AND b2."scheduledFor"<b1."endsAt" AND b1."scheduledFor"<b2."endsAt"
- AND (b1."patientId" IS NULL OR b2."patientId" IS NULL OR b1."patientId"<>b2."patientId")
-JOIN "Tenant" t ON t."id"=b1."tenantId" GROUP BY 1,2 ORDER BY pares DESC`;
-
 // M21 (CF2 · profesional y caja, §29.4): RUNBOOK «M21 en prod». 7 columnas en Practitioner, 2 tablas, 12 CHECK, 1 único
 // parcial + 2 parciales en Booking (tabla caliente: CREATE INDEX en la tx toma SHARE, frena las escrituras mientras
 // dura), 1 trigger y RLS (PushSubscription SERVICE_ONLY).
@@ -561,6 +550,88 @@ const M21_INDEXES = [
   "PushSubscription_userId_idx",
 ] as const;
 
+// M22 (CF3 · precio por profesional y sede digital, §30.3): RUNBOOK «M22 en prod». 6 columnas, 3 CHECK; sin tablas,
+// sin índices, sin tocar Booking (solo catálogo: ADD COLUMN NULL o con DEFAULT constante).
+const M22_COLUMNS = [
+  "PractitionerService.priceCents",
+  "Practitioner.showPublicPrice",
+  "Practitioner.showContactForInsured",
+  "Tenant.siteEnabled",
+  "Tenant.siteEnabledAt",
+  "Tenant.siteTagline",
+] as const;
+const M22_COLUMN_SHAPE: Record<(typeof M22_COLUMNS)[number], string> = {
+  "PractitionerService.priceCents": "integer YES -",
+  "Practitioner.showPublicPrice": "boolean NO true",
+  "Practitioner.showContactForInsured": "boolean NO false",
+  "Tenant.siteEnabled": "boolean NO false",
+  "Tenant.siteEnabledAt": "timestamp without time zone YES -",
+  "Tenant.siteTagline": "text YES -",
+};
+const M22_CHECKS = ["PractitionerService_priceCents_check", "Practitioner_insuredContact_check", "Tenant_siteTagline_check"] as const;
+/**
+ * Slugs que CF3 (SD-R, `lib/onboarding-logic.ts`) pasa a reservar: rutas de primer nivel de `app/` y archivos de
+ * metadata de Next. La sede digital vive en `/<slug>`, así que un consultorio (o un alias viejo de TenantSlugAlias) con
+ * uno de estos dejaría de andar: la ruta fija de Next gana y su sede/turnero nunca se ve. FAIL, no WARN: hay que
+ * renombrarlo (Plataforma → consultorio → slug, que deja el viejo como alias… que también cae acá) ANTES del deploy.
+ * Literal y no importado de onboarding-logic: este script corre con tsx sin alias, y la lista es la de ESTA salida.
+ */
+export const M22_NEW_RESERVED_SLUGS = [
+  "caja", "cobros", "planes", "sala", "pagar", "profesionales", "consultorios", "privacidad", "terminos", "contacto",
+  "mantenimiento", "plataforma-mfa", "icons", "apple-icon", "opengraph-image", "icon", "favicon", "manifest", "robots",
+  "sitemap", "offline",
+  // CF3b (BR-H): `public/sede/` (fotos del encabezado de la sede) crea el segmento `/sede`.
+  "sede",
+] as const;
+
+// M23 (CF3b · co-titular y matrícula de la persona, 05-nov): RUNBOOK «M23 en prod». 5 columnas, 4 CHECK, 1 función con
+// su trigger; sin tablas, sin índices, sin tocar Booking (ADD COLUMN NULL o con DEFAULT constante: solo catálogo).
+const M23_COLUMNS = [
+  "Membership.grantCoOwner",
+  "UserProfile.licenseKind",
+  "UserProfile.licenseNumber",
+  "UserProfile.licenseJurisdiction",
+  "UserProfile.licenseUpdatedAt",
+] as const;
+const M23_COLUMN_SHAPE: Record<(typeof M23_COLUMNS)[number], string> = {
+  "Membership.grantCoOwner": "boolean NO false",
+  "UserProfile.licenseKind": "text YES -",
+  "UserProfile.licenseNumber": "text YES -",
+  "UserProfile.licenseJurisdiction": "text YES -",
+  "UserProfile.licenseUpdatedAt": "timestamp without time zone YES -",
+};
+const M23_CHECKS = [
+  "Membership_coOwner_role_check",
+  "UserProfile_licenseNumber_check",
+  "UserProfile_licenseJurisdiction_check",
+  "UserProfile_license_check",
+] as const;
+const M23_PROCS = ["user_profile_license_stamp"] as const;
+const M23_TRIGGER = "UserProfile_license_stamp";
+
+// M24 (CF3b · foto de la persona, 05-nov): RUNBOOK «M24 en prod». 3 columnas, 2 CHECK; sin tablas, sin índices, sin
+// trigger, sin tocar Booking (ADD COLUMN NULL o con DEFAULT constante: solo catálogo).
+const M24_COLUMNS = ["UserProfile.photoStorageKey", "UserProfile.photoUpdatedAt", "Practitioner.showPhotoPublic"] as const;
+const M24_COLUMN_SHAPE: Record<(typeof M24_COLUMNS)[number], string> = {
+  "UserProfile.photoStorageKey": "text YES -",
+  "UserProfile.photoUpdatedAt": "timestamp without time zone YES -",
+  "Practitioner.showPhotoPublic": "boolean NO false",
+};
+/**
+ * Definición EXACTA (`pg_get_constraintdef`, Docker local tras `migrate deploy`). No alcanza con el nombre: la forma de
+ * la clave es lo que impide que una fila de UserProfile (sin RLS) apunte a la firma o al logo de un consultorio en el
+ * mismo bucket y el turnero o la sede la publiquen como foto. Un CHECK homónimo más laxo (creado a mano) pasaría
+ * `constraintsByName`.
+ */
+const M24_CHECK_DEFS = {
+  UserProfile_photoStorageKey_check:
+    `CHECK ((("photoStorageKey" IS NULL) OR ((char_length("photoStorageKey") <= 200) AND ` +
+    `starts_with("photoStorageKey", (('users/'::text || id) || '/'::text)) AND ` +
+    `("photoStorageKey" ~ '^users(/[A-Za-z0-9_-][A-Za-z0-9._-]*)+$'::text))))`,
+  UserProfile_photo_check: `CHECK ((("photoStorageKey" IS NULL) = ("photoUpdatedAt" IS NULL)))`,
+} as const;
+const M24_CHECKS = Object.keys(M24_CHECK_DEFS) as (keyof typeof M24_CHECK_DEFS)[];
+
 /** Objetos de cada migración ya aplicada: el `--pre` los exige presentes (mismo inventario que el `--post`). */
 const APPLIED_OBJECTS: Record<AppliedKey, Parameters<typeof present>[1]> = {
   M12: { columns: M12_COLUMNS, types: ["BookingCapMode", "BookingPaymentMethod"] },
@@ -570,6 +641,8 @@ const APPLIED_OBJECTS: Record<AppliedKey, Parameters<typeof present>[1]> = {
   M15: { tables: M15_TABLES, types: M15_TYPES, columns: M15_COLUMNS },
   M16: { tables: ["SaasAdjustment"], types: M16_TYPES, columns: M16_COLUMNS, procs: ["saas_adjustment_guard"] },
   M19: { tables: ["SupportTicketNote"], types: M19_TYPES, columns: M19_COLUMNS },
+  M20: { columns: M20_COLUMNS },
+  M21: { tables: M21_TABLES, columns: M21_COLUMNS, procs: ["practitioner_revenue_share_guard"] },
 };
 
 const M16_CHECKS_EXISTING = [
@@ -692,7 +765,7 @@ async function preChecks(c: Collector, tx: Tx, o: PrecheckOptions, ms: MigState)
   });
 
   const expected = new Set<string>(PENDING_MIGRATIONS.map((m) => m.name));
-  await c.check("pre.migrations.pending", "base", "Pendientes ⊆ M20 → M21 (CF y CF2; M12..M19 ya aplicadas desde el reset)", async () => {
+  await c.check("pre.migrations.pending", "base", "Pendientes ⊆ M22, M23, M24 (CF3; M12..M21 ya aplicadas)", async () => {
     const unexpected = ms.pending.filter((n) => !expected.has(n));
     if (unexpected.length > 0) {
       return fail(`pendientes que NO son de esta salida (revisar antes de deployar): ${list(unexpected)}`);
@@ -704,14 +777,15 @@ async function preChecks(c: Collector, tx: Tx, o: PrecheckOptions, ms: MigState)
     return pass(`${ms.pending.length} pendientes${keys.length ? `: ${keys.join(" → ")}` : " (la base ya está al día)"}`);
   });
 
-  await c.check("pre.repo.checksums", "base", "Repo: migration.sql de M12..M21 = el sha256 verificado en local", async () => {
+  await c.check("pre.repo.checksums", "base", "Repo: migration.sql de M12..M24 = el sha256 verificado en local", async () => {
     const bad = TRACKED_MIGRATIONS.filter((m) => fileSha256(o.migrationsDir, m.name) !== m.sha256).map((m) => m.key);
     return bad.length === 0
       ? pass(`los ${TRACKED_MIGRATIONS.length} sha256 coinciden con el RUNBOOK y los handoffs`)
       : fail(`migration.sql cambiado: ${bad.join(", ")}`);
   });
 
-  // Ya aplicadas (M12..M19): el reset de prod las aplicó. Pendiente o con otro checksum = prod no es lo que creemos.
+  // Ya aplicadas (M12..M21): el reset de prod (M12..M19) y el push de CF2 (M20, M21). Pendiente o con otro checksum =
+  // prod no es lo que creemos.
   for (const m of APPLIED_MIGRATIONS) {
     const row = ms.db.find((r) => r.migration_name === m.name && r.finished_at && !r.rolled_back_at);
     c.add(
@@ -719,7 +793,7 @@ async function preChecks(c: Collector, tx: Tx, o: PrecheckOptions, ms: MigState)
       m.key,
       `${m.key} ${m.name}`,
       !row
-        ? fail("pendiente: tenía que estar aplicada desde el reset (29/30-oct); frená y revisá _prisma_migrations")
+        ? fail("pendiente: tenía que estar aplicada (reset del 29/30-oct o push de CF2 del 02-nov); frená y revisá _prisma_migrations")
         : row.checksum !== m.sha256
           ? fail(`ya aplicada pero con otro checksum (${row.checksum.slice(0, 12)}… ≠ ${m.sha256.slice(0, 12)}…): el SQL de prod no es el del repo`)
           : pass(`ya aplicada (${row.finished_at ? new Date(row.finished_at).toISOString().slice(0, 16) + "Z" : "?"}) con el checksum verificado`)
@@ -727,7 +801,7 @@ async function preChecks(c: Collector, tx: Tx, o: PrecheckOptions, ms: MigState)
     await c.check(`pre.${m.key}.present`, m.key, `${m.key}: sus objetos existen`, () => present(tx, APPLIED_OBJECTS[m.key]));
   }
 
-  // Pendientes (M20, M21): si ya está aplicada, no hay nada que aplicar y sus prechecks se saltean.
+  // Pendientes (M22, M23, M24): si ya está aplicada, no hay nada que aplicar y sus prechecks se saltean.
   for (const m of PENDING_MIGRATIONS) {
     const row = ms.db.find((r) => r.migration_name === m.name && r.finished_at && !r.rolled_back_at);
     c.add(
@@ -745,69 +819,79 @@ async function preChecks(c: Collector, tx: Tx, o: PrecheckOptions, ms: MigState)
     else await c.check(id, key, title, fn);
   };
 
-  // M20 (RUNBOOK «M20 en prod»)
-  await gate("pre.M20.absent", "M20", "M20: las 6 columnas nuevas de Tenant/Practitioner no existen", () => absent(tx, { columns: M20_COLUMNS }));
-  await gate(
-    "pre.M20.crossService",
-    "M20",
-    "M20: profesionales con servicios distintos pisados (informativo: a quién prenderle «Atiende servicios distintos a la vez»)",
-    async () => {
-      const r = await rows<{ slug: string; practitionerId: string; pares: unknown; primero: Date }>(tx, M20_CROSS_SERVICE_SQL);
-      if (r.length === 0) return pass("nadie: ningún profesional tiene turnos vivos de servicios distintos que se pisen (desde hace 7 días)");
-      // WARN, no FAIL (CF-D1): la migración no toca turnos; es la lista para el aviso al cliente y el interruptor.
-      return warn(
-        `${r.length} profesionales (slug:practitionerId pares desde): ${list(
-          r.map((x) => `${x.slug}:${x.practitionerId} ${num(x.pares)} desde ${toARDateKey(new Date(x.primero))}`),
-          20
-        )} → después del deploy, prendeles «Atiende servicios distintos a la vez» si trabajan así (o avisales)`
-      );
-    }
-  );
-
-  // M21 (RUNBOOK «M21 en prod»)
-  await gate("pre.M21.absent", "M21", "M21: las 7 columnas de Practitioner, las 2 tablas, el trigger y los índices nuevos no existen", () =>
+  // M22 (RUNBOOK «M22 en prod»)
+  await gate("pre.M22.absent", "M22", "M22: las 6 columnas nuevas de PractitionerService/Practitioner/Tenant y sus 3 CHECK no existen", () =>
     allOf(
-      () => absent(tx, { tables: M21_TABLES, columns: M21_COLUMNS, procs: ["practitioner_revenue_share_guard"] }),
+      () => absent(tx, { columns: M22_COLUMNS }),
       async () => {
         const r = await rows<{ n: string }>(
           tx,
-          `SELECT indexname AS n FROM pg_indexes WHERE schemaname = 'public' AND indexname = ANY($1::text[]) ORDER BY 1`,
-          [...M21_BOOKING_INDEXES]
+          `SELECT conname AS n FROM pg_constraint WHERE connamespace = 'public'::regnamespace AND conname = ANY($1::text[]) ORDER BY 1`,
+          [...M22_CHECKS]
         );
-        return r.length === 0
-          ? pass("ni los 2 índices de Booking")
-          : fail(`ya existen (alguien los creó a mano o la migración quedó a medias): ${list(r.map((x) => `índice ${x.n}`))}`);
+        return r.length === 0 ? pass("ni los 3 CHECK") : fail(`ya existen (a mano o la migración quedó a medias): ${list(r.map((x) => `CHECK ${x.n}`))}`);
       }
     )
   );
-  // Booking es la tabla más escrita: el CREATE INDEX (sin CONCURRENTLY, va en la tx de la migración) pide SHARE, que
-  // espera a TODA tx abierta que haya escrito en Booking (ROW EXCLUSIVE) y, mientras espera, encola a los que vienen
-  // atrás. Con lock_timeout 5 s, una tx de más de 5 s sobre Booking hace caer el deploy (P3009). WARN, no FAIL: puede
-  // terminar sola antes de deployar; esperá a que quede en verde.
-  await gate("pre.M21.bookingTx", "M21", "M21: transacciones de más de 5 s con lock sobre Booking (CREATE INDEX pide SHARE)", async () => {
-    const r = await rows<{ pid: number; mode: string; granted: boolean; state: string | null; age: unknown }>(
+  // M23 (RUNBOOK «M23 en prod»). Sin precheck de datos: los 4 CHECK son sobre columnas nuevas (todas false / NULL al
+  // crearse), así que ninguna fila existente los puede violar.
+  await gate("pre.M23.absent", "M23", "M23: las 5 columnas nuevas de Membership/UserProfile, sus 4 CHECK, la función y su trigger no existen", () =>
+    allOf(
+      () => absent(tx, { columns: M23_COLUMNS, procs: M23_PROCS }),
+      async () => {
+        const r = await rows<{ n: string }>(
+          tx,
+          `SELECT 'CHECK ' || conname AS n FROM pg_constraint WHERE connamespace = 'public'::regnamespace AND conname = ANY($1::text[])
+           UNION ALL
+           SELECT 'trigger ' || tgname FROM pg_trigger WHERE tgrelid = to_regclass('public."UserProfile"') AND tgname = $2
+           ORDER BY 1`,
+          [...M23_CHECKS],
+          M23_TRIGGER
+        );
+        return r.length === 0
+          ? pass("ni los 4 CHECK ni el trigger")
+          : fail(`ya existen (a mano o la migración quedó a medias): ${list(r.map((x) => x.n))}`);
+      }
+    )
+  );
+  // M24 (RUNBOOK «M24 en prod»). Sin precheck de datos: los 2 CHECK son sobre columnas nuevas (todas NULL al crearse),
+  // así que ninguna fila existente los puede violar; showPhotoPublic nace false sin CHECK.
+  await gate("pre.M24.absent", "M24", "M24: las 3 columnas nuevas de UserProfile/Practitioner y sus 2 CHECK no existen", () =>
+    allOf(
+      () => absent(tx, { columns: M24_COLUMNS }),
+      async () => {
+        const r = await rows<{ n: string }>(
+          tx,
+          `SELECT conname AS n FROM pg_constraint WHERE connamespace = 'public'::regnamespace AND conname = ANY($1::text[]) ORDER BY 1`,
+          [...M24_CHECKS]
+        );
+        return r.length === 0 ? pass("ni los 2 CHECK") : fail(`ya existen (a mano o la migración quedó a medias): ${list(r.map((x) => `CHECK ${x.n}`))}`);
+      }
+    )
+  );
+
+  // No depende de M22 (la lista la reserva el CÓDIGO de CF3) pero va el mismo día y la consecuencia es de M22 (la sede
+  // en /<slug>): corre siempre, aunque M22 ya esté aplicada.
+  await c.check("pre.M22.reservedSlugs", "M22", "CF3: consultorios o alias cuyo slug pasa a estar reservado (tiene que dar 0)", async () => {
+    const r = await rows<{ src: string; slug: string; tenantId: string }>(
       tx,
-      `SELECT l.pid, l.mode, l.granted, a.state, extract(epoch FROM now() - a.xact_start)::int AS age
-         FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
-        WHERE l.relation = to_regclass('public."Booking"') AND l.pid <> pg_backend_pid()
-          AND a.xact_start IS NOT NULL AND now() - a.xact_start > interval '5 seconds'
-        ORDER BY a.xact_start`
+      `SELECT 'Tenant' AS src, slug, id AS "tenantId" FROM "Tenant" WHERE lower(slug) = ANY($1::text[])
+       UNION ALL
+       SELECT 'TenantSlugAlias' AS src, slug, "tenantId" FROM "TenantSlugAlias" WHERE lower(slug) = ANY($1::text[])
+       ORDER BY 1, 2`,
+      [...M22_NEW_RESERVED_SLUGS]
     );
     return r.length === 0
-      ? pass("ninguna")
-      : warn(`${r.length}: ${list(r.map((x) => `pid ${x.pid} ${x.mode}${x.granted ? "" : " (esperando)"} ${x.state ?? "?"} ${num(x.age)} s`), 6)} → esperá a que terminen (el deploy caería por lock_timeout)`);
-  });
-  await gate("pre.M21.bookingCount", "M21", "M21: tamaño de Booking (los 2 índices parciales se construyen con SHARE)", async () => {
-    const n = await scalar(tx, `SELECT count(*) AS n FROM "Booking"`);
-    const copago = await scalar(tx, `SELECT count(*) AS n FROM "Booking" WHERE "copagoPaidAt" IS NOT NULL`);
-    const insurer = await scalar(tx, `SELECT count(*) AS n FROM "Booking" WHERE "insurerPaidAt" IS NOT NULL`);
-    const detail = `${n} turnos (${copago} con copagoPaidAt, ${insurer} con insurerPaidAt)`;
-    // Miles de filas → ms. Con cientos de miles el índice tarda segundos con las escrituras de turnos frenadas.
-    return n > 200_000 ? warn(`${detail}: el CREATE INDEX puede tardar segundos; hacelo en horario sin atención`) : pass(detail);
+      ? pass(`ninguno de los ${M22_NEW_RESERVED_SLUGS.length} slugs nuevos reservados está en uso`)
+      : fail(
+          `${r.length} en uso (dejarían de andar con el código de CF3): ${list(r.map((x) => `${x.src} «${x.slug}» → ${x.tenantId}`), 20)} → renombralos antes del deploy`
+        );
   });
 
-  // Sesiones y locks: M20 toma ACCESS EXCLUSIVE en Tenant y Practitioner (ALTER TABLE, solo catálogo) con lock_timeout
-  // 5 s. Las dos se leen en cada request de agenda: una tx larga sobre ellas hace caer el deploy con P3009.
+  // Sesiones y locks: M22 toma ACCESS EXCLUSIVE en Tenant, Practitioner y PractitionerService, M23 en Membership y
+  // UserProfile, y M24 de nuevo en UserProfile y Practitioner (ALTER TABLE, solo catálogo), cada una con lock_timeout 5 s.
+  // Las cinco se leen en cada request (M23/M24: la foto de acceso de CADA request): una tx larga sobre ellas hace caer el
+  // deploy con P3009.
   await c.check("pre.activity.longTx", "base", "Transacciones de más de 30 s (pg_stat_activity)", async () => {
     const r = await rows<{ pid: number; u: string | null; app: string | null; state: string | null; age: unknown }>(
       tx,
@@ -819,12 +903,13 @@ async function preChecks(c: Collector, tx: Tx, o: PrecheckOptions, ms: MigState)
       ? pass("ninguna")
       : warn(`${r.length}: ${list(r.map((x) => `pid ${x.pid} ${x.u ?? "?"}/${x.app || "-"} ${x.state ?? "?"} ${num(x.age)} s`), 6)} (esperá a que terminen)`);
   });
-  await c.check("pre.activity.locks", "base", "Locks sobre Tenant y Practitioner (las que alteran M20 y M21)", async () => {
+  await c.check("pre.activity.locks", "base", "Locks sobre Tenant, Practitioner, PractitionerService, Membership y UserProfile (las que alteran M22, M23 y M24)", async () => {
     const r = await rows<{ pid: number; rel: string; mode: string; granted: boolean; age: unknown }>(
       tx,
       `SELECT l.pid, c.relname AS rel, l.mode, l.granted, coalesce(extract(epoch FROM now() - a.xact_start)::int, 0) AS age
          FROM pg_locks l JOIN pg_class c ON c.oid = l.relation LEFT JOIN pg_stat_activity a ON a.pid = l.pid
-        WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('Tenant','Practitioner') AND l.pid <> pg_backend_pid()
+        WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('Tenant','Practitioner','PractitionerService','Membership','UserProfile')
+          AND l.pid <> pg_backend_pid()
           AND (NOT l.granted OR l.mode IN ('ShareLock','ShareRowExclusiveLock','ExclusiveLock','AccessExclusiveLock')
                OR now() - a.xact_start > interval '30 seconds')
         ORDER BY 1`
@@ -885,14 +970,14 @@ async function postChecks(c: Collector, tx: Tx, o: PrecheckOptions, ms: MigState
       ? warn(`${ms.applied.size} aplicadas; la base tiene migraciones que el repo no conoce: ${list(ms.unknownInDb)}`)
       : pass(`${ms.applied.size} aplicadas = ${ms.repo.length} del repo («Database schema is up to date!»)`);
   });
-  await c.check("post.migrate.checksums", "base", "Checksum de M12..M21 en _prisma_migrations = sha256 del repo", async () => {
+  await c.check("post.migrate.checksums", "base", "Checksum de M12..M24 en _prisma_migrations = sha256 del repo", async () => {
     const bad: string[] = [];
     for (const m of TRACKED_MIGRATIONS) {
       const r = ms.db.find((x) => x.migration_name === m.name && x.finished_at && !x.rolled_back_at);
       if (!r) bad.push(`${m.key} sin aplicar`);
       else if (r.checksum !== m.sha256 || fileSha256(o.migrationsDir, m.name) !== m.sha256) bad.push(`${m.key} checksum distinto`);
     }
-    return bad.length === 0 ? pass("M12, M14, M18, M17, M15, M16, M19, M20 y M21 con el checksum verificado") : fail(list(bad));
+    return bad.length === 0 ? pass(`${TRACKED_MIGRATIONS.map((m) => m.key).join(", ")} con el checksum verificado`) : fail(list(bad));
   });
 
   await c.check("post.grants.app", "base", `Rol de la app: SELECT sobre las ${NEW_TABLES.length} tablas nuevas (DEFAULT PRIVILEGES)`, async () => {
@@ -1200,6 +1285,126 @@ async function postChecks(c: Collector, tx: Tx, o: PrecheckOptions, ms: MigState
     // Recién migrado da 0: cada profesional los prende en Configuración → «Mi agenda» (tarea de Martin: avisarles).
     return pass(`de ${num(x?.total)} profesionales: mail ${num(x?.mail)}, push ${num(x?.push)}, contacto ${num(x?.contact)}`);
   });
+
+  // M22 (CF3 · precio por profesional y sede digital): RUNBOOK «M22 en prod».
+  await c.check("post.M22.objects", "M22", "M22: 6 columnas en PractitionerService/Practitioner/Tenant", () => present(tx, { columns: M22_COLUMNS }));
+  await c.check("post.M22.columns", "M22", "M22: priceCents integer NULL; showPublicPrice DEFAULT true; showContactForInsured y siteEnabled DEFAULT false; siteEnabledAt y siteTagline NULL", async () => {
+    const r = await rows<{ n: string; t: string; nullable: string; d: string | null }>(
+      tx,
+      `SELECT table_name || '.' || column_name AS n, data_type AS t, is_nullable AS nullable, column_default AS d
+         FROM information_schema.columns WHERE table_schema = 'public' AND (table_name || '.' || column_name) = ANY($1::text[])`,
+      [...M22_COLUMNS]
+    );
+    const bad: string[] = [];
+    for (const col of M22_COLUMNS) {
+      const x = r.find((y) => y.n === col);
+      const got = x ? `${x.t} ${x.nullable} ${x.d ?? "-"}` : "no existe";
+      if (got !== M22_COLUMN_SHAPE[col]) bad.push(`${col}: ${got} (≠ ${M22_COLUMN_SHAPE[col]})`);
+    }
+    return bad.length === 0 ? pass("tipos, nulabilidad y DEFAULT como el SQL de M22") : fail(list(bad));
+  });
+  await c.check("post.M22.checks", "M22", "M22: 3 CHECK por nombre (precio 0..100 000 000, contacto OS con consentimiento, frase 1..120)", () =>
+    constraintsByName(tx, M22_CHECKS, "c")
+  );
+  await c.check("post.M22.optIn", "M22", "M22: precios propios, precio oculto, contacto OS y sedes encendidas (informativo)", async () => {
+    const r = await rows<{ prices: unknown; hidden: unknown; insured: unknown; total: unknown; sites: unknown }>(
+      tx,
+      `SELECT (SELECT count(*) FROM "PractitionerService" WHERE "priceCents" IS NOT NULL) AS prices,
+              count(*) FILTER (WHERE NOT "showPublicPrice") AS hidden, count(*) FILTER (WHERE "showContactForInsured") AS insured,
+              count(*) AS total, (SELECT count(*) FROM "Tenant" WHERE "siteEnabled") AS sites FROM "Practitioner"`
+    );
+    const x = r[0];
+    // Recién migrado: 0 precios propios, 0 ocultos, 0 contacto OS, 0 sedes (todo nace con la conducta de hoy).
+    return pass(
+      `de ${num(x?.total)} profesionales: ${num(x?.prices)} precios propios, ${num(x?.hidden)} con precio oculto, ${num(x?.insured)} con contacto OS; ${num(x?.sites)} sedes encendidas`
+    );
+  });
+
+  // M23 (CF3b · co-titular y matrícula de la persona): RUNBOOK «M23 en prod».
+  await c.check("post.M23.objects", "M23", "M23: 5 columnas en Membership/UserProfile y la función user_profile_license_stamp()", () =>
+    present(tx, { columns: M23_COLUMNS, procs: M23_PROCS })
+  );
+  await c.check("post.M23.columns", "M23", "M23: grantCoOwner boolean NOT NULL DEFAULT false; las 4 de matrícula NULL sin DEFAULT", async () => {
+    const r = await rows<{ n: string; t: string; nullable: string; d: string | null }>(
+      tx,
+      `SELECT table_name || '.' || column_name AS n, data_type AS t, is_nullable AS nullable, column_default AS d
+         FROM information_schema.columns WHERE table_schema = 'public' AND (table_name || '.' || column_name) = ANY($1::text[])`,
+      [...M23_COLUMNS]
+    );
+    const bad: string[] = [];
+    for (const col of M23_COLUMNS) {
+      const x = r.find((y) => y.n === col);
+      const got = x ? `${x.t} ${x.nullable} ${x.d ?? "-"}` : "no existe";
+      if (got !== M23_COLUMN_SHAPE[col]) bad.push(`${col}: ${got} (≠ ${M23_COLUMN_SHAPE[col]})`);
+    }
+    return bad.length === 0 ? pass("tipos, nulabilidad y DEFAULT como el SQL de M23") : fail(list(bad));
+  });
+  await c.check("post.M23.checks", "M23", "M23: 4 CHECK por nombre (co-titular solo PRACTITIONER; número, provincia y coherencia de la matrícula)", () =>
+    constraintsByName(tx, M23_CHECKS, "c")
+  );
+  await c.check("post.M23.trigger", "M23", "M23: trigger de UserProfile + md5 de user_profile_license_stamp() + INVOKER/search_path", () =>
+    allOf(
+      () => triggers(tx, "UserProfile", [M23_TRIGGER]),
+      () => md5Check(tx, "user_profile_license_stamp"),
+      () => invokerWithSearchPath(tx, M23_PROCS)
+    )
+  );
+  await c.check("post.M23.optIn", "M23", "M23: co-titulares y matrículas cargadas (informativo)", async () => {
+    const r = await rows<{ co: unknown; lic: unknown; users: unknown }>(
+      tx,
+      `SELECT (SELECT count(*) FROM "Membership" WHERE "grantCoOwner") AS co,
+              count(*) FILTER (WHERE "licenseNumber" IS NOT NULL) AS lic, count(*) AS users FROM "UserProfile"`
+    );
+    const x = r[0];
+    // Recién migrado da 0 y 0: el Titular nombra co-titulares desde Usuarios y cada persona carga su matrícula.
+    return pass(`${num(x?.co)} co-titulares; de ${num(x?.users)} usuarios, ${num(x?.lic)} con matrícula`);
+  });
+
+  // M24 (CF3b · foto de la persona): RUNBOOK «M24 en prod».
+  await c.check("post.M24.objects", "M24", "M24: 3 columnas en UserProfile/Practitioner", () => present(tx, { columns: M24_COLUMNS }));
+  await c.check("post.M24.columns", "M24", "M24: photoStorageKey text NULL; photoUpdatedAt timestamp NULL; showPhotoPublic boolean NOT NULL DEFAULT false", async () => {
+    const r = await rows<{ n: string; t: string; nullable: string; d: string | null }>(
+      tx,
+      `SELECT table_name || '.' || column_name AS n, data_type AS t, is_nullable AS nullable, column_default AS d
+         FROM information_schema.columns WHERE table_schema = 'public' AND (table_name || '.' || column_name) = ANY($1::text[])`,
+      [...M24_COLUMNS]
+    );
+    const bad: string[] = [];
+    for (const col of M24_COLUMNS) {
+      const x = r.find((y) => y.n === col);
+      const got = x ? `${x.t} ${x.nullable} ${x.d ?? "-"}` : "no existe";
+      if (got !== M24_COLUMN_SHAPE[col]) bad.push(`${col}: ${got} (≠ ${M24_COLUMN_SHAPE[col]})`);
+    }
+    return bad.length === 0 ? pass("tipos, nulabilidad y DEFAULT como el SQL de M24") : fail(list(bad));
+  });
+  await c.check("post.M24.checks", "M24", "M24: 2 CHECK por nombre y con su definición exacta (clave bajo users/<id>/; clave y fecha juntas)", () =>
+    allOf(
+      () => constraintsByName(tx, M24_CHECKS, "c"),
+      async () => {
+        const r = await rows<{ n: string; def: string }>(
+          tx,
+          `SELECT conname AS n, pg_get_constraintdef(oid) AS def FROM pg_constraint
+            WHERE contype = 'c' AND conrelid = to_regclass('public."UserProfile"') AND conname = ANY($1::text[])`,
+          [...M24_CHECKS]
+        );
+        const bad = M24_CHECKS.filter((n) => r.find((x) => x.n === n)?.def !== M24_CHECK_DEFS[n]);
+        return bad.length === 0
+          ? pass("definiciones = las del SQL de M24")
+          : fail(`definición distinta a la del repo (¿creado a mano?): ${list(bad)}`);
+      }
+    )
+  );
+  await c.check("post.M24.optIn", "M24", "M24: fotos subidas y profesionales que la publican (informativo)", async () => {
+    const r = await rows<{ photos: unknown; users: unknown; pub: unknown; pracs: unknown }>(
+      tx,
+      `SELECT count(*) FILTER (WHERE "photoStorageKey" IS NOT NULL) AS photos, count(*) AS users,
+              (SELECT count(*) FROM "Practitioner" WHERE "showPhotoPublic") AS pub, (SELECT count(*) FROM "Practitioner") AS pracs
+         FROM "UserProfile"`
+    );
+    const x = r[0];
+    // Recién migrado da 0 y 0: cada persona sube su foto y la publica por consultorio desde «Mi agenda».
+    return pass(`de ${num(x?.users)} usuarios, ${num(x?.photos)} con foto; de ${num(x?.pracs)} profesionales, ${num(x?.pub)} la publican`);
+  });
 }
 
 // ─── entrada ────────────────────────────────────────────────────────────────
@@ -1219,7 +1424,7 @@ export async function runProdPrecheck(o: PrecheckOptions): Promise<PrecheckResul
 /** Tabla de texto para pegar en el chat (sin colores: se copia tal cual). */
 export function formatPrecheckTable(r: PrecheckResult): string {
   const lines: string[] = [];
-  // Agrupado por bloque (Base y después M12 → M21 en orden de aplicación), estable dentro de cada uno: los chequeos
+  // Agrupado por bloque (Base y después M12 → M24 en orden de aplicación), estable dentro de cada uno: los chequeos
   // se ejecutan en el orden que conviene a la tx, pero se leen por migración.
   const rank = (g: string) => (g === "base" ? 0 : 1 + TRACKED_MIGRATIONS.findIndex((m) => m.key === g));
   const sorted = r.rows.map((row, i) => ({ row, i })).sort((a, b) => rank(a.row.group) - rank(b.row.group) || a.i - b.i);

@@ -12,8 +12,12 @@
  * anticipación en horas que se guarda en horas), así que vive acá con tests.
  */
 import { formatLeadTime } from "@/lib/lead-time";
+import { formatARS } from "@/lib/format";
+import { isGridDuration } from "@/lib/service-durations";
+import { OWN_SERVICES_MAX, SERVICES_COPY } from "@/lib/services-types";
 import {
   PractitionerServiceInput,
+  PS_PRICE_CENTS_MAX,
   PS_DURATION_MAX,
   PS_DURATION_MIN,
   PS_MAX_CONCURRENT_MAX,
@@ -43,9 +47,15 @@ export type ServiceDraft = {
   concurrencyUnlimited: boolean;
   maxConcurrent: string;
   notifyOnBooking: boolean;
+  /**
+   * CF3 (M22, D-CF3-1): precio de ESTE profesional en centavos (lo controla `MoneyInput`, que ya entrega centavos o
+   * null). null = vacío = usa el precio del consultorio. No es un string como el resto: el texto lo maneja el input.
+   */
+  price: number | null;
 };
 
 export type ServiceDraftField =
+  | "priceCents"
   | "durationMin"
   | "minLead"
   | "maxLeadDays"
@@ -71,6 +81,7 @@ export function rowToDraft(row: PractitionerServiceRow): ServiceDraft {
     // partida (lo que el usuario ve si prende el switch).
     maxConcurrent: numStr(row.concurrencyOverride ? row.maxConcurrent : row.serviceMaxConcurrent),
     notifyOnBooking: row.notifyOnBooking,
+    price: row.priceCents,
   };
 }
 
@@ -99,9 +110,20 @@ export function joinLead(hours: string, minutes: string): number | null {
  * fila antes de viajar. El server vuelve a validar (no confiamos en esto).
  */
 export function draftToInput(
-  d: ServiceDraft
+  d: ServiceDraft,
+  /**
+   * CF3: con `baseline`, un precio que no cambió NO viaja (`priceCents` omitido = el server no lo toca). Así guardar
+   * la duración desde Configuración no pisa el precio que el profesional cargó en «Mi agenda» un minuto antes (y al
+   * revés). Sin `baseline` (clave de dirty, tests) viaja siempre: null si está vacío.
+   */
+  baseline?: ServiceDraft
 ): { ok: true; input: PractitionerServiceInputT } | { ok: false; errors: ServiceDraftErrors } {
   const errors: ServiceDraftErrors = {};
+
+  if (d.price !== null) {
+    if (!Number.isInteger(d.price) || d.price < 0) errors.priceCents = "Poné un precio válido.";
+    else if (d.price > PS_PRICE_CENTS_MAX) errors.priceCents = `Máximo ${formatARS(PS_PRICE_CENTS_MAX)}.`;
+  }
 
   const duration = parseIntField(d.durationMin);
   if (duration !== null) {
@@ -151,6 +173,7 @@ export function draftToInput(
     // Sin override → null (el server también lo fuerza: nada de "cupo fantasma").
     maxConcurrent: d.concurrencyOverride ? cap : null,
     notifyOnBooking: d.notifyOnBooking,
+    ...(baseline && baseline.price === d.price ? {} : { priceCents: d.price }),
   };
   // Red de seguridad: si el zod compartido rechaza algo que se nos escapó
   // arriba, no mandamos un payload que sabemos inválido.
@@ -164,6 +187,7 @@ export function draftToInput(
         ...(fe.minLeadMinutes ? { minLead: fe.minLeadMinutes[0] } : {}),
         ...(fe.maxLeadDays ? { maxLeadDays: fe.maxLeadDays[0] } : {}),
         ...(fe.maxConcurrent ? { maxConcurrent: fe.maxConcurrent[0] } : {}),
+        ...(fe.priceCents ? { priceCents: fe.priceCents[0] } : {}),
       },
     };
   }
@@ -194,6 +218,139 @@ export function formatLead(min: number | null): string {
   const m = min % 60;
   if (h === 0) return `${m} min`;
   return m === 0 ? `${h} h` : `${h} h ${m} min`;
+}
+
+// ─── Servicios: precio, alcance y servicios propios (CF3, §30) ─────────────
+
+/**
+ * Quién usa el editor. `"config"` = Configuración › Profesionales (Titular / Admin, con `schedule.configure`): todas
+ * las filas y todas las columnas, como siempre. `"self"` = «Mi agenda» (el profesional sobre sí mismo, D-CF3-7/13).
+ */
+export type ServicesEditorScope = "config" | "self";
+
+/** Hint del precio vacío. `servicePriceCents` es `Service.priceCents` (D-CF3-1: con null se cobra como hoy). */
+export function inheritedPriceHint(row: Pick<PractitionerServiceRow, "servicePriceCents">, own: boolean): string {
+  const amount = formatARS(row.servicePriceCents);
+  // Un servicio propio no tiene «precio del consultorio»: el que se hereda es el que el profesional le puso al crearlo.
+  return own ? `Vacío: usa el precio del servicio (${amount})` : `Vacío: usa el precio del consultorio (${amount})`;
+}
+
+export function isOwnService(row: Pick<PractitionerServiceRow, "serviceOwnerPractitionerId">, practitionerId: string): boolean {
+  return row.serviceOwnerPractitionerId === practitionerId;
+}
+
+/**
+ * Filas que se muestran. En `"self"` se ocultan los servicios PROPIOS de otro profesional: por la vía propia no los
+ * puede habilitar (AU-S: «camino propio no habilita servicio de otro») y verlos ahí («Asignado a otro profesional»)
+ * solo mete ruido en una pantalla que es de él. En `"config"` se ven todos, como siempre.
+ */
+export function visibleServiceRows<R extends Pick<PractitionerServiceRow, "serviceOwnerPractitionerId">>(
+  rows: R[],
+  scope: ServicesEditorScope,
+  practitionerId: string
+): R[] {
+  if (scope === "config") return rows;
+  return rows.filter((r) => r.serviceOwnerPractitionerId === null || r.serviceOwnerPractitionerId === practitionerId);
+}
+
+/** Servicios propios contados para el tope `OWN_SERVICES_MAX` (D-CF3-6). Lo hace cumplir el server; esto es la UX. */
+export function ownServicesLeft(
+  rows: Pick<PractitionerServiceRow, "serviceOwnerPractitionerId">[],
+  practitionerId: string
+): { count: number; canCreate: boolean; limitMessage: string | null } {
+  const count = rows.filter((r) => r.serviceOwnerPractitionerId === practitionerId).length;
+  const canCreate = count < OWN_SERVICES_MAX;
+  return { count, canCreate, limitMessage: canCreate ? null : SERVICES_COPY.ownLimit };
+}
+
+/**
+ * Borrador del «Nuevo servicio» / «Editar servicio» propio. La duración es un string del select (grilla de 15; un
+ * valor viejo fuera de grilla se conserva). El cupo: "" = sin límite, como en Servicios.
+ */
+export type OwnServiceDraft = {
+  name: string;
+  durationMin: string;
+  color: string | null;
+  priceCents: number | null;
+  maxConcurrent: string;
+};
+
+export type OwnServiceField = "name" | "durationMin" | "priceCents" | "maxConcurrent";
+export type OwnServiceErrors = Partial<Record<OwnServiceField, string>>;
+
+/** Payload de `createService` / `updateService` por la vía propia: nunca lleva `practitionerId` (lo pone el server). */
+export type OwnServicePayload = {
+  name: string;
+  durationMin: number;
+  color: string;
+  priceCents: number;
+  maxConcurrent: string;
+};
+
+export const OWN_SERVICE_NAME_MAX = 80;
+
+/**
+ * Valores iniciales. Alta: 45 min y **1 paciente por horario** (no «sin límite» como el catálogo): el profesional que
+ * crea su servicio desde «Mi agenda» no ve el cupo en ningún otro lado, y un «sin límite» por defecto le dejaría el
+ * turnero dando el mismo horario a varios pacientes sin que lo haya elegido. Si atiende en paralelo, lo cambia acá.
+ */
+export function ownServiceDraftFrom(
+  row?: Pick<PractitionerServiceRow, "serviceName" | "serviceDurationMin" | "serviceColor" | "servicePriceCents" | "serviceMaxConcurrent">
+): OwnServiceDraft {
+  if (!row) return { name: "", durationMin: "45", color: null, priceCents: null, maxConcurrent: "1" };
+  return {
+    name: row.serviceName,
+    durationMin: String(row.serviceDurationMin),
+    color: row.serviceColor,
+    priceCents: row.servicePriceCents,
+    maxConcurrent: row.serviceMaxConcurrent == null ? "" : String(row.serviceMaxConcurrent),
+  };
+}
+
+/**
+ * Borrador → payload, con los topes de `ServiceInput` (`lib/validation.ts`) y la grilla de 15 de la UI. Precio vacío
+ * = $ 0 (el servicio sin precio propio: el particular paga el «Particular» del consultorio, D-CF3-1).
+ */
+export function ownServiceToPayload(
+  d: OwnServiceDraft,
+  original?: OwnServiceDraft
+): { ok: true; payload: OwnServicePayload } | { ok: false; errors: OwnServiceErrors } {
+  const errors: OwnServiceErrors = {};
+  const name = d.name.trim();
+  if (!name) errors.name = "Poné un nombre.";
+  else if (name.length > OWN_SERVICE_NAME_MAX) errors.name = `Hasta ${OWN_SERVICE_NAME_MAX} caracteres.`;
+
+  const dur = /^\d+$/.test(d.durationMin.trim()) ? Number(d.durationMin.trim()) : Number.NaN;
+  // Fuera de grilla solo vale si es el valor que ya tenía (servicio viejo de 40/50 min: abrir y guardar no lo cambia).
+  const keepsOld = original !== undefined && d.durationMin === original.durationMin;
+  if (Number.isNaN(dur) || (!isGridDuration(dur) && !keepsOld)) errors.durationMin = "Elegí una duración de la lista.";
+
+  const price = d.priceCents ?? 0;
+  if (!Number.isInteger(price) || price < 0) errors.priceCents = "Poné un precio válido.";
+  else if (price > PS_PRICE_CENTS_MAX) errors.priceCents = `Máximo ${formatARS(PS_PRICE_CENTS_MAX)}.`;
+
+  const capRaw = d.maxConcurrent.trim();
+  if (capRaw !== "") {
+    const cap = /^\d+$/.test(capRaw) ? Number(capRaw) : Number.NaN;
+    if (Number.isNaN(cap) || cap < 1 || cap > PS_MAX_CONCURRENT_MAX)
+      errors.maxConcurrent = `Entre 1 y ${PS_MAX_CONCURRENT_MAX}, o vacío para sin límite.`;
+  }
+
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+  return {
+    ok: true,
+    payload: { name, durationMin: dur, color: d.color ?? "", priceCents: price, maxConcurrent: capRaw },
+  };
+}
+
+export function isOwnServiceDirty(d: OwnServiceDraft, baseline: OwnServiceDraft): boolean {
+  return (
+    d.name.trim() !== baseline.name.trim() ||
+    d.durationMin !== baseline.durationMin ||
+    (d.color ?? null) !== (baseline.color ?? null) ||
+    (d.priceCents ?? 0) !== (baseline.priceCents ?? 0) ||
+    d.maxConcurrent.trim() !== baseline.maxConcurrent.trim()
+  );
 }
 
 // ─── Coberturas ─────────────────────────────────────────────────────────────

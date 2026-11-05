@@ -219,7 +219,10 @@ async function ensureMemberInTx(
   await tx.membership.upsert({
     where: { userId_tenantId: { userId: p.userId, tenantId: p.tenantId } },
     create: { userId: p.userId, tenantId: p.tenantId, role: p.role, clinical, ...grants, acceptedAt: new Date() },
-    update: { role: p.role, clinical, ...grants, disabledAt: null, disabledById: null, disabledReason: null },
+    // CF3 ZF5: `grantCoOwner: false` también al re-correr (la spec no tiene co-titulares). Sin esto, un co-titular de una
+    // prueba manual lo seguía siendo, y volver a ADMIN a quien se había pasado a Profesional chocaba con el CHECK
+    // `Membership_coOwner_role_check` de M23 (23514) y cortaba el script.
+    update: { role: p.role, clinical, ...grants, grantCoOwner: false, disabledAt: null, disabledById: null, disabledReason: null },
   });
   if (clinical) {
     const prac = await tx.practitioner.upsert({

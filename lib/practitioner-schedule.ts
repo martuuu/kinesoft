@@ -6,9 +6,16 @@
  * `ScheduleException`. Las consume el motor de disponibilidad vía
  * `lib/availability-loader.ts`; acá solo se configuran.
  *
- * Authz: leer = `agenda.viewAll`; escribir = `schedule.configure` (hoy solo
- * OWNER/ADMIN: las franjas abren o cierran disponibilidad en el turnero
- * público y en el batch de Planes). `lib/capabilities.ts`.
+ * Authz: leer = la propia o `agenda.viewAll`; escribir la semana y las excepciones de un profesional = el PROPIO
+ * profesional o `schedule.configure` («Configuración»). Hasta CF2 escribir era solo `schedule.configure`; CF3 (AU-S,
+ * D-CF3-7, decisión de Martin del 04-nov) le devuelve al profesional su semana y sus vacaciones desde «Mi agenda», con
+ * los MISMOS validadores (sedes del tenant, salas, choque de sala con otros profesionales). Gate y validación en la tx:
+ * `lib/practitioner-self-scope.ts`. Siguen del consultorio (solo `schedule.configure`): las excepciones de TODO el
+ * consultorio (`practitionerId` null), el tope de turnos por intervalo y las reglas de agenda (pasos).
+ *
+ * Audit (`auditInTx`, en la tx del write): solo el camino propio (`via: "self"`: la superficie nueva, alguien sin
+ * «Configuración» abre o cierra disponibilidad del turnero). Por «Configuración» sigue sin audit: horarios son ruido
+ * operativo del recorte PL-A (§20.5.9).
  *
  * Tenant: `where: { tenantId }` a mano en cada query (BYPASSRLS en prod) y
  * los ids de entrada (profesional, sede) se validan contra el tenant DENTRO
@@ -40,7 +47,7 @@ import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { runWithRls, type DbClient } from "@/lib/rls";
-import { requireCapability } from "@/lib/authz";
+import { capabilitiesForActor, requireCapability } from "@/lib/authz";
 import { ForbiddenError } from "@/lib/session";
 import { MODULE_DENIED_COPY, roomsEnabled } from "@/lib/tenant-modules";
 import { logger } from "@/lib/logger";
@@ -80,14 +87,23 @@ import {
 } from "@/lib/practitioner-schedule-schemas";
 import { FALLBACK_WORKING_DOWS, type DayKey, type ScheduleRange } from "@/lib/availability/types";
 import type { ActionResult } from "@/lib/validation";
-import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
+import { bookablePractitionerWhere, isActorPractitioner } from "@/lib/practitioner-scope";
 import { auditInTx } from "@/lib/audit";
+import { getActor } from "@/lib/session";
+import {
+  assertSelfOrAgendaViewAll,
+  assertSelfOrScheduleConfigure,
+  writablePractitionerWhere,
+  type SelfScopeVia,
+} from "@/lib/practitioner-self-scope";
 import { parsePractitionerBookingCap, type BookingCapMode } from "@/lib/booking-cap-config";
 import { parsePractitionerAgendaRules, type PractitionerAgendaRulesWrite } from "@/lib/agenda-rules-config";
 import { z } from "zod";
 
-const WRITE_MSG = "Solo OWNER/ADMIN pueden configurar sedes y horarios.";
+// CF3 AU-S: el profesional ya edita lo suyo; esto es para lo ajeno (sin «OWNER/ADMIN», que es jerga).
+const SELF_WRITE_MSG = "Solo podés cambiar tu propia agenda. Para la de otro profesional o la de todo el consultorio hace falta el permiso «Configuración».";
 const READ_MSG = "No tenés permiso para ver la agenda del consultorio.";
+const EXCEPTION_RANGE_MSG = `Revisá el rango de fechas: «desde» no puede ser posterior a «hasta» y el rango abarca como mucho ${MAX_EXCEPTION_WINDOW_DAYS} días.`;
 // T3c-1s: también para un profesional suspendido o deshabilitado en las escrituras (`findBookablePractitioner`): mismo
 // copy que el de otro consultorio, así un id ajeno no se distingue de uno inactivo (y no cambia el contrato IDOR).
 const PRAC_NOT_FOUND = "Profesional no encontrado.";
@@ -113,11 +129,14 @@ async function findPractitioner(tx: DbClient, tenantId: string, id: string) {
  * Secretaria con su fila `Practitioner` vieja: disponibilidad para alguien a quien el motor nunca le ofrece turnos.
  * Mismo EXISTS en la misma sentencia (0 statements nuevos).
  */
-async function findBookablePractitioner(tx: DbClient, tenantId: string, id: string) {
-  return tx.practitioner.findFirst({
-    where: { id, ...bookablePractitionerWhere(tenantId, { includeDisabledFilter: true }) },
-    select: { id: true },
-  });
+async function findBookablePractitioner(
+  tx: DbClient,
+  actor: { tenantId: string; userId: string; practitionerId: string | null },
+  id: string,
+  via: SelfScopeVia
+) {
+  // CF3 AU-S: con `via: "self"` además del usuario del actor (`writablePractitionerWhere`); misma sentencia.
+  return tx.practitioner.findFirst({ where: writablePractitionerWhere(actor, id, via), select: { id: true } });
 }
 
 /** Ids de sedes ACTIVAS del tenant dentro de `ids`. */
@@ -446,9 +465,12 @@ function revalidateAll() {
 export async function getPractitionerSchedule(
   practitionerId: string
 ): Promise<PractitionerScheduleView | null> {
-  const { actor } = await requireCapability("agenda.viewAll", READ_MSG);
+  const actor = await getActor();
   const id = EntityId.safeParse(practitionerId);
   if (!id.success) return null;
+  // CF3 AU-S: la propia o `agenda.viewAll` (hoy el profesional ya tiene `agenda.viewAll`; el gate deja explícito que
+  // «Mi agenda» no depende de esa capacidad si la matriz cambia).
+  await assertSelfOrAgendaViewAll(actor, id.data, READ_MSG);
   return runWithRls(actor.tenantId, async (tx) => {
     if (!(await findPractitioner(tx, actor.tenantId, id.data))) return null;
     const rows = await tx.practitionerSchedule.findMany({
@@ -535,12 +557,15 @@ async function savePractitionerWeekImpl(
   }>,
   expectedUpdatedAt?: string | null
 ): Promise<ActionResult<{ version: string | null; warnings?: string[] }>> {
-  const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
+  const actor = await getActor();
   const parsed = SaveWeekInput.safeParse({ practitionerId, ranges, expectedUpdatedAt });
   if (!parsed.success) {
+    // Sin permiso, el 403 manda sobre la forma (no se le valida el payload a quien no puede escribir).
+    await assertSelfOrScheduleConfigure(actor, typeof practitionerId === "string" ? practitionerId : null, SELF_WRITE_MSG);
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
   }
   const input = parsed.data;
+  const { via } = await assertSelfOrScheduleConfigure(actor, input.practitionerId, SELF_WRITE_MSG);
   if (input.ranges.length === 0) {
     return {
       ok: false,
@@ -565,7 +590,7 @@ async function savePractitionerWeekImpl(
       // Orden fijo: sedes compartido → room-schedule → schedule:<prac> (ver "Salas en franjas").
       if (roomIds.length > 0) await lockKey(tx, roomScheduleLockKey(actor.tenantId));
       await lockKey(tx, `kinesoft:schedule:${input.practitionerId}`);
-      if (!(await findBookablePractitioner(tx, actor.tenantId, input.practitionerId))) {
+      if (!(await findBookablePractitioner(tx, actor, input.practitionerId, via))) {
         throw new Abort({ ok: false, error: PRAC_NOT_FOUND });
       }
       if (!roomsOn && sentRoomIds.length > 0) {
@@ -645,6 +670,7 @@ async function savePractitionerWeekImpl(
       }
       const before = await tx.practitionerSchedule.findMany({
         where: { tenantId: actor.tenantId, practitionerId: input.practitionerId },
+        orderBy: [{ dow: "asc" }, { startMin: "asc" }],
         select: { dow: true, startMin: true, endMin: true, locationId: true },
       });
       await tx.practitionerSchedule.deleteMany({
@@ -663,6 +689,21 @@ async function savePractitionerWeekImpl(
           validUntil: r.validUntil ? dayKeyToDbDate(r.validUntil) : null,
         })),
       });
+      if (via === "self") {
+        // Ver la cabecera (Audit). Sin sala ni vigencia en el payload: el qué-días-y-a-qué-hora alcanza para rastrear.
+        await auditInTx(tx, {
+          tenantId: actor.tenantId,
+          actorId: actor.userId,
+          action: "practitionerSchedule.replace",
+          entity: "Practitioner",
+          entityId: input.practitionerId,
+          payload: {
+            via,
+            from: before,
+            to: input.ranges.map((r) => ({ dow: r.dow, startMin: r.startMin, endMin: r.endMin, locationId: r.locationId })),
+          },
+        });
+      }
       return { before, warnings, version: await versionOf(tx, actor.tenantId, input.practitionerId) };
     });
     revalidateAll();
@@ -751,18 +792,29 @@ function toExceptionRow(r: Prisma.ScheduleExceptionGetPayload<{ select: typeof E
 /**
  * Excepciones entre `from` y `to` (DayKeys AR, inclusive). Con
  * `practitionerId`: las de ese profesional + las de todo el consultorio.
+ *
+ * CF3 ZF2: `ActionResult` (antes devolvía las filas y tiraba `Error` genérico con un rango inválido: en una server
+ * action eso es un 500 sin copy en prod). El rango inválido y el permiso vuelven como `{ ok: false, error }`.
  */
 export async function listExceptions(range: {
   from: string;
   to: string;
   practitionerId?: string;
-}): Promise<ScheduleExceptionRow[]> {
-  const { actor } = await requireCapability("agenda.viewAll", READ_MSG);
+}): Promise<ActionResult<ScheduleExceptionRow[]>> {
+  const actor = await getActor();
   const parsed = ExceptionRangeInput.safeParse(range);
-  if (!parsed.success) throw new Error("Rango de fechas inválido.");
+  if (!parsed.success) return { ok: false, error: EXCEPTION_RANGE_MSG };
   const { from, to, practitionerId } = parsed.data;
+  // CF3 AU-S: las propias (+ las de todo el consultorio, que le aplican) o `agenda.viewAll`. Sin `practitionerId` =
+  // todas las del tenant → solo `agenda.viewAll` (`isActorPractitioner` con undefined da false).
+  try {
+    await assertSelfOrAgendaViewAll(actor, practitionerId, READ_MSG);
+  } catch (e) {
+    if (e instanceof ForbiddenError) return { ok: false, error: e.message };
+    throw e;
+  }
   const span = dayKeyDiff(from, to);
-  if (span < 0 || span > MAX_EXCEPTION_WINDOW_DAYS) throw new Error("Rango de fechas inválido.");
+  if (span < 0 || span > MAX_EXCEPTION_WINDOW_DAYS) return { ok: false, error: EXCEPTION_RANGE_MSG };
   const rows = await runWithRls(actor.tenantId, (tx) =>
     tx.scheduleException.findMany({
       where: {
@@ -774,7 +826,7 @@ export async function listExceptions(range: {
       select: EXC_SELECT,
     })
   );
-  return rows.map(toExceptionRow);
+  return { ok: true, data: rows.map(toExceptionRow) };
 }
 
 /**
@@ -788,12 +840,17 @@ export async function upsertException(...args: Parameters<typeof upsertException
 }
 
 async function upsertExceptionImpl(raw: UpsertExceptionRaw): Promise<ActionResult<{ id: string }>> {
-  const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
+  const actor = await getActor();
   const parsed = UpsertExceptionInput.safeParse(raw);
   if (!parsed.success) {
+    const rawPid = (raw as { practitionerId?: unknown } | null)?.practitionerId;
+    await assertSelfOrScheduleConfigure(actor, typeof rawPid === "string" ? rawPid : null, SELF_WRITE_MSG);
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
   }
   const input = parsed.data;
+  // CF3 AU-S: la de un profesional, el propio o «Configuración»; la de TODO el consultorio (null), solo «Configuración»
+  // (`isActorPractitioner` con null da false).
+  const { via } = await assertSelfOrScheduleConfigure(actor, input.practitionerId, SELF_WRITE_MSG);
   const ranges = input.kind === "CUSTOM_HOURS" ? (input.ranges ?? []) : null;
   if (ranges) {
     const shape = validateDayRanges(ranges);
@@ -829,7 +886,7 @@ async function upsertExceptionImpl(raw: UpsertExceptionRaw): Promise<ActionResul
       // Orden fijo: sedes compartido → room-schedule → schedexc (ver "Salas en franjas").
       if (roomIds.length > 0) await lockKey(tx, roomScheduleLockKey(actor.tenantId));
       await lockKey(tx, `kinesoft:schedexc:${actor.tenantId}:${input.practitionerId ?? "*"}:${input.date}`);
-      if (input.practitionerId && !(await findBookablePractitioner(tx, actor.tenantId, input.practitionerId))) {
+      if (input.practitionerId && !(await findBookablePractitioner(tx, actor, input.practitionerId, via))) {
         throw new Abort({ ok: false, error: PRAC_NOT_FOUND });
       }
       if (!roomsOn && sentRoomIds.length > 0) {
@@ -932,11 +989,24 @@ async function upsertExceptionImpl(raw: UpsertExceptionRaw): Promise<ActionResul
         where: { tenantId: actor.tenantId, practitionerId: input.practitionerId, date },
         select: { id: true },
       });
+      const auditSelf = async (id: string, created: boolean) => {
+        if (via !== "self") return;
+        // Ver la cabecera (Audit). El motivo es texto libre del profesional («Vacaciones»): no va al payload.
+        await auditInTx(tx, {
+          tenantId: actor.tenantId,
+          actorId: actor.userId,
+          action: "scheduleException.upsert",
+          entity: "ScheduleException",
+          entityId: id,
+          payload: { via, practitionerId: input.practitionerId, date: input.date, kind: input.kind, created },
+        });
+      };
       if (existing) {
         await tx.scheduleException.updateMany({
           where: { id: existing.id, tenantId: actor.tenantId },
           data,
         });
+        await auditSelf(existing.id, false);
         return { id: existing.id, created: false };
       }
       const row = await tx.scheduleException.create({
@@ -949,6 +1019,7 @@ async function upsertExceptionImpl(raw: UpsertExceptionRaw): Promise<ActionResul
         },
         select: { id: true },
       });
+      await auditSelf(row.id, true);
       return { id: row.id, created: true };
     });
     revalidateAll();
@@ -972,7 +1043,12 @@ export async function deleteException(...args: Parameters<typeof deleteException
 }
 
 async function deleteExceptionImpl(id: string): Promise<ActionResult> {
-  const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
+  const actor = await getActor();
+  const caps = await capabilitiesForActor(actor);
+  const config = caps.has("schedule.configure");
+  // CF3 AU-S: sin «Configuración» y sin profesional propio (Secretaria, Facturación, soporte) → el 403 de siempre, sin
+  // consultar. Con profesional, el dueño de la fila se decide DENTRO de la tx (el id no dice de quién es).
+  if (!config && !actor.practitionerId) throw new ForbiddenError(SELF_WRITE_MSG);
   const idOk = EntityId.safeParse(id);
   if (!idOk.success) return { ok: false, error: "Excepción no encontrada." };
   const deleted = await runWithRls(actor.tenantId, async (tx) => {
@@ -981,7 +1057,27 @@ async function deleteExceptionImpl(id: string): Promise<ActionResult> {
       select: { id: true, practitionerId: true, date: true, kind: true },
     });
     if (!row) return null;
+    const via: SelfScopeVia = config ? "config" : "self";
+    if (via === "self") {
+      // Propia = del profesional del actor (nunca la de todo el consultorio: `practitionerId` null) y ese profesional
+      // sigue siendo suyo y reservable en el tenant (misma validación que crear). Lo ajeno → 403 sin borrar; el id
+      // ya es del tenant, así que el 403 no le revela nada que `listExceptions` no le muestre.
+      const mine =
+        isActorPractitioner(actor, row.practitionerId) &&
+        (await findBookablePractitioner(tx, actor, row.practitionerId!, via));
+      if (!mine) throw new ForbiddenError(SELF_WRITE_MSG);
+    }
     await tx.scheduleException.deleteMany({ where: { id: row.id, tenantId: actor.tenantId } });
+    if (via === "self") {
+      await auditInTx(tx, {
+        tenantId: actor.tenantId,
+        actorId: actor.userId,
+        action: "scheduleException.delete",
+        entity: "ScheduleException",
+        entityId: row.id,
+        payload: { via, practitionerId: row.practitionerId, date: dbDateToDayKey(row.date), kind: row.kind },
+      });
+    }
     return row;
   });
   if (!deleted) return { ok: false, error: "Excepción no encontrada." };
@@ -1023,7 +1119,7 @@ async function setPractitionerBookingCapImpl(
   if (!parsed.ok) return { ok: false, error: parsed.error };
   const to = parsed.data;
   const res = await runWithRls(actor.tenantId, async (tx) => {
-    const found = await findBookablePractitioner(tx, actor.tenantId, idOk.data);
+    const found = await findBookablePractitioner(tx, actor, idOk.data, "config");
     if (!found) return "notFound" as const;
     const [prev] = await tx.$queryRaw<
       { bookingCapMode: BookingCapMode; bookingCapCount: number | null; bookingCapIntervalMin: number | null }[]
@@ -1101,7 +1197,7 @@ async function setPractitionerAgendaRulesImpl(
   if (!parsed.ok) return { ok: false, error: parsed.error, fieldErrors: { [parsed.field]: [parsed.error] } };
   const to = parsed.data;
   const res = await runWithRls(actor.tenantId, async (tx) => {
-    const found = await findBookablePractitioner(tx, actor.tenantId, idOk.data);
+    const found = await findBookablePractitioner(tx, actor, idOk.data, "config");
     if (!found) return "notFound" as const;
     const [prev] = await tx.$queryRaw<PractitionerAgendaRulesWrite[]>`
       SELECT "allowParallelServices", "agendaSlotStepMin", "publicSlotStepMin"

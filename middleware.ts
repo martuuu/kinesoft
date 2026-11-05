@@ -13,19 +13,27 @@ import {
   maintenanceDecision,
   maintenanceMode,
 } from "@/lib/maintenance";
+import { siteHostDecision } from "@/lib/site-host";
 
 /**
  * Edge middleware — three responsibilities:
  *
  *   1. **Tenant slug resolution** for public routes that need it before
  *      auth runs:
- *        - `/c/<slug>/...`         (path-based, primary)
- *        - `<slug>.kinesoft.app`   (subdomain)
- *      Sets `x-tenant-slug` on the downstream request. **Authenticated
- *      server actions ignore this header entirely** (see
- *      `lib/session.ts`) — it is purely a public-tenant resolution
- *      mechanism, not an auth bypass. Client-supplied values are always
- *      stripped first, closing the header-smuggling vector.
+ *        - `/c/<slug>/...`         (path-based) → sets `x-tenant-slug` on the
+ *          downstream request. **Authenticated server actions ignore this
+ *          header entirely** (see `lib/session.ts`) — it is purely a
+ *          public-tenant resolution mechanism, not an auth bypass.
+ *          Client-supplied values are always stripped first, closing the
+ *          header-smuggling vector.
+ *        - `<slug>.<SITE_ROOT_DOMAIN>` (CF3 SD-M, §30 D-CF3-11): sede digital
+ *          por subdominio, DORMIDA mientras la variable no esté seteada (default
+ *          de prod). `/` → rewrite a `/<slug>`, `/logo` → `/<slug>/logo`, el
+ *          resto 308 al host principal. Ver `lib/site-host.ts`. Antes acá había
+ *          una regla «3 etiquetas» que tomaba el primer label de CUALQUIER host
+ *          (incluidas las previews `*.vercel.app`) y seteaba `x-tenant-slug`
+ *          sin que nadie lo leyera: se reemplazó, y el subdominio ya no setea
+ *          el header.
  *
  *   2. **Request ID minting** for observability. Every request gets an
  *      `x-request-id` header (UUID v4-shaped). If the upstream sent
@@ -181,8 +189,12 @@ export async function middleware(req: NextRequest) {
   requestHeaders.delete("x-pathname");
   requestHeaders.set("x-pathname", req.nextUrl.pathname + req.nextUrl.search);
 
-  const finish = () => {
-    const res = NextResponse.next({ request: { headers: requestHeaders } });
+  // `rewriteTo` (sede por subdominio): misma respuesta que `next()` (request-id, cookies de sesión, no-store), solo
+  // que sirve otro pathname sin cambiar la URL del navegador. Los headers de request son los ya stripeados.
+  const finish = (rewriteTo?: URL) => {
+    const res = rewriteTo
+      ? NextResponse.rewrite(rewriteTo, { request: { headers: requestHeaders } })
+      : NextResponse.next({ request: { headers: requestHeaders } });
     // Echo the ID on the response too so client-side instrumentation can
     // correlate fetches to server logs.
     res.headers.set("x-request-id", safeReqId);
@@ -214,17 +226,38 @@ export async function middleware(req: NextRequest) {
     return res;
   }
 
-  // 1) path: /c/<slug>/...
+  // 1) Sede por subdominio (CF3 SD-M). Después del strip y del request-id (AUDIT §5.3: «delete, then set» intacto) y
+  // del mantenimiento (con `on` la sede también muestra /mantenimiento). Sin `SITE_ROOT_DOMAIN` → `none` siempre y
+  // el camino es el de antes. Sin consultas a la base: si el slug no existe o la sede está apagada, la página
+  // `/<slug>` da su 404 estático. `process.env` directo, como `MAINTENANCE_MODE` (lib/env.ts valida todo al importarse).
+  const site = siteHostDecision({
+    host,
+    pathname: url.pathname,
+    search: url.search,
+    rootDomain: process.env.SITE_ROOT_DOMAIN,
+    appUrl: process.env.NEXT_PUBLIC_APP_URL,
+  });
+  if (site.kind === "rewrite") {
+    const target = url.clone();
+    target.pathname = site.pathname;
+    return finish(target);
+  }
+  if (site.kind === "redirect") {
+    // El turnero, el login y la app viven en el host principal: las cookies de Supabase son host-only
+    // (`lib/supabase/cookie-options.ts`), una sesión abierta en el subdominio no existiría allá. Las cookies de un
+    // refresh se escriben igual (son de este host) para no perderlas.
+    const res = NextResponse.redirect(site.url, 308);
+    res.headers.set("x-request-id", safeReqId);
+    for (const c of sessionCookies) res.cookies.set(c.name, c.value, c.options);
+    if (sessionCookies.length > 0) res.headers.set("cache-control", "private, no-store");
+    return res;
+  }
+
+  // 2) path: /c/<slug>/...
   const pathMatch = url.pathname.match(/^\/c\/([a-z0-9-]+)(\/|$)/i);
   if (pathMatch) {
     requestHeaders.set("x-tenant-slug", pathMatch[1].toLowerCase());
     return finish();
-  }
-
-  // 2) subdomain: <slug>.kinesoft.app
-  const hostParts = host.split(":")[0].split(".");
-  if (hostParts.length >= 3 && !["www", "app", "api"].includes(hostParts[0])) {
-    requestHeaders.set("x-tenant-slug", hostParts[0].toLowerCase());
   }
 
   return finish();

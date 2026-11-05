@@ -9,7 +9,7 @@ import type { PrismaClient } from "@prisma/client";
 import { addPractitioner, addStaff, createEphemeralTenant, ownerClient, type EphemeralTenant } from "@/tests/helpers/tenant-factory";
 import { asUser } from "@/tests/helpers/actor";
 import { storageFake } from "@/tests/helpers/storage-fake";
-import { jpeg, png } from "@/tests/helpers/image-bytes";
+import { jpeg, png, pngFile } from "@/tests/helpers/image-bytes";
 
 vi.mock("@/lib/supabase/admin", async () => {
   const { storageFake: fake } = await import("@/tests/helpers/storage-fake");
@@ -50,7 +50,8 @@ describe.skipIf(!RUN)("[FC-2f] logo y firma (practice-assets)", () => {
   it("[FC-2f] logo PNG/JPEG ≤1 MB con magic bytes: sube, guarda la clave y audita", async () => {
     asUser(A.userId);
     const { uploadTenantLogo } = await assets();
-    const r = await uploadTenantLogo(form(png(800, 200), "image/png", "logo.png"));
+    // CF3 ZF5: PNG entero (con IEND): el logo se limpia de metadatos (`stripImageMetadata`) y uno cortado se rechaza.
+    const r = await uploadTenantLogo(form(pngFile(800, 200), "image/png", "logo.png"));
     expect(r).toMatchObject({ ok: true });
     const t = await db.tenant.findUniqueOrThrow({ where: { id: A.tenantId } });
     expect(t.logoStorageKey).toMatch(new RegExp(`^${A.tenantId}/logo/[0-9a-f]{24}\\.png$`));
@@ -62,7 +63,7 @@ describe.skipIf(!RUN)("[FC-2f] logo y firma (practice-assets)", () => {
   it("[FC-2f] reemplazar el logo: el viejo se borra DESPUÉS del commit (la fila nunca apunta a un objeto borrado)", async () => {
     asUser(A.userId);
     const { uploadTenantLogo } = await assets();
-    await uploadTenantLogo(form(png(10, 10), "image/png"));
+    expect(await uploadTenantLogo(form(pngFile(10, 10), "image/png"))).toMatchObject({ ok: true });
     const first = (await db.tenant.findUniqueOrThrow({ where: { id: A.tenantId } })).logoStorageKey!;
     storageFake.calls = [];
     expect(await uploadTenantLogo(form(jpeg(20, 20), "image/jpeg"))).toMatchObject({ ok: true });

@@ -5,7 +5,7 @@
 > lo crítico que sigue valiendo de ellas está resumido en el §2.
 >
 > **Orden:** §1 QA de producción por plan (después del push) → §2 P0 (lo que no puede fallar) → §3 lo vigente de T3 a
-> CF2. Marcá cada ítem ✅/❌. **Un 🔴 P0 en ❌ frena el pase a prod.** Desde el reset del 29/30-oct **prod tiene un cliente
+> CF3b. Marcá cada ítem ✅/❌. **Un 🔴 P0 en ❌ frena el pase a prod.** Desde el reset del 29/30-oct **prod tiene un cliente
 > vivo**: lo de prod se prueba en consultorios de QA propios, nunca creando ni moviendo turnos en el del cliente.
 
 ## Cómo se corre
@@ -20,7 +20,7 @@
   - **Nunca `npm run dev` pelado** contra algo que no sea el Docker (desde INF-DEV se niega a arrancar contra un
     Supabase remoto) y nunca un Preview que comparta la base de prod (H6).
 - **Fechas siempre con `TZ=UTC`** (`dev:local` ya la fija): en AR-local los bugs de timezone no se ven.
-- **Prod: solo el §1, el «CF» y el «CF2»**, después del push y del postcheck, con los consultorios de `scripts/qa-tenants.ts` (o
+- **Prod: solo el §1, el «CF», el «CF2», el «CF3» y el «CF3b»**, después del push y del postcheck, con los consultorios de `scripts/qa-tenants.ts` (o
   uno de QA propio). Nada más del QA se corre contra prod, y nada sobre el consultorio del cliente.
 - Antes de marcar algo como manual, mirá la columna de cobertura: si dice **QA-M** (integración
   `tests/integration/plan-routing-matrix.test.ts`) o **QA-E** / **E2E** (Playwright, `tests/e2e/*.spec.ts`), ya corre
@@ -371,7 +371,7 @@
 
 ---
 
-## §3 · Vigente por tanda (T3 a T7, PV, CF y CF2)
+## §3 · Vigente por tanda (T3 a T7, PV, CF, CF2 y CF3)
 
 ## T3 · Agenda, Secretaria, cobros y módulos (19-oct-2026)
 
@@ -973,3 +973,149 @@ a **1366×768** y a **390**. Los E2E `cf2-*` cubren el camino feliz en local (si
 - [ ] Sin lugar libre hoy, en otro día, con «cualquier profesional» o con el contacto apagado → no aparece. El número no
   está en el HTML de la página (viene por action).
 - [ ] El Titular, desde Profesionales → Horarios, solo puede ocultarlo; volver a mostrarlo lo hace el profesional.
+
+## CF3 · Precio por profesional, Mi agenda, compartir y sede (04-nov-2026)
+
+Plan §30, **con migración M22** (`cf3_precios_sede`; en prod antes del push, [RUNBOOK «M22 en prod»](MIGRACIONES-RUNBOOK.md)).
+Diseño en ARCHITECTURE ADR-035 (precio por profesional) y ADR-036 (sede digital); hallazgos en [AUDIT «Ronda
+CF3»](AUDIT.md#ronda-cf3). En local con `npm run dev:local`; **en prod, después del deploy**, con un consultorio de QA propio
+(Titular que atiende + otro profesional + Secretaria, turnero prendido, una OS con copago y la fila «Particular»), nunca
+sobre el de TMP. Cada pantalla a **1366×768** y a **390**.
+
+### 🔴 P0 · Dos profesionales, precios distintos
+- [ ] En «Mi agenda», el Titular carga $ 20 000 y el otro profesional $ 15 000 en el mismo servicio. Configuración →
+  Servicios / Profesionales muestra la columna de precio de cada uno (vacío = hereda).
+- [ ] Agenda (Día, Semana, Lista): un turno particular de cada uno muestra su precio; uno con OS real y copago, el copago de
+  la OS (no el precio del profesional); uno con OS sin copago cargado, el precio del profesional.
+- [ ] Modal de turno: elegir paciente particular y cambiar de profesional → el preview cambia de $ 20 000 a $ 15 000 con la
+  fuente «precio del profesional».
+- [ ] Turnero: paso de servicio con el profesional elegido → su precio; con «Cualquier profesional» → sin precio, y en el
+  resumen el del profesional que tocó.
+- [ ] Link de pago a nombre de un paciente particular del segundo profesional → $ 15 000. Cobrar desde el drawer → se
+  congela $ 15 000; cambiar después el precio en «Mi agenda» no mueve ese cobro.
+- [ ] Reasignar un turno sin cobrar del Titular al otro → pasa a $ 15 000; ya cobrado, no cambia.
+- [ ] Turno sin paciente (invitado): la agenda y el Inicio muestran lo mismo que después se cobra.
+- [ ] «Mostrar el precio en el turnero» apagado en uno: el turnero no lo muestra (mirar el HTML: ni el número ni el precio
+  del servicio si es el mismo), y con cobro online el monto aparece en la pantalla antes de Mercado Pago.
+
+### Paciente con obra social en el turnero
+- [ ] Profesional con «WhatsApp para pacientes con obra social» prendido (pide aceptar el consentimiento nuevo) → paciente
+  que elige su OS: sin precio, «Consultá tu cobertura con {Profesional}» + botón de WhatsApp que abre `wa.me` con el texto.
+  El número no está en el HTML (viene al tocar).
+- [ ] Con el switch apagado, o tocando muchas veces seguidas (rate limit): «Consultá tu cobertura con el consultorio» +
+  teléfono del consultorio, sin nombrar al profesional y sin dos textos a la vez.
+- [ ] Borrar el teléfono en «Mi agenda» con el switch prendido → el switch se apaga solo.
+
+### Profesional sin «Configuración» en «Mi agenda»
+- [ ] Entra a Configuración → cae en «Mi agenda» (no en Soporte). No ve General, Sedes, Profesionales ni Servicios.
+- [ ] Ve las 5 secciones en orden: Servicios y precios · Días y horarios · Vacaciones y días especiales · Turnero online ·
+  Avisos.
+- [ ] «Nuevo servicio» → crea uno propio (Drawer con dirty-guard); aparece en su turnero, **no** en el de otro profesional;
+  un solo precio editable. Los del consultorio: habilitar, precio, duración y público/privado, sin poder editarlos.
+- [ ] Cambiar días y horarios de la semana; un horario que choca de sala con otro profesional → rechazo con copy claro.
+- [ ] Cargar vacaciones (rango de días) → la agenda y el turnero las respetan. Un rango inválido → mensaje, no error 500.
+- [ ] No puede cambiar la capacidad, la anticipación ni el horizonte del servicio (siguen en Configuración del Titular).
+- [ ] Tarjeta «Turnero online» → «Tu link para sacar turno» con «Copiar» y «Compartir por WhatsApp»; abrirlo → «Turnos con
+  {Nombre}» y «Ver otros profesionales». Con su switch apagado o el turnero del consultorio cerrado: deshabilitado con el
+  motivo.
+- [ ] El Titular (también atiende) ve «Mi agenda» además de las pestañas del consultorio; en Profesionales, el link de cada
+  uno. La Secretaria no ve «Mi agenda».
+
+### Secretaria compartiendo desde el perfil
+- [ ] Perfil de un paciente → ícono de WhatsApp en el teléfono: abrir chat, llamar, copiar, recordatorio del próximo turno
+  (con el nombre del consultorio), próximos turnos (hasta 5), link del turnero (solo si está abierto), link de pago (con
+  cobros online y permiso de cobro). Sin datos clínicos en ningún texto.
+- [ ] El próximo turno saltea ausentes y cancelados. La invitación al portal solo aparece con acceso full.
+- [ ] Pestaña Turnos: «Compartir por WhatsApp» y «Copiar» por fila, con teclado (flechas, Esc devuelve el foco).
+- [ ] Paciente sin celular válido → el menú lo explica. Acceso básico → contacto oculto («en sus datos»).
+- [ ] A 390: botones de 44 px.
+
+### Titular en «Sitio web» y `/tmp`
+- [ ] Configuración → «Sitio web»: prender, frase (contador ≤ 120), descripción (≤ 800), teléfono y WhatsApp públicos;
+  «Ver mi sitio» abre `/<slug>`. Con dos pestañas, la segunda en guardar avisa que cambió.
+- [ ] `/tmp` (en el QA, `/<slug del consultorio QA>`): logo, nombre, frase, descripción, «Sacar turno», profesionales con
+  especialidad, matrícula, servicios y precio (solo de quien lo muestra), «Sacar turno con X» → turnero con él elegido,
+  horarios, «Quién atiende cada día», sede con «Ver en el mapa», obras sociales y contacto del consultorio. Nunca el
+  WhatsApp ni el email de un profesional (mirar el HTML).
+- [ ] `/TMP` → 308 a `/tmp`. Un slug inexistente → 404 de la sede (no 500). Sitio apagado → 404. `/caja`, `/cobros`,
+  `/pagar`, `/contacto` siguen siendo lo de siempre.
+- [ ] Subir otro logo en General → a los ≤ 10 min la sede muestra el nuevo. Cambiar el nombre o un precio → idem.
+- [ ] `/robots.txt` no bloquea `/tmp` ni un slug como `tvsalud`; con el sitio prendido, `/sitemap.xml` lo lista.
+  `/consultorios/<slug>` apunta a la sede (canonical).
+- [ ] Plataforma → consultorio → prender/apagar el sitio; soporte no puede publicarlo.
+- [ ] A 390 y 1366: una sola columna legible en mobile, nav sin anclas a secciones vacías, «Ver en el mapa» de 44 px.
+
+
+## CF3b · Marca TMP, servicios, co-titular, matrícula y foto (05-nov-2026)
+
+Decisiones y pedidos de Martin del 05-nov, **con migraciones M23** (`cf3_co_titular`) **y M24** (`cf3_practitioner_photo`),
+que van con M22 en un solo `db:prod:deploy` ([RUNBOOK «M23 en prod» y «M24 en prod»](MIGRACIONES-RUNBOOK.md)). Diseño en
+ARCHITECTURE ADR-036 (encabezado y logo público), ADR-037 (co-titular y matrícula) y ADR-038 (foto y marca); hallazgos en
+[AUDIT «Ronda CF3b»](AUDIT.md#ronda-cf3b). En local con `npm run dev:local` y un consultorio de QA (Titular que atiende +
+otro profesional + Secretaria, turnero y «Sitio web» prendidos, con logo). **En prod**, la paleta de TMP es una activación
+(se asigna sobre TMP y se mira sin tocar turnos); el resto, en un consultorio de QA propio. Cada pantalla a **1366×768** y
+a **390**.
+
+### Tema TMP
+- [ ] Plataforma → el consultorio → Ciclo de vida → colores del sitio y del turnero → «TMP (de marca)» → pide
+  confirmación → guarda. En prod, después del deploy, esto se hace sobre **TMP** (es la activación de la marca).
+- [ ] La sede `/<slug>` y el turnero `/c/<slug>/booking` quedan en azul marino y turquesa: botones, avisos, turno
+  elegido, sombras (ningún celeste fijo de los de antes). El fondo general del turnero no cambia (C-F1).
+- [ ] Apariencia (miembro de ese consultorio) ofrece «TMP» además de las cuatro de siempre; elegirla pinta la app.
+  «Ajustes» la muestra marcada. En otro consultorio del mismo usuario no aparece y se ve «Celeste».
+- [ ] Configuración → «Sitio web»: las cuatro generales + «TMP». Elegir otra y «Guardar» → confirmación que avisa que
+  volver a TMP lo hace soporte; cancelar no guarda. Un consultorio sin la paleta asignada no ve «TMP».
+
+### Logo en la app
+- [ ] Con logo cargado (General): se ve en el selector del sidebar (abierto y contraído), la barra móvil (con la marca
+  del producto en una baldosa al lado), el menú de cuenta y `/elegir-consultorio`. Sin logo: las iniciales de siempre.
+- [ ] Cambiar el logo → al recargar se ve el nuevo en todos lados. Abrir `/api/consultorio/logo?t=<otro tenant>` →
+  404 (no distingue «no existe» de «no es tuyo»); sin sesión → 401.
+
+### Encabezado de la sede
+- [ ] `/<slug>`: foto de consultorio de fondo con el velo en el color del consultorio, el logo grande, nombre, frase y
+  «Sacar turno». La foto se mueve despacio y los puntos flotan; con «reducir movimiento» del sistema no se mueve nada y
+  se ve completo.
+- [ ] Compartir `/<slug>` por WhatsApp (o un validador de OG): la tarjeta trae la foto con el nombre del consultorio.
+- [ ] A 390 el encabezado no tapa el texto y no hay salto al cargar la foto.
+
+### Servicios con «Para todo el consultorio»
+- [ ] Configuración → Servicios → «Nuevo servicio» (Titular que atiende): el checkbox «Para todo el consultorio»
+  viene marcado; marcado → queda del consultorio, habilitado y en el turnero para todos. Desmarcado → aparece el
+  selector con uno mismo elegido.
+- [ ] «Mi agenda» → «Nuevo servicio» (profesional sin «Configuración»): el checkbox viene desmarcado → queda suyo.
+  Marcado → la fila dice «Del consultorio», ya no lo puede editar ni borrar; los colegas lo tienen habilitado para la
+  agenda pero **no** en su turnero hasta que lo publiquen.
+- [ ] Con 30 servicios propios: el checkbox queda marcado y fijo (solo puede crear del consultorio).
+
+### Co-titular
+- [ ] Titular principal → Configuración → Usuarios → otro profesional activo: switch «Co-titular» con el texto de qué
+  puede y qué no, y su matrícula (o «sin matrícula») → pide el código de 2FA → badge «Co-titular». A una Secretaria o a
+  un Administrador/a no se le ofrece.
+- [ ] El co-titular entra: ve Configuración como el Titular (equipo, servicios, sedes, «Sitio web», export de datos) y
+  todo el consultorio en agenda, pacientes e Inicio. **No** ve «Plan y uso» ni «Facturación», no puede delegar «Planes y
+  pagos», no recibe los mails de cobro de la plataforma y donde un módulo falta lee «Pedile al titular…».
+- [ ] Sobre el principal: no puede cambiarle el rol, los permisos ni suspenderlo (fila bloqueada con el motivo), no
+  transfiere la titularidad, no da ni saca «Co-titular» (tampoco a sí mismo). Puede delegar «Configuración» a los demás.
+- [ ] Reparto: una regla donde destina el principal no la puede crear ni cerrar (rechazo con copy); las demás sí.
+- [ ] Quitar «Co-titular» → vuelve a Profesional con lo que tenía; «Planes y pagos» no reaparece. Cambiarle el rol a un
+  co-titular (lo hace solo el principal) le saca la marca sin error.
+- [ ] Con el consultorio suspendido, el co-titular también ve «Descargar el export de mis datos» en `/suspendido`.
+
+### Matrícula
+- [ ] «Mi agenda» → «Matrícula»: «Sin matrícula» esconde los campos; MN pide número; MP pide número y provincia. Un
+  número con símbolos raros → error en el campo. Guardar → toast; vaciar → la borra.
+- [ ] `/cuenta/seguridad` → actividad: «Cambiaste tu matrícula» / «Borraste tu matrícula». No aparece en la sede ni en
+  el turnero.
+
+### Foto
+- [ ] «Mi agenda» → «Tu foto»: subir una foto de teléfono grande → se reduce y se ve en el avatar de la barra superior,
+  la barra móvil y el menú de cuenta. Un PNG con fondo transparente queda recortado sobre blanco. Un PDF o un archivo
+  renombrado → mensaje claro.
+- [ ] El switch «Mostrar mi foto en el turnero y en el sitio del consultorio» está deshabilitado sin foto. Prendido →
+  en el turnero (elegir profesional) y en las tarjetas de la sede sale la foto en el marco blanco con la sombra en el
+  color del consultorio y el logo chico abajo a la derecha. Apagado → iniciales en el mismo marco.
+- [ ] Apagar el switch o borrar la foto: a lo sumo en un día deja de verse en una URL ya abierta; una página recargada
+  ya no la pide. Con foto en dos consultorios, el switch es por consultorio.
+- [ ] `/cuenta/seguridad` → actividad: «Cambiaste tu foto» / «Borraste tu foto». Una foto con GPS en el EXIF: la descargada desde
+  `/api/public/pro-photo/…` no lo trae.

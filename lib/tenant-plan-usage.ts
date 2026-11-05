@@ -7,9 +7,14 @@ import "server-only";
  * No es `"use server"` a propósito: la llama la página de Configuración (Server Component) y nada del cliente la
  * necesita; así no queda expuesta como endpoint RPC.
  *
- * Orden de AGENTS.md: `tenant.admin` («Configuración»: Titular, ADMIN o delegada; también el soporte) **o**
- * `account.billing` («Planes y pagos», PL-3) → `runWithRls` con `where: { tenantId }` a mano (en prod la conexión es
- * BYPASSRLS: es la única barrera).
+ * Orden de AGENTS.md: `account.billing` («Planes y pagos», PL-3) → `runWithRls` con `where: { tenantId }` a mano (en
+ * prod la conexión es BYPASSRLS: es la única barrera).
+ *
+ * CT-INT (CF3b, B): hasta CF3b también abría con `tenant.admin` («Configuración»). Con el co-titular (M23), que tiene
+ * `tenant.admin` y NUNCA nada de la suscripción, ese «o» le abría «Plan y uso» (plan, estado de la suscripción, prueba)
+ * por la puerta de atrás. Ningún llamador lo usaba ya con `tenant.admin` solo: el loader de Configuración lo pide solo
+ * con `account.billing` (la pestaña es de «Planes y pagos», controls.tsx). Así que la barrera queda en lo mismo que la
+ * pestaña: tampoco el Administrador/a o la Secretaria con «Configuración» sin «Planes y pagos», ni soporte.
  * Los cupos salen de `getSeatUsageInTx` (lib/team-internal.ts), el mismo cálculo que frena la invitación; el
  * desglose de invitaciones y miembros no clínicos, de `countSeatsInTx` (mismos filtros); el copy, de `planUsageView`.
  */
@@ -20,12 +25,15 @@ import { countSeatsInTx, getSeatUsageInTx } from "@/lib/team-internal";
 import { PLAN_DEFAULTS, hasCustomLimits } from "@/lib/saas-plans-logic";
 import { planUsageView, type TenantPlanUsageView } from "@/lib/tenant-plan-usage-logic";
 
+/** Copy del rechazo (sin jerga de roles; antes «Solo OWNER/ADMIN…»). Exportado para los tests. */
+export const PLAN_USAGE_FORBIDDEN = "El plan del consultorio lo ven el titular y quien tenga «Planes y pagos».";
+
 export async function getTenantPlanUsage(now: Date = new Date()): Promise<TenantPlanUsageView> {
-  // PL-3a: «Plan y uso» es de quien tiene «Planes y pagos» (`account.billing`) o «Configuración» (`tenant.admin`).
+  // PL-3a → CT-INT: «Plan y uso» es de quien tiene «Planes y pagos» (`account.billing`), nada más (ver la cabecera).
   const actor = await getActor();
   const caps = await capabilitiesForActor(actor);
-  if (!caps.has("tenant.admin") && !caps.has("account.billing")) {
-    throw new ForbiddenError("Solo OWNER/ADMIN ven el plan del consultorio.");
+  if (!caps.has("account.billing")) {
+    throw new ForbiddenError(PLAN_USAGE_FORBIDDEN);
   }
   const tenantId = actor.tenantId;
   const r = await runWithRls(tenantId, async (tx) => {

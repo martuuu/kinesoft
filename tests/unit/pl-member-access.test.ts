@@ -23,7 +23,8 @@ const CLINICAL: Capability[] = ["clinical.read", "plans.manage"];
 // T3b-1k1 (C-AS1): «Configuración» delega también `tenant.sensitive` (CONFIG_DELEGATED); el corte de staff se la saca
 // a la Secretaria y a Facturación al final.
 const SETTINGS: Capability[] = ["tenant.admin", "schedule.configure", "tenant.sensitive"];
-const ACCOUNT: Capability[] = ["account.billing", "account.owner"];
+// CT-K1 (CF3b): + `account.manage` y `account.export` (funciones de Titular que comparte el co-titular); fuera del rol.
+const ACCOUNT: Capability[] = ["account.billing", "account.owner", "account.manage", "account.export"];
 /** Solo del PRACTITIONER (C-AS1): OWNER/ADMIN cobran todo con `billing.collect`. */
 const OWN_ONLY: Capability[] = ["billing.collectOwn"];
 const STAFF: Role[] = ["ASSISTANT", "BILLING"];
@@ -195,6 +196,7 @@ describe("[PL-1b] capabilitiesForMembership (reemplazo de capabilitiesFor(m?.rol
     expect(capabilitiesForMembership(undefined).size).toBe(0);
     const owner = m("OWNER", { clinical: false });
     expect(sorted(capabilitiesForMembership(owner))).toEqual(sorted(capabilitiesForMember(owner)));
-    expect(Object.keys(MEMBER_ACCESS_SELECT).sort()).toEqual(["clinical", "grantBilling", "grantSettings", "role"]);
+    // CT-K1 (M23): + `grantCoOwner` (co-titular).
+    expect(Object.keys(MEMBER_ACCESS_SELECT).sort()).toEqual(["clinical", "grantBilling", "grantCoOwner", "grantSettings", "role"]);
   });
 });

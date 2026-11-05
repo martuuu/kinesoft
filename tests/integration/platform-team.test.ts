@@ -187,13 +187,14 @@ describe.skipIf(!RUN)("[BO2-B] equipo de un consultorio desde /plataforma", () =
     expect(team!.members.length).toBeGreaterThan(0);
     for (const m of team!.members) {
       expect(Object.keys(m).sort()).toEqual(
-        // PL-3b: + «¿Atiende?», permisos delegados y turnero por profesional.
+        // PL-3b: + «¿Atiende?», permisos delegados y turnero por profesional. CF3b (CT-K2): + «Co-titular».
         [
           "clinical",
           "disabledAt",
           "email",
           "fullName",
           "grantBilling",
+          "grantCoOwner",
           "grantSettings",
           "hasAgenda",
           "joinedAt",

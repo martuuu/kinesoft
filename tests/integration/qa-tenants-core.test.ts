@@ -165,6 +165,24 @@ describe.skipIf(!RUN)("[INF-S] qa-tenants (núcleo) contra el Docker local", () 
     expect(fake.calls.filter((c) => c.method === "createUser").length).toBe(before.creates);
   });
 
+  // CF3 ZF5 (B): re-correr deja cada membresía como dice la spec, y eso incluye «Co-titular» (M23). Antes el `update`
+  // no lo tocaba: un QA que había promovido a alguien a co-titular lo conservaba, y si esa persona era el
+  // Administrador/a de la spec (y la habían pasado a Profesional para probar), volver a ADMIN chocaba con el CHECK
+  // `Membership_coOwner_role_check` (23514) y el script entero se caía.
+  it("[CF3-ZF5-2b] re-correr apaga «Co-titular» (no se hereda) y vuelve el rol de la spec sin chocar con el CHECK de M23", async () => {
+    const slug = `${PREFIX}consultorio-general`;
+    const t = await db.tenant.findUniqueOrThrow({ where: { slug }, select: { id: true } });
+    const byRole = (role: "ADMIN" | "PRACTITIONER") =>
+      db.membership.findFirstOrThrow({ where: { tenantId: t.id, role }, orderBy: { invitedAt: "asc" }, select: { id: true, userId: true } });
+    const admin = await byRole("ADMIN");
+    const prof = await byRole("PRACTITIONER");
+    await db.membership.update({ where: { id: prof.id }, data: { grantCoOwner: true } });
+    await db.membership.update({ where: { id: admin.id }, data: { role: "PRACTITIONER", clinical: true, grantCoOwner: true } });
+    await ensureQaTenants(deps, { emailBase: EMAIL_BASE, password: PASSWORD });
+    expect(await db.membership.findUniqueOrThrow({ where: { id: prof.id } })).toMatchObject({ role: "PRACTITIONER", grantCoOwner: false });
+    expect(await db.membership.findUniqueOrThrow({ where: { id: admin.id } })).toMatchObject({ role: "ADMIN", clinical: false, grantCoOwner: false });
+  });
+
   it("[INF-S] --sample-data: 10 pacientes «QA Paciente NN» y una semana de turnos, idempotente", async () => {
     const slug = qaSlugs(PREFIX).find((s) => s.plan === "CONSULTORIO" && s.vertical === "KINESIOLOGY")!.slug;
     const t = await db.tenant.findUniqueOrThrow({ where: { slug }, select: { id: true } });

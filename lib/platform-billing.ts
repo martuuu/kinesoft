@@ -569,7 +569,8 @@ export async function platformPreviewPlanChange(tenantId: unknown, to: unknown):
   const plan = SAAS_PLAN.safeParse(to);
   if (!id.success || !plan.success) return invalid();
   const preview = await runTeamTx(platformCtx(actor, id.data), (tx) =>
-    previewPlanChangeInTx(tx, { tenantId: id.data, to: plan.data, now: new Date(), actorUserId: actor.userId })
+    // CT-INT (fix M): Plataforma sí puede elegir al co-titular (D1: lo gestionan el principal y Plataforma).
+    previewPlanChangeInTx(tx, { tenantId: id.data, to: plan.data, now: new Date(), actorUserId: actor.userId, via: "platform" })
   );
   return preview ? { ok: true, data: preview } : invalid(PLAN_CHANGE_COPY.not_found);
 }

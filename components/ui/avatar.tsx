@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { personInitials } from "@/lib/person-initials";
 
 type Props = {
   name?: string;
@@ -8,12 +9,9 @@ type Props = {
 };
 
 export function Avatar({ name = "JP", size = 36, tone = "sky", style }: Props) {
-  const initials = name
-    .split(" ")
-    .slice(0, 2)
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase();
+  // CF3 (ZF4b): la regla compartida (nombre y apellido, sin «Lic.»/«Dra.»). Antes eran las dos primeras palabras y el
+  // avatar del shell decía «LA» para «Lic. Ana Pérez» mientras la foto del profesional decía «AP».
+  const initials = personInitials(name);
   const bg =
     tone === "lime"
       ? "var(--lime-300)"

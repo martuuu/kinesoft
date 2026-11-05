@@ -11,6 +11,8 @@
  *     este navegador ya tiene suscripción. El permiso se pide SOLO dentro de `activateThisDevice`, que corre al tocar
  *     «Activar en este dispositivo»: pedirlo al abrir la pestaña es lo que hace que la gente lo bloquee para siempre
  *     (y Chrome castiga a los sitios que lo piden sin gesto).
+ *   • CF3b PH-U1: copy y switch de «Tu foto» (`PHOTO_COPY`, `photoSwitchUiOf`); la reducción con canvas vive en
+ *     `lib/photo-resize.ts` (test `tests/unit/ph-u1-photo-resize.test.ts`).
  */
 import { normalizeArMobile } from "@/lib/phone-e164";
 import { LEAD_CONTACT_PHONE_COPY, SELF_SETTINGS_COPY } from "@/lib/practitioner-self-settings-logic";
@@ -24,10 +26,45 @@ import {
 } from "@/lib/web-push-types";
 import type { ConfiguracionMiAgendaData } from "@/lib/configuracion-page-loader";
 import type { ActionResult } from "@/lib/validation";
+import { turneroInviteText, whatsAppShareUrl } from "@/lib/booking-share";
 
 export const MI_AGENDA_COPY = {
   cardTurnero: "Turnero online",
-  turneroIntro: "Si aparecés en el turnero y con cuánta anticipación te pueden reservar.",
+  turneroIntro:
+    "Si aparecés en el turnero, tu link para sacar turno, si se ve tu precio y con cuánta anticipación te pueden reservar.",
+  // CF3 (D-CF3-13): las secciones nuevas, en el orden de la pestaña.
+  sectionServices: "Servicios y precios",
+  servicesIntro:
+    "Los servicios que atendés, cuánto cobrás y cuáles se pueden reservar por el turnero. Si te falta uno, crealo con «Nuevo servicio».",
+  sectionWeek: "Días y horarios",
+  weekIntro: "Los días y horarios en que atendés cada semana, en cada sede.",
+  sectionExceptions: "Vacaciones y días especiales",
+  exceptionsIntro: "Los días que no atendés o que atendés en otro horario: vacaciones, feriados, congresos.",
+  catalogLoading: "Cargando las sedes del consultorio…",
+  catalogError: "No pudimos cargar las sedes del consultorio.",
+  // CF3 (D-CF3-12): link propio del turnero.
+  linkTitle: "Tu link para sacar turno",
+  linkHint: "Compartilo con tus pacientes: entran al turnero con vos ya elegido.",
+  linkOffOwn: "Tu link todavía no funciona: prendé «Aparece en el turnero online».",
+  linkOffTenant: "Tu link todavía no funciona: el consultorio tiene los turnos online apagados.",
+  copy: "Copiar",
+  copied: "Copiado",
+  copyFailed: "No pudimos copiar. Seleccioná el link y copialo a mano.",
+  shareWhatsApp: "Compartir por WhatsApp",
+  // CF3 (D-CF3-3): precio visible.
+  priceLabel: "Mostrar mi precio en el turnero",
+  priceHintOn: "Los pacientes ven tu precio al elegir el servicio.",
+  priceHintOff:
+    "Tu precio no se muestra en el turnero ni en el sitio del consultorio. Si se cobra una seña online, el monto se ve al pagar.",
+  // CF3 (D-CF3-5): WhatsApp para pacientes con obra social.
+  insuredLabel: "Mostrar mi WhatsApp a pacientes con obra social para que consulten su cobertura",
+  insuredHintOn:
+    "Cuando un paciente con obra social saca turno con vos, el turnero le ofrece escribirte para consultar si atendés su cobertura.",
+  insuredHintOff:
+    "Los pacientes con obra social ven «Consultá tu cobertura con el consultorio» y el teléfono del consultorio.",
+  insuredNeedsPhone: "Primero guardá tu celular con WhatsApp en «Si te piden un turno antes».",
+  insuredAccept: "Aceptar y mostrar",
+  cancel: "Cancelar",
   cardLeadContact: "Si te piden un turno antes",
   leadContactIntro:
     "Si tu anticipación no deja reservar un lugar libre de hoy, el turnero puede ofrecerle al paciente escribirte o " +
@@ -339,5 +376,101 @@ export function deviceLine(d: PushDeviceView): { title: string; detail: string }
   return {
     title: d.current ? `${name} (este dispositivo)` : name,
     detail: `Activado el ${arDate(d.createdAt)} · ${d.lastSuccessAt ? `Último aviso el ${arDate(d.lastSuccessAt)}` : "Todavía sin avisos"}`,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CF3 (§30, D-CF3-12): link propio del turnero
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type OwnBookingLink = {
+  /** Absoluto si ya hay origin (después de montar); relativo en el SSR (el server no sabe el host). */
+  url: string;
+  /** El link lleva a un turnero que de verdad lo muestra: consultorio prendido Y switch propio prendido. */
+  enabled: boolean;
+  /** Qué falta, con el consultorio primero (con él apagado el switch propio ni se puede tocar). */
+  reason: string | null;
+};
+
+export function ownBookingLinkOf(
+  d: Pick<ConfiguracionMiAgendaData, "bookingUrl" | "ownPublicBookingEnabled" | "tenantPublicBookingEnabled">,
+  origin: string | null
+): OwnBookingLink {
+  const url = origin ? `${origin.replace(/\/+$/, "")}${d.bookingUrl}` : d.bookingUrl;
+  if (!d.tenantPublicBookingEnabled) return { url, enabled: false, reason: MI_AGENDA_COPY.linkOffTenant };
+  if (!d.ownPublicBookingEnabled) return { url, enabled: false, reason: MI_AGENDA_COPY.linkOffOwn };
+  return { url, enabled: true, reason: null };
+}
+
+/** «Compartir por WhatsApp» SIN destinatario (WhatsApp pide elegir el contacto), con el texto de `turneroInviteText`. */
+export function ownBookingWhatsAppHref(clinicName: string, practitionerName: string, url: string): string {
+  return whatsAppShareUrl(turneroInviteText({ clinicName, practitionerName, url }), null);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CF3 (§30, D-CF3-5): WhatsApp para pacientes con obra social
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type InsuredContactUi = {
+  /** Hay un celular válido GUARDADO (el server usa el de la base, no lo que esté escrito sin guardar). */
+  canEnable: boolean;
+  /** Sin consentimiento sellado: se pide la casilla antes de llamar. Con uno viejo (v1) lo pide el server. */
+  needsConsentUpfront: boolean;
+};
+
+export function insuredContactUiOf(d: Pick<ConfiguracionMiAgendaData, "contactWhatsapp" | "contactConsentAt">): InsuredContactUi {
+  const phone = d.contactWhatsapp ? normalizeArMobile(d.contactWhatsapp) : null;
+  return { canEnable: !!phone && phone.ok, needsConsentUpfront: d.contactConsentAt == null };
+}
+
+/** Respuesta de `setOwnInsuredContact`: ¿pide la casilla? (consentimiento v1 o ninguno) y el error a mostrar. */
+export function insuredErrorOf(r: { ok: false; error: string; fieldErrors?: Record<string, string[] | undefined> }): {
+  needsConsent: boolean;
+  error: string | null;
+} {
+  if (r.fieldErrors?.acceptConsent?.[0]) return { needsConsent: true, error: null };
+  return { needsConsent: false, error: r.fieldErrors?.contactWhatsapp?.[0] ?? r.error };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CF3b PH-U1 (M24, contrato FOTO): «Tu foto»
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const PHOTO_COPY = {
+  section: "Tu foto",
+  intro:
+    "Es tu avatar en la app y, si lo prendés, la foto que ven los pacientes en el turnero y en el sitio del consultorio. " +
+    "La foto es tuya: es la misma en todos tus consultorios.",
+  note: "Usá una foto tuya de frente, con buena luz. Si es PNG sin fondo, queda sobre blanco con los colores del consultorio.",
+  formats: "PNG, JPEG o WEBP. La achicamos a 512 × 512 antes de subirla.",
+  upload: "Subir foto",
+  change: "Cambiar foto",
+  uploading: "Subiendo…",
+  remove: "Quitar foto",
+  removing: "Quitando…",
+  removeTitle: "¿Quitar tu foto?",
+  removeMessage:
+    "Deja de verse en la app, en el turnero y en el sitio de todos tus consultorios. Podés subir otra cuando quieras.",
+  uploaded: "Listo, tu foto quedó guardada.",
+  removed: "Listo, quitamos tu foto.",
+  publicLabel: "Mostrar mi foto en el turnero y en el sitio del consultorio",
+  publicHintOn: "Los pacientes ven tu foto al elegir con quién sacar turno y en el sitio del consultorio.",
+  publicHintOff: "Tu foto se ve solo adentro de la app.",
+  publicNeedsPhoto: "Primero subí una foto.",
+} as const;
+
+export type PhotoSwitchUi = { on: boolean; disabled: boolean; hint: string };
+
+/**
+ * El switch «Mostrar mi foto…» (`Practitioner.showPhotoPublic`, por consultorio). Sin foto se ve APAGADO y deshabilitado
+ * aunque el flag guardado esté prendido: el público no ve nada sin foto (contrato: «foto solo con showPhotoPublic &&
+ * foto») y un switch prendido sin foto decía lo contrario. Al subir otra, vuelve a mostrar lo guardado.
+ */
+export function photoSwitchUiOf(i: { hasPhoto: boolean; showPublic: boolean; readOnly: boolean; pending: boolean }): PhotoSwitchUi {
+  if (!i.hasPhoto) return { on: false, disabled: true, hint: PHOTO_COPY.publicNeedsPhoto };
+  return {
+    on: i.showPublic,
+    disabled: i.readOnly || i.pending,
+    hint: i.showPublic ? PHOTO_COPY.publicHintOn : PHOTO_COPY.publicHintOff,
   };
 }

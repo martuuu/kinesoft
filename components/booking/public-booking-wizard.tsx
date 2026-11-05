@@ -35,6 +35,7 @@ import { IconAlert, IconArrow, IconCheck, IconChevL, IconClock } from "@/compone
 import { formatARS } from "@/lib/format";
 import { submitPublicBooking } from "@/lib/public-booking";
 import { toARDateKey } from "@/lib/datetime-ar";
+import { paletteAttr } from "@/lib/brand-palettes";
 import type { PublicClinic, PublicLocation, PrefillPatient } from "@/lib/public-booking-types";
 import type { TenantVertical } from "@prisma/client";
 import {
@@ -42,10 +43,12 @@ import {
   attemptSignature,
   canConfirmPayment,
   checkoutCopyFor,
+  checkoutPricingFor,
   clinicInitials,
   coverageInsurerPrefill,
   destinationAfterSubmit,
   durationFor,
+  entryPractitionerHeading,
   filterPractitioners,
   findLocation,
   formatLocationAddress,
@@ -55,6 +58,7 @@ import {
   locationsForPractitioner,
   missingTurneroReason,
   nextAttempt,
+  particularQuoteFor,
   payNowFor,
   quotedForInterstitial,
   reconcileSelection,
@@ -63,6 +67,7 @@ import {
   servicesForPractitioner,
   windowNavAt,
   wizardOnlinePaymentFor,
+  insuredCoverageTextAfterContact,
   type Attempt,
   type CheckoutCopy,
   type PayChoice,
@@ -90,6 +95,9 @@ const loadFirstSlot = () => import("./wizard/first-slot-step");
 const stepLoading = () => <p className={s.loading}>Cargando…</p>;
 const SlotWindowStep = dynamic(() => loadSlotWindow().then((m) => m.SlotWindowStep), { loading: stepLoading });
 const FirstSlotStep = dynamic(() => loadFirstSlot().then((m) => m.FirstSlotStep), { loading: stepLoading });
+// CF3 (D-CF3-5): botón del WhatsApp del profesional para un paciente con obra social. Diferido: solo existe con obra
+// social declarada (nunca en el SSR: los filtros arrancan vacíos) y trae el ícono + la llamada a `getInsuredContact`.
+const InsuredContact = dynamic(() => import("./wizard/insured-contact").then((m) => m.InsuredContact));
 
 export type PatientHC = {
   firstName: string;
@@ -139,6 +147,7 @@ export function PublicBookingWizard({
   prefill,
   googleEnabled = true,
   initialPractitionerId = null,
+  siteHref = null,
 }: {
   clinic: WizardClinic;
   session: { email: string; fullName: string | null } | null;
@@ -151,6 +160,8 @@ export function PublicBookingWizard({
   googleEnabled?: boolean;
   /** DIR-2d: `?pro=` del deep link del directorio. No reservable acá = se ignora (`initialWizardSelection`). */
   initialPractitionerId?: string | null;
+  /** CF3 (SD-U): `/<slug>` si la sede digital del consultorio está publicada; la marca del nav vuelve a ella. */
+  siteHref?: string | null;
 }) {
   const singlePractitioner = clinic.practitioners.length === 1;
   // Piso del «Volver»: con el deep link se arranca en el paso 1 pero se puede volver a elegir profesional.
@@ -208,19 +219,36 @@ export function PublicBookingWizard({
   // y la elección del paciente en OPTIONAL (null = no eligió; sin preselección, TP-UI-D5). Botón y resumen son copy:
   // adónde ir lo decide el `next` del server.
   const coverage = { insurerId: filters.insurerId, coverageInsurer: hc.coverageInsurer };
-  const payment = wizardOnlinePaymentFor(clinic, practitionerId, service?.priceCents ?? 0, coverage);
+  // CF3 (D-CF3-1/3): con `serviceId`, la cotización de un particular con ESE profesional (`particularQuotes`); precio
+  // oculto → `amountHidden` (sin número: el monto real se ve en el interstitial antes de Mercado Pago).
+  const payment = wizardOnlinePaymentFor(clinic, practitionerId, service?.priceCents ?? 0, coverage, serviceId);
   const [payChoice, setPayChoice] = useState<PayChoice>(null);
   // WA-U4 (§26.5): la casilla de WhatsApp de «Tus datos». Destildada; vive acá (no en `DataStep`) para sobrevivir el
   // «Atrás» y para mandarla en el submit.
   const [waConsent, setWaConsent] = useState(false);
+  // CF3: precio del resumen por profesional; con obra social declarada, sin precio y con el bloque de cobertura
+  // (`pricing.insured`, decisión 1 de Martin). Con «cualquier profesional» sin resolver no hay precio (D-CF3-4).
+  const pricing = checkoutPricingFor(clinic, practitionerId, serviceId, coverage);
   const checkout = checkoutCopyFor({
     payment,
     choice: payChoice,
-    priceCents: service?.priceCents ?? 0,
-    withoutOnlinePayment: reservesWithoutOnlinePayment(clinic, practitionerId, coverage),
+    ...pricing,
+    withoutOnlinePayment: reservesWithoutOnlinePayment(clinic, practitionerId, coverage, serviceId),
   });
+  // D-CF3-12: entró por el link propio (`?pro=`) → «Turnos con {Nombre}» mientras siga con ese profesional; «Ver otros
+  // profesionales» (solo con más de uno) vuelve al paso 0 y apaga el encabezado.
+  const [entryActive, setEntryActive] = useState(true);
+  const entryHeading =
+    // En el paso 0 (volvió con «Atrás») está eligiendo entre todos: ahí el encabezado no aplica.
+    entryActive && step > 0 && mode === "pick" && practitionerId === initialPractitionerId
+      ? entryPractitionerHeading(clinic, initialPractitionerId)
+      : null;
+  const seeOtherPractitioners = () => {
+    setEntryActive(false);
+    setStep(0);
+  };
   // Interstitial antes de navegar (TP-UI-D6 monto distinto; MP caído en OPTIONAL). `href` = adónde sigue.
-  const [interstitial, setInterstitial] = useState<{ kind: "amount" | "unavailable" | "reserved"; amountCents: number | null; href: string } | null>(null);
+  const [interstitial, setInterstitial] = useState<{ kind: "amount" | "hidden" | "unavailable" | "reserved"; amountCents: number | null; href: string } | null>(null);
 
   // Servicios del profesional elegido (`practitionerIds`, B3.2). En modo
   // "cualquiera": los que ofrece al menos un profesional que pasa los filtros.
@@ -372,7 +400,8 @@ export function PublicBookingWizard({
         // TP-ZF2: `reserved` acá = el wizard cotizó un cobro y el server no cobró (copago $ 0): se avisa en vez de ir
         // directo a `/ok` después de prometer «Pagar y reservar».
         setInterstitial({
-          kind: r.data.next === "reserved" ? "reserved" : "amount",
+          // CF3 (D-CF3-3): con el precio oculto no hubo número que «cambie»: el interstitial lo muestra por primera vez.
+          kind: r.data.next === "reserved" ? "reserved" : payment?.amountHidden ? "hidden" : "amount",
           amountCents: r.data.amountCents,
           href: destinationAfterSubmit(r.data),
         });
@@ -383,9 +412,16 @@ export function PublicBookingWizard({
   };
 
   return (
-    <div className={`k-app ${s.root}`}>
-      <Nav clinic={clinic} session={session} />
-      <Header clinic={clinic} step={step} />
+    // BR-P: los colores del consultorio (`Tenant.palette`, la elige el titular en «Sitio web» o Plataforma). Antes el
+    // turnero recibía `clinic.palette` y no la usaba: todos salían Celeste. Sky o un valor desconocido = sin atributo.
+    <div className={`k-app ${s.root}`} data-palette={paletteAttr(clinic.palette)}>
+      <Nav clinic={clinic} session={session} siteHref={siteHref} />
+      <Header
+        clinic={clinic}
+        step={step}
+        heading={entryHeading}
+        onSeeOthers={entryHeading && !singlePractitioner ? seeOtherPractitioners : null}
+      />
 
       <main className={s.body}>
         <Card glass className={s.card}>
@@ -403,8 +439,10 @@ export function PublicBookingWizard({
           )}
           {step === 1 && (
             <ServiceStep
+              clinic={clinic}
               services={visibleServices}
               practitionerId={mode === "pick" ? practitionerId : null}
+              declaredObraSocial={!!pricing.insured}
               value={serviceId}
               onChange={(id) => {
                 setServiceId(id);
@@ -560,20 +598,42 @@ function newIdempotencyKey(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
-function Nav({ clinic, session }: { clinic: PublicClinic; session: { email: string } | null }) {
+function Nav({
+  clinic,
+  session,
+  siteHref = null,
+}: {
+  clinic: PublicClinic;
+  session: { email: string } | null;
+  siteHref?: string | null;
+}) {
   const initials = clinicInitials(clinic.name);
+  const brand = (
+    <>
+      {siteHref && <span aria-hidden="true">←</span>}
+      {initials && (
+        <span className={s.navMono} aria-hidden="true">
+          {initials}
+        </span>
+      )}
+      <p className={s.navClinic}>
+        {siteHref && <span className="k-sr-only">Volver al sitio de </span>}
+        {clinic.name}
+      </p>
+    </>
+  );
   return (
     <header className={`k-glass ${s.nav}`}>
       {/* VX-Z: la marca es la DEL CONSULTORIO (monograma + nombre, como `BookingFrame`): el paciente llegó por su link
           y no conoce la app. La marca de la app queda chica en el pie. El nombre es un `<p>`: la única h1 es la del head. */}
-      <div className={s.navBrand}>
-        {initials && (
-          <span className={s.navMono} aria-hidden="true">
-            {initials}
-          </span>
-        )}
-        <p className={s.navClinic}>{clinic.name}</p>
-      </div>
+      {/* CF3 (SD-U): con la sede digital publicada, «← {Consultorio}» vuelve a `/<slug>` (link plano: es otra página). */}
+      {siteHref ? (
+        <a href={siteHref} className={`${s.navBrand} ${s.navLink}`} style={{ color: "inherit", minHeight: 44 }}>
+          {brand}
+        </a>
+      ) : (
+        <div className={s.navBrand}>{brand}</div>
+      )}
       <div className={s.navSpacer} />
       {/* VX2-d1 (AUDIT `turnero-texto-fijo-lun-sab`): antes «lun-sáb 8 a 19hs» fijo para todos. Ahora el resumen de
           las franjas reales (`summarizeOpeningHours`); sin franjas vigentes no se muestra nada. */}
@@ -594,12 +654,28 @@ function Nav({ clinic, session }: { clinic: PublicClinic; session: { email: stri
   );
 }
 
-function Header({ clinic, step }: { clinic: PublicClinic; step: Step }) {
+function Header({
+  clinic,
+  step,
+  heading = null,
+  onSeeOthers = null,
+}: {
+  clinic: PublicClinic;
+  step: Step;
+  /** D-CF3-12: «Turnos con {Nombre}» con el link propio; null = «Reservá tu turno». Sigue siendo la única h1. */
+  heading?: string | null;
+  onSeeOthers?: (() => void) | null;
+}) {
   return (
     <div className={s.head}>
       <p className={s.eyebrow}>{clinic.name}</p>
       {/* VX2-d1: sin «en 30 segundos» (§3: solo claims con evidencia; nadie lo midió). */}
-      <h1 className={`k-display ${s.title}`}>Reservá tu turno</h1>
+      <h1 className={`k-display ${s.title}`}>{heading ?? "Reservá tu turno"}</h1>
+      {onSeeOthers && (
+        <button type="button" className={s.otherPros} onClick={onSeeOthers}>
+          Ver otros profesionales
+        </button>
+      )}
       <Steps step={step} hidePractitioner={clinic.practitioners.length === 1} />
     </div>
   );
@@ -634,21 +710,38 @@ function Steps({ step, hidePractitioner }: { step: Step; hidePractitioner: boole
 // ─── Step 0 ─ Practitioner: components/booking/wizard/practitioner-step.tsx
 
 // ─── Step 1 ─ Service ──────────────────────────────────────────────────
-function ServiceStep({
+/** Exportado para el render test (CF3 PR-W): «cualquier profesional» y obra social no se alcanzan por render estático. */
+export function ServiceStep({
+  clinic,
   services,
   practitionerId,
+  declaredObraSocial,
   value,
   onChange,
 }: {
+  clinic: PublicClinic;
   services: PublicClinic["services"];
-  /** Para la duración por profesional; null = modo "cualquiera". */
+  /** Para la duración y el precio por profesional; null = modo "cualquiera". */
   practitionerId: string | null;
+  /** CF3 (decisión 1): declaró obra social → sin precio (el valor depende de su cobertura, lo dice el resumen). */
+  declaredObraSocial: boolean;
   value: string | null;
   onChange: (id: string) => void;
 }) {
+  // CF3 (D-CF3-1/3/4): lo que paga un particular con ESE profesional; null con «cualquiera» (el precio aparece en el
+  // resumen cuando se sabe con quién es) o con el precio oculto. Nunca el `priceCents` del servicio si hay cotizaciones.
+  const prices = new Map(services.map((sv) => [sv.id, declaredObraSocial ? null : particularQuoteFor(clinic, practitionerId, sv.id)]));
+  const anyPrice = [...prices.values()].some((v) => (v ?? 0) > 0);
+  const subtitle = declaredObraSocial
+    ? "Cada servicio tiene su duración. El valor depende de tu cobertura."
+    : anyPrice
+      ? "Cada servicio tiene su duración y su precio."
+      : !practitionerId && clinic.particularQuotes
+        ? "Cada servicio tiene su duración. El precio lo ves en el resumen, cuando se sabe con quién es el turno."
+        : "Cada servicio tiene su duración.";
   return (
     <>
-      <StepHeader title="¿Qué servicio necesitás?" subtitle="Cada servicio tiene su duración y su precio." />
+      <StepHeader title="¿Qué servicio necesitás?" subtitle={subtitle} />
       {services.length === 0 ? (
         <EmptyBox>No hay servicios para reservar online con esta elección. Volvé y probá otra.</EmptyBox>
       ) : (
@@ -667,7 +760,7 @@ function ServiceStep({
                 <div className={s.choiceMeta}>{durationFor(sv, practitionerId)} min</div>
               </div>
               {/* TP-1: con precio 0 no hay monto (antes «$ 0», que se leía como un error o como «gratis» sin serlo). */}
-              {sv.priceCents > 0 && <div className={`k-display ${s.price}`}>{formatARS(sv.priceCents)}</div>}
+              {(prices.get(sv.id) ?? 0) > 0 && <div className={`k-display ${s.price}`}>{formatARS(prices.get(sv.id)!)}</div>}
             </button>
           ))}
         </div>
@@ -705,6 +798,9 @@ export function SummaryAside({
 }) {
   const when = slotISO ? formatWhenAR(slotISO) : null;
   const address = location ? formatLocationAddress(location) : "";
+  // CF3 ZF3: `getInsuredContact` dijo que no para ESTE profesional (cambiar de profesional vuelve al texto con nombre).
+  const [failedFor, setFailedFor] = useState<{ pid: string | null } | null>(null);
+  const contactFailed = !!failedFor && failedFor.pid === (practitioner?.id ?? null);
   // VX2-d1 (handoff 12): fuera la tarjeta «100% seguro» + «Tu información clínica está cifrada»: sin evidencia
   // (guard `tests/unit/public-claims.test.ts`).
   return (
@@ -740,6 +836,31 @@ export function SummaryAside({
                 <span className={s.totalLabel}>{"Resto en el consultorio"}</span>
                 <span className={s.splitValue}>{formatARS(checkout.split.restCents)}</span>
               </div>
+            </>
+          )}
+          {/* CF3 (D-CF3-5): con obra social no hay número; el texto y, con opt-in, el WhatsApp del profesional al tocar. */}
+          {service && checkout.insured && (
+            <>
+              <div className={s.totalRow}>
+                <span className={s.totalLabel}>Valor del turno</span>
+                <span className={s.splitValue}>Según tu cobertura</span>
+              </div>
+              {/* El texto va afuera del chunk diferido para que se vea en el primer render (InsuredContact es
+                  `next/dynamic`). CF3 ZF3: si la action dice que no, `onFallback` lo cambia al del consultorio (antes
+                  quedaban los dos: «Consultá con {Nombre}…» y, debajo, «Consultá tu cobertura con el consultorio»). */}
+              <p className={s.insuredText}>
+                {contactFailed
+                  ? insuredCoverageTextAfterContact(practitioner?.name ?? null, checkout.insured.contactAvailable, true)
+                  : checkout.insured.text}
+              </p>
+              <InsuredContact
+                slug={clinic.slug}
+                practitionerId={practitioner?.id ?? null}
+                contactAvailable={checkout.insured.contactAvailable}
+                practitionerName={practitioner?.name ?? null}
+                clinicPhone={clinic.clinicPhone ?? null}
+                onFallback={() => setFailedFor({ pid: practitioner?.id ?? null })}
+              />
             </>
           )}
           <p className={s.totalNote}>{checkout.note}</p>

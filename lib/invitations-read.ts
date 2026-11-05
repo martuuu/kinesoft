@@ -9,14 +9,26 @@ import "server-only";
 import type { DbClient } from "@/lib/rls";
 import { invitationStatus } from "@/lib/access-logic";
 import { isClinicalMember } from "@/lib/roles";
-import type { InvitationEmailStatus, InvitationRow, TeamMemberRow } from "@/lib/invitations-types";
+import { isPrincipalOwner } from "@/lib/roles-core";
+import type { InvitationEmailStatus, InvitationRow } from "@/lib/invitations-types";
+import type { TeamMemberView } from "@/lib/co-owner-types";
 import type { EmailTransportName } from "@/lib/email/types";
+import { USER_LICENSE_SELECT } from "@/lib/user-license-internal";
+import { licenseFromColumns } from "@/lib/user-license-logic";
 
+/**
+ * CF3b (CT-U, M23): además de lo de siempre, `grantCoOwner` («Co-titular») y la matrícula de la persona
+ * (`UserProfile.license*`), las dos en el MISMO select (0 sentencias más: el presupuesto de /configuracion es estricto,
+ * `tests/integration/pf2-config-budget.test.ts`; por eso `USER_LICENSE_SELECT` y no una lectura aparte). Es la ÚNICA
+ * lectura de la matrícula ajena. La matrícula viaja SOLO si quien mira es el Titular principal (`isPrincipalOwner`: el que decide
+ * «Co-titular») y SOLO en filas de Profesional con la invitación aceptada (mismo criterio que CT-L: una membresía sin
+ * aceptar no alcanza para leerla). Al resto no se le manda (`license` ausente), aunque la pantalla tampoco la mostraría.
+ */
 export async function listTeamMembersInTx(
   tx: DbClient,
   tenantId: string,
   actorUserId: string
-): Promise<TeamMemberRow[]> {
+): Promise<TeamMemberView[]> {
   const rows = await tx.membership.findMany({
     where: { tenantId },
     include: {
@@ -33,11 +45,15 @@ export async function listTeamMembersInTx(
             select: { id: true, specialty: true, publicBookingEnabled: true },
             take: 1,
           },
+          ...USER_LICENSE_SELECT,
         },
       },
     },
     orderBy: { invitedAt: "asc" },
   });
+  // Quién mira sale de su propia fila (la del Actor), sin sentencia extra. El soporte no tiene fila: no la ve.
+  const me = rows.find((r) => r.userId === actorUserId);
+  const viewerIsPrincipal = !!me && isPrincipalOwner(me);
   // IAM-4c: último «link para nueva contraseña» por miembro (EmailLog, entity Membership), para que la UI diga
   // si salió sin que nadie abra Vercel. Más nuevo primero: el primero por membresía es el último intento.
   const logs = rows.length
@@ -83,6 +99,10 @@ export async function listTeamMembersInTx(
             at: l.createdAt,
           }
         : null,
+      grantCoOwner: m.grantCoOwner,
+      ...(viewerIsPrincipal && m.role === "PRACTITIONER" && m.acceptedAt !== null
+        ? { license: licenseFromColumns(m.user) }
+        : {}),
     };
   });
 }

@@ -23,6 +23,8 @@ vi.mock("@/lib/practitioner-public", () => proxy());
 // Los editores de la ficha del profesional (Horarios, Servicios, Coberturas) importan sus server actions.
 vi.mock("@/lib/practitioner-schedule", () => proxy());
 vi.mock("@/lib/practitioner-services", () => proxy());
+// CF3: el editor de servicios (scope "self") importa `lib/services` (crear servicio propio): sin mock arrastra `cache()`.
+vi.mock("@/lib/services", () => proxy());
 vi.mock("@/lib/practitioner-payers", () => proxy());
 // CF2 (T-U2): la anticipación del turnero y el «Ocultar su contacto» de Horarios.
 vi.mock("@/lib/practitioner-self-settings", () => proxy());

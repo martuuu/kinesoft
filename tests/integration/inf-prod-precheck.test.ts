@@ -3,14 +3,22 @@
  * siempre conecta con el owner, como el script con DIRECT_URL). El SCRIPT no se corre: lo corre Martin contra prod.
  *
  * Qué se fija:
- *  - `--post` sobre la base local (las 49 migraciones aplicadas) da PASS en todo; el único SKIP admitido es el de la
+ *  - `--post` sobre la base local (las 52 migraciones aplicadas) da PASS en todo; el único SKIP admitido es el de la
  *    Data API (en el Docker no existen los roles `anon`/`authenticated` de Supabase) y el de Storage.
- *  - `--pre` (CF, 30-oct: M12..M19 ya están en prod desde el reset; las pendientes son M20 y M21 de CF2): exige
- *    M12..M19 PRESENTES (aplicadas con su checksum y con sus objetos: PASS) y, como en el Docker M20 y M21 también
- *    están aplicadas, las marca «ya aplicada» y saltea sus prechecks en vez de dar FAIL por «el objeto ya existe».
- *  - Con `evaluateApplied`, los prechecks de M20 y M21 corren igual: `pre.M20.absent` / `pre.M21.absent` dan FAIL
- *    nombrando lo que encontraron, `pre.M20.crossService` (el SQL literal del brief) detecta un par de servicios
- *    distintos pisados armado a propósito y los de Booking de M21 (tx largas, tamaño) corren sin error.
+ *  - `--pre` (CF3, 04/05-nov: M12..M21 ya están en prod —reset del 29/30-oct y push de CF2 del 02-nov—; las pendientes
+ *    son M22, M23 y M24, en el mismo deploy): exige M12..M21 PRESENTES (aplicadas con su checksum y con sus objetos:
+ *    PASS) y, como en el Docker M22, M23 y M24 también están aplicadas, las marca «ya aplicada» y saltea
+ *    `pre.M22.absent`, `pre.M23.absent` y `pre.M24.absent` en vez de dar FAIL por «el objeto ya existe».
+ *    `pre.M22.reservedSlugs` corre siempre (depende del código de CF3, no de la migración).
+ *  - Con `evaluateApplied`, `pre.M22.absent`, `pre.M23.absent` y `pre.M24.absent` corren igual y dan FAIL nombrando lo
+ *    que encontraron.
+ *  - [CF3-MIG2-6] M23 en el `--post` objeto por objeto (columnas, 4 CHECK, trigger + md5 + INVOKER, informativo) y la
+ *    pendiente permitida junto con M22.
+ *  - [CF3-MIG3-6] M24 en el `--post` objeto por objeto (columnas, 2 CHECK con su definición exacta, informativo) y la
+ *    pendiente permitida junto con M22 y M23.
+ *  - [CF3-MIG6] `pre.M22.reservedSlugs` da FAIL si un consultorio o un alias usa un slug que CF3 reserva.
+ *  (Los prechecks de M20 —crossService, y su caso del día AR de ZF1— y los de Booking de M21 se borraron con sus
+ *  migraciones aplicadas: ya no hay nada que aplicar y su SQL no corre más.)
  *  - Todo corre en UNA transacción READ ONLY: un write adentro rebota (25006).
  *  - El chequeo de `pg_dump` compara la versión local contra la del server (el backup con un pg_dump viejo falla).
  *  - La tabla impresa no lleva la URL de conexión.
@@ -18,10 +26,10 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import path from "node:path";
 import type { PrismaClient } from "@prisma/client";
-import { addService, createEphemeralTenant, ownerClient, uniqueSuffix, type EphemeralTenant } from "@/tests/helpers/tenant-factory";
-import { localToARIso, toARDateKey } from "@/lib/datetime-ar";
+import { createEphemeralTenant, ownerClient, type EphemeralTenant } from "@/tests/helpers/tenant-factory";
 import {
   APPLIED_MIGRATIONS,
+  M22_NEW_RESERVED_SLUGS,
   PENDING_MIGRATIONS,
   TRACKED_MIGRATIONS,
   formatPrecheckTable,
@@ -87,11 +95,33 @@ describe.skipIf(!RUN)("[INF-S] prod-precheck (núcleo) contra el Docker local", 
       "post.M21.trigger",
     ]);
     for (const id of m21) expect(post.rows.find((r) => r.id === id)?.status, id).toBe("PASS");
+    // [CF3-MIG] M22 objeto por objeto.
+    const m22 = post.rows.filter((r) => r.group === "M22").map((r) => r.id).sort();
+    expect(m22).toEqual(["post.M22.checks", "post.M22.columns", "post.M22.objects", "post.M22.optIn"]);
+    for (const id of m22) expect(post.rows.find((r) => r.id === id)?.status, id).toBe("PASS");
+    // [CF3-MIG2-6] M23 objeto por objeto (el trigger incluye el md5 de user_profile_license_stamp y INVOKER/search_path).
+    const m23 = post.rows.filter((r) => r.group === "M23").map((r) => r.id).sort();
+    expect(m23).toEqual(["post.M23.checks", "post.M23.columns", "post.M23.objects", "post.M23.optIn", "post.M23.trigger"]);
+    for (const id of m23) expect(post.rows.find((r) => r.id === id)?.status, id).toBe("PASS");
+    expect(post.rows.find((r) => r.id === "post.M23.trigger")?.detail).toMatch(/UserProfile_license_stamp.*md5 = 112d2ddb.*INVOKER/);
+    // [CF3-MIG3-6] M24 objeto por objeto (los 2 CHECK por nombre Y con la definición exacta del SQL).
+    const m24 = post.rows.filter((r) => r.group === "M24").map((r) => r.id).sort();
+    expect(m24).toEqual(["post.M24.checks", "post.M24.columns", "post.M24.objects", "post.M24.optIn"]);
+    for (const id of m24) expect(post.rows.find((r) => r.id === id)?.status, id).toBe("PASS");
+    expect(post.rows.find((r) => r.id === "post.M24.checks")?.detail).toMatch(/2 CHECK validados · definiciones = las del SQL de M24/);
+    expect(post.rows.find((r) => r.id === "post.M24.optIn")?.detail).toMatch(/usuarios, \d+ con foto; de \d+ profesionales, \d+ la publican/);
+    expect(post.rows.find((r) => r.id === "post.migrate.checksums")?.detail).toMatch(/M22, M23, M24 con el checksum verificado/);
   });
 
-  it("[INF-S] --pre en local: M12..M19 PRESENTES (PASS, checksum y objetos); M20 y M21 ya aplicadas y sus prechecks se saltean", () => {
-    expect(APPLIED_MIGRATIONS.map((m) => m.key)).toEqual(["M12", "M14", "M18", "M17", "M15", "M16", "M19"]);
-    expect(PENDING_MIGRATIONS.map((m) => m.key)).toEqual(["M20", "M21"]);
+  it("[INF-S] --pre en local: M12..M21 PRESENTES (PASS, checksum y objetos); M22, M23 y M24 ya aplicadas y sus absent se saltean", () => {
+    expect(APPLIED_MIGRATIONS.map((m) => m.key)).toEqual(["M12", "M14", "M18", "M17", "M15", "M16", "M19", "M20", "M21"]);
+    // [CF3-MIG2-6] [CF3-MIG3-6] M23 y M24 van con M22 en el mismo deploy, en orden de timestamp.
+    expect(PENDING_MIGRATIONS.map((m) => m.key)).toEqual(["M22", "M23", "M24"]);
+    expect(PENDING_MIGRATIONS.map((m) => m.name)).toEqual([
+      "20261104120000_cf3_precios_sede",
+      "20261105120000_cf3_co_titular",
+      "20261105130000_cf3_practitioner_photo",
+    ]);
     const pending = pre.rows.find((r) => r.id === "pre.migrations.pending");
     expect(pending?.status).toBe("PASS");
     expect(pending?.detail).toMatch(/0 pendientes/);
@@ -104,18 +134,26 @@ describe.skipIf(!RUN)("[INF-S] prod-precheck (núcleo) contra el Docker local", 
       expect(pre.rows.find((r) => r.id === `pre.${m.key}.present`)?.status, m.key).toBe("PASS");
       expect(pre.rows.some((r) => r.id === `pre.${m.key}.absent`), m.key).toBe(false);
     }
-    const PRE_IDS: Record<string, string[]> = {
-      M20: ["pre.M20.absent", "pre.M20.crossService"],
-      M21: ["pre.M21.absent", "pre.M21.bookingCount", "pre.M21.bookingTx"],
-    };
-    for (const key of ["M20", "M21"]) {
-      const st = pre.rows.find((r) => r.id === `pre.state.${key}`);
-      expect(st?.status, key).toBe("WARN");
-      expect(st?.detail, key).toMatch(/ya aplicada/);
-      const objs = pre.rows.filter((r) => r.group === key && r.id !== `pre.state.${key}`);
-      expect(objs.map((r) => r.id).sort(), key).toEqual(PRE_IDS[key]);
-      expect(objs.every((r) => r.status === "SKIP"), key).toBe(true);
-    }
+    const st = pre.rows.find((r) => r.id === "pre.state.M22");
+    expect(st?.status).toBe("WARN");
+    expect(st?.detail).toMatch(/ya aplicada/);
+    const objs = pre.rows.filter((r) => r.group === "M22" && r.id !== "pre.state.M22");
+    expect(objs.map((r) => r.id).sort()).toEqual(["pre.M22.absent", "pre.M22.reservedSlugs"]);
+    expect(pre.rows.find((r) => r.id === "pre.M22.absent")?.status).toBe("SKIP");
+    // El Docker no tiene consultorios con slugs reservados: PASS (no se saltea aunque M22 esté aplicada).
+    expect(pre.rows.find((r) => r.id === "pre.M22.reservedSlugs")?.status).toBe("PASS");
+    const st23 = pre.rows.find((r) => r.id === "pre.state.M23");
+    expect(st23?.status).toBe("WARN");
+    expect(st23?.detail).toMatch(/ya aplicada/);
+    const objs23 = pre.rows.filter((r) => r.group === "M23" && r.id !== "pre.state.M23");
+    expect(objs23.map((r) => r.id)).toEqual(["pre.M23.absent"]);
+    expect(objs23[0]?.status).toBe("SKIP");
+    const st24 = pre.rows.find((r) => r.id === "pre.state.M24");
+    expect(st24?.status).toBe("WARN");
+    expect(st24?.detail).toMatch(/ya aplicada/);
+    const objs24 = pre.rows.filter((r) => r.group === "M24" && r.id !== "pre.state.M24");
+    expect(objs24.map((r) => r.id)).toEqual(["pre.M24.absent"]);
+    expect(objs24[0]?.status).toBe("SKIP");
     expect(pre.rows.find((r) => r.id === "pre.migrations.failed")?.status).toBe("PASS");
     expect(pre.rows.find((r) => r.id === "pre.role.bypassrls")?.status).toBe("PASS");
     expect(pre.rows.find((r) => r.id === "pre.server.version")?.status).toBe("PASS");
@@ -125,7 +163,7 @@ describe.skipIf(!RUN)("[INF-S] prod-precheck (núcleo) contra el Docker local", 
     expect(fails, JSON.stringify(fails, null, 2)).toEqual([]);
   });
 
-  it("[INF-S] el SQL de los prechecks de M20 y M21 corre sin errores (evaluado sobre las ya aplicadas)", async () => {
+  it("[INF-S] el SQL de los prechecks de M22, M23 y M24 corre sin errores (evaluado sobre las ya aplicadas)", async () => {
     const forced = await runProdPrecheck({
       db,
       mode: "pre",
@@ -136,86 +174,59 @@ describe.skipIf(!RUN)("[INF-S] prod-precheck (núcleo) contra el Docker local", 
     const broken = forced.rows.filter((r) => /la consulta falló/.test(r.detail));
     expect(broken, JSON.stringify(broken, null, 2)).toEqual([]);
     // Con las columnas ya creadas, el «no existe» da FAIL nombrando lo que encontró (el veredicto de verdad).
-    const absent = forced.rows.find((r) => r.id === "pre.M20.absent");
+    const absent = forced.rows.find((r) => r.id === "pre.M22.absent");
     expect(absent?.status).toBe("FAIL");
     expect(absent?.detail).toMatch(/ya existen/);
-    expect(absent?.detail).toMatch(/Practitioner\.allowParallelServices/);
-    // El informativo corre: PASS (nadie) o WARN (lista), nunca FAIL.
-    expect(["PASS", "WARN"]).toContain(forced.rows.find((r) => r.id === "pre.M20.crossService")?.status);
-    // [CF2-MIG] M21: el «no existe» nombra columnas, tablas y función; Booking (tx > 5 s, tamaño) nunca da FAIL.
-    const absent21 = forced.rows.find((r) => r.id === "pre.M21.absent");
-    expect(absent21?.status).toBe("FAIL");
-    expect(absent21?.detail).toMatch(/ya existen/);
-    expect(absent21?.detail).toMatch(/tabla PractitionerRevenueShare/);
-    expect(absent21?.detail).toMatch(/Practitioner\.notifyBookingPush/);
-    for (const id of ["pre.M21.bookingTx", "pre.M21.bookingCount"]) {
-      expect(["PASS", "WARN"], id).toContain(forced.rows.find((r) => r.id === id)?.status);
+    expect(absent?.detail).toMatch(/PractitionerService\.priceCents/);
+    expect(absent?.detail).toMatch(/Tenant\.siteTagline/);
+    // `allOf` corta en el primer no-PASS: el ramal de los CHECK se ve solo si faltan las columnas (no en el Docker);
+    // su SQL corre igual en el caso de abajo, que no lo puede ejercitar sin borrar columnas, así que se fija aparte.
+    const checks = await db.$queryRaw<{ n: string }[]>`
+      SELECT conname AS n FROM pg_constraint WHERE connamespace = 'public'::regnamespace
+        AND conname = ANY(${["PractitionerService_priceCents_check", "Practitioner_insuredContact_check", "Tenant_siteTagline_check"]}) ORDER BY 1`;
+    expect(checks.map((x) => x.n)).toEqual(["PractitionerService_priceCents_check", "Practitioner_insuredContact_check", "Tenant_siteTagline_check"]);
+    // [CF3-MIG2-6] M23: mismo veredicto; el ramal de los CHECK y el trigger tampoco se ve con las columnas creadas.
+    const absent23 = forced.rows.find((r) => r.id === "pre.M23.absent");
+    expect(absent23?.status).toBe("FAIL");
+    expect(absent23?.detail).toMatch(/ya existen/);
+    expect(absent23?.detail).toMatch(/columna Membership\.grantCoOwner/);
+    expect(absent23?.detail).toMatch(/columna UserProfile\.licenseUpdatedAt/);
+    expect(absent23?.detail).toMatch(/función user_profile_license_stamp/);
+    // [CF3-MIG3-6] M24: mismo veredicto, nombrando las 3 columnas.
+    const absent24 = forced.rows.find((r) => r.id === "pre.M24.absent");
+    expect(absent24?.status).toBe("FAIL");
+    expect(absent24?.detail).toMatch(/ya existen/);
+    for (const col of ["UserProfile.photoStorageKey", "UserProfile.photoUpdatedAt", "Practitioner.showPhotoPublic"]) {
+      expect(absent24?.detail).toContain(`columna ${col}`);
     }
-    expect(forced.rows.find((r) => r.id === "pre.M21.bookingCount")?.detail).toMatch(/\d+ turnos \(\d+ con copagoPaidAt, \d+ con insurerPaidAt\)/);
+    // El ramal de los CHECK no se ve con las columnas creadas (allOf corta): sus nombres se fijan aparte.
+    const checks24 = await db.$queryRaw<{ n: string }[]>`
+      SELECT conname AS n FROM pg_constraint WHERE connamespace = 'public'::regnamespace
+        AND conname = ANY(${["UserProfile_photoStorageKey_check", "UserProfile_photo_check"]}) ORDER BY 1`;
+    expect(checks24.map((x) => x.n)).toEqual(["UserProfile_photoStorageKey_check", "UserProfile_photo_check"]);
   });
 
-  it("[INF-S] pre.M20.crossService lista a quien tiene servicios distintos pisados (y no el mismo paciente ni cancelados)", async () => {
+  it("[CF3-MIG6] pre.M22.reservedSlugs: FAIL si un consultorio o un alias usa un slug que CF3 reserva", async () => {
+    // 21 de SD-R + `sede` (CF3b BR-H: la carpeta `public/sede/` crea el segmento `/sede`).
+    expect(M22_NEW_RESERVED_SLUGS).toHaveLength(22);
+    expect(M22_NEW_RESERVED_SLUGS).toEqual(expect.arrayContaining(["caja", "cobros", "sitemap", "plataforma-mfa", "offline", "sede"]));
     let T: EphemeralTenant | undefined;
     try {
       T = await createEphemeralTenant(db);
-      const other = await addService(db, T, { name: "Evaluación" });
-      const at = new Date(Date.now() + 3 * 86_400_000);
-      at.setUTCSeconds(0, 0);
-      const plus = (min: number) => new Date(at.getTime() + min * 60_000);
-      const [p1, p2] = await Promise.all(
-        ["Uno", "Dos"].map((n) =>
-          db.patient.create({ data: { tenantId: T!.tenantId, firstName: n, lastName: "CF-M" }, select: { id: true } })
-        )
-      );
-      const mk = (serviceId: string, patientId: string, start: Date, status: "CONFIRMED" | "CANCELLED" = "CONFIRMED") =>
-        db.booking.create({
-          data: { tenantId: T!.tenantId, practitionerId: T!.practitionerId, serviceId, patientId, scheduledFor: start, durationMin: 45, status,
-            idempotencyKey: `cfm-${uniqueSuffix()}` },
-        });
-      // El único par que cuenta: servicio A 45' (p1) a la hora y servicio B (p2) a la hora + 30' → se pisan 15'.
-      await mk(T.serviceId, p1.id, at);
-      await mk(other, p2.id, plus(30));
-      // No suman pares: p2 en B cancelado encima de A; y p2 en B justo cuando termina el de A (+45', borde abierto,
-      // pisa solo al de p2 en B, que es el MISMO servicio).
-      await mk(other, p2.id, plus(5), "CANCELLED");
-      await mk(other, p2.id, plus(45));
-      const forced = await runProdPrecheck({ db, mode: "pre", migrationsDir: MIGRATIONS_DIR, pgDumpVersion: null, evaluateApplied: true });
-      const row = forced.rows.find((r) => r.id === "pre.M20.crossService");
-      expect(row?.status).toBe("WARN");
-      expect(row?.detail).toContain(`${T.slug}:${T.practitionerId} 1 desde`);
+      // Un alias viejo (renombre de Plataforma) con un slug que pasa a ser ruta: también deja de resolver.
+      await db.tenantSlugAlias.create({ data: { slug: "sitemap", tenantId: T.tenantId } });
+      // Y el slug vigente de un consultorio (en mayúsculas: la comparación es case-insensitive).
+      await db.tenant.update({ where: { id: T.tenantId }, data: { slug: "Caja" } });
+      const r = await runProdPrecheck({ db, mode: "pre", migrationsDir: MIGRATIONS_DIR, pgDumpVersion: null });
+      const row = r.rows.find((x) => x.id === "pre.M22.reservedSlugs");
+      expect(row?.status).toBe("FAIL");
+      expect(row?.detail).toMatch(/^2 en uso/);
+      expect(row?.detail).toContain(`Tenant «Caja» → ${T.tenantId}`);
+      expect(row?.detail).toContain(`TenantSlugAlias «sitemap» → ${T.tenantId}`);
+      expect(r.failed).toBe(true);
     } finally {
-      await T?.cleanup();
-    }
-  });
-
-  it("[ZF1] pre.M20.crossService imprime el «desde» en día AR: un par a las 21:30 AR no sale con el día siguiente (UTC)", async () => {
-    // El bug (B2 del revisor ZA): `toISOString().slice(0, 10)` del primer turno. 21:30 AR = 00:30 UTC del día
-    // siguiente, así que Martin leía en el reporte un día que no es el del turno.
-    let T: EphemeralTenant | undefined;
-    try {
-      T = await createEphemeralTenant(db);
-      const other = await addService(db, T, { name: "Evaluación" });
-      const day = toARDateKey(new Date(Date.now() + 3 * 86_400_000));
-      const at = new Date(localToARIso(`${day}T21:30:00`));
-      const utcDay = at.toISOString().slice(0, 10);
-      expect(utcDay).not.toBe(day); // no vacuo: el turno cruza la medianoche UTC
-      const [p1, p2] = await Promise.all(
-        ["Uno", "Dos"].map((n) =>
-          db.patient.create({ data: { tenantId: T!.tenantId, firstName: n, lastName: "ZF1" }, select: { id: true } })
-        )
-      );
-      const mk = (serviceId: string, patientId: string, start: Date) =>
-        db.booking.create({
-          data: { tenantId: T!.tenantId, practitionerId: T!.practitionerId, serviceId, patientId, scheduledFor: start, durationMin: 45,
-            status: "CONFIRMED", idempotencyKey: `zf1-${uniqueSuffix()}` },
-        });
-      await mk(T.serviceId, p1.id, at);
-      await mk(other, p2.id, new Date(at.getTime() + 30 * 60_000));
-      const forced = await runProdPrecheck({ db, mode: "pre", migrationsDir: MIGRATIONS_DIR, pgDumpVersion: null, evaluateApplied: true });
-      const row = forced.rows.find((r) => r.id === "pre.M20.crossService");
-      expect(row?.status).toBe("WARN");
-      expect(row?.detail).toContain(`${T.slug}:${T.practitionerId} 1 desde ${day}`);
-    } finally {
+      if (T) await db.tenant.update({ where: { id: T.tenantId }, data: { slug: T.slug } });
+      await db.tenantSlugAlias.deleteMany({ where: { slug: "sitemap", tenantId: T?.tenantId ?? "-" } });
       await T?.cleanup();
     }
   });

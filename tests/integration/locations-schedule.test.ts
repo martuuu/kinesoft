@@ -3,8 +3,9 @@
  * con RLS y owner BYPASSRLS = prod).
  *
  * Lo que se protege:
- *   • authz: escribir exige `schedule.configure` (solo OWNER/ADMIN); leer,
- *     `agenda.viewAll` (PRACTITIONER sí lee);
+ *   • authz: sedes exigen `schedule.configure`; la semana y las excepciones de un
+ *     profesional, el propio o `schedule.configure` (CF3 AU-S, D-CF3-7: antes
+ *     solo `schedule.configure`); leer, la propia o `agenda.viewAll`;
  *   • IDOR: las FK de PractitionerSchedule/ScheduleException saltean RLS → un
  *     id de sede o profesional de OTRO tenant tiene que rechazarse y no dejar
  *     ninguna fila (en owner BYPASSRLS el `where tenantId` es la única barrera);
@@ -43,7 +44,8 @@ import {
 import { asUser } from "@/tests/helpers/actor";
 
 const RUN = process.env.INTEGRATION === "1";
-const FORBIDDEN = "Solo OWNER/ADMIN pueden configurar sedes y horarios.";
+const FORBIDDEN = "Solo quien tiene permiso de «Configuración» puede configurar sedes y horarios.";
+const SELF_FORBIDDEN = "Solo podés cambiar tu propia agenda.";
 
 const week = (locationId: string, dows = [1, 2, 3, 4, 5]) =>
   dows.flatMap((dow) => [
@@ -134,7 +136,7 @@ describe.skipIf(!RUN)("sedes, franjas y excepciones (B2.4a)", () => {
   });
 
   // ── authz ───────────────────────────────────────────────────────────────
-  it("PRACTITIONER lee pero no escribe sedes, franjas ni excepciones (y no se escribe nada)", async () => {
+  it("PRACTITIONER lee pero no escribe sedes ni la agenda AJENA ni la de todo el consultorio (y no se escribe nada)", async () => {
     asUser(pracA.userId);
     expect((await listLocations()).length).toBe(2);
     expect((await getPractitionerScheduleSummary()).length).toBeGreaterThanOrEqual(2);
@@ -144,14 +146,28 @@ describe.skipIf(!RUN)("sedes, franjas y excepciones (B2.4a)", () => {
     await expect(updateLocation(locA2, { name: "Prac" })).rejects.toThrow(FORBIDDEN);
     await expect(setPrimaryLocation(locA2)).rejects.toThrow(FORBIDDEN);
     await expect(archiveLocation(locA2)).rejects.toThrow(FORBIDDEN);
-    await expect(savePractitionerWeek(pracA.practitionerId, week(locA1))).rejects.toThrow(FORBIDDEN);
+    // CF3 AU-S: lo AJENO (el OWNER) y lo de todo el consultorio siguen con «Configuración».
+    await expect(savePractitionerWeek(A.practitionerId, week(locA1))).rejects.toThrow(SELF_FORBIDDEN);
     await expect(
-      upsertException({ practitionerId: pracA.practitionerId, date: "2030-01-07", kind: "CLOSED" })
-    ).rejects.toThrow(FORBIDDEN);
+      upsertException({ practitionerId: A.practitionerId, date: "2030-01-07", kind: "CLOSED" })
+    ).rejects.toThrow(SELF_FORBIDDEN);
+    await expect(upsertException({ practitionerId: null, date: "2030-01-07", kind: "CLOSED" })).rejects.toThrow(SELF_FORBIDDEN);
 
     expect(await db.location.count({ where: { tenantId: A.tenantId } })).toBe(2);
     expect((await db.location.findUniqueOrThrow({ where: { id: locA2 } })).name).toBe("Palermo");
-    expect(await db.practitionerSchedule.count({ where: { practitionerId: pracA.practitionerId } })).toBe(0);
+    expect(await db.practitionerSchedule.count({ where: { practitionerId: A.practitionerId } })).toBe(0);
+    expect(await db.scheduleException.count({ where: { tenantId: A.tenantId } })).toBe(0);
+  });
+
+  it("[CF3-AUS] PRACTITIONER escribe SU semana y SUS excepciones (D-CF3-7; antes rechazado)", async () => {
+    asUser(pracA.userId);
+    expect((await savePractitionerWeek(pracA.practitionerId, week(locA1))).ok).toBe(true);
+    expect(await db.practitionerSchedule.count({ where: { practitionerId: pracA.practitionerId } })).toBe(10);
+    const exc = await upsertException({ practitionerId: pracA.practitionerId, date: "2030-01-07", kind: "CLOSED" });
+    expect(exc.ok).toBe(true);
+    expect((await deleteException(exc.ok ? exc.data.id : "")).ok).toBe(true);
+    // Se deja como estaba: los casos de abajo arrancan sin franjas ni excepciones.
+    await db.practitionerSchedule.deleteMany({ where: { practitionerId: pracA.practitionerId } });
     expect(await db.scheduleException.count({ where: { tenantId: A.tenantId } })).toBe(0);
   });
 
@@ -288,11 +304,13 @@ describe.skipIf(!RUN)("sedes, franjas y excepciones (B2.4a)", () => {
     expect(twRow.createdById).toBe(A.userId);
 
     // listExceptions con profesional: las suyas + las del consultorio, no las de otro profesional.
-    const forPrac = await listExceptions({ from: "2030-03-01", to: "2030-03-31", practitionerId: pracA.practitionerId });
+    const forPracR = await listExceptions({ from: "2030-03-01", to: "2030-03-31", practitionerId: pracA.practitionerId });
+    if (!forPracR.ok) throw new Error(forPracR.error);
+    const forPrac = forPracR.data;
     expect(forPrac.map((e) => e.practitionerId).sort()).toEqual([null, pracA.practitionerId].sort());
     const prRow = forPrac.find((e) => e.practitionerId === pracA.practitionerId)!;
     expect(prRow).toMatchObject({ date: day, kind: "CUSTOM_HOURS", ranges: [{ startMin: 540, endMin: 720, locationId: locA2 }] });
-    expect(await listExceptions({ from: "2030-03-05", to: "2030-03-31" })).toEqual([]);
+    expect(await listExceptions({ from: "2030-03-05", to: "2030-03-31" })).toEqual({ ok: true, data: [] });
 
     // CUSTOM_HOURS sin franjas → rechazo.
     const bad = await upsertException({ practitionerId: null, date: "2030-03-05", kind: "CUSTOM_HOURS", ranges: [] });

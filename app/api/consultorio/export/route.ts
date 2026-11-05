@@ -14,8 +14,9 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/consultorio/export[?tenant=<id>] — export completo del consultorio en un único JSON (BO5-C, plan §19.5).
  *
- * Quién: SOLO el OWNER (aceptado y habilitado), también con el consultorio suspendido, en solo lectura o dado de
- * baja (BO-D4; la lectura nunca se bloquea). ADMIN y el resto de los roles → 403. Soporte → 403 (BO2-E: soporte
+ * Quién: SOLO el Titular (aceptado y habilitado): el principal (OWNER) o, desde CT-K1 (CF3b, M23), el co-titular
+ * (`account.export`; «sí exporta los datos: siempre es profesional»), también con el consultorio suspendido, en solo
+ * lectura o dado de baja (BO-D4; la lectura nunca se bloquea). ADMIN y el resto → 403. Soporte → 403 (BO2-E: soporte
  * nunca baja datos del consultorio, y el superadmin desde Plataforma solo PIDE el export: lib/platform-export-request.ts).
  *
  * Por qué no alcanza con `getActor()`: con el consultorio suspendido o dado de baja `buildActor` no entra ahí
@@ -46,8 +47,8 @@ export async function GET(req: Request) {
   if (!choice.ok) {
     return new Response(
       choice.reason === "choose_tenant"
-        ? "Sos titular de más de un consultorio: elegí cuál exportar."
-        : "Solo el titular del consultorio puede descargar el export completo.",
+        ? "Sos titular o co-titular de más de un consultorio: elegí cuál exportar."
+        : "Solo el titular o un co-titular del consultorio puede descargar el export completo.",
       { status: choice.status }
     );
   }

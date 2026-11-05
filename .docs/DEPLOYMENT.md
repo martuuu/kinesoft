@@ -138,6 +138,7 @@ contraseñas.
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | P Pv L | — (**obligatoria en P**) | Martin | no (pública) | Recortada: un `\n` rompía el socket (HF-1a) |
 | `SUPABASE_SERVICE_ROLE_KEY` | P Pv | — (**obligatoria en P**) | Martin | **sí** | Auth admin, Storage, Broadcast |
 | `NEXT_PUBLIC_APP_URL` | P Pv L | `http://localhost:3000` | Martin | no | En P **no** puede ser localhost (el boot lo rechaza): links de mails, `notification_url` de MP, redirect de OAuth |
+| `SITE_ROOT_DOMAIN` | P | sin setear (subdominio de la sede apagado) | Martin | no | CF3 (ADR-036): dominio raíz sin esquema (`consultorio-online.com`) → `<slug>.<dominio>` sirve la sede. Nunca `*.vercel.app` (el boot lo rechaza). Requiere Vercel Pro + DNS wildcard y `NEXT_PUBLIC_APP_URL` = host principal ([EXTERNAL-CONFIG §0.18](EXTERNAL-CONFIG.md#sede-cf3)) |
 | `PROD_SUPABASE_REF` | **P Pv L** (mismo valor) | sin setear | Martin | no | Ref de prod. Activa el [guard de Preview](#guard-de-preview-ops-1c), `dev-safe` y `qa-tenants --target local` |
 | `NODE_ENV` | — | lo pone Next/Vercel | — | no | No se carga a mano |
 | `VERCEL_ENV` / `VERCEL` | P Pv | los pone Vercel | — | no | «Automatically expose System Environment Variables» **prendido**: CSP/HSTS y el rechazo de `fake` dependen de esto |

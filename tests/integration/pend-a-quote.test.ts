@@ -213,7 +213,7 @@ describe.skipIf(!RUN)("[PEND-a] cotización del turnero = cobro del server", () 
     };
     const on = await count();
     expect(on.clinic?.onlinePayment?.particularCopagoCents).toBe(PARTICULAR);
-    expect(on.insurer).toBe(2); // la lista pública + la fila Particular
+    expect(on.insurer).toBe(1); // CF3 PR-P: la lista pública y la fila Particular salen de la misma consulta
 
     await setPaymentPolicy(db, T.tenantId, { mode: "OFF" });
     const off = await count();

@@ -155,16 +155,13 @@ describe.skipIf(!RUN)("catálogo global · adopción desde el consultorio (B1.4)
   });
 
   // ── authz: requireTenantAdmin adoptado con el mensaje literal ────────────
-  it("PRACTITIONER no crea obras sociales ni servicios (mensaje de siempre) y no se escribe nada", async () => {
+  it("PRACTITIONER no crea obras sociales (mensaje de siempre) y no se escribe nada; sus servicios propios los cubre [CF3-AUC1]", async () => {
     asUser(pracUserA);
     await expect(createInsurer({ name: `Hack ${s}`, copagoCents: 0, fixedFeeCents: 0 })).rejects.toThrow(
-      "Solo OWNER/ADMIN pueden modificar el catálogo de obras sociales."
+      "Solo quien tiene permiso de «Configuración» puede modificar el catálogo de obras sociales."
     );
     await expect(addInsurerFromCatalog(payer.id)).rejects.toThrow(
-      "Solo OWNER/ADMIN pueden modificar el catálogo de obras sociales."
-    );
-    await expect(createService({ name: `Hack ${s}`, durationMin: 30, priceCents: 0 })).rejects.toThrow(
-      "Solo OWNER/ADMIN pueden modificar el catálogo de servicios."
+      "Solo quien tiene permiso de «Configuración» puede modificar el catálogo de obras sociales."
     );
     expect(await db.insurer.count({ where: { tenantId: A.tenantId, name: { contains: "Hack" } } })).toBe(0);
     expect(await db.insurer.count({ where: { tenantId: A.tenantId, payerId: payer.id } })).toBe(0);

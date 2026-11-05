@@ -14,6 +14,7 @@
  */
 import { AR_PROVINCES, isProvinceCode, provinceName } from "@/lib/ar-provinces";
 import { HONORIFIC_OPTIONS } from "@/lib/directory-constants";
+import { personInitials } from "@/lib/person-initials";
 import { bookingHref } from "@/lib/public-booking-links";
 import type {
   DirectoryClinic,
@@ -90,17 +91,13 @@ export function parseNombreId(nombreId: string): { nameSlug: string; profileId: 
   return { nameSlug: i >= 0 ? raw.slice(0, i) : "", profileId };
 }
 
-/** Iniciales para el avatar (DIR-D4: v1 sin foto): primera letra del primer y del último nombre, en mayúsculas. */
+/**
+ * Iniciales para el avatar (DIR-D4: v1 sin foto): primera letra del primer y del último nombre, en mayúsculas. CF3
+ * (ZF4b): la regla de `lib/person-initials.ts` (la misma del `Avatar`, la foto y la sede; además saltea un «Lic.» que
+ * alguien haya escrito dentro del nombre público), con el «?» de siempre si no queda nada.
+ */
 export function initials(publicName: string): string {
-  const words = publicName
-    .trim()
-    .split(/\s+/)
-    .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ""))
-    .filter(Boolean);
-  if (words.length === 0) return "?";
-  const first = words[0][0];
-  const last = words.length > 1 ? words[words.length - 1][0] : "";
-  return (first + last).toLocaleUpperCase("es-AR");
+  return personInitials(publicName) || "?";
 }
 
 /** Ciudad comparable: sin tildes, minúsculas, espacios colapsados. «San Miguel de Tucumán » = «san miguel de tucuman». */

@@ -7,7 +7,10 @@
  * `lib/dashboard-kpi-options.ts` (la agenda importa este archivo y los cargaba
  * sin usarlos); no se re-exportan desde acá.
  */
-export type Palette = "sky" | "mint" | "coral" | "violet";
+// BR-P (CF3b): las generales + las de marca (`lib/brand-palettes.ts`, hoy «tmp»). Una de marca solo se ofrece y se
+// guarda para los miembros del consultorio que la tiene asignada (`Tenant.palette`); el resto la ve como sky.
+import type { AppPalette } from "@/lib/brand-palettes";
+export type Palette = AppPalette;
 
 export type KpiKey =
   | "activePatients"

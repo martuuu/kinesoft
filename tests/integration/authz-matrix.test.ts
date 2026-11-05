@@ -18,6 +18,11 @@
  * [WA-S5] Filas de WhatsApp (T6, WA-D25): panel del drawer, recordatorio manual, «marcar como visto» y consentimiento
  * del staff, contra el simulador de Meta. Nacieron con las actions de WA-S5 (wa-s5-actions.test.ts las vio fallar contra
  * el stub).
+ * [CT-K1] Columna CO_OWNER (CF3b, M23): «Co-titular» = Profesional con `grantCoOwner` (y un `grantBilling` VIEJO en la
+ * fila, para probar el corte). Tiene lo del Titular salvo la suscripción y la titularidad: ✅ agenda, cobros,
+ * Configuración delicada, equipo; ⛔ Facturación, plan, débito, la cuenta MP del consultorio. Las celdas que dependen de
+ * handoffs fuera de CT-K1 (supervisión de la HC en lib/visibility.ts, «Titular clínico» de las evoluciones) nacieron
+ * `it.fails("[CT-INT] …")` y las dio vuelta el integrador CT-I. También corre la matriz cross-tenant con un co-titular de A.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -147,6 +152,20 @@ const exportPatientsCsv = async (opts?: Parameters<typeof exportPatientsCsvFor>[
   exportPatientsCsvFor(await getActor(), opts);
 
 const RUN = process.env.INTEGRATION === "1";
+
+/**
+ * CT-K1: co-titular de `t` (Profesional + `grantCoOwner`, M23). Con `grantBilling` en `true` a propósito: un dato viejo
+ * (era Profesional con «Planes y pagos» antes de ser co-titular) que el corte de `capabilitiesForMember` tiene que
+ * ignorar (contrato (d): nunca `account.billing`).
+ */
+async function addCoOwner(db: PrismaClient, t: EphemeralTenant): Promise<{ userId: string; practitionerId: string }> {
+  const co = await addPractitioner(db, t, "PRACTITIONER");
+  await db.membership.update({
+    where: { userId_tenantId: { userId: co.userId, tenantId: t.tenantId } },
+    data: { grantCoOwner: true, grantBilling: true },
+  });
+  return co;
+}
 
 type Ctx = {
   A: EphemeralTenant;
@@ -366,10 +385,12 @@ const ROWS: Row[] = [
  * la Secretaria lo saltearía. Por eso la misma matriz corre también con un
  * ASSISTANT del tenant A.
  */
-for (const who of ["OWNER", "ASSISTANT"] as const) describe.skipIf(!RUN)(
+for (const who of ["OWNER", "ASSISTANT", "CO_OWNER"] as const) describe.skipIf(!RUN)(
   who === "OWNER"
     ? "autorización cross-tenant (actor de A con ids de B)"
-    : "autorización cross-tenant (actor de A con ids de B) · ASSISTANT (P0-S07sb)",
+    : who === "ASSISTANT"
+      ? "autorización cross-tenant (actor de A con ids de B) · ASSISTANT (P0-S07sb)"
+      : "autorización cross-tenant (actor de A con ids de B) · CO-TITULAR (CT-K1)",
   () => {
   let db: PrismaClient;
   const ctx = {} as Ctx;
@@ -398,7 +419,15 @@ for (const who of ["OWNER", "ASSISTANT"] as const) describe.skipIf(!RUN)(
     ctx.programB = hcB.programId;
     ctx.programBUpdatedAt = hcB.programUpdatedAt;
     ctx.sessionB = hcB.sessionId;
-    asUser(who === "OWNER" ? ctx.A.userId : (await addPractitioner(db, ctx.A, "ASSISTANT")).userId);
+    // CT-K1: el co-titular trae `agenda.operateAll`, `billing.*` y `tenant.sensitive` (lo del Titular): la misma
+    // matriz tiene que cortar los ids de B por `tenantId`, no por el rol.
+    asUser(
+      who === "OWNER"
+        ? ctx.A.userId
+        : who === "ASSISTANT"
+          ? (await addPractitioner(db, ctx.A, "ASSISTANT")).userId
+          : (await addCoOwner(db, ctx.A)).userId
+    );
   });
 
   afterAll(async () => {
@@ -599,8 +628,8 @@ for (const who of ["PRACTITIONER", "ASSISTANT"] as const) describe.skipIf(!RUN)(
 // rechazo depende de lo que dejó la celda anterior.
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-type Col = "XT" | "OWNER" | "BASIC" | "ASSISTANT" | "ASSISTANT_CFG" | "BILLING" | "ADMIN" | "PRO_CFG" | "GENERAL" | "SUPPORT";
-const COLS: readonly Col[] = ["XT", "OWNER", "BASIC", "ASSISTANT", "ASSISTANT_CFG", "BILLING", "ADMIN", "PRO_CFG", "GENERAL", "SUPPORT"];
+type Col = "XT" | "OWNER" | "BASIC" | "ASSISTANT" | "ASSISTANT_CFG" | "BILLING" | "ADMIN" | "PRO_CFG" | "CO_OWNER" | "GENERAL" | "SUPPORT";
+const COLS: readonly Col[] = ["XT", "OWNER", "BASIC", "ASSISTANT", "ASSISTANT_CFG", "BILLING", "ADMIN", "PRO_CFG", "CO_OWNER", "GENERAL", "SUPPORT"];
 /**
  * ok = ✅ (escribe / ve) · deny = ⛔ sin escribir / sin ver · ro = solo lectura de soporte (`ok:false`, intacto) ·
  * isolated = action sin ids de entrada: el actor de otro consultorio opera el SUYO, y K queda intacto.
@@ -703,6 +732,8 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
   /** T3c-1i: Secretaria con «Configuración» (sin lo delicado: corte de staff) y Profesional con «Configuración» (con). */
   let assistantCfg: { userId: string };
   let proCfg: { userId: string; practitionerId: string };
+  /** CT-K1: co-titular de K (Profesional + `grantCoOwner`, con un `grantBilling` viejo en la fila). */
+  let coOwner: { userId: string; practitionerId: string };
   /** Superadmin de las sesiones de soporte que la fila `endSupportAccessForTenant` termina (no el de la columna SUPPORT). */
   let fxSuperadminId = "";
   let supportCookie = "";
@@ -721,6 +752,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
       BILLING: billing.userId,
       ADMIN: admin.userId,
       PRO_CFG: proCfg.userId,
+      CO_OWNER: coOwner.userId,
       GENERAL: G.userId,
       SUPPORT: H.userId,
     };
@@ -961,7 +993,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "write",
       name: "Turnos · createBooking",
-      cells: { XT: "deny", OWNER: "ok", BASIC: { exp: "deny", note: "E1: el profesional opera turnos con acceso full; en básico, ni en su propia agenda" }, ASSISTANT: "ok", BILLING: "deny", ADMIN: "ok", GENERAL: "ok", SUPPORT: "ro" },
+      cells: { XT: "deny", OWNER: "ok", BASIC: { exp: "deny", note: "E1: el profesional opera turnos con acceso full; en básico, ni en su propia agenda" }, ASSISTANT: "ok", BILLING: "deny", ADMIN: "ok", CO_OWNER: { exp: "ok", note: "lo del Titular: agenda.operateAll" }, GENERAL: "ok", SUPPORT: "ro" },
       act: (fx) => {
         fx.at = s26bAt().toISOString();
         // X-tenant: profesional y servicio propios (de Other) con el paciente de K.
@@ -1018,6 +1050,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
         BILLING: "ok",
         ADMIN: "ok",
         PRO_CFG: { exp: "deny", note: "turno del Titular: «Configuración» no suma billing.collect" },
+        CO_OWNER: { exp: "ok", note: "billing.collect, lo del Titular" },
         GENERAL: "ok",
         SUPPORT: { exp: "deny", note: "SUPPORT_CAPS sin billing.*" },
       },
@@ -1049,6 +1082,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
         ASSISTANT: { exp: "deny", note: "la Secretaria cobra el copago, no confirma la OS" },
         BILLING: "ok",
         ADMIN: "ok",
+        CO_OWNER: "ok",
         GENERAL: "ok",
         SUPPORT: { exp: "deny", note: "SUPPORT_CAPS sin billing.*" },
       },
@@ -1259,7 +1293,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "write",
       name: "EV2 · voidClinicalNote",
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "deny", GENERAL: "ok", SUPPORT: "ro" },
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "deny", CO_OWNER: { exp: "ok", note: "EV2-D15 «Titular clínico»: account.manage (clinical-notes-internal.ts) + supervisión de lib/visibility.ts" }, GENERAL: "ok", SUPPORT: "ro" },
       setup: (fx) => fxNote(fx, "S26b a anular"),
       act: (fx) => voidClinicalNote({ noteId: fx.noteId as string, expectedRevision: fx.noteRevision as number, reason: "Cargada por error" }),
       effect: async (fx, db) => (await db.clinicalNote.findUniqueOrThrow({ where: { id: fx.noteId as string } })).voidedAt !== null,
@@ -1267,7 +1301,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "read",
       name: "EV2 · getPatientTimeline",
-      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: { exp: "deny", note: "nunca HC (PD-13)" }, BILLING: "deny", ADMIN: { exp: "deny", note: "nunca HC (§20.17)" }, GENERAL: "ok", SUPPORT: { exp: "deny", note: "SUPPORT_CAPS sin clinical.read → null" } },
+      cells: { XT: "deny", OWNER: "ok", BASIC: "deny", ASSISTANT: { exp: "deny", note: "nunca HC (PD-13)" }, BILLING: "deny", ADMIN: { exp: "deny", note: "nunca HC (§20.17)" }, CO_OWNER: { exp: "ok", note: "supervisión del Titular: lib/visibility.ts (OVERSIGHT_ROLES || isCoOwner)" }, GENERAL: "ok", SUPPORT: { exp: "deny", note: "SUPPORT_CAPS sin clinical.read → null" } },
       setup: (fx) => fxNote(fx, "S26b timeline secreta"),
       seen: async (fx) => JSON.stringify(await getPatientTimeline({ patientId: fx.patientId })).includes("S26b timeline secreta"),
     },
@@ -1444,6 +1478,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
         ASSISTANT: "deny",
         BILLING: { exp: "deny", note: "C-PL5: `account.billing` solo por titularidad o `grantBilling`, no por el rol" },
         ADMIN: { exp: "ok", note: "«Planes y pagos» por default (decisión 2 del 19-oct)" },
+        CO_OWNER: { exp: "deny", note: "contrato (d): nunca account.billing, ni con grantBilling en la fila" },
         GENERAL: "ok",
         SUPPORT: { exp: "deny", note: "C-PL5: soporte nunca `account.*` (el brief decía ✅ RO)" },
       },
@@ -1452,13 +1487,13 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "read",
       name: "PL · previewPlanChange",
-      cells: { OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "ok", GENERAL: "ok", SUPPORT: "deny" },
+      cells: { OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "ok", CO_OWNER: "deny", GENERAL: "ok", SUPPORT: "deny" },
       seen: async () => (await settle(previewPlanChange("CLINICA"))).ok,
     },
     {
       kind: "write",
       name: "PL · applyPlanChange (→ CLINICA)",
-      cells: { XT: "isolated", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: { exp: "ok", note: "decisión 2 (con step-up)" }, GENERAL: "ok", SUPPORT: { exp: "ro", note: "soporte nunca `account.*`" } },
+      cells: { XT: "isolated", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: { exp: "ok", note: "decisión 2 (con step-up)" }, CO_OWNER: { exp: "deny", note: "contrato (d): nada de la suscripción" }, GENERAL: "ok", SUPPORT: { exp: "ro", note: "soporte nunca `account.*`" } },
       act: async (fx) =>
         settle(
           applyPlanChange({
@@ -1512,7 +1547,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "write",
       name: "MPS · setCollectionMethod (Transferencia)",
-      cells: { XT: "isolated", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: { exp: "ok", note: "«Planes y pagos» por default" }, GENERAL: "ok", SUPPORT: { exp: "ro", note: "soporte nunca `account.*`" } },
+      cells: { XT: "isolated", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: { exp: "ok", note: "«Planes y pagos» por default" }, CO_OWNER: { exp: "deny", note: "contrato (d)" }, GENERAL: "ok", SUPPORT: { exp: "ro", note: "soporte nunca `account.*`" } },
       act: () => withSaasMode("manual", () => settle(setCollectionMethod({ method: "TRANSFER" }))),
       effect: async (fx, db) => {
         const changed = (await db.saasSubscription.findUnique({ where: { tenantId: fx.host.tenantId } }))?.collectionMethod === "TRANSFER";
@@ -1523,7 +1558,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     {
       kind: "write",
       name: "MPS · scheduleCancel (baja a fin de período)",
-      cells: { XT: "isolated", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "ok", GENERAL: "ok", SUPPORT: "ro" },
+      cells: { XT: "isolated", OWNER: "ok", BASIC: "deny", ASSISTANT: "deny", BILLING: "deny", ADMIN: "ok", CO_OWNER: "deny", GENERAL: "ok", SUPPORT: "ro" },
       act: () => withSaasMode("manual", () => settle(scheduleCancel())),
       effect: async (fx, db) => {
         const changed = (await db.saasSubscription.findUnique({ where: { tenantId: fx.host.tenantId } }))?.cancelAtPeriodEnd === true;
@@ -1596,6 +1631,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
         BILLING: "deny",
         ADMIN: "ok",
         PRO_CFG: { exp: "ok", note: "decisión 4 del 19-oct" },
+        CO_OWNER: { exp: "ok", note: "tenant.sensitive, lo del Titular" },
         GENERAL: "ok",
         SUPPORT: "ro",
       },
@@ -1618,6 +1654,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
         BILLING: "deny",
         ADMIN: "ok",
         PRO_CFG: { exp: "ok", note: "decisión 4 del 19-oct" },
+        CO_OWNER: "ok",
         GENERAL: "ok",
         SUPPORT: { exp: "ok", note: "BO decisión 3: está en SUPPORT_WRITABLE_ACTIONS (el brief decía RO)" },
       },
@@ -1640,6 +1677,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
         BILLING: "deny",
         ADMIN: "ok",
         PRO_CFG: "ok",
+        CO_OWNER: "ok",
         GENERAL: "ok",
         SUPPORT: { exp: "ok", note: "BO decisión 3: está en SUPPORT_WRITABLE_ACTIONS (el brief decía RO)" },
       },
@@ -1670,6 +1708,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
         BILLING: "deny",
         ADMIN: "ok",
         PRO_CFG: { exp: "ok", note: "decisión 4 del 19-oct" },
+        CO_OWNER: { exp: "ok", note: "equipo: tenant.sensitive" },
         GENERAL: "ok",
         SUPPORT: { exp: "ok", note: "BO decisión 3: usuarios desde Configuración (SUPPORT_WRITABLE_ACTIONS)" },
       },
@@ -1768,6 +1807,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
         BILLING: "deny",
         ADMIN: { exp: "deny", note: "solo el Titular (account.owner), decisión 1" },
         PRO_CFG: { exp: "deny", note: "«Configuración» no es account.owner" },
+        CO_OWNER: { exp: "deny", note: "D-CT-K1-1: la cuenta MP del consultorio es del principal (account.owner)" },
         GENERAL: "ok",
         SUPPORT: { exp: "deny", note: "soporte nunca (§25.4)" },
       },
@@ -1809,6 +1849,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
         BILLING: "deny",
         ADMIN: { exp: "deny", note: "solo el Titular" },
         PRO_CFG: "deny",
+        CO_OWNER: { exp: "deny", note: "D-CT-K1-1" },
         GENERAL: "ok",
         SUPPORT: { exp: "deny", note: "soporte nunca (§25.4)" },
       },
@@ -1860,6 +1901,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
         BILLING: { exp: "deny", note: "Facturación no (§25.13)" },
         ADMIN: { exp: "ok", note: "tenant.sensitive" },
         PRO_CFG: { exp: "ok", note: "decisión 4 del 19-oct" },
+        CO_OWNER: { exp: "ok", note: "tenant.sensitive" },
         GENERAL: "ok",
         SUPPORT: { exp: "ro", note: "nada nuevo en SUPPORT_WRITABLE_ACTIONS (C-TP14)" },
       },
@@ -2118,6 +2160,7 @@ describe.skipIf(!RUN)("ES4-S26b · matriz de autorización del staff (brief §5)
     assistantCfg = await addStaff(db, K, "ASSISTANT", { grantSettings: true });
     proCfg = await addPractitioner(db, K, "PRACTITIONER");
     await db.membership.update({ where: { userId_tenantId: { userId: proCfg.userId, tenantId: K.tenantId } }, data: { grantSettings: true } });
+    coOwner = await addCoOwner(db, K);
     fxSuperadminId = `test-user-sa-${uniqueSuffix()}`;
     portalUsers.push(fxSuperadminId);
     await db.userProfile.create({ data: { id: fxSuperadminId, email: `${fxSuperadminId}@test.local`, fullName: "Soporte S26b", isPlatformAdmin: true } });

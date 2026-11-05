@@ -1,0 +1,367 @@
+/*
+ * CF3 (SD-U, §30 D-CF3-9) · sede digital `/<slug>`. Dirección A del prototipo (`design_source/sede/sede-a.html`,
+ * editorial centrada) + la sección «Quién atiende cada día» de la B (`sede-b.html`), default del orquestador mientras
+ * Martin elige. Traducción de `design_source/sede/shared.css` a tokens reales de `app/globals.css`.
+ *
+ * Color del consultorio: todo lo «de marca» sale de --sky-* y el wrapper lleva `data-palette` (`Tenant.palette`), que
+ * reasigna --sky-* (globals.css `[data-palette=…]`); navy y estados no cambian. Las cuatro paletas pasan AA con
+ * --sky-700 sobre blanco.
+ *
+ * Sin JS: server components puros. Motion (BR-H, pedido de Martin del 05-nov): la entrada escalonada del texto del
+ * encabezado (`.k-enter`, ≤ 300 ms, opacity/transform), el zoom lento de la foto, las «vértebras» que flotan y un
+ * barrido de luz al entrar. Todo es `transform`/`opacity` (compositor: no repinta ni recalcula layout) y con
+ * `prefers-reduced-motion` no se mueve nada: el bloque del final apaga toda animación de la página y el estado final
+ * (foto a escala 1, puntos en su lugar, texto visible) es el natural. Foco: el anillo global
+ * (`:where(a, …):focus-visible`), sin apagar el outline por componente; sobre fondos oscuros se invierte.
+ *
+ * Sin variables CSS locales: el guard `design-tokens` exige que toda variable usada exista en globals.css. Sin hex de un
+ * consultorio: el color de marca sale SOLO de --sky-* / --lime-* (los reasigna `[data-palette]`).
+ */
+
+.page {
+  min-height: 100vh;
+  background: #f7fafd;
+  color: var(--navy-900);
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
+}
+.page :where(h1, h2, h3, p, ul, ol) { margin: 0; }
+.list { list-style: none; padding: 0; margin: 0; }
+
+/* ── Barra superior ───────────────────────────────────────────── */
+.top {
+  position: sticky; top: 0; z-index: 20;
+  background: rgba(247, 250, 253, 0.92);
+  border-bottom: 1px solid var(--line);
+}
+.topIn { display: flex; align-items: center; gap: var(--space-4); min-height: 64px; }
+.brand { display: inline-flex; align-items: center; gap: var(--space-3); text-decoration: none; color: inherit; min-width: 0; border-radius: 8px; }
+.brandName { font-weight: 700; font-size: var(--fs-md); letter-spacing: -0.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topNav { display: flex; gap: var(--space-1); margin-left: auto; }
+.topNav a {
+  display: inline-flex; align-items: center; min-height: 40px; padding: 0 12px; border-radius: 999px;
+  font-size: 15px; font-weight: 500; color: var(--navy-700); text-decoration: none;
+}
+.topNav a:hover { background: rgba(15, 30, 51, 0.05); color: var(--navy-900); }
+.topCta { flex-shrink: 0; }
+@media (max-width: 899px) { .topNav { display: none; } .topCta { margin-left: auto; } }
+
+/* ── Marca del consultorio: logo o monograma ─────────────────── */
+.mono {
+  width: 36px; height: 36px; border-radius: 10px;
+  display: inline-grid; place-items: center; flex-shrink: 0;
+  background: linear-gradient(140deg, var(--sky-700), var(--sky-500));
+  color: #fff; font-weight: 700; font-size: 12px; letter-spacing: -0.02em;
+  box-shadow: 0 6px 16px rgba(15, 30, 51, 0.16);
+}
+/* En el encabezado (fondo oscuro): baldosa de vidrio con las letras en blanco, no el degradé (se perdía contra el velo). */
+.monoXl {
+  width: clamp(76px, 7vw, 96px); height: clamp(76px, 7vw, 96px); border-radius: 26px; font-size: clamp(26px, 2.4vw, 33px);
+  background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+.logo {
+  width: 36px; height: 36px; border-radius: 10px; object-fit: contain; background: #fff; flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px rgba(15, 30, 51, 0.08);
+}
+/* BR-H · logo protagonista: baldosa blanca (el logo puede tener cualquier color; sobre el velo oscuro un logo azul
+   desaparecería) con alto fijo y ancho libre: isotipo cuadrado → cuadrado; logo horizontal → entero, hasta 320 px. */
+.logoXl {
+  width: auto; height: clamp(80px, 7.6vw, 104px); max-width: min(320px, 100%);
+  border-radius: 24px; padding: clamp(10px, 1vw, 14px);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.22), 0 0 0 6px rgba(255, 255, 255, 0.12);
+}
+
+/* ── Encabezado (BR-H) ─────────────────────────────────────────
+   Capas, de abajo hacia arriba: fondo --sky-800 (lo que se ve antes de que baje la foto, o si no baja) → foto → velo
+   (`.heroScrim`) → barrido de luz → texto y «vértebras». El velo es lo que garantiza el AA: donde hay texto, --sky-800
+   a ≥ 88 % sobre la foto (que es casi blanca), y `tests/unit/render/br-h-sede-hero.test.tsx` lo mide con cada paleta
+   de globals.css. Sin `color-mix` (navegador viejo) el degradé se descarta y queda el respaldo sólido del velo: se
+   pierde la foto, nunca el contraste.
+
+   Escritorio (≥ 900): foto a todo el ancho, texto a la izquierda sobre la parte opaca del velo y la foto (el
+   estetoscopio) visible a la derecha. El borde del texto es `max(50 %, gutter + 580 px)`: el `.k-container` mide
+   1200 + 2 gutters centrado, así que a partir de ~1280 la columna de texto termina justo en la mitad, y más angosto
+   termina en gutter + 580. Alto: ≤ 64vh y ≤ 600 px (a 1366×768 queda en ~490-520 px, menos del 70 % del alto).
+   Mobile (< 900): la foto es una franja arriba (más ancha que la pantalla y corrida: queda el estetoscopio, no la
+   notebook) y el texto va abajo, sobre
+   el --sky-800 sólido: la foto nunca queda detrás del texto. */
+.hero {
+  position: relative; isolation: isolate; overflow: hidden;
+  background: var(--sky-800); color: #fff;
+}
+.heroMedia { position: absolute; inset: 0; z-index: -1; overflow: hidden; }
+.heroMedia picture { display: contents; }
+.heroImg {
+  position: absolute; inset: 0; width: 100%; height: 100%; max-width: none;
+  object-fit: cover; object-position: 50% 56%;
+  transform-origin: 66% 56%;
+  animation: sedeKenBurns 28s ease-in-out 0.2s infinite alternate both;
+}
+/* Ken Burns: acercamiento lento hacia el estetoscopio. Arranca en escala 1 (= el estado quieto de reduced-motion). */
+@keyframes sedeKenBurns {
+  from { transform: scale(1); }
+  to { transform: scale(1.09) translate3d(-1.2%, -0.8%, 0); }
+}
+.heroScrim {
+  position: absolute; inset: 0;
+  /* Respaldo sin color-mix: velo sólido (se pierde la foto, no el contraste). */
+  background: var(--sky-800);
+  background:
+    linear-gradient(90deg,
+      color-mix(in srgb, var(--sky-800) 93%, transparent) 0%,
+      color-mix(in srgb, var(--sky-800) 88%, transparent) max(50%, calc(var(--gutter) + 580px)),
+      color-mix(in srgb, var(--sky-700) 52%, transparent) calc(max(50%, calc(var(--gutter) + 580px)) + 16%),
+      color-mix(in srgb, var(--sky-600) 26%, transparent) 100%),
+    linear-gradient(0deg, color-mix(in srgb, var(--sky-800) 30%, transparent) 0%, transparent 40%);
+}
+/* Barrido de luz: una sola pasada al entrar (no en loop: distrae mientras se lee). Quieto = fuera de cuadro. */
+.heroSweep {
+  position: absolute; inset: 0; pointer-events: none; opacity: 0; transform: translate3d(100%, 0, 0);
+  background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, 0.16) 48%, rgba(255, 255, 255, 0.05) 56%, transparent 70%);
+  animation: sedeSweep 2.4s var(--ease-out) 0.45s 1 both;
+}
+@keyframes sedeSweep {
+  from { opacity: 1; transform: translate3d(-100%, 0, 0); }
+  to { opacity: 1; transform: translate3d(100%, 0, 0); }
+}
+
+.heroIn {
+  position: relative; display: grid; align-items: center;
+  min-height: clamp(420px, 64vh, 600px);
+  padding-block: clamp(36px, 6vh, 72px);
+}
+.heroText { display: grid; justify-items: start; gap: var(--space-4); max-width: 580px; position: relative; z-index: 1; }
+.heroMark { display: inline-flex; margin-bottom: var(--space-1); }
+.h1 {
+  font-size: clamp(36px, 2.6vw + 18px, 60px); line-height: var(--lh-tight); font-weight: 650; letter-spacing: -0.035em;
+  text-wrap: balance; overflow-wrap: anywhere; color: #fff;
+}
+.h1 small {
+  display: block; font-size: max(17px, 0.42em); line-height: 1.25; letter-spacing: -0.02em; color: var(--sky-200);
+  margin-top: var(--space-3); font-weight: 600;
+}
+.lead {
+  font-size: clamp(17px, 0.4vw + 15.5px, 20px); line-height: var(--lh-relaxed); color: var(--sky-100);
+  text-wrap: pretty; max-width: 540px; white-space: pre-line;
+}
+.ctas { display: flex; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-2); }
+.quick {
+  display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5);
+  font-size: 15px; color: var(--sky-100);
+}
+.quick li { display: inline-flex; align-items: center; gap: var(--space-2); }
+.quick .i { color: var(--lime-300); }
+/* Sobre el velo oscuro el anillo global (blanco adentro, --sky-700 afuera) se perdía: se invierte. */
+.hero :focus-visible { box-shadow: 0 0 0 2px var(--sky-800), 0 0 0 4px #fff; }
+
+/* «Vértebras»: 9 puntos en S que flotan desfasados (una ola que sube por la columna). Tamaños en em: la columna se
+   achica cambiando el font-size. Entrada: se encienden de abajo hacia arriba; después, flotan ±5 px. */
+.dots { position: absolute; display: block; pointer-events: none; font-size: 16px; }
+.dot {
+  position: absolute; display: block; width: 1em; height: 1em; margin: -0.5em 0 0 -0.5em; border-radius: 50%;
+  background: #fff; opacity: 0.9;
+  box-shadow: 0 0 0 0.38em rgba(255, 255, 255, 0.14), 0 0.15em 0.6em rgba(0, 0, 0, 0.16);
+  animation: sedeDotIn 600ms var(--ease-out) both, sedeFloat 5.6s ease-in-out infinite alternate;
+}
+.dot:nth-child(1) { left: 52%; top: 4%; font-size: 0.62em; animation-delay: 1040ms, -0.4s; }
+.dot:nth-child(2) { left: 70%; top: 15%; font-size: 0.78em; animation-delay: 920ms, -1.1s; }
+.dot:nth-child(3) { left: 80%; top: 27%; font-size: 0.92em; animation-delay: 800ms, -1.8s; }
+.dot:nth-child(4) { left: 72%; top: 39%; font-size: 1.04em; animation-delay: 680ms, -2.5s; }
+.dot:nth-child(5) { left: 52%; top: 51%; font-size: 1.12em; animation-delay: 560ms, -3.2s; }
+.dot:nth-child(6) { left: 32%; top: 63%; font-size: 1.1em; animation-delay: 440ms, -3.9s; }
+.dot:nth-child(7) { left: 22%; top: 75%; font-size: 1em; animation-delay: 320ms, -4.6s; }
+.dot:nth-child(8) { left: 30%; top: 87%; font-size: 0.84em; animation-delay: 200ms, -5.3s; }
+.dot:nth-child(9) { left: 46%; top: 97%; font-size: 0.66em; animation-delay: 80ms, -6s; }
+/* Solo opacidad: el `transform` lo maneja `sedeFloat` (la segunda animación de la lista gana esa propiedad). */
+@keyframes sedeDotIn { from { opacity: 0; } }
+@keyframes sedeFloat { from { transform: translate3d(0, -5px, 0); } to { transform: translate3d(0, 5px, 0); } }
+/* En el encabezado: a la derecha del contenedor, sobre la foto (nunca sobre el texto: la columna termina antes). */
+.heroDots { right: 5%; top: 13%; bottom: 13%; width: clamp(96px, 9vw, 150px); font-size: clamp(16px, 1.45vw, 22px); }
+
+@media (max-width: 899px) {
+  .hero { padding-top: clamp(168px, 40vw, 280px); }
+  .heroMedia { bottom: auto; height: clamp(200px, 46vw, 320px); }
+  /* Más ancha que la franja y corrida: queda el estetoscopio, no la notebook (que en 390 ocupaba media franja). */
+  .heroImg { width: 170%; left: -60%; object-position: 50% 58%; transform-origin: 62% 60%; }
+  .heroScrim {
+    background: var(--sky-800);
+    background: linear-gradient(180deg,
+      color-mix(in srgb, var(--sky-800) 22%, transparent) 0%,
+      color-mix(in srgb, var(--sky-700) 34%, transparent) 45%,
+      var(--sky-800) 100%);
+  }
+  /* `static`: así las «vértebras» se ubican contra el encabezado (sobre la franja de la foto) y no contra el texto. */
+  .heroIn { position: static; min-height: 0; padding-block: 0 clamp(36px, 8vw, 56px); }
+  .heroText { max-width: 100%; }
+  .heroDots { right: var(--gutter); top: 16px; bottom: auto; height: clamp(136px, 32vw, 230px); width: 64px; font-size: 11px; }
+}
+@media (max-width: 479px) {
+  .ctas { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; }
+  .quick { display: grid; }
+}
+
+/* ── Secciones ───────────────────────────────────────────────── */
+.section { padding-block: clamp(56px, 7vw, 104px); scroll-margin-top: 64px; }
+.section + .section { border-top: 1px solid var(--line); }
+.head { display: grid; gap: var(--space-3); max-width: 640px; margin: 0 auto clamp(32px, 4vw, 48px); text-align: center; justify-items: center; }
+.eyebrow {
+  display: inline-flex; align-items: center; gap: var(--space-2);
+  font-size: 13px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--sky-700);
+  padding: 6px 12px; border-radius: 999px; background: var(--sky-50); box-shadow: inset 0 0 0 1px var(--sky-100);
+}
+/* --sky-500 y no --lime-500: el lima 500 no lo reasigna ninguna paleta y en la de TMP quedaba un punto verde suelto. */
+.eyebrow::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--sky-500); }
+.h2 { font-size: clamp(26px, 1.4vw + 20px, 36px); line-height: var(--lh-snug); font-weight: 650; letter-spacing: -0.03em; text-wrap: balance; }
+.h3 { font-size: var(--fs-lg); line-height: 1.3; font-weight: 650; letter-spacing: -0.015em; }
+.note { font-size: var(--fs-sm); color: var(--navy-500); line-height: 1.5; }
+.empty { text-align: center; color: var(--navy-500); max-width: 560px; margin-inline: auto; }
+/* BR-H: «Semana» sobre un fondo teñido con la paleta, para cortar la seguidilla de secciones blancas iguales. */
+.sectionTint { background: linear-gradient(180deg, var(--sky-50) 0%, #f7fafd 100%); }
+.section.sectionTint + .section, .section + .section.sectionTint { border-top-color: var(--sky-100); }
+
+.card {
+  background: #fff; border-radius: var(--r-lg); border: 1px solid rgba(15, 30, 51, 0.07);
+  box-shadow: var(--shadow-card); padding: clamp(20px, 2.4vw, 28px);
+}
+
+/* ── Profesionales ───────────────────────────────────────────── */
+.pros { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-5); }
+/* BR-H: barra de acento arriba (el color del consultorio) en vez de la tarjeta blanca genérica. */
+.pro { display: grid; gap: var(--space-5); align-content: start; position: relative; overflow: hidden; }
+.pro::before {
+  content: ""; position: absolute; inset: 0 0 auto; height: 4px;
+  background: linear-gradient(90deg, var(--sky-700), var(--sky-400));
+}
+.pro .proCta { justify-self: start; }
+@media (max-width: 767px) { .pros { grid-template-columns: 1fr; } .pro .proCta { justify-self: stretch; } }
+/* PH-U2: la foto (o las iniciales) es `PractitionerPhoto` de 96 px, con su marco blanco, su sombra teñida y el logo de la
+   sede en la insignia (components/ui/practitioner-photo.module.css). Antes era un disco de 56 px con degradé --sky-800
+   → --sky-700 e iniciales blancas: con foto, el marco tiene que ser blanco para todos (pedido de Martin del 05-nov). A
+   390 px queda 96 + 20 de aire y ~200 px para el nombre (que parte con `overflow-wrap`). */
+.proHead { display: flex; gap: var(--space-5); align-items: center; min-width: 0; }
+.proId { min-width: 0; }
+.proName { font-size: var(--fs-lg); line-height: 1.25; font-weight: 650; letter-spacing: -0.015em; overflow-wrap: anywhere; }
+.proSpec { color: var(--navy-700); font-weight: 500; }
+.proLic { font-size: 13px; color: var(--navy-500); margin-top: 2px; }
+
+/* Servicios: nombre + duración a la izquierda, precio a la derecha. Sin `showPublicPrice` (D-CF3-3) el server no manda
+   el monto y la fila dice «Consultá el valor». */
+.svc { display: grid; border-top: 1px solid var(--line); }
+.svc li {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-4);
+  padding: var(--space-3) 0; border-bottom: 1px solid var(--line);
+}
+.svcName { font-weight: 550; color: var(--navy-900); min-width: 0; overflow-wrap: anywhere; }
+.svcDur { display: block; font-size: 13px; color: var(--navy-500); font-weight: 400; }
+.svcPrice { font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.svcAsk { font-size: var(--fs-sm); color: var(--navy-500); white-space: nowrap; }
+
+/* ── Quién atiende cada día (dirección B) ────────────────────────
+   Una tarjeta por día con quién atiende y de qué hora a qué hora. El profesional se marca con iniciales y nombre
+   (canal no cromático, AGENTS §5): no hay un color por profesional. */
+.weekHead { display: flex; justify-content: center; margin-bottom: var(--space-5); }
+.legend { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2) var(--space-4); font-size: var(--fs-sm); color: var(--navy-700); }
+.legend li { display: inline-flex; align-items: center; gap: var(--space-2); }
+/* Una columna por día con alguien (5, 6 o 7) sin variable local: flujo por columnas, todas del mismo ancho. */
+.week { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: var(--space-3); }
+.day {
+  background: #fff; border: 1px solid rgba(15, 30, 51, 0.07); border-radius: var(--r-md); padding: var(--space-3);
+  display: grid; gap: var(--space-2); align-content: start; min-height: 132px;
+}
+.dayName { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--navy-500); }
+.slots { display: grid; gap: var(--space-2); }
+.slot {
+  display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: var(--space-2); align-items: center;
+  padding: 8px; border-radius: 10px; background: var(--sky-50); border-left: 3px solid var(--sky-700);
+}
+.ini {
+  width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700;
+  background: #fff; color: var(--navy-900); box-shadow: inset 0 0 0 1px rgba(15, 30, 51, 0.14); flex-shrink: 0;
+}
+.slotName { display: block; font-size: 13px; font-weight: 600; line-height: 1.2; overflow-wrap: anywhere; }
+.slotTime { display: block; font-size: 13px; color: var(--navy-700); font-variant-numeric: tabular-nums; }
+/* 6-7 columnas solo con lugar real: a 1366 cada día quedaba en ~150 px y «8 a 14 y 15 a 20 h» se partía en 4 líneas. */
+@media (max-width: 1279px) {
+  .week { grid-auto-flow: row; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .day { min-height: 0; }
+}
+@media (max-width: 767px) {
+  .week { grid-template-columns: 1fr; gap: 0; background: #fff; border: 1px solid rgba(15, 30, 51, 0.07); border-radius: var(--r-md); }
+  .day {
+    grid-template-columns: 52px minmax(0, 1fr); align-items: center; border: 0; border-bottom: 1px solid var(--line);
+    border-radius: 0; min-height: 0; background: transparent;
+  }
+  .day:last-child { border-bottom: 0; }
+}
+.weekNote { text-align: center; margin-top: var(--space-4); }
+
+/* ── Horarios y sede ─────────────────────────────────────────── */
+.visit { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-5); align-items: start; }
+.visit > .card, .stack { display: grid; gap: var(--space-5); align-content: start; }
+.visitSingle { grid-template-columns: minmax(0, 720px); justify-content: center; }
+@media (max-width: 899px) { .visit { grid-template-columns: 1fr; } }
+
+.hours { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.hours th, .hours td { padding: 10px 0; border-bottom: 1px solid var(--line); text-align: left; font-weight: 500; }
+.hours th { color: var(--navy-700); width: 40%; }
+.hours td { text-align: right; color: var(--navy-900); }
+.hours .closed td { color: var(--navy-400); }
+.hours tr:last-child th, .hours tr:last-child td { border-bottom: 0; }
+
+.facts { display: grid; gap: var(--space-4); }
+.fact { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: var(--space-3); align-items: start; }
+.factIco { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--sky-50); color: var(--sky-700); }
+.factLabel { font-size: 13px; color: var(--navy-500); }
+.factValue { font-weight: 550; overflow-wrap: anywhere; }
+.fact a, .made a { display: inline-flex; align-items: center; min-height: 28px; }
+.fact a { color: var(--sky-700); font-weight: 600; text-decoration: none; border-radius: 6px; }
+.fact a:hover { text-decoration: underline; text-underline-offset: 3px; }
+/* CF3 ZF3: «Ver en el mapa» medía 28 px; en táctil / mobile, 44 px (AGENTS §5). */
+@media (pointer: coarse), (max-width: 767px) { .fact a { min-height: 44px; } }
+
+.coverages { display: grid; gap: var(--space-3); scroll-margin-top: 96px; }
+.chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.chip {
+  display: inline-flex; align-items: center; gap: var(--space-2); min-height: 32px; padding: 0 12px; border-radius: 999px;
+  background: #fff; border: 1px solid rgba(15, 30, 51, 0.1); font-size: var(--fs-sm); font-weight: 500; color: var(--navy-700);
+}
+.chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--sky-500); flex-shrink: 0; }
+
+/* ── Contacto ────────────────────────────────────────────────── */
+/* BR-H: la banda de contacto en el color del consultorio (antes navy fijo, igual para todos). Texto blanco / --sky-100
+   sobre --sky-800 → --sky-700: AA con todas las paletas (lo mide `br-h-sede-hero.test.tsx`). */
+.band {
+  background: linear-gradient(120deg, var(--sky-800) 0%, var(--sky-700) 100%);
+  color: #fff; border-radius: var(--r-xl); padding: clamp(28px, 4vw, 48px);
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-5); flex-wrap: wrap;
+}
+.band p { color: var(--sky-100); margin-top: var(--space-2); }
+.bandCtas { display: flex; gap: var(--space-3); flex-wrap: wrap; }
+.onDark { background: rgba(255, 255, 255, 0.1); color: #fff; border: 1px solid rgba(255, 255, 255, 0.24); }
+.onDark:hover { background: rgba(255, 255, 255, 0.16); }
+.band :focus-visible { box-shadow: 0 0 0 2px var(--sky-800), 0 0 0 4px #fff; }
+@media (max-width: 599px) { .bandCtas { display: grid; width: 100%; } }
+
+/* ── Pie «Hecho con» ─────────────────────────────────────────── */
+.footer { border-top: 1px solid var(--line); }
+.made {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--space-2) var(--space-4);
+  padding-block: var(--space-6); font-size: var(--fs-sm); color: var(--navy-500);
+}
+.made a { gap: var(--space-2); font-weight: 600; color: var(--navy-700); text-decoration: none; border-radius: 6px; }
+.made a:hover { color: var(--navy-900); text-decoration: underline; text-underline-offset: 3px; }
+
+/* Ícono del sprite inline. */
+.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+
+/* 404 del grupo. */
+.notFound { min-height: 100vh; display: grid; place-items: center; padding: var(--space-6) var(--gutter); background: var(--bg-public); }
+.notFoundCard { max-width: 520px; text-align: center; display: grid; gap: var(--space-4); justify-items: center; }
+
+/* Reduced motion: NADA se mueve (foto, puntos, barrido, entradas, hovers). El estado sin animación es el final:
+   foto a escala 1, puntos en su lugar, barrido fuera de cuadro (opacity 0), texto visible. */
+@media (prefers-reduced-motion: reduce) {
+  .page *, .page *::before, .page *::after { animation: none !important; transition: none !important; }
+}

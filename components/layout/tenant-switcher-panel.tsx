@@ -8,10 +8,11 @@
  */
 import { useEffect, useRef } from "react";
 import type { TenantOption } from "@/lib/tenant-choice";
-import { roleLabel } from "@/lib/roles";
+import { tenantOptionRoleLabel } from "@/lib/co-owner-types";
 import { VERTICAL_LABEL } from "@/lib/tenant-modules";
 import { IconCheck } from "@/components/ui/icons";
 import { CHOOSE_TENANT_HREF, tenantInitials } from "./tenant-switcher";
+import { TenantLogo } from "./tenant-logo";
 import { initialsStyle, nameStyle, panelBoxStyle, sectionLabelStyle, seeAllStyle } from "./tenant-switcher-styles";
 
 export function TenantSwitcherPanel({
@@ -88,13 +89,27 @@ export function TenantSwitcherPanel({
                 opacity: pendingId && pendingId !== o.tenantId ? 0.5 : 1,
               }}
             >
-              <span style={initialsStyle} aria-hidden>
-                {tenantInitials(o.name)}
-              </span>
+              {/* CF3 (BR-L): el logo de cada consultorio (de la misma foto, `TenantOption.logoUrl`); sin logo o si no
+                  carga, las iniciales. 30 px como las iniciales: la fila no cambia de alto. */}
+              {o.logoUrl ? (
+                <TenantLogo
+                  src={o.logoUrl}
+                  size={30}
+                  fallback={
+                    <span style={initialsStyle} aria-hidden>
+                      {tenantInitials(o.name)}
+                    </span>
+                  }
+                />
+              ) : (
+                <span style={initialsStyle} aria-hidden>
+                  {tenantInitials(o.name)}
+                </span>
+              )}
               <span style={{ flex: 1, minWidth: 0 }}>
                 <span style={nameStyle}>{o.name}</span>
                 <span style={{ display: "block", fontSize: 11.5, color: "var(--navy-500)", marginTop: 2 }}>
-                  {roleLabel(o.role, o.vertical)} · {VERTICAL_LABEL[o.vertical]}
+                  {tenantOptionRoleLabel(o)} · {VERTICAL_LABEL[o.vertical]}
                 </span>
               </span>
               <span aria-hidden style={{ width: 16, display: "inline-flex", color: "var(--sky-700)" }}>

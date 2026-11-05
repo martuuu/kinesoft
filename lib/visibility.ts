@@ -74,6 +74,7 @@ import type { Prisma, Role } from "@prisma/client";
 import type { PatientAccessLevel } from "@/lib/capabilities";
 import { isActorPractitioner } from "@/lib/practitioner-scope";
 import { isClinicalMember } from "@/lib/roles";
+import { isOversightMember } from "@/lib/roles-core";
 
 /**
  * = `PatientAccessLevel` de `lib/capabilities.ts` (el puro que importa la UI):
@@ -125,15 +126,14 @@ function readTenantSettings(db: DbClient, tenantId: string) {
 
 // PL-1b: `clinical` viaja en la misma fila (sin query extra). Se lee en la tx del llamador y no de
 // `actor.membership` a propósito: es la barrera de la HC y tiene que ver lo mismo que el resto de la tx.
+// CT-INT (CF3b, H1): + `grantCoOwner` (M23), misma sentencia; sin él el co-titular quedaba como un Profesional común
+// (solo sus pacientes asignados/compartidos) aunque tenga lo del Titular.
 function readMembership(db: DbClient, userId: string, tenantId: string) {
   return db.membership.findUnique({
     where: { userId_tenantId: { userId, tenantId } },
-    select: { role: true, clinical: true },
+    select: { role: true, clinical: true, grantCoOwner: true },
   });
 }
-
-/** Roles que, si atienden, ven todo el consultorio (supervisión). */
-const OVERSIGHT_ROLES: ReadonlySet<Role> = new Set<Role>(["OWNER", "ADMIN"]);
 
 type MemberTier = { adminOnly: boolean; oversight: boolean };
 
@@ -159,14 +159,16 @@ type MemberTier = { adminOnly: boolean; oversight: boolean };
  */
 function memberTier(
   actor: Actor,
-  membership: { role: Role; clinical: boolean } | null | undefined
+  membership: { role: Role; clinical: boolean; grantCoOwner?: boolean } | null | undefined
 ): MemberTier {
   if (actor.support) return { adminOnly: true, oversight: false };
   const m = membership ?? { role: "PRACTITIONER" as Role, clinical: true };
   // PL-1b (H-PL1): «¿atiende?» va ANTES que el rol. Un Titular/Admin que no atiende es `admin` como la
   // Secretaria; hasta PL-1b el `role === OWNER|ADMIN` de abajo le devolvía `full` sin mirar.
   if (!isClinicalMember(m)) return { adminOnly: true, oversight: false };
-  return { adminOnly: false, oversight: OVERSIGHT_ROLES.has(m.role) };
+  // Supervisión (ve todo el consultorio): Titular, Administrador/a y, desde CT-INT (H1), el co-titular. CF3 ZF4a: un
+  // solo predicado (`isOversightMember`, lib/roles-core.ts) para esto y el token de los counts del dashboard.
+  return { adminOnly: false, oversight: isOversightMember(m) };
 }
 
 export async function visibilityForActor(

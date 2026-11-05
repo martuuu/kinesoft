@@ -7,6 +7,7 @@ import { exportHref } from "@/components/configuracion/panels/export-panel";
 import { SupportContact } from "@/components/ui/support-contact";
 import { BRAND_NAME } from "@/lib/brand";
 import { contactHref } from "@/lib/support-contact";
+import { canExportTenantData, isCoOwner } from "@/lib/capabilities";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Consultorio suspendido" };
@@ -21,8 +22,10 @@ export const metadata = { title: "Consultorio suspendido" };
  * sobre esto); ninguna vuelve acá sola.
  *
  * BO-D4: el OWNER de un consultorio suspendido descarga él la exportación de sus datos (BO5-C). El link lleva el
- * `tenantId` porque acá no hay consultorio activo; `/api/consultorio/export` vuelve a exigir OWNER de ese consultorio
- * (el botón es UX, no la barrera).
+ * `tenantId` porque acá no hay consultorio activo; `/api/consultorio/export` vuelve a exigir el titular de ese
+ * consultorio (el botón es UX, no la barrera). CT-INT (CF3b, H4): «titular» = `canExportTenantData` (el principal o el
+ * co-titular), el mismo predicado de la ruta; con `b.role === "OWNER"` el co-titular no veía el botón que la ruta sí
+ * le acepta.
  */
 export default async function SuspendidoPage() {
   const s = await getAccessSnapshot();
@@ -42,15 +45,16 @@ export default async function SuspendidoPage() {
   }
 
   const closed = block.kind === "tenant_closed";
-  // ¿Es OWNER de alguno de los consultorios bloqueados? (los datos los ve el propio usuario: son suyos). BO-Z B6:
-  // TODOS los que tenga como titular, no solo el del bloqueo que se muestra (un titular de dos suspendidos solo
-  // podía bajar uno). El de este bloqueo, primero.
+  // ¿Es titular (principal o co-titular) de alguno de los consultorios bloqueados? (los datos los ve el propio
+  // usuario: son suyos). BO-Z B6: TODOS los que tenga como titular, no solo el del bloqueo que se muestra (un titular
+  // de dos suspendidos solo podía bajar uno). El de este bloqueo, primero.
   const ownerBlocks = s.tenantBlocks
-    .filter((b) => b.role === "OWNER")
+    .filter((b) => canExportTenantData(b))
     .sort((a, b) => Number(b.tenantName === block.tenantName) - Number(a.tenantName === block.tenantName));
   // BO-Z B4: el contacto con soporte es del titular/admin; el resto del equipo no decide nada sobre el consultorio.
+  // CT-INT: el co-titular también (es titular; el ticket es del consultorio, no de la suscripción).
   const thisBlock = s.tenantBlocks.find((b) => b.tenantName === block.tenantName);
-  const canContact = !thisBlock || thisBlock.role === "OWNER" || thisBlock.role === "ADMIN";
+  const canContact = !thisBlock || thisBlock.role === "OWNER" || thisBlock.role === "ADMIN" || isCoOwner(thisBlock);
 
   return (
     <AuthShell variant="centered" introAs="p">

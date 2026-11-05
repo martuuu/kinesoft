@@ -15,10 +15,40 @@
  * Roles: ASSISTANT y BILLING son anticipos de diseño (AUDIT §5.17): se
  * preservan aunque hoy ningún flujo de alta los asigne; la Secretaria de C0 es
  * ASSISTANT.
+ *
+ * CT-K1 (CF3b, contrato de Martin del 05-nov) — «Co-titular» = `Membership.grantCoOwner` (M23, solo PRACTITIONER por
+ * el CHECK `Membership_coOwner_role_check`). Tiene lo del Titular SALVO: (a) tocar rol, permisos o cuenta del Titular
+ * principal; (b) transferir la titularidad; (c) dar o quitar «Co-titular»; (d) nada de la suscripción al SaaS (plan,
+ * medios de pago, facturación de la plataforma: nunca `account.billing`, aunque tenga `grantBilling`; tampoco recibe
+ * los mails de cobro, `billingRecipients` de lib/saas-billing-internal.ts). Sí exporta los datos (siempre es
+ * profesional). Para eso `account.owner`, que agrupaba «todo lo del Titular», se partió en tres; matriz final de las
+ * capacidades de CUENTA (fuera de la matriz por rol; los tests usan estos mismos nombres):
+ *
+ *   capacidad        │ Titular principal │ Co-titular │ Admin / Profesional │ Secretaria / Facturación │ Soporte
+ *   ─────────────────┼───────────────────┼────────────┼─────────────────────┼──────────────────────────┼────────
+ *   account.owner    │ ✓                 │ –          │ –                   │ –                        │ –
+ *   account.billing  │ ✓                 │ – (nunca)  │ con `grantBilling`  │ – (corte de staff)       │ –
+ *   account.manage   │ ✓                 │ ✓          │ –                   │ –                        │ –
+ *   account.export   │ ✓                 │ ✓          │ –                   │ –                        │ –
+ *
+ *   - `account.owner`: SOLO el principal, no se delega ni se comparte: transferir la titularidad, dar/quitar
+ *     «Co-titular», su «Atiendo pacientes», y las cuentas EXTERNAS a su nombre (la cuenta de Mercado Pago del
+ *     consultorio, sus links y el OAuth; la cuenta de WhatsApp Business, que factura a su medio de pago en Meta).
+ *   - `account.manage`: las funciones de Titular que comparte con el co-titular: delegar «Configuración» (dar
+ *     «Planes y pagos» exige además `account.billing`), gestionar el equipo con la mano del Titular salvo sobre el
+ *     principal, y anular/corregir evoluciones ajenas (EV2-D15, «el Titular clínico»).
+ *   - `account.export`: el export completo del consultorio (`GET /api/consultorio/export`). La ruta decide SIN Actor
+ *     (consultorio bloqueado) con `canExportTenantData`, que es el mismo predicado (un unit test los cruza).
+ *   - El resto: el co-titular tiene exactamente lo del Titular que atiende (`ALL`), no la fila PRACTITIONER (sin
+ *     `billing.collectOwn`, que en el «todo» no suma nada).
  */
 import type { Role } from "@prisma/client";
 import type { MemberAccess } from "@/lib/saas-plans-types";
-import { isClinicalMember } from "@/lib/roles-core";
+import { isClinicalMember, isCoOwner, isPrincipalOwner } from "@/lib/roles-core";
+
+// CT-K1: los predicados de titularidad viven en roles-core (sin copy); se re-exportan acá para que server y UI los
+// importen junto con las capacidades.
+export { isCoOwner, isPrincipalOwner };
 
 export const CAPABILITIES = [
   /** Ver la agenda de todos los profesionales del tenant (vista "Por profesional"). */
@@ -75,14 +105,27 @@ export const CAPABILITIES = [
   /**
    * PL-1b (C-PL5, decisión 7): «Planes y pagos» de la CUENTA del consultorio con la plataforma (plan SaaS, débito,
    * comprobantes). La tienen el Titular y quien él delegue (`Membership.grantBilling`). No es `billing.manage`
-   * (cobros a pacientes). Soporte nunca.
+   * (cobros a pacientes). Soporte nunca. CT-K1: el co-titular nunca, ni con `grantBilling` (contrato (d)).
    */
   "account.billing",
   /**
-   * PL-1b: acciones que son SOLO del Titular (transferir titularidad, delegar permisos). No se delega ni se revoca
-   * (decisión 7: «nadie le revoca la titularidad»). Soporte nunca.
+   * PL-1b: acciones que son SOLO del Titular. No se delega ni se revoca (decisión 7: «nadie le revoca la
+   * titularidad»). Soporte nunca. CT-K1 (CF3b): queda para lo del Titular PRINCIPAL que el co-titular no tiene
+   * (transferir, dar/quitar «Co-titular», su «Atiendo pacientes», la cuenta MP del consultorio y WhatsApp Business);
+   * delegar permisos pasó a `account.manage` (ver la matriz de la cabecera).
    */
   "account.owner",
+  /**
+   * CT-K1 (CF3b): funciones de Titular que comparten el principal y el co-titular: delegar «Configuración», gestionar
+   * el equipo como Titular (salvo al principal, la titularidad y «Co-titular») y anular evoluciones ajenas. Nunca por
+   * delegación ni por rol. Soporte nunca.
+   */
+  "account.manage",
+  /**
+   * CT-K1 (CF3b): export completo del consultorio (BO5-C). El principal y el co-titular («sí exporta los datos:
+   * siempre es profesional»). Nadie más; soporte nunca (baja PHI).
+   */
+  "account.export",
   /**
    * T3 (C-AS1, decisión 1 del 19-oct): registrar el cobro del copago de CUALQUIER turno (guest incluido) con su medio
    * de pago. OWNER, ADMIN, ASSISTANT y BILLING. Hasta T3 cobrar exigía acceso full al paciente (`toggleBilling` con
@@ -114,8 +157,20 @@ export const CAPABILITIES = [
 
 export type Capability = (typeof CAPABILITIES)[number];
 
-/** Capacidades de la cuenta (C-PL5): fuera de la matriz por rol, solo por titularidad o delegación. */
-const ACCOUNT_CAPS: readonly Capability[] = ["account.billing", "account.owner"];
+/**
+ * Capacidades de la cuenta (C-PL5): fuera de la matriz por rol, solo por titularidad, co-titularidad (CT-K1) o
+ * delegación. Las cuatro son del Titular principal.
+ */
+const ACCOUNT_CAPS: readonly Capability[] = ["account.billing", "account.owner", "account.manage", "account.export"];
+
+/** CT-K1: las de cuenta que el co-titular comparte con el principal. */
+const CO_OWNER_ACCOUNT_CAPS: readonly Capability[] = ["account.manage", "account.export"];
+
+/**
+ * CT-K1 (contrato (b), (c) y (d)): lo que el co-titular nunca tiene, ni con `grantBilling` en la fila (un dato viejo:
+ * era Profesional con «Planes y pagos» antes de que lo hicieran co-titular). Se corta AL FINAL, como el corte de staff.
+ */
+const CO_OWNER_CUT_CAPS: readonly Capability[] = ["account.billing", "account.owner"];
 
 /**
  * Lo que solo tiene quien atiende (PL-D4): leer HC y crear/editar planes. Sacarlas a un Titular/Admin que no
@@ -256,13 +311,21 @@ export function capabilitiesFor(role: Role | null | undefined): ReadonlySet<Capa
  * - T3 (C-AS1): corte de staff — ASSISTANT y BILLING pierden `tenant.sensitive` y `account.billing` siempre
  *   (decisión 3 del 19-oct: la Secretaria nunca turnero, equipo ni plan; un PRACTITIONER con «Configuración» sí
  *   accede a lo delicado, decisión 4).
+ * - CT-K1 (CF3b): co-titular (PRACTITIONER + `grantCoOwner`) — parte de `ALL` (lo del Titular que atiende) y suma
+ *   `account.manage` + `account.export`; pierde `account.billing` y `account.owner` siempre (corte de co-titular).
  *
- * El orden importa: lo clínico y el corte de staff se sacan AL FINAL, así ninguna delegación los puede devolver.
+ * El orden importa: lo clínico, el corte de staff y el de co-titular se sacan AL FINAL, así ninguna delegación los
+ * puede devolver.
  */
 export function capabilitiesForMember(m: MemberAccess): ReadonlySet<Capability> {
-  const caps = new Set<Capability>(capabilitiesFor(m.role));
-  if (m.role === "OWNER") {
+  const coOwner = isCoOwner(m);
+  // CT-K1: el co-titular arranca de lo del Titular (`ALL`), no de la fila PRACTITIONER.
+  const caps = new Set<Capability>(coOwner ? ALL : capabilitiesFor(m.role));
+  if (isPrincipalOwner(m)) {
     for (const c of ACCOUNT_CAPS) caps.add(c);
+  }
+  if (coOwner) {
+    for (const c of CO_OWNER_ACCOUNT_CAPS) caps.add(c);
   }
   if (m.role === "ADMIN") {
     for (const c of CONFIG_DELEGATED) caps.delete(c);
@@ -277,14 +340,28 @@ export function capabilitiesForMember(m: MemberAccess): ReadonlySet<Capability> 
   if (STAFF_ROLES.has(m.role)) {
     for (const c of STAFF_CUT_CAPS) caps.delete(c);
   }
+  if (coOwner) {
+    for (const c of CO_OWNER_CUT_CAPS) caps.delete(c);
+  }
   return caps;
 }
 
 /**
- * `select` de Prisma con lo que necesita `capabilitiesForMember` (la misma fila de `Membership`, sin query extra).
- * Para las lecturas EN tx que hoy hacen `select: { role: true }` + `capabilitiesFor(m?.role)`.
+ * CT-K1: ¿puede bajar el export completo de ESTE consultorio? El Titular principal o el co-titular: lo mismo que
+ * `account.export` de `capabilitiesForMember` (un unit test los cruza), pero sobre la fila cruda. La ruta del export
+ * decide sin Actor (con el consultorio suspendido o dado de baja `getActor` no entra: BO-D4) y la foto de acceso
+ * trae solo la membresía, no las capacidades.
  */
-export const MEMBER_ACCESS_SELECT = { role: true, clinical: true, grantSettings: true, grantBilling: true } as const;
+export function canExportTenantData(m: { role: Role; grantCoOwner?: boolean }): boolean {
+  return isPrincipalOwner(m) || isCoOwner(m);
+}
+
+/**
+ * `select` de Prisma con lo que necesita `capabilitiesForMember` (la misma fila de `Membership`, sin query extra).
+ * Para las lecturas EN tx que hoy hacen `select: { role: true }` + `capabilitiesFor(m?.role)`. CT-K1: + `grantCoOwner`
+ * (M23); sin él el co-titular valdría como Profesional común. Un select copiado a mano lo frena el guard [CT-K1-6].
+ */
+export const MEMBER_ACCESS_SELECT = { role: true, clinical: true, grantSettings: true, grantBilling: true, grantCoOwner: true } as const;
 
 /**
  * Reemplazo 1:1 de `capabilitiesFor(m?.role)` cuando `m` es la fila leída con `MEMBER_ACCESS_SELECT`: sin

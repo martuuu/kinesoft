@@ -13,6 +13,11 @@
  * Gate: `tenant.sensitive` (D-CF2-18: «la edita quien tenga `tenant.sensitive`»: el Titular, o un Administrador/a o
  * Profesional con «Configuración»; la Secretaria y Facturación nunca, por el corte de staff de C-AS1). La lectura
  * pide lo mismo: el % que cada uno le pasa a otro es plata del equipo y la pantalla vive bajo ese mismo gate.
+ * CF3 ZF5 (B, default de Martin pendiente): una regla cuyo «quien destina» es el Practitioner del Titular PRINCIPAL
+ * reparte la plata del principal («la cuenta del principal», CT-K1): la crean o la cierran SOLO él (`account.owner`).
+ * El co-titular (que tiene `tenant.sensitive` como el Titular) y un Admin o Profesional con «Configuración» siguen con
+ * las demás. Se chequea en la tx, después del lock y antes del CAS (`isPrincipalOwnerPractitionerInTx`, 1 sentencia
+ * que el principal no paga).
  * Soporte tiene `tenant.sensitive` en `SUPPORT_CAPS` pero NO lee (CF2-ZF3, ZA-4): el reparto es plata del equipo y
  * soporte tampoco ve la caja (`loadCajaPage` → `none`, BO2-E); antes la lectura le devolvía todas las reglas con
  * nombres y %. Sus escrituras caen además en la tx de solo lectura (no están en `SUPPORT_WRITABLE_ACTIONS`) y
@@ -31,6 +36,7 @@ import type { Prisma } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { capabilitiesForActor } from "@/lib/authz";
+import type { Capability } from "@/lib/capabilities";
 import { auditInTx } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
@@ -38,6 +44,7 @@ import { validateShareGraph } from "@/lib/revenue-share-logic";
 import { EndRevenueShareSchema, SetRevenueShareSchema } from "@/lib/revenue-share-schemas";
 import {
   assertSharePractitionersInTx,
+  isPrincipalOwnerPractitionerInTx,
   isRevenueShareConflict,
   listRevenueSharesInTx,
   lockRevenueSharesInTx,
@@ -59,12 +66,27 @@ const FORBIDDEN_READ = "Solo el titular o el administrador (o un profesional con
 const SUPPORT_READ = "Soporte no ve el reparto ni la caja del consultorio.";
 const GIVER_NOT_FOUND = "Profesional no encontrado.";
 const SAVE_FAILED = "No pudimos guardar el reparto. Probá de nuevo.";
+const PRINCIPAL_ONLY = "Esto lo puede hacer solo el titular principal.";
 
 async function requireSensitive(message: string) {
   const actor = await getActor();
   const caps = await capabilitiesForActor(actor);
   if (!caps.has("tenant.sensitive")) return { ok: false as const, error: message };
-  return { ok: true as const, actor };
+  return { ok: true as const, actor, caps };
+}
+
+/**
+ * CF3 ZF5: la regla del principal la toca solo él (ver la cabecera). `account.owner` = principal (nunca el co-titular,
+ * ni soporte, ni por delegación); a él no le cuesta la sentencia.
+ */
+async function principalGiverBlocked(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  caps: ReadonlySet<Capability>,
+  giverPractitionerId: string,
+): Promise<boolean> {
+  if (caps.has("account.owner")) return false;
+  return isPrincipalOwnerPractitionerInTx(tx, tenantId, giverPractitionerId);
 }
 
 function revalidateShares() {
@@ -122,7 +144,7 @@ export async function setRevenueShare(...args: Parameters<typeof setRevenueShare
 async function setRevenueShareImpl(raw: unknown): Promise<ActionResult<{ id: string }>> {
   const gate = await requireSensitive(FORBIDDEN);
   if (!gate.ok) return gate;
-  const { actor } = gate;
+  const { actor, caps } = gate;
   const parsed = SetRevenueShareSchema.safeParse(raw);
   if (!parsed.success) {
     return { ok: false, error: "Revisá los datos del reparto.", fieldErrors: parsed.error.flatten().fieldErrors };
@@ -135,6 +157,7 @@ async function setRevenueShareImpl(raw: unknown): Promise<ActionResult<{ id: str
     const who = await assertSharePractitionersInTx(tx, tenantId, input);
     if (who === "giverNotFound") return { kind: "error", error: GIVER_NOT_FOUND };
     if (who === "receiverNotBookable") return { kind: "error", error: REVENUE_SHARE_COPY.receiverNotBookable };
+    if (await principalGiverBlocked(tx, tenantId, caps, input.giverPractitionerId)) return { kind: "error", error: PRINCIPAL_ONLY };
 
     const open = await openSharesInTx(tx, tenantId);
     const current = open.find((r) => r.giverPractitionerId === input.giverPractitionerId) ?? null;
@@ -220,7 +243,7 @@ export async function endRevenueShare(...args: Parameters<typeof endRevenueShare
 async function endRevenueShareImpl(raw: unknown): Promise<ActionResult<null>> {
   const gate = await requireSensitive(FORBIDDEN);
   if (!gate.ok) return gate;
-  const { actor } = gate;
+  const { actor, caps } = gate;
   const parsed = EndRevenueShareSchema.safeParse(raw);
   if (!parsed.success) return { ok: false, error: "Datos inválidos.", fieldErrors: parsed.error.flatten().fieldErrors };
   const input = parsed.data;
@@ -230,6 +253,7 @@ async function endRevenueShareImpl(raw: unknown): Promise<ActionResult<null>> {
     await lockRevenueSharesInTx(tx, tenantId);
     const who = await assertSharePractitionersInTx(tx, tenantId, { giverPractitionerId: input.giverPractitionerId });
     if (who !== "ok") return { kind: "error", error: GIVER_NOT_FOUND };
+    if (await principalGiverBlocked(tx, tenantId, caps, input.giverPractitionerId)) return { kind: "error", error: PRINCIPAL_ONLY };
     const open = await openSharesInTx(tx, tenantId);
     const current = open.find((r) => r.giverPractitionerId === input.giverPractitionerId) ?? null;
     // Lo que vio el editor ya no rige (otra pestaña la cambió o la cerró): no se cierra a ciegas la que haya ahora.

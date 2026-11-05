@@ -4,7 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { prismaService as prisma } from "@/lib/db";
 import { mpConnectMode } from "@/lib/env";
 import { logger } from "@/lib/logger";
-import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
+import { getParticularCopagoCents, getPractitionerPriceCentsInTx, resolveBookingCopagoCents } from "@/lib/billing-internal";
 import type { PaymentPolicyInput } from "@/lib/booking-payment-policy-types";
 import type { MpAccountKind } from "@/lib/online-payments-types";
 import type { PublicClinicOnlinePayment } from "@/lib/public-booking-types";
@@ -111,25 +111,40 @@ export async function loadPublicOnlinePayment(
 
 /**
  * Copago del turno que se va a cobrar online, con la MISMA precedencia que la agenda (`resolveBookingCopagoCents`,
- * AUDIT §5.5: turno → cobertura del paciente → obra social → Particular → precio) y la misma cobertura (la última por
- * id, como `listAgendaBookings` y el congelado de `lib/bookings.ts`). El turno recién nace: no tiene copago propio.
+ * AUDIT §5.5: turno → cobertura del paciente → obra social / precio del profesional → Particular → precio) y la misma
+ * cobertura (la última por id, como `listAgendaBookings` y el congelado de `lib/bookings.ts`). El turno recién nace: no
+ * tiene copago propio.
  *
  * TP-D22: si el DNI matcheó una ficha existente pero el contacto tipeado es otro, se cobra como PARTICULAR (no se lee
- * la cobertura): cobrar el copago de la ficha le revelaría a quien tipeó el DNI de otro cuál es su obra social.
+ * la cobertura): cobrar el copago de la ficha le revelaría a quien tipeó el DNI de otro cuál es su obra social. Como
+ * particular, sí con el precio del profesional (es lo que el turnero le mostró: `particularQuoteCents`).
+ *
+ * CF3 PR-C2 (D-CF3-1): `practitionerId` + `serviceId` son obligatorios a propósito: el precio del profesional del par
+ * entra a la escalera y suma `insurerRef.isParticular` (sin él, la fila «Particular» le ganaría al profesional y el
+ * turnero cobraría distinto que la agenda). El servicio ya lo validó el que llama contra el tenant; la lectura del
+ * precio filtra por `tenantId` igual.
  */
 export async function resolvePublicCopagoCents(
   tx: Prisma.TransactionClient,
-  o: { tenantId: string; patientId: string; servicePriceCents: number; contactMismatch: boolean }
+  o: {
+    tenantId: string;
+    patientId: string;
+    practitionerId: string;
+    serviceId: string;
+    servicePriceCents: number;
+    contactMismatch: boolean;
+  }
 ): Promise<number> {
-  const [coverage, particularCopago] = await Promise.all([
+  const [coverage, particularCopago, practitionerPriceCents] = await Promise.all([
     o.contactMismatch
       ? Promise.resolve(null)
       : tx.coverage.findFirst({
           where: { patientId: o.patientId, patient: { tenantId: o.tenantId } },
           orderBy: { id: "desc" },
-          select: { copagoCents: true, insurerRef: { select: { copagoCents: true } } },
+          select: { copagoCents: true, insurerRef: { select: { copagoCents: true, isParticular: true } } },
         }),
     getParticularCopagoCents(o.tenantId, tx),
+    getPractitionerPriceCentsInTx(tx, o.tenantId, o.practitionerId, o.serviceId),
   ]);
   return resolveBookingCopagoCents({
     bookingOverride: null,
@@ -138,6 +153,8 @@ export async function resolvePublicCopagoCents(
     insurerCopago: coverage?.insurerRef ? coverage.insurerRef.copagoCents : null,
     particularCopago,
     servicePriceCents: o.servicePriceCents,
+    practitionerPriceCents,
+    insurerIsParticular: coverage?.insurerRef?.isParticular === true,
   });
 }
 

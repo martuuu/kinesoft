@@ -66,11 +66,15 @@ const ROLE_EQ = /(?:===|!==)\s*["'](?:OWNER|ADMIN)["']|["'](?:OWNER|ADMIN)["']\s
 
 /** Congelado en PL-1b. `lib/roles.ts` y `lib/capabilities.ts` son LA regla (`isClinicalMember`, `capabilitiesForMember`). */
 const ROLE_EQ_ALLOW: Record<string, number> = {
-  "app/(app)/configuracion/page.tsx": 1,
+  // CT-INT (CF3b, H4): 0 (era 1): los titulares de los consultorios bloqueados salen de `canExportTenantData`.
+  "app/(app)/configuracion/page.tsx": 0,
   "app/(app)/pacientes/[id]/page.tsx": 2,
-  "app/suspendido/page.tsx": 3,
-  // PL-F1b: Soporte para todos sacó las comparaciones de rol de las pestañas; quedan 2 (eran 8).
-  "components/configuracion/configuracion-client.tsx": 2,
+  // CT-INT (H4): 2 (era 3): el export va por `canExportTenantData`; quedan las 2 del contacto con soporte (OWNER/ADMIN
+  //   del bloqueo, + `isCoOwner`).
+  "app/suspendido/page.tsx": 2,
+  // PL-F1b: Soporte para todos sacó las comparaciones de rol de las pestañas; quedaban 2 (eran 8). CT-INT (H4): 0, el
+  //   export del activo sale de `account.export` (`exportActive`, lo calcula la página).
+  "components/configuracion/configuracion-client.tsx": 0,
   // T3d-1g: General va por capability (`tenant.admin` / `tenant.sensitive`, eran 4); controls y Usuarios ya no tenían
   // las que les quedaban (3 → 0 y 7 → 5).
   "components/configuracion/controls.tsx": 0,
@@ -79,7 +83,8 @@ const ROLE_EQ_ALLOW: Record<string, number> = {
   "components/layout/access-banner.tsx": 2,
   "components/plataforma/team/team-logic.ts": 2,
   "components/plataforma/team/team-panel.tsx": 2,
-  "lib/capabilities.ts": 2,
+  // CT-K1: 1 (era 2): el `role === "OWNER"` de `capabilitiesForMember` pasó a `isPrincipalOwner` (roles-core).
+  "lib/capabilities.ts": 1,
   "lib/invitations.ts": 2,
   "lib/onboarding-internal.ts": 1,
   "lib/onboarding-logic.ts": 1,
@@ -91,8 +96,9 @@ const ROLE_EQ_ALLOW: Record<string, number> = {
   // PV TK-U2: /contacto ofrece el form de sesión solo a Titular/Admin de un consultorio bloqueado (misma regla que
   //   lib/tickets.ts, sin Actor).
   "app/contacto/page.tsx": 2,
-  // T3a-0z2: `isClinicalMember` (OWNER con `clinical`) se mudó a roles-core.
-  "lib/roles-core.ts": 1,
+  // T3a-0z2: `isClinicalMember` (OWNER con `clinical`) se mudó a roles-core. CT-K1: + `isPrincipalOwner` (= role
+  //   OWNER), LA regla de «es el principal» que sacó la de capabilities.ts y la de tenant-export-logic.ts.
+  "lib/roles-core.ts": 2,
   // PL-1c (misma ola) sumó 7 en team-internal y 1 en invite-activation, revisadas en PL-1b: miran el rol del
   // miembro DESTINO («nunca sobre el Titular», C-PL3/PL-D5: el ADMIN invitado nace con «Configuración»), no deciden
   // qué puede el actor. Eran 11 en HEAD 14eb013. Integrador PL-1: 19 en team-internal (§20.17: «¿Atiende?» solo
@@ -102,7 +108,8 @@ const ROLE_EQ_ALLOW: Record<string, number> = {
   "lib/invite-activation-internal.ts": 0,
   "lib/saas-plan-change-internal.ts": 2,
   "lib/team-internal.ts": 19,
-  "lib/tenant-export-logic.ts": 1,
+  // CT-K1: 0 (era 1): el export va por `canExportTenantData` (principal o co-titular).
+  "lib/tenant-export-logic.ts": 0,
   // H-PL1: eran 6 (`role === OWNER || role === ADMIN` ×3); ahora resuelve por miembro.
   "lib/visibility.ts": 0,
 };
@@ -152,6 +159,28 @@ describe("[PL-1b] guard de titularidad y acceso por miembro", () => {
       expect(caps.has("account.owner")).toBe(false);
     }
     expect(capabilitiesForMember({ role: "OWNER", clinical: false, grantSettings: false, grantBilling: false }).has("account.owner")).toBe(true);
+  });
+
+  it("[CT-K1-5] el co-titular nunca tiene account.billing ni account.owner (ninguna delegación se los da)", () => {
+    for (const clinical of [true, false]) {
+      for (const grantSettings of [true, false]) {
+        for (const grantBilling of [true, false]) {
+          const caps = capabilitiesForMember({ role: "PRACTITIONER", clinical, grantSettings, grantBilling, grantCoOwner: true });
+          expect(caps.has("account.billing"), JSON.stringify({ clinical, grantSettings, grantBilling })).toBe(false);
+          expect(caps.has("account.owner")).toBe(false);
+          // Lo que sí: las funciones de Titular que comparte con el principal.
+          expect(caps.has("account.manage")).toBe(true);
+          expect(caps.has("account.export")).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("[CT-K1-6] ninguna lectura de MemberAccess con un select a mano (sin grantCoOwner): va `MEMBER_ACCESS_SELECT`", () => {
+    // Un select copiado a mano no trae `grantCoOwner` y el co-titular pasaría por Profesional común (falla cerrado,
+    // pero rompe el co-titular sin que nada avise). `MEMBER_ACCESS_SELECT` es el único lugar que lo lista.
+    const INLINE = /select:\s*\{\s*role:\s*true,\s*clinical:\s*true,\s*grantSettings:\s*true,\s*grantBilling:\s*true\s*\}/g;
+    expect(countBy(INLINE)).toEqual({});
   });
 
   it("SUPPORT_CAPS sin account.* (ni clinical.read ni plans.manage)", () => {

@@ -24,18 +24,19 @@ import { findUsablePayerPlan } from "@/lib/catalog-validate";
 import { auditInTx } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { notify, notifyTenantOwners } from "@/lib/notifications-internal";
-import { resolveBookingCopagoCents } from "@/lib/billing-internal";
+import { getPractitionerPriceCentsInTx, resolveBookingCopagoCents } from "@/lib/billing-internal";
 import { resolveInsurerName } from "@/lib/insurers-internal";
 // P0-S02a (E0): `visibilityForActor` salió con `getPatient`, su único uso acá.
 import { patientAccessFor, bulkPatientAccess } from "@/lib/visibility";
 import {
+  billingPreviewSource,
+  type BillingPreviewSource,
   patientBillableCountInTx,
   patientBookingsAllInTx,
   patientBookingsSummaryInTx,
   patientCoreInTx,
   resolvePatientBillingInTx,
   seesBookings,
-  type PatientBilling,
 } from "@/lib/patients-profile-internal";
 import { hcAccessError } from "@/lib/patient-access-internal";
 import { env } from "@/lib/env";
@@ -224,11 +225,6 @@ export async function getPatientBillableCount(patientId: string) {
   // P0-S07sp: el estado de cobro es administrativo (PD-13) → `admin` también.
   if (!seesBookings(access)) return 0;
   return runWithRls(actor.tenantId, (tx) => patientBillableCountInTx(tx, actor, patientId, access));
-}
-
-/** PF2-b: delega en `resolvePatientBillingInTx` (lib/patients-profile-internal.ts) con una tx propia. */
-async function resolvePatientBilling(patientId: string, tenantId: string): Promise<PatientBilling> {
-  return runWithRls(tenantId, (tx) => resolvePatientBillingInTx(tx, patientId, tenantId));
 }
 
 /**
@@ -962,15 +958,22 @@ async function setPatientCoverageImpl(input: {
  * `serviceId` opcional: sin él se usa el primer servicio del tenant en el
  * orden del modal (`listServices`, nombre asc). El modal lo re-consulta al
  * cambiar de servicio. `source` dice de qué escalón salió el monto.
+ *
+ * CF3 PR-C2 (D-CF3-1): `practitionerId` opcional = el profesional del turno. Con él entra a la escalera
+ * `PractitionerService.priceCents` de ese par (y `source` = «precio del profesional» cuando gana ese escalón), igual
+ * que la agenda, el link de pago y el turnero (paridad en tests/integration/cf3-ladder-callers.test.ts). Sin él, la
+ * conducta de antes de CF3. Se valida contra el tenant en la misma lectura (`where: { tenantId }`): un id de otro
+ * consultorio o inexistente no trae fila y cotiza como sin profesional, sin error (es una lectura de preview).
  * Returns null when the actor has `basic`/`none` access to the patient.
  */
 export async function getPatientBillingPreview(
   patientId: string,
-  serviceId?: string
+  serviceId?: string,
+  practitionerId?: string
 ): Promise<{
   obraSocial: string;
   copagoCents: number;
-  source: "OS" | "copago propio" | "Particular" | "precio del servicio";
+  source: BillingPreviewSource;
   /** Servicio cuyo precio se usó (el pedido, o el default si no vino). */
   serviceId: string | null;
 } | null> {
@@ -979,16 +982,21 @@ export async function getPatientBillingPreview(
   // T3c-1b (§23.5): el monto y la OS son datos de cobro, no HC: los lee todo nivel `admin` (Secretaria, Admin,
   // Facturación, Titular sin agenda), que es quien carga turnos y cobra. `basic` (kine ajeno) sigue sin verlo.
   if (access !== "full" && access !== "admin") return null;
-  const [b, service] = await Promise.all([
-    resolvePatientBilling(patientId, actor.tenantId),
-    runWithRls(actor.tenantId, (tx) =>
-      tx.service.findFirst({
-        where: { tenantId: actor.tenantId, ...(serviceId ? { id: serviceId } : {}) },
-        orderBy: { name: "asc" },
-        select: { id: true, priceCents: true },
-      })
-    ),
-  ]);
+  // Por RPC llega cualquier cosa: un id que no es un string corto se ignora (= sin profesional), no llega a Prisma.
+  const proId = typeof practitionerId === "string" && practitionerId.length > 0 && practitionerId.length <= 64
+    ? practitionerId
+    : null;
+  // Una sola tx (antes eran dos en paralelo: la cobertura con una tx propia y el servicio en otra).
+  const { b, service, practitionerPriceCents } = await runWithRls(actor.tenantId, async (tx) => {
+    const billing = await resolvePatientBillingInTx(tx, patientId, actor.tenantId);
+    const svc = await tx.service.findFirst({
+      where: { tenantId: actor.tenantId, ...(serviceId ? { id: serviceId } : {}) },
+      orderBy: { name: "asc" },
+      select: { id: true, priceCents: true },
+    });
+    const pro = svc && proId ? await getPractitionerPriceCentsInTx(tx, actor.tenantId, proId, svc.id) : null;
+    return { b: billing, service: svc, practitionerPriceCents: pro };
+  });
   const copagoCents = resolveBookingCopagoCents({
     bookingOverride: null,
     coverageOverride: b.coverageOverride,
@@ -996,18 +1004,15 @@ export async function getPatientBillingPreview(
     insurerCopago: b.insurerCopago,
     particularCopago: b.particularCopago,
     servicePriceCents: service?.priceCents ?? 0,
+    practitionerPriceCents,
+    insurerIsParticular: b.isParticular,
   });
-  // Mismo orden que el resolver (lib/copago.ts), solo para etiquetar la fuente.
-  const source = b.hasCoverage
-    ? b.coverageOverride != null
-      ? "copago propio"
-      : b.insurerCopago != null
-        ? b.isParticular ? "Particular" : "OS"
-        : "precio del servicio"
-    : b.particularCopago != null
-      ? "Particular"
-      : "precio del servicio";
-  return { obraSocial: b.obraSocial, copagoCents, source, serviceId: service?.id ?? null };
+  return {
+    obraSocial: b.obraSocial,
+    copagoCents,
+    source: billingPreviewSource(b, practitionerPriceCents),
+    serviceId: service?.id ?? null,
+  };
 }
 
 /**
@@ -1223,38 +1228,44 @@ export async function sendPatientPortalInvite(input: {
   // (o una sesión de soporte) mandaba la invitación igual.
   const readOnly = writableError(actor);
   if (readOnly) return { ok: false, error: readOnly };
-  const patient = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
-    where: { id: input.patientId, tenantId: actor.tenantId },
-    select: {
-      id: true,
-      firstName: true,
-      lastName: true,
-      email: true,
-      userId: true,
-      tenant: { select: { slug: true, name: true, publicEmail: true } },
-    },
-  }));
-  if (!patient) return { ok: false, error: "Paciente no encontrado." };
-  // A2a-S08: invitar al portal expone la historia del paciente → acceso `full`.
-  if ((await patientAccessFor(actor, patient.id)) !== "full") {
-    return { ok: false, error: "No tenés acceso completo a este paciente: solo podés verlo." };
-  }
-  if (!patient.email) {
-    return { ok: false, error: "El paciente no tiene email cargado." };
-  }
-  const email = patient.email.trim().toLowerCase();
-
-  const staffHere = await runWithRls(actor.tenantId, (tx) => tx.membership.findMany({
-    where: { tenantId: actor.tenantId, user: { email: emailEqualsFilter(email) } },
-    select: { user: { select: { email: true } } },
-    take: 5,
-  }));
-  if (staffHere.some((m) => sameEmail(m.user.email, email))) {
-    return {
-      ok: false,
-      error: "Ese email es de alguien del equipo del consultorio: el portal de pacientes es para otro email.",
-    };
-  }
+  // CF3 ZF2: paciente, acceso y equipo en UNA tx (antes eran tres `runWithRls` sueltos: tres BEGIN/COMMIT y tres
+  // set_config del GUC por invitación). Mismo orden de cortes y mismos mensajes; el mail y el audit siguen afuera.
+  const gate = await runWithRls(actor.tenantId, async (tx) => {
+    const patient = await tx.patient.findFirst({
+      where: { id: input.patientId, tenantId: actor.tenantId },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        userId: true,
+        tenant: { select: { slug: true, name: true, publicEmail: true } },
+      },
+    });
+    if (!patient) return { ok: false as const, error: "Paciente no encontrado." };
+    // A2a-S08: invitar al portal expone la historia del paciente → acceso `full`.
+    if ((await patientAccessFor(actor, patient.id, tx)) !== "full") {
+      return { ok: false as const, error: "No tenés acceso completo a este paciente: solo podés verlo." };
+    }
+    if (!patient.email) {
+      return { ok: false as const, error: "El paciente no tiene email cargado." };
+    }
+    const email = patient.email.trim().toLowerCase();
+    const staffHere = await tx.membership.findMany({
+      where: { tenantId: actor.tenantId, user: { email: emailEqualsFilter(email) } },
+      select: { user: { select: { email: true } } },
+      take: 5,
+    });
+    if (staffHere.some((m) => sameEmail(m.user.email, email))) {
+      return {
+        ok: false as const,
+        error: "Ese email es de alguien del equipo del consultorio: el portal de pacientes es para otro email.",
+      };
+    }
+    return { ok: true as const, patient, email };
+  });
+  if (!gate.ok) return { ok: false, error: gate.error };
+  const { patient, email } = gate;
 
   // A3a-S-rl: cada llamada manda un mail y no había límite (spam + cuota de
   // envío). 10/h por actor + 1 cada 10 min por destinatario (hash del email,

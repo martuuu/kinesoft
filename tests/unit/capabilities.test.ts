@@ -14,6 +14,9 @@ import {
   canManageBlocksFor,
   canOperateBooking,
   canWriteClinical,
+  isCoOwner,
+  isPrincipalOwner,
+  MEMBER_ACCESS_SELECT,
   type Capability,
   type PatientAccessLevel,
 } from "@/lib/capabilities";
@@ -279,6 +282,77 @@ describe("[AS-1k1] canCollectCopago = collect || (collectOwn && turno propio)", 
     expect(canCollectCopago(m("OWNER", false), null, other)).toBe(true);
     expect(canCollectCopago(m("PRACTITIONER"), me, me)).toBe(true);
     expect(canCollectCopago(m("PRACTITIONER"), me, other)).toBe(false);
+  });
+});
+
+/*
+ * CT-K1 (CF3b, contrato de Martin del 05-nov): «Co-titular» = `Membership.grantCoOwner` (M23, solo PRACTITIONER, CHECK
+ * en la base). Tiene lo del Titular SALVO (a) tocar rol, permisos o cuenta del Titular principal, (b) transferir la
+ * titularidad, (c) dar o quitar «Co-titular» y (d) nada de la suscripción al SaaS (nunca `account.billing`, aunque
+ * tenga `grantBilling`). Sí exporta (siempre es profesional). La matriz de cuenta, con los mismos nombres que
+ * lib/capabilities.ts:
+ *   account.owner   → solo el Titular principal (a, b, c y las cuentas externas a su nombre: MP del consultorio, WhatsApp)
+ *   account.billing → principal; el resto por `grantBilling`; NUNCA Secretaria, Facturación ni co-titular
+ *   account.manage  → principal y co-titular (delegar «Configuración», gestionar el equipo como Titular, anular notas ajenas)
+ *   account.export  → principal y co-titular (export completo del consultorio)
+ */
+describe("[CT-K1-1] co-titular (Membership.grantCoOwner, M23) — matriz exacta", () => {
+  const CO_OWNER_EXPECTED = [...ROLE_DEFAULT_ALL, "account.export", "account.manage"].sort();
+  const BOOLS = [true, false] as const;
+
+  it("[CT-K1-1] co-titular = todo lo del Titular que atiende + account.manage + account.export; nunca account.billing ni account.owner (con cualquier delegación)", () => {
+    for (const clinical of BOOLS) {
+      for (const grantSettings of BOOLS) {
+        for (const grantBilling of BOOLS) {
+          const caps = capabilitiesForMember({ role: "PRACTITIONER", clinical, grantSettings, grantBilling, grantCoOwner: true });
+          expect([...caps].sort(), JSON.stringify({ clinical, grantSettings, grantBilling })).toEqual(CO_OWNER_EXPECTED);
+        }
+      }
+    }
+  });
+
+  it("[CT-K1-2] Titular principal: account.owner, account.billing, account.manage y account.export, atienda o no", () => {
+    for (const clinical of BOOLS) {
+      const caps = capabilitiesForMember({ role: "OWNER", clinical, grantSettings: false, grantBilling: false });
+      for (const c of ["account.owner", "account.billing", "account.manage", "account.export"] as const) {
+        expect(caps.has(c), `${c} clinical=${clinical}`).toBe(true);
+      }
+    }
+    // El que no atiende sigue sin lo clínico (decisión 8): la titularidad no abre la HC.
+    expect(capabilitiesForMember({ role: "OWNER", clinical: false, grantSettings: false, grantBilling: false }).has("clinical.read")).toBe(false);
+  });
+
+  it("[CT-K1-3] account.manage y account.export: nadie más, con ninguna delegación; grantCoOwner fuera de PRACTITIONER no suma nada (falla cerrado)", () => {
+    for (const role of ["ADMIN", "PRACTITIONER", "ASSISTANT", "BILLING"] as Role[]) {
+      for (const g of BOOLS) {
+        const caps = capabilitiesForMember({ role, clinical: true, grantSettings: g, grantBilling: g });
+        expect(caps.has("account.manage"), role).toBe(false);
+        expect(caps.has("account.export"), role).toBe(false);
+      }
+    }
+    // El CHECK de M23 no deja grabar grantCoOwner en otro rol; si una fila de test o un dato viejo lo trae, nada cambia.
+    for (const role of ["OWNER", "ADMIN", "ASSISTANT", "BILLING"] as Role[]) {
+      const base = { role, clinical: true, grantSettings: true, grantBilling: true };
+      expect([...capabilitiesForMember({ ...base, grantCoOwner: true })].sort(), role).toEqual([...capabilitiesForMember(base)].sort());
+    }
+    // `grantCoOwner` ausente = false (los fixtures viejos que no lo traen no ganan nada).
+    expect(capabilitiesForMember({ role: "PRACTITIONER", clinical: true, grantSettings: false, grantBilling: false }).has("account.manage")).toBe(false);
+  });
+
+  it("[CT-K1-4] isPrincipalOwner (= role OWNER) e isCoOwner (PRACTITIONER + grantCoOwner)", () => {
+    expect(isPrincipalOwner({ role: "OWNER" })).toBe(true);
+    for (const role of ["ADMIN", "PRACTITIONER", "ASSISTANT", "BILLING"] as Role[]) expect(isPrincipalOwner({ role })).toBe(false);
+    expect(isCoOwner({ role: "PRACTITIONER", grantCoOwner: true })).toBe(true);
+    expect(isCoOwner({ role: "PRACTITIONER", grantCoOwner: false })).toBe(false);
+    expect(isCoOwner({ role: "PRACTITIONER" })).toBe(false);
+    for (const role of ["OWNER", "ADMIN", "ASSISTANT", "BILLING"] as Role[]) expect(isCoOwner({ role, grantCoOwner: true }), role).toBe(false);
+  });
+
+  it("[CT-K1-4] MEMBER_ACCESS_SELECT trae grantCoOwner (misma fila, sin query extra) y el default por rol nunca trae las de cuenta", () => {
+    expect(MEMBER_ACCESS_SELECT).toEqual({ role: true, clinical: true, grantSettings: true, grantBilling: true, grantCoOwner: true });
+    for (const role of ROLES) {
+      expect([...capabilitiesFor(role)].filter((c) => c.startsWith("account.")), role).toEqual([]);
+    }
   });
 });
 

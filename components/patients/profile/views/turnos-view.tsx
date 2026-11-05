@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition, type CSSProperties } from "react";
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -26,8 +26,90 @@ import {
   shouldGroupByPlan,
   type PlanGroupMeta,
 } from "@/components/planes/plan-booking-groups";
+import { CONTACT_MENU_COPY, isShareableRow } from "@/components/patients/contact-actions-logic";
+import type { PatientShareBundle } from "@/lib/patient-share-types";
+import { menuKeyStep } from "@/components/fichas/ficha-menu";
+import contactStyles from "@/components/patients/contact-actions.module.css";
 import tableStyles from "./profile-table.module.css";
 import heroStyles from "../hero.module.css";
+
+/**
+ * CF3 (D-CF3-8, SH-U): «Compartir por WhatsApp» y «Copiar recordatorio» por fila. El contacto, el consultorio y la
+ * sede salen de `getPatientShareBundle`, que baja con el panel diferido del teléfono (`contact-actions.tsx`): se pide
+ * al abrir el menú de la fila (y se precarga en hover/foco), así el click del ítem ya tiene el link armado.
+ */
+const loadContactActions = () => import("@/components/patients/contact-actions");
+type ContactActionsModule = Awaited<ReturnType<typeof loadContactActions>>;
+type RowShareState = { mod: ContactActionsModule; bundle: PatientShareBundle };
+
+function useRowShare(patientId: string, firstName: string) {
+  const toast = useToast();
+  const [ready, setReady] = useState<RowShareState | null>(null);
+  const inflight = useRef<Promise<RowShareState | null> | null>(null);
+  const prepare = useCallback((): Promise<RowShareState | null> => {
+    if (!inflight.current) {
+      inflight.current = loadContactActions()
+        .then(async (mod) => {
+          const next = { mod, bundle: await mod.loadRowShareBundle(patientId) };
+          setReady(next);
+          return next;
+        })
+        .catch((e) => {
+          console.error("contact-actions chunk failed", e);
+          return null;
+        })
+        .finally(() => {
+          // Siguiente apertura: vuelve a pedir (la caché de 30 s del módulo evita la lectura repetida).
+          inflight.current = null;
+        });
+    }
+    return inflight.current;
+  }, [patientId]);
+
+  const reminderOf = (s: RowShareState, b: PatientBookingFull) =>
+    s.mod.rowShareFor(
+      s.bundle,
+      { id: b.id, serviceName: b.serviceName, scheduledFor: b.scheduledFor, durationMin: b.durationMin, status: b.status },
+      firstName
+    );
+
+  const whatsApp = (b: PatientBookingFull) => {
+    if (ready) {
+      window.open(reminderOf(ready, b).href, "_blank", "noopener");
+      return;
+    }
+    // Todavía sin el bundle: la ventana se abre YA (dentro del click; después de un `await` el navegador la bloquea)
+    // y se le pone la dirección cuando llega.
+    const w = window.open("", "_blank");
+    void prepare().then((s) => {
+      if (!s) {
+        w?.close();
+        toast.error(CONTACT_MENU_COPY.rowUnavailable);
+        return;
+      }
+      if (w) {
+        w.opener = null;
+        w.location.href = reminderOf(s, b).href;
+      }
+    });
+  };
+
+  const copy = async (b: PatientBookingFull) => {
+    const s = ready ?? (await prepare());
+    if (!s) {
+      toast.error(CONTACT_MENU_COPY.rowUnavailable);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(reminderOf(s, b).text);
+      toast.success("Recordatorio copiado");
+    } catch {
+      toast.error(CONTACT_MENU_COPY.copyFailed, { description: CONTACT_MENU_COPY.copyFailedDetail });
+    }
+  };
+
+  return { prepare, whatsApp, copy };
+}
 
 /** Turnos tab columns: Fecha+hora · Servicio · Obra social · Copago · Duración · Estado · acciones. */
 const TURNOS_COLS = "120px 1.2fr 1fr 90px 72px 96px 40px";
@@ -107,6 +189,8 @@ export type TurnosViewProps = {
   planBalances?: PatientPlanBalances | null;
   /** Acceso full + `clinical.read`. Sin esto el grupo muestra la disciplina, nunca el título. */
   showPlanTitles?: boolean;
+  /** CF3 (SH-U): nombre de pila para el recordatorio por fila si el bundle no llega (el bundle trae el suyo). */
+  patientFirstName?: string;
 };
 
 export function TurnosView({
@@ -122,9 +206,11 @@ export function TurnosView({
   plans = null,
   planBalances = null,
   showPlanTitles = false,
+  patientFirstName = "",
 }: TurnosViewProps) {
   const readOnly = readOnlyProp || admin;
   const toast = useToast();
+  const share = useRowShare(patientId, patientFirstName);
   const confirm = useConfirm();
   const [pending, start] = useTransition();
   // `setBookingStatus` devuelve la nueva versión (`data.updatedAt`): se guarda
@@ -263,6 +349,10 @@ export function TurnosView({
     const cancelled = b.status === "CANCELLED";
     const ord = plan ? bookingPlanOrdinal(b, plan) : null;
     const billable = isBillableBooking(b);
+    // CF3 (SH-U): futuros y no cancelados/ausentes; sin acceso de escritura sigue (la Secretaria es quien más manda).
+    const rowShare = isShareableRow(b, now)
+      ? { onOpen: () => void share.prepare(), onWhatsApp: () => share.whatsApp(b), onCopy: () => void share.copy(b) }
+      : null;
     return (
       <div
         key={b.id}
@@ -301,7 +391,9 @@ export function TurnosView({
         {/* B4b: la acción es la última celda en escritorio y va arriba a la derecha de la card bajo 768 (`.actions`). */}
         <span className={tableStyles.actions} style={{ justifySelf: "end" }}>
           {readOnly ? (
-            admin ? (
+            admin && rowShare ? (
+              <TurnoActionsMenu booking={b} share={rowShare} disabled={false} admin />
+            ) : admin ? (
               <Link
                 href={`/agenda?view=timeline&date=${toARDateKey(d)}`}
                 style={{ fontSize: 12, fontWeight: 600, color: "var(--sky-700)", textDecoration: "none" }}
@@ -315,6 +407,7 @@ export function TurnosView({
               onStatus={(s) => void setStatus(b, s)}
               onDelete={canDeleteFromProfile(b) ? () => void remove(b) : undefined}
               disabled={pending}
+              share={rowShare}
             />
           )}
         </span>
@@ -360,33 +453,70 @@ export function TurnosView({
   );
 }
 
+/** Ítems del menú por fila que pueden tomar foco (los deshabilitados se saltean). */
+function menuItems(menu: HTMLElement | null): HTMLElement[] {
+  return Array.from(menu?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? []);
+}
+
+type RowShareActions = { onOpen: () => void; onWhatsApp: () => void; onCopy: () => void };
+
 function TurnoActionsMenu({
   booking,
   onStatus,
   onDelete,
   disabled,
+  share = null,
+  admin = false,
 }: {
   booking: PatientBookingFull;
-  onStatus: (s: PatientBookingFull["status"]) => void;
+  /** Ausente (nivel `admin`) = sin cambios de estado: se operan en la agenda. */
+  onStatus?: (s: PatientBookingFull["status"]) => void;
   /** Ausente = sin "Eliminar" (turno de plan, `canDeleteFromProfile`). */
   onDelete?: () => void;
   disabled: boolean;
+  /** CF3 (SH-U): «Compartir por WhatsApp» / «Copiar recordatorio» (solo filas futuras no canceladas). */
+  share?: RowShareActions | null;
+  /**
+   * CF3 (SH-U): nivel `admin`. «Ver en agenda» pasa a ser un menú «Opciones» con el compartir + «Ver en agenda» (antes
+   * era el único link de la fila).
+   */
+  admin?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
+    return () => window.removeEventListener("mousedown", onDown);
   }, [open]);
+  // CF3 ZF3 (revisor de UI): el menú no se manejaba con teclado (solo Esc global). Ahora como el del teléfono
+  // (`contact-actions.tsx`) y `FichaMenu`: foco en el primer ítem al abrir, flechas/Home/End con `menuKeyStep`, Esc
+  // cierra y devuelve el foco al botón, Tab cierra.
+  useEffect(() => {
+    if (open) menuItems(menuRef.current)[0]?.focus();
+  }, [open]);
+  const close = (refocus: boolean) => {
+    setOpen(false);
+    if (refocus) triggerRef.current?.focus();
+  };
+  const onMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const all = menuItems(menuRef.current);
+    const step = menuKeyStep(e.key, all.indexOf(document.activeElement as HTMLElement), all.length);
+    if (step === "close") {
+      e.preventDefault();
+      close(true);
+    } else if (step === "tab") {
+      close(false);
+    } else if (typeof step === "number") {
+      e.preventDefault();
+      all[step]?.focus();
+    }
+  };
 
   const dateKey = toARDateKey(new Date(booking.scheduledFor));
   const itemStyle: React.CSSProperties = {
@@ -396,35 +526,58 @@ function TurnoActionsMenu({
     display: "flex", alignItems: "center", boxSizing: "border-box", textDecoration: "none",
   };
   const Item = ({ label, onClick, danger }: { label: string; onClick: () => void; danger?: boolean }) => (
-    <button type="button" disabled={disabled} onClick={() => { setOpen(false); onClick(); }} style={{ ...itemStyle, color: danger ? "var(--danger-fg)" : "var(--navy-700)" }}>
+    <button type="button" role="menuitem" tabIndex={-1} disabled={disabled} onClick={() => { setOpen(false); onClick(); }} style={{ ...itemStyle, color: danger ? "var(--danger-fg)" : "var(--navy-700)" }}>
       {label}
     </button>
   );
+  const sep = <div role="none" style={{ height: 1, background: "rgba(15,30,51,0.08)", margin: "2px 0" }} />;
 
   return (
     <div ref={ref} style={{ position: "relative", justifySelf: "end" }}>
       <button
+        ref={triggerRef}
         type="button"
-        aria-label="Acciones del turno"
-        aria-haspopup="true"
+        className={admin ? contactStyles.rowMenuTrigger : contactStyles.rowMenuDots}
+        aria-label={admin ? CONTACT_MENU_COPY.rowMenuLabel : "Acciones del turno"}
+        aria-haspopup="menu"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        style={{ width: 30, height: 30, borderRadius: 8, border: "none", background: open ? "rgba(15,30,51,0.06)" : "transparent", cursor: "pointer", color: "var(--navy-500)", fontSize: 18, lineHeight: 1, fontWeight: 700 }}
+        onClick={() => {
+          if (!open) share?.onOpen();
+          setOpen((v) => !v);
+        }}
+        onPointerEnter={share?.onOpen}
+        onFocus={share?.onOpen}
+        style={
+          admin
+            ? { padding: "0 8px", borderRadius: 8, border: "none", background: open ? "rgba(15,30,51,0.06)" : "transparent", cursor: "pointer", color: "var(--sky-700)", fontSize: 12, fontWeight: 600 }
+            : { borderRadius: 8, border: "none", background: open ? "rgba(15,30,51,0.06)" : "transparent", cursor: "pointer", color: "var(--navy-500)", fontSize: 18, lineHeight: 1, fontWeight: 700 }
+        }
       >
-        ⋯
+        {admin ? `${CONTACT_MENU_COPY.rowMenu} ▾` : "⋯"}
       </button>
       {open && (
-        <div role="menu" className="k-glass-strong" style={{ position: "absolute", top: "calc(100% + 2px)", right: 0, width: 190, borderRadius: 12, padding: 6, zIndex: 30, display: "grid", gap: 2 }}>
-          <Item label="Confirmar" onClick={() => onStatus("CONFIRMED")} />
-          <Item label="Marcar hecho" onClick={() => onStatus("COMPLETED")} />
-          <Item label="Marcar ausente" onClick={() => onStatus("NO_SHOW")} />
-          <Item label="Cancelar turno" onClick={() => onStatus("CANCELLED")} />
-          <Link href={`/agenda?view=timeline&date=${dateKey}`} style={itemStyle} onClick={() => setOpen(false)}>
-            Abrir en agenda
+        <div ref={menuRef} role="menu" aria-label={admin ? CONTACT_MENU_COPY.rowMenuLabel : "Acciones del turno"} onKeyDown={onMenuKeyDown} className="k-glass-strong" style={{ position: "absolute", top: "calc(100% + 2px)", right: 0, width: 210, borderRadius: 12, padding: 6, zIndex: 30, display: "grid", gap: 2 }}>
+          {onStatus && (
+            <>
+              <Item label="Confirmar" onClick={() => onStatus("CONFIRMED")} />
+              <Item label="Marcar hecho" onClick={() => onStatus("COMPLETED")} />
+              <Item label="Marcar ausente" onClick={() => onStatus("NO_SHOW")} />
+              <Item label="Cancelar turno" onClick={() => onStatus("CANCELLED")} />
+            </>
+          )}
+          {share && (
+            <>
+              {onStatus && sep}
+              <Item label={CONTACT_MENU_COPY.rowShare} onClick={share.onWhatsApp} />
+              <Item label={CONTACT_MENU_COPY.rowCopy} onClick={share.onCopy} />
+            </>
+          )}
+          <Link href={`/agenda?view=timeline&date=${dateKey}`} role="menuitem" tabIndex={-1} style={itemStyle} onClick={() => setOpen(false)}>
+            {admin ? CONTACT_MENU_COPY.rowAgenda : "Abrir en agenda"}
           </Link>
           {onDelete && (
             <>
-              <div style={{ height: 1, background: "rgba(15,30,51,0.08)", margin: "2px 0" }} />
+              {sep}
               <Item label="Eliminar" onClick={onDelete} danger />
             </>
           )}

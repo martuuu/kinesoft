@@ -21,6 +21,7 @@
 import type { Role } from "@prisma/client";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { BRAND_NAME } from "@/lib/brand";
+import { canExportTenantData } from "@/lib/capabilities";
 
 /** Versión del formato. Se sube si cambia la forma de `data` (no por sumar una columna a la allowlist). */
 export const TENANT_EXPORT_VERSION = 1;
@@ -245,6 +246,8 @@ export function selectOf(entity: ExportEntity): Record<string, true> {
 export type ExportMembership = {
   tenantId: string;
   role: Role;
+  /** CT-K1 (M23): «Co-titular» (`Membership.grantCoOwner`). Ausente = no (falla cerrado). */
+  grantCoOwner?: boolean;
   acceptedAt: Date | null;
   disabledAt?: Date | null;
 };
@@ -254,12 +257,14 @@ export type ExportTenantChoice =
   | { ok: false; status: 400 | 403; reason: "not_owner" | "choose_tenant" | "user_disabled" };
 
 /**
- * Decide el consultorio del export.
- * - `requestedTenantId` (`?tenant=` de la URL): tiene que ser uno donde la sesión es OWNER; si no, 403 (nunca se
+ * Decide el consultorio del export. «Titular» acá es el principal (OWNER) o, desde CT-K1 (CF3b, contrato de Martin
+ * del 05-nov: «sí exporta los datos, siempre es profesional»), el co-titular: `canExportTenantData`, el mismo
+ * predicado que `account.export` de `capabilitiesForMember`. Hasta CT-K1 era `role === "OWNER"` suelto.
+ * - `requestedTenantId` (`?tenant=` de la URL): tiene que ser uno donde la sesión es titular; si no, 403 (nunca se
  *   «cae» a otro: el usuario pidió ese).
- * - Sin pedido y con consultorio activo (hay Actor): ese, si ahí es OWNER; si es ADMIN/otro rol, 403.
+ * - Sin pedido y con consultorio activo (hay Actor): ese, si ahí es titular; si es ADMIN/otro rol, 403.
  * - Sin Actor (p. ej. su único consultorio está suspendido o dado de baja: `getActor` no entra ahí): el único
- *   consultorio donde es OWNER; con varios, 400 (que elija con `?tenant=`).
+ *   consultorio donde es titular; con varios, 400 (que elija con `?tenant=`).
  * Las membresías llegan crudas (`loadAccessMemberships`): incluyen las de consultorios bloqueados, que es justo
  * lo que BO-D4 necesita. Una membresía no aceptada o deshabilitada nunca cuenta.
  */
@@ -271,7 +276,7 @@ export function chooseExportTenant(p: {
 }): ExportTenantChoice {
   if (p.userDisabled) return { ok: false, status: 403, reason: "user_disabled" };
   const owned = new Set(
-    p.memberships.filter((m) => m.role === "OWNER" && m.acceptedAt && !m.disabledAt).map((m) => m.tenantId)
+    p.memberships.filter((m) => canExportTenantData(m) && m.acceptedAt && !m.disabledAt).map((m) => m.tenantId)
   );
   if (p.requestedTenantId) {
     return owned.has(p.requestedTenantId)

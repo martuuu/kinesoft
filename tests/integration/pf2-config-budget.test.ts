@@ -163,7 +163,9 @@ describe.skipIf(!RUN)("[PF2-d] /configuracion: presupuesto de tx e igualdad con 
     // [CF-U4] Las reglas de agenda de M20 (consultorio y profesional) son columnas en los selects de siempre: ninguna
     // sentencia nueva (42 medidas antes de CF-U4, 30-oct). [CF2-TL] «Mi agenda» y la anticipación de Profesionales
     // (M21) tampoco: columnas de la ficha propia y del select de Profesionales; la del consultorio, de la fila del Tenant.
-    expect(m.statements).toBeLessThanOrEqual(42);
+    // [CT-L] +1 DECLARADA (42 → 43, 05-nov): la matrícula de la persona para «Mi agenda» (`ownLicenseInTx`, UserProfile;
+    // ver la cabecera del loader).
+    expect(m.statements).toBeLessThanOrEqual(43);
 
     asUser(T.userId);
     const [settings, insurers, services, team, pending, conditions, locations, summary, rooms, support] =
@@ -189,9 +191,10 @@ describe.skipIf(!RUN)("[PF2-d] /configuracion: presupuesto de tx e igualdad con 
     // T3e-2c (C-AS3): el loader suma a cada fila el tope del profesional y el del consultorio (`bookingCap`, mismas
     // columnas del mismo select); sin eso, la fila es la del lector.
     // CF-U4: ídem con las reglas de agenda (`agendaRules`). CF2 (T.A/T.B): ídem con la anticipación (`publicLead`) y
-    // con el contacto en el turnero (`leadContactShown`): no existen en el lector viejo.
+    // con el contacto en el turnero (`leadContactShown`): no existen en el lector viejo. CF3 (PR-U): ídem con el switch
+    // propio del turnero y el WhatsApp para OS (`publicBookingEnabled`, `insuredContactShown`, mismo select).
     expect(
-      plain(r.scheduleSummary.map(({ bookingCap: _cap, agendaRules: _rules, publicLead: _lead, leadContactShown: _shown, ...row }) => row))
+      plain(r.scheduleSummary.map(({ bookingCap: _cap, agendaRules: _rules, publicLead: _lead, leadContactShown: _shown, publicBookingEnabled: _pb, insuredContactShown: _ins, ...row }) => row))
     ).toEqual(plain(summary));
     const caps = await db.practitioner.findMany({
       where: { id: { in: summary.map((s) => s.practitionerId) } },
@@ -271,8 +274,8 @@ describe.skipIf(!RUN)("[PF2-d] /configuracion: presupuesto de tx e igualdad con 
     expect(m.transactions).toBeLessThanOrEqual(1);
     // [CF2-TL] 4 medidas antes de CF2 (02-nov, 3 app + 1 service) + 1 DECLARADA: la anticipación del consultorio para
     // «Usar la del consultorio (N)» de «Mi agenda» (sin `tenant.admin` no se lee la fila del Tenant; ver la cabecera
-    // del loader).
-    expect(m.statements).toBeLessThanOrEqual(5);
+    // del loader). [CT-L] +1 DECLARADA (5 → 6, 05-nov): la matrícula de la persona para «Mi agenda».
+    expect(m.statements).toBeLessThanOrEqual(6);
     expect(r.miAgenda?.practitionerId).toBeTruthy();
     expect(r.tenant).toBeNull();
     expect(r.team).toBeNull();

@@ -191,6 +191,17 @@ export function initialWizardSelection(
   return { step: 0, practitionerId: null, mode: "pick" };
 }
 
+/**
+ * CF3 (D-CF3-12): encabezado «Turnos con {Nombre}» cuando se entró por el link propio (`?pro=`). Misma validación que
+ * `initialWizardSelection`: un id que no es de `clinic.practitioners` se ignora en silencio (null). El wizard muestra
+ * además «Ver otros profesionales» solo si hay más de uno.
+ */
+export function entryPractitionerHeading(clinic: PublicClinic, pro: string | null | undefined): string | null {
+  if (!pro) return null;
+  const p = clinic.practitioners.find((x) => x.id === pro);
+  return p ? `Turnos con ${p.name}` : null;
+}
+
 // ─── Idempotencia por instancia (AUDIT §5, A2b-S-pub) ──────────────────
 
 /** Firma de un intento: si cambia profesional, servicio u horario es OTRO
@@ -300,6 +311,13 @@ export type WizardOnlinePayment = {
   baseCents?: number;
   /** true = el paciente declaró obra social: el wizard no promete un monto. */
   coverageDependent?: boolean;
+  /**
+   * CF3 (D-CF3-3): el profesional tiene el precio oculto (`showPublicPrice=false`: no está en `particularQuotes`), así
+   * que el wizard no sabe cuánto cobra el server. No promete número y el interstitial va siempre (`quotedForInterstitial`
+   * devuelve `"coverage"`): «al pagar online el monto se muestra siempre», antes de ir a Mercado Pago. `quote` se calcula
+   * sobre `priceCents` solo para el flujo (como con obra social).
+   */
+  amountHidden?: boolean;
 };
 
 /**
@@ -321,6 +339,19 @@ function declaresObraSocial(clinic: PublicClinic, cov: WizardCoverage | undefine
   return !ins || !ins.isParticular;
 }
 
+/**
+ * CF3: la cotización de un particular con ese profesional (`PublicClinic.particularQuotes`). `undefined` = payload viejo
+ * (sin mapa: conducta de antes); `null` = el server no la mandó (precio oculto, D-CF3-3, o servicio que no ofrece).
+ * Solo cuenta un entero ≥ 0 propio del objeto (no `constructor` ni otra clave heredada: los ids vienen del payload).
+ */
+function knownParticularQuote(clinic: PublicClinic, practitionerId: string, serviceId: string): number | null | undefined {
+  const map = clinic.particularQuotes;
+  if (!map) return undefined;
+  const byService = Object.prototype.hasOwnProperty.call(map, practitionerId) ? map[practitionerId] : undefined;
+  const v = byService && Object.prototype.hasOwnProperty.call(byService, serviceId) ? byService[serviceId] : undefined;
+  return typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null;
+}
+
 function chargingPolicy(clinic: PublicClinic, practitionerId: string | null) {
   const op = clinic.onlinePayment;
   return op && practitionerId && op.practitionerIds.includes(practitionerId) ? op : null;
@@ -330,16 +361,34 @@ export function wizardOnlinePaymentFor(
   clinic: PublicClinic,
   practitionerId: string | null,
   priceCents: number,
-  coverage?: WizardCoverage
+  coverage?: WizardCoverage,
+  /**
+   * CF3 (D-CF3-1): con el servicio, un particular cotiza con `particularQuotes[profesional][servicio]` (lo que el server
+   * resuelve con el precio del profesional: paridad con `decideOnlineCharge` en `cf3-turnero-precio.test.ts`). Sin él
+   * (llamador viejo) o sin el mapa (payload viejo): `particularCopagoCents ?? priceCents`, como en PEND-a.
+   */
+  serviceId?: string | null
 ): WizardOnlinePayment | null {
   const op = chargingPolicy(clinic, practitionerId);
   if (!op) return null;
   const cancellationNote = op.cancellationNote?.trim() || null;
   if (declaresObraSocial(clinic, coverage)) {
-    const quote = quoteTurnero(op, priceCents);
+    // CF3 ZF3 (B6): con el precio del servicio en 0 (oculto, o servicio propio sin precio) `quoteTurnero` da null, pero
+    // el server cobra el copago de la OS (`resolveBookingCopagoCents` no mira el precio si la cobertura tiene copago).
+    // Antes el wizard decía «Lo pagás en el consultorio» y después mandaba a Mercado Pago. Si la política es usable
+    // (cotiza algo sobre una base de prueba), igual se ofrece el cobro sin número: `quote` es un centinela que nadie
+    // muestra (`checkoutCopyFor` solo usa `quote` con cotización exacta) y el interstitial muestra el monto real.
+    const quote = quoteTurnero(op, priceCents) ?? (quoteTurnero(op, POLICY_PROBE_CENTS) ? COVERAGE_SENTINEL_QUOTE : null);
     return quote && { mode: op.mode, quote, cancellationNote, baseCents: priceCents, coverageDependent: true };
   }
-  const base = op.particularCopagoCents ?? priceCents;
+  const known = serviceId ? knownParticularQuote(clinic, practitionerId!, serviceId) : undefined;
+  if (known === null) {
+    // Precio oculto: sin número. Si el precio del servicio da < $1 no se ofrece pagar, pero si el server cobra igual
+    // (`next: "checkout"`), `amountDiffers(…, null)` muestra el monto antes de Mercado Pago.
+    const quote = quoteTurnero(op, priceCents);
+    return quote && { mode: op.mode, quote, cancellationNote, amountHidden: true };
+  }
+  const base = known ?? op.particularCopagoCents ?? priceCents;
   const quote = quoteTurnero(op, base);
   return quote && { mode: op.mode, quote, cancellationNote, baseCents: base };
 }
@@ -353,20 +402,34 @@ export function wizardOnlinePaymentFor(
 export function reservesWithoutOnlinePayment(
   clinic: PublicClinic,
   practitionerId: string | null,
-  coverage?: WizardCoverage
+  coverage?: WizardCoverage,
+  /** CF3: con el servicio y `particularQuotes`, decide sobre la cotización del profesional (Particular en $ 0 con un
+   *  profesional que cobra $ 15.000 SÍ cobra). Precio oculto → false (no se sabe: no se avisa nada). */
+  serviceId?: string | null
 ): boolean {
   const op = chargingPolicy(clinic, practitionerId);
-  if (!op || op.particularCopagoCents == null || declaresObraSocial(clinic, coverage)) return false;
+  if (!op || declaresObraSocial(clinic, coverage)) return false;
+  const known = serviceId ? knownParticularQuote(clinic, practitionerId!, serviceId) : undefined;
+  if (known === null) return false;
+  if (known !== undefined) return quoteTurnero(op, known) === null;
+  if (op.particularCopagoCents == null) return false;
   return quoteTurnero(op, op.particularCopagoCents) === null;
 }
 
 /** «$ 8.000», «Seña de $ 3.000» o, con obra social, «El monto final depende de tu cobertura» (sin número). */
 export function paymentAmountText(p: WizardOnlinePayment): string {
   if (p.coverageDependent) return COVERAGE_DEPENDENT_TEXT;
+  if (p.amountHidden) return HIDDEN_AMOUNT_TEXT;
   return p.quote.chargeKind === "DEPOSIT" ? `Seña de ${formatARS(p.quote.amountCents)}` : formatARS(p.quote.amountCents);
 }
 
+/** Base de prueba ($ 10.000) para saber si una política cobra algo cuando el wizard no conoce la base real. */
+const POLICY_PROBE_CENTS = 1_000_000;
+/** Centinela de `quote` con obra social y base desconocida: no se muestra (`coverageDependent` oculta el número). */
+const COVERAGE_SENTINEL_QUOTE: WizardOnlinePayment["quote"] = { amountCents: 0, chargeKind: "FULL" };
+
 const COVERAGE_DEPENDENT_TEXT = "El monto final depende de tu cobertura";
+const HIDDEN_AMOUNT_TEXT = "Ves el monto antes de ir a pagar";
 
 /**
  * Copia de la regla de montos de `quoteOnlineCharge` (`lib/online-charge-logic.ts`, TP-P3), con paridad fijada por
@@ -427,7 +490,15 @@ export type CheckoutCopy = {
   note: string;
   /** Con seña (§25.10): «Seña a pagar ahora» / «Resto en el consultorio». null = sin seña. */
   split: { nowCents: number; restCents: number } | null;
+  /**
+   * CF3 (decisión 1 de Martin, D-CF3-5): el paciente declaró obra social → el turnero no muestra precio (`showTotal`
+   * false) y muestra `text`. Con `contactAvailable` el wizard pide el WhatsApp a `getInsuredContact`. Clave OMITIDA si
+   * no aplica (los literales de los tests de TP-0 quedan iguales).
+   */
+  insured?: InsuredCheckoutCopy;
 };
+
+export type InsuredCheckoutCopy = { kind: "insured"; contactAvailable: boolean; text: string };
 
 /**
  * Copy del cierre del wizard y del resumen. Sin cobro (o OPTIONAL «pagar en el consultorio»): «Confirmar turno» y «Lo
@@ -438,14 +509,36 @@ export type CheckoutCopy = {
 export function checkoutCopyFor(args: {
   payment?: WizardOnlinePayment | null;
   choice?: PayChoice;
-  priceCents: number;
+  /** CF3: `checkoutPricingFor(...).priceCents`. null = el server no mandó el precio (oculto o con obra social): sin
+   *  fila de total salvo que el cobro online tenga monto exacto. */
+  priceCents: number | null;
   /** PEND-a: `reservesWithoutOnlinePayment(...)` (Particular en $ 0 con cobro prendido). Solo cambia la nota. */
+  withoutOnlinePayment?: boolean;
+  /** CF3: `checkoutPricingFor(...).insured` (declaró obra social). Ausente = la conducta de antes. */
+  insured?: { contactAvailable: boolean; practitionerName: string | null };
+}): CheckoutCopy {
+  const copy = checkoutCopyCore(args);
+  if (!args.insured) return copy;
+  const { contactAvailable, practitionerName } = args.insured;
+  const available = contactAvailable && !!practitionerName;
+  return {
+    ...copy,
+    showTotal: false,
+    insured: { kind: "insured", contactAvailable: available, text: insuredCoverageText(practitionerName, available) },
+  };
+}
+
+function checkoutCopyCore(args: {
+  payment?: WizardOnlinePayment | null;
+  choice?: PayChoice;
+  priceCents: number | null;
   withoutOnlinePayment?: boolean;
 }): CheckoutCopy {
   const p = args.payment ?? null;
   const online = !!p && (p.mode === "REQUIRED" || args.choice === "now");
-  const exact = !!p && !p.coverageDependent;
-  const totalCents = exact ? (p!.baseCents ?? args.priceCents) : args.priceCents;
+  const exact = !!p && !p.coverageDependent && !p.amountHidden;
+  const price = args.priceCents ?? 0;
+  const totalCents = exact ? (p!.baseCents ?? price) : price;
   if (p && online) {
     const deposit = exact && p.quote.chargeKind === "DEPOSIT";
     const mp =
@@ -459,8 +552,13 @@ export function checkoutCopyFor(args: {
       // Con obra social no hay «Total a pagar»: el número de la fila es el valor del servicio, no lo que se cobra.
       totalLabel: deposit || !exact ? "Valor del turno" : "Total a pagar",
       totalCents,
-      showTotal: true,
-      note: exact ? mp : `${COVERAGE_DEPENDENT_TEXT}: lo ves antes de ir a pagar. ${mp}`,
+      // CF3: precio oculto sin monto exacto → sin fila (lo muestra el interstitial antes de Mercado Pago).
+      showTotal: exact || args.priceCents !== null,
+      note: exact
+        ? mp
+        : p.amountHidden
+          ? `${HIDDEN_AMOUNT_TEXT}. ${mp}`
+          : `${COVERAGE_DEPENDENT_TEXT}: lo ves antes de ir a pagar. ${mp}`,
       split: deposit ? { nowCents: p.quote.amountCents, restCents: Math.max(0, totalCents - p.quote.amountCents) } : null,
     };
   }
@@ -482,12 +580,78 @@ export function checkoutCopyFor(args: {
 }
 
 /**
+ * CF3 (D-CF3-5): copy del bloque de cobertura del resumen. Con el WhatsApp del profesional disponible (opt-in), lo
+ * nombra; si no (sin opt-in, `getInsuredContact` → `none`/`rate_limited`, o sin nombre), el consultorio.
+ */
+export function insuredCoverageText(practitionerName: string | null, contactAvailable: boolean): string {
+  return contactAvailable && practitionerName
+    ? `El valor depende de tu cobertura. Consultá con ${practitionerName} si tiene convenio con tu obra social y cuánto te cubre.`
+    : "Consultá tu cobertura con el consultorio.";
+}
+
+/**
+ * CF3 ZF2: el mismo texto, pero sabiendo si `getInsuredContact` ya respondió que no (`none` / `rate_limited` / error).
+ * En ese caso el bloque cae al teléfono del consultorio y el texto no puede seguir diciendo «Consultá con {Nombre}»:
+ * prometería un contacto que no está.
+ */
+export function insuredCoverageTextAfterContact(
+  practitionerName: string | null,
+  contactAvailable: boolean,
+  contactFailed: boolean
+): string {
+  return insuredCoverageText(practitionerName, contactAvailable && !contactFailed);
+}
+
+/** CF3 (D-CF3-5): ¿ofrecer el WhatsApp del profesional a un paciente con obra social? Solo con un profesional ya
+ *  elegido o resuelto (en «cualquier profesional» antes del horario, nunca) y `true` explícito del server. */
+export function insuredContactAvailableFor(clinic: PublicClinic, practitionerId: string | null): boolean {
+  if (!practitionerId) return false;
+  const map = clinic.insuredContactAvailable;
+  return !!map && Object.prototype.hasOwnProperty.call(map, practitionerId) && map[practitionerId] === true;
+}
+
+/**
+ * CF3 (D-CF3-1/3/4): precio del paso de servicio. Con `particularQuotes`: la cotización de un particular con ESE
+ * profesional; null con «cualquier profesional» (D-CF3-4: aparece en el resumen, cuando ya se sabe con quién es) o si el
+ * server no la mandó (precio oculto, D-CF3-3). Sin el mapa (payload viejo): `priceCents` del servicio, como antes
+ * (también en «cualquiera»). El wizard lo pinta si es > 0, igual que hoy.
+ */
+export function particularQuoteFor(clinic: PublicClinic, practitionerId: string | null, serviceId: string): number | null {
+  if (!clinic.particularQuotes) return clinic.services.find((s) => s.id === serviceId)?.priceCents ?? null;
+  if (!practitionerId) return null;
+  return knownParticularQuote(clinic, practitionerId, serviceId) ?? null;
+}
+
+/**
+ * CF3: lo que `checkoutCopyFor` necesita del precio para el resumen (`{ ...checkoutPricingFor(...) }`).
+ *   - Payload viejo (sin `particularQuotes`): `priceCents` del servicio, sin variante insured (conducta de antes).
+ *   - Declaró obra social: sin precio (decisión 1 de Martin: el turnero no lo muestra) + `insured`.
+ *   - Particular: la cotización del profesional (null si está oculta).
+ */
+export function checkoutPricingFor(
+  clinic: PublicClinic,
+  practitionerId: string | null,
+  serviceId: string | null,
+  coverage: WizardCoverage | undefined
+): { priceCents: number | null; insured?: { contactAvailable: boolean; practitionerName: string | null } } {
+  if (!clinic.particularQuotes) {
+    return { priceCents: (serviceId && clinic.services.find((s) => s.id === serviceId)?.priceCents) || 0 };
+  }
+  if (declaresObraSocial(clinic, coverage)) {
+    const practitionerName = clinic.practitioners.find((p) => p.id === practitionerId)?.name ?? null;
+    return { priceCents: null, insured: { contactAvailable: insuredContactAvailableFor(clinic, practitionerId), practitionerName } };
+  }
+  return { priceCents: practitionerId && serviceId ? knownParticularQuote(clinic, practitionerId, serviceId) ?? null : null };
+}
+
+/**
  * PEND-a: lo que el wizard le pasa a `amountDiffers`. null = no prometió cobro (sin cobro u OPTIONAL «en el
- * consultorio»); `"coverage"` = prometió cobro sin número (obra social): el interstitial va siempre.
+ * consultorio»); `"coverage"` = prometió cobro sin número (obra social, o precio oculto de CF3): el interstitial va
+ * siempre.
  */
 export function quotedForInterstitial(payment: WizardOnlinePayment | null, online: boolean): number | "coverage" | null {
   if (!online || !payment) return null;
-  return payment.coverageDependent ? "coverage" : payment.quote.amountCents;
+  return payment.coverageDependent || payment.amountHidden ? "coverage" : payment.quote.amountCents;
 }
 
 /**

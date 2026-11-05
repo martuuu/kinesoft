@@ -14,6 +14,9 @@
  * - Con 2+: botón `aria-haspopup="listbox"` → lista con nombre, rol (`roleLabel` con la vertical de CADA consultorio:
  *   en uno General es «Profesional», en uno de Kine «Kinesiólogo/a»), tipo y check en el activo; «Ver todos» lleva a
  *   `/elegir-consultorio`.
+ * - CF3 (BR-L): con logo, el del consultorio activo va al lado del nombre (28 px; 32 contraído) y cada fila de la
+ *   lista lleva el suyo en lugar de las iniciales. El activo sale de `useTenantBrand()` (el layout lo arma de la misma
+ *   foto); las filas, de `TenantOption.logoUrl`. Sin logo, todo como antes.
  * - Al elegir: `switchTenant` (valida en el server) y navegación DURA a /dashboard. Una navegación blanda dejaría
  *   montados el canal realtime, los avisos de llegada y el estado cliente del consultorio anterior (y la página
  *   actual puede tener ids que en el otro consultorio no existen).
@@ -21,10 +24,13 @@
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import type { TenantOption } from "@/lib/tenant-choice";
-import { roleLabel } from "@/lib/role-label";
+import { tenantOptionRoleLabel } from "@/lib/co-owner-types";
 import { IconChevD } from "@/components/ui/icons";
 import { nameStyle } from "./tenant-switcher-styles";
+import { useTenantBrand } from "./tenant-brand-context";
+import { TenantLogo } from "./tenant-logo";
 import type { ActionResult } from "@/lib/validation";
+import { tenantInitials } from "@/lib/person-initials";
 
 export const CHOOSE_TENANT_HREF = "/elegir-consultorio";
 
@@ -117,12 +123,12 @@ export function switcherKeyIndex(key: string, current: number, count: number): n
   }
 }
 
-/** «Centro Kinésico Movare» → «CK». Decorativo: el nombre completo va en `title`/`aria-label`. */
-export function tenantInitials(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
-  const letters = (words.length >= 2 ? [words[0], words[1]] : [words[0] ?? "?"]).map((w) => w[0]?.toUpperCase() ?? "");
-  return letters.join("") || "?";
-}
+/**
+ * «Centro Kinésico Movare» → «CK». Decorativo: el nombre completo va en `title`/`aria-label`. CF3 (ZF4b): la regla vive
+ * en `lib/person-initials.ts` (puro), la misma de /elegir-consultorio, que es server component y no puede importarla de
+ * este módulo cliente; se re-exporta para la lista (`tenant-switcher-panel.tsx`).
+ */
+export { tenantInitials };
 
 export function TenantSwitcher({
   collapsed = false,
@@ -133,6 +139,7 @@ export function TenantSwitcher({
   defaultOpen?: boolean;
 }) {
   const { options, active, canSwitch, switchTenant } = useTenantChoice();
+  const { logoUrl } = useTenantBrand();
   const [open, setOpen] = useState(defaultOpen);
   const activeIndex = Math.max(0, options.findIndex((o) => o.tenantId === active?.tenantId));
   const [focusIndex, setFocusIndex] = useState(activeIndex);
@@ -166,11 +173,20 @@ export function TenantSwitcher({
   if (options.length === 0) return null;
 
   if (!canSwitch) {
-    // Un solo consultorio: el nombre como referencia, sin nada clickeable. Colapsado no entra: queda el logo.
-    if (collapsed || !active) return null;
+    // Un solo consultorio: el nombre como referencia, sin nada clickeable. Colapsado el nombre no entra: queda el logo
+    // del producto y, si el consultorio tiene, el suyo (con el nombre como `alt`/`title`: no está escrito en ningún lado).
+    if (!active) return null;
+    if (collapsed) {
+      return logoUrl ? (
+        <div style={{ padding: "0 0 12px", display: "flex", justifyContent: "center" }}>
+          <TenantLogo src={logoUrl} size={32} alt={active.name} title={active.name} />
+        </div>
+      ) : null;
+    }
     return (
-      <div style={{ padding: "0 6px 14px", minWidth: 0 }}>
-        <div style={nameStyle} title={active.name}>
+      <div style={{ padding: "0 6px 14px", minWidth: 0, display: "flex", alignItems: "center", gap: 8 }}>
+        {logoUrl && <TenantLogo src={logoUrl} size={28} />}
+        <div style={{ ...nameStyle, flex: 1, minWidth: 0 }} title={active.name}>
           {active.name}
         </div>
       </div>
@@ -247,14 +263,20 @@ export function TenantSwitcher({
         style={collapsed ? collapsedButtonStyle(open) : buttonStyle(open)}
       >
         {collapsed ? (
-          <span aria-hidden>{tenantInitials(active?.name ?? "?")}</span>
+          logoUrl ? (
+            <TenantLogo src={logoUrl} size={32} fallback={<span aria-hidden>{tenantInitials(active?.name ?? "?")}</span>} />
+          ) : (
+            <span aria-hidden>{tenantInitials(active?.name ?? "?")}</span>
+          )
         ) : (
           <>
+            {logoUrl && <TenantLogo src={logoUrl} size={28} />}
             <span style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
               <span style={nameStyle}>{active?.name ?? "Elegí un consultorio"}</span>
               {active && (
                 <span style={{ display: "block", fontSize: 11.5, color: "var(--navy-500)", marginTop: 2 }}>
-                  {roleLabel(active.role, active.vertical)}
+                  {/* CF3b: «Co-titular» si lo es en este consultorio (`TenantOption.coOwner`). */}
+                  {tenantOptionRoleLabel(active)}
                 </span>
               )}
             </span>

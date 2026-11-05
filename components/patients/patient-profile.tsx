@@ -16,6 +16,7 @@ import type {
 } from "@/lib/patients-types";
 import type { PatientPlanBalances, PlanDTO } from "@/lib/plans-read-types";
 import type { Capability } from "@/lib/capabilities";
+import type { ContactPaymentLinkInput } from "@/components/patients/contact-actions-logic";
 import type { Role } from "@prisma/client";
 import { formatARS } from "@/lib/format";
 import { isProfileTabAllowed, type TenantModule } from "@/lib/tenant-modules";
@@ -29,7 +30,7 @@ import {
 import type { ProfilePlanIntent } from "@/lib/plans-deeplink";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { useToast } from "@/components/ui/toast";
-import { PatientHero, PatientAdminHero } from "@/components/patients/profile/hero";
+import { PatientHero, PatientAdminHero, PatientPhoneAction } from "@/components/patients/profile/hero";
 import { TabsBar } from "@/components/patients/profile/tabs-bar";
 import {
   heroPlanChips,
@@ -619,6 +620,9 @@ export function PatientProfile({
         // PL-1b congela las comparaciones de rol (el rol solo ya no dice qué puede alguien): mismo corte por capabilities
         // del MIEMBRO (`account.owner` = Titular; `tenant.admin` = Admin con «Configuración» o delegado).
         canSeeEmailReason={caps.has("account.owner") || caps.has("tenant.admin")}
+        // CF3 (SH-U): link de pago desde el menú del teléfono (a quién, con el mismo filtro que `createPaymentLink`).
+        capabilities={capabilities}
+        viewerPractitionerId={viewerPractitionerId}
       />
 
       <TabsBar
@@ -688,6 +692,7 @@ export function PatientProfile({
               plans={plans}
               planBalances={planBalances}
               showPlanTitles={showPlanTitles}
+              patientFirstName={patient.firstName}
             />
           )}
           {tab === "sesiones" && (
@@ -872,6 +877,16 @@ export function PatientAdminProfile({
   }, []);
   // El saldo de cada plan es del server (P7): después de un cobro se vuelve a pedir, como en el perfil completo.
   const [planBalances, setPlanBalances] = useState<PatientPlanBalances | null>(initialPlanBalances);
+  // CF3 (SH-U): link de pago desde el teléfono: los profesionales de sus turnos (como Facturación sin lista explícita,
+  // `linkPractitionerOptions`); el filtro por `collect`/`collectOwn` lo aplica el panel diferido.
+  const phonePaymentLink = useMemo(
+    () => ({
+      practitioners: bookings.map((b) => ({ id: b.practitionerId, name: b.practitionerName })),
+      capabilities,
+      viewerPractitionerId,
+    }),
+    [bookings, capabilities, viewerPractitionerId]
+  );
   const balancesSeq = useRef(0);
   const reloadBalances = useCallback(async () => {
     if (!plansEnabled) return;
@@ -917,6 +932,7 @@ export function PatientAdminProfile({
         canEdit={canEdit}
         insurers={insurers}
         whatsappActive={whatsappActive}
+        paymentLink={phonePaymentLink}
       />
 
       <TabsBar
@@ -929,7 +945,13 @@ export function PatientAdminProfile({
       />
 
       {tab === "resumen" && (
-        <AdminDatosView patient={patient} bookings={bookings} partial={nextCursor !== null} canEdit={canEdit} />
+        <AdminDatosView
+          patient={patient}
+          bookings={bookings}
+          partial={nextCursor !== null}
+          canEdit={canEdit}
+          phonePaymentLink={phonePaymentLink}
+        />
       )}
       {tab === "turnos" && (
         <TurnosView
@@ -942,6 +964,7 @@ export function PatientAdminProfile({
           plansEnabled={plansEnabled}
           plans={plansEnabled ? plans : null}
           planBalances={plansEnabled ? planBalances : null}
+          patientFirstName={patient.firstName}
         />
       )}
       {tab === "fact" && (
@@ -1008,6 +1031,7 @@ function AdminDatosView({
   bookings,
   partial,
   canEdit,
+  phonePaymentLink = null,
 }: {
   patient: PatientAdminCore;
   bookings: PatientBookingFull[];
@@ -1015,6 +1039,8 @@ function AdminDatosView({
   partial: boolean;
   /** `patients.editAdmin`: el viewer edita los datos desde «Editar datos». */
   canEdit: boolean;
+  /** CF3 (SH-U): el mismo menú del teléfono que el hero (link de pago incluido). */
+  phonePaymentLink?: ContactPaymentLinkInput | null;
 }) {
   const unpaid = bookings.filter((b) => isBillable(b) && b.paymentStatus !== "PAID");
   const unpaidCents = unpaid.reduce((s, b) => s + b.copagoCents, 0);
@@ -1024,7 +1050,15 @@ function AdminDatosView({
       <Grid2>
         <Section title="Contacto">
           <Grid2>
-            <Detail label="Teléfono">{patient.phone ?? "—"}</Detail>
+            <Detail label="Teléfono">
+              {/* CF3 (D-CF3-8, SH-U): el teléfono abre el menú de contacto (diferido), como en el hero. */}
+              <PatientPhoneAction
+                patientId={patient.id}
+                patientName={`${patient.firstName} ${patient.lastName}`}
+                phone={patient.phone}
+                paymentLink={phonePaymentLink}
+              />
+            </Detail>
             <Detail label="Email">{patient.email ?? "—"}</Detail>
             <Detail label="DNI">{patient.documentId ?? "—"}</Detail>
             <Detail label="Nacimiento">{patient.dateOfBirth ? formatDob(patient.dateOfBirth) : "—"}</Detail>

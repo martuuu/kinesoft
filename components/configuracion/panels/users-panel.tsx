@@ -1,7 +1,7 @@
 "use client";
 
 import { displayUserName } from "@/lib/display-name";
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useId, useRef, useState, useTransition } from "react";
 import type { Role, TenantVertical } from "@prisma/client";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import { IconCheck, IconPlus } from "@/components/ui/icons";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { StepUpProvider, useStepUpAction } from "@/components/account/step-up-modal";
 import type { InvitationRow, InvitationSendResult, TeamMemberRow } from "@/lib/invitations-types";
+import { CO_OWNER_LABEL, roleLabelWithCoOwner, type TeamMemberView } from "@/lib/co-owner-types";
 import type { TenantPlanUsageView } from "@/lib/tenant-plan-usage-logic";
 import { inviteEmailStatusCopy, passwordResetEmailStatusCopy } from "@/lib/invitations-constants";
 import {
@@ -26,14 +27,27 @@ import {
   reactivateMember,
   sendMemberPasswordReset,
   setMemberClinical,
+  setMemberCoOwner,
   setMemberGrants,
   transferOwnership,
 } from "@/lib/invitations";
 import { ROLE_ORDER, INVITABLE_ROLES, roleLabel, roleDescription, isClinicalMember } from "@/lib/roles";
+import { isCoOwner } from "@/lib/roles-core";
 import { canAddSeat, seatKindOf } from "@/lib/plan-catalog";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { PublicBookingSwitch } from "./practitioners/public-booking-switch";
 import { ErrorBox, Switch } from "../controls";
+import {
+  CO_OWNER_GRANTS_NOTE,
+  CO_OWNER_HINT,
+  CO_OWNER_ROLE_CHANGE_SUFFIX,
+  CO_OWNER_VIEWER_NOTE,
+  NO_LICENSE_COPY,
+  coOwnerConfirm,
+  memberLicenseText,
+  teamRowAccess,
+  type TeamViewer,
+} from "./users-co-owner-logic";
 import styles from "../configuracion.module.css";
 
 // [PF1.1-config · C-PF4] Sin `router.refresh()` después de las actions de este archivo: todas revalidan `/configuracion`
@@ -44,10 +58,14 @@ const ASSIGNABLE_ROLES: readonly Role[] = ROLE_ORDER.filter((r) => r !== "OWNER"
 
 /**
  * Rótulo de un miembro (PL-3b): «Titular» / «Titular (sin agenda)» según atienda; el resto por su rol
- * («Administrador/a», «Kinesiólogo/a» o «Profesional», «Secretario/a», «Facturación»). Exportada para el test.
+ * («Administrador/a», «Kinesiólogo/a» o «Profesional», «Secretario/a», «Facturación»). CF3b: «Co-titular» para el
+ * profesional que lo tiene (lo dicen las confirmaciones: «De Co-titular a Administrador/a…»). Exportada para el test.
  */
-export function memberRoleLabel(m: Pick<TeamMemberRow, "role" | "clinical">, vertical: TenantVertical): string {
-  return roleLabel(m.role, vertical, { clinical: isClinicalMember(m) });
+export function memberRoleLabel(
+  m: Pick<TeamMemberRow, "role" | "clinical"> & Pick<TeamMemberView, "grantCoOwner">,
+  vertical: TenantVertical
+): string {
+  return roleLabelWithCoOwner(m.role, vertical, { clinical: isClinicalMember(m), coOwner: isCoOwner(m) });
 }
 
 /**
@@ -85,6 +103,11 @@ const ATTENDS_OFF_COPY = "No tenés agenda ni aparecés en el turnero, y no ves 
  * delegada, con los límites del Administrador/a (no toca al Titular ni lo transfiere). SOLO el Titular ve y cambia
  * los permisos delegados, su propio «Atiendo pacientes» y transfiere la titularidad; esas tres piden step-up
  * (`StepUpProvider`, PL-D11). El server lo rechaza igual (`lib/invitations.ts`): esto solo evita ofrecerlo.
+ *
+ * CF3b (CT-U, M23): «Co-titular». Solo el Titular principal lo da o lo saca (switch en cada profesional activo, con la
+ * matrícula a la vista). El co-titular ve esto como el Titular salvo el switch, «Planes y pagos» y cualquier acción
+ * sobre el Titular principal u otro co-titular (filas bloqueadas con el motivo). Quién es co-titular sale de su propia
+ * fila del equipo (`isYou` + `grantCoOwner`): sin prop nueva desde la página. Reglas en `users-co-owner-logic.ts`.
  */
 export function UsersPanel({
   team,
@@ -92,7 +115,7 @@ export function UsersPanel({
   viewerRole = "OWNER",
   seats,
 }: {
-  team: TeamMemberRow[];
+  team: TeamMemberView[];
   pending: InvitationRow[];
   viewerRole?: Role;
   /** Cupos del plan (`planUsage.seats` de Configuración, `seatsSummary`). Sin él no se muestra el indicador. */
@@ -101,6 +124,8 @@ export function UsersPanel({
   const [inviting, setInviting] = useState(false);
   const [inviteResult, setInviteResult] = useState<InvitationSendResult | null>(null);
   const viewerIsOwner = viewerRole === "OWNER";
+  // CF3b: el co-titular se reconoce por su propia fila (la del Actor), sin prop nueva desde la página.
+  const viewer: TeamViewer = { principal: viewerIsOwner, coOwner: !viewerIsOwner && team.some((m) => m.isYou && isCoOwner(m)) };
 
   return (
     <StepUpProvider>
@@ -122,6 +147,11 @@ export function UsersPanel({
             <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 4 }}>
               Profesionales y administrativos con acceso al consultorio.
             </div>
+            {viewer.coOwner && (
+              <div data-co-owner-note style={{ fontSize: 12, color: "var(--navy-700)", marginTop: 6, lineHeight: 1.45 }}>
+                {CO_OWNER_VIEWER_NOTE}
+              </div>
+            )}
             {seats && (
               <div data-testid="team-seats" style={{ marginTop: 6, display: "grid", gap: 2 }}>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -142,7 +172,13 @@ export function UsersPanel({
         </header>
         <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
           {team.map((m) => (
-            <TeamRow key={m.membershipId} member={m} viewerIsOwner={viewerIsOwner} currentOwner={team.find((x) => x.role === "OWNER") ?? null} />
+            <TeamRow
+              key={m.membershipId}
+              member={m}
+              viewerIsOwner={viewerIsOwner}
+              viewer={viewer}
+              currentOwner={team.find((x) => x.role === "OWNER") ?? null}
+            />
           ))}
         </ul>
       </Card>
@@ -207,14 +243,16 @@ const NOTICE_COLOR: Record<RowNotice["tone"], string> = { ok: "var(--navy-500)",
 function TeamRow({
   member,
   viewerIsOwner = false,
+  viewer = { principal: viewerIsOwner, coOwner: false },
   currentOwner = null,
 }: {
-  member: TeamMemberRow;
+  member: TeamMemberView;
   viewerIsOwner?: boolean;
+  /** CF3b: quién mira (Titular principal / co-titular). Default: lo que dice `viewerIsOwner`. */
+  viewer?: TeamViewer;
   currentOwner?: TeamMemberRow | null;
 }) {
   const isOwnerRow = member.role === "OWNER";
-  const ownerLocked = !viewerIsOwner && isOwnerRow;
   const vertical = useTenantVertical();
   const label = (r: Role) => roleLabel(r, vertical);
   const runStepUp = useStepUpAction();
@@ -224,6 +262,13 @@ function TeamRow({
   const suspended = !!member.disabledAt;
   const attends = isClinicalMember(member);
   const staff = STAFF_ROLES.has(member.role);
+  // CF3b: qué ofrece la fila según quién mira. `lockedReason`: la fila del Titular principal (para todo el que no lo
+  // es, como antes con `ownerLocked`) y la de otro co-titular (para quien no es el principal), sin selector ni menú.
+  const access = teamRowAccess(member, { isOwnerRow, staff, viewer });
+  const locked = access.lockedReason !== null;
+  const coOwner = isCoOwner(member);
+  const lockId = useId();
+  const coOwnerHintId = useId();
   // DIR-0: nunca el email como nombre (el email ya va en su propia línea de la fila).
   const who = displayUserName(member.fullName);
   const tz = { timeZone: "America/Argentina/Buenos_Aires" } as const;
@@ -254,9 +299,11 @@ function TeamRow({
         : member.hasAgenda
           ? " Deja de atender: sale de la agenda y del turnero. Si tiene turnos futuros o pacientes asignados, primero reasignalos."
           : "";
+    // CF3b (M23): co-titular es solo de un Profesional; el server lo apaga en la misma escritura del rol (CT-K2).
+    const coOwnerLoss = coOwner ? CO_OWNER_ROLE_CHANGE_SUFFIX : "";
     const ok = await confirm({
       title: `¿Cambiar el rol de ${who}?`,
-      message: `De ${memberRoleLabel(member, vertical)} a ${label(role)}: ${roleDescription(role, vertical)}${agenda}`,
+      message: `De ${memberRoleLabel(member, vertical)} a ${label(role)}: ${roleDescription(role, vertical)}${agenda}${coOwnerLoss}`,
       confirmLabel: "Cambiar rol",
     });
     if (!ok) return;
@@ -300,6 +347,21 @@ function TeamRow({
         // staff ya le saca `account.billing`), así que se manda en `false`.
         grantBilling: key === "grantBilling" ? value : staff ? false : member.grantBilling,
       })
+    );
+  };
+
+  /**
+   * CF3b: «Co-titular» (solo el Titular principal). Confirma al prender (con la matrícula en el texto) y al apagar; corre
+   * con `runStepUp` por si la action pide el código (como los permisos delegados). El aviso de la fila confirma el
+   * cambio para el lector de pantalla (el badge aparece con el árbol nuevo de la action).
+   */
+  const toggleCoOwner = async () => {
+    const next = !coOwner;
+    const ok = await confirm(coOwnerConfirm(who, next, member.license));
+    if (!ok) return;
+    run(
+      () => setMemberCoOwner(member.membershipId, next),
+      () => setNotice({ tone: "ok", text: next ? `${who} ahora es co-titular.` : `${who} dejó de ser co-titular.` })
     );
   };
 
@@ -388,8 +450,10 @@ function TeamRow({
         { label: "Quitar del equipo", onSelect: remove, danger: true },
       ];
   const showAttends = viewerIsOwner && isOwnerRow && member.isYou;
-  const showGrants = viewerIsOwner && !isOwnerRow;
+  const showGrants = access.grants;
+  const showCoOwner = access.coOwnerSwitch;
   const showTurnero = attends && !!member.practitionerId && !suspended;
+  const license = memberLicenseText(member.license);
 
   return (
     <li
@@ -409,9 +473,19 @@ function TeamRow({
           {member.isYou && (
             <span style={{ fontSize: 11, color: "var(--sky-700)", fontWeight: 700 }}>(vos)</span>
           )}
+          {coOwner && (
+            <span data-co-owner-badge style={{ display: "inline-flex" }}>
+              <Tag>{CO_OWNER_LABEL}</Tag>
+            </span>
+          )}
           {suspended && <Tag tone="soft">Suspendido</Tag>}
         </div>
         <div style={{ fontSize: 12, color: "var(--navy-500)", overflowWrap: "anywhere" }}>{member.email}</div>
+        {access.lockedReason && (
+          <div id={lockId} data-locked-reason style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 2 }}>
+            {access.lockedReason}
+          </div>
+        )}
         {member.specialty && <div style={{ fontSize: 12, color: "var(--navy-500)" }}>{member.specialty}</div>}
         {suspended && member.disabledAt && (
           <div style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 2 }}>
@@ -433,9 +507,10 @@ function TeamRow({
       ) : (
         <select
           value={member.role}
-          disabled={member.isYou || pending || ownerLocked}
+          disabled={member.isYou || pending || locked}
           onChange={(e) => changeRole(e.target.value as Role)}
           aria-label={`Rol de ${who}`}
+          aria-describedby={locked ? lockId : undefined}
           style={{
             padding: "8px 10px",
             borderRadius: 10,
@@ -455,11 +530,11 @@ function TeamRow({
         </select>
       )}
       <div style={{ textAlign: "right", flex: "0 0 32px" }}>
-        {/* Sin menú en la fila propia; quien no es Titular no toca al Titular (IAM-D3). */}
-        {!member.isYou && !ownerLocked && <MemberActionsMenu who={who} actions={actions} disabled={pending} />}
+        {/* Sin menú en la fila propia; quien no es Titular no toca al Titular (IAM-D3) ni, CF3b, a otro co-titular. */}
+        {!member.isYou && !locked && <MemberActionsMenu who={who} actions={actions} disabled={pending} />}
       </div>
 
-      {(showAttends || showGrants || showTurnero) && (
+      {(showAttends || showCoOwner || showGrants || showTurnero) && (
         <div
           style={{
             flex: "1 1 100%",
@@ -477,6 +552,28 @@ function TeamRow({
               </div>
               <div style={{ fontSize: 11.5, color: "var(--navy-500)", lineHeight: 1.4 }}>
                 {attends ? ATTENDS_ON_COPY : ATTENDS_OFF_COPY}
+              </div>
+            </div>
+          )}
+          {showCoOwner && (
+            <div data-co-owner-switch style={{ display: "grid", gap: 4, flex: "1 1 260px", minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <Switch
+                  on={coOwner}
+                  onChange={toggleCoOwner}
+                  disabled={pending}
+                  aria-label={`${CO_OWNER_LABEL}: ${who}`}
+                  aria-describedby={coOwnerHintId}
+                />
+                <span style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-900)" }}>{CO_OWNER_LABEL}</span>
+              </div>
+              <div id={coOwnerHintId} style={{ fontSize: 11.5, color: "var(--navy-500)", lineHeight: 1.4 }}>
+                {CO_OWNER_HINT}
+                {coOwner && ` ${CO_OWNER_GRANTS_NOTE}`}
+                {/* La matrícula la carga la persona en su cuenta (M23): el Titular la ve acá antes de decidir. */}
+                <span data-co-owner-license style={{ display: "block", marginTop: 2, color: license ? "var(--navy-700)" : "var(--navy-500)" }}>
+                  {license ? `Matrícula: ${license}` : NO_LICENSE_COPY}
+                </span>
               </div>
             </div>
           )}
@@ -501,7 +598,8 @@ function TeamRow({
               )}
               {/* T3d-1g: a la Secretaria y Facturación el server les rechaza «Planes y pagos»; se ofrece solo para
                   sacárselo a quien lo tenía de antes (fila legada). */}
-              {(!staff || member.grantBilling) && (
+              {/* CF3b: «Planes y pagos» solo lo delega el Titular principal (nunca el co-titular). */}
+              {access.billingGrant && (
                 <GrantCheckbox
                   label="Puede ver y cambiar el plan y los pagos"
                   checked={member.grantBilling}

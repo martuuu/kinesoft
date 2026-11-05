@@ -528,7 +528,14 @@ export function PlanChangeReview({
           {preview.candidates.map((c) => {
             const selectable = selectableForDisable(c);
             const checked = disable.has(c.membershipId);
-            const why = c.isOwner ? "Titular: no puede perder el acceso" : c.isSelf ? "Sos vos: no te podés quitar el acceso" : null;
+            // CT-INT (fix M): el co-titular llega con `isOwner` cuando quien mira no es el principal.
+            const why = c.isOwner
+              ? c.coOwner
+                ? "Co-titular: solo el titular principal le puede quitar el acceso"
+                : "Titular: no puede perder el acceso"
+              : c.isSelf
+                ? "Sos vos: no te podés quitar el acceso"
+                : null;
             return (
               <li key={c.membershipId}>
                 <label

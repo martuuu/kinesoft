@@ -10,7 +10,8 @@ import type { TenantModule } from "@/lib/tenant-modules";
 
 /**
  * Un miembro activo, con lo que queda colgado si pierde el acceso (solo conteos, sin PHI). `isOwner`/`isSelf` vienen
- * para que la UI los muestre sin casilla: el Titular nunca es candidato, ni quien está cambiando el plan.
+ * para que la UI los muestre sin casilla: el Titular nunca es candidato, ni quien está cambiando el plan. CT-INT: el
+ * co-titular tampoco (`isOwner` true) salvo que mire el Titular principal o Plataforma.
  */
 export type PlanChangeCandidate = {
   membershipId: string;
@@ -21,6 +22,11 @@ export type PlanChangeCandidate = {
   clinical: boolean;
   kind: SeatKind;
   isOwner: boolean;
+  /**
+   * CT-INT (CF3b): es «Co-titular». Con `isOwner` true = quien mira no es el principal ni Plataforma, así que no lo
+   * puede elegir (fix M); el drawer lo explica con su propio copy. Opcional para los fixtures viejos.
+   */
+  coOwner?: boolean;
   isSelf: boolean;
   futureBookings: number;
   assignedPatients: number;

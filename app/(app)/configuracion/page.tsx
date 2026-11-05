@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getActor } from "@/lib/session";
-import { getCapabilities, getMembershipRole } from "@/lib/authz";
+import { getCapabilities, getMemberAccess, getMembershipRole } from "@/lib/authz";
+import { canExportTenantData, isCoOwner } from "@/lib/capabilities";
 import { modulesFor } from "@/lib/tenant-modules";
 import { loadConfiguracionPage } from "@/lib/configuracion-page-loader";
 import { canWrite, effectiveMode } from "@/lib/tenant-access";
@@ -45,6 +46,13 @@ export default async function ConfiguracionPage({
   const caps = await getCapabilities();
   const tenantAdmin = caps.has("tenant.admin");
   const billing = caps.has("account.billing");
+  // CT-INT (CF3b, H4): el export del consultorio ACTIVO sale de la capacidad (`account.export`: el Titular principal y
+  // el co-titular; soporte nunca `account.*`) y no de `role === "OWNER"`, que dejaba afuera al co-titular aunque la
+  // ruta (`canExportTenantData`) se lo acepta. `coOwner` va a las pestañas: «Plan y uso» y «Facturación» nunca para él
+  // (controls.tsx), aunque le quede un «Planes y pagos» viejo (el server ya le saca `account.billing`).
+  const exportActive = !actor.support && caps.has("account.export");
+  const member = await getMemberAccess(actor);
+  const coOwner = !actor.support && !!member && isCoOwner(member);
   if (!role) {
     redirect("/dashboard");
   }
@@ -89,9 +97,9 @@ export default async function ConfiguracionPage({
 
   // [BO-Z B6] Consultorios suspendidos/dados de baja de los que es titular (misma foto del request que usó el gate:
   // sin query extra; la pide el loader en paralelo). El soporte no baja PHI: lista vacía. `?tenant=` viene del mail
-  // de Plataforma.
+  // de Plataforma. CT-INT (H4): «titular» = `canExportTenantData` (principal o co-titular), el predicado de la ruta.
   const exportBlocked = (snapshot?.tenantBlocks ?? [])
-    .filter((b) => b.role === "OWNER")
+    .filter((b) => canExportTenantData(b))
     .map((b) => ({ tenantId: b.tenantId, tenantName: b.tenantName, kind: b.kind }));
   const rawTenant = Array.isArray(searchParams?.tenant) ? searchParams?.tenant[0] : searchParams?.tenant;
 
@@ -119,7 +127,8 @@ export default async function ConfiguracionPage({
       support={!!actor.support}
       // T3 (C-AS1): `sensitive` = `tenant.sensitive` (lo delicado de Configuración) para que la UI se lo esconda a la
       // Secretaria con «Configuración» (T3d-1g; el server ya se lo niega).
-      access={{ tenantAdmin, billing, team: team !== null && pending !== null, sensitive }}
+      access={{ tenantAdmin, billing, team: team !== null && pending !== null, sensitive, coOwner }}
+      exportActive={exportActive}
       initialTab={supportDraft ? "soporte" : rawTab}
       initialSupportDraft={supportDraft}
       planUsage={planUsage}
@@ -156,6 +165,8 @@ export default async function ConfiguracionPage({
       // (la que el navegador necesita para `pushManager.subscribe`); la privada y el subject no salen del server.
       miAgenda={miAgenda}
       webPushPublicKey={miAgenda ? webPushVapid()?.publicKey ?? null : null}
+      // CF3 (D-CF3-12): el texto de «Compartir por WhatsApp» del link propio nombra al consultorio (del Actor: 0 queries).
+      clinicName={actor.tenantName}
     />
   );
 }

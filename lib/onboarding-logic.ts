@@ -17,10 +17,10 @@ import type { AccessState } from "./access-logic";
 export const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])$/;
 
 /**
- * Paths de primer nivel de la app: un tenant con ese slug chocaría con el
- * router (`/c/<slug>` es lo público, pero el subdominio `<slug>.kinesoft.app`
- * y los links viejos usan el slug pelado). Antes estaba duplicada en
- * `lib/auth.ts` y en `scripts/create-tenant.ts`.
+ * Segmentos de primer nivel de la app: desde CF3 la sede digital del consultorio vive en `/<slug>` (ADR-036), así que un
+ * tenant con el slug de una ruta real (`caja`, `pagar`, `sitemap`…) la taparía o se quedaría sin sede. La lista se
+ * deriva del árbol `app/` en `tests/unit/cf3-reserved-slugs.test.ts` (no se mantiene a mano) y en prod la chequea
+ * `pre.M22.reservedSlugs`. También la usa el subdominio dormido `<slug>.<SITE_ROOT_DOMAIN>` (`lib/site-host.ts`).
  */
 export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
   "admin", "api", "app", "auth", "agenda", "biblioteca", "booking",
@@ -33,6 +33,18 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
   "verificar-acceso", "cuenta",
   // ZF1a (ZA M1): aceptación de los Términos del titular de un alta asistida (fuera de `(app)`).
   "aceptar-terminos",
+  // CF3 (SD-R, §30 D-CF3-10): la sede digital vive en `/<slug>` (`app/(sede)/[slug]/`) y Next resuelve antes los
+  // segmentos estáticos: un consultorio con uno de estos slugs tendría la sede tapada por la ruta fija. Faltaban las
+  // rutas de los grupos `(app)`, `(booking)`, `(directory)` y `(legal)`, las de primer nivel sueltas y los archivos de
+  // metadata de Next y de `public/`. `tests/unit/cf3-reserved-slugs.test.ts` deriva la lista del árbol `app/` y falla
+  // si aparece un segmento nuevo sin reservar. En prod lo chequea `pre.M22.reservedSlugs` (misma lista, literal).
+  "caja", "cobros", "planes", "sala",
+  "pagar", "profesionales", "consultorios", "privacidad", "terminos", "contacto",
+  "mantenimiento", "plataforma-mfa",
+  "icons", "apple-icon", "opengraph-image", "icon", "favicon", "manifest", "robots", "sitemap", "offline",
+  // CF3b (BR-H): `public/sede/` (la foto del encabezado de la sede) crea el segmento `/sede`: un consultorio con ese
+  // slug vería su sede tapada por la carpeta estática.
+  "sede",
 ]);
 
 export function isValidSlug(slug: string): boolean {

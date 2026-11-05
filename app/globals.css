@@ -300,6 +300,29 @@
   --bg-panel: #f5f2fc;
 }
 
+/* [BR-P] Paleta DE MARCA de TMP (lib/brand-palettes.ts): solo se ofrece a sus miembros y la asigna Plataforma.
+   Colores medidos del logo (design_source/tmp-brand/): azul marino #1A436C (= --sky-800) y turquesa #53A0AA
+   (= --sky-500). La escala va de tintes turquesa a ese marino; el 700 (botones, links, foco) es el puente entre los
+   dos (#1f5a80, tono ~203°). Contraste medido (tests/unit/br-p-palettes.test.ts): --sky-700 7.4:1 sobre blanco y
+   texto blanco encima; --sky-600 5.4:1 (las otras paletas no llegan: mint da 4.3); --sky-500 3:1 sobre blanco (solo
+   bordes y anillos, WCAG 1.4.11); --sky-800 sobre --sky-100 8.7:1. El «lime» es un aqua claro que combina con el
+   turquesa sin confundirse con --sky-200/300 (más verde y más brillante); --navy-900 encima da 12.7:1. */
+[data-palette="tmp"] {
+  --sky-50: #f1f8f9;
+  --sky-100: #e2f0f2;
+  --sky-200: #c6e3e7;
+  --sky-300: #9fcfd5;
+  --sky-400: #76b8c0;
+  --sky-500: #53a0aa;
+  --sky-600: #2a7480;
+  --sky-700: #1f5a80;
+  --sky-800: #1a436c;
+  --lime-300: #a6eedd;
+  --lime-400: #7fe0c9;
+  --bg-app: linear-gradient(165deg, #bfdde3 0%, #dfeff1 40%, #f0f7f8 100%);
+  --bg-panel: #f4f9fa;
+}
+
 /* VX2.1 (handoff 14, como el prototipo `design_source/vx0/shared.css:90`): border-box global. Sin él, todo
    `width: 100%` con padding (`.k-container`, inputs) desborda en mobile. Se verificó con capturas antes/después de
    las pantallas del workspace (1366 y 390). */

@@ -8,9 +8,11 @@ import { updateUserPreferences } from "@/lib/preferences";
 import type { KpiKey, Palette, Preferences } from "@/lib/preferences-constants";
 import { effectivePinnedKpis, kpiOptionsFor, type KpiRevenueScope } from "@/lib/dashboard-kpi-options";
 import { useTweaks } from "@/components/layout/tweaks-context";
-// PL-F: las mismas cuatro paletas y rótulos que «Apariencia». PF1.0-a: desde `appearance-options` (sin dependencias),
+// PL-F: las mismas paletas y rótulos que «Apariencia». PF1.0-a: desde `appearance-options` (sin dependencias),
 // no desde `tweaks-panel`, que arrastraba el panel entero de Apariencia a `/dashboard`.
-import { PALETTE_OPTIONS as PALETTES } from "@/components/layout/appearance-options";
+// BR-P: con la de marca del consultorio (solo para sus miembros), igual que Apariencia.
+import { paletteOptionsFor } from "@/components/layout/appearance-options";
+import { useTenantBrand } from "@/components/layout/tenant-brand-context";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 
 /**
@@ -38,7 +40,12 @@ export function SettingsModal({
   // Antes ofrecía «Planes en curso»/«Cerca del alta», que en General valen 0 siempre.
   const modules = useTenantModules();
   const kpiOptions = kpiOptionsFor(revenueScope, modules);
-  const [palette, setPalette] = useState<Palette>(preferences.palette);
+  const palettes = paletteOptionsFor(useTenantBrand().palette);
+  // CF3 (ZF4b, B de BR-P): arranca con la paleta EFECTIVA del TweaksProvider, la que se está viendo. `preferences.palette`
+  // es lo guardado y puede no ser lo pintado: «TMP» guardada en un consultorio que no la tiene se pinta «Celeste» (no
+  // quedaba ninguna marcada), y un cambio desde Apariencia no llega a `preferences` hasta recargar. Como el guardado
+  // compara contra `t.palette`, abrir y guardar sin tocar nada tampoco reescribe la paleta.
+  const [palette, setPalette] = useState<Palette>(t.palette);
   const [pinned, setPinned] = useState<KpiKey[]>(() =>
     effectivePinnedKpis(preferences.pinnedKpis, revenueScope, modules)
   );
@@ -73,8 +80,9 @@ export function SettingsModal({
     <Modal open={open} onClose={onClose} width={540} title="Ajustes">
         <section style={{ marginBottom: 18 }}>
           <SectionLabel>Paleta</SectionLabel>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
-            {PALETTES.map((p) => {
+          {/* BR-P: 4 o 5 (con la de marca); a lo ancho del modal entran en una fila y en un celular bajan solas. */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(88px, 1fr))", gap: 8 }}>
+            {palettes.map((p) => {
               const on = p.value === palette;
               return (
                 <button

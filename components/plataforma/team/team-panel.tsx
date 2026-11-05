@@ -26,6 +26,7 @@ import {
 } from "@/lib/platform-team";
 import { inviteEmailStatusCopy, passwordResetEmailStatusCopy } from "@/lib/invitations-constants";
 import { isClinicalRole, roleDescription, roleLabel } from "@/lib/roles";
+import { isCoOwner } from "@/lib/roles-core";
 import type {
   InvitationSendResult,
   PlatformTeamInvitationRow,
@@ -50,6 +51,7 @@ import {
 import { InviteDrawer } from "./invite-drawer";
 import { InviteResultNotice } from "./invite-result";
 import { TransferOwnershipDialog } from "./transfer-dialog";
+import { CO_OWNER_LABEL, CO_OWNER_ROLE_CHANGE_SUFFIX } from "@/lib/co-owner-types";
 
 /**
  * /plataforma/consultorios/[id]/equipo (BO3-C, plan §19.5). El superadmin gestiona el equipo de un consultorio ajeno
@@ -219,6 +221,10 @@ export function MemberRow({
   vertical,
 }: {
   tenantId: string;
+  /**
+   * CF3b (M23): `grantCoOwner` se muestra como badge «Co-titular», SOLO LECTURA: lo da y lo saca el Titular principal
+   * desde Configuración (decisión de Martin del 05-nov), no Plataforma.
+   */
   member: PlatformTeamMemberRow;
   owner: PlatformTeamMemberRow | null;
   vertical: TenantVertical;
@@ -269,7 +275,7 @@ export function MemberRow({
         : "";
     const ok = await confirm({
       title: `¿Cambiar el rol de ${who}?`,
-      message: `De ${label(member.role)} a ${label(role)}: ${roleDescription(role, vertical)}${agenda}`,
+      message: `De ${label(member.role)} a ${label(role)}: ${roleDescription(role, vertical)}${agenda}${isCoOwner(member) ? CO_OWNER_ROLE_CHANGE_SUFFIX : ""}`,
       confirmLabel: "Cambiar rol",
     });
     if (!ok) return;
@@ -385,6 +391,11 @@ export function MemberRow({
         <div style={{ fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <span style={{ overflowWrap: "anywhere" }}>{who}</span>
           {isOwner && <Tag tone="lime">{platformMemberRoleLabel(member, vertical)}</Tag>}
+          {isCoOwner(member) && (
+            <span data-co-owner-badge style={{ display: "inline-flex" }}>
+              <Tag>{CO_OWNER_LABEL}</Tag>
+            </span>
+          )}
           {suspended ? <Tag tone="soft">Suspendido</Tag> : null}
           {!member.joinedAt && <Tag tone="soft">Sin aceptar</Tag>}
         </div>

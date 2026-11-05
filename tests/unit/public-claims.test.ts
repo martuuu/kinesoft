@@ -93,31 +93,39 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+const C_F7_DIRS = [
+  "app/(auth)/",
+  "app/(booking)/",
+  "app/(portal)/",
+  "app/invite/",
+  "app/sin-acceso/",
+  "app/suspendido/",
+  "app/cuenta-desactivada/",
+  "app/mantenimiento/",
+  "app/verificar-acceso/",
+  "app/elegir-consultorio/",
+  "app/(directory)/",
+  // PV (§27): LG-P (`/terminos`, `/privacidad`) y TK-U2 (`/contacto`) son copy público.
+  "app/(legal)/",
+  "app/contacto/",
+  // CF3 (SD-R, §30 D-CF3-9/10): sede digital `/<slug>` (la crea SD-U en W4). Muestra la matrícula de los
+  // profesionales (D-CF3-9): esa línea va con `// claim-ok: <evidencia>`, como el WhatsApp del consultorio.
+  "app/(sede)/",
+];
+
+/** ¿Es copy público este archivo de `app/`? (C-F7 + `opengraph-image`). Exportado para el test de sanidad de la sede. */
+export function isPublicAppCopy(f: string): boolean {
+  return (
+    C_F7_DIRS.some((d) => f.startsWith(d)) ||
+    (f.startsWith("app/auth/") && /\/page\.tsx$/.test(f)) ||
+    ["app/page.tsx", "app/not-found.tsx", "app/global-error.tsx", "app/opengraph-image.tsx"].includes(f)
+  );
+}
+
 /** C-F7 (literal) + los extras de §3.4. */
 export function publicCopyFiles(): string[] {
   const appAll = walk("app").map(rel);
-  const C_F7_DIRS = [
-    "app/(auth)/",
-    "app/(booking)/",
-    "app/(portal)/",
-    "app/invite/",
-    "app/sin-acceso/",
-    "app/suspendido/",
-    "app/cuenta-desactivada/",
-    "app/mantenimiento/",
-    "app/verificar-acceso/",
-    "app/elegir-consultorio/",
-    "app/(directory)/",
-    // PV (§27): LG-P (`/terminos`, `/privacidad`) y TK-U2 (`/contacto`) son copy público.
-    "app/(legal)/",
-    "app/contacto/",
-  ];
-  const fromApp = appAll.filter(
-    (f) =>
-      C_F7_DIRS.some((d) => f.startsWith(d)) ||
-      (f.startsWith("app/auth/") && /\/page\.tsx$/.test(f)) ||
-      ["app/page.tsx", "app/not-found.tsx", "app/global-error.tsx", "app/opengraph-image.tsx"].includes(f),
-  );
+  const fromApp = appAll.filter(isPublicAppCopy);
   const extras = [
     ...walk("components/landing"),
     ...walk("components/auth"),
@@ -125,6 +133,8 @@ export function publicCopyFiles(): string[] {
     ...walk("components/directory"),
     ...walk("components/legal"),
     ...walk("components/contact"),
+    // CF3 (SD-R): componentes de la sede digital (SD-U, W4).
+    ...walk("components/sede"),
     ...["login", "signup", "forgot", "reset"].flatMap((n) => walk(`components/screens/${n}-screen.tsx`)),
     ...walk("lib/portal-copy.ts"),
     // [ZF3] A2: los bullets de las tarjetas de precio (landing y /precios) salen de acá, no de components/landing.
@@ -170,6 +180,15 @@ describe("[VX2-c1] claims prohibidos en superficies públicas (§3.4)", () => {
     expect(files.some((f) => f.startsWith("app/(auth)/"))).toBe(true);
     expect(files.some((f) => f.startsWith("components/booking/"))).toBe(true);
     expect(files.length).toBeGreaterThan(20);
+  });
+
+  // [CF3-SDR] `app/(sede)/` y `components/sede/` los crea SD-U (W4): `walk` tolera que no existan, pero el guard no
+  // puede pasar en vacío cuando existan.
+  it("[CF3-SDR] la sede entra al alcance, exista o no todavía", () => {
+    for (const f of ["app/(sede)/[slug]/page.tsx", "app/(sede)/[slug]/opengraph-image.tsx"]) expect(isPublicAppCopy(f), f).toBe(true);
+    expect(isPublicAppCopy("app/(app)/sala/page.tsx")).toBe(false);
+    for (const d of ["app/(sede)", "components/sede"])
+      for (const f of walk(d).map(rel)) expect(files, f).toContain(f);
   });
 
   const allHits = () => files.flatMap((f) => findClaims(f, readFileSync(join(ROOT, f), "utf8")));

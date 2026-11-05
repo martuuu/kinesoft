@@ -6,13 +6,16 @@ import { useTenantModules } from "./tenant-modules-context";
 import { IconX } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import type { ReceptionLayout } from "@/lib/preferences-constants";
-import { PALETTE_OPTIONS } from "./appearance-options";
+import { paletteOptionsFor } from "./appearance-options";
+import { useTenantBrand } from "./tenant-brand-context";
 
 /**
  * Panel «Apariencia» (ex «Tweaks» con la marca; Martin lo mantiene, §20.18: «se arreglan las opciones que no
  * funcionan»). PL-F1c, inventario de lo que queda y quién lo lee (cada una con su test en
  * `tests/unit/render/pl-f1c-tweaks.test.tsx`):
  *   - Paleta → `data-palette` de `<html>` (efecto de `TweaksProvider`) y `UserPreferences.palette` en el server.
+ *     BR-P: las cuatro generales y, solo para los miembros del consultorio que la tiene asignada
+ *     (`useTenantBrand().palette`), su paleta de marca (hoy «TMP», `lib/brand-palettes.ts`).
  *   - Navegación «Barra lateral / Barra superior» → `dashChrome`, lo lee `AppShell` (monta `Sidebar` o `TopBar`).
  *   - «Barra lateral contraída» → `sidebarCollapsed`, prop `collapsed` del `Sidebar` (solo con barra lateral).
  *   - Vista semanal (encabezado, sábado, domingo) → prefs del server (`setAgenda`), las lee la agenda semanal.
@@ -61,6 +64,7 @@ export function receptionRolledBack(
 export function TweaksPanel({ canReception = false }: { canReception?: boolean } = {}) {
   const { t, set, agenda, setAgenda } = useTweaks();
   const modules = useTenantModules();
+  const paletteOptions = paletteOptionsFor(useTenantBrand().palette);
   const showReception = canReception && modules.has("salaEspera");
   const open = !t.minimised;
 
@@ -135,7 +139,7 @@ export function TweaksPanel({ canReception = false }: { canReception?: boolean }
 
       <Section label="Paleta">
         <div style={{ display: "flex", gap: 8 }}>
-          {PALETTE_OPTIONS.map((p) => {
+          {paletteOptions.map((p) => {
             const on = p.value === t.palette;
             return (
               <button

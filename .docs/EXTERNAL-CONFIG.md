@@ -288,7 +288,7 @@ planning** (§22.14: consolas, push y migraciones juntos). Orden en [RUNBOOK «M
 | Qué | Dónde | Cuándo / cómo |
 |---|---|---|
 | Bucket `patient-documents` | Supabase → Storage → New bucket | **Antes del deploy.** Privado (`public = false`), **sin policies**, límite **10 MB**, MIME permitido `application/pdf`. Guarda los PDF que se comparten con el paciente (`{tenantId}/{patientId}/{documentId}.pdf`) |
-| Bucket `practice-assets` | Supabase → Storage → New bucket | **Antes del deploy.** Privado, sin policies, límite **1 MB**, MIME `image/png`, `image/jpeg`. Logo del consultorio y firmas de los profesionales |
+| Bucket `practice-assets` | Supabase → Storage → New bucket | **Antes del deploy.** Privado, sin policies, límite **1 MB**, MIME `image/png`, `image/jpeg`. Logo del consultorio y firmas de los profesionales (`<tenantId>/…`) y, desde CF3b (M24), la foto de cada persona (`users/<userId>/photo/…`, fuera de las carpetas de los consultorios). Nada que cambiar en la consola: mismo bucket, mismo límite |
 | Límite de `patient-files` | Supabase → Storage → `patient-files` → Edit bucket | **Antes del deploy.** Sigue privado y sin policies; límite **25 MB** (la subida firmada ya no pasa por el body de 4,5 MB de Vercel) |
 | Verificar los 3 buckets | SQL editor (solo lectura) | `SELECT id, public, file_size_limit, allowed_mime_types FROM storage.buckets WHERE id IN ('patient-documents','practice-assets','patient-files');` → 3 filas, `public = f`, con sus límites. Y `SELECT policyname FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects';` → ninguna para estos buckets |
 | `PATIENT_FILES_SIGNED_UPLOAD` | Vercel (opcional) | Sin setear = prendido. `off` vuelve al camino viejo de ≤ 4 MB si la subida firmada falla en el checklist de abajo (redeploy) |
@@ -563,6 +563,29 @@ aparece «Activar en este dispositivo») y el resto anda: los avisos por mail sa
    agenda» y «el reparto lo configura el Titular en Profesionales → Reparto» (plan §29.8).
 6. QA en [QA «CF2»](QA.md) (Android Chrome, Chrome/Edge de escritorio, iPhone con la app instalada).
 
+### <a id="sede-cf3"></a>0.18 CF3 / CF3b — Sede digital, subdominio y marca (04/05-nov-2026) 🟡
+
+**Con migración M22** (`cf3_precios_sede`, [RUNBOOK «M22 en prod»](MIGRACIONES-RUNBOOK.md)), que no pide consola. Diseño en
+ARCHITECTURE ADR-036. La sede `consultorio-online.com/<slug>` **no necesita nada de consola**: la prende el Titular en
+Configuración → «Sitio web» (o vos desde Plataforma). El logo se sube desde Configuración → General.
+
+**CF3b (05-nov, M23 + M24, [RUNBOOK «M23 en prod» y «M24 en prod»](MIGRACIONES-RUNBOOK.md)): tampoco pide consola.** El
+encabezado de la sede usa fotos de `public/sede/` (van con el deploy), la foto de cada persona vive en el bucket
+`practice-assets` que ya existe (§0.11) y la paleta de TMP se asigna **después del deploy** desde Plataforma → TMP →
+Ciclo de vida → «TMP (de marca)». Recomendado: que TMP suba su isotipo (`design_source/tmp-brand/tmp-isotipo-512.png`)
+como logo en Configuración → General.
+
+**Subdominio `<slug>.consultorio-online.com` (dormido; opcional).** `SITE_ROOT_DOMAIN` **sin setear** = apagado (default de
+prod: el middleware se comporta como antes y `*.vercel.app` nunca matchea). Para prenderlo, el día que se decida:
+1. **Vercel Pro** (los dominios wildcard no están en Hobby).
+2. **DNS wildcard** `*.consultorio-online.com` en Vercel → Settings → Domains: con los nameservers de Vercel, o con un CNAME
+   `*` → `cname.vercel-dns.com` en el DNS actual.
+3. **Vercel → Production:** `SITE_ROOT_DOMAIN=consultorio-online.com` (sin esquema, sin `www`; el boot rechaza un valor que
+   no sea dominio o que sea `vercel.app`) y `NEXT_PUBLIC_APP_URL` = el **host principal** (`https://consultorio-online.com`):
+   ahí van el turnero, el login y la app, porque las cookies de Supabase son host-only.
+4. **Redeploy.** Verificar: `https://tmp.consultorio-online.com/` muestra la sede; `/logo` sirve el logo; cualquier otro path
+   sale con 308 al host principal. El canonical sigue siendo `consultorio-online.com/tmp`.
+
 ### 1. Hosting / plataforma de despliegue — Vercel
 - **Qué configura:** proyecto en Vercel (región `gru1` ya fijada en `vercel.json`); env vars de prod;
   branch protection en `main` exigiendo el check de CI como required; `KINESOFT_ALLOW_DEMO_ACTOR`
@@ -573,8 +596,8 @@ aparece «Activar en este dispositivo») y el resto anda: los avisos por mail sa
 - **Gate de activación:** —
 
 ### 2. DNS y dominio
-- **Qué configura:** dominio productivo del SaaS + apuntar a Vercel; subdominios si el modelo
-  `/c/<slug>` migra a `slug.dominio`.
+- **Qué configura:** dominio productivo del SaaS + apuntar a Vercel. El subdominio por consultorio
+  (`<slug>.dominio`, sede digital) queda dormido: cómo prenderlo en [§0.18](#sede-cf3).
 - **Bloquea:** email transaccional (SPF/DKIM viven acá), corte E2.
 - **Responsable:** dueño.
 - **Estado:** 🔴

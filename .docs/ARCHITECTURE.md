@@ -2186,9 +2186,8 @@ que no tenía guard.
 
 ## CF2 (02-nov-2026): feedback de los clientes, 2.ª ronda
 
-Plan §29 (brief `wip-20/brief-cf2.md`; olas W0..W6, INT y Z). **En `develop`, sin commitear y sin push.** Una migración:
-**M21** `20261102120000_cf2_profesional_caja`, aditiva y **antes** del deploy ([RUNBOOK «M21 en prod»](MIGRACIONES-RUNBOOK.md));
-si M20 todavía no está en prod, va antes. Hallazgos en [AUDIT «Ronda CF2»](AUDIT.md#ronda-cf2).
+Plan §29 (brief `wip-20/brief-cf2.md`; olas W0..W6, INT y Z). **En prod desde el 02-nov** (`c288e5d`, junto con CF; M20
+y M21 aplicadas antes del push, [RUNBOOK «M21 en prod»](MIGRACIONES-RUNBOOK.md)). Hallazgos en [AUDIT «Ronda CF2»](AUDIT.md#ronda-cf2).
 
 ### ADR-033 — Caja y reparto entre profesionales (status: ACCEPTED, CF2, 02-nov-2026)
 
@@ -2318,6 +2317,301 @@ la campana alcanza); el nombre del paciente en el push.
 | `lib/sala-location-filter.ts` · `components/sala/sala-location.tsx` · `components/sala/sala-cash-drawer.tsx` | Sede y cobro en `/sala` |
 | `lib/practitioner-names-internal.ts` | Nombres de profesionales cacheados (Pacientes) |
 | `components/dashboard/notifications-panel.tsx` · `components/ui/confirm-dialog-panel.tsx` · `components/ui/icon-wallet.tsx` | Chunks diferidos para el first-load (ZF4) |
+
+## CF3 (04-nov-2026) y CF3b (05-nov): precio por profesional, autoconfiguración, compartir, sede digital, co-titular y foto
+
+Plan §30 (brief `wip-20/brief-cf3.md`; olas W0..W5 y Z) + CF3b (decisiones de Martin del 05-nov, `wip-20/cf3-handoffs.md`).
+**En `develop` sobre `c288e5d`, commiteadas juntas por el agente a pedido de Martin, sin push.** Tres migraciones, aditivas
+y **antes** del push en un solo `db:prod:deploy`: **M22** `20261104120000_cf3_precios_sede`, **M23**
+`20261105120000_cf3_co_titular` y **M24** `20261105130000_cf3_practitioner_photo` ([RUNBOOK «M22/M23/M24 en
+prod»](MIGRACIONES-RUNBOOK.md)). Hallazgos en [AUDIT «Ronda CF3»](AUDIT.md#ronda-cf3) y [«Ronda CF3b»](AUDIT.md#ronda-cf3b).
+
+### ADR-035 — Precio por profesional (status: ACCEPTED, CF3, 04-nov-2026)
+
+**Contexto.** En TMP el Titular y el otro profesional atienden el mismo servicio y cobran distinto. La escalera de
+`lib/copago.ts` (AUDIT §5.5) no recibía al profesional, y el particular pagaba el copago de la fila «Particular» (que
+nace en $ 0) mientras el turnero mostraba `Service.priceCents`. Martin (decisión 1 del 04-nov): el particular paga el
+precio del profesional; con obra social el turnero no muestra precio y ofrece el WhatsApp del profesional.
+
+**Decisión** (D-CF3-1..5):
+- **Dato.** `PractitionerService.priceCents` INTEGER NULL (M22, CHECK 0..100 000 000). NULL = hereda: con NULL en todos
+  lados el resultado es **idéntico** al de antes de CF3 (invariante por barrido en `tests/unit/cf3-copago-ladder.test.ts`).
+- **Escalera** (`resolveBookingCopagoCents`, inputs nuevos `practitionerPriceCents?` e `insurerIsParticular?`):
+  1. monto del turno (`Booking.copagoCents`);
+  2. OS real: copago propio del paciente → copago de la OS → **precio del profesional** → precio del servicio (el
+     convenio manda; el profesional solo reemplaza al precio del servicio);
+  3. particular sin cobertura: **precio del profesional** → «Particular» del consultorio → servicio
+     (`particularQuoteCents`, el mismo helper que usan el turnero y la sede);
+  4. cobertura a la fila «Particular» (`insurerIsParticular`): copago propio → **precio del profesional** → copago de esa
+     fila → servicio. Acá no se consulta `particularCopago` (la escalera vieja con cobertura no lo hacía: cambiaría montos
+     ya cotizados).
+- **Contrato de los callers (M):** quien pase `practitionerPriceCents` **tiene que** seleccionar `insurerRef.isParticular`
+  y pasar `insurerIsParticular`; si no, el precio del profesional no aplica al particular con cobertura a la fila
+  «Particular». `lib/billing-internal.ts` re-exporta solo `resolveBookingCopagoCents`; `particularQuoteCents` se importa
+  de `@/lib/copago`. Precios en lote: `loadPractitionerPrices` (`lib/bookings.ts:159`, una sentencia por lectura,
+  producto `practitionerId IN × serviceId IN`, `tenantId` a mano) y `loadPractitionerPricesInTx` /
+  `getPractitionerPriceCentsInTx` (`lib/billing-internal.ts`) para el resto.
+- **Paridad:** agenda (liviana y completa) = dashboard = preview del modal (`getPatientBillingPreview(patientId,
+  serviceId?, practitionerId?)`, se vuelve a pedir al cambiar de profesional) = link de pago = cobro del turnero = status
+  = congelado al cobrar. El modal muestra la fuente «precio del profesional».
+- **Congelado al cobrar** (`toggleBilling`, `lib/bookings.ts:2206`): una sentencia con el precio del servicio y el del
+  profesional **actual** del turno (`$queryRaw` LEFT JOIN con `tenantId`). Después de cobrado, el monto no se mueve.
+- **Reasignación (D-CF3-2):** hasta que se cobra, el precio sigue al profesional actual (como el reparto de ADR-033).
+  El precio aplica aunque el servicio esté `enabled = false` para ese profesional: un turno ya dado se cotiza a su
+  arancel hasta cobrarse.
+- **Invitados (turno sin paciente, ZA M1 → ZF1):** se cotizan con `particularQuoteCents` (profesional → «Particular» →
+  servicio) en la agenda y en el dashboard, que es lo que `toggleBilling` congela; antes se mostraban al precio del
+  servicio y se cobraban a otro número. Con monto propio del turno, ese monto.
+- **Precio oculto (D-CF3-3/4, `Practitioner.showPublicPrice`, default true):** `buildPublicPricing` (puro) decide qué
+  números de plata viajan en `getPublicClinic`: `particularQuotes[pro][svc]` solo de los profesionales que muestran su
+  precio; `services[].priceCents` y `onlinePayment.particularCopagoCents` en 0 / null cuando podrían ser el precio de
+  uno que lo ocultó. El status sin cobro online pone 0 para un oculto. Con «Cualquier profesional», el paso de servicio
+  no muestra precio: aparece en el resumen. Con cobro online el monto se ve siempre, recién en el interstitial antes de
+  Mercado Pago (ZF3-1: también con OS y precio del servicio en 0).
+- **Límite conocido (ZA B1, aceptado):** la cotización por profesional y los números del consultorio salen de las mismas
+  filas. Si un profesional **oculto** y uno **visible** heredan el mismo fallback (los dos sin precio propio, o sea, el
+  «Particular» del consultorio o el precio del servicio), la cotización del visible es, por construcción, el número del
+  oculto. No es una fuga del precio propio del oculto (ese nunca viaja); es que «ocultar» no puede esconder un número que
+  el consultorio publica para otro. Si el oculto quiere esconderlo de verdad, carga su precio propio.
+- **OS en el turnero (D-CF3-5):** sin precio; `showContactForInsured` (opt-in, CHECK de M22 = número + consentimiento +
+  versión) sobre el número con consentimiento de CF2, versión vigente `cf3-lead-contact-v2` (la anticipación acepta v1,
+  la OS exige v2). El número llega solo por la action `getInsuredContact(slug, practitionerId)` con rate limit (20 cada
+  10 min); en el HTML viaja solo `insuredContactAvailable[pro] = true`. Sin opt-in o si la action falla: «Consultá tu
+  cobertura con el consultorio» + teléfono del consultorio (`clinicPhone`), sin nombrar al profesional (ZF2-8).
+
+**Autoedición del profesional (D-CF3-6/7/12/13).** Gate «lo propio o `schedule.configure`»
+(`lib/practitioner-self-scope.ts`: `assertSelfOrScheduleConfigure` / `assertSelfOrAgendaViewAll` → `{via, caps}` fuera de
+la tx, y `writablePractitionerWhere` dentro: el `Practitioner` tiene que ser del usuario del actor, del tenant y
+reservable). El permiso se mira primero (un Titular con «Configuración» queda `via: "config"`). Aplica a servicios del
+profesional, semana, excepciones y vacaciones, con los mismos validadores (incluido el choque de salas). **Quedan del
+consultorio:** la capacidad del servicio, la anticipación y el horizonte del servicio (ZA M2 → ZF1-3), el tope de turnos
+por intervalo y los pasos de la agenda. Servicios propios: `Service.practitionerId = él`, tope `OWN_SERVICES_MAX` (30),
+no se habilitan solos a otros, edita y archiva solo los suyos, nacen con 1 paciente por horario. Una reasignación
+commiteada entre la lectura y el UPDATE no le pisa el servicio a otro (ZF1-4). Audit: lo propio siempre; por
+Configuración, solo el precio (criterio PL-A2). «Mi agenda» pasa a ser la pestaña inicial del profesional con 5
+secciones (Servicios y precios · Días y horarios · Vacaciones y días especiales · Turnero online · Avisos), y el link
+propio `bookingHref(slug, practitionerId)` con estado honesto (deshabilitado con el motivo). La Secretaria y Facturación
+no ven «Mi agenda».
+
+**Descartados.** El precio del profesional antes del copago de la OS (lo fija el convenio); mandar el número del WhatsApp en el HTML; QR del link
+(librería nueva).
+
+**Consecuencias.** Un caller nuevo de la escalera sin `insurerIsParticular` es un bug silencioso de plata (§5.5
+enmendado). Cada profesional de TMP carga su precio en «Mi agenda» después del deploy; hasta entonces todo cobra igual
+que hoy.
+
+### ADR-036 — Sede digital `/<slug>` (status: ACCEPTED, CF3, 04-nov-2026)
+
+**Contexto.** Martin quiere `consultorio-online.com/tmp` como página del consultorio. Lo más parecido era
+`/consultorios/[slug]` del directorio (apagado). Un `/<slug>` de primer nivel choca con las rutas de la app, el root 404
+lee cookie (500 en ISR), robots bloqueaba por prefijo y el logo vive en un bucket privado.
+
+**Decisión** (D-CF3-9/10/11):
+- **Ruta** `app/(sede)/[slug]/{page,layout,not-found,opengraph-image}` + `logo/route.ts`. `revalidate = 600`,
+  `dynamic = "force-static"`, `generateStaticParams` vacío y **sin** `dynamicParams = false` (con él todo slug da 404 y
+  se rompe el logo). 404 **estático** propio del grupo (el root lee cookie). Alias viejo o mayúsculas → 308
+  (`permanentRedirect`) sin query. JSON-LD (`clinicSiteJsonLd`) y OG por consultorio. Componentes server puros en
+  `components/sede/*` (guard `public-surface-imports`); grupo `public` del bundle (≤ 120 kB).
+- **Datos:** `getClinicSite(slug)` (`lib/clinic-site-internal.ts`) → `null` | `{redirectTo}` | `ClinicSite` (DTO
+  cerrado, `clinicSiteSchema`), de un **snapshot global** `unstable_cache` `["clinic-site:snapshot:v3"]` (v3 = CF3b
+  suma `photoUrl` por profesional, ADR-038) con tags
+  `global:directory` + `global:sites` (`CLINIC_SITES_TAG`) y 10 min. Sin cookies ni headers adentro. Publica solo con
+  `Tenant.siteEnabled` (M22, apagada por defecto), superficies públicas abiertas y slug no reservado; turnero apagado =
+  la sede existe sin profesionales. Muestra lo que ya es público en el turnero (nombre, especialidad, matrícula,
+  servicios y precio si `showPublicPrice`, «Sacar turno con X» con `?pro=`), horarios, sedes con link al mapa (null sin
+  dirección), obras sociales y el contacto **del consultorio**. Nunca el WhatsApp de un profesional ni el email de
+  nadie (`publicEmail` se edita pero no se publica). Invalidación `revalidateTag(CLINIC_SITES_TAG)` post-commit en
+  «Sitio web», logo, nombre/contacto, suspensión, precio, `showPublicPrice`, servicios, OS y sedes.
+- **Logo público versionado** (`/<slug>/logo?v=<logoUpdatedAt ms>`): baja los bytes por el canal service con la sede
+  publicada **o con el turnero abierto** (CF3b PH-S: el turnero pinta el logo sobre la foto de cada profesional,
+  `PublicClinic.logoUrl`, aunque el consultorio no haya prendido su sede; esa rama lee por slug sin cache para que un slug
+  basura no deje entradas), revalida magic bytes y tope, y sirve `public, max-age=31536000, s-maxage=31536000,
+  immutable` **solo** con el `?v` vigente. Sin `v` o con otro → **308** a `?v=<vigente>` (`max-age`/`s-maxage` 5 min)
+  sin tocar Storage (ZA M3 → ZF2: un `?v` al azar por request bajaba el objeto cada vez); 404 con 1 min en el CDN.
+  CF3b ZF5: el `s-maxage` (sin él el CDN de Vercel no guarda la respuesta de una función y cada visitante nuevo bajaba
+  el objeto) y un **rate limit por IP** solo en el camino que baja bytes (`PUBLIC_PHOTO_BYTES_RATE_LIMIT`, clave
+  `site-logo:ip:`); el 308 y el 404 no gastan cupo. El logo se guarda **sin metadatos** (`stripImageMetadata`, ZF5):
+  es público desde CF3.
+- **Encabezado con foto (CF3b BR-H, pedido de Martin del 05-nov):** `components/sede/sede-hero.tsx` pinta una foto de
+  consultorio igual para todos (`public/sede/hero-consultorio-{960,1600,2400}.webp` + `-1600.jpg`, decorativa,
+  `fetchPriority="high"`, `position: absolute` → CLS 0) con un velo en `--sky-*` de la paleta activa, el logo grande, el
+  nombre, la frase y «Sacar turno». Movimiento solo CSS (zoom lento, «vértebras», barrido de luz); con
+  `prefers-reduced-motion` no se mueve nada. `next.config.mjs`: `/sede/:path*` con `public, max-age=604800,
+  stale-while-revalidate=86400` (sin hash en el nombre, así que no `immutable`: una foto nueva va con otro nombre) y
+  `sede` entra a `RESERVED_SLUGS` (22 en total). La **OG** (`opengraph-image.tsx`) usa la misma foto
+  (`hero-consultorio-og.jpg`, 1200×630 por `readFile` con ruta literal) con el velo de `components/sede/sede-og.ts`
+  (copia de los tokens, `next/og` no lee CSS; un test los compara con `globals.css`); el trazado del build no sigue el
+  `readFile`, así que va en `outputFileTracingIncludes` (`"/*/opengraph-image*"`). Si la foto falta, la OG sale sobre el
+  color sólido, nunca 500. Recomendación a Martin: subir el isotipo como logo.
+- **Slugs reservados derivados de `app/`** (`tests/unit/cf3-reserved-slugs.test.ts`): cada segmento de primer nivel
+  (entrando a los route groups, más metadata y `public/`) tiene que ser un slug inválido. Se sumaron 21 (`caja`, `cobros`,
+  `pagar`, `consultorios`, `contacto`…) y `sede` en CF3b (22); precheck `pre.M22.reservedSlugs`. «Sitio web» avisa si el slug quedó reservado
+  pero no bloquea (el server tampoco: la sede simplemente no se publica).
+- **Robots exactos** (`app/robots.ts`): cada segmento de la app se bloquea como `/<seg>$`, `/<seg>/` y `/<seg>?`, así
+  `/tvsalud` no cae bajo `/tv`. La sede la cubre `Allow: /`; apagada da 404. Prendida = en el sitemap.
+- **Canonical** `/<slug>`; `/consultorios/<slug>` apunta a ella cuando está prendida.
+- **Activación:** el Titular en Configuración → «Sitio web» (`tenant.sensitive`: activar, frase ≤ 120, descripción ≤ 800,
+  teléfono, WhatsApp y email públicos) o Plataforma (`setPlatformTenantSite`; soporte no la publica).
+- **Subdominio dormido** (`lib/site-host.ts` + `middleware.ts`): con `SITE_ROOT_DOMAIN` sin setear (default) está
+  apagado. Prendido, solo un host exactamente `<slug>.<SITE_ROOT_DOMAIN>` con forma de slug y no reservado sirve la sede
+  (`/` → `/<slug>`, `/logo`) y todo lo demás sale con 308 al host de `NEXT_PUBLIC_APP_URL` (cookies de Supabase
+  host-only). `*.vercel.app` nunca matchea (la regla vieja de 3 etiquetas tomaba las previews como slug). El canonical
+  se queda en `/<slug>`.
+- **Diseño:** dirección A del prototipo (`design_source/sede/sede-a.html`, editorial) + «Quién atiende cada día» de la B
+  (`SEDE_SECTIONS` en `components/sede/sede-page.tsx` reordena). **Martin confirmó la A el 05-nov.** Colores:
+  `Tenant.palette` (`data-palette` del wrapper), incluida la paleta de marca de ADR-038.
+
+**Descartados.** Reusar `/consultorios/[slug]` (depende de `DIRECTORY_MODE`); URL firmada de Storage para el logo
+(vence); prender el subdominio ya (necesita Vercel Pro + wildcard).
+
+**Consecuencias.** Toda carpeta nueva de primer nivel en `app/` tiene que entrar a `RESERVED_SLUGS` (el test lo exige).
+Prender el subdominio: [EXTERNAL-CONFIG §0.18](EXTERNAL-CONFIG.md#sede-cf3).
+
+### ADR-037 — Co-titular y matrícula de la persona (status: ACCEPTED, CF3b, 05-nov-2026)
+
+**Contexto.** En TMP atienden dos profesionales y Martin quiere que el segundo tenga las funciones del Titular sin poder
+degradar al principal (consulta y OK del 05-nov). Hasta CF3 `account.owner` agrupaba «todo lo del Titular» y había un
+solo OWNER por consultorio, que además es el dueño de la suscripción, de la cuenta de Mercado Pago del consultorio y
+de WhatsApp Business.
+
+**Decisión** (M23 `20261105120000_cf3_co_titular`):
+- **Dato:** `Membership.grantCoOwner` BOOLEAN NOT NULL DEFAULT false, una delegación más de la membresía (molde de
+  `grantSettings`/`grantBilling`, M8), no un valor nuevo de `Role`. CHECK `Membership_coOwner_role_check`: solo con
+  `role = 'PRACTITIONER'` (el OWNER ya es el principal; Admin, Secretaria y Facturación no atienden).
+- **Matriz de cuenta** (`lib/capabilities.ts`, cabecera; los tests usan los mismos nombres). `account.owner` se partió en
+  tres:
+
+  | Capacidad | Titular principal | Co-titular | Admin / Profesional | Secretaria / Facturación | Soporte |
+  | --- | --- | --- | --- | --- | --- |
+  | `account.owner` | ✓ | – | – | – | – |
+  | `account.billing` | ✓ | – (nunca) | con `grantBilling` | – (corte de staff) | – |
+  | `account.manage` | ✓ | ✓ | – | – | – |
+  | `account.export` | ✓ | ✓ | – | – | – |
+
+  `account.owner` = transferir, dar/quitar «Co-titular», su «Atiendo pacientes» y las cuentas externas a su nombre (MP
+  del consultorio y su OAuth, WhatsApp Business). `account.manage` = delegar «Configuración» (dar «Planes y pagos» exige
+  además `account.billing`), gestionar el equipo y anular evoluciones ajenas (EV2-D15). `account.export` = el export
+  completo (`GET /api/consultorio/export`, que decide sin Actor con `canExportTenantData`, el mismo predicado). El resto:
+  el co-titular tiene lo del Titular que atiende (`ALL`). Helpers en `lib/roles-core.ts` (`isPrincipalOwner`,
+  `isCoOwner`, `isOversightMember`) y `lib/capabilities.ts` (`canExportTenantData`, `MEMBER_ACCESS_SELECT` con
+  `grantCoOwner`); `requireAccountManage()`, `memberRoleLabel(m)` y `CO_OWNER_LABEL` («Co-titular»).
+- **Nunca la suscripción:** sin `account.billing` aunque la fila tenga `grantBilling` (prender la marca lo apaga en la
+  misma escritura, `setMemberCoOwnerInTx`); no ve «Plan y uso» (`lib/tenant-plan-usage.ts`: solo `account.billing`), no
+  delega «Planes y pagos», no recibe los mails de cobro SaaS (`billingRecipients`) y los upsell le dicen «Pedile al
+  titular…» (`moduleDeniedCopy(…, { seesPlan })`, ZF4b). El aviso de reconectar la cuenta de MP del consultorio va solo
+  al principal (`lib/mp-connect/cron-internal.ts`, ZF4a).
+- **Sí:** supervisa todo el consultorio como el Titular (`isOversightMember` en `lib/visibility.ts` y
+  `lib/dashboard.ts`, un solo predicado desde ZF4a), recibe los avisos del Titular (`notifications-internal.ts`),
+  exporta (también desde `/suspendido`) y anula notas ajenas.
+- **Protecciones del principal** (`lib/team-internal.ts`): `actsAsOwner` sale del **rol** OWNER (el wrapper nunca lo
+  arma por capacidades) y `teamStandingInTx` relee en la tx quién actúa (`principal` | `coOwner` | `member`): si el
+  principal le sacó la marca un segundo antes, ya no puede. Frente al principal el co-titular tiene los límites del
+  Admin: nada sobre su membresía, no transfiere, no ve el link de la invitación (usa «Reenviar»). Al bajar de plan, un
+  Admin con «Planes y pagos» no puede deshabilitar a un co-titular (se lo trata como al OWNER salvo que actúe el
+  principal, `lib/saas-plan-change-internal.ts`, fix M de CT-K2 en CT-I).
+- **Dar y quitar:** `setMemberCoOwner(membershipId, enabled)` (`lib/invitations.ts`): `account.owner` + step-up de 2FA;
+  prender solo a un PROFESIONAL aceptado y activo; CAS sobre lo leído; audit `membership.coOwner.change`. Defaults de
+  CT-K2 (rigen hasta que Martin diga otra cosa): **D1** a un co-titular lo gestionan (rol, permisos, suspender,
+  reactivar, quitar) solo el principal y Plataforma (`coOwnerTargetError` + `notCoOwnerUnlessPrincipal` en el CAS);
+  **D2** el ex-Titular de una transferencia no queda co-titular; **D3** no hay acción de Plataforma para dar/quitar
+  co-titular (el núcleo la admite; se suma si Martin la pide).
+- **Limpieza por el CHECK:** cambiar el rol de un co-titular (`...(nextRole !== "PRACTITIONER" ? { grantCoOwner: false }
+  : {})`), transferirle la titularidad (pasa a OWNER) y el demote del Titular viejo escriben `grantCoOwner: false` en la
+  **misma** escritura (si no, 23514). Re-entrar por una invitación nueva entra sin co-titular
+  (`lib/invite-activation-internal.ts`, ZF5: antes un co-titular suspendido que volvía como Admin chocaba con el CHECK)
+  y el sembrado de QA (`scripts/lib/qa-tenants-core.ts`) también lo apaga al re-correr.
+- **Reparto del principal** (ZF5, default de Martin pendiente): una regla cuyo «quien destina» es el Practitioner del
+  principal reparte su plata; la crean o la cierran solo él (`isPrincipalOwnerPractitionerInTx`, en la tx, después del
+  lock `rshare` y antes del CAS). El co-titular y un Admin con «Configuración» siguen con las demás (D-CF2-18).
+- **Matrícula de la persona** (misma M23): `UserProfile.licenseKind` (MN | MP), `licenseNumber`, `licenseJurisdiction`
+  (las 24 provincias, solo MP) y `licenseUpdatedAt` (la pone el trigger `UserProfile_license_stamp`). Todo o nada (los
+  tres NULL, MN + número, o MP + número + provincia). Es un **dato de seguridad**, no se publica: la carga cada uno en
+  «Mi agenda» → «Matrícula» (`setOwnLicense`, `lib/user-license*.ts`; `UserProfile` no tiene RLS, así que el `userId`
+  sale siempre de la sesión), deja `license.updated` / `license.cleared` en `UserSecurityEvent` y el Titular la ve en
+  Usuarios antes de dar «Co-titular».
+
+**Descartados.** Un `Role` nuevo (tocaba cada comparación con OWNER y el enum); la matrícula en
+`ProfessionalPublicProfile` (M11: exige `publicName`, es el contenido público y SERVICE_ONLY) o en
+`Practitioner.licenseNumber` (por consultorio, texto libre y público, lo congela la firma de la ficha).
+
+**Consecuencias.** Todo chequeo nuevo de «solo el Titular» elige entre `account.owner` (solo el principal) y
+`account.manage` (los dos); nunca `role === "OWNER"` a mano (guard `pl-ownership-guard`). Una escritura nueva que cambie
+`Membership.role` tiene que limpiar `grantCoOwner` en la misma sentencia.
+
+### ADR-038 — Foto de la persona y marca del consultorio (status: ACCEPTED, CF3b, 05-nov-2026)
+
+**Contexto.** Pedidos de Martin del 05-nov: cada profesional sube su foto (avatar en la app, turnero y sede) con un
+marco igual para todos; el logo del consultorio adentro de la app; los colores de TMP (`design_source/tmp-brand/`).
+Hasta acá solo existía `UserProfile.avatarUrl`, la URL de Google/Facebook que el login pisa.
+
+**Decisión** (M24 `20261105130000_cf3_practitioner_photo`):
+- **Foto por persona, opt-in por consultorio.** `UserProfile.photoStorageKey` + `photoUpdatedAt` (las dos o ninguna,
+  CHECK) en el bucket privado `practice-assets` bajo `users/<userId>/photo/<nonce>.<png|jpg>`; el CHECK
+  `UserProfile_photoStorageKey_check` ata el prefijo al id de la fila para que ninguna fila apunte a una firma o a un
+  logo. `Practitioner.showPhotoPublic` (default false, por consultorio, Ley 25.326): sin él la foto no sale en el
+  turnero ni en la sede de ese consultorio; en la app sale sin flag (la ve el equipo). Nunca se cae a `avatarUrl`.
+- **Subida** (`lib/user-photo.ts` + `-internal` + `-logic`): el cliente la reduce a 512×512 con canvas
+  (`lib/photo-resize.ts`, PNG si tiene alfa, JPEG si no, sin librerías); el server no confía: PNG/JPEG por magic bytes,
+  ≤ 1 MB, ≤ 2048 px por lado (bomba de descompresión) y **`stripImageMetadata`** (saca EXIF/GPS, XMP, texto y bytes
+  después del EOI/IEND). Rate limit 10 cada 10 min por usuario. El objeto viejo se borra después del commit.
+  `UserSecurityEvent` `photo.updated` / `photo.removed` (ZF4a). Post-commit se revalidan solo la sede y el turnero de
+  los consultorios donde la persona la publica (ZF5; antes `revalidatePath("/", "layout")` purgaba todo el sitio).
+- **Rutas:** propia `/api/me/photo?v=<ms>` (`private, max-age=31536000, immutable`); pública
+  `/api/public/pro-photo/<practitionerId>?v=<ms>`: solo con superficie pública abierta, profesional reservable, opt-in y
+  foto; cualquier «no» es el mismo 404 (1 min en el CDN). Query distinta a la canónica (`isCanonicalPhotoQuery`) → 308
+  sin bajar bytes (5 min). 200 con **`public, max-age=86400, s-maxage=86400`** + `nosniff`, sin `immutable` (ZF4a:
+  retirar el opt-in tiene que surtir efecto en un día, no en un año); rate limit por IP solo en el camino que baja
+  bytes (`PUBLIC_PHOTO_BYTES_RATE_LIMIT`). DTOs: `ConfiguracionMiAgendaData.photo`, `PublicClinic.practitioners[].photoUrl`,
+  `ClinicSite.practitioners[].photoUrl`. El avatar del shell sale de la foto de acceso (`loadAccessMemberships` trae
+  `photoUpdatedAt` en la misma sentencia, 0 sentencias nuevas, ZF4a) como `AppShell.userPhotoUrl`.
+- **Marco:** `components/ui/practitioner-photo.tsx` (`PractitionerPhoto`, server-safe, sin framer): disco blanco, sombra
+  en `color-mix(--sky-600)`, anillo `--sky-500`, foto `object-fit: cover` (un PNG transparente queda recortado sobre
+  blanco) y el logo del consultorio en una insignia abajo a la derecha (~32 %); sin foto, las iniciales de
+  `lib/person-initials.ts` en el mismo marco (una sola regla desde ZF4b: «Lic. Ana Pérez» → «AP»). Lo usan el turnero
+  (con `PublicClinic.logoUrl` = `/<slug>/logo`, ADR-036), la sede, el avatar de la app y «Mi agenda». Una foto que no
+  carga deja el disco vacío (aceptado: no es componente de cliente).
+- **Logo en la app** (BR-L): `GET /api/consultorio/logo?t=<tenantId>&v=<logoUpdatedAt ms>` (`tenantLogoUrl`,
+  `lib/tenant-logo.ts`) con sesión y membresía usable en ese consultorio (sin Actor: sirve a `/elegir-consultorio`);
+  consultorio ajeno o sin logo = el mismo 404; query no canónica → 308 sin bajar bytes (ZF4a: antes un parámetro de más
+  bajaba el objeto); 200 `private, max-age=31536000, immutable`. Lo pintan el selector del sidebar, la barra móvil, el
+  menú de cuenta y `/elegir-consultorio` (`TenantLogo`, caja fija, iniciales si no carga; `useTenantBrand()` en
+  `components/layout/tenant-brand-context.tsx`). En mobile, con logo, la marca del producto pasa a baldosa al lado.
+- **Paleta de marca** (BR-P, `lib/brand-palettes.ts`): además de las cuatro generales (`sky`, `mint`, `coral`,
+  `violet`) hay paletas de un consultorio puntual; hoy solo **`tmp`** (`#1A436C` / `#53A0AA`, medidos del logo), con su
+  bloque `[data-palette="tmp"]` en `globals.css` que reasigna `--sky-*`. Existe para un consultorio cuando
+  `Tenant.palette = "tmp"`, y eso lo asigna **solo Plataforma** (Consultorio → Ciclo de vida → colores, «TMP (de
+  marca)», con confirmación; `setPlatformTenantSite`). Con eso: la sede y el turnero la pintan; Apariencia se la ofrece
+  a los miembros de ese consultorio (`palettesForTenant`), que la eligen (es preferencia del usuario; en otro
+  consultorio se pinta la de siempre, `effectivePalette`); «Sitio web» ofrece las cuatro generales + la asignada, y
+  dejarla pide confirmación (ZF5) porque solo Plataforma la vuelve a poner. Los tintes del turnero salen de
+  `color-mix(var(--sky-700) …)` (ZF4b); el fondo `--bg-public` no cambia con la paleta (C-F1).
+
+**Descartados.** La foto en `Practitioner` (la persona la subiría una vez por consultorio); reusar `avatarUrl` (URL de
+terceros que cambia con cada login); `immutable` de un año en la foto pública (no deja retirar el consentimiento); URL
+firmada de Storage para el logo de la app (vence y no se cachea).
+
+**Consecuencias.** Toda superficie pública que muestre a una persona usa `photoUrl` del DTO (opt-in ya aplicado) y nunca
+arma la URL a mano. Una paleta de marca nueva = su key en `BRAND_PALETTES`, su bloque en `globals.css` y su swatch.
+
+### Módulos nuevos de CF3 y CF3b
+
+| Módulo | Qué es |
+| --- | --- |
+| `lib/copago.ts` (`particularQuoteCents`) · `lib/billing-internal.ts` (`loadPractitionerPricesInTx`) | Escalera con precio del profesional (ADR-035) |
+| `lib/practitioner-self-scope.ts` | Gate «propio o `schedule.configure`» |
+| `lib/public-insured-contact.ts` · `components/booking/wizard/insured-contact.tsx` | WhatsApp del profesional para pacientes con OS |
+| `components/configuracion/panels/practitioners/own-service-form.tsx` | Servicio propio desde «Mi agenda» |
+| `lib/patient-share-types.ts` · `components/patients/contact-actions.tsx` · `contact-actions-logic.ts` | Compartir desde el perfil (D-CF3-8) |
+| `lib/clinic-site-{types,logic,internal,settings,settings-schemas}.ts` · `app/(sede)/` · `components/sede/` · `site-panel.tsx` | Sede digital (ADR-036) |
+| `lib/site-host.ts` | Subdominio dormido |
+| `components/sede/sede-hero.tsx` · `sede-og.ts` · `public/sede/` | Encabezado con foto y OG de la sede (CF3b, ADR-036) |
+| `lib/services-schemas.ts` (`serviceOwnerFor`) | Alta con «Para todo el consultorio» (CF3b SV) |
+| `lib/co-owner-types.ts` · `components/configuracion/panels/users-co-owner-logic.ts` | Co-titular (ADR-037) |
+| `lib/user-license{,-internal,-logic,-schemas}.ts` · `license-section.tsx` | Matrícula de la persona (ADR-037) |
+| `lib/user-photo{,-internal,-logic}.ts` · `lib/photo-resize.ts` · `app/api/me/photo/` · `app/api/public/pro-photo/` · `photo-section.tsx` · `components/layout/user-photo-context.tsx` | Foto de la persona (ADR-038) |
+| `components/ui/practitioner-photo.tsx` · `lib/person-initials.ts` | Marco de la foto e iniciales únicas (ADR-038) |
+| `lib/tenant-logo.ts` · `app/api/consultorio/logo/` · `components/layout/tenant-logo.tsx` · `tenant-brand-context.tsx` | Logo del consultorio en la app (ADR-038) |
+| `lib/brand-palettes.ts` | Paletas generales y de marca (`tmp`, ADR-038) |
 
 ## Cache & cookies (what is implemented — updated 30-sep-2026)
 

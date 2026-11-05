@@ -20,7 +20,7 @@ import { refreshTokens } from "@/lib/mp-connect/oauth-client";
 import { fakeMpHandle } from "@/lib/mp-connect/fake-mp";
 import { prismaService } from "@/lib/db";
 import { mpCredentialAad, openSecret, sealSecret } from "@/lib/secret-box";
-import { ownerClient, createEphemeralTenant, addPatient, addPractitioner, type EphemeralTenant } from "@/tests/helpers/tenant-factory";
+import { ownerClient, createEphemeralTenant, addPatient, addPractitioner, addStaff, type EphemeralTenant } from "@/tests/helpers/tenant-factory";
 import { connectFakeAccount, fakeMpForceReauth, installFakeMp, type InstalledFakeMp } from "@/tests/helpers/mp-connect-fake";
 
 const RUN = process.env.INTEGRATION === "1";
@@ -249,6 +249,50 @@ describe.skipIf(!RUN)("[TP-2k] cron diario · etapa mp_connect", () => {
     expect((await runMpConnectMaintenance(new Date(), 8_000, scope())).reauth).toBe(1);
     const notes = await db.notification.findMany({ where: { tenantId: T.tenantId, kind: "SYSTEM" } });
     expect(notes.map((n) => [n.userId, n.link])).toEqual([[T.userId, "/configuracion?tab=cobros-online"]]);
+  });
+
+  // CF3 ZF4a (B, auditoría de CT-I): reconectar la cuenta del CONSULTORIO es `account.owner` (solo el Titular principal,
+  // lib/configuracion-page-loader.ts `canManageClinicAccount`). Antes iba por `notifyTenantOwners` y le llegaba también
+  // al Administrador/a y al co-titular, que abren el link y no tienen el botón.
+  it("[CF3-ZF4a5] REAUTH de la cuenta del consultorio: el aviso va SOLO al Titular principal (ni Admin ni co-titular)", async () => {
+    await freshTenant();
+    const admin = await addStaff(db, T, "ADMIN", { grantSettings: true, grantBilling: true });
+    const co = await addStaff(db, T, "PRACTITIONER");
+    await db.membership.update({ where: { id: co.membershipId }, data: { grantCoOwner: true } });
+    fake = installFakeMp();
+    const acc = await connectFakeAccount(db, T, { seller: 2, kind: "CLINIC", accessExpiresAt: new Date(Date.now() + DAY) });
+    fakeMpForceReauth(acc.mpUserId);
+    expect((await runMpConnectMaintenance(new Date(), 8_000, scope())).reauth).toBe(1);
+    const notes = await db.notification.findMany({ where: { tenantId: T.tenantId, kind: "SYSTEM" } });
+    expect(notes.map((n) => [n.userId, n.link])).toEqual([[T.userId, "/configuracion?tab=cobros-online"]]);
+    expect(notes.map((n) => n.userId)).not.toContain(admin.userId);
+    expect(notes.map((n) => n.userId)).not.toContain(co.userId);
+  });
+
+  it("[CF3-ZF4a5] Titular principal suspendido en el consultorio → nadie recibe el aviso (no cae a Admin ni co-titular)", async () => {
+    await freshTenant();
+    await addStaff(db, T, "ADMIN", { grantSettings: true });
+    await db.membership.updateMany({ where: { tenantId: T.tenantId, userId: T.userId }, data: { disabledAt: new Date() } });
+    fake = installFakeMp();
+    const acc = await connectFakeAccount(db, T, { seller: 2, kind: "CLINIC", accessExpiresAt: new Date(Date.now() + DAY) });
+    fakeMpForceReauth(acc.mpUserId);
+    expect((await runMpConnectMaintenance(new Date(), 8_000, scope())).reauth).toBe(1);
+    expect(await db.notification.count({ where: { tenantId: T.tenantId, kind: "SYSTEM" } })).toBe(0);
+  });
+
+  it("[CF3-ZF4a5b] REAUTH de la cuenta de un profesional suspendido en el consultorio → sin aviso (HD-12); activo → a él", async () => {
+    await freshTenant();
+    const susp = await addPractitioner(db, T);
+    const act = await addPractitioner(db, T);
+    await db.membership.updateMany({ where: { tenantId: T.tenantId, userId: susp.userId }, data: { disabledAt: new Date() } });
+    fake = installFakeMp();
+    const a1 = await connectFakeAccount(db, T, { seller: 1, practitionerId: susp.practitionerId, accessExpiresAt: new Date(Date.now() + DAY) });
+    const a2 = await connectFakeAccount(db, T, { seller: 2, practitionerId: act.practitionerId, accessExpiresAt: new Date(Date.now() + DAY) });
+    fakeMpForceReauth(a1.mpUserId);
+    fakeMpForceReauth(a2.mpUserId);
+    expect((await runMpConnectMaintenance(new Date(), 8_000, scope())).reauth).toBe(2);
+    const notes = await db.notification.findMany({ where: { tenantId: T.tenantId, kind: "SYSTEM" } });
+    expect(notes.map((n) => [n.userId, n.link])).toEqual([[act.userId, "/configuracion?tab=mercado-pago"]]);
   });
 
   it("[TP-2k] Purga a 7 días sin cobros vivos; con link vivo conserva", async () => {

@@ -44,10 +44,12 @@ export async function clinicalNoteGateInTx(tx: DbClient, actor: Actor, patientId
     access,
     canRead,
     canWrite: canWriteClinicalNotes(caps, access, actor.practitionerId),
-    // Titular = `account.owner` (solo el OWNER lo tiene; SUPPORT_CAPS nunca `account.*`), sin comparar el rol (guard
-    // PL-1b). Clínico = `canRead`: `clinical.read` sale de `isClinicalMember`, que deja afuera al ADMIN (nunca atiende,
+    // Titular = `account.manage` (el principal y el co-titular; SUPPORT_CAPS nunca `account.*`), sin comparar el rol
+    // (guard PL-1b). CT-INT (CF3b, H3): era `account.owner`, que desde CT-K1 es SOLO el principal; anular/corregir
+    // evoluciones ajenas (EV2-D15, «el Titular clínico») es de las funciones que comparte con el co-titular.
+    // Clínico = `canRead`: `clinical.read` sale de `isClinicalMember`, que deja afuera al ADMIN (nunca atiende,
     // §20.17) y al Titular que no atiende.
-    isClinicalOwner: canRead && caps.has("account.owner"),
+    isClinicalOwner: canRead && caps.has("account.manage"),
   };
 }
 

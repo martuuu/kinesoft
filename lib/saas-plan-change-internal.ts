@@ -40,7 +40,7 @@ import { PLAN_DEFAULTS, hasCustomLimits } from "@/lib/saas-plans-logic";
 import { liveProgramWhere } from "@/lib/plan-predicates";
 import { displayUserName } from "@/lib/display-name";
 import { normalizeEmail } from "@/lib/email-match";
-import { isClinicalMember } from "@/lib/roles";
+import { isClinicalMember, isCoOwner, isPrincipalOwner } from "@/lib/roles";
 import { closeRevenueSharesForUserInTx } from "@/lib/revenue-share-internal";
 import {
   ensureClinicalPractitionerInTx,
@@ -114,6 +114,8 @@ function loadMembersInTx(tx: DbClient, tenantId: string) {
       userId: true,
       role: true,
       clinical: true,
+      // CT-INT (CF3b, fix M): el co-titular no es candidato salvo que actúe el principal (`principalActsOn`).
+      grantCoOwner: true,
       disabledAt: true,
       disabledReason: true,
       user: { select: { email: true, fullName: true } },
@@ -122,6 +124,27 @@ function loadMembersInTx(tx: DbClient, tenantId: string) {
   });
 }
 type MemberRow = Awaited<ReturnType<typeof loadMembersInTx>>[number];
+
+/**
+ * CT-INT (CF3b, fix M de CT-K2; decisión de Martin del 05-nov + default D1: «al co-titular lo gestionan solo el
+ * principal y Plataforma»). Bajar de plan lo hace quien tiene «Planes y pagos» (`account.billing`): el principal o un
+ * delegado (Administrador/a o Profesional). Sin esto, un Administrador/a con «Planes y pagos» le sacaba el acceso al
+ * co-titular eligiéndolo en el drawer, que es justo lo que no puede hacer por Usuarios (`coOwnerTargetError`). Así que
+ * el co-titular se trata como al Titular (no candidato) salvo que actúe el principal o Plataforma.
+ *
+ * «Actúa el principal» se decide sobre las membresías YA leídas en la tx (las de `loadMembersInTx`, lockeadas en
+ * `applyPlanChangeInTx`): 0 sentencias nuevas y la misma foto que el recuento (si en el medio transfirió la
+ * titularidad, vale lo de la tx, no el `ctx.actorRole` que armó el wrapper).
+ */
+function principalActsOn(
+  members: readonly MemberRow[],
+  o: { via: "tenant" | "platform"; actorUserId?: string | null }
+): boolean {
+  if (o.via === "platform") return true;
+  if (!o.actorUserId) return false;
+  const me = members.find((m) => m.userId === o.actorUserId && !m.disabledAt);
+  return !!me && isPrincipalOwner(me);
+}
 
 function pendingInvitesInTx(tx: DbClient, tenantId: string, now: Date) {
   return tx.invitation.findMany({
@@ -200,7 +223,8 @@ function modulesDiff(t: TenantPlanRow, to: SaasPlan): { lost: TenantModule[]; ga
  */
 export async function previewPlanChangeInTx(
   tx: DbClient,
-  p: { tenantId: string; to: SaasPlan; now: Date; actorUserId?: string }
+  /** `via` (CT-INT): "platform" desde Plataforma (puede elegir al co-titular); ausente = el consultorio. */
+  p: { tenantId: string; to: SaasPlan; now: Date; actorUserId?: string; via?: "tenant" | "platform" }
 ): Promise<PlanChangePreview | null> {
   const t = await readTenantInTx(tx, p.tenantId, false);
   if (!t) return null;
@@ -222,6 +246,9 @@ export async function previewPlanChangeInTx(
     inviteKinds
   );
   const loads = await loadsByUserInTx(tx, p.tenantId, active.map((a) => a.userId), p.now);
+  // CT-INT (fix M): el co-titular va como el Titular (sin casilla) salvo que mire el principal o Plataforma. Lo usan
+  // el drawer y `scheduleDowngradeInTx` (bajada programada), que valida con este mismo `isOwner`.
+  const principalActs = principalActsOn(members, { via: p.via ?? "tenant", actorUserId: p.actorUserId });
   const candidates: PlanChangeCandidate[] = active.map((a) => ({
     membershipId: a.id,
     userId: a.userId,
@@ -229,7 +256,8 @@ export async function previewPlanChangeInTx(
     role: a.role,
     clinical: isClinicalMember(a),
     kind: seatKindOf(a),
-    isOwner: a.role === "OWNER",
+    isOwner: a.role === "OWNER" || (isCoOwner(a) && !principalActs),
+    coOwner: isCoOwner(a),
     isSelf: p.actorUserId != null && a.userId === p.actorUserId,
     ...loads.get(a.userId)!,
   }));
@@ -303,10 +331,13 @@ export async function applyPlanChangeInTx(
     return fail("invalid_selection", "duplicated");
   }
   const toDisable: MemberRow[] = [];
+  const principalActs = principalActsOn(members, { via: ctx.via, actorUserId: ctx.actorUserId });
   for (const id of disableIds) {
     const m = byId.get(id);
     if (!m || m.disabledAt) return fail("invalid_selection", "disable_not_active");
     if (m.role === "OWNER") return fail("owner_selected");
+    // CT-INT (fix M): el co-titular, como el Titular, salvo que actúe el principal o Plataforma.
+    if (isCoOwner(m) && !principalActs) return fail("owner_selected");
     if (m.userId === ctx.actorUserId) return fail("self_selected");
     toDisable.push(m);
   }
@@ -355,7 +386,8 @@ export async function applyPlanChangeInTx(
   let revokedInvites = 0;
   if (toDisable.length) {
     const upd = await tx.membership.updateMany({
-      where: { id: { in: disableIds }, tenantId, disabledAt: null, role: { not: "OWNER" } },
+      // CT-INT (fix M): el co-titular también en el predicado (como el OWNER) cuando no actúa el principal.
+      where: { id: { in: disableIds }, tenantId, disabledAt: null, role: { not: "OWNER" }, ...(principalActs ? {} : { grantCoOwner: false }) },
       data: { disabledAt: now, disabledById: ctx.actorUserId, disabledReason: "PLAN_DOWNGRADE" },
     });
     if (upd.count !== toDisable.length) throw new PlanChangeRaceError();

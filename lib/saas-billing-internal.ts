@@ -48,6 +48,7 @@ import { toARDateKey } from "@/lib/datetime-ar";
 import { SAAS_PLANS_TAG } from "@/lib/cache-tags";
 import { PLAN_DEFAULTS } from "@/lib/saas-plans-logic";
 import { PAST_DUE_GRACE_DAYS } from "@/lib/tenant-access";
+import { MEMBER_ACCESS_SELECT, capabilitiesForMember } from "@/lib/capabilities";
 import {
   applyTenantEntitlementsInTx,
   type TenantEntitlementActor,
@@ -1404,7 +1405,16 @@ export function billingUrl(): string {
   return `${env.NEXT_PUBLIC_APP_URL.replace(/\/+$/, "")}/configuracion?tab=facturacion`;
 }
 
-/** Titular y quien tenga «Planes y pagos», activos (molde de los recordatorios de prueba). */
+/**
+ * Titular y quien tenga «Planes y pagos», activos (molde de los recordatorios de prueba).
+ *
+ * CT-K1 (CF3b): «quien tenga Planes y pagos» = `account.billing` de `capabilitiesForMember`, la MISMA regla que
+ * abre la pestaña Facturación (`requireAccountBilling`), no la columna `grantBilling` cruda. Hasta CT-K1 el `OR`
+ * de abajo era toda la regla y le mandaba los mails de cobro (montos, vencimientos, link a Facturación) a quien la
+ * app ya no dejaba entrar: la Secretaria y Facturación con un `grantBilling` viejo (el corte de staff de T3 corta la
+ * capacidad, no la fila) y, desde M23, el co-titular con `grantBilling` (contrato (d): nada de la suscripción). El
+ * `OR` queda como prefiltro en SQL (misma sentencia; trae a lo sumo el equipo) y la capacidad decide.
+ */
 export async function billingRecipients(tenantId: string): Promise<{ userId: string; email: string }[]> {
   const rows = await prismaService.membership.findMany({
     where: {
@@ -1414,10 +1424,12 @@ export async function billingRecipients(tenantId: string): Promise<{ userId: str
       user: { disabledAt: null },
       OR: [{ role: "OWNER" }, { grantBilling: true }],
     },
-    select: { userId: true, user: { select: { email: true } } },
+    select: { userId: true, ...MEMBER_ACCESS_SELECT, user: { select: { email: true } } },
     orderBy: { userId: "asc" },
   });
-  return rows.map((r) => ({ userId: r.userId, email: r.user.email }));
+  return rows
+    .filter((r) => capabilitiesForMember(r).has("account.billing"))
+    .map((r) => ({ userId: r.userId, email: r.user.email }));
 }
 
 /** Manda un mail a los destinatarios de cobros. `sendEmail` nunca tira; devuelve cuántos salieron. */

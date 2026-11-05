@@ -4,7 +4,9 @@ import { EyebrowLabel } from "@/components/ui/eyebrow";
 /**
  * Configuración → «Exportar datos» (BO5-C, plan §19.5; BO-D4). Solo para el OWNER: el export completo es la vía
  * más corta para sacar toda la PHI del consultorio y llevársela es decisión del titular (ADMIN no lo ve; la ruta
- * igual lo rechaza con 403, esto es UX).
+ * igual lo rechaza con 403, esto es UX). CF3b (M23, decisión de Martin del 05-nov): también el co-titular (es
+ * profesional del consultorio; `canExportTenantData` de CT-K1 en la ruta). Por eso el aviso de abajo dice que cada
+ * descarga queda registrada: con dos personas que pueden bajarla, el registro es lo que la hace auditable.
  *
  * Sin estado ni actions: el botón es un link de descarga a `GET /api/consultorio/export` (OWNER, 3 por hora por
  * consultorio, soporte → 403). Es un `<a download>` y no un `fetch`: el navegador baja el archivo en streaming sin
@@ -57,7 +59,7 @@ export function ExportPanel({
   blocked?: ExportBlockedTenant[];
   /** `?tenant=` de la URL: ese va primero y en primario. */
   requestedTenantId?: string | null;
-  /** false = no es OWNER del consultorio activo (solo ve los bloqueados). */
+  /** false = no es Titular ni co-titular del consultorio activo (solo ve los bloqueados). */
   showActive?: boolean;
 }) {
   const ordered = orderExportBlocks(blocked, requestedTenantId);

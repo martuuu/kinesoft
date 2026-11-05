@@ -104,7 +104,8 @@ describe.skipIf(!RUN)("[CF2-TL] /configuracion: «Mi agenda» y la anticipación
     console.info(`[CF2-TL1] /configuracion Profesional: ${m.transactions} tx · ${m.statements} sentencias (app ${m.byClient.app} · service ${m.byClient.service})`);
     expect(m.transactions).toBeLessThanOrEqual(1);
     // +1 declarada: la anticipación del consultorio (el Profesional sin delegaciones no lee la fila del Tenant).
-    expect(m.statements).toBeLessThanOrEqual(PRO_BASELINE_STATEMENTS + 1);
+    // [CT-L] +1 más DECLARADA (05-nov): la matrícula de la persona para «Mi agenda» (UserProfile, `ownLicenseInTx`).
+    expect(m.statements).toBeLessThanOrEqual(PRO_BASELINE_STATEMENTS + 2);
     expect(plain(r.miAgenda)).toEqual({
       practitionerId: pro.practitionerId,
       name: expect.any(String),
@@ -117,6 +118,17 @@ describe.skipIf(!RUN)("[CF2-TL] /configuracion: «Mi agenda» y la anticipación
       contactConsentAt: consentAt.toISOString(),
       notifyBookingEmail: true,
       notifyBookingPush: false,
+      // CF3 AU-C (D-CF3-3/5/12): los switches de M22 (defaults) y el link propio, sin sentencias nuevas.
+      ownPublicBookingEnabled: true,
+      showPublicPrice: true,
+      showContactForInsured: false,
+      tenantSlug: T.slug,
+      bookingUrl: `/c/${T.slug}/booking?pro=${pro.practitionerId}`,
+      // CF3b CT-L (M23): la matrícula de la persona (no cargó).
+      license: { license: null, updatedAt: null },
+      // CF3b PH-S (M24): la foto de la persona (no subió) y el opt-in de este consultorio (default false). 0 sentencias:
+      // viaja en la misma lectura de UserProfile que la matrícula y en el select del profesional.
+      photo: { url: null, showPublic: false },
     });
     // El nombre es el del actor (el mismo que ve en la agenda), nunca el email.
     expect(r.miAgenda?.name).not.toContain("@");
@@ -130,7 +142,8 @@ describe.skipIf(!RUN)("[CF2-TL] /configuracion: «Mi agenda» y la anticipación
     expect(m.transactions).toBeLessThanOrEqual(3);
     // Mismo techo que pf2-config-budget (42): «Mi agenda» y la anticipación de Profesionales son columnas de selects
     // que ya corrían.
-    expect(m.statements).toBeLessThanOrEqual(42);
+    // [CT-L] 42 → 43: la matrícula de la persona, +1 declarada (también en pf2-config-budget).
+    expect(m.statements).toBeLessThanOrEqual(43);
     expect(r.miAgenda).toMatchObject({
       practitionerId: T.practitionerId,
       publicMinLeadMinutes: null,

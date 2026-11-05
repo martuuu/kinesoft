@@ -256,6 +256,7 @@ const PLATFORM_ACTION_LABEL: Record<string, string> = {
   "platform.tenant.entitlements": "Suscripción o estado",
   "platform.tenant.profile": "Datos del consultorio",
   "platform.tenant.slug": "Cambio de slug",
+  "platform.tenant.site": "Sitio del consultorio",
   "platform.tenant.onboarding_complete": "Alta terminada a mano",
   "platform.support.start": "Entró como soporte",
   "platform.support.end": "Salió de soporte",

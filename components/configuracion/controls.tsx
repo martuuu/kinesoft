@@ -15,6 +15,7 @@ export type Tab =
   | "whatsapp"
   | "diagnosticos"
   | "directorio"
+  | "sitio-web"
   | "usuarios"
   | "plan"
   | "facturacion"
@@ -42,6 +43,8 @@ export const CONFIG_TABS: readonly Tab[] = [
   "diagnosticos",
   // DIR-3c: `?tab=directorio` (el link «Configurar» de una futura comunicación del directorio).
   "directorio",
+  // CF3 (D-CF3-10): `?tab=sitio-web` = Configuración › «Sitio web» (activar la sede `/<slug>`, frase y descripción).
+  "sitio-web",
   "usuarios",
   "plan",
   // PL-3a (PL-D21): `?tab=facturacion` es el link de los mails de cobro (cargo nuevo, vencido, comprobante revisado).
@@ -79,7 +82,8 @@ export function parseConfigTab(raw: string | string[] | null | undefined): Tab {
  *  - `miAgenda` (CF2, T.C): «Mi agenda» = el mismo gate que `fichas` (el loader manda sus datos en null a la
  *    Secretaria, a Facturación y al soporte): switch propio del turnero, anticipación, contacto y avisos. Sin módulo:
  *    un consultorio General o con el turnero apagado también la ve (los avisos y la anticipación quedan listos).
- *    Opcional; ausente = no se ve.
+ *    Opcional; ausente = no se ve. CF3 (D-CF3-13): es la pestaña inicial de quien no tiene «Configuración».
+ *  - `sensitive` también abre «Sitio web» (CF3, D-CF3-10).
  *  - `canExport`: Exportar datos (BO5-C: solo el titular, o el de un consultorio suspendido).
  *  - `directory` (DIR-3c, C-DIR9): Directorio = `tenant.sensitive` con `DIRECTORY_MODE` ≠ off (lo decide el loader: la
  *    pestaña existe si llegaron sus datos). Opcional: sin él (tests viejos, `legacyConfigAccess`) no se ve.
@@ -93,6 +97,10 @@ export function parseConfigTab(raw: string | string[] | null | undefined): Tab {
  *    tests viejos; ausente = sin lo delicado (deny por default).
  *  - `whatsapp` (WA-U1, C-WA9): «WhatsApp» = `tenant.sensitive` con `WHATSAPP_MODE` ≠ off (el loader manda sus datos en
  *    null sin eso). Conectar y desconectar adentro son solo del Titular; la pestaña la ve también la administración.
+ *  - `coOwner` (CF3b, M23, decisión de Martin del 05-nov): quien mira es co-titular (`Membership.grantCoOwner`). Ve lo
+ *    del Titular por sus capacidades (CT-K1) salvo la suscripción a la plataforma: «Plan y uso» y «Facturación» NUNCA,
+ *    aunque le quede un «Planes y pagos» delegado de antes (el server ya le saca `account.billing`; esto es la misma
+ *    regla en la UI). «Exportar datos» SÍ (es profesional y Martin lo pidió). Opcional; ausente = no es co-titular.
  */
 export type ConfigTabAccess = {
   tenantAdmin: boolean;
@@ -106,6 +114,7 @@ export type ConfigTabAccess = {
   onlinePayments?: boolean;
   myMp?: boolean;
   whatsapp?: boolean;
+  coOwner?: boolean;
 };
 
 /**
@@ -147,10 +156,17 @@ const TAB_DEFS: readonly TabDef[] = [
   // algo que el público todavía no ve sería un switch sin efecto.
   // T3d-1g: Directorio y Usuarios son lo delicado (`tenant.sensitive`): la Secretaria con «Configuración» no los ve.
   { key: "directorio", label: "Directorio", visible: (a) => a.tenantAdmin && !!a.sensitive && !!a.directory },
+  // CF3 (D-CF3-10): la sede pública del consultorio la prende el Titular (`tenant.sensitive`, lo mismo que exigen
+  // `getSiteSettings`/`updateSiteSettings`). Después de «Directorio»: las dos son la cara pública del consultorio.
+  { key: "sitio-web", label: "Sitio web", visible: (a) => !!a.sensitive },
   { key: "usuarios", label: "Usuarios", visible: (a) => a.team && !!a.sensitive },
-  { key: "plan", label: "Plan y uso", visible: (a) => a.billing },
-  { key: "facturacion", label: "Facturación", visible: (a) => a.billing },
-  // CF2 (T.C): lo personal del turnero y los avisos, primera de las personales (antes de «Mis fichas»).
+  // CF3b: la suscripción a la plataforma es del Titular principal (o de quien él delegue «Planes y pagos»), nunca del
+  // co-titular.
+  { key: "plan", label: "Plan y uso", visible: (a) => a.billing && !a.coOwner },
+  { key: "facturacion", label: "Facturación", visible: (a) => a.billing && !a.coOwner },
+  // CF2 (T.C): lo personal del turnero y los avisos, primera de las personales (antes de «Mis fichas»). CF3
+  // (D-CF3-13): además servicios y precios, semana y excepciones propias; es la inicial de quien no tiene
+  // «Configuración» (`initialConfigTab`). El Titular que atiende la ve además de las del consultorio.
   { key: "mi-agenda", label: "Mi agenda", visible: (a) => !!a.miAgenda },
   // FC-3i: lo personal de las fichas, antes de Soporte (para un Profesional sin delegaciones es la pestaña inicial).
   { key: "mis-fichas", label: "Mis fichas", module: "evoluciones", visible: (a) => !!a.fichas },
@@ -159,8 +175,10 @@ const TAB_DEFS: readonly TabDef[] = [
   // PL-2d: «Soporte» = Mensajes + Accesos de soporte (la key no cambia: los mails ya linkean `?tab=soporte`).
   // PL-F1b: visible para cualquier miembro (antes `tenantAdmin || billing`, PL-D20).
   { key: "soporte", label: "Soporte", visible: () => true },
-  // BO5-C (BO-D4): el export completo es SOLO del titular (la route también lo exige), no de ADMIN.
-  { key: "exportar", label: "Exportar datos", visible: (a) => a.canExport },
+  // BO5-C (BO-D4): el export completo es SOLO del titular (la route también lo exige), no de ADMIN. CF3b: y del
+  // co-titular (decisión de Martin del 05-nov). Desde CT-INT `canExport` ya lo incluye (configuracion-client lo arma
+  // con `account.export`, no con el rol); `coOwner` queda de red para quien pase `access` a mano (tests, TabsBar).
+  { key: "exportar", label: "Exportar datos", visible: (a) => a.canExport || !!a.coOwner },
 ];
 
 /** Pestañas visibles, en orden. */
@@ -169,12 +187,16 @@ export function visibleConfigTabs(access: ConfigTabAccess, modules: readonly Ten
 }
 
 /**
- * Pestaña inicial: la de `?tab=` si la puede ver; si no, la primera que ve (quien solo tiene «Planes y pagos» no ve
- * General y entra a «Plan y uso»; un Profesional sin delegaciones entra a «Soporte», PL-F1b).
+ * Pestaña inicial: la de `?tab=` si la puede ver; si no:
+ *  - CF3 (D-CF3-13): quien atiende y NO tiene «Configuración» (no ve General) entra a «Mi agenda», que es su
+ *    configuración completa. Antes caía en la primera visible: con «Planes y pagos» delegado era «Plan y uso», y sin
+ *    «Mi agenda» (PL-F1b, antes de CF2) era Soporte. El Titular con «Configuración» sigue entrando a General.
+ *  - si no, la primera que ve (quien solo tiene «Planes y pagos» entra a «Plan y uso»; sin nada, «Soporte»).
  */
 export function initialConfigTab(raw: string | string[] | null | undefined, visible: readonly Tab[]): Tab {
   const t = parseConfigTab(raw);
   if (visible.includes(t)) return t;
+  if (!visible.includes("general") && visible.includes("mi-agenda")) return "mi-agenda";
   return visible[0] ?? "general";
 }
 

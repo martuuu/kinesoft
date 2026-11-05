@@ -64,8 +64,10 @@ const HOME_TX_STATEMENTS = 11;
  * [CF-L1] Techo de sentencias del perfil `full` completo (las 3 tx + actor), peor caso con deep link, cache en frío.
  * Medido el 30-oct: 37. Antes de CF eran 38: la EVA salió de la app (§28, decisión 4) y el loader dejó de leer
  * `EvaScore` (un `findMany` por carga en Kinesiología). Si sube, es una lectura nueva: se discute, no se corre el número.
+ * CF3 SH-S (04-nov): +1 discutido y aceptado, `nextBooking` del perfil full (`patientUpcomingBookingsInTx`, una
+ * sentencia con JOIN): sin ella el perfil full no sabía cuál era el próximo turno (traía los 5 más lejanos).
  */
-const FULL_PROFILE_STATEMENTS = 37;
+const FULL_PROFILE_STATEMENTS = 38;
 
 /** Claves exactas de `PatientAdminCore` (congelado) y de la proyección básica. */
 const ADMIN_CORE_KEYS = [

@@ -1,11 +1,19 @@
 "use server";
 
 import { z } from "zod";
-import { getActor } from "@/lib/session";
+import { getActor, writableError } from "@/lib/session";
 import { runWithRls } from "@/lib/rls";
 import { patientAccessFor } from "@/lib/visibility";
 import { normalizeArMobile } from "@/lib/phone-e164";
-import type { ShareContact } from "@/lib/booking-share";
+import { phoneActionsFor, UPCOMING_SHARE_MAX, type ShareContact } from "@/lib/booking-share";
+import { memberCapabilitiesForActor } from "@/lib/authz";
+import { canCollectCopago } from "@/lib/capabilities";
+import { env, mpConnectMode, tenantAccessEnforcement } from "@/lib/env";
+import { isPublicBookingOpen } from "@/lib/tenant-modules";
+import { effectiveMode, publicSurfacesOpen } from "@/lib/tenant-access";
+import { bookingHref } from "@/lib/public-booking-links";
+import { patientUpcomingBookingsInTx, shareBookingOf } from "@/lib/patient-profile-loader";
+import type { PatientShareBundle } from "@/lib/patient-share-types";
 
 /**
  * WA-0 (§21.6): el celular del paciente para el link `wa.me` del drawer del turno, ya normalizado a E.164.
@@ -40,5 +48,72 @@ export async function getPatientShareContact(patientId: string): Promise<ShareCo
     if (!p) return { status: "hidden" } as const;
     const r = normalizeArMobile(p.phone);
     return r.ok ? ({ status: "ok", e164: r.e164 } as const) : ({ status: "invalid", reason: r.reason } as const);
+  });
+}
+
+/**
+ * CF3 (D-CF3-8, SH-S) · todo lo que el menú del teléfono del perfil necesita, en UNA tx y al abrirlo (el perfil no lo
+ * carga: es un menú lazy y su peso no va en `/pacientes/[id]`).
+ *
+ * Acceso = el de `getPatientShareContact` (arriba): `full` y `admin` (Secretaria/Facturación, PD-13) ven contacto y
+ * turnos; `basic`, `none`, otro tenant o un id malo → `{ contact: hidden }` y nada más (ni turnos, ni nombre). La
+ * Secretaria es justamente quien más manda recordatorios: por eso `admin` entra.
+ *
+ * Nada clínico: los turnos salen de `patientUpcomingBookingsInTx` (sin título, notas ni descripción) y del paciente
+ * solo se leen nombre, teléfono y si tiene email. Sin audit, como el contacto del drawer (mismo motivo: son datos que
+ * el actor ya ve en el perfil y el menú se abre muchas veces).
+ *
+ * Sentencias: acceso (lo que cueste `patientAccessFor`) + paciente 1 + turnos 1. Capabilities, turnero y modo de
+ * cobros salen del Actor y del entorno (0 sentencias; `memberCapabilitiesForActor` usa la membresía del Actor).
+ *   - `turneroUrl`: la regla de `isPublicTurneroOpen` (switch del turnero + superficies públicas abiertas con el modo
+ *     EFECTIVO de acceso), con el acceso que el Actor ya trae calculado. Cerrado → null (no se ofrece un link que da
+ *     «turnos cerrados»).
+ *   - `canPaymentLink` (sin turno) = la regla de `createPaymentLink` sin `bookingId`; por turno, `canCollectCopago`.
+ *     Con `MP_CONNECT_MODE=off` o en soporte, nunca.
+ *   - `canPortalInvite` = la de `sendPatientPortalInvite`: `full`, email cargado y consultorio que puede escribir.
+ */
+export async function getPatientShareBundle(patientId: string): Promise<PatientShareBundle> {
+  const actor = await getActor();
+  const hidden: PatientShareBundle = { contact: { status: "hidden" } };
+  const parsed = Input.safeParse(patientId);
+  if (!parsed.success) return hidden;
+  const id = parsed.data;
+  return runWithRls(actor.tenantId, async (tx): Promise<PatientShareBundle> => {
+    const access = await patientAccessFor(actor, id, tx);
+    if (access !== "full" && access !== "admin") return hidden;
+    const p = await tx.patient.findFirst({
+      where: { id, tenantId: actor.tenantId },
+      select: { firstName: true, phone: true, email: true },
+    });
+    if (!p) return hidden;
+    const rows = await patientUpcomingBookingsInTx(tx, actor.tenantId, id, UPCOMING_SHARE_MAX);
+
+    const caps = await memberCapabilitiesForActor(actor);
+    const online = mpConnectMode() !== "off" && !actor.support;
+    const turneroOpen =
+      isPublicBookingOpen(actor.entitlements) &&
+      publicSurfacesOpen(effectiveMode(actor.access.mode, tenantAccessEnforcement()));
+
+    const phone = phoneActionsFor(p.phone);
+    const contact =
+      phone.e164 != null
+        ? ({ status: "ok", e164: phone.e164, phone } as const)
+        : ({ status: "invalid", reason: phone.reason ?? "empty", phone } as const);
+
+    return {
+      contact,
+      firstName: p.firstName,
+      clinicName: actor.tenantName,
+      turneroUrl: turneroOpen ? `${env.NEXT_PUBLIC_APP_URL.replace(/\/+$/, "")}${bookingHref(actor.tenantSlug)}` : null,
+      upcoming: rows.map((r) => ({
+        ...shareBookingOf(r),
+        canPaymentLink: online && canCollectCopago(caps, actor.practitionerId, r.practitionerId),
+      })),
+      canPaymentLink:
+        online &&
+        (caps.has("billing.collect") ||
+          (caps.has("billing.collectOwn") && actor.practitionerId != null && access === "full")),
+      canPortalInvite: access === "full" && !!p.email?.trim() && writableError(actor) == null,
+    };
   });
 }

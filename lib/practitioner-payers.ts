@@ -32,7 +32,7 @@ import {
   type PractitionerPayerRow,
 } from "@/lib/practitioner-config-schemas";
 
-const CONFIG_MSG = "Solo OWNER/ADMIN pueden configurar las coberturas de los profesionales.";
+const CONFIG_MSG = "Solo quien tiene permiso de «Configuración» puede configurar las coberturas de los profesionales.";
 
 export async function listPractitionerPayers(
   practitionerId: string

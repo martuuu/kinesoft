@@ -39,6 +39,15 @@ const DATA: ConfiguracionMiAgendaData = {
   contactConsentAt: null,
   notifyBookingEmail: false,
   notifyBookingPush: false,
+  ownPublicBookingEnabled: true,
+  showPublicPrice: true,
+  showContactForInsured: false,
+  tenantSlug: "tmp",
+  bookingUrl: "/c/tmp/booking?pro=pr_1",
+  // CF3b CT-L (M23): la matrícula de la persona (sin cargar).
+  license: { license: null, updatedAt: null },
+  // CF3b PH-U1 (M24, contrato FOTO): sin foto subida.
+  photo: { url: null, showPublic: false },
 };
 const ON = { ...DATA, contactWhatsapp: "+5491123456789", showContactInLeadWindow: true, contactConsentAt: "2026-11-01T12:00:00.000Z" };
 

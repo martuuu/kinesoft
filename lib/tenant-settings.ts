@@ -30,7 +30,7 @@ import { isAgendaSlotMinutes } from "@/lib/tenant-settings-constants";
 import { parseBookingCapPair } from "@/lib/booking-cap-config";
 import { parseTenantAgendaRules, type TenantAgendaRulesWrite } from "@/lib/agenda-rules-config";
 import { applyTenantEntitlementsInTx } from "@/lib/tenant-entitlements-internal";
-import { tenantEntitlementTags } from "@/lib/cache-tags";
+import { CLINIC_SITES_TAG, tags, tenantEntitlementTags } from "@/lib/cache-tags";
 import { updateTenantProfileInTx } from "@/lib/tenant-profile-internal";
 import { TenantProfileFields } from "@/lib/platform-tenants-schemas";
 import type { ActionResult } from "@/lib/validation";
@@ -434,7 +434,14 @@ async function updateTenantBasicsImpl(input: {
   if (r.changed.length > 0) {
     revalidatePath("/configuracion");
     // El nombre se ve en el shell (selector de consultorio, encabezado).
-    if (r.changed.includes("name")) revalidatePath("/", "layout");
+    if (r.changed.includes("name")) {
+      revalidatePath("/", "layout");
+      // CF3 (SD-S, Anexo R): el nombre sale en la sede digital `/<slug>` y en el directorio (los dos snapshots son
+      // globales de 10 min); sin esto la sede y su JSON-LD seguían con el nombre viejo.
+      revalidateTag(CLINIC_SITES_TAG);
+      revalidateTag(tags.directory());
+      revalidatePath(`/${actor.tenantSlug}`);
+    }
   }
   return { ok: true, data: undefined };
 }

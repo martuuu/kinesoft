@@ -91,10 +91,13 @@ function addressLine(l: LocationRow): string {
 export function LocationsPanel({
   locations,
   rooms = [],
+  seesPlan = true,
 }: {
   locations: LocationRow[];
   /** Todas las salas del consultorio, archivadas incluidas (SR-U1). */
   rooms?: RoomRow[];
+  /** CF3b: ¿el actor ve «Plan y uso»? Cambia el cierre del aviso de salas (link a la pestaña o «pedile al titular»). */
+  seesPlan?: boolean;
 }) {
   const toast = useToast();
   const confirm = useConfirm();
@@ -286,7 +289,7 @@ export function LocationsPanel({
                     minWidth: 0,
                   }}
                 >
-                  <RoomsSection locationId={l.id} locationName={l.name} rooms={rooms} />
+                  <RoomsSection locationId={l.id} locationName={l.name} rooms={rooms} seesPlan={seesPlan} />
                 </div>
               )}
             </li>

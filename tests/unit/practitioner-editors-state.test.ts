@@ -16,8 +16,17 @@ import {
   payerIdsForSave,
   rowToDraft,
   togglePayer,
+  inheritedPriceHint,
+  isOwnService,
+  isOwnServiceDirty,
+  ownServiceDraftFrom,
+  ownServicesLeft,
+  ownServiceToPayload,
+  visibleServiceRows,
   type ServiceDraft,
 } from "@/lib/practitioner-editors-state";
+import { OWN_SERVICES_MAX, SERVICES_COPY } from "@/lib/services-types";
+import { ServiceInput } from "@/lib/validation";
 import {
   PractitionerServiceInput,
   type PractitionerPayerRow,
@@ -40,6 +49,8 @@ const baseRow: PractitionerServiceRow = {
   concurrencyOverride: false,
   maxConcurrent: null,
   notifyOnBooking: false,
+  priceCents: null,
+  servicePriceCents: 0,
 };
 
 const draft = (over: Partial<ServiceDraft> = {}): ServiceDraft => ({
@@ -61,6 +72,8 @@ describe("rowToDraft / draftToInput", () => {
       concurrencyOverride: false,
       maxConcurrent: null,
       notifyOnBooking: false,
+      // CF3: sin baseline el precio viaja siempre (null = usa el del consultorio).
+      priceCents: null,
     });
     const parsed = PractitionerServiceInput.parse(r.input);
     expect(parsed.durationMin).toBeNull();
@@ -255,5 +268,110 @@ describe("coberturas", () => {
     const noPart = new Set(base);
     noPart.delete("part");
     expect(isPayerSelectionDirty(rows, base, noPart)).toBe(false);
+  });
+});
+
+// ─── CF3 · AU-U1: precio por profesional, alcance «self» y servicios propios ─
+
+describe("[CF3-AUU1] precio del profesional en el borrador", () => {
+  it("[CF3-AUU1-1] la fila trae el precio; vacío = null y el hint muestra el precio del consultorio", () => {
+    const d = rowToDraft({ ...baseRow, priceCents: 1_500_000 });
+    expect(d.price).toBe(1_500_000);
+    expect(rowToDraft(baseRow).price).toBeNull();
+    const hint = inheritedPriceHint({ servicePriceCents: 2_000_000 }, false);
+    expect(hint).toContain("precio del consultorio");
+    expect(hint).toMatch(/20\.000/);
+    expect(inheritedPriceHint({ servicePriceCents: 2_000_000 }, true)).toContain("precio del servicio");
+  });
+
+  it("[CF3-AUU1-2] con baseline: precio sin cambios NO viaja (undefined), vaciado viaja null, nuevo viaja el valor", () => {
+    const base = rowToDraft({ ...baseRow, priceCents: 1_500_000 });
+    const same = draftToInput({ ...base, durationMin: "60" }, base);
+    expect(same.ok && "priceCents" in same.input).toBe(false);
+    const cleared = draftToInput({ ...base, price: null }, base);
+    expect(cleared.ok && cleared.input.priceCents).toBeNull();
+    expect(cleared.ok && "priceCents" in cleared.input).toBe(true);
+    const changed = draftToInput({ ...base, price: 1_800_000 }, base);
+    expect(changed.ok && changed.input.priceCents).toBe(1_800_000);
+    // El payload sin precio lo acepta el zod del server y sale `undefined` (= no se toca en la base).
+    if (same.ok) expect(PractitionerServiceInput.parse(same.input).priceCents).toBeUndefined();
+  });
+
+  it("[CF3-AUU1-3] precio fuera de rango o con decimales de centavo → error por campo, sin viajar", () => {
+    const over = draftToInput(draft({ price: 100_000_001 }));
+    expect(over.ok).toBe(false);
+    if (!over.ok) expect(over.errors.priceCents).toBeTruthy();
+    const neg = draftToInput(draft({ price: -1 }));
+    expect(!neg.ok && neg.errors.priceCents).toBeTruthy();
+    const frac = draftToInput(draft({ price: 10.5 }));
+    expect(!frac.ok && frac.errors.priceCents).toBeTruthy();
+    expect(draftToInput(draft({ price: 0 })).ok).toBe(true); // 0 = sesión sin cargo, vale
+  });
+
+  it("[CF3-AUU1-4] dirty-guard: cambiar el precio ensucia; volver al valor original limpia", () => {
+    const base = rowToDraft({ ...baseRow, priceCents: 1_500_000 });
+    expect(isDraftDirty({ ...base, price: 1_600_000 }, base)).toBe(true);
+    expect(isDraftDirty({ ...base, price: null }, base)).toBe(true);
+    expect(isDraftDirty({ ...base, price: 1_500_000 }, base)).toBe(false);
+  });
+});
+
+describe("[CF3-AUU1] alcance «self» y servicios propios", () => {
+  const rows: PractitionerServiceRow[] = [
+    { ...baseRow, serviceId: "shared", serviceOwnerPractitionerId: null },
+    { ...baseRow, serviceId: "mine", serviceOwnerPractitionerId: "p1" },
+    { ...baseRow, serviceId: "other", serviceOwnerPractitionerId: "p2" },
+  ];
+
+  it("[CF3-AUU1-5] «self» oculta los servicios propios de otro profesional; «config» muestra todos", () => {
+    expect(visibleServiceRows(rows, "self", "p1").map((r) => r.serviceId)).toEqual(["shared", "mine"]);
+    expect(visibleServiceRows(rows, "config", "p1").map((r) => r.serviceId)).toEqual(["shared", "mine", "other"]);
+    expect(isOwnService(rows[1], "p1")).toBe(true);
+    expect(isOwnService(rows[0], "p1")).toBe(false);
+  });
+
+  it("[CF3-AUU1-6] tope de servicios propios: con OWN_SERVICES_MAX no se crea más y el copy es el de SERVICES_COPY", () => {
+    expect(ownServicesLeft(rows, "p1")).toEqual({ count: 1, canCreate: true, limitMessage: null });
+    const full = Array.from({ length: OWN_SERVICES_MAX }, (_, i) => ({ serviceOwnerPractitionerId: "p1", i }));
+    const r = ownServicesLeft(full, "p1");
+    expect(r.canCreate).toBe(false);
+    expect(r.limitMessage).toBe(SERVICES_COPY.ownLimit);
+  });
+
+  it("[CF3-AUU1-7] «Nuevo servicio»: 45 min y 1 por horario por defecto; el payload no lleva practitionerId y lo acepta ServiceInput", () => {
+    const d = ownServiceDraftFrom();
+    expect(d).toMatchObject({ durationMin: "45", maxConcurrent: "1", priceCents: null, color: null });
+    const r = ownServiceToPayload({ ...d, name: "  Osteopatía  ", priceCents: 2_500_000, color: "#A6D8F0" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.payload).toEqual({ name: "Osteopatía", durationMin: 45, color: "#A6D8F0", priceCents: 2_500_000, maxConcurrent: "1" });
+    expect("practitionerId" in r.payload).toBe(false);
+    const parsed = ServiceInput.parse(r.payload);
+    expect(parsed.maxConcurrent).toBe(1);
+    expect(parsed.priceCents).toBe(2_500_000);
+    // Sin precio = $ 0; cupo vacío = sin límite.
+    const r0 = ownServiceToPayload({ ...d, name: "X", maxConcurrent: "" });
+    expect(r0.ok && r0.payload.priceCents).toBe(0);
+    expect(r0.ok && ServiceInput.parse(r0.payload).maxConcurrent).toBeNull();
+  });
+
+  it("[CF3-AUU1-8] validación del servicio propio: nombre, duración fuera de grilla, precio y cupo", () => {
+    const d = ownServiceDraftFrom();
+    const bad = ownServiceToPayload({ ...d, name: " ", durationMin: "40", priceCents: 100_000_001, maxConcurrent: "0" });
+    expect(bad.ok).toBe(false);
+    if (bad.ok) return;
+    expect(Object.keys(bad.errors).sort()).toEqual(["durationMin", "maxConcurrent", "name", "priceCents"]);
+    // Al editar un servicio viejo de 40 min, guardarlo sin tocar la duración vale.
+    const old = ownServiceDraftFrom({ serviceName: "Viejo", serviceDurationMin: 40, serviceColor: null, servicePriceCents: 0, serviceMaxConcurrent: null });
+    expect(ownServiceToPayload({ ...old, name: "Viejo 2" }, old).ok).toBe(true);
+    expect(old.maxConcurrent).toBe("");
+  });
+
+  it("[CF3-AUU1-9] dirty del formulario propio: espacios del nombre y precio vacío vs 0 no ensucian", () => {
+    const base = ownServiceDraftFrom({ serviceName: "Kine", serviceDurationMin: 45, serviceColor: null, servicePriceCents: 0, serviceMaxConcurrent: 1 });
+    expect(isOwnServiceDirty({ ...base, name: "Kine " }, base)).toBe(false);
+    expect(isOwnServiceDirty({ ...base, priceCents: null }, base)).toBe(false);
+    expect(isOwnServiceDirty({ ...base, color: "#A6D8F0" }, base)).toBe(true);
+    expect(isOwnServiceDirty({ ...base, durationMin: "60" }, base)).toBe(true);
   });
 });

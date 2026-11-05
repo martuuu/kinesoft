@@ -31,6 +31,8 @@ import ts from "typescript";
  * (b) lo exige). El motivo dice por qué el endpoint queda expuesto igual y qué lo protege.
  */
 const ALLOWLIST: Record<string, string> = {
+  "lib/user-license.ts#getOwnLicense":
+    "CT-L (M23): «Mi agenda» recibe la matrícula del loader de /configuracion (ownLicenseInTx en su tx); la action queda para tests. Gate getAccessSnapshot (perfil, no deshabilitado, 2FA no pendiente), userId de la sesión, sin input.",
   "lib/bookings.ts#listBookingsInRange": "Proyección completa vieja: la agenda usa listAgendaBookings desde B4.1; la usan 8 tests de integración y 3 de perf. Gate getActor + BookingsRangeQuery (≤62 días, HD-1) + bookingFieldAccess.",
   "lib/catalog.ts#suggestPayerForInsurer": "Sugerencia «Vincular a <Payer>» de M-cat cuya UI nunca se construyó (solo la usa catalog-tenant.test). Gate getActor + CatalogQuery; devuelve solo el payer del catálogo global.",
   "lib/conditions.ts#listCustomConditions": "PF2-d: /configuracion lo lee dentro de la tx única de configuracion-page-loader; la action queda para tests. Gate getActor + módulo diagnostico, where tenantId.",
@@ -50,7 +52,6 @@ const ALLOWLIST: Record<string, string> = {
   "lib/programs.ts#deleteSession": "Legacy de P2-S15: ya no borra nada, siempre devuelve el copy LEGACY_EDIT_COPY.deleteSession. Gate requireModule planes; sin escritura.",
   "lib/programs.ts#setProgramStatus": "Cambio de estado legacy del Tab Plan viejo (borrado en S27a); la UI nueva usa el ciclo de vida de plans-lifecycle. Gate requireModule planes + zod, withReadOnlyResult.",
   "lib/public-booking.ts#listPublicSlots": "Turnero público: el wizard usa listPublicSlotWindow/findFirstPublicSlot (TP-1); esta queda para ~18 tests del motor. Rate limit por IP + zod; sin Actor.",
-  "lib/rooms.ts#listRooms": "SR/PF2-d: /configuracion lee las salas en su tx única (rooms-read); la action queda para tests. safeParse (inválido → []) y archivadas solo con schedule.configure.",
   "lib/services.ts#listServicesWithCounts": "PF2-d: /configuracion lee los servicios con conteos en su tx única (services-read); la action queda con su cache por tag para tests. Gate getActor.",
   "lib/sessions.ts#substituteSessionExercise": "Reemplazar un ejercicio de una sesión: sin UI hoy (solo sessions.test). Gate getActor + módulo + sessionExerciseForWrite + ejercicio asignable, withReadOnlyResult.",
   "lib/tenant-settings.ts#getTenantSettings": "PF2-d: /configuracion lee estos datos en su tx única (configuracion-page-loader); la action queda para tests. Gate getActor, where id = tenant del actor.",

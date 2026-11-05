@@ -24,12 +24,13 @@
 import { revalidatePath, revalidateTag } from "next/cache";
 import { prismaService } from "@/lib/db";
 import { requirePlatformAdmin } from "@/lib/platform-actor";
-import { tenantEntitlementTags } from "@/lib/cache-tags";
+import { CLINIC_SITES_TAG, tags, tenantEntitlementTags } from "@/lib/cache-tags";
+import { auditPlatformInTx } from "@/lib/audit";
 import {
   applyTenantEntitlementsInTx,
   type EntitlementPatchFor,
 } from "@/lib/tenant-entitlements-internal";
-import { UpdatePlatformTenant, trialEndsOnToDate } from "@/lib/platform-tenants-schemas";
+import { SetPlatformTenantSite, UpdatePlatformTenant, trialEndsOnToDate } from "@/lib/platform-tenants-schemas";
 import { getSeatUsageInTx } from "@/lib/team-internal";
 import { PLAN_DEFAULTS, effectiveLimits } from "@/lib/saas-plans-logic";
 import { limitsShrinkBelowUsage, type SeatCounts } from "@/lib/platform-tenants-logic";
@@ -165,5 +166,103 @@ export async function updatePlatformTenant(raw: unknown): Promise<ActionResult<{
     revalidatePath("/", "layout");
   }
 
+  return { ok: true, data: { updatedAt: res.updatedAt.toISOString() } };
+}
+
+/**
+ * CF3 (SD-S, D-CF3-10): el superadmin prende o apaga la sede digital `/<slug>` de un consultorio (p. ej. a pedido del
+ * Titular por soporte, o para bajarla rápido si publica algo que no debe). Mismo molde que el resto de /plataforma:
+ * `requirePlatformAdmin` primero (canal service = única barrera), zod `.strict()`, FOR UPDATE + CAS obligatorio contra
+ * `expectedUpdatedAt`, diff (mismo valor = no-op sin audit) y audit DOBLE `platform.tenant.site` en la misma tx
+ * (C-BO5: el `platform.*` en el log del consultorio afectado y la fila global). Clave `tenant.profile.update` (riesgo
+ * medio, la de «Editar datos»): no se crea una clave nueva para un booleano del perfil público.
+ * `siteEnabledAt` = ahora solo al prender (como «Sitio web»); apagar no lo borra.
+ * Después del commit: snapshot de la sede (`CLINIC_SITES_TAG`), directorio (que enlaza a la sede) y `/<slug>`.
+ *
+ * BR-P: también los colores del sitio y del turnero (`palette`, cualquiera de `ALL_PALETTES`: Plataforma es quien
+ * le asigna su paleta de marca a un consultorio). Mismo CAS, mismo diff por campo (solo lo que cambia entra al audit,
+ * con su antes y después) y, si cambió la paleta, además el turnero (`/c/<slug>/booking`, que la pinta) y el
+ * workspace del consultorio (`/`, layout: Apariencia ofrece la de marca según `Tenant.palette`).
+ */
+export async function setPlatformTenantSite(raw: unknown): Promise<ActionResult<{ updatedAt: string }>> {
+  const actor = await requirePlatformAdmin("tenant.profile.update");
+  const parsed = SetPlatformTenantSite.safeParse(raw);
+  if (!parsed.success) {
+    const fieldErrors: Record<string, string[]> = {};
+    for (const [k, v] of Object.entries(parsed.error.flatten().fieldErrors)) if (v) fieldErrors[k] = v;
+    return { ok: false, error: "Datos inválidos", fieldErrors };
+  }
+  const { tenantId, expectedUpdatedAt, siteEnabled, palette } = parsed.data;
+  const expected = new Date(expectedUpdatedAt);
+
+  const res = await prismaService.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "Tenant" WHERE "id" = ${tenantId} FOR UPDATE`;
+    if (locked.length === 0) return { ok: false as const, reason: "not-found" as const };
+    const cur = await tx.tenant.findUniqueOrThrow({
+      where: { id: tenantId },
+      select: { slug: true, siteEnabled: true, palette: true, updatedAt: true },
+    });
+    if (cur.updatedAt.getTime() !== expected.getTime()) return { ok: false as const, reason: "stale" as const };
+    const siteChanged = siteEnabled !== undefined && cur.siteEnabled !== siteEnabled;
+    const paletteChanged = palette !== undefined && cur.palette !== palette;
+    if (!siteChanged && !paletteChanged) {
+      return { ok: true as const, changed: false, paletteChanged: false, slug: cur.slug, updatedAt: cur.updatedAt };
+    }
+    const now = new Date();
+    // Estrictamente mayor que el anterior: dos writes en el mismo ms dejarían pasar un CAS viejo (tenant-profile-internal).
+    const updatedAt = new Date(Math.max(now.getTime(), cur.updatedAt.getTime() + 1));
+    await tx.tenant.update({
+      where: { id: tenantId },
+      data: {
+        ...(siteChanged ? { siteEnabled, ...(siteEnabled ? { siteEnabledAt: now } : {}) } : {}),
+        ...(paletteChanged ? { palette } : {}),
+        updatedAt,
+      },
+      select: { id: true },
+    });
+    // Solo lo que cambió, con antes y después (la paleta no es PII: el valor ayuda a soporte a ver qué se asignó).
+    const changed: string[] = [];
+    const before: Record<string, string | boolean> = {};
+    const after: Record<string, string | boolean> = {};
+    if (siteChanged && siteEnabled !== undefined) {
+      changed.push("siteEnabled");
+      before.siteEnabled = cur.siteEnabled;
+      after.siteEnabled = siteEnabled;
+    }
+    if (paletteChanged && palette !== undefined) {
+      changed.push("palette");
+      before.palette = cur.palette;
+      after.palette = palette;
+    }
+    await auditPlatformInTx(tx, {
+      actor: { userId: actor.userId, email: actor.email, homeTenantId: actor.homeTenantId },
+      affectedTenantId: tenantId,
+      action: "platform.tenant.site",
+      entity: "Tenant",
+      entityId: tenantId,
+      payload: { changed, before, after },
+    });
+    return { ok: true as const, changed: true, paletteChanged, slug: cur.slug, updatedAt };
+  });
+
+  if (!res.ok) {
+    return {
+      ok: false,
+      error:
+        res.reason === "stale"
+          ? "Otro cambio se guardó antes. Recargá y revisá."
+          : "No encontramos ese consultorio. Volvé a la lista.",
+    };
+  }
+  if (res.changed) {
+    revalidateTag(CLINIC_SITES_TAG);
+    revalidateTag(tags.directory());
+    revalidatePath(`/${res.slug}`);
+    revalidatePath("/plataforma", "layout");
+    if (res.paletteChanged) {
+      revalidatePath(`/c/${res.slug}/booking`);
+      revalidatePath("/", "layout");
+    }
+  }
   return { ok: true, data: { updatedAt: res.updatedAt.toISOString() } };
 }

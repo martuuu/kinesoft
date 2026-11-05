@@ -32,6 +32,12 @@ export const PS_MIN_LEAD_MAX = PUBLIC_MIN_LEAD_MAX_MINUTES;
 export const PS_MAX_LEAD_DAYS_MAX = 730;
 /** Mismo tope que `Service.maxConcurrent`. */
 export const PS_MAX_CONCURRENT_MAX = 50;
+/**
+ * CF3 (M22, D-CF3-1): precio del profesional para el servicio, en centavos. Mismo rango que el CHECK
+ * `PractitionerService_priceCents_check` (0..100 000 000 = $1 000 000): si rebotara en la base saldría un 500 sin decir
+ * qué corregir. 0 vale (sesión sin cargo).
+ */
+export const PS_PRICE_CENTS_MAX = 100_000_000;
 
 /** "" / undefined / null → null; el resto se coerciona a número. */
 const nullableInt = <T extends z.ZodTypeAny>(inner: T) =>
@@ -71,6 +77,18 @@ export const PractitionerServiceInput = z
       z.number().int().min(1, "Mínimo 1").max(PS_MAX_CONCURRENT_MAX)
     ).optional(),
     notifyOnBooking: z.boolean(),
+    /**
+     * CF3 (D-CF3-1): centavos enteros (el cliente convierte con `parseARS`; acá no se coerciona texto para no
+     * aceptar «12,5» como 12). `null` = hereda (Service / plan de la OS); OMITIDO = no se toca: el editor de
+     * Profesionales anterior a CF3 no lo manda y no tiene que borrar el precio que el profesional cargó en «Mi agenda».
+     */
+    priceCents: z
+      .number({ invalid_type_error: "Precio inválido" })
+      .int("El precio va en centavos enteros")
+      .min(0, "El precio no puede ser negativo")
+      .max(PS_PRICE_CENTS_MAX, "Máximo $ 1.000.000")
+      .nullable()
+      .optional(),
   })
   .transform((v) => ({
     enabled: v.enabled,
@@ -81,6 +99,8 @@ export const PractitionerServiceInput = z
     concurrencyOverride: v.concurrencyOverride,
     maxConcurrent: v.concurrencyOverride ? (v.maxConcurrent ?? null) : null,
     notifyOnBooking: v.notifyOnBooking,
+    // `undefined` sale tal cual: Prisma lo omite del update (no se toca).
+    priceCents: v.priceCents,
   }));
 
 export type PractitionerServiceInputT = z.input<typeof PractitionerServiceInput>;
@@ -118,6 +138,10 @@ export type PractitionerServiceRow = {
   concurrencyOverride: boolean;
   maxConcurrent: number | null;
   notifyOnBooking: boolean;
+  /** CF3 (M22): precio de este profesional en centavos; null = hereda (sin fila, null). */
+  priceCents: number | null;
+  /** CF3: `Service.priceCents` (lo que se hereda cuando `priceCents` es null; para el «hereda $ X» del editor). */
+  servicePriceCents: number;
 };
 
 /**

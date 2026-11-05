@@ -326,9 +326,13 @@ const nextConfig = {
     // con las métricas de Helvetica de pdfkit (ver `HC_PDFKIT_STANDARD_FONTS_GLOB`). Las claves son rutas (picomatch
     // con `contains`) de todo lo que puede renderizar un PDF: las rutas de descarga de C-FC7 y el perfil
     // del paciente (la action de compartir de C-FC6 arma el PDF ahí).
-    outputFileTracingIncludes: Object.fromEntries(
-      HC_PDF_ROUTES.map((r) => [r, [HC_PDF_FONTS_GLOB, HC_PDFKIT_STANDARD_FONTS_GLOB]]),
-    ),
+    outputFileTracingIncludes: {
+      ...Object.fromEntries(HC_PDF_ROUTES.map((r) => [r, [HC_PDF_FONTS_GLOB, HC_PDFKIT_STANDARD_FONTS_GLOB]])),
+      // CF3 (BR-H): la imagen OG de la sede lee la foto con `readFile(process.cwd() + "/public/sede/…")`, que el trazado
+      // estático no sigue: sin esto la función de Vercel sale sin el jpg y la OG cae al color sólido.
+      // Clave = glob de picomatch sobre la ruta (`[slug]` sería una clase de caracteres; la OG lleva sufijo de hash).
+      "/*/opengraph-image*": ["./public/sede/hero-consultorio-og.jpg"],
+    },
   },
   images: {
     remotePatterns: [
@@ -344,6 +348,13 @@ const nextConfig = {
       {
         source: "/(.*)",
         headers: securityHeaders,
+      },
+      // CF3 (BR-H): fotos del hero de la sede. Sin hash en el nombre (son de `public/`), así que no van `immutable`:
+      // una semana de cache + revalidación en segundo plano, en vez del `max-age=0` por defecto que revalidaba la foto
+      // en cada visita. Si se reemplaza una foto, se publica con otro nombre.
+      {
+        source: "/sede/:path*",
+        headers: [{ key: "Cache-Control", value: "public, max-age=604800, stale-while-revalidate=86400" }],
       },
       // BO4: se SUMA a la global (la Report-Only sigue llegando y reportando); el browser aplica las dos y la
       // enforced es la que bloquea. `:path*` también matchea `/plataforma` pelado.

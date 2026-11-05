@@ -12,9 +12,11 @@ import {
   type ReactNode,
 } from "react";
 import { updateAgendaViewPrefs, updateUserPreferences } from "@/lib/preferences";
-import type { AgendaPrefs, ReceptionLayout } from "@/lib/preferences-constants";
+import type { AgendaPrefs, Palette, ReceptionLayout } from "@/lib/preferences-constants";
+import { GENERAL_PALETTES, palettesForTenant } from "@/lib/brand-palettes";
 
-export type Palette = "sky" | "mint" | "coral" | "violet";
+// BR-P: el tipo es el de `lib/preferences-constants.ts` (generales + de marca); antes era una copia de la unión.
+export type { Palette };
 export type DashChrome = "sidebar" | "topbar";
 /**
  * [HF-2a] (D-LL1) Cómo avisa la agenda que un paciente está en sala de espera: el punto lima que late (default) o el
@@ -49,7 +51,12 @@ const DEFAULTS: TweaksState = {
 };
 
 const STORAGE_KEY = "kinesoft:tweaks";
-const PALETTES: readonly Palette[] = ["sky", "mint", "coral", "violet"];
+/**
+ * BR-P: sin `allowed` explícito, solo las generales. Una paleta de marca (hoy «tmp») se acepta únicamente si el
+ * consultorio activo la tiene (`palettesForTenant(Tenant.palette)`, que pasa el layout como `tenantPalette`): un
+ * usuario que la eligió en TMP y entra a otro consultorio ve sky, no los colores de TMP.
+ */
+const GENERAL: readonly Palette[] = GENERAL_PALETTES;
 
 /**
  * Estado inicial desde lo guardado en el navegador. Puro (exportado para el test). Ignora claves viejas
@@ -57,7 +64,11 @@ const PALETTES: readonly Palette[] = ["sky", "mint", "coral", "violet"];
  * server (`serverPalette`), si viene, gana sobre la del navegador: es la que sigue al usuario entre dispositivos y
  * la misma que guarda Perfil → Ajustes.
  */
-export function hydrateTweaks(raw: string | null, serverPalette?: Palette | null): TweaksState {
+export function hydrateTweaks(
+  raw: string | null,
+  serverPalette?: Palette | null,
+  allowed: readonly Palette[] = GENERAL
+): TweaksState {
   let stored: Record<string, unknown> = {};
   try {
     const parsed: unknown = raw ? JSON.parse(raw) : null;
@@ -65,12 +76,15 @@ export function hydrateTweaks(raw: string | null, serverPalette?: Palette | null
   } catch {
     /* JSON roto: defaults */
   }
-  const palette =
-    serverPalette && PALETTES.includes(serverPalette)
+  // BR-P: una paleta del server que este consultorio no ofrece (la de marca de otro) NO cae a la del navegador: se
+  // pinta el default. Si no, el localStorage de la misma PC podría traer la de marca por la puerta de atrás.
+  const palette = serverPalette
+    ? allowed.includes(serverPalette)
       ? serverPalette
-      : PALETTES.includes(stored.palette as Palette)
-        ? (stored.palette as Palette)
-        : DEFAULTS.palette;
+      : DEFAULTS.palette
+    : allowed.includes(stored.palette as Palette)
+      ? (stored.palette as Palette)
+      : DEFAULTS.palette;
   return {
     palette,
     dashChrome: stored.dashChrome === "topbar" ? "topbar" : "sidebar",
@@ -159,18 +173,29 @@ export function TweaksProvider({
   children,
   initialAgenda,
   initialPalette = null,
+  tenantPalette = null,
   initialReceptionLayout = SHELL_DEFAULT_RECEPTION_LAYOUT,
 }: {
   children: ReactNode;
   initialAgenda?: AgendaPrefs;
   /** PL-F1c: `UserPreferences.palette` (lo lee el layout `(app)`). null = sin server (tests, demo). */
   initialPalette?: Palette | null;
+  /**
+   * BR-P: `Tenant.palette` del consultorio activo (lo lee el layout `(app)`). Decide si una paleta de marca se puede
+   * pintar acá (`palettesForTenant`). null/ausente = solo las generales.
+   */
+  tenantPalette?: string | null;
   /** RX-0: `agendaPrefs.receptionLayout` ya sanitizado (layout `(app)`). Sin server: "board". */
   initialReceptionLayout?: ReceptionLayout;
 }) {
+  // BR-P: lista estable por consultorio (el layout no cambia `tenantPalette` sin una carga completa: el cambio de
+  // consultorio navega con `window.location.assign`).
+  const allowed = useMemo(() => palettesForTenant(tenantPalette), [tenantPalette]);
+  const allowedRef = useRef(allowed);
+  allowedRef.current = allowed;
   const [t, setT] = useState<TweaksState>(() => ({
     ...DEFAULTS,
-    palette: initialPalette && PALETTES.includes(initialPalette) ? initialPalette : DEFAULTS.palette,
+    palette: initialPalette && allowed.includes(initialPalette) ? initialPalette : DEFAULTS.palette,
   }));
   const [agenda, setAgendaState] = useState<AgendaPrefs>(initialAgenda ?? DEFAULT_AGENDA);
   const [receptionLayout, setReceptionLayoutState] = useState<ReceptionLayout>(() =>
@@ -189,7 +214,7 @@ export function TweaksProvider({
     } catch {
       /* storage bloqueado: defaults */
     }
-    const next = hydrateTweaks(raw, initialPalette);
+    const next = hydrateTweaks(raw, initialPalette, allowedRef.current);
     // MB-Z (integrador, CLS 0,18 a 360/390 en Semana/Lista/Recepción): este effect corre cuando el layout ya hidrató
     // pero el Suspense de `agenda/loading.tsx` (la página) todavía no. Un update urgente que llega por contexto a un
     // Suspense deshidratado obliga a React 18 a tirar el HTML del server y renderizar TODA la página en el cliente
@@ -227,6 +252,8 @@ export function TweaksProvider({
   }, [t]);
 
   const set: Ctx["set"] = useCallback((key, value) => {
+    // BR-P: una paleta que este consultorio no ofrece no se aplica ni se guarda (el panel no la muestra; red).
+    if (key === "palette" && !allowedRef.current.includes(value as Palette)) return;
     setT((prev) => ({ ...prev, [key]: value }));
     // PL-F1c (M1 del barrido): la paleta solo iba a localStorage y el dashboard la pisaba con la del server al
     // cargar: elegías «mint» acá y al pasar por Inicio volvía la anterior. Ahora se guarda en el server, como

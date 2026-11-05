@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Avatar } from "@/components/ui/avatar";
 import { IconBell, IconCheck, IconHome, IconLogout, IconSettings, IconUsers } from "@/components/ui/icons";
 import { SUPPORT_HELP_HREF } from "./shell-links";
 import { preloadAppearance } from "./appearance-loader";
 import { CHOOSE_TENANT_HREF, useTenantChoice } from "./tenant-switcher";
+import { useTenantBrand } from "./tenant-brand-context";
+import { TenantLogo } from "./tenant-logo";
+import { UserAvatar } from "./user-photo-context";
 import type { TenantOption } from "@/lib/tenant-choice";
 
 /**
@@ -74,6 +76,12 @@ export function showsPublicProfileEntry(attendsHere: boolean, options: readonly 
  * sin esto, con la barra superior no había forma de llegar a ninguno de los dos.
  *
  * `name` es `actor.practitionerName` (ya pasa por `displayUserName`: nunca el email, decisión 19).
+ *
+ * CF3 (BR-L): debajo del usuario, el consultorio activo (logo, si tiene, y nombre; `useTenantBrand`). En mobile es el
+ * único lugar donde se lee en qué consultorio se está, justo arriba de «Cambiar de consultorio».
+ *
+ * CF3b PH-U1: el avatar es la foto propia si hay (`UserAvatar`, del `UserPhotoProvider` del AppShell); si no, las
+ * iniciales de siempre.
  */
 export function TopbarAccountMenu({
   name,
@@ -94,6 +102,7 @@ export function TopbarAccountMenu({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const { canSwitch, options, publicProfile } = useTenantChoice();
+  const brand = useTenantBrand();
   // HD-9: con el directorio apagado (`publicProfile` false) no hay perfil que editar (la página da 404).
   const showPublicProfile = publicProfile && showsPublicProfileEntry(ownPublicBooking !== null, options);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -164,7 +173,7 @@ export function TopbarAccountMenu({
           outlineOffset: 2,
         }}
       >
-        <Avatar name={name} size={36} />
+        <UserAvatar name={name} size={36} />
       </button>
 
       {open && (
@@ -193,6 +202,20 @@ export function TopbarAccountMenu({
           >
             {name}
           </div>
+          {brand.name && (
+            <div
+              data-active-tenant
+              style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 12px 10px", minWidth: 0 }}
+            >
+              {brand.logoUrl && <TenantLogo src={brand.logoUrl} size={24} />}
+              <span
+                title={brand.name}
+                style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-900)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+              >
+                {brand.name}
+              </span>
+            </div>
+          )}
           {onOpenAppearance && (
             <button
               type="button"

@@ -19,6 +19,7 @@ import { z } from "zod";
 import type { SaasPlan, SubscriptionStatus, TenantPlan, TenantStatus, TenantVertical } from "@prisma/client";
 import { localToARIso } from "@/lib/datetime-ar";
 import { isValidSlug } from "@/lib/onboarding-logic";
+import { ALL_PALETTES } from "@/lib/brand-palettes";
 
 export const TENANT_VERTICAL_VALUES = ["GENERAL", "KINESIOLOGY"] as const satisfies readonly TenantVertical[];
 /**
@@ -227,3 +228,21 @@ export const ChangePlatformTenantSlug = z
   })
   .strict();
 export type ChangePlatformTenantSlugInput = z.input<typeof ChangePlatformTenantSlug>;
+
+/**
+ * CF3 (SD-S, D-CF3-10): prender/apagar la sede digital `/<slug>` desde Plataforma (`setPlatformTenantSite`). Solo el
+ * switch: la frase, la descripción y el contacto los edita el consultorio en «Sitio web».
+ * BR-P: y los colores del sitio y del turnero (`Tenant.palette`). Plataforma elige CUALQUIERA de `ALL_PALETTES`,
+ * incluidas las de marca (es quien se la asigna al consultorio que la pidió). Cada campo es opcional (ausente = no
+ * tocar), pero tiene que venir al menos uno.
+ */
+export const SetPlatformTenantSite = z
+  .object({
+    tenantId: id,
+    expectedUpdatedAt,
+    siteEnabled: z.boolean().optional(),
+    palette: z.enum(ALL_PALETTES, { message: "Elegí una paleta de la lista." }).optional(),
+  })
+  .strict()
+  .refine((v) => v.siteEnabled !== undefined || v.palette !== undefined, { message: "Nada para cambiar." });
+export type SetPlatformTenantSiteInput = z.input<typeof SetPlatformTenantSite>;

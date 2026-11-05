@@ -124,8 +124,9 @@ describe.skipIf(!RUN)("[IAM-3a] elección de consultorio (C-IAM7)", () => {
     await multiUser();
     const st = await getTenantChoiceState();
     expect(st.options).toEqual([
-      { tenantId: B.tenantId, name: `Alfa ${B.slug}`, slug: B.slug, role: "PRACTITIONER", vertical: "GENERAL" },
-      { tenantId: A.tenantId, name: `Zeta ${A.slug}`, slug: A.slug, role: "ADMIN", vertical: "KINESIOLOGY" },
+      // CF3 (BR-L): + `logoUrl` de la misma foto (sin logo → null; con logo lo cubre cf3-tenant-logo.test.ts).
+      { tenantId: B.tenantId, name: `Alfa ${B.slug}`, slug: B.slug, role: "PRACTITIONER", vertical: "GENERAL", logoUrl: null, coOwner: false },
+      { tenantId: A.tenantId, name: `Zeta ${A.slug}`, slug: A.slug, role: "ADMIN", vertical: "KINESIOLOGY", logoUrl: null, coOwner: false },
     ]);
     expect(st.activeTenantId).toBe(B.tenantId); // aceptado más reciente
     expect(st.needsChoice).toBe(true);

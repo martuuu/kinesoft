@@ -1,0 +1,151 @@
+/* CF3 (D-CF3-8, SH-U): el teléfono del perfil como botón (ícono de WhatsApp) y su menú diferido. Estático: lo usa el
+   botón del hero (first load de /pacientes/[id], pocos bytes) y el panel (chunk aparte). Sin animación: con
+   reducedMotion el estado final es el mismo. */
+.wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.trigger {
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 6px;
+  margin-left: -6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--navy-900);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.trigger:hover,
+.trigger[aria-expanded="true"] {
+  background: rgba(15, 30, 51, 0.05);
+  border-color: rgba(15, 30, 51, 0.08);
+}
+
+.trigger:focus-visible {
+  outline: 2px solid var(--sky-700);
+  outline-offset: 1px;
+}
+
+.panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 260px;
+  max-width: min(340px, calc(100vw - 32px));
+  border-radius: 12px;
+  padding: 4px;
+  z-index: 25;
+  display: grid;
+}
+
+.row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.sep {
+  border-top: 1px solid var(--navy-100);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+.item {
+  flex: 1;
+  min-height: 44px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--navy-700);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.copy {
+  flex: 0 0 auto;
+  min-height: 44px;
+  background: transparent;
+  border: none;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sky-700);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.item:hover,
+.item:focus-visible,
+.copy:hover,
+.copy:focus-visible {
+  background: rgba(15, 30, 51, 0.06);
+}
+
+/* Foco visible con el anillo del design system (ratchet de UI de VX F-b2: nunca se apaga el foco). */
+.item:focus-visible,
+.copy:focus-visible {
+  outline: 2px solid var(--sky-500);
+  outline-offset: -2px;
+}
+
+.status {
+  padding: 10px 12px;
+  font-size: 12.5px;
+  color: var(--navy-500);
+}
+
+.notice {
+  display: grid;
+  gap: 2px;
+  margin: 4px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  color: var(--warn-fg);
+  font-size: 11.5px;
+}
+
+.notice strong {
+  font-weight: 650;
+}
+
+/* CF3 ZF3 (revisor de UI): el botón del teléfono medía ~20 px de alto; en táctil o pantalla chica llega a 44 px. */
+@media (pointer: coarse), (max-width: 767px) {
+  .trigger {
+    min-height: 44px;
+  }
+}
+
+/* CF3 ZF3: el botón de opciones por fila de Turnos (`turnos-view.tsx`): 30 px en escritorio, 44 px en táctil / mobile.
+   Las medidas viven acá y no inline: el `min-height` inline le ganaba a la pasada de 44 px de `profile-table`. */
+.rowMenuTrigger {
+  min-height: 30px;
+}
+
+.rowMenuDots {
+  width: 30px;
+  height: 30px;
+}
+
+@media (pointer: coarse), (max-width: 767px) {
+  .rowMenuTrigger {
+    min-height: 44px;
+  }
+  .rowMenuDots {
+    width: 44px;
+    height: 44px;
+  }
+}

@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
-import { Avatar } from "@/components/ui/avatar";
+import { UserAvatar } from "@/components/layout/user-photo-context";
 import { IconBell, IconHome, IconLogout, IconSettings, IconShield } from "@/components/ui/icons";
 import type { Preferences } from "@/lib/preferences-constants";
 import type { KpiRevenueScope } from "@/lib/dashboard-kpi-options";
@@ -134,7 +134,8 @@ export function ProfileMenu({
           boxShadow: open ? "var(--focus-ring)" : undefined,
         }}
       >
-        <Avatar name={name} size={36} />
+        {/* CF3b PH-U1: la foto propia si hay (`UserPhotoProvider` del AppShell); si no, las iniciales. */}
+        <UserAvatar name={name} size={36} />
       </button>
 
       {open && (

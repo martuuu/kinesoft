@@ -80,4 +80,15 @@ describe("[VX F-e] scripts/bundle-groups.mjs", () => {
     expectGroup("/agenda", "workspace");
     expectGroup("/tvx", "workspace");
   });
+  // [CF3-SDR] §30 D-CF3-10: la sede digital `/<slug>` (`app/(sede)/[slug]/`, la crea SD-U en W4) es la página que el
+  // paciente abre desde Google o Instagram, a menudo con datos móviles: grupo `public` (≤120, bloqueante). Sin el match
+  // caía en `workspace` (180) y CI no la frenaba. `/c/[slug]/booking` sigue en `turnero` (empieza con `/c/`).
+  it("[CF3-SDR] /[slug] y sus subrutas → public (120, bloqueante); el turnero y /[slug]x no", () => {
+    for (const r of ["/[slug]", "/[slug]/profesionales"]) expectGroup(r, "public");
+    expect(groupFor("/[slug]")).toMatchObject({ budget: 120, blocking: true });
+    expectGroup("/c/[slug]/booking", "turnero");
+    expectGroup("/portal/c/[slug]", "portal");
+    expectGroup("/[slug]x", "workspace");
+    expectGroup("/[otro]", "workspace");
+  });
 });

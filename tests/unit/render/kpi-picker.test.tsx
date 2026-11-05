@@ -17,7 +17,8 @@ vi.mock("@/lib/practitioner-public", () => ({ setPractitionerPublicBooking: asyn
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: () => {}, push: () => {}, replace: () => {} }),
 }));
-vi.mock("@/components/layout/tweaks-context", () => ({ useTweaks: () => ({ set: () => {} }) }));
+// [CF3-ZF4b] «Ajustes» arranca con la paleta efectiva (`t.palette`), así que el mock la trae.
+vi.mock("@/components/layout/tweaks-context", () => ({ useTweaks: () => ({ t: { palette: "sky" }, set: () => {} }) }));
 
 // PF1.1-dashboard: los dos pickers viven en su propio módulo (los bajan con `next/dynamic` el botón y el menú).
 import { PinKpiModal } from "@/components/dashboard/pin-kpi-modal";

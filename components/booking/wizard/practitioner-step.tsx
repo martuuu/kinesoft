@@ -6,6 +6,11 @@
  *
  * Cobertura: solo filtra profesionales (`acceptedInsurerIds`). NUNCA muestra
  * montos de copago: en el turnero público no hay contexto para explicarlos.
+ *
+ * PH-U2 (CF3b, pedido de Martin del 05-nov): cada tarjeta lleva la foto del
+ * profesional (`photoUrl`, solo con su opt-in `showPhotoPublic`; sin foto, sus
+ * iniciales) en el marco de `PractitionerPhoto`, con el logo del consultorio en
+ * la insignia cuando el payload lo trae (`logoUrl`). Es markup + CSS: no suma JS.
  */
 import type { PublicClinic } from "@/lib/public-booking-types";
 import type { TenantVertical } from "@prisma/client";
@@ -18,6 +23,7 @@ import {
   type WizardFilters,
 } from "@/lib/public-wizard-state";
 import { IconClock } from "@/components/ui/icons";
+import { PractitionerPhoto } from "@/components/ui/practitioner-photo";
 import { EmptyBox, FieldLabel, StepHeader } from "./shared";
 import s from "../public-booking.module.css";
 
@@ -30,8 +36,10 @@ export function PractitionerStep({
   onPick,
   onAny,
 }: {
-  /** `vertical` opcional (EV1-C2): sin ella, el copy de Kinesiología de siempre. */
-  clinic: PublicClinic & { vertical?: TenantVertical | null };
+  /** `vertical` opcional (EV1-C2): sin ella, el copy de Kinesiología de siempre.
+   *  `logoUrl` (PH-U2): logo del consultorio para la insignia de la foto; ausente/null = sin insignia. Handoff a PH-S:
+   *  `PublicClinic.logoUrl` (hasta entonces el wizard no lo manda y la tarjeta sale sin insignia). */
+  clinic: PublicClinic & { vertical?: TenantVertical | null; logoUrl?: string | null };
   filters: WizardFilters;
   onFiltersChange: (next: WizardFilters) => void;
   mode: "pick" | "any";
@@ -46,6 +54,7 @@ export function PractitionerStep({
   // EV1-C2: sin especialidad cargada, Kine mostraba «Kinesiología»; en Clínica
   // general eso es falso, así que ahí no se muestra nada (solo la matrícula, si hay).
   const specialtyFallback = clinic.vertical === "GENERAL" ? null : "Kinesiología";
+  const logoUrl = clinic.logoUrl ?? null;
 
   return (
     <>
@@ -139,11 +148,15 @@ export function PractitionerStep({
                 type="button"
                 aria-pressed={mode === "pick" && p.id === value}
                 onClick={() => onPick(p.id)}
-                className={s.choice}
+                className={`${s.choice} ${s.choiceRow} ${s.proChoice}`}
               >
-                <div className={s.choiceTitle}>{p.name}</div>
-                {line && <div className={s.choiceSub}>{line}</div>}
-                {p.yearsExp != null && <div className={s.choiceMeta}>{p.yearsExp} años de experiencia</div>}
+                {/* Decorativa: el nombre es el texto del botón (el lector no lo repite). */}
+                <PractitionerPhoto src={p.photoUrl ?? null} name={p.name} logoUrl={logoUrl} size={64} nameShown />
+                <div className={s.choiceMain}>
+                  <div className={s.choiceTitle}>{p.name}</div>
+                  {line && <div className={s.choiceSub}>{line}</div>}
+                  {p.yearsExp != null && <div className={s.choiceMeta}>{p.yearsExp} años de experiencia</div>}
+                </div>
               </button>
             );
           })}

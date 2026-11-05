@@ -45,6 +45,13 @@ export const SAAS_PLANS_TAG = "saas-plans";
  */
 export const DIRECTORY_TAG = "global:directory";
 
+/**
+ * CF3 (D-CF3-10): snapshot global de las sedes digitales `/<slug>` (`lib/clinic-site-internal.ts`). Se invalida con todo
+ * lo que cambia una sede: switch y textos de «Sitio web», logo, nombre y contacto, precios y visibilidad de servicios,
+ * obras sociales, sedes y el ciclo de vida del consultorio.
+ */
+export const CLINIC_SITES_TAG = "global:sites";
+
 function t(tenantId: string, surface: string) {
   return `${TENANT_PREFIX}${tenantId}:${surface}`;
 }
@@ -70,6 +77,7 @@ export const tags = {
   anatomy: () => "global:anatomy",
   saasPlans: () => SAAS_PLANS_TAG,
   directory: () => DIRECTORY_TAG,
+  sites: () => CLINIC_SITES_TAG,
 } as const;
 
 /**

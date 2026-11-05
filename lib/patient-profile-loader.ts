@@ -54,6 +54,8 @@ import type { PatientAdminCore, PatientBasic, PatientCore } from "@/lib/patients
 import { listInsurers } from "@/lib/insurers";
 import { getPatientClinicalHome } from "@/lib/clinical-notes-read";
 import type { PatientClinicalHome } from "@/lib/clinical-notes-types";
+import { publicPractitionerName } from "@/lib/display-name";
+import type { PatientShareBooking } from "@/lib/patient-share-types";
 
 /** Turnos del perfil `admin` (mismo tope que pedía la página: 100). */
 export const PROFILE_ADMIN_BOOKINGS = 100;
@@ -110,6 +112,12 @@ export type PatientProfileTx =
       plans: PlanReadResult<PlanDTO[]> | null;
       balances: PlanReadResult<PatientPlanBalances> | null;
       recentBookings: Awaited<ReturnType<typeof patientBookingsSummaryInTx>>;
+      /**
+       * CF3 (D-CF3-8, SH-S): el próximo turno REAL (futuro, no cancelado ni ausente), para el recordatorio del menú
+       * del teléfono. `recentBookings` no sirve: son los 5 más lejanos (`scheduledFor desc`), con turnos a meses el
+       * próximo no está. Forma mínima, sin título ni notas (ver `PatientShareBooking`).
+       */
+      nextBooking: PatientShareBooking | null;
       billableCount: number;
       practitioners: PractitionerRow[];
       noteBookingRow: ProfileNoteBookingRow | null;
@@ -145,6 +153,9 @@ export async function loadPatientProfile(
 
   const pb = plansEnabled ? await patientPlansAndBalancesInTx(tx, actor, caps, patientId, access) : null;
   const recentBookings = await patientBookingsSummaryInTx(tx, actor, patientId, access, PROFILE_RECENT_BOOKINGS);
+  // CF3 (SH-S): +1 sentencia en el perfil `full` (una sola: servicio, profesional y sede van en el JOIN). Presupuesto
+  // pf2-profile: techo 37 → 38, el máximo que permitía el brief. `admin` ya trae `nextBookingAt` y sus 100 turnos.
+  const [nextBooking = null] = await patientUpcomingBookingsInTx(tx, actor.tenantId, patientId, 1);
   const billableCount = await patientBillableCountInTx(tx, actor, patientId, access);
   // CF (§28, decisión 4): ya no se leen los `EvaScore` (la pestaña EVA y la card de Resumen salieron de la app). Era
   // una sentencia por carga de un perfil `full` con `evaluaciones`; pf2-profile-budget fija el techo nuevo.
@@ -171,9 +182,80 @@ export async function loadPatientProfile(
     plans: pb?.plans ?? null,
     balances: pb?.balances ?? null,
     recentBookings,
+    nextBooking: nextBooking ? shareBookingOf(nextBooking) : null,
     billableCount,
     practitioners,
     noteBookingRow,
+  };
+}
+
+/** Fila de `patientUpcomingBookingsInTx`: lo justo para compartir, más el profesional (para el permiso de cobro). */
+export type UpcomingBookingRow = {
+  id: string;
+  scheduledFor: Date;
+  durationMin: number;
+  practitionerId: string;
+  serviceName: string;
+  practitionerFullName: string | null;
+  locationName: string | null;
+  telemedicineUrl: string | null;
+};
+
+/** Tope duro de `patientUpcomingBookingsInTx` (el menú pide 5; `UPCOMING_SHARE_MAX`). */
+const UPCOMING_TAKE_MAX = 20;
+
+/**
+ * CF3 (D-CF3-8, SH-S) · los próximos turnos del paciente para compartir: futuros (desde `now`), sin CANCELLED ni
+ * NO_SHOW, del más cercano al más lejano. Lo usan el perfil `full` (`nextBooking`, take 1) y `getPatientShareBundle`
+ * (take 5). El que llama ya decidió el acceso (`full`/`admin`): acá no se mira.
+ *
+ * UNA sentencia: con `select` anidado Prisma 5 corre una por relación (servicio, profesional, usuario, sede = +4) y el
+ * perfil tiene techo de sentencias (pf2-profile-budget). `tenantId` a mano en el WHERE y en cada JOIN (en prod la
+ * conexión tiene BYPASSRLS). NUNCA se seleccionan `title`, `notes` ni `description`: la lista la pide la Secretaria y
+ * va al WhatsApp del paciente.
+ *
+ * La sede: solo si el consultorio tiene más de una activa (subconsulta en la misma sentencia); con una sola, «en
+ * Consultorio» en el recordatorio es ruido. El link de la videollamada, solo si el turno es de telemedicina.
+ */
+export async function patientUpcomingBookingsInTx(
+  tx: DbClient,
+  tenantId: string,
+  patientId: string,
+  take: number,
+  now: Date = new Date()
+): Promise<UpcomingBookingRow[]> {
+  const limit = Math.min(Math.max(Math.trunc(take) || 1, 1), UPCOMING_TAKE_MAX);
+  return tx.$queryRaw<UpcomingBookingRow[]>`
+    SELECT b."id", b."scheduledFor", b."durationMin", b."practitionerId",
+      s."name" AS "serviceName",
+      u."fullName" AS "practitionerFullName",
+      CASE WHEN (SELECT count(*) FROM "Location" lc WHERE lc."tenantId" = b."tenantId" AND lc."active") > 1
+        THEN l."name" END AS "locationName",
+      CASE WHEN b."isTelemedicine" THEN b."telemedicineUrl" END AS "telemedicineUrl"
+    FROM "Booking" b
+    JOIN "Service" s ON s."id" = b."serviceId" AND s."tenantId" = b."tenantId"
+    JOIN "Practitioner" p ON p."id" = b."practitionerId" AND p."tenantId" = b."tenantId"
+    LEFT JOIN "UserProfile" u ON u."id" = p."userId"
+    LEFT JOIN "Location" l ON l."id" = b."locationId" AND l."tenantId" = b."tenantId"
+    WHERE b."tenantId" = ${tenantId}
+      AND b."patientId" = ${patientId}
+      AND b."scheduledFor" >= ${now}
+      AND b."status" NOT IN ('CANCELLED', 'NO_SHOW')
+    ORDER BY b."scheduledFor" ASC, b."id" ASC
+    LIMIT ${limit}
+  `;
+}
+
+/** Fila → la forma que viaja al cliente (ISO, nombre público del profesional). */
+export function shareBookingOf(r: UpcomingBookingRow): PatientShareBooking {
+  return {
+    bookingId: r.id,
+    startsAt: r.scheduledFor.toISOString(),
+    serviceName: r.serviceName,
+    practitionerName: publicPractitionerName(r.practitionerFullName),
+    durationMin: r.durationMin,
+    locationName: r.locationName?.trim() || null,
+    telemedicineUrl: r.telemedicineUrl?.trim() || null,
   };
 }
 

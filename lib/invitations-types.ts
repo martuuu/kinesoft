@@ -77,6 +77,11 @@ export type TeamMemberRow = {
   grantSettings: boolean;
   /** PL-1c (PL-D5): «Planes y pagos» delegado. */
   grantBilling: boolean;
+  /**
+   * CF3b (M23): «Co-titular» (`Membership.grantCoOwner`; solo PRACTITIONER). `listTeamMembersInTx` lo trae siempre;
+   * opcional solo para no romper los fixtures de la UI armados a mano (ausente = no).
+   */
+  grantCoOwner?: boolean;
   /** PL-1c: por qué está deshabilitado (MANUAL | PLAN_DOWNGRADE | PLATFORM); null si está activo. */
   disabledReason: string | null;
   /**
@@ -104,7 +109,11 @@ export type MemberPasswordResetResult = {
 /** PL-3b: «¿Atiende pacientes?» del Titular (`setMemberClinical`, solo sobre sí mismo, con step-up). */
 export type SetMemberClinicalInput = { membershipId: string; clinical: boolean };
 
-/** PL-3b (PL-D5): permisos delegados por miembro (`setMemberGrants`, solo el Titular, con step-up; nunca sobre el OWNER). */
+/**
+ * PL-3b (PL-D5): permisos delegados por miembro (`setMemberGrants`, con step-up; nunca sobre el OWNER). CF3b: el Titular
+ * principal o un co-titular (`account.manage`); el co-titular solo cambia `grantSettings` (con `grantBilling` igual al
+ * que ya tiene) y nunca sobre otro co-titular ni sobre sí mismo.
+ */
 export type SetMemberGrantsInput = { membershipId: string; grantSettings: boolean; grantBilling: boolean };
 
 /** Resultado de suspender (IAM-4c): cuántos turnos futuros activos le quedan, para avisar que no se cancelan. */
@@ -114,6 +123,8 @@ export type SuspendMemberResult = { futureBookings: number };
  * Quién actúa sobre el equipo (BO2-B, contrato C-BO8). Lo arman los dos wrappers de los núcleos de
  * `lib/team-internal.ts`:
  *  - `via: "tenant"`: Configuración → Usuarios (`lib/invitations.ts`), OWNER o ADMIN del consultorio; `actorRef` null.
+ *    `actorRole: "OWNER"` SOLO para el Titular principal (`account.owner`); quien gestiona sin serlo (el co-titular de
+ *    CF3b incluido) va como "ADMIN" y los núcleos releen en la tx lo que el co-titular suma (`teamStandingInTx`).
  *  - `via: "platform"`: /plataforma (`lib/platform-team.ts`), superadmin (`actorRole: "SUPERADMIN"`) sobre cualquier
  *    consultorio; `actorRef` = la referencia para el registro de plataforma (C-BO5).
  * Vive acá (y `team-internal` lo re-exporta) para que la UI y los tests lo importen sin arrastrar `server-only`.
@@ -149,6 +160,8 @@ export type PlatformTeamMemberRow = {
   clinical: boolean;
   grantSettings: boolean;
   grantBilling: boolean;
+  /** CF3b (M23): «Co-titular». Lo arma `lib/platform-team-read.ts`; opcional por los fixtures de la UI (ausente = no). */
+  grantCoOwner?: boolean;
   /** `Practitioner.publicBookingEnabled` (null = no atiende o no tiene `Practitioner` en este consultorio). */
   publicBookingEnabled: boolean | null;
 };

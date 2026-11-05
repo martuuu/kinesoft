@@ -17,6 +17,7 @@ import { auditInTx } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { notify } from "@/lib/notifications-internal";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
+import { particularQuoteCents } from "@/lib/copago";
 import { isPublicReservation, overlapBlocks } from "@/lib/booking-capacity";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { lockPlanPatient } from "@/lib/plan-lock";
@@ -156,6 +157,55 @@ import type { ReceptionAction } from "@/lib/reception-state";
 import { bookablePractitionerWhere, isActorPractitioner } from "@/lib/practitioner-scope";
 import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 
+/** Clave del mapa de precios por profesional × servicio (CF3, D-CF3-1). */
+const practitionerPriceKey = (practitionerId: string, serviceId: string) => `${practitionerId}:${serviceId}`;
+
+/**
+ * CF3 PR-C1 (D-CF3-1): `PractitionerService.priceCents` de los pares profesional × servicio de los turnos que se van a
+ * cotizar, en UNA sentencia (nunca por fila: la agenda de la Secretaria trae cientos de turnos de 5+ profesionales).
+ * El `where` es el producto `practitionerId IN × serviceId IN` (superconjunto chico de los pares reales, que se filtra
+ * en el mapa) y `priceCents` no nulo: un par sin fila o con NULL hereda (= la escalera de antes de CF3). Sin pares no
+ * hay sentencia. `tenantId` a mano: en prod la conexión tiene BYPASSRLS.
+ *
+ * No filtra por `enabled`: el arancel es del profesional aunque después deshabilite el servicio; un turno ya dado con
+ * ese servicio se sigue cotizando a su precio hasta cobrarlo (D-CF3-2: sigue al profesional actual).
+ */
+async function loadPractitionerPrices(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  pairs: ReadonlyArray<{ practitionerId: string; serviceId: string }>
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (pairs.length === 0) return out;
+  const practitionerIds = [...new Set(pairs.map((p) => p.practitionerId))];
+  const serviceIds = [...new Set(pairs.map((p) => p.serviceId))];
+  const rows = await tx.practitionerService.findMany({
+    where: { tenantId, practitionerId: { in: practitionerIds }, serviceId: { in: serviceIds }, priceCents: { not: null } },
+    select: { practitionerId: true, serviceId: true, priceCents: true },
+  });
+  for (const r of rows) if (r.priceCents != null) out.set(practitionerPriceKey(r.practitionerId, r.serviceId), r.priceCents);
+  return out;
+}
+
+/**
+ * CF3 ZF1 (M1): monto de un turno INVITADO (sin paciente) = lo que `toggleBilling` congela al cobrarlo: el monto propio
+ * del turno si lo tiene; si no, la escalera del particular (`particularQuoteCents`: precio del profesional →
+ * «Particular» del consultorio → servicio). Antes la agenda mostraba el precio del servicio y se estampaba otro monto.
+ * No es PHI (no hay paciente): se muestra a todos, como antes el precio del servicio.
+ */
+function guestCopagoCents(
+  b: { copagoCents: number | null; practitionerId: string; serviceId: string; service: { priceCents: number } },
+  particularCopago: number | null,
+  practitionerPrices: ReadonlyMap<string, number>
+): number {
+  if (b.copagoCents != null) return b.copagoCents;
+  return particularQuoteCents({
+    practitionerPriceCents: practitionerPrices.get(practitionerPriceKey(b.practitionerId, b.serviceId)) ?? null,
+    particularCopagoCents: particularCopago,
+    servicePriceCents: b.service.priceCents,
+  });
+}
+
 export async function listBookingsInRange(raw: BookingsRangeQueryInput): Promise<BookingRow[]> {
   const actor = await getActor();
   // PV-W1a (HD-1): validada como `listAgendaBookings` (tira ZodError): por RPC llega cualquier cosa, y sin tope un
@@ -164,38 +214,51 @@ export async function listBookingsInRange(raw: BookingsRangeQueryInput): Promise
   // Sprint 16: agenda shows every booking in the tenant; per-row access
   // tier is resolved below. The diagnosis chip is hidden when the actor
   // only has BASIC access to that booking's patient.
-  const rows = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
-    where: {
-      tenantId: actor.tenantId,
-      scheduledFor: { gte: opts.from, lt: opts.to },
-      ...(opts.practitionerId ? { practitionerId: opts.practitionerId } : {}),
-    },
-    orderBy: { scheduledFor: "asc" },
-    include: {
-      service: true,
-      patient: {
-        include: {
-          // Active coverage → insurer name + copago for the billing
-          // subtitle/columns. `take: 1` mirrors the single-coverage model
-          // (setPatientCoverage replaces rather than appends).
-          coverages: {
-            include: { insurerRef: true },
-            orderBy: { id: "desc" },
-            take: 1,
-          },
-          programs: {
-            where: { status: "ACTIVE" },
-            include: { case: { include: { diagnoses: { include: { condition: true }, take: 1, orderBy: { rank: "asc" } } } } },
-            // S07k: con dos ACTIVE (legacy de prod; el único parcial llega con
-            // M1) el chip mostraba el que Postgres devolviera primero. Gana el
-            // más reciente, igual que el resto de las lecturas del plan activo.
-            orderBy: { createdAt: "desc" },
-            take: 1,
+  const { rows, practitionerPrices } = await runWithRls(actor.tenantId, async (tx) => {
+    const rows = await tx.booking.findMany({
+      where: {
+        tenantId: actor.tenantId,
+        scheduledFor: { gte: opts.from, lt: opts.to },
+        ...(opts.practitionerId ? { practitionerId: opts.practitionerId } : {}),
+      },
+      orderBy: { scheduledFor: "asc" },
+      include: {
+        service: true,
+        patient: {
+          include: {
+            // Active coverage → insurer name + copago for the billing
+            // subtitle/columns. `take: 1` mirrors the single-coverage model
+            // (setPatientCoverage replaces rather than appends).
+            coverages: {
+              include: { insurerRef: true },
+              orderBy: { id: "desc" },
+              take: 1,
+            },
+            programs: {
+              where: { status: "ACTIVE" },
+              include: { case: { include: { diagnoses: { include: { condition: true }, take: 1, orderBy: { rank: "asc" } } } } },
+              // S07k: con dos ACTIVE (legacy de prod; el único parcial llega con
+              // M1) el chip mostraba el que Postgres devolviera primero. Gana el
+              // más reciente, igual que el resto de las lecturas del plan activo.
+              orderBy: { createdAt: "desc" },
+              take: 1,
+            },
           },
         },
       },
-    },
-  }));
+    });
+    // CF3 PR-C1: precio del profesional de los turnos que se cotizan con la escalera, en la misma tx y en una sentencia
+    // (+1, solo si hay alguno). CF3 ZF1 (M1): también los invitados (sin paciente), que `toggleBilling` congela con la
+    // escalera del particular: sin su par, la agenda los mostraba al precio del servicio y se cobraba otro monto.
+    // Quedan afuera solo las filas con paciente sin billing visible (`basic`): esas siguen al precio del servicio, y
+    // el acceso se resuelve después de esta tx, así que acá va el superconjunto (un par de más no cambia ningún monto).
+    const practitionerPrices = await loadPractitionerPrices(
+      tx,
+      actor.tenantId,
+      rows.map((b) => ({ practitionerId: b.practitionerId, serviceId: b.serviceId }))
+    );
+    return { rows, practitionerPrices };
+  });
 
   const patientIds = rows
     .map((b) => b.patientId)
@@ -245,9 +308,9 @@ export async function listBookingsInRange(raw: BookingsRangeQueryInput): Promise
       seesBilling
         ? insurer?.name ?? coverage?.insurer ?? "Particular"
         : "Particular";
-    // Copago precedence: per-turno override → per-patient override →
-    // insurer → Particular → service price. Basic-access rows hide billing
-    // and just show the service price.
+    // Copago precedence (lib/copago.ts, D-CF3-1): per-turno override → per-patient override → insurer / precio del
+    // profesional del turno → Particular → service price. Basic-access rows hide billing and just show the service
+    // price (sin el precio del profesional: igual que antes de CF3).
     const copagoCents =
       seesBilling
         ? resolveBookingCopagoCents({
@@ -257,8 +320,12 @@ export async function listBookingsInRange(raw: BookingsRangeQueryInput): Promise
             insurerCopago: insurer ? insurer.copagoCents : null,
             particularCopago,
             servicePriceCents: b.service.priceCents,
+            practitionerPriceCents: practitionerPrices.get(practitionerPriceKey(b.practitionerId, b.serviceId)) ?? null,
+            insurerIsParticular: insurer?.isParticular === true,
           })
-        : b.service.priceCents;
+        : !b.patientId
+          ? guestCopagoCents(b, particularCopago, practitionerPrices)
+          : b.service.priceCents;
     return {
       id: b.id,
       scheduledFor: b.scheduledFor,
@@ -453,7 +520,12 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
       const l = access.get(id);
       return l === "full" || l === "admin";
     });
-    const [coverages, particularCopago] = await Promise.all([
+    // CF3 PR-C1 (D-CF3-1): precio del profesional SOLO de los pares de las filas que se cotizan con la escalera: las que
+    // muestran billing y (CF3 ZF1, M1) los invitados, que `toggleBilling` congela con la escalera del particular. Las
+    // de `basic` siguen al precio del servicio. Una sentencia con el mismo `Promise.all` (+1 en el presupuesto de
+    // pf2-agenda; sin filas que cotizar, +0).
+    const billingSet = new Set(billingIds);
+    const [coverages, particularCopago, practitionerPrices] = await Promise.all([
       billingIds.length
         ? tx.coverage.findMany({
             where: { patientId: { in: billingIds }, patient: { tenantId } },
@@ -470,8 +542,15 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
           })
         : Promise.resolve([]),
       getParticularCopagoCents(tenantId, tx),
+      loadPractitionerPrices(
+        tx,
+        tenantId,
+        rows
+          .filter((r) => !r.patientId || billingSet.has(r.patientId))
+          .map((r) => ({ practitionerId: r.practitionerId, serviceId: r.serviceId }))
+      ),
     ]);
-    return { locations, rows, access, coverages, particularCopago, c9 };
+    return { locations, rows, access, coverages, particularCopago, practitionerPrices, c9 };
   });
   if (!loaded) return [];
 
@@ -519,8 +598,12 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
             insurerCopago: insurer ? insurer.copagoCents : null,
             particularCopago: loaded.particularCopago,
             servicePriceCents: b.service.priceCents,
+            practitionerPriceCents: loaded.practitionerPrices.get(practitionerPriceKey(b.practitionerId, b.serviceId)) ?? null,
+            insurerIsParticular: insurer?.isParticular === true,
           })
-        : b.service.priceCents;
+        : !b.patientId
+          ? guestCopagoCents(b, loaded.particularCopago, loaded.practitionerPrices)
+          : b.service.priceCents;
     return {
       id: b.id,
       scheduledFor: b.scheduledFor,
@@ -2120,16 +2203,25 @@ async function toggleBilling(
     // (`pricedByPlan` ⇒ copago no nulo, CHECK). Solo al marcar cobrado.
     let frozen: { copagoCents: number } | null = null;
     if (toggle.side === "copago" && toggle.mark.paid && row.copagoCents == null) {
-      const [coverage, particularCopago, service] = await Promise.all([
+      // CF3 PR-C1 (D-CF3-1/2): se congela con el precio del profesional ACTUAL del turno (`row.practitionerId`, leído
+      // en esta tx): hasta acá el monto lo siguió al reasignar; desde acá `copagoCents` queda fijo y la escalera ya no
+      // se consulta. El precio sale en la MISMA sentencia que el del servicio (LEFT JOIN, +0: el techo de as1c-cobros
+      // ≤ 12 ya tenía al marcar 11) — `include` de Prisma serían dos. `tenantId` a mano en las dos tablas.
+      const [coverage, particularCopago, [service]] = await Promise.all([
         row.patientId
           ? tx.coverage.findFirst({
               where: { patientId: row.patientId, patient: { tenantId: actor.tenantId } },
               orderBy: { id: "desc" },
-              select: { insurer: true, copagoCents: true, insurerRef: { select: { copagoCents: true } } },
+              select: { insurer: true, copagoCents: true, insurerRef: { select: { copagoCents: true, isParticular: true } } },
             })
           : Promise.resolve(null),
         getParticularCopagoCents(actor.tenantId, tx),
-        tx.service.findFirst({ where: { id: row.serviceId, tenantId: actor.tenantId }, select: { priceCents: true } }),
+        tx.$queryRaw<{ priceCents: number; practitionerPriceCents: number | null }[]>`
+          SELECT s."priceCents", ps."priceCents" AS "practitionerPriceCents"
+          FROM "Service" s
+          LEFT JOIN "PractitionerService" ps
+            ON ps."serviceId" = s."id" AND ps."practitionerId" = ${row.practitionerId} AND ps."tenantId" = ${actor.tenantId}
+          WHERE s."id" = ${row.serviceId} AND s."tenantId" = ${actor.tenantId}`,
       ]);
       frozen = {
         copagoCents: resolveBookingCopagoCents({
@@ -2139,6 +2231,8 @@ async function toggleBilling(
           insurerCopago: coverage?.insurerRef ? coverage.insurerRef.copagoCents : null,
           particularCopago,
           servicePriceCents: service?.priceCents ?? 0,
+          practitionerPriceCents: service?.practitionerPriceCents ?? null,
+          insurerIsParticular: coverage?.insurerRef?.isParticular === true,
         }),
       };
     }

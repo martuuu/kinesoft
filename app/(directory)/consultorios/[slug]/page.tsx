@@ -7,6 +7,7 @@ import { provinceName } from "@/lib/ar-provinces";
 import { directoryMode } from "@/lib/directory-mode";
 import { getDirectorySnapshot } from "@/lib/directory-internal";
 import { resolveSlugAlias } from "@/lib/public-booking-internal";
+import { getClinicSite } from "@/lib/clinic-site-internal";
 import { clinicJsonLd, clinicPath, findDirectoryClinic, jsonLdScript } from "@/lib/directory-logic";
 import { ButtonLink } from "@/components/ui/button";
 import { DirectoryAvatar, DirectoryCrumbs, JsonLd } from "@/components/directory/directory-shell";
@@ -82,10 +83,23 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     metadataBase: new URL(env.NEXT_PUBLIC_APP_URL),
     title: { absolute: title },
     description,
-    alternates: { canonical: clinic.path },
+    alternates: { canonical: await canonicalFor(clinic.slug, clinic.path) },
     robots: directoryRobots(mode),
     openGraph: { type: "website", locale: "es_AR", siteName: BRAND_NAME, title, description, url: clinic.path },
   };
+}
+
+/**
+ * CF3 (SD-U, D-CF3-10): con la sede digital prendida, `/consultorios/<slug>` apunta a ella (`/<slug>`): las dos páginas
+ * muestran al mismo consultorio y Google tiene que indexar una sola. Sin sede (o si su snapshot falla) sigue la propia.
+ */
+async function canonicalFor(slug: string, path: string): Promise<string> {
+  try {
+    const site = await getClinicSite(slug);
+    return site && !("redirectTo" in site) ? `/${site.slug}` : path;
+  } catch {
+    return path;
+  }
 }
 
 export default async function ConsultorioPage({ params }: Props) {

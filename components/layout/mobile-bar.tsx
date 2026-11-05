@@ -18,6 +18,10 @@
  * campana pasó del dashboard al Sidebar (`.desktopOnly`) y en mobile no quedaba ninguna. Ahora la campana solo pide
  * si se ve (`createBellGate`, lib/notifications-live.ts): la de acá en mobile, la del chrome de escritorio desde 768.
  * Llega por prop (`bell`) como en el Sidebar: la arma el AppShell y esta barra se renderiza suelta en tests sin router.
+ *
+ * CF3 (BR-L): con logo del consultorio (`useTenantBrand`), el logo va al lado de la marca del producto, que pasa a la
+ * baldosa sola: en mobile el nombre del consultorio no está escrito en ningún lado y a 320 px no entran el wordmark
+ * (~155 px), el logo, la búsqueda, la campana y el avatar. El logo lleva el nombre como `alt`. Sin logo, lo de hoy.
  */
 import type { ReactNode } from "react";
 import Link from "next/link";
@@ -25,6 +29,8 @@ import { KineLogo } from "@/components/ui/kine-logo";
 import { IconSearch } from "@/components/ui/icons";
 import { openCommandPalette, preloadCommandPalette } from "./command-palette-launcher";
 import { TopbarAccountMenu } from "./topbar-account-menu";
+import { useTenantBrand } from "./tenant-brand-context";
+import { TenantLogo } from "./tenant-logo";
 import styles from "./shell.module.css";
 
 export function MobileBar({
@@ -40,12 +46,14 @@ export function MobileBar({
   ownPublicBooking?: { practitionerId: string; enabled: boolean; myMp?: boolean } | null;
   onOpenAppearance?: () => void;
 }) {
+  const { name, logoUrl } = useTenantBrand();
   return (
     <header className={`k-glass ${styles.mobileBar}`} data-mobile-bar>
       <Link href="/dashboard" aria-label="Inicio" style={{ display: "inline-flex", alignItems: "center", minHeight: 44, paddingLeft: 4 }}>
         {/* PV BR-a: con el wordmark nuevo (~155 px a 22) la barra suma ~275 px con búsqueda y avatar: entra a 320/360. */}
-        <KineLogo size={22} />
+        <KineLogo size={22} markOnly={!!logoUrl} />
       </Link>
+      {logoUrl && <TenantLogo src={logoUrl} size={28} alt={name} title={name} />}
       <span className={styles.mobileSpacer} />
       <button
         type="button"

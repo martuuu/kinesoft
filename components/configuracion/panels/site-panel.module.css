@@ -1,0 +1,215 @@
+/* CF3 (SD-C): Configuración → «Sitio web». Mobile primero (390 px): una columna; desde 640 px el contacto va de a dos. */
+
+.panel {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.card {
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.lead {
+  font-size: 13px;
+  color: var(--navy-500);
+  margin: 4px 0 0;
+  line-height: 1.5;
+}
+
+.switchRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.switchLabel {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--navy-900);
+}
+
+.state {
+  font-size: 13px;
+  color: var(--navy-500);
+}
+
+.urlRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* La URL larga (slug de 40) no puede empujar el ancho a 390 px: se corta donde sea. */
+.url {
+  flex: 1 1 220px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: rgba(15, 30, 51, 0.04);
+  color: var(--navy-900);
+  overflow-wrap: anywhere;
+}
+
+.urlActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.note {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  font-size: 12.5px;
+  line-height: 1.45;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  color: var(--warn-fg);
+}
+
+.note a {
+  color: inherit;
+  font-weight: 700;
+}
+
+.fields {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.contact {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 640px) {
+  .contact {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.counter {
+  font-size: 12px;
+  text-align: right;
+  color: var(--navy-500);
+  margin-top: -8px;
+}
+
+.counterOver {
+  color: var(--danger-fg);
+  font-weight: 700;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 6px;
+  border-top: 1px solid rgba(15, 30, 51, 0.06);
+}
+
+.dirty {
+  font-size: 12px;
+  color: var(--warn-fg);
+  font-weight: 600;
+}
+
+.clean {
+  font-size: 12px;
+  color: var(--navy-300);
+}
+
+.footerActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* BR-P: «Colores del sitio y del turnero». Mobile primero: 2 por fila a 390 px, en una fila desde 640. */
+.paletteField {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.paletteLegend {
+  padding: 0;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--navy-900);
+}
+
+.paletteGrid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (min-width: 640px) {
+  .paletteGrid {
+    grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  }
+}
+
+.paletteOption {
+  display: grid;
+  gap: 6px;
+  min-height: 44px;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 30, 51, 0.12);
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--navy-700);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.paletteOption:disabled {
+  cursor: progress;
+  opacity: 0.85;
+}
+
+.paletteOptionOn {
+  border: 2px solid var(--sky-700);
+  padding: 7px;
+  color: var(--navy-900);
+}
+
+.paletteSwatch {
+  display: flex;
+  gap: 3px;
+}
+
+.paletteSwatch > span {
+  flex: 1;
+  height: 20px;
+  border-radius: 6px;
+}
+
+.paletteError {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--danger-fg);
+}

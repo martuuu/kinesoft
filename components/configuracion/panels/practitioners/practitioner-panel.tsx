@@ -32,11 +32,23 @@
  * que un profesional le destina a otro es plata del equipo (la action exige lo mismo). Carga lazy al montar
  * (`listRevenueShares`), en línea y con el mismo dirty-guard.
  *
+ * CF3 (§30, D-CF3-12; PR-U): arriba de las sub-pestañas, el link directo al turnero del profesional
+ * (`bookingHref(slug, practitionerId)` con el origin) con «Copiar» y «Compartir por WhatsApp». Estado honesto: con el
+ * turnero del consultorio (`turneroPublico`) o el switch del profesional apagados, el link se ve deshabilitado y dice qué
+ * falta. Necesita `turnero` (slug + nombre del consultorio, de `props.tenant` en `configuracion-client`); sin él no se
+ * muestra. En Coberturas, para `tenant.sensitive`, «Ocultar su WhatsApp para obras sociales»
+ * (`hidePractitionerInsuredContact`): el titular solo apaga, prenderlo es del profesional (consentimiento, Mi agenda).
+ *
  * Layout: tarjetas que se acomodan solas (grid auto-fill) arriba y el detalle
  * abajo; en un celular quedan apiladas sin necesitar un breakpoint.
  */
-import { useCallback, useEffect, useState, useTransition } from "react";
-import { Button } from "@/components/ui/button";
+import { useCallback, useEffect, useId, useState, useTransition } from "react";
+import { Button, buttonClassName } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
+import { bookingHref } from "@/lib/public-booking-links";
+import { turneroInviteText, whatsAppShareUrl } from "@/lib/booking-share";
+import { hidePractitionerInsuredContact } from "@/lib/practitioner-self-settings";
 import { setPractitionerBookingCap } from "@/lib/practitioner-schedule";
 import {
   INTERVAL_CAP_COUNT_MAX,
@@ -91,7 +103,17 @@ export type PractitionerPanelRow = PractitionerScheduleSummaryRow & {
   agendaRules?: PractitionerAgendaRulesView;
   publicLead?: PractitionerPublicLeadView;
   leadContactShown?: boolean;
+  /**
+   * CF3 (D-CF3-12): switch «Aparece en el turnero online» del profesional (`Practitioner.publicBookingEnabled`), para el
+   * estado del link. Sin él se usa el de `team` (solo `tenant.sensitive`); sin ninguno el link no afirma nada del switch.
+   */
+  publicBookingEnabled?: boolean;
+  /** CF3 (D-CF3-5): el profesional muestra su WhatsApp a pacientes con OS → el titular ve «Ocultar su WhatsApp…». */
+  insuredContactShown?: boolean;
 };
+
+/** CF3 (D-CF3-12): lo del consultorio que hace falta para el link del turnero (de `TenantSettings`). */
+export type PractitionerTurneroInfo = { slug: string; clinicName: string };
 
 export function PractitionerPanel({
   summary,
@@ -102,6 +124,7 @@ export function PractitionerPanel({
   specialties,
   support = false,
   sensitive = false,
+  turnero = null,
 }: {
   summary: PractitionerPanelRow[];
   locations: LocationRow[];
@@ -127,8 +150,11 @@ export function PractitionerPanel({
    * el switch (el propio se prende desde el menú de perfil, que no pasa por acá). Default `false`: deny por default.
    */
   sensitive?: boolean;
+  /** CF3 (D-CF3-12): slug + nombre del consultorio para el link del turnero de cada profesional. Sin él, no hay link. */
+  turnero?: PractitionerTurneroInfo | null;
 }) {
   const confirm = useConfirm();
+  const tenantTurneroOpen = useTenantModules().has("turneroPublico");
   const [selectedId, setSelectedId] = useState<string | null>(summary[0]?.practitionerId ?? null);
   const [sub, setSub] = useState<SubTab>("horarios");
   const [svcDirty, setSvcDirty] = useState(false);
@@ -284,6 +310,17 @@ export function PractitionerPanel({
                 </div>
               )}
             </div>
+            {turnero && (
+              <PractitionerTurneroLink
+                key={`link-${selected.practitionerId}`}
+                practitionerId={selected.practitionerId}
+                practitionerName={selected.name}
+                slug={turnero.slug}
+                clinicName={turnero.clinicName}
+                tenantOpen={tenantTurneroOpen}
+                practitionerOn={selected.publicBookingEnabled ?? selectedTeam?.publicBookingEnabled}
+              />
+            )}
             <div
               role="tablist"
               aria-label={`Configuración de ${selected.name}`}
@@ -354,7 +391,8 @@ export function PractitionerPanel({
               />
             )}
             {/* CF2 (D-CF2-9): el titular solo apaga el contacto; prenderlo es del profesional (Mi agenda). */}
-            {sub === "horarios" && sensitive && selected.leadContactShown && (
+            {/* CF3 (PR-U, B): soporte no lo ve; la action lo rechazaría. */}
+            {sub === "horarios" && sensitive && !support && selected.leadContactShown && (
               <PractitionerLeadContactHide
                 key={`lead-contact-${selected.practitionerId}`}
                 practitionerId={selected.practitionerId}
@@ -385,6 +423,14 @@ export function PractitionerPanel({
                 practitionerId={selected.practitionerId}
                 practitionerName={selected.name}
                 onDirtyChange={setSvcDirty}
+              />
+            )}
+            {/* CF3 (D-CF3-5): el titular solo apaga el WhatsApp para OS; prenderlo es del profesional (Mi agenda). */}
+            {sub === "coberturas" && sensitive && !support && selected.insuredContactShown && (
+              <PractitionerInsuredContactHide
+                key={`insured-${selected.practitionerId}`}
+                practitionerId={selected.practitionerId}
+                practitionerName={selected.name}
               />
             )}
             {sub === "coberturas" && (
@@ -583,5 +629,201 @@ export function BookingCapEditor({
         </Button>
       </div>
     </fieldset>
+  );
+}
+
+/** CF3 (D-CF3-12): copy del link del turnero en la ficha del profesional. */
+export const TURNERO_LINK_COPY = {
+  title: "Link directo a su turnero",
+  hint: "Quien entra con este link ve solo los turnos de este profesional.",
+  tenantOff: "El consultorio tiene los turnos online apagados. Se prenden en Configuración › General.",
+  practitionerOff: (name: string) => `Prendé «Aparece en el turnero online» de ${name} para que el link funcione.`,
+  copy: "Copiar",
+  whatsapp: "Compartir por WhatsApp",
+} as const;
+
+export type PractitionerTurneroLinkState = {
+  /** Absoluto con `origin`; relativo mientras no se conoce (primer render, server). */
+  url: string;
+  /** null = se puede usar; si no, el motivo (se muestra y deshabilita Copiar/WhatsApp). */
+  disabledReason: string | null;
+  /** `wa.me/?text=` sin destinatario (WhatsApp pide elegir el contacto); null si está deshabilitado o sin origin. */
+  whatsappHref: string | null;
+};
+
+/**
+ * CF3 (D-CF3-12): estado del link. Puro (testeado). El consultorio apagado gana sobre el switch del profesional: si el
+ * turnero no existe, prender al profesional no alcanza. `practitionerOn` undefined = no se sabe (no se afirma).
+ */
+export function practitionerTurneroLink(input: {
+  origin: string;
+  slug: string;
+  practitionerId: string;
+  practitionerName: string;
+  clinicName: string;
+  tenantOpen: boolean;
+  practitionerOn: boolean | undefined;
+}): PractitionerTurneroLinkState {
+  const url = `${input.origin}${bookingHref(input.slug, input.practitionerId)}`;
+  const disabledReason = !input.tenantOpen
+    ? TURNERO_LINK_COPY.tenantOff
+    : input.practitionerOn === false
+      ? TURNERO_LINK_COPY.practitionerOff(input.practitionerName)
+      : null;
+  const whatsappHref =
+    disabledReason || !input.origin
+      ? null
+      : whatsAppShareUrl(
+          turneroInviteText({ clinicName: input.clinicName, practitionerName: input.practitionerName, url }),
+          null
+        );
+  return { url, disabledReason, whatsappHref };
+}
+
+function PractitionerTurneroLink({
+  practitionerId,
+  practitionerName,
+  slug,
+  clinicName,
+  tenantOpen,
+  practitionerOn,
+}: {
+  practitionerId: string;
+  practitionerName: string;
+  slug: string;
+  clinicName: string;
+  tenantOpen: boolean;
+  practitionerOn: boolean | undefined;
+}) {
+  const toast = useToast();
+  // El origin solo existe en el cliente: el server (y el primer render) muestran el link relativo, sin acciones.
+  const [origin, setOrigin] = useState("");
+  useEffect(() => setOrigin(window.location.origin), []);
+  const st = practitionerTurneroLink({ origin, slug, practitionerId, practitionerName, clinicName, tenantOpen, practitionerOn });
+  const usable = !st.disabledReason && !!origin;
+  const reasonId = useId();
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(st.url);
+      toast.success("Link copiado");
+    } catch {
+      toast.error("No se pudo copiar", { description: "Seleccioná el link y copialo a mano." });
+    }
+  };
+
+  return (
+    <div data-turnero-link style={{ display: "grid", gap: 6, marginTop: 10 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--navy-700)" }}>{TURNERO_LINK_COPY.title}</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+        <input
+          readOnly
+          value={st.url}
+          aria-label={`${TURNERO_LINK_COPY.title} de ${practitionerName}`}
+          aria-disabled={!!st.disabledReason}
+          aria-describedby={reasonId}
+          onFocus={(e) => e.currentTarget.select()}
+          style={{
+            flex: "1 1 240px",
+            minWidth: 0,
+            minHeight: 36,
+            padding: "6px 10px",
+            borderRadius: 8,
+            border: "1px solid rgba(15,30,51,0.12)",
+            background: st.disabledReason ? "rgba(15,30,51,0.04)" : "var(--card-bg)",
+            // CF3 ZF3: `--navy-300` sobre el gris no llegaba a AA (≈4:1 a 12 px); `--navy-500` sí.
+            color: st.disabledReason ? "var(--navy-500)" : "var(--navy-900)",
+            fontSize: 12,
+            fontFamily: "var(--font-mono)",
+          }}
+        />
+        <Button type="button" variant="ghost" onClick={() => void copy()} disabled={!usable}>
+          {TURNERO_LINK_COPY.copy}
+        </Button>
+        {usable && st.whatsappHref ? (
+          <a className={buttonClassName({ variant: "ghost" })} href={st.whatsappHref} target="_blank" rel="noopener noreferrer">
+            {TURNERO_LINK_COPY.whatsapp}
+          </a>
+        ) : (
+          <Button type="button" variant="ghost" disabled>
+            {TURNERO_LINK_COPY.whatsapp}
+          </Button>
+        )}
+      </div>
+      {/* CF3 ZF3: el motivo (turnero apagado, profesional sin turnos online) no es un error: navy como en «Mi agenda»
+          (`mi-agenda-panel.tsx`), no `--danger-fg`. */}
+      <div
+        id={reasonId}
+        role={st.disabledReason ? "note" : undefined}
+        data-turnero-link-reason={st.disabledReason ? "" : undefined}
+        style={{ fontSize: 12, lineHeight: 1.45, color: st.disabledReason ? "var(--navy-700)" : "var(--navy-500)", fontWeight: st.disabledReason ? 600 : undefined }}
+      >
+        {st.disabledReason ?? TURNERO_LINK_COPY.hint}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * CF3 (D-CF3-5): el titular (`tenant.sensitive`) APAGA el WhatsApp para pacientes con obra social de otro profesional.
+ * Nunca lo prende: mostrarlo requiere el consentimiento del profesional (Mi agenda). Mismo patrón que
+ * `PractitionerLeadContactHide`; la barrera es la action.
+ */
+export function PractitionerInsuredContactHide({
+  practitionerId,
+  practitionerName,
+}: {
+  practitionerId: string;
+  practitionerName: string;
+}) {
+  const confirm = useConfirm();
+  const toast = useToast();
+  const [pending, start] = useTransition();
+  const [hidden, setHidden] = useState(false);
+  if (hidden) return null;
+
+  const hide = async () => {
+    const ok = await confirm({
+      title: `¿Ocultar el WhatsApp de ${practitionerName} para obras sociales?`,
+      message: `Los pacientes con obra social dejan de ver su WhatsApp en el turnero. Volver a mostrarlo lo decide ${practitionerName} desde Configuración › Mi agenda.`,
+      tone: "danger",
+      confirmLabel: "Ocultar",
+      cancelLabel: "Cancelar",
+    });
+    if (!ok) return;
+    start(async () => {
+      const r = await hidePractitionerInsuredContact(practitionerId);
+      if (!r.ok) {
+        toast.error("No pudimos ocultar el WhatsApp", { description: r.error });
+        return;
+      }
+      setHidden(true);
+      toast.success(`Ocultaste el WhatsApp de ${practitionerName} para obras sociales`);
+    });
+  };
+
+  return (
+    <div
+      data-insured-contact-hide
+      style={{
+        border: "1px solid rgba(15,30,51,0.08)",
+        borderRadius: "var(--r-sm)",
+        padding: 14,
+        margin: "0 0 16px",
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+      }}
+    >
+      <span style={{ fontSize: 12.5, color: "var(--navy-500)", lineHeight: 1.45, flex: "1 1 240px" }}>
+        {practitionerName} muestra su WhatsApp en el turnero a los pacientes con obra social, para que consulten su
+        cobertura.
+      </span>
+      <Button type="button" variant="ghost" onClick={() => void hide()} disabled={pending}>
+        {pending ? "Ocultando…" : "Ocultar su WhatsApp para obras sociales"}
+      </Button>
+    </div>
   );
 }

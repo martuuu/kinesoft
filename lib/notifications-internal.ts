@@ -53,7 +53,7 @@ export async function notify(p: {
  * Enqueue a notification for every member of a tenant that can plausibly
  * act on it. Used when a webhook (no actor context) needs to reach the
  * right practitioner — we notify the booking's practitioner + every
- * OWNER / ADMIN of the tenant.
+ * OWNER / ADMIN of the tenant (+ el co-titular desde CF3b, H5).
  *
  * HD-12 (PV): solo miembros ACTIVOS. Antes el rol era el único filtro de
  * titulares, así que una membresía suspendida (`Membership.disabledAt`), una
@@ -101,8 +101,17 @@ export async function notifyTenantOwners(p: {
       }));
       if (prac?.userId) recipients.add(prac.userId);
     }
+    // CT-INT (CF3b, H5): + el co-titular (`grantCoOwner`, M23; solo PRACTITIONER por el CHECK): tiene lo del Titular,
+    // así que recibe lo mismo que él (pagos, pacientes nuevos, respuestas por WhatsApp). El aviso de reconectar el Mercado Pago del
+    // consultorio ya no pasa por acá: va solo al titular principal (lib/mp-connect/cron-internal.ts, ZF4a).
+    // Los avisos de la SUSCRIPCIÓN no pasan por acá (`billingRecipients` de lib/saas-billing-internal.ts, que lo deja
+    // afuera). Mismo filtro de membresía activa y misma sentencia (0 nuevas).
     const memberships = await runWithRls(p.tenantId, (tx) => tx.membership.findMany({
-      where: { tenantId: p.tenantId, role: { in: ["OWNER", "ADMIN"] }, ...ACTIVE_MEMBER },
+      where: {
+        tenantId: p.tenantId,
+        OR: [{ role: { in: ["OWNER", "ADMIN"] } }, { role: "PRACTITIONER", grantCoOwner: true }],
+        ...ACTIVE_MEMBER,
+      },
       select: { userId: true },
     }));
     for (const m of memberships) recipients.add(m.userId);

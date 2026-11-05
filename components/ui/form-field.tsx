@@ -97,6 +97,8 @@ type CommonProps = {
   placeholder?: string;
   error?: string;
   hint?: string;
+  /** CF3: id de un texto de ayuda externo (ej. un contador) que se suma al `aria-describedby` del control. */
+  describedBy?: string;
   /**
    * Short explanation shown as a "?" icon next to the label (visible on
    * hover via the native title tooltip). Keeps labels terse — e.g.
@@ -149,6 +151,7 @@ export function FormField(props: FormFieldProps) {
     placeholder,
     error,
     hint,
+    describedBy: extraDescribedBy,
     tooltip,
     disabled,
     autoFocus,
@@ -160,7 +163,8 @@ export function FormField(props: FormFieldProps) {
   const id = useId();
   const hintId = `${id}-hint`;
   const errorId = `${id}-error`;
-  const describedBy = error ? errorId : hint ? hintId : undefined;
+  const describedBy =
+    [error ? errorId : hint ? hintId : null, extraDescribedBy ?? null].filter(Boolean).join(" ") || undefined;
   const isDateTime = props.as !== "textarea" && props.as !== "select" && props.type === "datetime-local";
   // Atributos comunes del control (id, aria, autocomplete). El picker de fecha y hora no los recibe: arma sus
   // propios inputs, así que el label no apunta a él (`htmlFor` solo cuando hay un control nativo).

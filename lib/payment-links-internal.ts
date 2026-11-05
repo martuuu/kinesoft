@@ -2,7 +2,7 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { resolveBookingCopagoCents } from "@/lib/copago";
-import { getParticularCopagoCents } from "@/lib/billing-internal";
+import { getParticularCopagoCents, getPractitionerPriceCentsInTx } from "@/lib/billing-internal";
 import { logger } from "@/lib/logger";
 import { mpCreatePreference, mpExpirePreference, type MpAccountRef } from "@/lib/mp-connect/account-client";
 import { mpAppUrl } from "@/lib/mp-connect/http";
@@ -70,26 +70,32 @@ export async function cancelLiveLinksForBookingInTx(
 
 /**
  * Copago del turno con la MISMA precedencia que la agenda y el cobro a mano (`resolveBookingCopagoCents`, AUDIT §5.5):
- * override del turno → cobertura → obra social → Particular → precio del servicio. Copia de la lectura de
- * `toggleBilling` (lib/bookings.ts, serial y de TP-2e): un link por «lo que falta» tiene que cobrar exactamente lo que
- * la Secretaría cobraría a mano. Sin congelar nada: el link no marca el copago (eso lo hace el webhook al pagarse).
+ * override del turno → cobertura → obra social / precio del profesional → Particular → precio del servicio. Copia de la
+ * lectura de `toggleBilling` (lib/bookings.ts, serial y de TP-2e): un link por «lo que falta» tiene que cobrar
+ * exactamente lo que la Secretaría cobraría a mano. Sin congelar nada: el link no marca el copago (eso lo hace el
+ * webhook al pagarse).
+ *
+ * CF3 PR-C2 (D-CF3-1): suma `PractitionerService.priceCents` del par (profesional ACTUAL del turno, D-CF3-2) y
+ * `insurerRef.isParticular`. Sin el segundo, una cobertura a la fila «Particular» cobraría el copago de la fila y no
+ * el precio del profesional, distinto de la agenda (handoff PR-K). Paridad: tests/integration/cf3-ladder-callers.test.ts.
  */
 export async function resolveLinkCopagoInTx(
   tx: Prisma.TransactionClient,
   tenantId: string,
-  b: { copagoCents: number | null; patientId: string | null; serviceId: string }
+  b: { copagoCents: number | null; patientId: string | null; serviceId: string; practitionerId: string }
 ): Promise<number> {
   if (b.copagoCents != null) return b.copagoCents;
-  const [coverage, particularCopago, service] = await Promise.all([
+  const [coverage, particularCopago, service, practitionerPriceCents] = await Promise.all([
     b.patientId
       ? tx.coverage.findFirst({
           where: { patientId: b.patientId, patient: { tenantId } },
           orderBy: { id: "desc" },
-          select: { insurer: true, copagoCents: true, insurerRef: { select: { copagoCents: true } } },
+          select: { insurer: true, copagoCents: true, insurerRef: { select: { copagoCents: true, isParticular: true } } },
         })
       : Promise.resolve(null),
     getParticularCopagoCents(tenantId, tx),
     tx.service.findFirst({ where: { id: b.serviceId, tenantId }, select: { priceCents: true } }),
+    getPractitionerPriceCentsInTx(tx, tenantId, b.practitionerId, b.serviceId),
   ]);
   return resolveBookingCopagoCents({
     bookingOverride: null,
@@ -98,6 +104,8 @@ export async function resolveLinkCopagoInTx(
     insurerCopago: coverage?.insurerRef ? coverage.insurerRef.copagoCents : null,
     particularCopago,
     servicePriceCents: service?.priceCents ?? 0,
+    practitionerPriceCents,
+    insurerIsParticular: coverage?.insurerRef?.isParticular === true,
   });
 }
 

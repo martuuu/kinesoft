@@ -10,11 +10,39 @@ import { useEffect, useRef, useState } from "react";
 import { getPatientBillingPreview } from "@/lib/patients";
 import type { BillingPreview, PatientOption, PatientRef } from "./types";
 
+/**
+ * CF3 (PR-U, D-CF3-1): argumentos de `getPatientBillingPreview`. `""` (sin elegir) viaja como `undefined`: el server
+ * resuelve el servicio por default y, sin profesional, la escalera de siempre (sin precio del profesional).
+ */
+export function billingPreviewArgs(
+  patientId: string,
+  serviceId: string,
+  practitionerId: string
+): [string, string | undefined, string | undefined] {
+  return [patientId, serviceId || undefined, practitionerId || undefined];
+}
+
+/**
+ * CF3 (PR-U): qué hacer con el preview al cambiar de profesional. `null` = mismo profesional (nada). Si no, se
+ * re-consulta UNA vez con el servicio ya re-conciliado (`reconcileServiceOnPractitionerChange`): si cambió, la
+ * consulta la hace `applyService` (que además resetea la duración); si no, se consulta con el servicio de siempre.
+ */
+export function practitionerChangePlan(input: {
+  current: string;
+  next: string;
+  serviceId: string;
+  reconciledServiceId: string;
+}): { serviceId: string; serviceChanged: boolean } | null {
+  if (input.next === input.current) return null;
+  return { serviceId: input.reconciledServiceId, serviceChanged: input.reconciledServiceId !== input.serviceId };
+}
+
 export function usePatientBilling({
   defaultPatientId,
   patients,
   isGuest,
   serviceId,
+  practitionerId,
 }: {
   defaultPatientId?: string | null;
   patients: PatientOption[];
@@ -22,6 +50,12 @@ export function usePatientBilling({
   isGuest: boolean;
   /** Servicio elegido: el precio particular depende de él. */
   serviceId: string;
+  /**
+   * CF3 (D-CF3-1): profesional del turno. El precio del profesional entra en la escalera del copago, así que el monto
+   * sugerido depende de él además del servicio: sin pasarlo, el modal pre-cargaba el precio del servicio y la agenda
+   * cobraba otro (el del profesional). `""` = todavía sin elegir (el server resuelve como antes).
+   */
+  practitionerId?: string;
 }) {
   // Existing-patient billing: when a registered patient is picked we load
   // their obra social + pre-established copago and show an editable row.
@@ -51,11 +85,15 @@ export function usePatientBilling({
    * A2a-S08): el precio particular depende del servicio. Guard de secuencia:
    * solo aplica la última respuesta (cambiar rápido de paciente o de
    * servicio no deja un monto viejo).
+   *
+   * CF3 (PR-U): `pid` es el profesional con el que se consulta. Quien cambia de profesional lo pasa explícito (el
+   * estado de React todavía no se actualizó en ese render); el resto usa el actual. Un solo request por cambio: cambiar
+   * de profesional que además re-concilia el servicio llama una vez con los dos valores nuevos.
    */
-  const fetchBilling = (patientId: string, svcId: string) => {
+  const fetchBilling = (patientId: string, svcId: string, pid: string = practitionerId ?? "") => {
     const seq = ++billingSeq.current;
     setCopagoLoading(true);
-    getPatientBillingPreview(patientId, svcId || undefined)
+    getPatientBillingPreview(...billingPreviewArgs(patientId, svcId, pid))
       .then((res) => {
         if (seq !== billingSeq.current) return; // stale-response guard
         setBilling(res);

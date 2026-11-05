@@ -23,6 +23,7 @@ describe("[EV0-fix] TabsBar de Configuración", () => {
       "Servicios",
       "Obras sociales",
       "Diagnósticos",
+      "Sitio web", // CF3 (D-CF3-10): `tenant.sensitive`, después de Directorio (acá sin directorio)
       "Usuarios",
       "Plan y uso",
       "Facturación", // PL-3a (PL-D21)

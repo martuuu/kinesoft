@@ -24,18 +24,19 @@ import { cache } from "react";
 import type { Role } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
 import { getActor, ForbiddenError, type Actor } from "@/lib/session";
-import { SUPPORT_CAPS, capabilitiesFor, capabilitiesForMember, type Capability } from "@/lib/capabilities";
+import { MEMBER_ACCESS_SELECT, SUPPORT_CAPS, capabilitiesFor, capabilitiesForMember, type Capability } from "@/lib/capabilities";
 import type { MemberAccess } from "@/lib/saas-plans-types";
 import { modulesFor, moduleDeniedCopy, type TenantModule } from "@/lib/tenant-modules";
 
 // Cacheado por primitivos (no por la identidad del objeto Actor) para que dos
 // llamadas con actores equivalentes en el mismo request compartan la query.
 // PL-1b: trae también `clinical` y las delegaciones (misma fila, misma query que antes traía solo `role`).
+// CT-K1: por `MEMBER_ACCESS_SELECT` (+ `grantCoOwner`, M23); un select a mano dejaba al co-titular como Profesional.
 const memberAccessFor = cache(async (tenantId: string, userId: string): Promise<MemberAccess | null> => {
   const m = await runWithRls(tenantId, (tx) =>
     tx.membership.findUnique({
       where: { userId_tenantId: { userId, tenantId } },
-      select: { role: true, clinical: true, grantSettings: true, grantBilling: true },
+      select: MEMBER_ACCESS_SELECT,
     })
   );
   return m ?? null;
@@ -157,7 +158,8 @@ export async function requireTenantSensitive(
 
 /**
  * «Planes y pagos» de la cuenta (PL-1b, C-PL5): el Titular o quien tenga `grantBilling`, salvo la Secretaria y
- * Facturación (T3, corte de staff). Soporte nunca (`SUPPORT_CAPS` no tiene `account.*`).
+ * Facturación (T3, corte de staff) y el co-titular (CT-K1, contrato (d): nada de la suscripción). Soporte nunca
+ * (`SUPPORT_CAPS` no tiene `account.*`).
  */
 export async function requireAccountBilling(
   message = "Solo el titular o quien tenga permiso de «Planes y pagos» puede hacer esto."
@@ -166,13 +168,27 @@ export async function requireAccountBilling(
 }
 
 /**
- * Solo el Titular (PL-1b, decisión 7): transferir titularidad y delegar permisos. No se delega.
+ * Solo el Titular PRINCIPAL (PL-1b, decisión 7; CT-K1): transferir la titularidad, dar/quitar «Co-titular», su
+ * «Atiendo pacientes» y las cuentas externas a su nombre (MP del consultorio, WhatsApp). No se delega ni la tiene el
+ * co-titular. Desde CT-K1 delegar permisos NO va por acá: es `requireAccountManage`.
  */
 export async function requireAccountOwner(
   message = "Solo el titular de la cuenta puede hacer esto."
 ): Promise<{ actor: Actor }> {
   const { actor } = await requireCapability("account.owner", message);
   return { actor };
+}
+
+/**
+ * CT-K1 (CF3b): funciones de Titular que comparten el principal y el co-titular (`account.manage`): delegar
+ * «Configuración» y gestionar el equipo como Titular. La action sigue siendo la que corta lo del principal (nunca
+ * sobre su membresía, nunca «Co-titular» ni la titularidad) y «Planes y pagos» (exige además `account.billing`, que el
+ * co-titular no tiene). Soporte nunca (`SUPPORT_CAPS` sin `account.*`). Devuelve también las caps para esa decisión.
+ */
+export async function requireAccountManage(
+  message = "Solo el titular o un co-titular del consultorio puede hacer esto."
+): Promise<{ actor: Actor; caps: ReadonlySet<Capability> }> {
+  return requireCapability("account.manage", message);
 }
 
 /*

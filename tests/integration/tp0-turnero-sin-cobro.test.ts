@@ -304,7 +304,7 @@ describe.skipIf(!RUN)("TP-0 · turnero sin cobro online", () => {
     expect(await getPublicBookingStatus(rr.data.bookingId)).toMatchObject({
       status: "CONFIRMED",
       paymentStatus: "UNPAID",
-      amountCents: 8000,
+      amountCents: 0, // CF3 PR-P: con Particular en $0 y sin precio propio, el status cotiza 0 (igual que el turnero)
       onlinePayment: false,
       onlineCharge: null,
     });

@@ -11,8 +11,10 @@
  *    propia (`actor.practitionerId`); nadie carga ni borra la firma de otro, ni el Titular: una firma es de quien firma.
  *  - PNG o JPEG con magic bytes y tope de dimensiones (`checkPracticeAsset`, `lib/file-sniff.ts`). WEBP, GIF, HEIC y SVG
  *    se rechazan SIN subir: react-pdf y docx no los embeben sin convertir, y el SVG es markup.
- *  - Orden (C-FC9): escribible → chequeo → upload → tx con CAS sobre `*UpdatedAt` + audit → DESPUÉS del commit se borra
- *    el viejo. Así nunca queda la fila apuntando a un objeto borrado: si la tx falla se borra el NUEVO, y si el remove
+ *  - CF3 ZF5: el logo se guarda SIN metadatos (EXIF/GPS, XMP, texto) ni bytes después del final (`stripImageMetadata`,
+ *    el limpiador de la foto del profesional): desde CF3 es público en la sede y el turnero. La firma, no (es privada).
+ *  - Orden (C-FC9): escribible → chequeo → (limpieza del logo) → upload → tx con CAS sobre `*UpdatedAt` + audit →
+ *    DESPUÉS del commit se borra el viejo. Así nunca queda la fila apuntando a un objeto borrado: si la tx falla se borra el NUEVO, y si el remove
  *    del viejo falla queda un huérfano en un bucket privado (inofensivo, logueado).
  *  - Claves armadas acá con un nonce del server: `{tenant}/logo/{nonce}.{ext}` y
  *    `{tenant}/signature/{practitionerId}/{nonce}.{ext}`. Clave nueva en cada subida (nunca se pisa un objeto): un PDF
@@ -23,7 +25,7 @@
  * Exporta solo funciones async (`"use server"`): `readImageInfo`, `PRACTICE_ASSET_LIMITS` y la validación viven en
  * `lib/file-sniff.ts` (puro).
  */
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { runWithRls } from "@/lib/rls";
@@ -33,7 +35,9 @@ import { auditInTx } from "@/lib/audit";
 import { withReadOnlyResult } from "@/lib/read-only-result";
 import type { ActionResult } from "@/lib/validation";
 import { isStorageConfigured, storageRemove, storageSign, storageUpload } from "@/lib/storage-internal";
-import { PRACTICE_ASSET_COPY, PRACTICE_ASSET_LIMITS, checkPracticeAsset, type PracticeAssetKind } from "@/lib/file-sniff";
+import { PRACTICE_ASSET_COPY, PRACTICE_ASSET_LIMITS, checkPracticeAsset, readImageInfo, type PracticeAssetKind } from "@/lib/file-sniff";
+import { stripImageMetadata } from "@/lib/user-photo-logic";
+import { CLINIC_SITES_TAG } from "@/lib/cache-tags";
 
 const BUCKET = "practice-assets";
 const PREVIEW_TTL_S = 60;
@@ -51,6 +55,16 @@ function newKey(t: Target, ext: string): string {
   return t.kind === "logo"
     ? `${t.tenantId}/logo/${nonce}.${ext}`
     : `${t.tenantId}/signature/${t.practitionerId}/${nonce}.${ext}`;
+}
+
+/**
+ * CF3 (SD-S, Anexo R): el logo sale en la sede digital `/<slug>` (`logoUrl` del snapshot con `?v=<logoUpdatedAt>`).
+ * Sin esto, subir o borrar el logo dejaba la sede con la URL vieja hasta 10 min (la vieja daba 404 o el logo
+ * anterior). Después del commit y solo si cambió algo. El directorio no muestra el logo: no se invalida.
+ */
+function revalidateSiteLogo(slug: string): void {
+  revalidateTag(CLINIC_SITES_TAG);
+  revalidatePath(`/${slug}`);
 }
 
 function forbidden(e: unknown): { ok: false; error: string } | null {
@@ -78,9 +92,23 @@ async function replaceAsset(
   if (file.size > PRACTICE_ASSET_LIMITS[kind].maxBytes) {
     return { ok: false, error: kind === "logo" ? PRACTICE_ASSET_COPY.logoFormat : PRACTICE_ASSET_COPY.signatureFormat };
   }
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const checked = checkPracticeAsset(kind, bytes, file.type);
+  const raw = new Uint8Array(await file.arrayBuffer());
+  const checked = checkPracticeAsset(kind, raw, file.type);
   if (!checked.ok) return checked;
+  // CF3 ZF5 (B): el logo es PÚBLICO desde CF3 (sede y turnero abierto, `/<slug>/logo`), y un logo sacado con el
+  // teléfono (la foto del cartel) trae EXIF con el GPS de quien la sacó, XMP o bytes pegados después del final (un
+  // polyglot). Se guarda limpio con el MISMO limpiador de la foto del profesional (`stripImageMetadata`, que se queda
+  // con el perfil ICC y el APP14 de Adobe) y se vuelve a leer: lo que se guarda es lo que se validó. La firma no se
+  // toca: es privada (solo la embebe el PDF del server) y no cambia su comportamiento de T4.
+  let bytes: Uint8Array = raw;
+  if (kind === "logo") {
+    const clean = stripImageMetadata(raw, checked.mime);
+    const info = clean ? readImageInfo(clean) : null;
+    if (!clean || !info || info.mime !== checked.mime || info.width !== checked.width || info.height !== checked.height) {
+      return { ok: false, error: PRACTICE_ASSET_COPY.fake };
+    }
+    bytes = clean;
+  }
   if (!isStorageConfigured()) return { ok: false, error: NO_STORAGE };
 
   const key = newKey(target, checked.ext);
@@ -209,7 +237,9 @@ export async function uploadTenantLogo(formData: FormData): Promise<ActionResult
     // Antes de Storage (BO-Z A1): la subida va por service role fuera de la tx.
     const readOnly = writableError(actor);
     if (readOnly) return { ok: false as const, error: readOnly };
-    return replaceAsset(actor, { kind: "logo", tenantId: actor.tenantId }, formData);
+    const r = await replaceAsset(actor, { kind: "logo", tenantId: actor.tenantId }, formData);
+    if (r.ok) revalidateSiteLogo(actor.tenantSlug);
+    return r;
   });
 }
 
@@ -225,7 +255,9 @@ export async function removeTenantLogo(): Promise<ActionResult> {
     }
     const readOnly = writableError(actor);
     if (readOnly) return { ok: false as const, error: readOnly };
-    return clearAsset(actor, { kind: "logo", tenantId: actor.tenantId });
+    const r = await clearAsset(actor, { kind: "logo", tenantId: actor.tenantId });
+    if (r.ok) revalidateSiteLogo(actor.tenantSlug);
+    return r;
   });
 }
 

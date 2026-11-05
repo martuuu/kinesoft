@@ -27,6 +27,9 @@ vi.mock("@/lib/public-booking-internal", () => ({
   resolveSlugAlias: async (slug: string) =>
     state.aliases[slug] ? { tenantId: "t-x", slug: state.aliases[slug] } : null,
 }));
+// CF3 (SD-U): la ficha de consultorio pide la sede (canonical → `/<slug>` si está publicada). Acá ninguna lo está (el
+// caso con sede lo fija `tests/unit/render/cf3-sede-page.test.tsx`); mock explícito para que nunca toque la base.
+vi.mock("@/lib/clinic-site-internal", () => ({ getClinicSite: async () => null }));
 vi.mock("next/navigation", () => ({
   notFound: () => {
     throw Object.assign(new Error("NEXT_NOT_FOUND"), { digest: "NEXT_NOT_FOUND" });

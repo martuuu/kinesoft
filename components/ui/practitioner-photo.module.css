@@ -1,0 +1,113 @@
+/*
+ * CF3b (PH-U2, pedido de Martin del 05-nov) · marco de la foto del profesional (`practitioner-photo.tsx`). El mismo para
+ * todos los consultorios; el color sale SOLO de --sky-* (lo reasigna el `data-palette` de la superficie: con TMP, el
+ * anillo es su turquesa y la sombra su azul petróleo). El único hex es el blanco del marco, a propósito: el pedido es
+ * «fondo blanco» con cualquier paleta, y un PNG con transparencia tiene que quedar recortado sobre blanco.
+ *
+ * Capas, de afuera hacia adentro:
+ *   .frame   disco blanco con borde sutil (hairline navy) y sombra difusa teñida (--sky-600 / --sky-700 por color-mix);
+ *   .inner   el círculo de la foto, a 5 % del borde (passe-partout blanco), con overflow hidden;
+ *   ::after  el anillo fino --sky-500, ENCIMA de la foto (un box-shadow inset del contenedor quedaría debajo de ella);
+ *   .badge   la insignia del logo del consultorio, círculo blanco con sombra chica abajo a la derecha.
+ *
+ * Sin `color-mix` (navegador viejo) se descarta la segunda declaración y queda la sombra navy neutra: se pierde el
+ * tinte, no la profundidad. Sin animaciones ni transiciones: con reduced motion no hay nada que apagar.
+ * Sin variables CSS locales: el guard `design-tokens` exige que toda variable usada exista en globals.css (los tamaños
+ * van inline en px desde el componente).
+ */
+
+.frame {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 0 0 1px rgba(15, 30, 51, 0.08),
+    0 14px 30px -12px rgba(15, 30, 51, 0.3),
+    0 3px 8px -3px rgba(15, 30, 51, 0.14);
+  box-shadow:
+    0 0 0 1px rgba(15, 30, 51, 0.08),
+    0 14px 30px -12px color-mix(in srgb, var(--sky-600) 55%, transparent),
+    0 3px 8px -3px color-mix(in srgb, var(--sky-700) 28%, transparent);
+}
+/* Avatares chicos (< 72 px): misma idea con menos radio de sombra (la grande se come la tarjeta del turnero). */
+.compact {
+  box-shadow:
+    0 0 0 1px rgba(15, 30, 51, 0.08),
+    0 6px 14px -6px rgba(15, 30, 51, 0.3);
+  box-shadow:
+    0 0 0 1px rgba(15, 30, 51, 0.08),
+    0 6px 14px -6px color-mix(in srgb, var(--sky-600) 50%, transparent);
+}
+
+/* `inset` en % se mide contra el marco (cuadrado): passe-partout parejo en cualquier tamaño. */
+.inner {
+  position: absolute;
+  inset: 5%;
+  display: block;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--sky-50);
+}
+.inner::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1.5px var(--sky-500);
+}
+
+/* La subida de PH-U1 deja la foto en 512×512; si llega un retrato no cuadrado, el recorte prioriza el tercio de arriba
+   (la cara) en vez del centro. Fondo blanco propio: lo transparente de un PNG queda blanco, no --sky-50. */
+.photo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  object-fit: cover;
+  object-position: 50% 30%;
+  background: #fff;
+}
+
+.initials {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  color: var(--sky-700);
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  user-select: none;
+}
+
+/* Centro de la insignia sobre el borde del círculo a 45° (≈ 85 % del lado), como un sello. */
+.badge {
+  position: absolute;
+  right: -2%;
+  bottom: -2%;
+  display: block;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 0 0 1px rgba(15, 30, 51, 0.08),
+    0 2px 6px -1px rgba(15, 30, 51, 0.24);
+  box-shadow:
+    0 0 0 1px rgba(15, 30, 51, 0.08),
+    0 2px 6px -1px color-mix(in srgb, var(--sky-800) 32%, transparent);
+}
+/* 15 % de aire por lado: un logo cuadrado (con su propio fondo, incluso) entra entero en el círculo (diagonal = 70 % × √2
+   ≈ 99 % del diámetro); `contain` para que un logo horizontal se vea entero en vez de recortado. */
+.badgeImg {
+  position: absolute;
+  inset: 15%;
+  display: block;
+  width: 70%;
+  height: 70%;
+  max-width: none;
+  object-fit: contain;
+}

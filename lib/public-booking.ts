@@ -23,6 +23,7 @@
  *     Supabase session.
  */
 import { headers } from "next/headers";
+import { z } from "zod";
 // No-Actor surface (anonymous turnero) → service channel (BYPASSRLS). See lib/db.ts#prismaService.
 import { NotificationKind, Prisma } from "@prisma/client";
 import { prismaService as prisma } from "@/lib/db";
@@ -45,7 +46,8 @@ import {
 import { isHoldingCapacity } from "@/lib/booking-capacity";
 import { afterBookingsCommitted, type BookingChangeRef } from "@/lib/booking-events-internal";
 import { logger } from "@/lib/logger";
-import { getParticularCopagoCents } from "@/lib/billing-internal";
+import { getParticularCopagoCents, getPractitionerPriceCentsInTx } from "@/lib/billing-internal";
+import { particularQuoteCents } from "@/lib/copago";
 import { rateLimit } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
 import { toARDateKey } from "@/lib/datetime-ar";
@@ -74,7 +76,13 @@ import {
   publicSlotWindow,
   resolvePublicOffer,
 } from "@/lib/public-booking-slots";
-import { buildLeadContact, LEAD_CONTACT_CONSENT_VERSION } from "@/lib/public-lead-contact";
+import { buildLeadContact, consentCoversLeadContact } from "@/lib/public-lead-contact";
+import {
+  buildInsuredContact,
+  buildPublicPricing,
+  insuredContactEligible,
+  publicClinicPhone,
+} from "@/lib/public-insured-contact";
 import { notifyPractitionerOfOnlineBooking, type ProNotifyOutcome } from "@/lib/booking-pro-notify-internal";
 import {
   PUBLIC_BOOKING_SWITCH_SELECT,
@@ -90,6 +98,9 @@ import { missingTurneroReason } from "@/lib/public-wizard-state";
 import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 import type { ActionResult } from "@/lib/validation";
 import { publicPractitionerName } from "@/lib/display-name";
+import { publicProPhotoUrlFor } from "@/lib/user-photo-logic";
+import { isSiteSlugShape, siteLogoUrl } from "@/lib/clinic-site-logic";
+import { RESERVED_SLUGS } from "@/lib/onboarding-logic";
 import { publicOpeningRanges, summarizeOpeningHours } from "@/lib/opening-hours-summary";
 import {
   FirstPublicSlotSchema,
@@ -102,6 +113,7 @@ import {
   type ListPublicSlotsInput,
   type PublicClinic,
   type PublicFirstSlot,
+  type PublicInsuredContact,
   type PublicLeadContact,
   type PublicSlot,
   type PublicSlotWindow,
@@ -162,6 +174,13 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
       // VX2-d1: red de seguridad del horario resumido (profesional sin franjas = horario del consultorio).
       businessHoursStart: true,
       businessHoursEnd: true,
+      // CF3 (D-CF3-5): el teléfono PÚBLICO del consultorio (el mismo que muestra la página de turnero cerrado y el
+      // directorio) para «Consultá tu cobertura con el consultorio». Columna de la misma lectura.
+      phone: true,
+      // CF3b PH-S (handoff de PH-U2): el logo del consultorio para la insignia sobre la foto del profesional. Columnas
+      // de la misma lectura; la clave NO sale de esta función (solo la URL pública con `?v`).
+      logoStorageKey: true,
+      logoUpdatedAt: true,
       ...PUBLIC_BOOKING_SWITCH_SELECT,
     },
   });
@@ -171,14 +190,40 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
   if (!tenant || !isPublicTurneroOpen(tenant)) return null;
   const tenantId = tenant.id;
 
-  const [practitioners, services, psRows, insurers, ppRows, locations, schedules] = await Promise.all([
+  const [practitioners, services, psRows, insurerRows, ppRows, locations, schedules] = await Promise.all([
     prisma.practitioner.findMany({
       where: publicPractitionerWhere(tenantId),
       // DIR-0: sin `email`; el nombre público nunca cae al email (`publicPractitionerName`).
-      include: { user: { select: { fullName: true } } },
+      // CF3 ZF1 (B2): `select` de lo que se usa (antes `include` de la fila entera). `contactWhatsapp` y el
+      // consentimiento SOLO para `insuredContactEligible` (el booleano por profesional): el número no sale de esta
+      // función (lo da `getInsuredContact`, con rate limit). Nada de esto se copia al `PublicClinic`.
+      select: {
+        id: true,
+        specialty: true,
+        licenseNumber: true,
+        yearsExp: true,
+        showPublicPrice: true,
+        showContactForInsured: true,
+        contactWhatsapp: true,
+        contactConsentAt: true,
+        contactConsentVersion: true,
+        // CF3b PH-S (M24): el opt-in de la foto (columna de esta lectura) y la fecha de la foto de la persona en la
+        // relación `user`, que ya es su propia sentencia (Prisma 5 sin `relationJoins`): 0 sentencias nuevas. Ni la
+        // clave del objeto ni `avatarUrl`: la URL pública se arma con la fecha (`publicProPhotoUrlFor`).
+        showPhotoPublic: true,
+        user: { select: { fullName: true, photoUpdatedAt: true } },
+      },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     }),
-    prisma.service.findMany({ where: { tenantId }, orderBy: { name: "asc" } }),
+    // CF3 ZF4a (B, auditoría de PH-S): `select` de lo que se usa (antes la fila entera: `color`, `practiceId`,
+    // `discipline` viajaban a cada visita del turnero sin uso). Lo usan el motor (`eligiblePractitioners` /
+    // `resolvePractitionerService`: duración, cupos y dueño), la cotización (`priceCents`) y el DTO (nombre y
+    // descripción). Misma sentencia.
+    prisma.service.findMany({
+      where: { tenantId },
+      select: { id: true, name: true, description: true, durationMin: true, maxConcurrent: true, practitionerId: true, priceCents: true },
+      orderBy: { name: "asc" },
+    }),
     prisma.practitionerService.findMany({
       where: { tenantId },
       select: {
@@ -191,11 +236,17 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
         maxLeadDays: true,
         concurrencyOverride: true,
         maxConcurrent: true,
+        // CF3 (M22, D-CF3-1): precio del profesional por servicio. Columna de la MISMA lectura (0 sentencias nuevas).
+        priceCents: true,
       },
     }),
+    // CF3 (contrato PR-T ↔ PR-P): la fila «Particular» se lee SIEMPRE (antes solo con cobro online), porque la
+    // cotización de un particular sin precio propio del profesional cae a ella (`particularQuoteCents`). En vez de una
+    // sentencia más, la MISMA lectura de coberturas trae también la Particular inactiva (como `getParticularCopagoCents`,
+    // que no mira `active`) y su copago; la lista pública se arma abajo sin montos (C-TP8: nunca copagos de OS).
     prisma.insurer.findMany({
-      where: { tenantId, active: true },
-      select: { id: true, name: true, isParticular: true },
+      where: { tenantId, OR: [{ active: true }, { isParticular: true }] },
+      select: { id: true, name: true, isParticular: true, active: true, copagoCents: true },
       orderBy: [{ isParticular: "desc" }, { name: "asc" }],
     }),
     prisma.practitionerPayer.findMany({
@@ -233,6 +284,9 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
     }),
   ]);
 
+  const insurers = insurerRows.filter((i) => i.active).map(({ id, name, isParticular }) => ({ id, name, isParticular }));
+  const particularRow = insurerRows.find((i) => i.isParticular);
+  const particularCopagoCents = particularRow ? particularRow.copagoCents : null;
   const pracIds = practitioners.map((p) => p.id);
   const serviceInfos = services.map((s) => ({
     id: s.id,
@@ -270,15 +324,26 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
     ),
     turneroWhatsAppActive(tenantId),
   ]);
-  // PEND-a (enmienda C-TP8): el copago de Particular, para que el wizard cotice lo que el server va a cobrar a un
-  // paciente sin obra social (antes cotizaba el precio del servicio, hallazgo «particular-en-cero-cotiza» de T5-Z).
-  // Solo con el cobro online prendido: con modo `off` o la política OFF `policyPayment` es null y no se lee nada.
-  // Serial a propósito: en paralelo con `loadPublicOnlinePayment` sería una lectura más en TODO turnero sin cobro,
-  // para ahorrar un viaje solo en los que cobran. Misma lectura que el submit (`getParticularCopagoCents`, AUDIT §5.5):
-  // la fila Particular aunque esté inactiva, igual que `resolvePublicCopagoCents`.
+  // CF3 (D-CF3-1/3): qué números de plata salen (`buildPublicPricing`, puro y testeado): la cotización de un particular
+  // por profesional SOLO de los que muestran su precio, y los números del consultorio (precio del servicio, copago de
+  // Particular) solo si no pueden ser el precio de alguien que lo ocultó. Todo sale de lecturas que ya estaban.
+  const offeringPractitioners = practitioners.filter((p) => offering.has(p.id));
+  const pricing = buildPublicPricing({
+    services: offered.map(({ s, offeredBy }) => ({ id: s.id, priceCents: s.priceCents, offeredBy })),
+    practitioners: offeringPractitioners.map((p) => ({ id: p.id, showPublicPrice: p.showPublicPrice })),
+    practitionerPrices: psRows,
+    particularCopagoCents,
+  });
+  // CF3 (D-CF3-5): solo el booleano por profesional (clave solo si es true); el número lo trae `getInsuredContact`.
+  const insuredContactAvailable: Record<string, boolean> = {};
+  for (const p of offeringPractitioners) if (insuredContactEligible(p)) insuredContactAvailable[p.id] = true;
+  // PEND-a (enmienda C-TP8): el copago de Particular, para que el wizard cotice lo que el server cobra a un paciente sin
+  // obra social (hallazgo «particular-en-cero-cotiza» de T5-Z). Antes era una lectura serial solo con cobro; CF3: sale
+  // de la lectura de coberturas (arriba, misma fila que `getParticularCopagoCents`: aunque esté inactiva). El wizard
+  // nuevo cotiza con `particularQuotes` y este queda de fallback; null si es el precio de un profesional oculto.
   const onlinePayment = policyPayment && {
     ...policyPayment,
-    particularCopagoCents: await getParticularCopagoCents(tenantId, prisma),
+    particularCopagoCents: pricing.particularCopagoPublic ? particularCopagoCents : null,
   };
   const primary = locations.find((l) => l.isPrimary) ?? null;
   const locationOrder = locations.map((l) => l.id);
@@ -319,6 +384,8 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
           acceptedInsurerIds: insurers
             .filter((ins) => ins.isParticular || acceptsInsurer(ppRows, p.id, ins.id))
             .map((ins) => ins.id),
+          // CF3b PH-S: solo con opt-in Y foto (la ruta pública vuelve a chequear todo antes de servir los bytes).
+          photoUrl: publicProPhotoUrlFor({ id: p.id, showPhotoPublic: p.showPhotoPublic, photoUpdatedAt: p.user.photoUpdatedAt }),
         };
       }),
     services: offered.map(({ s, offeredBy, durationByPractitioner }) => ({
@@ -326,7 +393,8 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
       name: s.name,
       description: s.description,
       durationMin: offeredBy.length === 1 ? durationByPractitioner[offeredBy[0]] : s.durationMin,
-      priceCents: s.priceCents,
+      // CF3 (D-CF3-3): 0 si solo lo ofrecen profesionales con el precio oculto o si es el precio de alguno de ellos.
+      priceCents: pricing.servicePriceCents[s.id] ?? 0,
       // Compat con el filtro del wizard actual (ver `PublicClinic.services`).
       practitionerId: offeredBy.length === 1 ? offeredBy[0] : null,
       practitionerIds: offeredBy,
@@ -338,6 +406,15 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
     // `decideOnlineCharge` con el copago real.
     onlinePayment,
     whatsappNotices,
+    particularQuotes: pricing.particularQuotes,
+    insuredContactAvailable,
+    clinicPhone: publicClinicPhone(tenant.phone),
+    // CF3b PH-S: `/<slug>/logo?v=<ms>`; esa ruta sirve con la sede publicada O el turnero abierto (acá siempre lo está),
+    // con la misma regla de slug (forma de la sede, no reservado). Si no, null: la ruta daría 404.
+    logoUrl:
+      isSiteSlugShape(tenant.slug) && !RESERVED_SLUGS.has(tenant.slug)
+        ? siteLogoUrl(tenant.slug, tenant.logoStorageKey, tenant.logoUpdatedAt)
+        : null,
   };
 }
 
@@ -485,7 +562,8 @@ export async function listPublicSlotWindow(raw: ListPublicSlotWindowInput): Prom
     // CF2-ZF3 (ZA-2): el consentimiento vale para el texto que aceptó. Si `LEAD_CONTACT_CONSENT_VERSION` cambia (otro
     // texto legal), el número no sale hasta que vuelva a aceptar en Configuración → Mi agenda (que re-sella solo si la
     // versión no es la vigente, `practitioner-self-settings-logic.ts`). Antes bastaba con que hubiera una fecha.
-    practitioner.contactConsentVersion === LEAD_CONTACT_CONSENT_VERSION &&
+    // CF3 (D-CF3-5): el v1 (que hablaba solo de este uso) sigue valiendo acá; el v2 también (`consentCoversLeadContact`).
+    consentCoversLeadContact(practitioner.contactConsentVersion) &&
     publicLeadWindowHasFree(availability, {
       practitionerId: input.practitionerId,
       serviceId: input.serviceId,
@@ -605,6 +683,58 @@ export async function findFirstPublicSlot(raw: FirstPublicSlotInput): Promise<Pu
   });
   if (!leadDay || leadDay <= fromDay || leadDay > addDays(today, PUBLIC_MAX_AHEAD_DAYS)) return null;
   return search(await load(leadDay), leadDay);
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// WhatsApp del profesional para pacientes con obra social (CF3, D-CF3-5)
+// ──────────────────────────────────────────────────────────────────────
+
+const InsuredContactInput = z.object({
+  slug: z.string().min(1).max(80),
+  practitionerId: z.string().min(1).max(64),
+});
+
+/**
+ * CF3 (D-CF3-5, decisión 1 de Martin): a un paciente que declaró obra social el turnero no le muestra precio y le
+ * ofrece escribirle al profesional para consultar el convenio. El número NUNCA va en el HTML (`getPublicClinic` manda
+ * solo `insuredContactAvailable`): lo pide el wizard con esta action cuando el paciente llega al resumen.
+ *
+ * Barreras, en orden:
+ *   1. Rate limit propio por IP ANTES de tocar la base (molde del contacto de CF2: 20 cada 10 min): la action es un
+ *      oráculo «slug + id → número» y no tiene que servir para cosechar números en loop. Excedido → `rate_limited`.
+ *   2. zod; turnero del consultorio abierto (switch + acceso, como `resolvePublicTarget`); profesional reservable EN
+ *      ESE consultorio (`publicPractitionerWhere`: membresía, rol clínico, no suspendido, prendido en el turnero).
+ *   3. Opt-in `showContactForInsured` + consentimiento v2 + celular válido (`insuredContactEligible`, la MISMA regla del
+ *      booleano del payload).
+ * Cualquier «no» responde el mismo `none` (no dice cuál). El texto prearmado no lleva PHI (`INSURED_CONTACT_MESSAGE`).
+ * El número no va a ningún log.
+ */
+export async function getInsuredContact(slug: string, practitionerId: string): Promise<PublicInsuredContact> {
+  const lrl = await rateLimit(`pub:insuredcontact:${callerIp()}`, { limit: 20, windowMs: 600_000 });
+  if (!lrl.ok) return { ok: false, reason: "rate_limited" };
+  const none: PublicInsuredContact = { ok: false, reason: "none" };
+  const parsed = InsuredContactInput.safeParse({ slug, practitionerId });
+  if (!parsed.success) return none;
+
+  const tenant = await prisma.tenant.findUnique({
+    where: { slug: parsed.data.slug },
+    select: { id: true, ...PUBLIC_BOOKING_SWITCH_SELECT },
+  });
+  if (!tenant || !isPublicTurneroOpen(tenant)) return none;
+  const p = await prisma.practitioner.findFirst({
+    where: { id: parsed.data.practitionerId, ...publicPractitionerWhere(tenant.id) },
+    select: {
+      showContactForInsured: true,
+      contactWhatsapp: true,
+      contactConsentAt: true,
+      contactConsentVersion: true,
+      userId: true,
+    },
+  });
+  if (!p || !insuredContactEligible(p)) return none;
+  // El nombre solo cuando el contacto sale (relación = otra sentencia, como en la ventana de CF2).
+  const user = await prisma.userProfile.findUnique({ where: { id: p.userId }, select: { fullName: true } });
+  return buildInsuredContact({ ...p, name: publicPractitionerName(user?.fullName) }) ?? none;
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -1004,6 +1134,10 @@ export async function submitPublicBooking(
           ? await resolvePublicCopagoCents(tx, {
               tenantId: tenant.id,
               patientId: resolution.patientId,
+              // CF3 (D-CF3-1): el par del turno; el precio del profesional y `insurerIsParticular` los resuelve adentro
+              // (paridad con la agenda). El servicio y el profesional ya se validaron contra el tenant arriba.
+              practitionerId: data.practitionerId,
+              serviceId: service.id,
               servicePriceCents: service.priceCents,
               contactMismatch: resolution.contactMismatch,
             })
@@ -1385,8 +1519,13 @@ export async function getPublicBookingStatus(
       durationMin: true,
       tenant: { select: { slug: true, name: true } },
       service: { select: { name: true, priceCents: true } },
+      // CF3: el par del turno para el precio del profesional (escalera) y su flag de precio visible (D-CF3-3), como
+      // columnas de las MISMAS lecturas (0 sentencias nuevas).
+      practitionerId: true,
+      serviceId: true,
       practitioner: {
         select: {
+          showPublicPrice: true,
           user: { select: { fullName: true } },
         },
       },
@@ -1433,6 +1572,8 @@ export async function getPublicBookingStatus(
             ? await resolvePublicCopagoCents(prisma, {
                 tenantId: b.tenantId,
                 patientId: b.patientId,
+                practitionerId: b.practitionerId,
+                serviceId: b.serviceId,
                 servicePriceCents: b.service.priceCents,
                 contactMismatch: (b.notes ?? "").includes(PUBLIC_PARTICULAR_CHARGE_NOTE),
               })
@@ -1446,6 +1587,31 @@ export async function getPublicBookingStatus(
       onlineDepositCents: b.onlineDepositCents,
       receipt: c,
     });
+  }
+
+  // CF3 (D-CF3-1/3): sin cobro online (ni pago legado con monto), la fila «A pagar en el consultorio» mostraba
+  // `Service.priceCents`, que ya no es lo que cobra el profesional. Ahora: con el precio oculto, 0 (sin fila: el server
+  // no manda su precio, tampoco acá); si no, la cotización de un particular con ESE profesional (`particularQuoteCents`,
+  // el mismo número que el turnero le mostró en el paso de servicio). +2 lecturas SOLO en esa rama (el estado con cobro,
+  // el que se poolea volviendo de Mercado Pago, no las paga). Con obra social sigue mostrando ese número, como antes con
+  // el precio del servicio (decisión abierta en el reporte de PR-P).
+  const needsPrice =
+    !onlineCharge && (!b.payment || (b.payment.status !== "PAID" && b.payment.expectedAmountCents == null));
+  let fallbackPriceCents = b.service.priceCents;
+  if (needsPrice) {
+    if (!b.practitioner.showPublicPrice) {
+      fallbackPriceCents = 0;
+    } else {
+      const [practitionerPriceCents, particularCopagoCents] = await Promise.all([
+        getPractitionerPriceCentsInTx(prisma, b.tenantId, b.practitionerId, b.serviceId),
+        getParticularCopagoCents(b.tenantId, prisma),
+      ]);
+      fallbackPriceCents = particularQuoteCents({
+        practitionerPriceCents,
+        particularCopagoCents,
+        servicePriceCents: b.service.priceCents,
+      });
+    }
   }
 
   const patientInitials =
@@ -1469,7 +1635,7 @@ export async function getPublicBookingStatus(
     // `amountCents` vale 0 hasta que acredita («$ 0» pendiente).
     amountCents: onlineCharge
       ? onlineCharge.amountCents
-      : publicStatusAmountCents({ priceCents: b.service.priceCents, payment: b.payment }),
+      : publicStatusAmountCents({ priceCents: fallbackPriceCents, payment: b.payment }),
     onlinePayment: !!b.payment || !!onlineCharge,
     onlineCharge,
   };

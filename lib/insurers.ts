@@ -8,7 +8,7 @@
  * `/configuracion` → Obras Sociales tab, surfaced in the patient/booking
  * coverage dropdown.
  *
- * Auth: every action requires OWNER/ADMIN. PRACTITIONER role can read
+ * Auth: every write requires `tenant.admin` («Configuración»). PRACTITIONER role can read
  * but not mutate — keeping the catalogue stable across the consultorio.
  */
 import { withSupportWritable } from "@/lib/support-writable";
@@ -29,7 +29,8 @@ import type { ActionResult } from "@/lib/validation";
 import type { InsurerRow } from "@/lib/insurers-types";
 import { listInsurersInTx } from "@/lib/insurers-read";
 
-const ADMIN_MSG = "Solo OWNER/ADMIN pueden modificar el catálogo de obras sociales.";
+// CF3 ZF2: sin «OWNER/ADMIN» (jerga en inglés): el gate es `tenant.admin`, que viene con «Configuración».
+const ADMIN_MSG = "Solo quien tiene permiso de «Configuración» puede modificar el catálogo de obras sociales.";
 
 /**
  * `unstable_cache` notes:

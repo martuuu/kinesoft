@@ -255,8 +255,41 @@ export function isProfileTabAllowed(tab: string, modules: ReadonlySet<TenantModu
 }
 
 /**
+ * CF3 (ZF4b, B de CT-I): el cierre de un upsell depende de quién lo lee. «Configuración → Plan y uso» es solo de quien
+ * tiene `account.billing` (el Titular principal o quien tenga «Planes y pagos» delegado): al co-titular, a un Admin sin
+ * «Planes y pagos» y a la Secretaria con «Configuración» los mandaba a una pestaña que no ven (callejón sin salida). A
+ * ellos, pedírselo al titular, como el cupo lleno de Usuarios (`seatsFullCopy`, lib/team-internal.ts). Este módulo es
+ * puro y sin actor: devuelve las dos variantes y elige quien sabe las capacidades (el componente, o la action).
+ */
+export const PLAN_CHANGE_HINT = "El plan se cambia en Configuración → Plan y uso.";
+export const PLAN_ASK_OWNER_HINT = "Pedile al titular que amplíe el plan.";
+
+/** Cierre del upsell para quien lee: `seesPlan` = tiene «Plan y uso» (`account.billing`). */
+export function planChangeHint(seesPlan: boolean): string {
+  return seesPlan ? PLAN_CHANGE_HINT : PLAN_ASK_OWNER_HINT;
+}
+
+/** Módulos cuyo copy de «falta el módulo» es un upsell con salida a «Plan y uso» (el resto no la nombra). */
+const PLAN_UPSELL_HEAD = {
+  // PL-Z B6: decir los dos planes que la traen y dónde se cambia (antes solo «en el plan Clínica», sin salida).
+  salaEspera: "La sala de espera viene con los planes Clínica y Libre.",
+  salas: "Las salas vienen con los planes Clínica y Libre.",
+} as const satisfies Partial<Record<TenantModule, string>>;
+export type PlanUpsellModule = keyof typeof PLAN_UPSELL_HEAD;
+
+function isPlanUpsellModule(m: TenantModule): m is PlanUpsellModule {
+  return Object.prototype.hasOwnProperty.call(PLAN_UPSELL_HEAD, m);
+}
+
+/** Upsell de un módulo del plan con el cierre de quien lee (la UI que lo muestra sin pasar por la action). */
+export function planUpsellCopy(m: PlanUpsellModule, seesPlan: boolean): string {
+  return `${PLAN_UPSELL_HEAD[m]} ${planChangeHint(seesPlan)}`;
+}
+
+/**
  * Mensaje de `ForbiddenError` cuando falta el módulo (`assertModule`). PL-1a: los que dependen del plan dicen desde
  * qué plan están (upsell, `minimumPlanFor`); los que dependen de la vertical, que no son para ese tipo de consultorio.
+ * Es la variante de quien ve «Plan y uso»; la otra sale de `moduleDeniedCopy(…, { seesPlan: false })`.
  */
 export const MODULE_DENIED_COPY: Record<TenantModule, string> = {
   agenda: "Tu consultorio no tiene la agenda habilitada.",
@@ -264,9 +297,8 @@ export const MODULE_DENIED_COPY: Record<TenantModule, string> = {
   facturacion: "Tu consultorio no tiene la facturación habilitada.",
   obrasSociales: "Tu consultorio no tiene las obras sociales habilitadas.",
   evoluciones: "Tu consultorio no tiene la historia clínica habilitada.",
-  // PL-Z B6: decir los dos planes que la traen y dónde se cambia (antes solo «en el plan Clínica», sin salida).
-  salaEspera: "La sala de espera viene con los planes Clínica y Libre. El plan se cambia en Configuración → Plan y uso.",
-  salas: "Las salas vienen con los planes Clínica y Libre. El plan se cambia en Configuración → Plan y uso.",
+  salaEspera: planUpsellCopy("salaEspera", true),
+  salas: planUpsellCopy("salas", true),
   turneroPublico:
     "Los turnos online no están habilitados. Activalos desde Configuración para recibir reservas.",
   reportes: "Los reportes no están disponibles para tu tipo de consultorio.",
@@ -289,11 +321,19 @@ export const MODULE_REVOKED_COPY =
  * `MODULE_REVOKED_COPY`; si no, el de siempre (upsell o «no es para tu tipo de consultorio»). T3c-1p: un revoke vale
  * aunque el plan tampoco traiga el módulo (el revoke sigue al cambiar de plan; vender un plan mayor prometería algo que
  * no se abre), igual que el muro (`moduleWallFor`).
+ *
+ * CF3 (ZF4b): `seesPlan: false` (quien lee no tiene «Plan y uso») cambia el cierre del upsell por «Pedile al titular…».
+ * Sin la opción, la variante de siempre: `assertModule` (lib/authz.ts) es sincrónico y no tiene las capacidades a mano.
  */
-export function moduleDeniedCopy(e: TenantEntitlements, m: TenantModule): string {
+export function moduleDeniedCopy(
+  e: TenantEntitlements,
+  m: TenantModule,
+  o: { seesPlan?: boolean } = {}
+): string {
   const revoked =
     (e.moduleRevokes ?? []).includes(m) && isModuleOverridable(m, e.vertical);
-  return revoked ? MODULE_REVOKED_COPY : MODULE_DENIED_COPY[m];
+  if (revoked) return MODULE_REVOKED_COPY;
+  return isPlanUpsellModule(m) && o.seesPlan === false ? planUpsellCopy(m, false) : MODULE_DENIED_COPY[m];
 }
 
 // BO3 (decisión de producto §19.6 ítem 1): «Clínica general», no «Consultorio general» (que se confundía con el

@@ -247,6 +247,42 @@ describe.skipIf(!RUN)("[CF2-PS3] reparto: listRevenueShares / setRevenueShare / 
     expect(audits[2].payload).toMatchObject({ giverPractitionerId: p1.practitionerId, receiverPractitionerId: p2.practitionerId, shareBps: 1500, sources: ALL });
   });
 
+  // CF3 ZF5 (B, default de Martin pendiente): una regla cuyo «quien destina» es el Practitioner del Titular PRINCIPAL
+  // reparte la plata del principal («la cuenta del principal», CT-K1): la crea o la cierra solo él. El co-titular (que
+  // tiene `tenant.sensitive` como el Titular) y un Admin o Profesional con «Configuración» siguen pudiendo con las demás.
+  it("[CF3-ZF5-7] reglas del principal: solo él las crea o cierra; co-titular y Admin con «Configuración», no (sí las demás)", async () => {
+    const PRINCIPAL_ONLY = "Esto lo puede hacer solo el titular principal.";
+    const co = await addPractitioner(db, A, "PRACTITIONER");
+    await db.membership.update({ where: { userId_tenantId: { userId: co.userId, tenantId: A.tenantId } }, data: { grantCoOwner: true } });
+    const admin = (await addStaff(db, A, "ADMIN", { grantSettings: true })).userId;
+    const principalRule = await addRevenueShare(db, A, { giverPractitionerId: A.practitionerId, receiverPractitionerId: p2.practitionerId, shareBps: 1000 });
+    for (const who of [co.userId, admin]) {
+      asUser(who);
+      expect(await set(A.practitionerId, p3.practitionerId, "20", principalRule), who).toEqual({ ok: false, error: PRINCIPAL_ONLY });
+      expect(await endRevenueShare({ giverPractitionerId: A.practitionerId, expectedOpenId: principalRule }), who).toEqual({
+        ok: false,
+        error: PRINCIPAL_ONLY,
+      });
+    }
+    expect(await rowsA()).toMatchObject([{ id: principalRule, effectiveTo: null, shareBps: 1000 }]);
+    expect(await auditsA()).toEqual([]);
+
+    // Las demás, sí: el co-titular guarda y cierra la de otro profesional.
+    asUser(co.userId);
+    const other = await set(p1.practitionerId, p3.practitionerId, "10", null);
+    expect(other.ok).toBe(true);
+    if (!other.ok) return;
+    expect(await endRevenueShare({ giverPractitionerId: p1.practitionerId, expectedOpenId: other.data.id })).toEqual({ ok: true, data: null });
+
+    // El principal, con la suya, sí.
+    asUser(A.userId);
+    const mine = await set(A.practitionerId, p3.practitionerId, "20", principalRule);
+    expect(mine.ok).toBe(true);
+    if (!mine.ok) return;
+    expect(await endRevenueShare({ giverPractitionerId: A.practitionerId, expectedOpenId: mine.data.id })).toEqual({ ok: true, data: null });
+    expect((await auditsA()).map((x) => x.action)).toEqual(["revenueShare.set", "revenueShare.end", "revenueShare.set", "revenueShare.end"]);
+  });
+
   /** Toma el lock de A desde el test, lanza `fns` y suelta recién cuando las dos esperan: contención real. */
   async function raceUnderLock<T>(fns: Array<() => Promise<T>>): Promise<T[]> {
     let pending: Promise<T[]> | null = null;

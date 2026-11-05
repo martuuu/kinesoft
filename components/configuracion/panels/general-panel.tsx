@@ -19,7 +19,7 @@ import {
   setTenantBookingCap,
   setTenantAgendaRules,
 } from "@/lib/tenant-settings";
-import { SAAS_PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
+import { PLAN_ASK_OWNER_HINT, SAAS_PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
 import {
   AGENDA_SLOT_OPTIONS,
   BUSINESS_HOUR_MIN,
@@ -68,6 +68,7 @@ export function GeneralPanel({
   sensitive,
   support = false,
   logo = null,
+  seesPlan = true,
   onDirtyChange,
 }: {
   tenant: TenantSettings;
@@ -79,6 +80,11 @@ export function GeneralPanel({
   support?: boolean;
   /** [FC-3i] Logo del consultorio (`tenant.sensitive`); null = sin la tarjeta (la página no lo leyó). */
   logo?: PracticeAssetState | null;
+  /**
+   * CF3 (ZF4b): quien mira ve «Plan y uso» (`account.billing` y no co-titular, la misma regla que la pestaña en
+   * `controls.tsx`). Decide la pista de la fila «Plan». Ausente = true (la pista de siempre).
+   */
+  seesPlan?: boolean;
   /**
    * [CF-ZF4 · B18] Dirty-guard del shell (el patrón de Profesionales): el tope y las reglas de la agenda se editan en
    * línea, sin Drawer, y cambiar de pestaña de Configuración desmontaba la tarjeta y perdía lo cargado sin avisar.
@@ -242,7 +248,7 @@ export function GeneralPanel({
       </Card>
       )}
 
-      {sensitive && <FeaturesCard tenant={tenant} />}
+      {sensitive && <FeaturesCard tenant={tenant} seesPlan={seesPlan} />}
 
       {sensitive && (
         <HcVisibilityCard
@@ -839,7 +845,7 @@ function HourSelect({
  * `applyTenantEntitlementsInTx` (source `tenant-settings`) y su key en la
  * allowlist de C-EV5.
  */
-function FeaturesCard({ tenant }: { tenant: TenantSettings }) {
+function FeaturesCard({ tenant, seesPlan }: { tenant: TenantSettings; seesPlan: boolean }) {
   const router = useRouter();
   const confirm = useConfirm();
   const [pending, start] = useTransition();
@@ -951,7 +957,12 @@ function FeaturesCard({ tenant }: { tenant: TenantSettings }) {
         >
           <ReadOnlyValue>{VERTICAL_LABEL[tenant.vertical]}</ReadOnlyValue>
         </PrefRow>
-        <PrefRow label="Plan" hint="Los usuarios que incluye y el uso, en la pestaña «Plan y uso».">
+        {/* CF3 (ZF4b, B de CT-I): esta tarjeta la ven también el co-titular y un Admin sin «Planes y pagos», que no
+            tienen la pestaña «Plan y uso»: mandarlos ahí era un callejón sin salida. */}
+        <PrefRow
+          label="Plan"
+          hint={seesPlan ? "Los usuarios que incluye y el uso, en la pestaña «Plan y uso»." : PLAN_ASK_OWNER_HINT}
+        >
           {/* PL-1: plan SaaS (Individual/Consultorio/Clínica/Libre), de `Tenant.saasPlan`. */}
           <ReadOnlyValue>{SAAS_PLAN_LABEL[tenant.saasPlan]}</ReadOnlyValue>
         </PrefRow>

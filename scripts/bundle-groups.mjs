@@ -39,6 +39,11 @@ export const BUNDLE_GROUPS = [
       // TK-U2 (PV §27): `/contacto`, la entrada única de contacto (lead o ticket de sesión). Sin el match caía en
       // `workspace` (180). Anclado con `$`, como los legales.
       /^\/contacto$/,
+      // CF3 (SD-R, §30 D-CF3-10): la sede digital `/<slug>` (`app/(sede)/[slug]/`; `cleanRoute` saca el grupo y queda
+      // `/[slug]`). Es la página que el paciente abre desde Google o Instagram: sin el match caía en `workspace` (180).
+      // `(\/|$)` y no un prefijo: `/[slug]x` no es la sede. Solo el parámetro `[slug]` literal: otro dinámico de primer
+      // nivel (`/[otro]`) tiene que decidir su grupo a propósito.
+      /^\/\[slug\](\/|$)/,
     ],
   },
   { id: "turnero", budget: 135, blocking: true, match: [/^\/c\/\[slug\]\/booking/, /^\/booking\//] },

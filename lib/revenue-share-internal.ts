@@ -102,6 +102,19 @@ export async function assertSharePractitionersInTx(
 }
 
 /**
+ * CF3 ZF5 (B, default de Martin pendiente): ¿el que destina es el Practitioner del Titular PRINCIPAL de este consultorio
+ * (membresía OWNER)? Una regla así reparte la plata del principal («la cuenta del principal», CT-K1): la crea o la
+ * cierra solo él (`account.owner`). 1 sentencia (la membresía con la relación al profesional como subconsulta), con el
+ * `tenantId` a mano en las dos tablas; el llamador la corre solo si quien actúa NO es el principal.
+ */
+export async function isPrincipalOwnerPractitionerInTx(tx: Tx, tenantId: string, practitionerId: string): Promise<boolean> {
+  const n = await tx.membership.count({
+    where: { tenantId, role: "OWNER", user: { practitioners: { some: { id: practitionerId, tenantId } } } },
+  });
+  return n > 0;
+}
+
+/**
  * Todas las reglas (vigentes e históricas, `effectiveFrom` desc) + los receptores posibles, con nombres visibles
  * (`displayMemberName`, nunca el email). Quién creó/cerró se resuelve por las membresías DEL consultorio: un usuario
  * que ya no es miembro queda `null` (no se busca su nombre en otro tenant). 3 sentencias en la tx del caller.

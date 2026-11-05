@@ -18,6 +18,8 @@ import {
   type ExportMembership,
   type TenantExportManifest,
 } from "@/lib/tenant-export-logic";
+import type { Role } from "@prisma/client";
+import { canExportTenantData, capabilitiesForMember } from "@/lib/capabilities";
 
 const D = new Date("2026-01-01T00:00:00Z");
 const m = (tenantId: string, role: ExportMembership["role"], extra: Partial<ExportMembership> = {}): ExportMembership => ({
@@ -60,6 +62,42 @@ describe("[BO5-C] chooseExportTenant: solo el OWNER, también con el consultorio
     expect(chooseExportTenant({ memberships: [m("A", "OWNER", { acceptedAt: null })], userDisabled: false, activeTenantId: null, requestedTenantId: null }).ok).toBe(false);
     expect(chooseExportTenant({ memberships: [m("A", "OWNER", { disabledAt: D })], userDisabled: false, activeTenantId: null, requestedTenantId: "A" }).ok).toBe(false);
     expect(chooseExportTenant({ memberships: [m("A", "OWNER")], userDisabled: true, activeTenantId: "A", requestedTenantId: null })).toEqual({ ok: false, status: 403, reason: "user_disabled" });
+  });
+});
+
+describe("[CT-K1-7] chooseExportTenant: el co-titular exporta como el Titular", () => {
+  const co = (tenantId: string, extra: Partial<ExportMembership> = {}) => m(tenantId, "PRACTITIONER", { grantCoOwner: true, ...extra });
+  const pick = (memberships: ExportMembership[], activeTenantId: string | null, requestedTenantId: string | null = null) =>
+    chooseExportTenant({ memberships, userDisabled: false, activeTenantId, requestedTenantId });
+
+  it("[CT-K1-7] co-titular del consultorio activo → ese; profesional sin co-titularidad → 403", () => {
+    expect(pick([co("A")], "A")).toEqual({ ok: true, tenantId: "A" });
+    expect(pick([m("A", "PRACTITIONER")], "A")).toEqual({ ok: false, status: 403, reason: "not_owner" });
+    expect(pick([m("A", "PRACTITIONER", { grantCoOwner: false })], "A")).toEqual({ ok: false, status: 403, reason: "not_owner" });
+  });
+
+  it("[CT-K1-7] sin Actor (consultorio bloqueado): el co-titular de uno solo → ese; titular de uno y co-titular de otro → 400", () => {
+    expect(pick([co("S"), m("X", "ADMIN")], null)).toEqual({ ok: true, tenantId: "S" });
+    expect(pick([co("S"), m("T", "OWNER")], null)).toEqual({ ok: false, status: 400, reason: "choose_tenant" });
+    expect(pick([m("A", "OWNER"), co("B")], "A", "B")).toEqual({ ok: true, tenantId: "B" });
+  });
+
+  it("[CT-K1-7] grantCoOwner en otro rol (dato imposible por el CHECK de M23) no exporta; no aceptada o deshabilitada tampoco", () => {
+    expect(pick([m("A", "ADMIN", { grantCoOwner: true })], "A")).toEqual({ ok: false, status: 403, reason: "not_owner" });
+    expect(pick([m("A", "ASSISTANT", { grantCoOwner: true })], "A").ok).toBe(false);
+    expect(pick([co("A", { acceptedAt: null })], null).ok).toBe(false);
+    expect(pick([co("A", { disabledAt: D })], null, "A").ok).toBe(false);
+  });
+
+  it("[CT-K1-7] canExportTenantData ⇔ account.export de capabilitiesForMember (la ruta sin Actor y la UI con Actor no divergen)", () => {
+    for (const role of ["OWNER", "ADMIN", "PRACTITIONER", "ASSISTANT", "BILLING"] as Role[]) {
+      for (const grantCoOwner of [true, false]) {
+        for (const clinical of [true, false]) {
+          const mem = { role, clinical, grantSettings: true, grantBilling: true, grantCoOwner };
+          expect(canExportTenantData(mem), JSON.stringify(mem)).toBe(capabilitiesForMember(mem).has("account.export"));
+        }
+      }
+    }
   });
 });
 

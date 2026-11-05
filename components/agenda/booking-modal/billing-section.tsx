@@ -15,6 +15,8 @@ const BILLING_SOURCE_LABEL: Record<BillingPreview["source"], string> = {
   "copago propio": "copago propio del paciente",
   Particular: "tarifa particular del consultorio",
   "precio del servicio": "precio del servicio",
+  // CF3 (D-CF3-1): el profesional del turno tiene su propio precio para este servicio.
+  "precio del profesional": "precio del profesional",
 };
 
 export function BillingSection({

@@ -202,6 +202,8 @@ describe("[CF2-TU2] Servicios del profesional: sin «Avisarme» (T.C)", () => {
       concurrencyOverride: false,
       maxConcurrent: null,
       notifyOnBooking: true,
+      priceCents: null,
+      servicePriceCents: 0,
     };
     const r = draftToInput(rowToDraft(row));
     expect(r.ok && r.input.notifyOnBooking).toBe(true);

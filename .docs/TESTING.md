@@ -12,6 +12,10 @@
 >   motor (`availability-{day,ranges,slots,classify,next-free,recurrence}`), `public-booking-engine`,
 >   `booking-schedule` (caracterización), `capabilities`, `catalog-{normalize,import-core,data}`, `agenda-layout`,
 >   `reception-state`, `schedule-validate` y los estados puros de la UI (`*-state.test.ts`).
+> - **Unit sin base, a propósito (CF3):** `vitest.config.ts` fija `DATABASE_URL`, `DIRECT_URL` y `DATABASE_URL_SERVICE` a
+>   `postgresql://unit-tests-no-db@127.0.0.1:1/…` (puerto muerto). Prisma Client carga `.env` cuando el proceso no trae
+>   `DATABASE_URL`, y `.env` puede ser **prod**: un unit que llegue por error a una query tiene que fallar con
+>   `ECONNREFUSED`, nunca conectarse. No se saca (AUDIT §5.87). Un test que necesite base va a `tests/integration/`.
 > - **Render tests (capa 2 liviana):** `tests/unit/render/*.test.tsx` (agenda-client, practitioner-day-view,
 >   day-lock, reception-view, public-booking-wizard) con `renderToStaticMarkup` en entorno node, sin jsdom ni
 >   testing-library (`vitest.config.ts`: `esbuild: { jsx: "automatic" }` + include de `*.test.tsx`). Afirman el

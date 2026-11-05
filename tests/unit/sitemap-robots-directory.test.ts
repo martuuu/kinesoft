@@ -14,6 +14,9 @@ import type { DirectorySnapshot } from "@/lib/directory-types";
  */
 const snapshotMock = vi.hoisted(() => ({ fn: vi.fn() }));
 vi.mock("@/lib/directory-internal", () => ({ getDirectorySnapshot: snapshotMock.fn }));
+// CF3 (SD-U): el sitemap suma las sedes (`listEnabledSiteSlugs`, otra lectura de la base). Acá sin sedes: lo fijan
+// `tests/unit/cf3-sede-sitemap.test.ts`.
+vi.mock("@/lib/clinic-site-internal", () => ({ listEnabledSiteSlugs: async () => [] }));
 
 import robots from "@/app/robots";
 import sitemap from "@/app/sitemap";
@@ -159,7 +162,7 @@ describe("[DIR-3b] robots según DIRECTORY_MODE", () => {
   it.each([undefined, "off", "preview", "public"])("modo %s → /cuenta bloqueado, landing y turnero permitidos", (mode) => {
     setMode(mode);
     const { r, allow, disallow } = robotsRule();
-    expect(disallow).toContain("/cuenta");
+    expect(disallow).toEqual(expect.arrayContaining(["/cuenta$", "/cuenta/", "/cuenta?"]));
     expect(allow).toEqual(expect.arrayContaining(["/", "/c/"]));
     expect(r.sitemap).toBe(`${BASE}/sitemap.xml`);
     // El directorio nunca queda bloqueado: en preview el noindex va por metadata (un Disallow lo ocultaría).

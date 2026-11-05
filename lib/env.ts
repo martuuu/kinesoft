@@ -2,6 +2,7 @@ import { z } from "zod";
 import { REALTIME_DRIVERS } from "@/lib/realtime-constants";
 import { ACCESS_ENFORCEMENTS, type AccessEnforcement } from "@/lib/tenant-access";
 import { PLATFORM_MFA_ENFORCEMENTS, type PlatformMfaEnforcement } from "@/lib/platform-mfa-logic";
+import { normalizeSiteRootDomain } from "@/lib/site-host";
 
 // IAM-0b: `.env.example` trae estas variables vacías (`EMAIL_TRANSPORT=""`).
 // Un string vacío cuenta como "no seteada", no como un valor inválido: si no,
@@ -207,6 +208,18 @@ const schema = z.object({
   DIRECTORY_MODE: z.preprocess(
     (v) => (typeof v === "string" ? emptyAsUndefined(v.trim().toLowerCase()) : v),
     z.enum(["off", "preview", "public"]).default("off")
+  ),
+
+  // CF3 (SD-M, §30 D-CF3-11): dominio raíz de la sede por subdominio, `<slug>.<SITE_ROOT_DOMAIN>` (ej.
+  // `consultorio-online.com`). Sin setear = DEFAULT de prod: apagado, el middleware se comporta como antes. Lo lee el
+  // middleware por `process.env` (Edge) con `normalizeSiteRootDomain`, que también apaga un valor raro; acá un valor
+  // que no es un dominio (o es `*.vercel.app`) frena el deploy en vez de quedar apagado sin que nadie se entere.
+  SITE_ROOT_DOMAIN: z.preprocess(
+    trimmedOrUndefined,
+    z
+      .string()
+      .refine((v) => normalizeSiteRootDomain(v) !== null, "SITE_ROOT_DOMAIN: dominio sin esquema (ej. consultorio-online.com), nunca vercel.app")
+      .optional()
   ),
 
   // TP-P4 (C-TP2, plan §25.4 «Modos»): cobros online con la cuenta de Mercado Pago DEL VENDEDOR (OAuth).
@@ -678,6 +691,7 @@ export const env = parseEnv({
   SAAS_BILLING_MODE: process.env.SAAS_BILLING_MODE,
   PLATFORM_INBOX_EMAIL: process.env.PLATFORM_INBOX_EMAIL,
   DIRECTORY_MODE: process.env.DIRECTORY_MODE,
+  SITE_ROOT_DOMAIN: process.env.SITE_ROOT_DOMAIN,
   TURNERO_CHECKOUT: process.env.TURNERO_CHECKOUT,
   MP_CONNECT_MODE: process.env.MP_CONNECT_MODE,
   MP_OAUTH_CLIENT_ID: process.env.MP_OAUTH_CLIENT_ID,

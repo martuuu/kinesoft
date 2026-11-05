@@ -59,38 +59,51 @@ const FRAMER_IMPORTERS_MAX = 21;
 
 const SOURCE_DIRS = ["app", "components", "lib", "hooks"];
 
+/** C-F7 (literal): prefijos de las superficies públicas. */
+const DIR_PREFIXES = [
+  "app/(auth)/",
+  "app/(booking)/",
+  "app/(portal)/",
+  "app/invite/",
+  "app/sin-acceso/",
+  "app/suspendido/",
+  "app/cuenta-desactivada/",
+  "app/mantenimiento/",
+  "app/verificar-acceso/",
+  "app/elegir-consultorio/",
+  "app/(directory)/",
+  // TV-1c (plan §26.4): pantallas de sala `/tv`. Corren sin Actor en teles de gama baja (grupo de bundle `display`,
+  // 125 kB): ni framer, ni toast, ni confirm, ni drawer, ni modal.
+  "app/(display)/",
+  // LG-P (PV §27): `/terminos` y `/privacidad` (grupo de bundle `public`): server components estáticos, sin JS.
+  "app/(legal)/",
+  // TK-U2 (PV §27): `/contacto`, la entrada pública única de contacto (grupo de bundle `public`). Lo ven visitantes sin
+  // sesión y usuarios bloqueados: forms planos con `useFormState`, sin providers.
+  "app/contacto/",
+  // CF3 (SD-R, §30 D-CF3-10): sede digital `/<slug>` (grupo de bundle `public`, ≤120). La crea SD-U en W4; mientras no
+  // exista no aporta entradas (ver el test de sanidad de abajo).
+  "app/(sede)/",
+];
+/**
+ * CF3 (SD-R): los componentes de la sede también son entradas, no solo lo que alcanza el grafo desde `app/(sede)/`. Así
+ * un componente de `components/sede/` que importe `Modal` rompe acá aunque todavía ninguna página lo use.
+ */
+const COMPONENT_ENTRY_DIRS = ["components/sede"];
+const SINGLE = ["app/page.tsx", "app/not-found.tsx", "app/global-error.tsx", "app/error.tsx"];
+
+export function isPublicEntry(f: string): boolean {
+  return (
+    SINGLE.includes(f) ||
+    DIR_PREFIXES.some((d) => f.startsWith(d)) ||
+    COMPONENT_ENTRY_DIRS.some((d) => f.startsWith(`${d}/`)) ||
+    (f.startsWith("app/auth/") && /\/page\.tsx?$/.test(f))
+  );
+}
+
 /** C-F7 (literal): entradas de las superficies públicas. */
 function publicEntries(): string[] {
-  const app = join(ROOT, "app");
-  const all = walk(app).map(rel);
-  const DIR_PREFIXES = [
-    "app/(auth)/",
-    "app/(booking)/",
-    "app/(portal)/",
-    "app/invite/",
-    "app/sin-acceso/",
-    "app/suspendido/",
-    "app/cuenta-desactivada/",
-    "app/mantenimiento/",
-    "app/verificar-acceso/",
-    "app/elegir-consultorio/",
-    "app/(directory)/",
-    // TV-1c (plan §26.4): pantallas de sala `/tv`. Corren sin Actor en teles de gama baja (grupo de bundle `display`,
-    // 125 kB): ni framer, ni toast, ni confirm, ni drawer, ni modal.
-    "app/(display)/",
-    // LG-P (PV §27): `/terminos` y `/privacidad` (grupo de bundle `public`): server components estáticos, sin JS.
-    "app/(legal)/",
-    // TK-U2 (PV §27): `/contacto`, la entrada pública única de contacto (grupo de bundle `public`). Lo ven visitantes sin
-    // sesión y usuarios bloqueados: forms planos con `useFormState`, sin providers.
-    "app/contacto/",
-  ];
-  const SINGLE = ["app/page.tsx", "app/not-found.tsx", "app/global-error.tsx", "app/error.tsx"];
-  return all.filter(
-    (f) =>
-      SINGLE.includes(f) ||
-      DIR_PREFIXES.some((d) => f.startsWith(d)) ||
-      (f.startsWith("app/auth/") && /\/page\.tsx?$/.test(f))
-  );
+  const all = [...walk(join(ROOT, "app")), ...COMPONENT_ENTRY_DIRS.flatMap((d) => walk(join(ROOT, d)))].map(rel);
+  return all.filter(isPublicEntry);
 }
 
 /** BFS desde `entry`; devuelve la primera cadena hacia cada objetivo prohibido de C-F3.5. */
@@ -130,6 +143,20 @@ describe("[VX F-d] superficies públicas sin framer-motion ni providers de UI (C
     const pages = walk(dir).map(rel).filter((f) => /\/(page|layout)\.tsx?$/.test(f));
     const entries = publicEntries();
     for (const p of pages) expect(entries, p).toContain(p);
+  });
+
+  // [CF3-SDR] `app/(sede)/` y `components/sede/` los crea SD-U (W4). El guard tolera que no existan, pero no puede
+  // pasar en vacío cuando existan: el predicado los toma (rutas sintéticas) y, si la carpeta está, todos sus archivos
+  // son entradas.
+  it("[CF3-SDR] la sede (app/(sede)/ y components/sede/) es superficie pública, exista o no todavía", () => {
+    for (const f of ["app/(sede)/[slug]/page.tsx", "app/(sede)/[slug]/layout.tsx", "app/(sede)/[slug]/not-found.tsx", "components/sede/sede-hero.tsx"])
+      expect(isPublicEntry(f), f).toBe(true);
+    for (const f of ["components/sedes/x.tsx", "app/(app)/sala/page.tsx", "components/sede-x.tsx"]) expect(isPublicEntry(f), f).toBe(false);
+    const entries = publicEntries();
+    for (const d of ["app/(sede)", "components/sede"]) {
+      const files = walk(join(ROOT, d)).map(rel);
+      for (const f of files) expect(entries, f).toContain(f);
+    }
   });
 
   it("anti-false-green: el grafo SÍ detecta los prohibidos desde una superficie privada", () => {

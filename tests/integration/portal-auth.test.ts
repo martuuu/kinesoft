@@ -88,7 +88,15 @@ vi.mock("@/lib/supabase/admin", () => ({
   }),
 }));
 
+// CF3 ZF2: contador de sentencias/tx (mismos clientes, solo un listener) para fijar la tx única de lecturas del invite.
+vi.mock("@/lib/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/db")>();
+  const { installQueryCounter } = await import("@/tests/helpers/query-counter");
+  return { ...actual, ...installQueryCounter() };
+});
+
 import { GET as callbackGET } from "@/app/auth/callback/route";
+import { measure } from "@/tests/helpers/query-counter";
 
 const RUN = process.env.INTEGRATION === "1";
 const GENERIC = "Si tu email está registrado en un consultorio, te mandamos un link para entrar. Vence en 1 hora.";
@@ -438,6 +446,21 @@ describe.skipIf(!RUN)("IAM-3c · portal con magic link, invitación por mail pro
       const r = await sendPatientPortalInvite({ patientId });
       expect(r).toMatchObject({ ok: true, data: { emailSent: false, transport: null, emailStatus: "failed" } });
       expect(mail.sent).toHaveLength(0);
+    });
+
+    // CF3 ZF2: paciente + acceso + equipo eran 3 tx sueltas (3 BEGIN/COMMIT y 3 set_config); ahora una sola. El rechazo
+    // por equipo corta antes del mail y del audit, así que todas las tx medidas son de lectura (y de `getActor`).
+    it("[CF3-ZF2-4] las lecturas del invite van en UNA tx (paciente, acceso y equipo)", async () => {
+      const patientId = await addPatient(db, A, { email: `${A.userId}@test.local` });
+      const { result, m } = await measure(() => sendPatientPortalInvite({ patientId }));
+      expect(result.ok).toBe(false);
+      const { m: actorOnly } = await measure(async () => {
+        const { getActor } = await import("@/lib/session");
+        return getActor();
+      });
+      // La ficha choca (tenantId, email) con la del test siguiente: se borra acá.
+      await db.patient.delete({ where: { id: patientId } });
+      expect(m.transactions - actorOnly.transactions).toBe(1);
     });
 
     it("email de alguien del equipo del MISMO consultorio → rechaza sin emitir link (AUDIT §5.22)", async () => {

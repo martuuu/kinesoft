@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Drawer } from "@/components/ui/drawer";
@@ -8,13 +8,14 @@ import { FormField } from "@/components/ui/form-field";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { IconPlus } from "@/components/ui/icons";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useFormDirty } from "@/components/ui/use-form-dirty";
 import { MoneyInput } from "@/components/ui/money-input";
 import { formatARS } from "@/lib/format";
 import { SERVICE_COLORS } from "@/lib/service-colors";
 import { DISCIPLINES, type Discipline } from "@/lib/plans-constants";
 import { disciplineLabel } from "@/lib/plan-display";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
-import type { ServiceRow } from "@/lib/services-types";
+import { SERVICES_COPY, type ServiceRow } from "@/lib/services-types";
 import {
   createService,
   updateService,
@@ -28,12 +29,23 @@ import { durationOptionsWith } from "@/lib/service-durations";
 // [PF1.1-config · C-PF4] Sin `router.refresh()` después de las actions de este archivo: todas revalidan `/configuracion`
 // y la respuesta de la action ya trae el árbol nuevo (un refresh era un segundo render entero, PF-0d).
 
+// CF3b · sesión SV (decisión de Martin del 05-nov): el alta tiene el checkbox «Para todo el consultorio» cuando quien
+// la usa ATIENDE (`ownPractitionerId`, el `Practitioner` del propio usuario). Marcado (default de esta pestaña: es el
+// catálogo del consultorio y antes el alta nacía en «Todos los profesionales») → del consultorio; desmarcado →
+// aparece el selector de siempre, sin «Todos» y con el propio usuario elegido (asignar a otro sigue andando). En el
+// alta el checkbox gana: marcado no se manda profesional. Sin agenda propia (Secretaria o Administrador/a con
+// «Configuración») no hay «propio»: ni checkbox, el selector de siempre. La edición tampoco cambia: el selector sigue
+// siendo la única forma de reasignar. La regla del dueño la decide el server (`serviceOwnerFor`, services-schemas).
+
 export function ServicesPanel({
   services,
   practitioners,
+  ownPractitionerId = null,
 }: {
   services: ServiceRow[];
   practitioners: { id: string; name: string }[];
+  /** `Practitioner` del usuario si atiende (el de «Mi agenda»); null/ausente = no atiende: el alta queda como antes. */
+  ownPractitionerId?: string | null;
 }) {
   const [editing, setEditing] = useState<ServiceRow | null>(null);
   const [creating, setCreating] = useState(false);
@@ -127,6 +139,7 @@ export function ServicesPanel({
         <ServiceModal
           practitioners={practitioners}
           hasPlanes={hasPlanes}
+          ownPractitionerId={ownPractitionerId}
           onClose={() => setCreating(false)}
         />
       )}
@@ -142,18 +155,105 @@ export function ServicesPanel({
   );
 }
 
+/**
+ * De quién es el servicio (exportado para los render tests: el Drawer no pinta nada antes de hidratar). Con
+ * `ownPractitionerId` (alta de quien atiende): checkbox «Para todo el consultorio» y, desmarcado, el selector sin
+ * «Todos». Sin él (edición, o alta de quien no atiende): el selector de siempre, con «Todos los profesionales».
+ */
+export function ServiceOwnerFields({
+  practitioners,
+  ownPractitionerId,
+  defaultPractitionerId,
+  forClinic,
+  onForClinicChange,
+  disabled,
+}: {
+  practitioners: { id: string; name: string }[];
+  ownPractitionerId: string | null;
+  /** Edición: el dueño guardado (null = del consultorio). */
+  defaultPractitionerId?: string | null;
+  forClinic: boolean;
+  onForClinicChange: (checked: boolean) => void;
+  disabled?: boolean;
+}) {
+  if (!ownPractitionerId) {
+    return (
+      <FormField
+        as="select"
+        label="Profesional asignado"
+        name="practitionerId"
+        defaultValue={defaultPractitionerId ?? ""}
+        options={[
+          { value: "", label: "Todos los profesionales" },
+          ...practitioners.map((p) => ({ value: p.id, label: p.name })),
+        ]}
+      />
+    );
+  }
+  const ownListed = practitioners.some((p) => p.id === ownPractitionerId);
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      {/* El <label> entero es el área táctil (≥ 44 px). */}
+      <label
+        style={{
+          display: "flex",
+          gap: 10,
+          alignItems: "flex-start",
+          minHeight: 44,
+          padding: "10px 12px",
+          borderRadius: 12,
+          border: "1px solid rgba(15,30,51,0.08)",
+          background: "var(--card-bg)",
+          cursor: disabled ? "default" : "pointer",
+        }}
+      >
+        <input
+          type="checkbox"
+          name="forClinic"
+          checked={forClinic}
+          onChange={(e) => onForClinicChange(e.target.checked)}
+          disabled={disabled}
+          aria-describedby="svc-scope-hint"
+          style={{ marginTop: 2, width: 18, height: 18, flexShrink: 0 }}
+        />
+        <span style={{ display: "grid", gap: 2, minWidth: 0 }}>
+          <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--navy-900)" }}>{SERVICES_COPY.forClinicLabel}</span>
+          <span id="svc-scope-hint" style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--navy-500)" }}>
+            {forClinic ? SERVICES_COPY.forClinicConfigOn : SERVICES_COPY.forClinicConfigOff}
+          </span>
+        </span>
+      </label>
+      {!forClinic && (
+        <FormField
+          as="select"
+          label="Profesional asignado"
+          name="practitionerId"
+          // El propio usuario por defecto («propio suyo»); si no está en la lista (no es reservable), el primero.
+          defaultValue={ownListed ? ownPractitionerId : practitioners[0]?.id ?? ""}
+          options={practitioners.map((p) => ({ value: p.id, label: p.id === ownPractitionerId ? `${p.name} (vos)` : p.name }))}
+        />
+      )}
+    </div>
+  );
+}
+
 function ServiceModal({
   practitioners,
   hasPlanes,
   service,
+  ownPractitionerId = null,
   onClose,
 }: {
   practitioners: { id: string; name: string }[];
   hasPlanes: boolean;
   service?: ServiceRow;
+  /** Solo en el alta: el `Practitioner` del usuario si atiende (habilita «Para todo el consultorio»). */
+  ownPractitionerId?: string | null;
   onClose: () => void;
 }) {
   const [pending, start] = useTransition();
+  const scopeChoice = !service && !!ownPractitionerId;
+  const [forClinic, setForClinic] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [color, setColor] = useState<string | null>(service?.color ?? null);
   // Precio controlado en centavos (MoneyInput). Antes era `type=number
@@ -184,6 +284,10 @@ function ServiceModal({
       : null;
   const showDisciplineSuggestion =
     hasPlanes && suggestedDiscipline != null && suggestedDiscipline !== discipline;
+  // CF3b (SV, auditoría de paso): el Drawer no tenía dirty-guard (AGENTS §5) y cerrarlo tiraba lo cargado sin
+  // preguntar. Lo que no vive en un input con `name` que dispare `input` (precio, color, práctica) va en `extra`.
+  const formRef = useRef<HTMLFormElement>(null);
+  const { dirty, onFormInput } = useFormDirty(formRef, { priceCents, color, practiceId: practice?.id ?? null });
 
   const submit = (formData: FormData) => {
     setError(null);
@@ -205,9 +309,11 @@ function ServiceModal({
         // toca la disciplina (mandar "" la borraría).
         ...(hasPlanes ? { discipline } : {}),
       };
+      // CF3b (SV): el checkbox solo viaja en el alta de quien atiende. Marcado, el selector no está en el form
+      // (practitionerId "") y el server lo deja del consultorio; desmarcado, el elegido. Sin el campo, como antes.
       const r = service
         ? await updateService(service.id, payload)
-        : await createService(payload);
+        : await createService(scopeChoice ? { ...payload, forClinic } : payload);
       if (!r.ok) setError(r.error);
       else {
         onClose();
@@ -234,8 +340,8 @@ function ServiceModal({
   };
 
   return (
-    <Drawer open onClose={onClose} title={service ? "Editar servicio" : "Nuevo servicio"} width={480}>
-      <form action={submit} style={{ display: "grid", gap: 12 }}>
+    <Drawer open onClose={onClose} title={service ? "Editar servicio" : "Nuevo servicio"} width={480} dirty={dirty && !pending}>
+      <form ref={formRef} action={submit} onInput={onFormInput} onChange={onFormInput} style={{ display: "grid", gap: 12 }}>
         <FormField label="Nombre" name="name" required defaultValue={service?.name ?? ""} />
         <FormField
           as="textarea"
@@ -355,15 +461,13 @@ function ServiceModal({
             " El cupo es por servicio. Un profesional no atiende servicios distintos a la vez salvo que lo actives en Profesionales → Horarios («Atiende servicios distintos a la vez»)."
           }
         />
-        <FormField
-          as="select"
-          label="Profesional asignado"
-          name="practitionerId"
-          defaultValue={service?.practitionerId ?? ""}
-          options={[
-            { value: "", label: "Todos los profesionales" },
-            ...practitioners.map((p) => ({ value: p.id, label: p.name })),
-          ]}
+        <ServiceOwnerFields
+          practitioners={practitioners}
+          ownPractitionerId={scopeChoice ? ownPractitionerId : null}
+          defaultPractitionerId={service?.practitionerId ?? null}
+          forClinic={forClinic}
+          onForClinicChange={setForClinic}
+          disabled={pending}
         />
 
         <div style={{ fontSize: 12, minWidth: 0 }}>

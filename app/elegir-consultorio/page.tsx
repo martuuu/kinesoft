@@ -4,8 +4,10 @@ import { SignOutButton, StatusHeading, StatusText } from "@/app/plataforma-mfa/s
 import { Tag } from "@/components/ui/tag";
 import { getAccessSnapshot } from "@/lib/session";
 import { getTenantChoiceState, safeChoiceNext } from "@/lib/tenant-choice";
-import { roleLabel } from "@/lib/roles";
+import { tenantOptionRoleLabel } from "@/lib/co-owner-types";
 import { VERTICAL_LABEL } from "@/lib/tenant-modules";
+import { TenantLogo } from "@/components/layout/tenant-logo";
+import { tenantInitials } from "@/lib/person-initials";
 import { chooseTenantAction } from "./choose-action";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +22,10 @@ export const metadata = { title: "Elegí tu consultorio" };
  * server action escribe la cookie y redirige). Con una sola opción no hay nada que preguntar → directo a `next`
  * (sin escribir la cookie: con una sola usable `getActor` entra a esa). Sin ninguna → el destino que corresponde
  * (alta o /sin-acceso), que no vuelven acá solos.
+ *
+ * CF3 (BR-L): cada card con el logo de ESE consultorio (`TenantOption.logoUrl`, de la misma foto: 0 sentencias; la ruta
+ * `/api/consultorio/logo?t=` acepta cualquier consultorio usable de la sesión, sin consultorio activo). Sin logo o si
+ * no carga, las iniciales de siempre, del mismo tamaño.
  */
 export default async function ElegirConsultorioPage({
   searchParams,
@@ -83,23 +89,11 @@ export default async function ElegirConsultorioPage({
                     color: "inherit",
                   }}
                 >
-                  <span
-                    aria-hidden
-                    style={{
-                      flex: "0 0 auto",
-                      width: 40,
-                      height: 40,
-                      borderRadius: "var(--r-md)",
-                      display: "grid",
-                      placeItems: "center",
-                      fontWeight: 700,
-                      fontSize: 15,
-                      background: "var(--sky-100)",
-                      color: "var(--sky-700)",
-                    }}
-                  >
-                    {initials(o.name)}
-                  </span>
+                  {o.logoUrl ? (
+                    <TenantLogo src={o.logoUrl} size={40} fallback={<InitialsBox name={o.name} />} />
+                  ) : (
+                    <InitialsBox name={o.name} />
+                  )}
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <span
                       style={{
@@ -115,7 +109,7 @@ export default async function ElegirConsultorioPage({
                       {o.name}
                     </span>
                     <span style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6, alignItems: "center" }}>
-                      <Tag tone="lime">{roleLabel(o.role, o.vertical)}</Tag>
+                      <Tag tone="lime">{tenantOptionRoleLabel(o)}</Tag>
                       <span style={{ fontSize: 12, color: "var(--navy-500)" }}>{VERTICAL_LABEL[o.vertical]}</span>
                       {isCurrent && <span style={{ fontSize: 12, color: "var(--sky-700)", fontWeight: 600 }}>· Actual</span>}
                     </span>
@@ -137,9 +131,28 @@ export default async function ElegirConsultorioPage({
   );
 }
 
-/** «Centro Kinésico Movare» → «CK». Solo decorativo (aria-hidden): el nombre va completo al lado. */
-function initials(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
-  const letters = (words.length >= 2 ? [words[0], words[1]] : [words[0] ?? "?"]).map((w) => w[0]?.toUpperCase() ?? "");
-  return letters.join("") || "?";
+/**
+ * Las iniciales en su caja de 40 px (la misma que ocupa el logo: sin salto si no carga). Decorativa. CF3 (ZF4b): la
+ * misma regla que el selector del sidebar (`lib/person-initials.ts`); antes era una copia literal acá.
+ */
+function InitialsBox({ name }: { name: string }) {
+  return (
+    <span
+      aria-hidden
+      style={{
+        flex: "0 0 auto",
+        width: 40,
+        height: 40,
+        borderRadius: "var(--r-md)",
+        display: "grid",
+        placeItems: "center",
+        fontWeight: 700,
+        fontSize: 15,
+        background: "var(--sky-100)",
+        color: "var(--sky-700)",
+      }}
+    >
+      {tenantInitials(name)}
+    </span>
+  );
 }

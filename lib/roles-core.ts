@@ -44,3 +44,40 @@ export function isClinicalMember(m: Pick<MemberAccess, "role" | "clinical">): bo
   if (m.role === "OWNER") return m.clinical === true;
   return false;
 }
+
+/**
+ * CT-K1 (CF3b, contrato de Martin del 05-nov): ¿es el Titular PRINCIPAL? = `role OWNER` (uno solo por consultorio).
+ * Es la pregunta de «a este no se lo toca»: su rol, sus permisos y su cuenta, transferirle o quitarle la titularidad,
+ * dar o quitar «Co-titular». Para «¿puede hacer cosas de titular?» no va esto sino las capacidades
+ * (`account.manage` / `account.export` de `capabilitiesForMember`), que el co-titular también tiene.
+ */
+export function isPrincipalOwner(m: { role: Role }): boolean {
+  return m.role === "OWNER";
+}
+
+/**
+ * CT-K1: ¿es «Co-titular»? = PRACTITIONER con `Membership.grantCoOwner` (M23). El rol se mira igual aunque el CHECK
+ * `Membership_coOwner_role_check` ya lo garantice en la base: un fixture o un MemberAccess armado a mano con
+ * `grantCoOwner` en otro rol no tiene que abrir nada (falla cerrado). `grantCoOwner` ausente = no.
+ */
+export function isCoOwner(m: { role: Role; grantCoOwner?: boolean }): boolean {
+  return m.role === "PRACTITIONER" && m.grantCoOwner === true;
+}
+
+/**
+ * CF3 ZF4a (B, auditoría de CT-I): ¿este miembro SUPERVISA todo el consultorio cuando atiende? = Titular,
+ * Administrador/a o co-titular (`isCoOwner`: PRACTITIONER + `grantCoOwner`, que tiene lo del Titular). Antes era un
+ * `OVERSIGHT_ROLES` copiado en `lib/visibility.ts` (`memberTier`, la barrera de la HC) y en `lib/dashboard.ts`
+ * (`countsScopeTokenFor`, el token de cache de los counts), con el co-titular sumado aparte en cada uno: si una copia
+ * cambiaba y la otra no, el dashboard contaba un universo distinto del que la HC le abre.
+ *
+ * Solo el ROL (y el flag): «¿atiende?» va antes y aparte (`isClinicalMember`). Los dos llamadores cortan primero a un
+ * miembro que no atiende (nivel `admin`, como la Secretaria), así que en la práctica el Administrador/a (que nunca
+ * atiende, §20.17) no llega acá; queda en la lista para no cambiar la regla si eso se revisa. Al co-titular no se lo suma
+ * por rol: su rol es PRACTITIONER y sumar el rol abriría todo a cualquier profesional.
+ */
+const OVERSIGHT_ROLES: ReadonlySet<Role> = new Set<Role>(["OWNER", "ADMIN"]);
+
+export function isOversightMember(m: { role: Role; grantCoOwner?: boolean }): boolean {
+  return OVERSIGHT_ROLES.has(m.role) || isCoOwner(m);
+}

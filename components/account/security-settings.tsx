@@ -45,6 +45,12 @@ const EVENT_LABEL: Record<string, string> = {
   "two_factor.reset_by_platform": `El equipo de ${BRAND_NAME} restableció tu verificación`,
   // PV (§27, LG-S/LG-U): el evento lo escribe `recordLegalAcceptanceInTx` (alta, onboarding o invitación).
   "legal.accepted": "Aceptaste los Términos y la Política de privacidad",
+  // CF3b (CT-L): la matrícula de la persona, en «Mi agenda».
+  "license.updated": "Cambiaste tu matrícula",
+  "license.cleared": "Borraste tu matrícula",
+  // CF3 ZF4a: la foto de la persona (avatar, turnero y sede), en «Mi agenda».
+  "photo.updated": "Cambiaste tu foto",
+  "photo.removed": "Borraste tu foto",
 };
 
 function formatWhen(iso: string): string {

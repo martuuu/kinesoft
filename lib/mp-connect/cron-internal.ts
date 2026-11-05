@@ -4,7 +4,7 @@ import { prismaService } from "@/lib/db";
 import { mpConnectMode } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { auditInTx } from "@/lib/audit";
-import { notify, notifyTenantOwners } from "@/lib/notifications-internal";
+import { notify } from "@/lib/notifications-internal";
 import { mpCredentialAad, openSecret, sealSecret, sealedKid, SecretBoxError } from "@/lib/secret-box";
 import { refreshTokens } from "@/lib/mp-connect/oauth-client";
 import { expirePreferencesBestEffort } from "@/lib/mp-connect/account-client";
@@ -90,15 +90,42 @@ export async function markMpAccountReauthRequired(o: {
   return (await markAccountReauthRequired(o)).marked;
 }
 
-/** «Reconectá tu Mercado Pago»: al profesional dueño de la cuenta, o al Titular/Admin si es la del consultorio. */
+/**
+ * Membresía usable en el consultorio: no suspendida, invitación aceptada y usuario no deshabilitado en Plataforma. El
+ * mismo criterio que `ACTIVE_MEMBER` de `notifyTenantOwners` (HD-12): a quien ya no entra no le llegan avisos.
+ */
+const ACTIVE_MEMBER = { disabledAt: null, acceptedAt: { not: null }, user: { disabledAt: null } } as const;
+
+/**
+ * «Reconectá tu Mercado Pago»: al profesional dueño de la cuenta, o al Titular PRINCIPAL si es la del consultorio.
+ *
+ * CF3 ZF4a (B, auditoría de CT-I): reconectar la cuenta del consultorio es `account.owner` (solo el principal: lib/
+ * capabilities.ts, `canManageClinicAccount` del loader de Configuración). Hasta ZF4a iba por `notifyTenantOwners`, que
+ * avisa también al Administrador/a y al co-titular: abrían el link y no tenían el botón. Ahora 1 lectura de la membresía
+ * OWNER (la de `notifyTenantOwners` era 1 también) y el aviso; si el principal está suspendido o deshabilitado no cae a
+ * nadie más (nadie más puede reconectarla; el estado REAUTH se ve igual en «Cobros online»).
+ *
+ * El profesional: el dueño de la cuenta, solo con membresía usable en ESTE consultorio (antes bastaba el `Practitioner`:
+ * un profesional suspendido seguía recibiendo el aviso de un consultorio al que no entra). Misma sentencia.
+ */
 async function notifyReauth(c: DueCredential): Promise<void> {
   const base = { kind: "SYSTEM" as const, title: MP_CONNECT_COPY.reauthTitle, body: MP_CONNECT_COPY.reauthBody };
   if (c.mpAccount.kind === "CLINIC" || !c.mpAccount.practitionerId) {
-    await notifyTenantOwners({ tenantId: c.tenantId, ...base, link: `/configuracion?tab=${ONLINE_PAYMENTS_TAB}` });
+    const owners = await prismaService.membership.findMany({
+      where: { tenantId: c.tenantId, role: "OWNER", ...ACTIVE_MEMBER },
+      select: { userId: true },
+    });
+    for (const o of owners) {
+      await notify({ tenantId: c.tenantId, userId: o.userId, ...base, link: `/configuracion?tab=${ONLINE_PAYMENTS_TAB}` });
+    }
     return;
   }
   const prac = await prismaService.practitioner.findFirst({
-    where: { id: c.mpAccount.practitionerId, tenantId: c.tenantId },
+    where: {
+      id: c.mpAccount.practitionerId,
+      tenantId: c.tenantId,
+      user: { disabledAt: null, memberships: { some: { tenantId: c.tenantId, disabledAt: null, acceptedAt: { not: null } } } },
+    },
     select: { userId: true },
   });
   if (prac?.userId) await notify({ tenantId: c.tenantId, userId: prac.userId, ...base, link: `/configuracion?tab=${MY_MP_TAB}` });

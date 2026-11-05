@@ -3,8 +3,10 @@
  * (rol app con RLS y owner BYPASSRLS = prod).
  *
  * Lo que se protege:
- *   - authz: `schedule.configure` (OWNER/ADMIN); un PRACTITIONER no lee ni
- *     escribe la config (ni la propia);
+ *   - authz: el propio profesional o `schedule.configure` («Configuración»).
+ *     CF3 AU-S (D-CF3-7) dio vuelta el «ni la propia» de B2.4b: el PRACTITIONER
+ *     lee y escribe SU config; la ajena sigue rechazada (detalle y Secretaria/
+ *     Facturación en `cf3-self-edit.test.ts`);
  *   - IDOR: las FK de PractitionerService/PractitionerPayer SALTEAN RLS, así
  *     que la única barrera para colgar el servicio / la obra social de OTRO
  *     consultorio es la validación de la action. Se afirma el efecto
@@ -63,13 +65,28 @@ describe.skipIf(!RUN)("config por profesional · servicios y coberturas (B2.4b)"
   });
 
   describe("servicios", () => {
-    it("PRACTITIONER: ni lista ni guarda (ni su propia config); no se crea fila", async () => {
+    it("[CF3-AUS] PRACTITIONER: la config ajena ni la lista ni la guarda; no se crea fila", async () => {
       asUser(prac2.userId);
-      await expect(listPractitionerServices(prac2.practitionerId)).rejects.toBeInstanceOf(ForbiddenError);
+      await expect(listPractitionerServices(A.practitionerId)).rejects.toBeInstanceOf(ForbiddenError);
       await expect(
-        upsertPractitionerService(prac2.practitionerId, sharedServiceId, BASE)
+        upsertPractitionerService(A.practitionerId, sharedServiceId, BASE)
       ).rejects.toBeInstanceOf(ForbiddenError);
-      expect(await db.practitionerService.count({ where: { practitionerId: prac2.practitionerId } })).toBe(0);
+      expect(await db.practitionerService.count({ where: { practitionerId: A.practitionerId, serviceId: sharedServiceId } })).toBe(0);
+    });
+
+    it("[CF3-AUS] PRACTITIONER: SU config la lista y la guarda (D-CF3-7; antes rechazado)", async () => {
+      asUser(prac2.userId);
+      const own = await listPractitionerServices(prac2.practitionerId);
+      expect(own.ok).toBe(true);
+      // El servicio propio del OWNER no se le ofrece por el camino propio (no puede habilitárselo).
+      expect(own.ok && own.data.map((x) => x.serviceId)).toEqual([sharedServiceId]);
+      expect((await upsertPractitionerService(prac2.practitionerId, sharedServiceId, { ...BASE, enabled: false })).ok).toBe(true);
+      const row = await db.practitionerService.findUniqueOrThrow({
+        where: { practitionerId_serviceId: { practitionerId: prac2.practitionerId, serviceId: sharedServiceId } },
+      });
+      expect(row.enabled).toBe(false);
+      // Se limpia para los casos de abajo (lista «sin fila» del OWNER).
+      await db.practitionerService.delete({ where: { id: row.id } });
     });
 
     it("lista todos los servicios del tenant con el default si no hay fila", async () => {

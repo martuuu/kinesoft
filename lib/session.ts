@@ -53,6 +53,7 @@ import {
   type MembershipLite,
 } from "@/lib/access-logic";
 import { isClinicalMember } from "@/lib/roles";
+import { MEMBER_ACCESS_SELECT } from "@/lib/capabilities";
 import type { SaasPlan } from "@prisma/client";
 import type { MemberAccess } from "@/lib/saas-plans-types";
 import { twoFactorStateOf, type TwoFactorMethods, type TwoFactorState } from "@/lib/two-factor-logic";
@@ -205,6 +206,11 @@ export type AccessMembership = MembershipLite & {
   clinical: boolean;
   grantSettings: boolean;
   grantBilling: boolean;
+  /**
+   * CT-K1 (CF3b, M23): «Co-titular» (`Membership.grantCoOwner`, solo PRACTITIONER), de la MISMA sentencia (0 nuevas).
+   * Lo leen `capabilitiesForMember` (vía `Actor.membership`) y la ruta del export (`canExportTenantData`, sin Actor).
+   */
+  grantCoOwner: boolean;
   tenant: {
     id: string;
     slug: string;
@@ -217,6 +223,13 @@ export type AccessMembership = MembershipLite & {
     moduleGrants: readonly TenantModule[];
     moduleRevokes: readonly TenantModule[];
     onboardingCompletedAt: Date | null;
+    /**
+     * CF3 (BR-L): marca del consultorio para el shell y el selector, de la MISMA sentencia (0 sentencias nuevas).
+     * `logoUpdatedAt` es la versión del logo (`?v=` de `tenantLogoUrl`, lib/tenant-logo.ts); la clave del objeto NO
+     * viaja en la foto (la lee la ruta del logo solo cuando baja bytes). `palette` = `Tenant.palette` (default "sky").
+     */
+    logoUpdatedAt: Date | null;
+    palette: string;
   } & TenantAccessInput;
 };
 
@@ -228,6 +241,14 @@ export type AccessProfile = {
   disabledAt: Date | null;
   /** PL-1e: métodos de 2FA prendidos (`UserProfile.twoFactorTotp/twoFactorEmail`, M8), en la misma sentencia. */
   twoFactor: TwoFactorMethods;
+  /**
+   * CF3 ZF4a (handoff de PH-U1, M24): versión de la foto PROPIA (`UserProfile.photoUpdatedAt`) para el avatar del shell
+   * (`ownPhotoUrlFor(snapshot.profile)` en `app/(app)/layout.tsx`), de la MISMA sentencia: antes el layout la leía
+   * aparte (+1 sentencia por carga completa del workspace). null = sin foto. La CLAVE del objeto no viaja en la foto
+   * (como la del logo): la lee `/api/me/photo` solo cuando baja bytes. La sentencia devuelve null también si la clave
+   * falta (el CHECK `UserProfile_photo_check` ata las dos columnas, pero una fila rota no promete una imagen).
+   */
+  photoUpdatedAt: Date | null;
 };
 
 /** Fila de `loadAccessMemberships`: el perfil repetido por membresía (LEFT JOIN: sin membresías, una fila con nulls). */
@@ -238,6 +259,7 @@ type AccessRow = {
   userDisabledAt: Date | null;
   twoFactorTotp: boolean;
   twoFactorEmail: boolean;
+  photoUpdatedAt: Date | null;
   tenantId: string | null;
   role: AccessMembership["role"] | null;
   acceptedAt: Date | null;
@@ -245,6 +267,7 @@ type AccessRow = {
   clinical: boolean | null;
   grantSettings: boolean | null;
   grantBilling: boolean | null;
+  grantCoOwner: boolean | null;
   slug: string | null;
   name: string | null;
   vertical: AccessMembership["tenant"]["vertical"] | null;
@@ -253,6 +276,8 @@ type AccessRow = {
   moduleGrants: string[] | null;
   moduleRevokes: string[] | null;
   onboardingCompletedAt: Date | null;
+  logoUpdatedAt: Date | null;
+  palette: string | null;
   status: AccessMembership["tenant"]["status"] | null;
   subscriptionStatus: AccessMembership["tenant"]["subscriptionStatus"] | null;
   trialEndsAt: Date | null;
@@ -284,10 +309,12 @@ export async function loadAccessMemberships(userId: string): Promise<{
   const rows = await prismaService.$queryRaw<AccessRow[]>`
     SELECT u."fullName", u."email", u."isPlatformAdmin", u."disabledAt" AS "userDisabledAt",
            u."twoFactorTotp", u."twoFactorEmail",
+           CASE WHEN u."photoStorageKey" IS NOT NULL THEN u."photoUpdatedAt" END AS "photoUpdatedAt",
            m."tenantId", m."role"::text AS "role", m."acceptedAt", m."disabledAt" AS "membershipDisabledAt",
-           m."clinical", m."grantSettings", m."grantBilling",
+           m."clinical", m."grantSettings", m."grantBilling", m."grantCoOwner",
            t."slug", t."name", t."vertical"::text AS "vertical", t."saasPlan"::text AS "saasPlan",
            t."publicBookingEnabled", t."moduleGrants", t."moduleRevokes", t."onboardingCompletedAt",
+           t."logoUpdatedAt", t."palette",
            t."status"::text AS "status", t."subscriptionStatus"::text AS "subscriptionStatus",
            t."trialEndsAt", t."subscriptionStatusChangedAt",
            p."id" AS "practitionerId"
@@ -317,6 +344,8 @@ export async function loadAccessMemberships(userId: string): Promise<{
       clinical: r.clinical ?? true,
       grantSettings: r.grantSettings ?? false,
       grantBilling: r.grantBilling ?? false,
+      // CT-K1: NOT NULL DEFAULT false (M23); el `?? false` es la misma red que las de arriba (nunca concede de más).
+      grantCoOwner: r.grantCoOwner ?? false,
       tenant: {
         id: r.tenantId,
         slug: r.slug,
@@ -327,6 +356,9 @@ export async function loadAccessMemberships(userId: string): Promise<{
         // T3b-1k2 (M12): dos columnas más en la MISMA sentencia (0 sentencias nuevas; `TEXT[]` llega como string[]).
         ...parseModuleOverrides(r),
         onboardingCompletedAt: r.onboardingCompletedAt,
+        // CF3 (BR-L): dos columnas más en la misma sentencia (logo y paleta del shell y del selector).
+        logoUpdatedAt: r.logoUpdatedAt,
+        palette: r.palette ?? "sky",
         // BO1-A: las 4 columnas de `tenantAccessFor` (TENANT_ACCESS_SELECT), en la misma lectura.
         status: r.status,
         subscriptionStatus: r.subscriptionStatus,
@@ -342,6 +374,8 @@ export async function loadAccessMemberships(userId: string): Promise<{
       isPlatformAdmin: first.isPlatformAdmin,
       disabledAt: first.userDisabledAt,
       twoFactor: { totp: !!first.twoFactorTotp, email: !!first.twoFactorEmail },
+      // CF3 ZF4a: columna de la misma sentencia (0 sentencias nuevas); `?? null` por si llegara undefined.
+      photoUpdatedAt: first.photoUpdatedAt ?? null,
     },
     memberships,
     preferredTenantId: null,
@@ -365,8 +399,16 @@ export type AccessSnapshot = {
   /**
    * BO1-A: membresías aceptadas y habilitadas en consultorios suspendidos o dados de baja (modo EFECTIVO). No
    * cuentan como usables; `getSessionBlock` las usa para explicar por qué no entra.
+   * CT-K1: + `grantCoOwner` para que las pantallas del bloqueo ofrezcan el export al co-titular igual que la ruta
+   * (`canExportTenantData`). Opcional en el tipo (ausente = no) para los fixtures; la foto real lo trae siempre.
    */
-  tenantBlocks: Array<{ tenantId: string; tenantName: string; role: AccessMembership["role"]; kind: "suspended" | "closed" }>;
+  tenantBlocks: Array<{
+    tenantId: string;
+    tenantName: string;
+    role: AccessMembership["role"];
+    grantCoOwner?: boolean;
+    kind: "suspended" | "closed";
+  }>;
   /**
    * PL-1e (C-PL6): 2FA de la sesión. `methods` sale de la misma sentencia (UserProfile); `state` cruza eso con el
    * `aal` del JWT y la cookie `kine_2fa` (`twoFactorStateOf`). Sin perfil: `not_enabled`.
@@ -402,7 +444,7 @@ function accessView(
     const mode = effectiveMode(tenantAccessFor(m.tenant, now).mode, enforcement);
     const blocked = isTenantBlocked(mode);
     if (blocked && m.acceptedAt && !m.disabledAt) {
-      tenantBlocks.push({ tenantId: m.tenantId, tenantName: m.tenant.name, role: m.role, kind: mode });
+      tenantBlocks.push({ tenantId: m.tenantId, tenantName: m.tenant.name, role: m.role, grantCoOwner: m.grantCoOwner, kind: mode });
     }
     return userDisabled || blocked ? { ...m, disabledAt: m.disabledAt ?? now } : m;
   });
@@ -536,6 +578,7 @@ function buildActor(s: AccessSnapshot): Actor {
     clinical: chosen.clinical,
     grantSettings: chosen.grantSettings,
     grantBilling: chosen.grantBilling,
+    grantCoOwner: chosen.grantCoOwner,
   };
   const clinical = isClinicalMember(membership);
   if (clinical && !chosen.practitionerId) throw new UnauthenticatedError("no_membership");
@@ -566,7 +609,8 @@ async function buildDemoActor(): Promise<Actor | null> {
   // PL-1e: el demo (solo dev) también lleva su MemberAccess: con `null` `getMemberAccess` no le daría capacidades.
   const m = await prismaService.membership.findUnique({
     where: { userId_tenantId: { userId: prac.userId, tenantId: tenant.id } },
-    select: { role: true, clinical: true, grantSettings: true, grantBilling: true },
+    // CT-K1: el mismo select que el resto de las lecturas de MemberAccess (+ `grantCoOwner`, guard [CT-K1-6]).
+    select: MEMBER_ACCESS_SELECT,
   });
   return {
     tenantId: tenant.id,

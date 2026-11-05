@@ -49,7 +49,8 @@ import {
 } from "@/lib/locations-schemas";
 import type { ActionResult } from "@/lib/validation";
 
-const WRITE_MSG = "Solo OWNER/ADMIN pueden configurar sedes y horarios.";
+// CF3 ZF2: sin «OWNER/ADMIN» (jerga en inglés): el gate es `schedule.configure`, que viene con «Configuración».
+const WRITE_MSG = "Solo quien tiene permiso de «Configuración» puede configurar sedes y horarios.";
 const READ_MSG = "No tenés permiso para ver la agenda del consultorio.";
 const NOT_FOUND = "Sede no encontrada.";
 

@@ -30,7 +30,13 @@ import { randomBytes } from "node:crypto";
 import type { Prisma, Role, SaasPlan, TenantVertical } from "@prisma/client";
 import { prismaService } from "@/lib/db";
 import { runWithRls, type DbClient } from "@/lib/rls";
-import { MEMBER_ACCESS_SELECT, capabilitiesFor, capabilitiesForMembership } from "@/lib/capabilities";
+import {
+  MEMBER_ACCESS_SELECT,
+  capabilitiesFor,
+  capabilitiesForMembership,
+  isCoOwner,
+  isPrincipalOwner,
+} from "@/lib/capabilities";
 import { liveProgramWhere } from "@/lib/plan-predicates";
 import { auditInTx, auditPlatformInTx, type PlatformActorRef } from "@/lib/audit";
 import { env } from "@/lib/env";
@@ -115,12 +121,77 @@ export async function teamAuditInTx(
   });
 }
 
-/** Superadmin y OWNER: tocan al dueño, transfieren y ven la URL de la invitación. El ADMIN no (IAM-D3). */
+/**
+ * Superadmin y OWNER (el Titular PRINCIPAL): tocan al dueño, transfieren y ven la URL de la invitación. El ADMIN no
+ * (IAM-D3), y el co-titular tampoco (CF3b): via "tenant" el wrapper pone `actorRole: "OWNER"` SOLO si el ROL del
+ * miembro es OWNER (`isPrincipalOwner`), nunca por capacidades, porque el co-titular puede tener las del Titular.
+ */
 function actsAsOwner(ctx: TeamActorCtx): boolean {
   return ctx.actorRole === "OWNER" || ctx.actorRole === "SUPERADMIN";
 }
 
 const fail = (error: string): { ok: false; error: string } => ({ ok: false, error });
+
+/**
+ * CF3b (M23 `Membership.grantCoOwner`, decisión de Martin del 05-nov): «Co-titular». El Titular principal se lo da a
+ * otro PROFESIONAL activo; tiene lo del Titular SALVO: tocar el rol, los permisos o la cuenta del principal, transferir
+ * la titularidad, dar o quitar «Co-titular» y todo lo de la suscripción al SaaS (nunca «Planes y pagos», ni para él ni
+ * para otro). Las capacidades las arma `lib/capabilities.ts` (CT-K1); acá viven las reglas del EQUIPO:
+ *  - Quien no es el principal (co-titular, Administrador/a, Profesional con «Configuración», soporte) actúa con los
+ *    límites del ADMIN frente al principal (`actsAsOwner` false): nada sobre su membresía, no transfiere.
+ *  - Lo que el co-titular suma sobre esos límites (`account.manage` de CT-K1): delegar «Configuración» a los demás
+ *    (`setMemberGrantsInTx`, releído EN la tx con `teamStandingInTx`: si el principal se la sacó un segundo antes, ya
+ *    no puede). «Planes y pagos» no lo da ni lo saca: `account.billing` nunca es suyo (`actorMayGrantBillingInTx` →
+ *    false por las capacidades de su fila, también al pasar a alguien a ADMIN o al activar una invitación suya).
+ *  - Default de CT-K2 (Martin lo confirma): a un co-titular lo gestiona (rol, permisos, suspender, reactivar, quitar)
+ *    SOLO el principal o Plataforma (`coOwnerTargetError`). Cambiarle el rol le saca la marca (CHECK de M23), así que
+ *    dejarlo en manos de otro co-titular o de un Administrador/a era «quitar co-titular» por la puerta de atrás; y
+ *    suspenderlo o sacarlo deshacía la decisión del principal igual. El link de contraseña sí (va a su casilla).
+ *  - El link de la invitación (credencial) sigue siendo del principal: el co-titular usa «Reenviar», como el ADMIN.
+ * Copy de los rechazos: `PRINCIPAL_ONLY_MESSAGE`.
+ */
+export const PRINCIPAL_ONLY_MESSAGE = "Esto lo puede hacer solo el titular principal.";
+export const CO_OWNER_TARGET_MESSAGE = "Solo un profesional activo del consultorio puede ser co-titular.";
+export const CO_OWNER_BILLING_MESSAGE =
+  "Un co-titular no maneja la suscripción del consultorio: no puede tener «Planes y pagos».";
+
+/** CF3b: qué es quien actúa frente al Titular principal. */
+export type TeamStanding = "principal" | "coOwner" | "member";
+
+/**
+ * CF3b: la posición de quien actúa, leída EN la tx (como `clinicalAssignError`): el ctx lo armó el wrapper antes de
+ * abrirla y, en el medio, el principal pudo sacarle la marca (o transferir). Falla cerrado: soporte, sin membresía
+ * usable o via "platform" sin ser superadmin → "member". Via "platform" el superadmin actúa como el principal (como en
+ * el resto de los núcleos). La marca sola no alcanza: `isCoOwner` exige además el rol (la base ya lo exige con el CHECK).
+ */
+export async function teamStandingInTx(tx: DbClient, ctx: TeamActorCtx): Promise<TeamStanding> {
+  if (ctx.support) return "member";
+  if (ctx.via === "platform") return actsAsOwner(ctx) ? "principal" : "member";
+  const me = await tx.membership.findFirst({
+    where: { tenantId: ctx.tenantId, userId: ctx.actorUserId, acceptedAt: { not: null }, disabledAt: null },
+    select: MEMBER_ACCESS_SELECT,
+  });
+  if (!me) return "member";
+  if (isPrincipalOwner(me)) return "principal";
+  return isCoOwner(me) ? "coOwner" : "member";
+}
+
+/**
+ * CF3b (default de CT-K2, ver arriba): a un co-titular lo gestiona solo el principal (o Plataforma). Va DESPUÉS de los
+ * chequeos de «sobre el principal» y de «sobre uno mismo», que tienen su propio copy.
+ */
+function coOwnerTargetError(ctx: TeamActorCtx, m: { grantCoOwner: boolean }): { ok: false; error: string } | null {
+  return m.grantCoOwner && !actsAsOwner(ctx) ? fail(PRINCIPAL_ONLY_MESSAGE) : null;
+}
+
+/**
+ * CF3b: predicado extra del CAS de las escrituras sobre un miembro cuando quien actúa NO es el principal: que siga sin
+ * la marca. Sin esto, si el principal lo hacía co-titular entre la lectura y el update, un Administrador/a le cambiaba
+ * el rol (y la marca se iba con él) o lo suspendía igual.
+ */
+function notCoOwnerUnlessPrincipal(ctx: TeamActorCtx): { grantCoOwner?: false } {
+  return actsAsOwner(ctx) ? {} : { grantCoOwner: false };
+}
 
 /**
  * T3 (C-AS1; decisiones 2 y 3 del 19-oct): delegaciones según el rol al que se ENTRA.
@@ -171,7 +242,11 @@ export function roleEntryGrantsBilling(role: Role): boolean {
   return ROLE_ENTRY_GRANTS[role]?.grantBilling === true;
 }
 
-/** ¿El miembro ACTIVO `userId` de `tenantId` tiene `account.billing`? Falla cerrado: sin membresía usable, no. */
+/**
+ * ¿El miembro ACTIVO `userId` de `tenantId` tiene `account.billing`? Falla cerrado: sin membresía usable, no.
+ * CF3b: el co-titular nunca (corte de `capabilitiesForMember`; `MEMBER_ACCESS_SELECT` trae `grantCoOwner`), así que
+ * tampoco da «Planes y pagos» por el default de ADMIN, ni cambiando un rol ni con una invitación suya.
+ */
 async function memberHasAccountBillingInTx(tx: DbClient, tenantId: string, userId: string): Promise<boolean> {
   const m = await tx.membership.findFirst({
     where: { tenantId, userId, acceptedAt: { not: null }, disabledAt: null },
@@ -321,6 +396,8 @@ function findMemberInTx(tx: DbClient, tenantId: string, membershipId: string) {
       clinical: true,
       grantSettings: true,
       grantBilling: true,
+      // CF3b (M23): las reglas de «a un co-titular lo gestiona solo el principal» y el CHECK al cambiar el rol.
+      grantCoOwner: true,
       acceptedAt: true,
       disabledAt: true,
       disabledReason: true,
@@ -462,8 +539,17 @@ const KIND_COPY: Record<SeatKind, { one: string; many: string; who: string }> = 
  * Copy del cupo lleno, por tipo. Desde Configuración habla el consultorio («tu plan»); desde Plataforma, el
  * superadmin. Dice qué se llenó (el total o el tipo), porque en Consultorio puede haber lugar de profesional y no de
  * Secretaría (y al revés).
+ *
+ * CT-INT (CF3b, B): `seesPlan` = quien actúa ve «Plan y uso» (`account.billing`). El equipo lo gestionan también el
+ * co-titular y quien tiene «Configuración» sin «Planes y pagos», que no ven esa pestaña: mandarlos ahí era un callejón
+ * sin salida. A ellos se les dice que le pidan al titular que amplíe el plan.
  */
-export function seatsFullCopy(ctx: Pick<TeamActorCtx, "via">, u: SeatUsageByKind, kind: SeatKind): string {
+export function seatsFullCopy(
+  ctx: Pick<TeamActorCtx, "via">,
+  u: SeatUsageByKind,
+  kind: SeatKind,
+  o: { seesPlan: boolean }
+): string {
   const totalFull = u.total.full && u.total.limit != null;
   const c = u[kind];
   const n = totalFull ? (u.total.limit ?? 0) : (c.limit ?? 0);
@@ -475,7 +561,9 @@ export function seatsFullCopy(ctx: Pick<TeamActorCtx, "via">, u: SeatUsageByKind
   const tail =
     ctx.via === "tenant"
       ? // BO-Z (C8): no hay un canal «ampliar el plan» por mail; desde PL el Titular cambia el plan en Configuración.
-        `Para sumar a ${KIND_COPY[kind].who}, liberá un lugar o cambiá de plan en Configuración → Plan y uso.`
+        o.seesPlan
+        ? `Para sumar a ${KIND_COPY[kind].who}, liberá un lugar o cambiá de plan en Configuración → Plan y uso.`
+        : `Para sumar a ${KIND_COPY[kind].who}, liberá un lugar o pedile al titular que amplíe el plan.`
       : `Cambiá el plan o el cupo a medida para sumar a ${KIND_COPY[kind].who}.`;
   return `${head} y están ocupados (${used} contando invitaciones pendientes). ${tail}`;
 }
@@ -493,8 +581,23 @@ async function requireFreeSeatInTx(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const u = await getSeatUsageInTx(tx, ctx.tenantId, { now, lock: true, ...o });
   if (!u) return fail("No encontramos el consultorio.");
-  if (!canAddSeat(u, kind)) return fail(seatsFullCopy(ctx, u, kind));
+  if (!canAddSeat(u, kind)) return fail(seatsFullCopy(ctx, u, kind, { seesPlan: await actorSeesPlanInTx(tx, ctx) }));
   return { ok: true };
+}
+
+/**
+ * CT-INT (CF3b, B): ¿quien actúa ve «Plan y uso»? = `account.billing` («Planes y pagos»: el principal o un delegado;
+ * nunca el co-titular, la Secretaria ni soporte, que gestionan el equipo sin ver la suscripción). Leído EN la tx, como
+ * `teamStandingInTx`, y solo en el camino del cupo lleno: el camino feliz no suma sentencias. Via "platform" no
+ * aplica (el copy de Plataforma es otro).
+ */
+async function actorSeesPlanInTx(tx: DbClient, ctx: TeamActorCtx): Promise<boolean> {
+  if (ctx.via !== "tenant" || ctx.support) return false;
+  const me = await tx.membership.findFirst({
+    where: { tenantId: ctx.tenantId, userId: ctx.actorUserId, acceptedAt: { not: null }, disabledAt: null },
+    select: MEMBER_ACCESS_SELECT,
+  });
+  return capabilitiesForMembership(me).has("account.billing");
 }
 
 /** Aceptar/activar una invitación sin lugar libre (ver `checkSeatForJoinInTx`). */
@@ -915,7 +1018,8 @@ export const ROLE_CHANGE_RACE_MESSAGE = "El rol cambió mientras tanto. Recargá
  * S13g: tampoco a un rol sin `plans.manage` si es responsable de planes ACTIVE.
  *
  * Reglas de quién (siempre exactamente un OWNER):
- *  - ADMIN (via tenant): no toca la membresía del OWNER ni asigna el OWNER (IAM-D3).
+ *  - ADMIN (via tenant): no toca la membresía del OWNER ni asigna el OWNER (IAM-D3). CF3b: el co-titular llega con
+ *    `actorRole: "ADMIN"` (mismos límites frente al principal) y a un co-titular le cambia el rol solo el principal.
  *  - Nadie cambia su propio rol.
  *  - Transferir: solo a alguien que aceptó y no está suspendido. Via tenant, quien transfiere queda ADMIN (como
  *    siempre). Via platform, TODOS los OWNER anteriores quedan ADMIN y se verifica que quede uno solo.
@@ -931,23 +1035,26 @@ export async function changeMemberRoleInTx(
   const nextRole = input.role;
   const m = await findMemberInTx(tx, tenantId, input.membershipId);
   if (!m) return fail("Miembro no encontrado.");
-  if (!actsAsOwner(ctx) && (m.role === "OWNER" || nextRole === "OWNER")) {
-    return fail("Solo el dueño puede cambiar o transferir el rol de dueño.");
-  }
+  // CF3b: el copy dice «principal» porque desde M23 hay más de un «titular» (el co-titular llega acá como ADMIN).
+  if (!actsAsOwner(ctx) && (m.role === "OWNER" || nextRole === "OWNER")) return fail(PRINCIPAL_ONLY_MESSAGE);
   if (m.userId === ctx.actorUserId && nextRole !== m.role) {
-    return fail(ctx.actorRole === "OWNER" ? "No podés cambiar tu propio rol de dueño." : "No podés cambiar tu propio rol.");
+    // CT-INT (B): sin «dueño» (jerga; en la pantalla es «titular»).
+    return fail(ctx.actorRole === "OWNER" ? "No podés cambiar tu propio rol de titular." : "No podés cambiar tu propio rol.");
   }
   if (m.role === nextRole) return { ok: true, data: undefined };
+  const coOwnerDenied = coOwnerTargetError(ctx, m);
+  if (coOwnerDenied) return coOwnerDenied;
   const supportDenied = supportRoleError(ctx, nextRole);
   if (supportDenied) return supportDenied;
   if (ctx.via === "platform" && m.role === "OWNER") {
-    return fail("Para cambiarle el rol al dueño, transferí primero la titularidad a otra persona del equipo.");
+    return fail("Para cambiarle el rol al titular, transferí primero la titularidad a otra persona del equipo.");
   }
   const transfer = nextRole === "OWNER" && m.userId !== ctx.actorUserId;
   if (transfer) {
     // El OWNER no se transfiere a una membresía que nunca se aceptó ni a una suspendida: el consultorio quedaría
     // sin nadie que pueda entrar como dueño.
-    if (!m.acceptedAt) return fail("Solo podés transferir el OWNER a alguien que ya aceptó la invitación.");
+    // CF3b (auditoría de paso): el copy decía «el OWNER» (jerga del código en la pantalla).
+    if (!m.acceptedAt) return fail("Solo podés transferir la titularidad a alguien que ya aceptó la invitación.");
     if (m.disabledAt) return fail("No podés transferir la titularidad a alguien suspendido. Reactivalo primero.");
   }
 
@@ -1000,15 +1107,26 @@ export async function changeMemberRoleInTx(
   // T3-Z (B1): si el rol trae o saca delegaciones, el CAS mira también las leídas. `nextGrants` sale de ESA lectura:
   // sin esto, un «Configuración» o «Planes y pagos» que el Titular delegó o quitó en paralelo (`setMemberGrantsInTx`)
   // se pisaba en silencio con lo de antes. Sin cambio de delegaciones no se escriben, así que no hace falta mirarlas.
+  // CF3b (M23, CHECK Membership_coOwner_role_check): «Co-titular» es solo de un PRACTITIONER, así que a cualquier otro
+  // rol (ADMIN, Secretaría, Facturación, o OWNER al transferirle la titularidad) la marca se limpia en ESTA escritura;
+  // en otra, la base rebota con 23514 y la tx se revierte. El CAS mira la marca leída: si el principal lo hizo
+  // co-titular en el medio, quien no es el principal no le cambia el rol (`coOwnerTargetError` lo decidió sin la marca).
+  const clearsCoOwner = m.grantCoOwner && nextRole !== "PRACTITIONER";
   const upd = await tx.membership.updateMany({
     where: {
       id: m.id,
       tenantId,
       role: m.role,
       clinical: m.clinical,
+      grantCoOwner: m.grantCoOwner,
       ...(grantsChanged ? { grantSettings: m.grantSettings, grantBilling: m.grantBilling } : {}),
     },
-    data: { role: nextRole, clinical: nextClinical, ...(grantsChanged ? nextGrants : {}) },
+    data: {
+      role: nextRole,
+      clinical: nextClinical,
+      ...(grantsChanged ? nextGrants : {}),
+      ...(nextRole !== "PRACTITIONER" ? { grantCoOwner: false } : {}),
+    },
   });
   if (upd.count !== 1) throw new RoleChangeRaceError();
   // CF2-ZF3 (ZA-1): a un rol que no atiende deja de ser reservable, así que tampoco recibe ni destina un % desde ahora.
@@ -1022,18 +1140,25 @@ export async function changeMemberRoleInTx(
     // ADMIN con agenda) o como ADMIN sin agenda. Antes quedaba ADMIN a secas y seguía atendiendo. Mismo tipo de
     // lugar que tenía, así que el cupo no cambia. T3 (C-AS1, decisión 2): el que queda ADMIN trae también «Planes y
     // pagos», como cualquier ADMIN nuevo (`ROLE_ENTRY_GRANTS`); el que queda Profesional, solo «Configuración».
+    // CF3b (default de CT-K2): el ex-Titular NO queda co-titular. Una fila OWNER ya tiene la marca en false (CHECK de
+    // M23); se escribe igual para que la regla se lea acá y no dependa de que nadie la haya prendido a mano. Si el
+    // Titular nuevo quiere, se la da después con «Co-titular».
     const demote = async (where: Prisma.MembershipWhereInput) =>
       (
         await tx.membership.updateMany({
           where: { ...where, role: "OWNER", clinical: true },
-          data: { role: "PRACTITIONER", grantSettings: true },
+          data: { role: "PRACTITIONER", grantSettings: true, grantCoOwner: false },
         })
       ).count +
       (
         await tx.membership.updateMany({
           where: { ...where, role: "OWNER", clinical: false },
           // Transferir es solo del Titular o del superadmin (arriba), así que `actsAsOwner` es la regla de T3c-1i acá.
-          data: { role: "ADMIN", ...grantsOnEnterRole("ADMIN", { grantSettings: true, grantBilling: false }, actsAsOwner(ctx)) },
+          data: {
+            role: "ADMIN",
+            grantCoOwner: false,
+            ...grantsOnEnterRole("ADMIN", { grantSettings: true, grantBilling: false }, actsAsOwner(ctx)),
+          },
         })
       ).count;
     if (ctx.via === "tenant") {
@@ -1061,6 +1186,8 @@ export async function changeMemberRoleInTx(
       // T3 (C-AS1): el cambio de delegaciones que trae el rol queda en el MISMO evento (el backfill de M12 y el
       // historial del miembro lo leen de acá; no es un `membership.grants.change`: no lo decidió el Titular).
       ...(grantsChanged ? { grants: nextGrants } : {}),
+      // CF3b: perder «Co-titular» por el cambio de rol queda en el MISMO evento (no lo decidió `setMemberCoOwnerInTx`).
+      ...(clearsCoOwner ? { coOwnerCleared: true } : {}),
       ...(practitionerCreated ? { agendaProvisioned: true } : {}),
       ...(demoted !== undefined ? { userId: m.userId, previousOwnersDemoted: demoted } : {}),
     },
@@ -1083,10 +1210,13 @@ export async function suspendMemberInTx(
   const m = await findMemberInTx(tx, tenantId, input.membershipId);
   if (!m) return fail("Miembro no encontrado.");
   if (m.userId === ctx.actorUserId) return fail("No podés suspenderte a vos mismo.");
-  if (m.role === "OWNER") return fail("No se puede suspender al dueño del consultorio.");
+  // CF3b: a quien no es el principal (co-titular incluido) el copy le dice quién puede; al superadmin, que nadie.
+  if (m.role === "OWNER") return fail(actsAsOwner(ctx) ? "No se puede suspender al titular del consultorio." : PRINCIPAL_ONLY_MESSAGE);
+  const coOwnerDenied = coOwnerTargetError(ctx, m);
+  if (coOwnerDenied) return coOwnerDenied;
 
   const upd = await tx.membership.updateMany({
-    where: { id: m.id, tenantId, disabledAt: null, role: { not: "OWNER" } },
+    where: { id: m.id, tenantId, disabledAt: null, role: { not: "OWNER" }, ...notCoOwnerUnlessPrincipal(ctx) },
     // PL-1c: el motivo separa la suspensión a mano de la de bajar de plan (subir de plan solo reactiva PLAN_DOWNGRADE).
     data: { disabledAt: input.now, disabledById: ctx.actorUserId, disabledReason: "MANUAL" },
   });
@@ -1121,8 +1251,11 @@ export async function reactivateMemberInTx(
   const { tenantId } = ctx;
   const m = await findMemberInTx(tx, tenantId, input.membershipId);
   if (!m) return fail("Miembro no encontrado.");
-  if (m.role === "OWNER" && !actsAsOwner(ctx)) return fail("Solo el dueño puede tocar la membresía del dueño.");
+  if (m.role === "OWNER" && !actsAsOwner(ctx)) return fail(PRINCIPAL_ONLY_MESSAGE);
   if (!m.disabledAt) return { ok: true, data: { changed: false } };
+  // CF3b: reactivar a un co-titular le devuelve lo del Titular: lo decide el principal.
+  const coOwnerDenied = coOwnerTargetError(ctx, m);
+  if (coOwnerDenied) return coOwnerDenied;
   // BO-Z (A2): reactivar devuelve el rol que tenía; si es clínico, soporte no lo reabre.
   const supportDenied = supportRoleError(ctx, m.role);
   if (supportDenied) return supportDenied;
@@ -1133,7 +1266,7 @@ export async function reactivateMemberInTx(
   const seat = await requireFreeSeatInTx(tx, ctx, new Date(), seatKindOf(m));
   if (!seat.ok) return seat;
   const upd = await tx.membership.updateMany({
-    where: { id: m.id, tenantId, disabledAt: { not: null } },
+    where: { id: m.id, tenantId, disabledAt: { not: null }, ...notCoOwnerUnlessPrincipal(ctx) },
     data: { disabledAt: null, disabledById: null, disabledReason: null },
   });
   if (upd.count !== 1) return { ok: true, data: { changed: false } };
@@ -1176,7 +1309,7 @@ export async function setMemberClinicalInTx(
         : "«¿Atiende?» solo se elige para el Titular. Para los demás, cambiá el rol."
     );
   }
-  if (m.role === "OWNER" && !actsAsOwner(ctx)) return fail("Solo el titular puede cambiar si el titular atiende.");
+  if (m.role === "OWNER" && !actsAsOwner(ctx)) return fail(PRINCIPAL_ONLY_MESSAGE);
   if (m.userId === ctx.actorUserId && m.role !== "OWNER") return fail("No podés cambiar si atendés vos mismo. Pedíselo al titular.");
   if (m.clinical === i.clinical) return { ok: true, data: undefined };
   if (ctx.support && i.clinical) return fail(SUPPORT_CLINICAL_ROLE_MESSAGE);
@@ -1225,23 +1358,41 @@ export async function setMemberClinicalInTx(
  * T3 (C-AS1, decisión 3): «Planes y pagos» a la Secretaria o a Facturación se rechaza (el corte de staff se la
  * negaría igual; guardarla dejaría un permiso que no rige). El CAS mira el rol leído: si en el medio lo pasaron a
  * Secretaria, no se le escribe «Planes y pagos».
+ * CF3b (M23): el co-titular también delega, solo «Configuración» y solo sobre quien no es el principal ni co-titular
+ * (lo suyo y lo de otro co-titular lo decide el principal). Se confirma que SIGUE siendo co-titular en esta tx
+ * (`teamStandingInTx`): el ctx viene de antes de abrirla. «Planes y pagos» no lo da ni lo saca: sin `account.billing`,
+ * cambiarlo es del principal (o Plataforma). Y a un co-titular nadie le da «Planes y pagos»: nunca maneja la
+ * suscripción (contrato (d); `capabilitiesForMember` se lo cortaría igual, guardarlo dejaría un permiso que no rige).
  */
 export async function setMemberGrantsInTx(
   tx: DbClient,
   ctx: TeamActorCtx,
   i: { membershipId: string; grantSettings: boolean; grantBilling: boolean }
 ): Promise<ActionResult> {
-  if (!actsAsOwner(ctx)) return fail("Solo el titular puede delegar permisos.");
+  const byCoOwner = !actsAsOwner(ctx);
+  if (byCoOwner && (await teamStandingInTx(tx, ctx)) !== "coOwner") return fail("Solo el titular puede delegar permisos.");
   const { tenantId } = ctx;
   const m = await findMemberInTx(tx, tenantId, i.membershipId);
   if (!m) return fail("Miembro no encontrado.");
-  if (m.role === "OWNER") return fail("El titular ya tiene todos los permisos.");
+  if (m.role === "OWNER") return fail(byCoOwner ? PRINCIPAL_ONLY_MESSAGE : "El titular ya tiene todos los permisos.");
+  const coOwnerDenied = coOwnerTargetError(ctx, m);
+  if (coOwnerDenied) return coOwnerDenied;
+  if (byCoOwner && i.grantBilling !== m.grantBilling) return fail(PRINCIPAL_ONLY_MESSAGE);
+  if (i.grantBilling && m.grantCoOwner) return fail(CO_OWNER_BILLING_MESSAGE);
   if (i.grantBilling && STAFF_NO_BILLING_ROLES.has(m.role)) return fail(STAFF_BILLING_GRANT_MESSAGE);
   if (m.grantSettings === i.grantSettings && m.grantBilling === i.grantBilling) return { ok: true, data: undefined };
   // CAS sobre lo leído y el rol (el leído, que no es OWNER): si en el medio lo hicieron Titular (transferencia) o lo
-  // pasaron a Secretaria/Facturación, no se escribe.
+  // pasaron a Secretaria/Facturación, no se escribe. CF3b: y la marca leída (si en el medio lo hicieron co-titular, ni
+  // el co-titular le cambia nada ni el principal le escribe «Planes y pagos»).
   const upd = await tx.membership.updateMany({
-    where: { id: m.id, tenantId, role: m.role, grantSettings: m.grantSettings, grantBilling: m.grantBilling },
+    where: {
+      id: m.id,
+      tenantId,
+      role: m.role,
+      grantSettings: m.grantSettings,
+      grantBilling: m.grantBilling,
+      grantCoOwner: m.grantCoOwner,
+    },
     data: { grantSettings: i.grantSettings, grantBilling: i.grantBilling },
   });
   if (upd.count !== 1) throw new RoleChangeRaceError();
@@ -1253,7 +1404,61 @@ export async function setMemberGrantsInTx(
       userId: m.userId,
       from: { grantSettings: m.grantSettings, grantBilling: m.grantBilling },
       to: { grantSettings: i.grantSettings, grantBilling: i.grantBilling },
+      // CF3b: quién delegó (el actorId ya lo dice; esto evita cruzarlo con la membresía de ese momento).
+      ...(byCoOwner ? { byCoOwner: true } : {}),
     },
+  });
+  return { ok: true, data: undefined };
+}
+
+/**
+ * «Co-titular» (CF3b, M23; decisión de Martin del 05-nov): lo da y lo saca SOLO el Titular principal (`account.owner`
+ * en la action; acá `actsAsOwner` + relectura en la tx de que quien actúa sigue siendo el OWNER, porque un ctx con
+ * `actorRole: "OWNER"` lo arma el wrapper antes de abrirla). Ni el co-titular (tampoco sobre sí mismo), ni el
+ * Administrador/a, ni soporte. Via "platform" el núcleo lo admite (el superadmin actúa como el principal, igual que en
+ * `setMemberGrantsInTx`), pero en CF3b no hay wrapper de Plataforma: decisión de CT-K2, se suma si Martin lo pide.
+ *  - Prender: solo a un PROFESIONAL (el CHECK de M23 lo exige; OWNER ya es el principal y ADMIN, Secretaría y
+ *    Facturación no atienden) que aceptó y no está suspendido. En la MISMA escritura `grantBilling = false`: el
+ *    co-titular nunca maneja la suscripción (las capacidades se lo cortan igual; la fila no queda con un permiso que
+ *    no rige y que reaparecería si después le sacan la marca).
+ *  - Apagar: solo la marca, también a un suspendido. «Configuración» queda como estaba; «Planes y pagos» no vuelve.
+ *  - Sin `expectedUpdatedAt`: `Membership` no tiene `updatedAt`. Idempotente (el pedido es el estado final) y con CAS
+ *    sobre lo leído (rol, marca, «Planes y pagos» y, al prender, activo): una carrera tira `RoleChangeRaceError`.
+ * Sin cupos (sigue siendo un lugar de profesional) ni efectos sobre agenda o reparto. Audit `membership.coOwner.change`.
+ */
+export async function setMemberCoOwnerInTx(
+  tx: DbClient,
+  ctx: TeamActorCtx,
+  i: { membershipId: string; enabled: boolean }
+): Promise<ActionResult> {
+  if (ctx.support || !actsAsOwner(ctx) || (await teamStandingInTx(tx, ctx)) !== "principal") {
+    return fail(PRINCIPAL_ONLY_MESSAGE);
+  }
+  const { tenantId } = ctx;
+  const m = await findMemberInTx(tx, tenantId, i.membershipId);
+  if (!m) return fail("Miembro no encontrado.");
+  if (m.grantCoOwner === i.enabled) return { ok: true, data: undefined };
+  // El mismo dominio que el CHECK de M23 (y que `isCoOwner`): solo PRACTITIONER, que siempre atiende.
+  if (i.enabled && (m.role !== "PRACTITIONER" || !isClinicalMember(m) || !m.acceptedAt || m.disabledAt)) {
+    return fail(CO_OWNER_TARGET_MESSAGE);
+  }
+  const upd = await tx.membership.updateMany({
+    where: {
+      id: m.id,
+      tenantId,
+      role: m.role,
+      grantCoOwner: m.grantCoOwner,
+      grantBilling: m.grantBilling,
+      ...(i.enabled ? { acceptedAt: { not: null }, disabledAt: null } : {}),
+    },
+    data: i.enabled ? { grantCoOwner: true, grantBilling: false } : { grantCoOwner: false },
+  });
+  if (upd.count !== 1) throw new RoleChangeRaceError();
+  await teamAuditInTx(tx, ctx, {
+    action: "membership.coOwner.change",
+    entity: "Membership",
+    entityId: m.id,
+    payload: { userId: m.userId, coOwner: i.enabled, ...(i.enabled && m.grantBilling ? { grantBillingCleared: true } : {}) },
   });
   return { ok: true, data: undefined };
 }
@@ -1273,10 +1478,12 @@ export async function removeMemberInTx(
   const m = await findMemberInTx(tx, tenantId, input.membershipId);
   if (!m) return fail("Miembro no encontrado.");
   if (m.userId === ctx.actorUserId) return fail("No podés quitarte a vos mismo del equipo.");
-  if (m.role === "OWNER" && !actsAsOwner(ctx)) return fail("Solo el dueño puede quitar a otro dueño.");
+  if (m.role === "OWNER" && !actsAsOwner(ctx)) return fail(PRINCIPAL_ONLY_MESSAGE);
   if (m.role === "OWNER" && ctx.via === "platform") {
-    return fail("No se puede quitar al dueño. Transferí primero la titularidad a otra persona del equipo.");
+    return fail("No se puede quitar al titular. Transferí primero la titularidad a otra persona del equipo.");
   }
+  const coOwnerDenied = coOwnerTargetError(ctx, m);
+  if (coOwnerDenied) return coOwnerDenied;
   const prac = await tx.practitioner.findFirst({ where: { userId: m.userId, tenantId }, select: { id: true } });
   if (prac) {
     const [{ futureBookings, assignedPatients }, activePlans] = await Promise.all([
@@ -1296,7 +1503,7 @@ export async function removeMemberInTx(
       return fail(`No se puede quitar: ${clauses.join(" y ")}. Reasignalos primero.`);
     }
   }
-  const del = await tx.membership.deleteMany({ where: { id: m.id, tenantId } });
+  const del = await tx.membership.deleteMany({ where: { id: m.id, tenantId, ...notCoOwnerUnlessPrincipal(ctx) } });
   if (del.count !== 1) return fail("Miembro no encontrado.");
   // CF2-ZF3 (ZA-1): fuera del equipo, sus reglas de reparto se cierran en `now` (el Practitioner queda: historia).
   if (prac) await closeRevenueSharesForPractitionerInTx(tx, tenantId, prac.id, ctx.actorUserId, "member.remove");
@@ -1336,7 +1543,7 @@ export async function teamSendMemberPasswordReset(
 ): Promise<ActionResult<MemberPasswordResetResult>> {
   const m = await runTeamTx(ctx, (tx) => findMemberInTx(tx, ctx.tenantId, membershipId));
   if (!m) return fail("Miembro no encontrado.");
-  if (m.role === "OWNER" && !actsAsOwner(ctx)) return fail("Solo el dueño puede pedir un link de contraseña para el dueño.");
+  if (m.role === "OWNER" && !actsAsOwner(ctx)) return fail(PRINCIPAL_ONLY_MESSAGE);
   if (m.disabledAt) return fail("Está suspendido: reactivalo antes de mandarle un link para entrar.");
   const email = normalizeEmail(m.user.email);
   const rl = await memberResetRateLimit(ctx.actorUserId, email);

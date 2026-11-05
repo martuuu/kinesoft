@@ -7,29 +7,32 @@
 
 ---
 
-## Estado y orden vigente (02-nov-2026) — **manda sobre todo lo de abajo**
+## Estado y orden vigente (05-nov-2026) — **manda sobre todo lo de abajo**
 
 > Prod se reseteó el 29/30-oct ([RESET-PROD.md](RESET-PROD.md)): `db:prod:deploy` aplicó desde cero las 47 del repo
-> (hasta **M19**) y desde ahí prod tiene **un cliente vivo**. Esta sección y las «Mxx en prod» son la referencia técnica
-> de cada migración; [PUSH-DIA.md](PUSH-DIA.md) fue la guía del push de T3..PV.
+> (hasta **M19**) y desde ahí prod tiene **un cliente vivo**. M20 y M21 se aplicaron el 02-nov con el push de CF2
+> (`c288e5d`). Esta sección y las «Mxx en prod» son la referencia técnica de cada migración; [PUSH-DIA.md](PUSH-DIA.md)
+> fue la guía del push de T3..PV.
 
-- **Prod: 47 migraciones** (hasta M19 `20261027120000_support_tickets`) mientras M20 no se aplique. **Local: 49.**
-- **Pendientes en prod: 2**, en este orden: **M20** `20261030120000_cf_agenda_rules` (tanda CF; si ya se aplicó, queda
-  solo M21) y **M21** `20261102120000_cf2_profesional_caja` (tanda CF2). Las dos aditivas y compatibles con el código que
-  hoy corre en prod: van **antes del push**. Paso a paso en «M20 en prod» y «M21 en prod»; un solo `db:prod:deploy`
-  aplica las dos en orden de timestamp.
+- **Prod: 49 migraciones** (hasta M21 `20261102120000_cf2_profesional_caja`). **Local: 52.**
+- **Pendientes en prod: 3**, **M22** `20261104120000_cf3_precios_sede`, **M23** `20261105120000_cf3_co_titular` y
+  **M24** `20261105130000_cf3_practitioner_photo` (tanda CF3; M23 = co-titular y matrícula, M24 = foto de la persona,
+  las dos de CF3b). Las tres aditivas y compatibles con el código que hoy corre en prod: van **antes del push**, en **un
+  solo `db:prod:deploy`** (las aplica en orden de timestamp). Paso a paso en «M22 en prod» (los pasos son los de las
+  tres) y lo propio de cada una en «M23 en prod» y «M24 en prod».
 - **Sin staging y, desde el reset, sin reset** (hay datos reales): **precheck de solo lectura → backup →
   `db:prod:deploy` → postcheck → push**. Lo corre Martin; el agente verifica la salida que él pega.
 - **Prechecks y postchecks automatizados:** `KINESOFT_CONFIRM_PROD=<ref> npm run db:prod:precheck -- --pre` y
   `… -- --post` (`scripts/prod-precheck.ts`, lógica en `scripts/lib/prod-precheck-core.ts`, una tx READ ONLY, tabla
-  PASS/WARN/FAIL sin secretos, exit 1 si hay FAIL). Desde CF el `--pre` **exige M12..M19 presentes** (aplicadas con su
+  PASS/WARN/FAIL sin secretos, exit 1 si hay FAIL). Desde CF3 el `--pre` **exige M12..M21 presentes** (aplicadas con su
   checksum y con sus objetos: `pre.state.Mxx` + `pre.Mxx.present`; una pendiente o con otro checksum es FAIL), que las
-  pendientes sean solo M20 y/o M21 (`pre.migrations.pending`) y corre `pre.M20.absent`, `pre.M20.crossService`,
-  `pre.M21.absent`, `pre.M21.bookingTx` y `pre.M21.bookingCount` (las de una ya aplicada se saltean); además los locks
-  y tx largas sobre Tenant/Practitioner (las que alteran M20 y M21), la Data API, los buckets, `pg_dump` local vs.
-  server y el rol. El `--post` re-verifica M12..M21 objeto por objeto, los md5 de las 6 funciones y el checksum de cada
-  migración contra el sha256 del repo. `--booking-relfilenode` es opcional (M21 crea 2 índices en Booking, que no
-  reescriben la tabla).
+  pendientes sean solo M22, M23 y/o M24 (`pre.migrations.pending`) y corre `pre.M22.absent`, `pre.M23.absent` y
+  `pre.M24.absent` (cada uno se saltea si su migración ya está aplicada) y `pre.M22.reservedSlugs` (siempre); además los
+  locks y tx largas sobre Tenant/Practitioner/PractitionerService/Membership/UserProfile (las que alteran M22, M23 y
+  M24), la Data API, los buckets, `pg_dump` local vs. server y el rol. El `--post` re-verifica M12..M24 objeto por
+  objeto, los md5 de las 7 funciones y el checksum de cada migración contra el sha256 del repo. `--booking-relfilenode`
+  es opcional (ni M22, ni M23, ni M24 tocan Booking). Los prechecks propios de M20 (`crossService`) y de M21
+  (`bookingTx`, `bookingCount`) se borraron con sus migraciones ya aplicadas.
 - **`pg_dump` ≥ el server:** el del PATH de Martin es 14.18; antes del `--pre` y del backup,
   `export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"` (el `--pre` marca FAIL `pre.pgdump.version` si no).
 - **Histórico:** el «go-live con reset» del 07-oct (nunca se hizo), las secciones de M3a/M4/M5 que dependían de él, el
@@ -75,8 +78,11 @@ El deploy sale con `WHATSAPP_MODE`, `SAAS_BILLING_MODE`, `MP_CONNECT_MODE` y `DI
 | `20261024120000_whatsapp_messaging` (**M15**) | MIG (X0, las tres en un commit) | **commiteada (`b019d7c`, sin push), aplicada solo en el Docker local (22-oct)**. sha256 de `migration.sql` = `e8637727af84b64b38c303be5dc0d762006baa402fdcd989bace81674471cf0d`. Aditiva, sin backfill (WA-D17), `lock_timeout` 5 s; los 2 `ADD VALUE` de `NotificationKind` van **fuera** de la tx. Objetos: 10 enums `WhatsApp*`; `WhatsAppAccount`/`Template`/`Message`/`Inbound` (TENANT_READONLY) y `WhatsAppCredential` (SERVICE_ONLY); 5 parciales; FKs compuestas; 6 columnas `wa*` en `Patient` y 3 de respuesta en `Booking` (NULL sin DEFAULT) con sus CHECK. Hallazgo A de MIG: `seriesCount IS NOT NULL` explícito. En Prisma `WhatsAppAccount.credentials` es 1:n; la base garantiza 1:1 (`WhatsAppCredential_accountId_key`). Drift aceptado. ADR-029. Orden: «M15 en prod» |
 | `20261025120000_saas_mp_subscriptions` (**M16**) | MIG (X0, las tres en un commit) | **commiteada (`b019d7c`, sin push), aplicada solo en el Docker local (22-oct)**. sha256 de `migration.sql` = `b235454f0ceceef95394d752f1fe879ec2ec0baf6b7f052ae3e253e47f207798`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill (lo hace `scripts/saas-reanchor.ts` después del deploy). Objetos: 2 enums; 19 columnas + 3 CHECK + 2 parciales en `SaasSubscription` (`anchorDay` default 4, `autoDebitAllowed` default true), 4 columnas + 2 CHECK en `SaasCharge`, 3 columnas + CHECK + FK compuesta en `SaasPayment`, `SaasPayment_source_mp_check` recreado más laxo; tabla `SaasAdjustment` (TENANT_READONLY, solo inserción) con `saas_adjustment_guard()` (md5 `fd8790f4959e9f56ea743dead6bb6d2b`) y 2 triggers. Hallazgo A de MIG: `IS NOT NULL` explícito en breakdown/proration. Drift aceptado. ADR-027. Orden: «M16 en prod» |
 | `20261027120000_support_tickets` (**M19**) | TK-M (PV, ola Q0, sola) | **commiteada en `f9099b1` (PV Q0) y aplicada solo en el Docker local (27-oct), sin push**. sha256 de `migration.sql` = `7ac440677f5f80098b6245f1de70b556cc7ea9d4aeeb923b2c6eb9825803f7a2`. Aditiva, una tx, `lock_timeout` 5 s, con backfill de `source` en la misma tx (sin tocar `updatedAt`: no hay trigger). Objetos: enum `SupportTicketSource` (10 valores); `SupportThread.source` / `platformTakenAt` / `platformTakenById` (NULL sin DEFAULT) + CHECKs `SupportThread_source_check` (origen atado al kind; NULL tolerado) y `SupportThread_taken_check` (tomado ⇔ con superadmin); tabla `SupportTicketNote` (notas internas de Plataforma, **SERVICE_ONLY**: ENABLE + FORCE, 0 policies; FK RESTRICT al hilo, CHECK de body 1..2000, índice `(threadId, createdAt)`). «En curso» = OPEN + `platformTakenAt`, sin `ALTER TYPE`. Drift aceptado: CHECKs, ENABLE/FORCE. Verificada objeto por objeto (consulta al catálogo + `tests/integration/m19-support-tickets.test.ts`, 2 roles); `migrate status` al día (47); `guard:isolation` OK (SERVICE_ONLY 10). Orden: «M19 en prod» |
-| `20261030120000_cf_agenda_rules` (**M20**) | CF-M (CF, ola CF-0, sola) | **commiteada (`476bdf5`), aplicada solo en el Docker local (30-oct), sin push**. sha256 de `migration.sql` = `e5d84eec9eba6f11ed6181fc0e18e34b5d220a637808906d445381207ea5b032`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill. Objetos: `Tenant.agendaSlotStepMin` / `publicSlotStepMin` / `publicMinLeadMinutes` y `Practitioner.agendaSlotStepMin` / `publicSlotStepMin` (INTEGER NULL sin DEFAULT = hereda), `Practitioner.allowParallelServices` (BOOLEAN NOT NULL DEFAULT false, solo catálogo: `atthasmissing` t, sin reescritura) + 5 CHECK con `IS NULL OR …` (`{Tenant,Practitioner}_agendaSlotStepMin_check`, `{Tenant,Practitioner}_publicSlotStepMin_check` 15/30/45/60, `Tenant_publicMinLeadMinutes_check` 0..80 640). Drift aceptado: los CHECK. Verificada objeto por objeto (catálogo + `tests/integration/m20-cf-agenda-rules.test.ts`, 2 roles); `migrate status` al día (48); `guard:isolation` OK (sin tablas nuevas). Orden: «M20 en prod» |
-| `20261102120000_cf2_profesional_caja` (**M21**) | MIG (CF2, ola W0, sola) | **sin commit (la corrida CF2 no commitea), aplicada solo en el Docker local (02-nov), sin push**. sha256 de `migration.sql` = `48aee329bf97404613044f0ce239e1186ca88f21eae16943448091c8130e588b` (SQL literal del Anexo D del plan §29). Aditiva, una tx, `lock_timeout` 5 s, sin backfill. Objetos: 7 columnas en `Practitioner` (`publicMinLeadMinutes` INTEGER, `contactWhatsapp` TEXT, `contactConsentAt` TIMESTAMP(3), `contactConsentVersion` TEXT: NULL sin DEFAULT; `showContactInLeadWindow`, `notifyBookingEmail`, `notifyBookingPush` BOOLEAN NOT NULL DEFAULT false) + 4 CHECK; tabla `PushSubscription` (SERVICE_ONLY: ENABLE + FORCE, 0 policies; FK a `UserProfile` CASCADE; `endpoint` único; 4 CHECK); tabla `PractitionerRevenueShare` (RLS de tenant, policy `PractitionerRevenueShare_tenant_isolation`; FKs compuestas `giver/receiver_tenant_fkey` a `Practitioner(id, tenantId)` RESTRICT; 4 CHECK; único parcial `PractitionerRevenueShare_giver_open_key`; trigger `PractitionerRevenueShare_guard` → `practitioner_revenue_share_guard()` md5 `dceb9da5179967d39f6b6b0132e96f7a`); 2 índices parciales en `Booking` (`Booking_tenantId_copagoPaidAt_idx`, `Booking_tenantId_insurerPaidAt_idx`). Drift aceptado: CHECKs, parciales, trigger y RLS. Verificada objeto por objeto (catálogo + `tests/integration/m21-cf2.test.ts` `[CF2-MIG1..9]`, 2 roles; bloque «CF2 M21» de `rls-isolation.test.ts`; `--post` del precheck en verde); `migrate status` al día (49); `guard:isolation` OK (`PushSubscription` en SERVICE_ONLY). Orden: «M21 en prod» |
+| `20261030120000_cf_agenda_rules` (**M20**) | CF-M (CF, ola CF-0, sola) | **commiteada (`476bdf5`), ✅ en prod (02-nov, push de CF2)**. sha256 de `migration.sql` = `e5d84eec9eba6f11ed6181fc0e18e34b5d220a637808906d445381207ea5b032`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill. Objetos: `Tenant.agendaSlotStepMin` / `publicSlotStepMin` / `publicMinLeadMinutes` y `Practitioner.agendaSlotStepMin` / `publicSlotStepMin` (INTEGER NULL sin DEFAULT = hereda), `Practitioner.allowParallelServices` (BOOLEAN NOT NULL DEFAULT false, solo catálogo: `atthasmissing` t, sin reescritura) + 5 CHECK con `IS NULL OR …` (`{Tenant,Practitioner}_agendaSlotStepMin_check`, `{Tenant,Practitioner}_publicSlotStepMin_check` 15/30/45/60, `Tenant_publicMinLeadMinutes_check` 0..80 640). Drift aceptado: los CHECK. Verificada objeto por objeto (catálogo + `tests/integration/m20-cf-agenda-rules.test.ts`, 2 roles); `migrate status` al día (48); `guard:isolation` OK (sin tablas nuevas). Orden: «M20 en prod» |
+| `20261102120000_cf2_profesional_caja` (**M21**) | MIG (CF2, ola W0, sola) | **commiteada (`c288e5d`), ✅ en prod (02-nov)**. sha256 de `migration.sql` = `48aee329bf97404613044f0ce239e1186ca88f21eae16943448091c8130e588b` (SQL literal del Anexo D del plan §29). Aditiva, una tx, `lock_timeout` 5 s, sin backfill. Objetos: 7 columnas en `Practitioner` (`publicMinLeadMinutes` INTEGER, `contactWhatsapp` TEXT, `contactConsentAt` TIMESTAMP(3), `contactConsentVersion` TEXT: NULL sin DEFAULT; `showContactInLeadWindow`, `notifyBookingEmail`, `notifyBookingPush` BOOLEAN NOT NULL DEFAULT false) + 4 CHECK; tabla `PushSubscription` (SERVICE_ONLY: ENABLE + FORCE, 0 policies; FK a `UserProfile` CASCADE; `endpoint` único; 4 CHECK); tabla `PractitionerRevenueShare` (RLS de tenant, policy `PractitionerRevenueShare_tenant_isolation`; FKs compuestas `giver/receiver_tenant_fkey` a `Practitioner(id, tenantId)` RESTRICT; 4 CHECK; único parcial `PractitionerRevenueShare_giver_open_key`; trigger `PractitionerRevenueShare_guard` → `practitioner_revenue_share_guard()` md5 `dceb9da5179967d39f6b6b0132e96f7a`); 2 índices parciales en `Booking` (`Booking_tenantId_copagoPaidAt_idx`, `Booking_tenantId_insurerPaidAt_idx`). Drift aceptado: CHECKs, parciales, trigger y RLS. Verificada objeto por objeto (catálogo + `tests/integration/m21-cf2.test.ts` `[CF2-MIG1..9]`, 2 roles; bloque «CF2 M21» de `rls-isolation.test.ts`; `--post` del precheck en verde); `migrate status` al día (49); `guard:isolation` OK (`PushSubscription` en SERVICE_ONLY). Orden: «M21 en prod» |
+| `20261104120000_cf3_precios_sede` (**M22**) | MIG (CF3, ola W0, sola) | **commiteada por el agente a pedido de Martin (05-nov, CF3 + CF3b juntas), aplicada solo en el Docker local (04-nov), sin push**. sha256 de `migration.sql` = `82ac0f6fdc7d8998264720f1b0347b4a69c77a5dcb4c995032f2bd557fb2c238` (SQL literal del plan §30.3). Aditiva, una tx, `lock_timeout` 5 s, sin backfill, no toca Booking. Objetos: `PractitionerService.priceCents` INTEGER NULL (precio por profesional; NULL = hereda), `Practitioner.showPublicPrice` BOOLEAN NOT NULL DEFAULT true, `Practitioner.showContactForInsured` BOOLEAN NOT NULL DEFAULT false, `Tenant.siteEnabled` BOOLEAN NOT NULL DEFAULT false, `Tenant.siteEnabledAt` TIMESTAMP(3) NULL, `Tenant.siteTagline` TEXT NULL + 3 CHECK (`PractitionerService_priceCents_check` 0..100 000 000, `Practitioner_insuredContact_check` flag ⇒ número + consentimiento + versión, `Tenant_siteTagline_check` 1..120). Drift aceptado: los CHECK. Verificada objeto por objeto (catálogo + `tests/integration/m22-cf3.test.ts` `[CF3-MIG1..5]`, 2 roles; `--post` del precheck en verde); `migrate status` al día (50); sin tablas nuevas (`guard:isolation` no cambia). Orden: «M22 en prod» |
+| `20261105120000_cf3_co_titular` (**M23**) | MIG2 (CF3b, sola) | **commiteada por el agente a pedido de Martin (05-nov, CF3 + CF3b juntas), aplicada solo en el Docker local (05-nov), sin push**. sha256 de `migration.sql` = `35ddd0dc4e658a72bdf1a4f617f93f367e492edde6ce6067e9e765eb2c41efa6`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill, no toca Booking; va con M22 en el mismo deploy. Objetos: `Membership.grantCoOwner` BOOLEAN NOT NULL DEFAULT false + CHECK `Membership_coOwner_role_check` (solo PRACTITIONER); `UserProfile.licenseKind` / `licenseNumber` / `licenseJurisdiction` TEXT NULL y `licenseUpdatedAt` TIMESTAMP(3) NULL + 3 CHECK (`UserProfile_licenseNumber_check`, `UserProfile_licenseJurisdiction_check`, `UserProfile_license_check`) + función `user_profile_license_stamp()` (md5 `112d2ddbe23470c7762896c6987f721f`) y trigger `UserProfile_license_stamp`. Drift aceptado: CHECKs, función y trigger. Verificada objeto por objeto (catálogo + `tests/integration/m23-cf3.test.ts` `[CF3-MIG2-1..5]`, 2 roles; `--post` del precheck en verde); `migrate status` al día (51); sin tablas nuevas (`guard:isolation` no cambia). Orden: «M23 en prod» |
+| `20261105130000_cf3_practitioner_photo` (**M24**) | MIG3 (CF3b, sola) | **commiteada por el agente a pedido de Martin (05-nov, CF3 + CF3b juntas), aplicada solo en el Docker local (05-nov), sin push**. sha256 de `migration.sql` = `cbb3d8383ff96e0d1afdf8c957aa3bded28fc8ba2cfb0d11f73b7fbb6ffd0e30`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill, sin trigger, no toca Booking; va con M22 y M23 en el mismo deploy. Objetos: `UserProfile.photoStorageKey` TEXT NULL y `UserProfile.photoUpdatedAt` TIMESTAMP(3) NULL (foto de la PERSONA en el bucket privado `practice-assets`, canal service) + 2 CHECK (`UserProfile_photoStorageKey_check`: clave bajo `users/<id de la fila>/`, ≤ 200, segmentos `[A-Za-z0-9._-]` sin «.» inicial; `UserProfile_photo_check`: las dos o ninguna); `Practitioner.showPhotoPublic` BOOLEAN NOT NULL DEFAULT false (opt-in por consultorio: turnero y sede). Drift aceptado: los 2 CHECK. Verificada objeto por objeto (catálogo con psql + `tests/integration/m24-cf3.test.ts` `[CF3-MIG3-1..5]`, 2 roles; `--post` del precheck en verde, con la definición exacta de los CHECK); `migrate status` al día (52); sin tablas nuevas (`guard:isolation` no cambia). Orden: «M24 en prod» |
 
 **M6 en prod (IAM-1).** Prod conserva sus datos (decisiones del 14-oct: sin reset y sin staging), así que M6 se aplica
 sobre la base viva:
@@ -1042,6 +1048,183 @@ tx de más de 5 s encima, el `lock_timeout` corta con P3009 → `migrate resolve
    inocuos para el código viejo). Sacar M21 = migración nueva con DROP del trigger y su función, las 2 tablas, los
    índices de Booking, los CHECK y las columnas (backup del paso 2).
 
+**M22 en prod (MIG, CF3 · precio por profesional y sede digital, §30.3).** ⚠️ **Migración nueva**
+(`20261104120000_cf3_precios_sede`, tanda CF3, ola W0, sola). sha256 de `migration.sql` =
+`82ac0f6fdc7d8998264720f1b0347b4a69c77a5dcb4c995032f2bd557fb2c238`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill,
+**no toca Booking**. Va **antes** del push. **Si se aplica antes del código (o el push se demora días): no pasa nada.**
+El código de prod no lee ni escribe ninguna columna nueva; sus INSERT de `Practitioner`, `PractitionerService` y
+`Tenant` toman los DEFAULT (probado en `[CF3-MIG5]`, owner y `kinesoft_app`), y los defaults son la conducta de hoy:
+precio heredado (NULL), precio visible (true), sin contacto para obra social (false), sede apagada (false).
+Objetos:
+- `PractitionerService.priceCents` INTEGER NULL (precio de ese profesional para ese servicio, en centavos; NULL =
+  hereda, escalón nuevo de `lib/copago.ts`). CHECK `PractitionerService_priceCents_check` (NULL o 0..100 000 000).
+- `Practitioner.showPublicPrice` BOOLEAN NOT NULL DEFAULT **true** y `Practitioner.showContactForInsured` BOOLEAN NOT
+  NULL DEFAULT false. CHECK `Practitioner_insuredContact_check`: con el flag prendido exige `contactWhatsapp`,
+  `contactConsentAt` y `contactConsentVersion` (los de M21; molde de `Practitioner_leadContact_check`).
+- `Tenant.siteEnabled` BOOLEAN NOT NULL DEFAULT false, `Tenant.siteEnabledAt` TIMESTAMP(3) NULL y `Tenant.siteTagline`
+  TEXT NULL. CHECK `Tenant_siteTagline_check` (NULL o `char_length` 1..120). La descripción larga reusa
+  `publicDescription` (≤ 800, M11).
+Drift aceptado: los 3 CHECK (si `migrate dev` los propone borrar, no se acepta).
+**Locks:** ACCESS EXCLUSIVE breve sobre `PractitionerService`, `Practitioner` y `Tenant` (ADD COLUMN NULL o con DEFAULT
+constante = solo catálogo, sin reescritura; los ADD CONSTRAINT CHECK validan con un barrido, con pocas filas ms). Las
+tres se leen en cada request de agenda y turnero: una tx de más de 5 s encima hace caer el deploy por `lock_timeout`
+(P3009 → `migrate resolve --rolled-back 20261104120000_cf3_precios_sede` y reintentar, §2.4).
+**Orden, sin saltear:** `db:prod:precheck -- --pre` → `db:prod:backup` → `db:prod:deploy` → `db:prod:precheck --
+--post` → push. Con `KINESOFT_CONFIRM_PROD=<ref>` delante de los dos precheck y el `pg_dump` ≥ 17 en el PATH
+(`export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"`).
+1. **Precheck** (`--pre`, solo lectura). Esperado: `pre.migrations.pending` PASS «3 pendientes: M22 → M23 → M24» (M23
+   y M24 van en el mismo deploy, ver «M23 en prod» y «M24 en prod»);
+   `pre.state.M12` … `pre.state.M21` y `pre.Mxx.present` PASS (M20 y M21 ahora se exigen aplicadas); `pre.state.M22`,
+   `pre.state.M23` y `pre.state.M24` PASS «pendiente»; `pre.M22.absent`, `pre.M23.absent` y `pre.M24.absent` PASS; **`pre.M22.reservedSlugs` PASS** (si da **FAIL**, ese consultorio o alias
+   tiene un slug que el código de CF3 reserva —`caja`, `cobros`, `planes`, `sala`, `pagar`, `profesionales`,
+   `consultorios`, `privacidad`, `terminos`, `contacto`, `mantenimiento`, `plataforma-mfa`, `icons`, `apple-icon`,
+   `opengraph-image`, `icon`, `favicon`, `manifest`, `robots`, `sitemap`, `offline` y, desde CF3b, `sede`— y dejaría de
+   andar: renombralo antes del push); `pre.activity.*` PASS; `pre.repo.checksums` PASS. A mano, lo mismo:
+   ```sql
+   SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'
+     AND ((table_name = 'PractitionerService' AND column_name = 'priceCents')
+       OR (table_name = 'Practitioner' AND column_name IN ('showPublicPrice','showContactForInsured'))
+       OR (table_name = 'Tenant' AND column_name IN ('siteEnabled','siteEnabledAt','siteTagline')));   -- 0 filas
+   SELECT 'Tenant' AS src, slug FROM "Tenant" WHERE lower(slug) = ANY(ARRAY['caja','cobros','planes','sala','pagar',
+     'profesionales','consultorios','privacidad','terminos','contacto','mantenimiento','plataforma-mfa','icons',
+     'apple-icon','opengraph-image','icon','favicon','manifest','robots','sitemap','offline','sede'])
+   UNION ALL
+   SELECT 'TenantSlugAlias', slug FROM "TenantSlugAlias" WHERE lower(slug) = ANY(ARRAY['caja','cobros','planes','sala',
+     'pagar','profesionales','consultorios','privacidad','terminos','contacto','mantenimiento','plataforma-mfa','icons',
+     'apple-icon','opengraph-image','icon','favicon','manifest','robots','sitemap','offline','sede']);   -- 0 filas
+   ```
+2. **Backup:** `npm run db:prod:backup` (con el `pg_dump` ≥ 17 en el PATH).
+3. **Deploy de las migraciones:** `npm run db:prod:deploy` (aplica M22, M23 y M24, en ese orden) →
+   `npm run db:prod:status` = «Database schema is up to date!» (52).
+4. **Postcheck** (`--post`): PASS en `post.migrate.status`, `post.migrate.checksums` (M12..M24), los `post.M23.*` de
+   «M23 en prod», los `post.M24.*` de «M24 en prod», `post.M22.objects`,
+   `post.M22.columns`, `post.M22.checks` (3) y `post.M22.optIn` («0 precios propios, 0 con precio oculto, 0 con
+   contacto OS; 0 sedes encendidas»), más el resto de M12..M21 en verde. A mano:
+   ```sql
+   SELECT table_name, column_name, data_type, is_nullable, column_default FROM information_schema.columns
+    WHERE table_schema = 'public' AND column_name IN ('priceCents','showPublicPrice','showContactForInsured',
+      'siteEnabled','siteEnabledAt','siteTagline') AND table_name IN ('PractitionerService','Practitioner','Tenant');
+   -- 6 filas: priceCents integer YES sin default; showPublicPrice boolean NO true; showContactForInsured y
+   -- siteEnabled boolean NO false; siteEnabledAt timestamp YES; siteTagline text YES
+   SELECT conname, convalidated FROM pg_constraint WHERE conname IN ('PractitionerService_priceCents_check',
+     'Practitioner_insuredContact_check','Tenant_siteTagline_check');                              -- 3 filas, todas t
+   SELECT checksum FROM _prisma_migrations WHERE migration_name = '20261104120000_cf3_precios_sede';  -- el sha256 de arriba
+   ```
+5. **Push** (Martin). Después: cada profesional de TMP carga su precio y sus servicios en «Mi agenda» (hasta entonces
+   todo cobra igual que hoy), el Titular prende Configuración → «Sitio web» (y sube el isotipo como logo en General);
+   Martin asigna la marca en Plataforma → TMP → Ciclo de vida → «TMP (de marca)» (CF3b; sin eso la sede y el turnero
+   siguen en celeste). Después, QA «CF3» y «CF3b» de [QA.md](QA.md).
+6. Rollback: revertir el código sin tocar M22 (columnas NULL o con DEFAULT = conducta de hoy; nadie las lee en el
+   código viejo). Sacar M22 = migración nueva con DROP de los 3 CHECK y las 6 columnas (backup del paso 2; se pierden los
+   precios por profesional y la configuración de la sede cargados desde el push).
+
+**M23 en prod (MIG2, CF3b · co-titular y matrícula de la persona, decisión de Martin del 05-nov).** ⚠️ **Migración
+nueva** (`20261105120000_cf3_co_titular`, sola). sha256 de `migration.sql` =
+`35ddd0dc4e658a72bdf1a4f617f93f367e492edde6ce6067e9e765eb2c41efa6`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill,
+**no toca Booking**. **Va con M22 y M24 en el mismo `db:prod:deploy`** (los pasos 1-6 de «M22 en prod» son los de las
+tres; acá, lo propio de M23). **Si se aplica antes del código: no pasa nada.** El código de prod no lee ni escribe ninguna columna
+nueva; sus INSERT de `Membership` y `UserProfile` toman los defaults y sus UPDATE de `UserProfile` (login, nombre, 2FA)
+no nombran las de matrícula, así que el trigger no se dispara (probado en `[CF3-MIG2-5]`, owner y `kinesoft_app`).
+Objetos:
+- `Membership.grantCoOwner` BOOLEAN NOT NULL DEFAULT false («Co-titular»: lo del Titular salvo el rol/permisos/cuenta del
+  principal, transferir, dar o quitar co-titular y la suscripción al SaaS). CHECK `Membership_coOwner_role_check`: solo
+  con `role = 'PRACTITIONER'`. Cambiarle el rol a un co-titular (incluida la transferencia: pasa a OWNER) exige
+  `grantCoOwner = false` en la misma escritura; si no, 23514.
+- `UserProfile.licenseKind` (MN | MP), `licenseNumber`, `licenseJurisdiction` (las 24 provincias, solo MP) TEXT NULL y
+  `licenseUpdatedAt` TIMESTAMP(3) NULL: matrícula de la PERSONA como dato de seguridad (no se publica). CHECKs
+  `UserProfile_licenseNumber_check` (1..30, letra o dígito al principio y al final; en el medio también espacio `.` `/`
+  `-`), `UserProfile_licenseJurisdiction_check` (las 24) y `UserProfile_license_check` (los tres NULL, o MN + número sin
+  provincia, o MP + número + provincia; con número exige fecha). La fecha la pone la base: función
+  `user_profile_license_stamp()` (INVOKER, `search_path` fijo; md5 `112d2ddbe23470c7762896c6987f721f`) y trigger
+  `UserProfile_license_stamp` BEFORE INSERT OR UPDATE OF las 4 columnas.
+Drift aceptado: los 4 CHECK, la función y el trigger (si `migrate dev` los propone borrar, no se acepta).
+**Locks:** ACCESS EXCLUSIVE breve sobre `Membership` y `UserProfile` (ADD COLUMN solo catálogo; los CHECK validan con un
+barrido de pocas filas). Las dos se leen en **cada request** (la foto de acceso): una tx de más de 5 s encima hace caer el
+deploy por `lock_timeout` (P3009 → `migrate resolve --rolled-back 20261105120000_cf3_co_titular` y reintentar, §2.4; M22
+ya queda aplicada, el reintento aplica M23 y M24). `pre.activity.locks` ya mira las cinco tablas de M22, M23 y M24.
+1. **Precheck** (el `--pre` de «M22 en prod»): además, `pre.state.M23` PASS «pendiente» y `pre.M23.absent` PASS. Sin
+   precheck de datos: los CHECK son sobre columnas nuevas. A mano:
+   ```sql
+   SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'
+     AND ((table_name = 'Membership' AND column_name = 'grantCoOwner')
+       OR (table_name = 'UserProfile' AND column_name IN ('licenseKind','licenseNumber','licenseJurisdiction','licenseUpdatedAt')));
+   -- 0 filas
+   SELECT proname FROM pg_proc WHERE proname = 'user_profile_license_stamp';                          -- 0 filas
+   ```
+2. **Backup y deploy:** los de «M22 en prod» (un solo `db:prod:backup` y un solo `db:prod:deploy`).
+3. **Postcheck** (`--post`): PASS en `post.M23.objects`, `post.M23.columns`, `post.M23.checks` (4), `post.M23.trigger`
+   (trigger + md5 + INVOKER) y `post.M23.optIn` («0 co-titulares; … 0 con matrícula»). A mano:
+   ```sql
+   SELECT table_name, column_name, data_type, is_nullable, column_default FROM information_schema.columns
+    WHERE table_schema = 'public' AND ((table_name = 'Membership' AND column_name = 'grantCoOwner')
+      OR (table_name = 'UserProfile' AND column_name IN ('licenseKind','licenseNumber','licenseJurisdiction','licenseUpdatedAt')));
+   -- 5 filas: grantCoOwner boolean NO false; las 3 de texto text YES; licenseUpdatedAt timestamp YES (sin default)
+   SELECT conname, convalidated FROM pg_constraint WHERE conname IN ('Membership_coOwner_role_check',
+     'UserProfile_licenseNumber_check','UserProfile_licenseJurisdiction_check','UserProfile_license_check');  -- 4 filas, t
+   SELECT md5(prosrc) FROM pg_proc WHERE proname = 'user_profile_license_stamp';      -- 112d2ddbe23470c7762896c6987f721f
+   SELECT tgname FROM pg_trigger WHERE tgrelid = '"UserProfile"'::regclass AND NOT tgisinternal;  -- UserProfile_license_stamp
+   SELECT checksum FROM _prisma_migrations WHERE migration_name = '20261105120000_cf3_co_titular';  -- el sha256 de arriba
+   ```
+4. **Push** (Martin). Después: el Titular principal nombra co-titular desde Configuración → Usuarios (switch
+   «Co-titular», pide 2FA) y cada persona carga su matrícula, si quiere, en «Mi agenda» → «Matrícula».
+5. Rollback: revertir el código sin tocar M23 (columnas con DEFAULT false / NULL; nadie las lee en el código viejo y el
+   trigger no se dispara). Sacar M23 = migración nueva con DROP del trigger, la función, los 4 CHECK y las 5 columnas
+   (backup del paso 2; se pierden los co-titulares y las matrículas cargados desde el push).
+
+**M24 en prod (MIG3, CF3b · foto de la persona, pedido de Martin del 05-nov).** ⚠️ **Migración nueva**
+(`20261105130000_cf3_practitioner_photo`, sola). sha256 de `migration.sql` =
+`cbb3d8383ff96e0d1afdf8c957aa3bded28fc8ba2cfb0d11f73b7fbb6ffd0e30`. Aditiva, una tx, `lock_timeout` 5 s, sin backfill, sin trigger,
+**no toca Booking**. **Va con M22 y M23 en el mismo `db:prod:deploy`** (los pasos 1-6 de «M22 en prod» son los de las
+tres; acá, lo propio de M24). **Si se aplica antes del código: no pasa nada.** El código de prod no lee ni escribe
+ninguna columna nueva; sus INSERT de `UserProfile` y `Practitioner` toman los defaults y sus UPDATE (login con OAuth que
+refresca `avatarUrl`, nombre, 2FA, Configuración) no las nombran (probado en `[CF3-MIG3-5]`, owner y `kinesoft_app`).
+Objetos:
+- `UserProfile.photoStorageKey` TEXT NULL y `UserProfile.photoUpdatedAt` TIMESTAMP(3) NULL: foto que sube la PERSONA
+  (una para todos sus consultorios; no es `avatarUrl`, que viene de Google/Facebook y el login pisa). Objeto del bucket
+  privado `practice-assets` (1 MB, png/jpeg; ya existe), por el canal service. CHECK `UserProfile_photoStorageKey_check`:
+  la clave empieza con `users/<id de esa fila>/` (`starts_with`, no LIKE), mide ≤ 200 y sus segmentos son
+  `[A-Za-z0-9._-]` sin «.» inicial (ni vacíos, ni `.`/`..`, ni barra final). Es lo que impide que una fila (UserProfile
+  no tiene RLS) apunte a la firma o al logo de un consultorio, o a la foto de otro, y el turnero o la sede lo publiquen.
+  CHECK `UserProfile_photo_check`: clave y fecha, las dos o ninguna.
+- `Practitioner.showPhotoPublic` BOOLEAN NOT NULL DEFAULT false: por consultorio, si la foto sale en el turnero y la sede
+  de ese consultorio (opt-in: imagen de una persona en una página pública). Sin CHECK contra la foto (otra tabla).
+Drift aceptado: los 2 CHECK (si `migrate dev` los propone borrar, no se acepta).
+**Locks:** ACCESS EXCLUSIVE breve sobre `UserProfile` y `Practitioner` (ADD COLUMN solo catálogo; los CHECK validan con un
+barrido de pocas filas). Las dos se leen en **cada request**: una tx de más de 5 s encima hace caer el deploy por
+`lock_timeout` (P3009 → `migrate resolve --rolled-back 20261105130000_cf3_practitioner_photo` y reintentar, §2.4; M22 y
+M23 ya quedan aplicadas, el reintento aplica solo M24). `pre.activity.locks` ya mira las dos tablas.
+1. **Precheck** (el `--pre` de «M22 en prod»): además, `pre.state.M24` PASS «pendiente» y `pre.M24.absent` PASS. Sin
+   precheck de datos: los CHECK son sobre columnas nuevas. A mano:
+   ```sql
+   SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'
+     AND ((table_name = 'UserProfile' AND column_name IN ('photoStorageKey','photoUpdatedAt'))
+       OR (table_name = 'Practitioner' AND column_name = 'showPhotoPublic'));                       -- 0 filas
+   SELECT conname FROM pg_constraint WHERE conname IN ('UserProfile_photoStorageKey_check','UserProfile_photo_check');
+   -- 0 filas
+   ```
+2. **Backup y deploy:** los de «M22 en prod» (un solo `db:prod:backup` y un solo `db:prod:deploy`).
+3. **Postcheck** (`--post`): PASS en `post.M24.objects`, `post.M24.columns`, `post.M24.checks` (los 2, por nombre **y**
+   con la definición exacta del SQL) y `post.M24.optIn` («… 0 con foto; … 0 la publican»). ⚠️ `post.M24.checks` compara
+   el texto de `pg_get_constraintdef` contra el que dio el Postgres 16 del Docker; prod es 17 y puede reescribir la
+   expresión distinto. Un FAIL **solo** por «definición distinta» con los 2 CHECK presentes y `convalidated = t` es
+   probablemente falso: pegá la salida de la query de abajo y se compara a ojo antes de seguir. A mano:
+   ```sql
+   SELECT table_name, column_name, data_type, is_nullable, column_default FROM information_schema.columns
+    WHERE table_schema = 'public' AND ((table_name = 'UserProfile' AND column_name IN ('photoStorageKey','photoUpdatedAt'))
+      OR (table_name = 'Practitioner' AND column_name = 'showPhotoPublic'));
+   -- 3 filas: photoStorageKey text YES; photoUpdatedAt timestamp without time zone YES; showPhotoPublic boolean NO false
+   SELECT conname, convalidated, pg_get_constraintdef(oid) FROM pg_constraint
+    WHERE conname IN ('UserProfile_photoStorageKey_check','UserProfile_photo_check');                -- 2 filas, t
+   SELECT checksum FROM _prisma_migrations WHERE migration_name = '20261105130000_cf3_practitioner_photo';  -- el sha256 de arriba
+   ```
+4. **Push** (Martin). Después: cada persona sube su foto en «Mi agenda» → «Tu foto» y, si quiere, prende «Mostrar mi
+   foto en el turnero y en el sitio del consultorio» (por consultorio).
+   Nada en Supabase: el bucket `practice-assets` ya existe y los objetos van bajo `users/<id>/`, fuera de las carpetas de
+   los consultorios (`<tenantId>/…`).
+5. Rollback: revertir el código sin tocar M24 (columnas NULL / DEFAULT false; nadie las lee en el código viejo). Sacar
+   M24 = migración nueva con DROP de los 2 CHECK y las 3 columnas (backup del paso 2; se pierden las fotos cargadas y los
+   opt-in desde el push; los objetos de `users/` en el bucket quedan huérfanos y se borran a mano).
+
 **Deploy de BO** (código de `0d058bb`..`c60014f`, después de M7). Las variables nuevas nacen en su default seguro, así
 que el deploy no cambia el comportamiento de nadie salvo lo que se describe abajo.
 1. **Antes del deploy (solo lectura):**
@@ -1248,11 +1431,15 @@ de abajo (el `--pre` del precheck lo confirma contra `_prisma_migrations`):
 | 30 | `20261024120000_whatsapp_messaging` | M15: WhatsApp por consultorio (cuenta, credencial sellada, plantillas, cola de mensajes sin cuerpo, entrantes sin texto), consentimiento en `Patient`, respuesta del paciente en `Booking`, `NotificationKind` += 2 | MIG (T6) — **ver «M15 en prod»** · ✅ en prod (reset 29/30-oct) |
 | 31 | `20261025120000_saas_mp_subscriptions` | M16: suscripción con débito / MP / transferencia (`anchorDay` default 4, bajada y baja programadas, preapproval pendiente), desglose del cargo, `SaasAdjustment` solo inserción con guard, `SaasPayment_source_mp_check` más laxo | MIG (T6) — **ver «M16 en prod»** · ✅ en prod (reset 29/30-oct) |
 | 32 | `20261027120000_support_tickets` | M19: tickets de soporte en /plataforma: origen del ticket (`SupportThread.source`, enum `SupportTicketSource`, backfill TENANT → TENANT_SUPPORT / LEAD → LANDING), «Tomar» (`platformTakenAt/ById`), notas internas `SupportTicketNote` (SERVICE_ONLY) | TK-M (PV) — **ver «M19 en prod»** · ✅ en prod (reset 29/30-oct) |
-| 33 | `20261030120000_cf_agenda_rules` | M20: reglas de agenda del feedback del cliente: `Practitioner.allowParallelServices` (default false, sin backfill: otro servicio pisado bloquea), paso del selector del staff y del turnero por consultorio y por profesional (`agendaSlotStepMin` / `publicSlotStepMin`), anticipación del turnero por consultorio (`Tenant.publicMinLeadMinutes`); 5 CHECK | CF-M (CF) — **ver «M20 en prod»** · ⏳ pendiente en prod |
-| 34 | `20261102120000_cf2_profesional_caja` | M21: CF2 profesional y caja: anticipación y contacto del profesional en el turnero (`Practitioner.publicMinLeadMinutes`, `contactWhatsapp` + consentimiento + `showContactInLeadWindow`), avisos de turno online (`notifyBookingEmail/Push`), dispositivos de push web (`PushSubscription`, SERVICE_ONLY), reparto de % entre profesionales (`PractitionerRevenueShare` con trigger de solo cierre), 2 índices parciales de caja en `Booking` | MIG (CF2) — **ver «M21 en prod»** · ⏳ pendiente en prod |
+| 33 | `20261030120000_cf_agenda_rules` | M20: reglas de agenda del feedback del cliente: `Practitioner.allowParallelServices` (default false, sin backfill: otro servicio pisado bloquea), paso del selector del staff y del turnero por consultorio y por profesional (`agendaSlotStepMin` / `publicSlotStepMin`), anticipación del turnero por consultorio (`Tenant.publicMinLeadMinutes`); 5 CHECK | CF-M (CF) — **ver «M20 en prod»** · ✅ en prod (02-nov) |
+| 34 | `20261102120000_cf2_profesional_caja` | M21: CF2 profesional y caja: anticipación y contacto del profesional en el turnero (`Practitioner.publicMinLeadMinutes`, `contactWhatsapp` + consentimiento + `showContactInLeadWindow`), avisos de turno online (`notifyBookingEmail/Push`), dispositivos de push web (`PushSubscription`, SERVICE_ONLY), reparto de % entre profesionales (`PractitionerRevenueShare` con trigger de solo cierre), 2 índices parciales de caja en `Booking` | MIG (CF2) — **ver «M21 en prod»** · ✅ en prod (02-nov) |
+| 35 | `20261104120000_cf3_precios_sede` | M22: CF3 precio por profesional y sede digital: `PractitionerService.priceCents` (NULL = hereda), `Practitioner.showPublicPrice` (default true) y `showContactForInsured` (WhatsApp para pacientes con obra social, exige el consentimiento de M21), sede en `/<slug>` (`Tenant.siteEnabled` apagada, `siteEnabledAt`, `siteTagline` ≤ 120); 3 CHECK | MIG (CF3) — **ver «M22 en prod»** · ⏳ pendiente en prod |
+| 36 | `20261105120000_cf3_co_titular` | M23: CF3b co-titular (`Membership.grantCoOwner`, solo PRACTITIONER) y matrícula de la persona como dato de seguridad (`UserProfile.licenseKind/Number/Jurisdiction`, `licenseUpdatedAt` puesta por trigger); 4 CHECK, 1 función, 1 trigger | MIG2 (CF3b) — **ver «M23 en prod»** · ⏳ pendiente en prod (mismo deploy que M22) |
+| 37 | `20261105130000_cf3_practitioner_photo` | M24: CF3b foto de la persona (`UserProfile.photoStorageKey` + `photoUpdatedAt`, bucket `practice-assets` bajo `users/<id>/`) y publicarla en el turnero y la sede por consultorio (`Practitioner.showPhotoPublic`, default false); 2 CHECK | MIG3 (CF3b) — **ver «M24 en prod»** · ⏳ pendiente en prod (mismo deploy que M22 y M23) |
 
 **#1-#32 están aplicadas en prod** desde el reset del 29/30-oct (más las 15 de base de [DEPLOYMENT.md](DEPLOYMENT.md):
-47 en total); **#33 (M20) y #34 (M21) son las pendientes**, en ese orden. Local: 49 (`migrate status` al día).
+47 en total) y **#33 (M20) y #34 (M21)** desde el push de CF2 del 02-nov (49); **#35 (M22), #36 (M23) y #37 (M24) son
+las pendientes** (un solo deploy). Local: 52 (`migrate status` al día).
 
 ⚠️ La #7 además crea políticas RLS (`ENABLE`/`FORCE` + `SELECT` en las dos tablas nuevas).
 ⚠️ La #3 falla si ya existieran dos turnos activos del **mismo paciente en el mismo instante**

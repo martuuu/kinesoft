@@ -15,7 +15,7 @@
  *   • El audit lleva solo los últimos 4 dígitos.
  */
 import { normalizeArMobile, type ArPhoneRejectReason } from "@/lib/phone-e164";
-import { LEAD_CONTACT_CONSENT_VERSION } from "@/lib/public-lead-contact";
+import { LEAD_CONTACT_CONSENT_VERSION, consentCoversLeadContact } from "@/lib/public-lead-contact";
 
 export const SELF_SETTINGS_COPY = {
   notFound: "Profesional no encontrado.",
@@ -28,6 +28,13 @@ export const SELF_SETTINGS_COPY = {
   supportDenied: "Soporte no puede cambiar el contacto ni los avisos de un profesional.",
   hideForbidden: "Solo el propio profesional, el titular o el administrador pueden ocultar el contacto del profesional.",
   consentRequired: "Para mostrar tu número en el turnero tenés que aceptar el texto de consentimiento.",
+  /** CF3 (D-CF3-5): el switch de OS reusa el número de arriba; sin número no hay qué mostrar. */
+  // CF3 ZF2: la tarjeta de Mi agenda se llama «Si te piden un turno antes» (mi-agenda-logic.ts), no «Contacto en el turnero».
+  insuredNeedsPhone: "Cargá tu celular en «Si te piden un turno antes» para poder mostrarlo a pacientes con obra social.",
+  insuredConsentRequired:
+    "Para mostrar tu WhatsApp a pacientes con obra social tenés que aceptar el texto de consentimiento.",
+  insuredHideForbidden:
+    "Solo el propio profesional, el titular o el administrador pueden ocultar el WhatsApp para pacientes con obra social.",
 } as const;
 
 /** Copy del número propio (el de `lib/booking-share.ts` habla del teléfono del paciente «en su ficha»). */
@@ -39,12 +46,16 @@ export const LEAD_CONTACT_PHONE_COPY: Record<ArPhoneRejectReason, string> = {
   invalid: "Revisá el número: no parece un celular de Argentina.",
 };
 
-/** Las 4 columnas de M21 del contacto (`Practitioner`). */
+/**
+ * Las 4 columnas de M21 del contacto (`Practitioner`) + el switch de OS de M22 (CF3, D-CF3-5). Opcional a propósito:
+ * ausente = estado de CF2 (sin el switch), así los llamadores y tests de antes siguen igual.
+ */
 export type LeadContactState = {
   contactWhatsapp: string | null;
   showContactInLeadWindow: boolean;
   contactConsentAt: Date | null;
   contactConsentVersion: string | null;
+  showContactForInsured?: boolean;
 };
 
 export type LeadContactInput = { contactWhatsapp: string | null; show: boolean; acceptConsent?: boolean };
@@ -58,7 +69,8 @@ const sameState = (a: LeadContactState, b: LeadContactState) =>
   a.contactWhatsapp === b.contactWhatsapp &&
   a.showContactInLeadWindow === b.showContactInLeadWindow &&
   (a.contactConsentAt?.getTime() ?? null) === (b.contactConsentAt?.getTime() ?? null) &&
-  a.contactConsentVersion === b.contactConsentVersion;
+  a.contactConsentVersion === b.contactConsentVersion &&
+  (a.showContactForInsured ?? false) === (b.showContactForInsured ?? false);
 
 export function planLeadContactWrite(prev: LeadContactState, input: LeadContactInput, now: Date): LeadContactPlan {
   const raw = (input.contactWhatsapp ?? "").trim();
@@ -73,19 +85,24 @@ export function planLeadContactWrite(prev: LeadContactState, input: LeadContactI
 
   let next: LeadContactState = { ...prev, contactWhatsapp: e164, showContactInLeadWindow: input.show };
   let consented = false;
-  if (input.show) {
-    const stillValid =
-      prev.showContactInLeadWindow &&
-      prev.contactWhatsapp === e164 &&
-      prev.contactConsentAt != null &&
-      prev.contactConsentVersion === LEAD_CONTACT_CONSENT_VERSION;
-    if (!stillValid) {
-      if (input.acceptConsent !== true) {
-        return { ok: false, error: SELF_SETTINGS_COPY.consentRequired, field: "acceptConsent" };
-      }
-      next = { ...next, contactConsentAt: now, contactConsentVersion: LEAD_CONTACT_CONSENT_VERSION };
-      consented = true;
+  // CF3 (D-CF3-5): el switch de OS publica ESTE mismo número. Borrarlo apaga también ese switch (si no, el CHECK
+  // `Practitioner_insuredContact_check` de M22 rebota como 500), y cambiarlo con el switch prendido pide el
+  // consentimiento aunque la anticipación esté apagada: lo aceptado fue mostrar el número de antes.
+  const insuredOn = prev.showContactForInsured === true;
+  if (insuredOn && e164 === null) next = { ...next, showContactForInsured: false };
+  const insuredNumberChanged = insuredOn && e164 !== null && e164 !== prev.contactWhatsapp;
+  const leadStillValid =
+    prev.showContactInLeadWindow &&
+    prev.contactWhatsapp === e164 &&
+    prev.contactConsentAt != null &&
+    // CF3 (PR-P): el v1 sigue cubriendo la anticipación; solo el switch de OS exige el v2 (`hasCurrentContactConsent`).
+    consentCoversLeadContact(prev.contactConsentVersion);
+  if ((input.show && !leadStillValid) || insuredNumberChanged) {
+    if (input.acceptConsent !== true) {
+      return { ok: false, error: SELF_SETTINGS_COPY.consentRequired, field: "acceptConsent" };
     }
+    next = { ...next, contactConsentAt: now, contactConsentVersion: LEAD_CONTACT_CONSENT_VERSION };
+    consented = true;
   }
   if (sameState(prev, next)) return { ok: true, kind: "same" };
   return { ok: true, kind: "write", next, consented };
@@ -112,6 +129,67 @@ export function leadContactAuditPayload(
   return {
     from: { show: from.showContactInLeadWindow, phone: maskE164(from.contactWhatsapp) },
     to: { show: to.showContactInLeadWindow, phone: maskE164(to.contactWhatsapp) },
+    ...(consented && to.contactConsentVersion ? { consentVersion: to.contactConsentVersion } : {}),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CF3 (§30, D-CF3-5): WhatsApp del profesional para pacientes con obra social
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Las columnas que decide `setOwnInsuredContact` (el número y el sello son los del contacto de CF2). */
+export type InsuredContactState = LeadContactState & { showContactForInsured: boolean };
+
+export type InsuredContactPlan =
+  | { ok: true; kind: "same" }
+  | { ok: true; kind: "write"; next: InsuredContactState; consented: boolean }
+  | { ok: false; error: string; field: "contactWhatsapp" | "acceptConsent" };
+
+/** El sello sirve solo si es del texto VIGENTE (PR-P lo sube a v2 para cubrir los dos usos del número). */
+export function hasCurrentContactConsent(s: Pick<LeadContactState, "contactConsentAt" | "contactConsentVersion">): boolean {
+  return s.contactConsentAt != null && s.contactConsentVersion === LEAD_CONTACT_CONSENT_VERSION;
+}
+
+/**
+ * Prender exige el número ya cargado (celular AR válido: se re-normaliza por si quedó uno viejo fuera de forma) y el
+ * consentimiento vigente; si es viejo o no hay, `acceptConsent` lo sella de nuevo (fecha + versión vigente). Apagar
+ * conserva número y sello. Lo mismo que respalda el CHECK de M22, pero con copy en vez de un 500.
+ */
+export function planInsuredContactWrite(
+  prev: InsuredContactState,
+  input: { show: boolean; acceptConsent?: boolean },
+  now: Date
+): InsuredContactPlan {
+  if (!input.show) {
+    if (!prev.showContactForInsured) return { ok: true, kind: "same" };
+    return { ok: true, kind: "write", next: { ...prev, showContactForInsured: false }, consented: false };
+  }
+  const phone = prev.contactWhatsapp ? normalizeArMobile(prev.contactWhatsapp) : null;
+  if (!phone || !phone.ok) return { ok: false, error: SELF_SETTINGS_COPY.insuredNeedsPhone, field: "contactWhatsapp" };
+  if (hasCurrentContactConsent(prev)) {
+    if (prev.showContactForInsured) return { ok: true, kind: "same" };
+    return { ok: true, kind: "write", next: { ...prev, showContactForInsured: true }, consented: false };
+  }
+  if (input.acceptConsent !== true) {
+    return { ok: false, error: SELF_SETTINGS_COPY.insuredConsentRequired, field: "acceptConsent" };
+  }
+  return {
+    ok: true,
+    kind: "write",
+    next: { ...prev, showContactForInsured: true, contactConsentAt: now, contactConsentVersion: LEAD_CONTACT_CONSENT_VERSION },
+    consented: true,
+  };
+}
+
+export function insuredContactAuditPayload(
+  from: InsuredContactState,
+  to: InsuredContactState,
+  consented: boolean
+): { from: { show: boolean }; to: { show: boolean }; phone: string | null; consentVersion?: string } {
+  return {
+    from: { show: from.showContactForInsured },
+    to: { show: to.showContactForInsured },
+    phone: maskE164(to.contactWhatsapp),
     ...(consented && to.contactConsentVersion ? { consentVersion: to.contactConsentVersion } : {}),
   };
 }

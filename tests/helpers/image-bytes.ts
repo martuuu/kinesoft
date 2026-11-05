@@ -22,6 +22,20 @@ export function png(w: number, h: number): Uint8Array {
   new DataView(b.buffer).setUint32(20, h);
   return b;
 }
+/**
+ * CF3 ZF5: PNG ENTERO (firma + IHDR de `png()` + IDAT + IEND). Lo que se limpia con `stripImageMetadata` (foto y, desde
+ * ZF5, el logo) exige el IEND como cualquier PNG real; `png()` solo alcanza para la cabecera (`readImageInfo`).
+ */
+export function pngFile(w: number, h: number, extra: Uint8Array[] = []): Uint8Array {
+  const chunk = (type: string, data: Uint8Array) => {
+    const b = new Uint8Array(12 + data.length);
+    new DataView(b.buffer).setUint32(0, data.length);
+    b.set(enc(type), 4);
+    b.set(data, 8);
+    return b;
+  };
+  return cat(png(w, h), ...extra, chunk("IDAT", enc("pixeles")), chunk("IEND", new Uint8Array(0)));
+}
 /** JPEG con un APP0 y un SOF0 de `w`×`h`. */
 export function jpeg(w: number, h: number): Uint8Array {
   const app0 = cat(new Uint8Array([0xff, 0xe0, 0, 16]), enc("JFIF\0"), new Uint8Array(9));

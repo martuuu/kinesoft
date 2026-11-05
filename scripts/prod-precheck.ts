@@ -5,11 +5,11 @@
  *
  * Lo corre Martin, nunca un agente (decisión 1 del 22-oct). Pega la salida en el chat y el agente la verifica antes
  * de cada paso:
- *   1. `--pre`  → backup (`db:prod:backup`) → `db:prod:deploy`. Desde el reset del 29-oct, M12..M19 ya están en prod y
- *      las pendientes son M20 `cf_agenda_rules` (CF, 30-oct; si todavía no se aplicó) y M21 `cf2_profesional_caja`
- *      (CF2, 02-nov); MIGRACIONES-RUNBOOK «M20 en prod» y «M21 en prod».
- *   2. `--post` → push. `--booking-relfilenode=<el que imprimió el --pre>` es opcional: confirma que ninguna migración
- *      reescribió "Booking" (M20 no lo toca; M21 le agrega 2 índices, que no reescriben la tabla).
+ *   1. `--pre`  → backup (`db:prod:backup`) → `db:prod:deploy`. M12..M21 ya están en prod (M20 y M21 desde el 02-nov) y
+ *      las pendientes son M22 `cf3_precios_sede` (CF3, 04-nov), M23 `cf3_co_titular` y M24 `cf3_practitioner_photo`
+ *      (CF3b, 05-nov), las tres en el mismo deploy; MIGRACIONES-RUNBOOK «M22 en prod», «M23 en prod» y «M24 en prod».
+ *   2. `--post` → push. `--booking-relfilenode=<el que imprimió el --pre>` es opcional: ni M22, ni M23, ni M24 tocan
+ *      "Booking".
  *
  * Seguridad:
  *  - Una sola tx `READ ONLY`: Postgres rechaza cualquier write.

@@ -38,6 +38,8 @@ import type { Prisma } from "@prisma/client";
 import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 
 type Tx = Prisma.TransactionClient;
+/** `PractitionerService.visibility` (enum `PracticeVisibility`), sin importar el valor de `@prisma/client`. */
+type ServiceVisibility = NonNullable<Prisma.PractitionerServiceCreateManyInput["visibility"]>;
 
 /** Nombre de la sede que crea el alta (= backfill (1)). */
 export const PRIMARY_LOCATION_NAME = "Principal";
@@ -148,7 +150,7 @@ export async function ensureDefaultSchedule(
 async function insertPractitionerServices(
   tx: Tx,
   tenantId: string,
-  pairs: ReadonlyArray<{ practitionerId: string; serviceId: string }>
+  pairs: ReadonlyArray<{ practitionerId: string; serviceId: string; visibility?: ServiceVisibility }>
 ): Promise<number> {
   if (pairs.length === 0) return 0;
   const r = await tx.practitionerService.createMany({
@@ -157,6 +159,8 @@ async function insertPractitionerServices(
       tenantId,
       practitionerId: p.practitionerId,
       serviceId: p.serviceId,
+      // Sin valor = el default de la tabla (PUBLIC), igual que el backfill.
+      ...(p.visibility ? { visibility: p.visibility } : {}),
     })),
     skipDuplicates: true,
   });
@@ -235,18 +239,28 @@ export async function provisionPractitionerAgenda(
  * profesional; sin (compartido) → todos los aceptados (decisión 7). Solo
  * AGREGA: no deshabilita a nadie (lo que un profesional dejó de atender se
  * maneja con `enabled` en su editor, B2.4b). Devuelve cuántas filas creó.
+ *
+ * `publicOnlyFor` (CF3b, sesión SV): compartido que creó un profesional SIN «Configuración» («Para todo el
+ * consultorio» desde «Mi agenda»). Todos quedan habilitados (se puede dar en la agenda), pero solo ese profesional
+ * PUBLIC: a un colega no le aparece en el turnero un servicio que no decidió ofrecer; lo publica él desde su editor.
+ * Va en el mismo INSERT (0 sentencias nuevas). Sin el argumento, todo igual que antes (default de la tabla, PUBLIC).
  */
 export async function enableServiceForPractitioners(
   tx: Tx,
-  args: { tenantId: string; serviceId: string; practitionerId: string | null }
+  args: { tenantId: string; serviceId: string; practitionerId: string | null; publicOnlyFor?: string }
 ): Promise<number> {
   const ids = args.practitionerId
     ? [args.practitionerId]
     : await acceptedPractitionerIds(tx, args.tenantId);
+  const only = args.publicOnlyFor;
   return insertPractitionerServices(
     tx,
     args.tenantId,
-    ids.map((practitionerId) => ({ practitionerId, serviceId: args.serviceId }))
+    ids.map((practitionerId) => ({
+      practitionerId,
+      serviceId: args.serviceId,
+      ...(only ? { visibility: practitionerId === only ? ("PUBLIC" as const) : ("PRIVATE" as const) } : {}),
+    }))
   );
 }
 

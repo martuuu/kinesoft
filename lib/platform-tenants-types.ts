@@ -163,6 +163,17 @@ export type PlatformTenantDetail = PlatformTenantRow & {
   recentPlatformEvents: PlatformAuditEventRow[];
   /** Ruta del turnero público (`/c/<slug>/booking`), exista o no el switch. */
   publicBookingPath: string;
+  /**
+   * CF3 (SD-S, D-CF3-10): switch de la sede digital `/<slug>` (lo cambia `setPlatformTenantSite`). Opcional solo para
+   * no romper los fixtures de los tests de render existentes; `getPlatformTenantDetail` siempre lo manda.
+   */
+  siteEnabled?: boolean;
+  /**
+   * BR-P: `Tenant.palette` tal cual está guardada (colores de la sede y del turnero; la cambia `setPlatformTenantSite`).
+   * Cruda y no validada a propósito: si quedó un valor desconocido, Plataforma lo tiene que ver. Opcional por los
+   * fixtures de render; `getPlatformTenantDetail` siempre la manda.
+   */
+  palette?: string;
   /** ISO de `Tenant.updatedAt`: va como `expectedUpdatedAt` del CAS. */
   updatedAt: string;
 };

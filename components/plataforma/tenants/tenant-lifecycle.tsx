@@ -7,7 +7,15 @@
  *     PHI) y **confirmación tipeada del slug**; reactivar (SUSPENDED|CLOSED → ACTIVE) con `useConfirm`;
  *   - cambiar el slug, también con el slug actual tipeado y la explicación del redirect (BO-D9);
  *   - forzar el fin del alta;
- *   - pedirle el export al titular (BO5-C): Plataforma solo PIDE, el superadmin nunca baja PHI (plan §19.5).
+ *   - pedirle el export al titular (BO5-C): Plataforma solo PIDE, el superadmin nunca baja PHI (plan §19.5);
+ *   - CF3 (SD-C, D-CF3-10): prender o apagar la sede digital `/<slug>` (`setPlatformTenantSite`). Solo el switch: la
+ *     frase, la descripción y el contacto son del consultorio (Configuración → «Sitio web»). Las dos direcciones van
+ *     con `useConfirm` (prender publica en Google algo que quizás el titular no pidió; apagar rompe el link que ya
+ *     repartió) y el mismo `run()` del resto (step-up con MFA, CAS con `version`). Si el detalle no trae
+ *     `siteEnabled` (lectura previa a M22) la sección no se muestra.
+ *   - BR-P: los colores del sitio y del turnero (`Tenant.palette`, misma action). Plataforma puede elegir cualquiera,
+ *     incluidas las de marca (es quien le asigna la suya al consultorio que la pidió; asignar una de marca pide
+ *     confirmación, porque son los colores del logo de un consultorio puntual).
  *
  * BO4: todas las llamadas pasan por `usePlatformAction()`; suspender, dar de baja, cambiar el slug y pedir el export
  * son riesgo high y, con MFA en enforce, pueden pedir el código otra vez (modal del provider de `(platform)`).
@@ -34,6 +42,8 @@ import {
   suspendPlatformTenant,
 } from "@/lib/platform-tenant-lifecycle";
 import { requestTenantExport } from "@/lib/platform-export-request";
+import { setPlatformTenantSite } from "@/lib/platform-tenants";
+import { Switch } from "@/components/ui/switch";
 import { usePlatformAction } from "@/components/plataforma/reauth-modal";
 import {
   STATUS_REASON_CODES,
@@ -51,6 +61,13 @@ import {
 } from "@/components/plataforma/tenants/labels";
 import { ErrorBox, Facts, Section, WarnBox, muted } from "@/components/plataforma/tenants/detail-ui";
 import { BRAND_NAME } from "@/lib/brand";
+import { ALL_PALETTES, brandPaletteFor, isAppPalette, paletteLabel, type AppPalette } from "@/lib/brand-palettes";
+
+/** BR-P: opciones del select de colores (las de marca, marcadas como tales). */
+export const PLATFORM_PALETTE_OPTIONS = ALL_PALETTES.map((p) => ({
+  value: p,
+  label: brandPaletteFor(p) ? `${paletteLabel(p)} (de marca)` : paletteLabel(p),
+}));
 
 type StatusKind = "suspend" | "close";
 
@@ -370,6 +387,69 @@ export function TenantLifecyclePanel({ detail: d }: { detail: PlatformTenantDeta
     }
   };
 
+  // Optimista no: el switch refleja lo que confirmó el server (un CAS viejo no puede dejarlo mintiendo).
+  const [siteOn, setSiteOn] = useState(d.siteEnabled ?? false);
+  useEffect(() => setSiteOn(d.siteEnabled ?? false), [d.siteEnabled]);
+
+  // BR-P: colores del sitio y del turnero. Un valor guardado desconocido se muestra como sky en el select (y se ve
+  // crudo al lado) hasta que se elija uno válido.
+  const savedPalette = d.palette ?? "sky";
+  const [paletteChoice, setPaletteChoice] = useState<AppPalette>(isAppPalette(savedPalette) ? savedPalette : "sky");
+  const [paletteSaved, setPaletteSaved] = useState(savedPalette);
+  useEffect(() => {
+    const p = d.palette ?? "sky";
+    setPaletteSaved(p);
+    setPaletteChoice(isAppPalette(p) ? p : "sky");
+  }, [d.palette]);
+
+  const savePalette = async () => {
+    if (pending || paletteChoice === paletteSaved) return;
+    const brand = brandPaletteFor(paletteChoice);
+    if (brand) {
+      const ok = await confirm({
+        title: `¿Darle a ${d.name} los colores de ${brand.label}?`,
+        message: `Son los colores de la marca de un consultorio puntual. El sitio y el turnero de ${d.name} pasan a verse así, y su equipo los puede elegir en Apariencia.`,
+        confirmLabel: "Asignar",
+        cancelLabel: "Cancelar",
+      });
+      if (!ok) return;
+    }
+    const done = await run(
+      () => setPlatformTenantSite({ tenantId: d.id, expectedUpdatedAt: version, palette: paletteChoice }),
+      "Colores guardados",
+      false
+    );
+    if (done) setPaletteSaved(paletteChoice);
+  };
+
+  const toggleSite = async () => {
+    if (pending) return;
+    const next = !siteOn;
+    const ok = await confirm(
+      next
+        ? {
+            title: `¿Publicar el sitio de ${d.name}?`,
+            message: `La página /${d.slug} pasa a verse con el link, a aparecer en Google y en el sitemap. Hacelo solo si lo pidió el titular.`,
+            confirmLabel: "Publicar",
+            cancelLabel: "Cancelar",
+          }
+        : {
+            title: `¿Dejar de publicar el sitio de ${d.name}?`,
+            message: `La página /${d.slug} deja de mostrar el consultorio. El titular la puede volver a publicar desde Configuración → Sitio web.`,
+            confirmLabel: "Dejar de publicar",
+            cancelLabel: "Cancelar",
+            tone: "danger",
+          }
+    );
+    if (!ok) return;
+    const done = await run(
+      () => setPlatformTenantSite({ tenantId: d.id, expectedUpdatedAt: version, siteEnabled: next }),
+      next ? "Sitio publicado" : "Sitio despublicado",
+      false
+    );
+    if (done) setSiteOn(next);
+  };
+
   const reason = statusReasonText(d.statusReason);
   const which = dialog?.kind === "status" ? dialog.which : null;
 
@@ -432,6 +512,50 @@ export function TenantLifecyclePanel({ detail: d }: { detail: PlatformTenantDeta
           ]}
         />
       </Section>
+
+      {d.siteEnabled !== undefined && (
+        <Section
+          title="Sitio del consultorio"
+          description="La página pública con el logo, los profesionales y el botón para sacar turno. La prende el titular desde Configuración → Sitio web."
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <Switch on={siteOn} onChange={() => void toggleSite()} disabled={pending} aria-label="Sitio publicado" />
+            <span style={{ fontSize: 13.5, color: "var(--navy-900)" }}>
+              {siteOn ? "Publicado" : "Sin publicar"} ·{" "}
+              <span style={{ fontFamily: "var(--font-mono)" }}>/{d.slug}</span>
+            </span>
+          </div>
+          {d.palette !== undefined && (
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
+              <div style={{ flex: "1 1 220px", minWidth: 0 }}>
+                <FormField
+                  as="select"
+                  label="Colores del sitio y del turnero"
+                  value={paletteChoice}
+                  options={PLATFORM_PALETTE_OPTIONS}
+                  onChange={(v) => {
+                    if (isAppPalette(v)) setPaletteChoice(v);
+                  }}
+                  hint={
+                    isAppPalette(paletteSaved)
+                      ? `Guardados: ${paletteLabel(paletteSaved)}.`
+                      : `Guardado un valor desconocido (${paletteSaved}): se ve Celeste.`
+                  }
+                  disabled={pending}
+                />
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => void savePalette()}
+                disabled={pending || paletteChoice === paletteSaved}
+              >
+                Guardar colores
+              </Button>
+            </div>
+          )}
+        </Section>
+      )}
 
       <Section
         title="Alta"

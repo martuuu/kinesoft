@@ -115,6 +115,13 @@ model Tenant {
   agendaSlotStepMin           Int?
   publicSlotStepMin           Int?
   publicMinLeadMinutes        Int?
+  // CF3 M22 (cf3_precios_sede, §30, D-CF3-10): sede digital pública en /<slug>. Nace APAGADA (DEFAULT false): ningún
+  // consultorio existente pasa a publicar una página que no pidió. `siteEnabledAt` = cuándo se encendió (auditoría,
+  // sin CHECK: apagar no lo borra). `siteTagline` = frase corta del encabezado, 1..120 (CHECK Tenant_siteTagline_check
+  // en la base, drift aceptado); la descripción larga reusa `publicDescription` (≤ 800) para no duplicar textos.
+  siteEnabled                 Boolean   @default(false)
+  siteEnabledAt               DateTime?
+  siteTagline                 String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -250,6 +257,28 @@ model UserProfile {
   // distinto de Membership.disabledAt (suspensión dentro de un consultorio, M6).
   disabledAt     DateTime?
   disabledReason String?
+  // CF3b M23 (cf3_co_titular): matrícula de la PERSONA, opcional, como dato de seguridad (no se publica). MN = nacional
+  // (sin jurisdicción) | MP = provincial (con la provincia: código ISO 3166-2:AR sin «AR-», = Location.provinceCode).
+  // No es ProfessionalPublicProfile (directorio público: exige publicName y es SERVICE_ONLY) ni Practitioner.licenseNumber
+  // (por consultorio, público en el turnero y la firma). En la base y NO acá (drift aceptado; NO borrar si `migrate dev`
+  // lo propone): CHECK UserProfile_licenseNumber_check (1..30, letra/dígito al principio y al final; en el medio
+  // también espacio . / -), UserProfile_licenseJurisdiction_check (las 24) y UserProfile_license_check (los tres NULL, o
+  // MN + número sin provincia, o MP + número + provincia). `licenseUpdatedAt` la pone el trigger UserProfile_license_stamp
+  // (cuándo cambió la matrícula, también al borrarla): NO la escribas, la base la pisa.
+  licenseKind         String?   // MN | MP
+  licenseNumber       String?
+  licenseJurisdiction String?   // código de provincia; solo MP
+  licenseUpdatedAt    DateTime?
+  // CF3b M24 (cf3_practitioner_photo, pedido de Martin del 05-nov): foto que la PERSONA sube (una para todos sus
+  // consultorios): avatar en la app y, con `Practitioner.showPhotoPublic` de cada consultorio, turnero y sede. No es
+  // `avatarUrl` (URL de Google/Facebook que el login pisa). Molde de Practitioner.signatureStorageKey: objeto del bucket
+  // privado `practice-assets` por el canal service; `photoUpdatedAt` = la fecha de la subida (el `?v=` de la URL
+  // immutable). En la base y NO acá (drift aceptado; NO borrar si `migrate dev` lo propone): CHECK
+  // UserProfile_photoStorageKey_check (la clave empieza con `users/<id de ESTA fila>/`, ≤ 200, segmentos [A-Za-z0-9._-]
+  // sin «.» inicial: una fila no puede apuntar a la firma, al logo ni a la foto de otro, aunque el escritor tenga un bug)
+  // y UserProfile_photo_check (las dos o ninguna). UserProfile no tiene RLS: el userId SIEMPRE de la sesión.
+  photoStorageKey     String?
+  photoUpdatedAt      DateTime?
   createdAt    DateTime      @default(now())
 
   memberships  Membership[]
@@ -358,6 +387,13 @@ model Membership {
   grantSettings  Boolean @default(false)
   grantBilling   Boolean @default(false)
   disabledReason String?
+  // CF3b M23 (cf3_co_titular, decisión de Martin del 05-nov): «Co-titular». El Titular principal se lo da a otro
+  // PROFESIONAL: tiene lo del Titular salvo el rol/permisos/cuenta del principal, transferir la titularidad, dar o quitar
+  // «Co-titular» y la suscripción al SaaS (sin account.billing). Las capacidades las arma el código; la base solo exige
+  // CHECK Membership_coOwner_role_check (grantCoOwner ⇒ role = PRACTITIONER): cambiarle el rol a un co-titular
+  // (ADMIN, Secretaria, o transferirle la titularidad) tiene que escribir grantCoOwner = false en la MISMA escritura o
+  // rebota con 23514. Drift aceptado.
+  grantCoOwner   Boolean @default(false)
 
   user   UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
   tenant Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -430,6 +466,18 @@ model Practitioner {
   // Mail por Resend; push web a los dispositivos de `UserProfile.pushSubscriptions`.
   notifyBookingEmail      Boolean   @default(false)
   notifyBookingPush       Boolean   @default(false)
+  // CF3 M22 (cf3_precios_sede, §30, D-CF3-3): el profesional decide si SU precio se ve en el turnero y la sede.
+  // DEFAULT true = la conducta de hoy (el turnero ya muestra el precio): apagarlo es una decisión explícita.
+  showPublicPrice         Boolean   @default(true)
+  // CF3 M22 (D-CF3-5): a un paciente con obra social se le ofrece el WhatsApp del profesional en vez del cobro online.
+  // Opt-in que reusa el número y el consentimiento de CF2 (Ley 25.326): CHECK Practitioner_insuredContact_check exige
+  // contactWhatsapp + contactConsentAt + contactConsentVersion con el flag prendido (molde de leadContact). Drift aceptado.
+  showContactForInsured   Boolean   @default(false)
+  // CF3b M24 (cf3_practitioner_photo): si la foto de la persona (`UserProfile.photoStorageKey`) sale en el turnero y la
+  // sede de ESTE consultorio. Opt-in por consultorio, nace apagado y sin backfill: es su imagen en una página pública
+  // (dato personal, Ley 25.326; molde de showContactInLeadWindow). Sin CHECK contra la foto (otra tabla): se publica
+  // solo con flag Y foto. En la app (avatar) la foto sale sin este flag.
+  showPhotoPublic         Boolean   @default(false)
   createdAt     DateTime @default(now())
 
   tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -3296,6 +3344,10 @@ model PractitionerService {
   concurrencyOverride Boolean            @default(false)
   maxConcurrent       Int?
   notifyOnBooking     Boolean            @default(false)
+  // CF3 M22 (cf3_precios_sede, §30, D-CF3-1): precio de ESTE profesional para este servicio, en centavos. Escalón
+  // nuevo de lib/copago.ts; NULL = hereda (Service / plan de la OS), idéntico a hoy. 0..100 000 000 (= $1 000 000,
+  // CHECK PractitionerService_priceCents_check en la base, drift aceptado): 0 es válido (sesión sin cargo).
+  priceCents          Int?
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
 
@@ -3548,3 +3600,9 @@ model PatientChangeRequest {
 //   • Función practitioner_revenue_share_guard() y su trigger "PractitionerRevenueShare_guard" (solo cierre).
 //   • RLS: PushSubscription ENABLE + FORCE y CERO policies (SERVICE_ONLY); PractitionerRevenueShare ENABLE + FORCE +
 //       policy PractitionerRevenueShare_tenant_isolation.
+
+// ── CF3 M22: DRIFT ACEPTADO ──────────────────────────────────────────────
+// Estos objetos viven SOLO en prisma/migrations/20261104120000_cf3_precios_sede y
+// Prisma no los expresa. Si `migrate dev` / `migrate diff` propone borrarlos, NO
+// se borran (y `migrate dev` está prohibido en este repo):
+//   • CHECKs: PractitionerService_priceCents_check, Practitioner_insuredContact_check, Tenant_siteTagline_check.

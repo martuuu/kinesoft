@@ -21,13 +21,40 @@ import type { PublicLeadContact } from "@/lib/public-booking-types";
  * `Practitioner.contactConsentVersion` junto con `contactConsentAt`; CHECK de M21: 1..32 caracteres). Si cambia
  * `LEAD_CONTACT_CONSENT_COPY` en algo de fondo, se sube la versión: el consentimiento registrado es el de ESE texto
  * (Ley 25.326: el número es un dato personal publicado en una superficie pública).
+ *
+ * CF3 (D-CF3-5, 04-nov): v2 suma el segundo uso del MISMO número, el WhatsApp para pacientes con obra social
+ * (`Practitioner.showContactForInsured`). Qué vale para qué lo deciden `consentCoversLeadContact` /
+ * `consentCoversInsuredContact` (abajo), no una comparación suelta con esta constante.
  */
-export const LEAD_CONTACT_CONSENT_VERSION = "cf2-lead-contact-v1";
+export const LEAD_CONTACT_CONSENT_VERSION = "cf3-lead-contact-v2";
 
-/** Lo que el profesional acepta (checkbox de «Mi agenda»). Voseo, sin jerga. */
+/**
+ * El texto v1 (CF2, 02-nov) cubría SOLO el contacto dentro de la anticipación. Los profesionales que lo aceptaron lo
+ * siguen teniendo vigente para ese uso: no se les apaga nada que ya prendieron por un cambio de texto que no lo toca.
+ */
+export const LEAD_CONTACT_CONSENT_VERSION_V1 = "cf2-lead-contact-v1";
+
+/** Lo que el profesional acepta (checkbox de «Mi agenda»). Voseo, sin jerga. TEXTO A REVISAR POR MARTIN (§30.7 #2). */
 export const LEAD_CONTACT_CONSENT_COPY =
-  "Acepto que mi número de WhatsApp se muestre en el turnero online a quienes buscan un turno para hoy, solo cuando " + // claim-ok: prisma/schema.prisma:425
-  "tengo lugar libre dentro de mi anticipación. Lo puedo desactivar cuando quiera.";
+  "Acepto que mi número de WhatsApp se muestre en el turnero online en dos casos, solo si prendo cada opción: a " + // claim-ok: prisma/schema.prisma:432
+  "quienes buscan un turno para hoy cuando tengo lugar libre dentro de mi anticipación, y a pacientes con obra " +
+  "social que quieren consultarme si atiendo su cobertura. Lo puedo desactivar cuando quiera.";
+
+/**
+ * CF3: ¿el consentimiento sellado vale para el contacto dentro de la anticipación (CF2)? v1 (que hablaba solo de eso)
+ * o v2 (que lo incluye). Cualquier otra versión (vieja, de prueba, null) no: hay que volver a aceptar.
+ */
+export function consentCoversLeadContact(version: string | null | undefined): boolean {
+  return version === LEAD_CONTACT_CONSENT_VERSION || version === LEAD_CONTACT_CONSENT_VERSION_V1;
+}
+
+/**
+ * CF3 (D-CF3-5): ¿vale para mostrar el número a pacientes con obra social? Solo v2: el v1 no mencionaba ese uso, así
+ * que el número no se publica para OS hasta que el profesional acepte el texto nuevo (Ley 25.326: finalidad).
+ */
+export function consentCoversInsuredContact(version: string | null | undefined): boolean {
+  return version === LEAD_CONTACT_CONSENT_VERSION;
+}
 
 /** «Hola {nombre}, te escribo desde el turnero online de {Consultorio}. ¿Tenés algún turno disponible antes?» */
 export function leadContactMessage(p: { name: string; tenantName: string }): string {

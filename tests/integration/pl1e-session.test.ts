@@ -85,7 +85,8 @@ describe.skipIf(!RUN)("[PL-1e] sesión v2", () => {
 
     it("Titular que atiende: membership de la foto, con profesional, plan = saasPlan", async () => {
       const actor = await getActor();
-      expect(actor.membership).toEqual({ role: "OWNER", clinical: true, grantSettings: false, grantBilling: false });
+      // CT-K1 (M23): + `grantCoOwner` (la foto lo trae siempre; el Titular principal nunca es co-titular).
+      expect(actor.membership).toEqual({ role: "OWNER", clinical: true, grantSettings: false, grantBilling: false, grantCoOwner: false });
       expect(actor.practitionerId).toBe(A.practitionerId);
       expect(actor.entitlements.plan).toBe("CONSULTORIO");
       // `getMemberAccess` devuelve lo del Actor (sin query: el techo de createBooking lo vigila aparte).
@@ -98,7 +99,7 @@ describe.skipIf(!RUN)("[PL-1e] sesión v2", () => {
         data: { clinical: false, grantBilling: true },
       });
       const actor = await getActor();
-      expect(actor.membership).toEqual({ role: "OWNER", clinical: false, grantSettings: false, grantBilling: true });
+      expect(actor.membership).toEqual({ role: "OWNER", clinical: false, grantSettings: false, grantBilling: true, grantCoOwner: false });
       // Tiene una fila Practitioner (la factory la crea), pero un no clínico nunca la usa.
       expect(actor.practitionerId).toBeNull();
     });

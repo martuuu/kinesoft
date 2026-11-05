@@ -12,6 +12,14 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/unit/**/*.test.ts", "tests/unit/**/*.test.tsx"],
+    // CF3 (hallazgo de SD-U): Prisma Client carga `.env` cuando el proceso no trae `DATABASE_URL`, y `.env` puede
+    // apuntar a PRODUCCIÓN (AGENTS §4). La capa 1 no usa DB: un unit que llegue por error a una query tiene que
+    // fallar contra un puerto muerto local, nunca conectarse a lo que diga `.env`.
+    env: {
+      DATABASE_URL: "postgresql://unit-tests-no-db@127.0.0.1:1/unit_tests_no_db",
+      DIRECT_URL: "postgresql://unit-tests-no-db@127.0.0.1:1/unit_tests_no_db",
+      DATABASE_URL_SERVICE: "postgresql://unit-tests-no-db@127.0.0.1:1/unit_tests_no_db",
+    },
   },
   resolve: {
     alias: {

@@ -34,7 +34,7 @@ import {
 import { asUser } from "@/tests/helpers/actor";
 
 const RUN = process.env.INTEGRATION === "1";
-const FORBIDDEN = "Solo OWNER/ADMIN pueden configurar las salas.";
+const FORBIDDEN = "Solo quien tiene permiso de «Configuración» puede configurar las salas.";
 const DAY = 86_400_000;
 
 describe.skipIf(!RUN)("salas: CRUD (SR1b)", () => {

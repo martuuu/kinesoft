@@ -21,6 +21,8 @@ import { ArrivalAlerts } from "@/components/providers/arrival-alerts";
 import type { AlertPrefs, AlertViewer } from "@/lib/arrival-alert-state";
 import type { TenantOption } from "@/lib/tenant-choice";
 import { TenantChoiceProvider, type SwitchTenantAction } from "./tenant-switcher";
+import { DEFAULT_TENANT_BRAND, TenantBrandProvider, type TenantBrand } from "./tenant-brand-context";
+import { UserPhotoProvider } from "./user-photo-context";
 import { SwRegister } from "@/components/pwa/sw-register";
 import { IdleLogout } from "./idle-logout";
 
@@ -83,6 +85,16 @@ import { IdleLogout } from "./idle-logout";
  * CF2 (P-NAV): `onlinePayments` = cobros online prendidos (`mpConnectMode() !== "off"`, lo calcula el layout). Viaja
  * por `OnlinePaymentsProvider` (sidebar.tsx) a sidebar, topbar, barra inferior y su Drawer: sin él no hay «Cobros»
  * (`onlinePaymentsOnly`). Antes el layout sacaba `billing.collect` de `caps` (`shellNavCaps`), que escondía «Caja».
+ *
+ * CF3 (BR-L): `brand` = marca del consultorio activo (nombre, URL del logo, paleta; la arma el layout de la misma foto
+ * de acceso, 0 sentencias). Se publica con `TenantBrandProvider` arriba de todo el workspace: la leen el selector del
+ * sidebar/topbar, la barra móvil y el menú de cuenta (`useTenantBrand`), y BR-P para la paleta. Sin prop (tests,
+ * render suelto) = `DEFAULT_TENANT_BRAND`: sin logo, el shell de siempre.
+ *
+ * CF3b PH-U1 (M24, contrato FOTO): `userPhotoUrl` = la foto PROPIA del usuario (`/api/me/photo?v=`, la arma el layout)
+ * o null. Se publica con `UserPhotoProvider` (user-photo-context.tsx) y la pintan los avatares del menú de cuenta
+ * (`UserAvatar`); sin foto, las iniciales de siempre. Contexto y no prop por `TopBar`/`MobileBar`/dashboard: tres
+ * caminos al mismo avatar, y «Tu foto» la cambia al toque al subirla (setter del contexto) sin recargar el layout.
  */
 /** HF-1c: ¿arranca el motor de avisos de llegada? Canal realtime y módulo `salaEspera`, los dos. */
 export function arrivalAlertsLive(realtime: Pick<RealtimeBootstrap, "driver">, modules: readonly TenantModule[]): boolean {
@@ -116,7 +128,13 @@ export function AppShell({
   idle = null,
   publicProfile = false,
   onlinePayments = false,
+  brand = DEFAULT_TENANT_BRAND,
+  userPhotoUrl = null,
 }: {
+  /** CF3 (BR-L): marca del consultorio activo (`TenantBrand`). */
+  brand?: TenantBrand;
+  /** CF3b PH-U1: foto propia del usuario (`/api/me/photo?v=`) o null (iniciales). */
+  userPhotoUrl?: string | null;
   /** CF2: cobros online prendidos (`MP_CONNECT_MODE` ≠ off). false = sin «Cobros» en el nav. */
   onlinePayments?: boolean;
   /** IN: cierre por inactividad (sesión «de navegador»). null = persistente, sin cierre. */
@@ -170,6 +188,8 @@ export function AppShell({
   }, [useSidebar]);
 
   return (
+    <TenantBrandProvider value={brand}>
+    <UserPhotoProvider value={userPhotoUrl}>
     <TenantChoiceProvider
       options={tenantOptions}
       activeTenantId={activeTenantId}
@@ -236,5 +256,7 @@ export function AppShell({
         </OnlinePaymentsProvider>
       </TenantModulesProvider>
     </TenantChoiceProvider>
+    </UserPhotoProvider>
+    </TenantBrandProvider>
   );
 }

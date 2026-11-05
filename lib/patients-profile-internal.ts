@@ -90,6 +90,28 @@ export async function resolvePatientBillingInTx(
   };
 }
 
+/** De qué escalón de la escalera (lib/copago.ts) sale el monto del preview del modal. */
+export type BillingPreviewSource = "OS" | "copago propio" | "Particular" | "precio del profesional" | "precio del servicio";
+
+/**
+ * Etiqueta del escalón que ganó, en el MISMO orden que `resolveBookingCopagoCents` (D-CF3-1) sin monto del turno (el
+ * preview es de un turno que todavía no existe). Si la escalera cambia, este espejo cambia con ella: lo fija
+ * `tests/integration/cf3-ladder-callers.test.ts` rama por rama ([CF3-PRC2-1]).
+ */
+export function billingPreviewSource(b: PatientBilling, practitionerPriceCents: number | null): BillingPreviewSource {
+  if (b.hasCoverage) {
+    if (b.coverageOverride != null) return "copago propio";
+    if (b.isParticular) {
+      if (practitionerPriceCents != null) return "precio del profesional";
+      return b.insurerCopago != null ? "Particular" : "precio del servicio";
+    }
+    if (b.insurerCopago != null) return "OS";
+    return practitionerPriceCents != null ? "precio del profesional" : "precio del servicio";
+  }
+  if (practitionerPriceCents != null) return "precio del profesional";
+  return b.particularCopago != null ? "Particular" : "precio del servicio";
+}
+
 /**
  * Redacta title/description/notes de un turno del paciente según
  * `bookingFieldAccess` (la misma regla que la agenda y el ICS: con paciente,
@@ -163,7 +185,9 @@ export async function patientCoreInTx(
         tenantId: actor.tenantId,
         patientId: id,
         scheduledFor: { gte: new Date() },
-        status: { notIn: ["CANCELLED"] },
+        // CF3 ZF2: tampoco NO_SHOW (un ausente marcado por adelantado no es «el próximo turno»), igual que el perfil
+        // `full` y el bundle de compartir (`patientUpcomingBookingsInTx`, lib/patient-profile-loader.ts).
+        status: { notIn: ["CANCELLED", "NO_SHOW"] },
       },
       orderBy: { scheduledFor: "asc" },
       select: { scheduledFor: true },
@@ -215,7 +239,9 @@ export async function patientCoreInTx(
         tenantId: actor.tenantId,
         patientId: id,
         scheduledFor: { gte: new Date() },
-        status: { notIn: ["CANCELLED"] },
+        // CF3 ZF2: tampoco NO_SHOW (un ausente marcado por adelantado no es «el próximo turno»), igual que el perfil
+        // `full` y el bundle de compartir (`patientUpcomingBookingsInTx`, lib/patient-profile-loader.ts).
+        status: { notIn: ["CANCELLED", "NO_SHOW"] },
       },
       orderBy: { scheduledFor: "asc" },
       select: { scheduledFor: true },
@@ -290,24 +316,55 @@ export async function patientBookingsSummaryInTx(
       title: true,
       description: true,
       copagoCents: true,
-      service: { select: { name: true, priceCents: true } },
     },
   });
+  // CF3 PR-C2 (D-CF3-1): el servicio y el precio del profesional del turno salen de UN SELECT con JOIN, en lugar del
+  // `select: { service }` de antes (Prisma 5 lo corría como una sentencia aparte). Mismo número de sentencias (2): el
+  // perfil `full` está en su techo (pf2-profile-budget, 37) y un `findMany` de PractitionerService lo pasaba.
+  // `tenantId` a mano en el WHERE (BYPASSRLS en prod); `PractitionerService` es único por (profesional, servicio), así
+  // que el LEFT JOIN no duplica filas.
+  const priced = await bookingPricesInTx(tx, actor.tenantId, rows.map((r) => r.id));
   const billing = await resolvePatientBillingInTx(tx, patientId, actor.tenantId);
   const redact = await bookingTextRedactor(actor, access);
-  return rows.map(({ service, copagoCents: bookingCopago, ...b }) => ({
-    ...redact(b),
-    serviceName: service.name,
-    obraSocial: billing.obraSocial,
-    copagoCents: resolveBookingCopagoCents({
-      bookingOverride: bookingCopago,
-      coverageOverride: billing.coverageOverride,
-      hasCoverage: billing.hasCoverage,
-      insurerCopago: billing.insurerCopago,
-      particularCopago: billing.particularCopago,
-      servicePriceCents: service.priceCents,
-    }),
-  }));
+  return rows.map(({ copagoCents: bookingCopago, ...b }) => {
+    const p = priced.get(b.id);
+    if (!p) throw new Error(`patientBookingsSummary: turno ${b.id} sin servicio`);
+    return {
+      ...redact(b),
+      serviceName: p.serviceName,
+      obraSocial: billing.obraSocial,
+      copagoCents: resolveBookingCopagoCents({
+        bookingOverride: bookingCopago,
+        coverageOverride: billing.coverageOverride,
+        hasCoverage: billing.hasCoverage,
+        insurerCopago: billing.insurerCopago,
+        particularCopago: billing.particularCopago,
+        servicePriceCents: p.servicePriceCents,
+        practitionerPriceCents: p.practitionerPriceCents,
+        insurerIsParticular: billing.isParticular,
+      }),
+    };
+  });
+}
+
+/** Servicio (nombre y precio) y precio del profesional de cada turno, en una sentencia (ver `patientBookingsSummaryInTx`). */
+async function bookingPricesInTx(
+  tx: DbClient,
+  tenantId: string,
+  ids: string[]
+): Promise<Map<string, { serviceName: string; servicePriceCents: number; practitionerPriceCents: number | null }>> {
+  if (ids.length === 0) return new Map();
+  const rows = await tx.$queryRaw<
+    { id: string; serviceName: string; servicePriceCents: number; practitionerPriceCents: number | null }[]
+  >`
+    SELECT b."id", s."name" AS "serviceName", s."priceCents" AS "servicePriceCents",
+      ps."priceCents" AS "practitionerPriceCents"
+    FROM "Booking" b
+    JOIN "Service" s ON s."id" = b."serviceId"
+    LEFT JOIN "PractitionerService" ps ON ps."tenantId" = b."tenantId"
+      AND ps."practitionerId" = b."practitionerId" AND ps."serviceId" = b."serviceId"
+    WHERE b."tenantId" = ${tenantId} AND b."id" = ANY(${ids})`;
+  return new Map(rows.map((r) => [r.id, r]));
 }
 
 /** Cuerpo de `getPatientBookingsAll` (página con cursor; ver su doc en lib/patients.ts). */
@@ -347,12 +404,22 @@ export async function patientBookingsAllInTx(
   // quién cobró). En el LATERAL y no en otra query: el perfil tiene presupuesto de sentencias (pf2-profile-budget).
   const extras = ids.length
     ? await tx.$queryRaw<
-        { id: string; serviceName: string; servicePriceCents: number; fullName: string | null; refundedAfterCents: number }[]
+        {
+          id: string;
+          serviceName: string;
+          servicePriceCents: number;
+          practitionerPriceCents: number | null;
+          fullName: string | null;
+          refundedAfterCents: number;
+        }[]
       >`
-        SELECT b."id", s."name" AS "serviceName", s."priceCents" AS "servicePriceCents", u."fullName",
+        SELECT b."id", s."name" AS "serviceName", s."priceCents" AS "servicePriceCents",
+          ps."priceCents" AS "practitionerPriceCents", u."fullName",
           COALESCE(r."cents", 0)::int AS "refundedAfterCents"
         FROM "Booking" b
         JOIN "Service" s ON s."id" = b."serviceId"
+        LEFT JOIN "PractitionerService" ps ON ps."tenantId" = b."tenantId"
+          AND ps."practitionerId" = b."practitionerId" AND ps."serviceId" = b."serviceId"
         JOIN "Practitioner" p ON p."id" = b."practitionerId"
         JOIN "UserProfile" u ON u."id" = p."userId"
         LEFT JOIN LATERAL (SELECT sum(c."amountCents") AS "cents" FROM "OnlineCharge" c
@@ -382,6 +449,9 @@ export async function patientBookingsAllInTx(
         insurerCopago: billing.insurerCopago,
         particularCopago: billing.particularCopago,
         servicePriceCents: extra.servicePriceCents,
+        // CF3 PR-C2: precio del profesional ACTUAL del turno (D-CF3-2), del LEFT JOIN de arriba (0 sentencias más).
+        practitionerPriceCents: extra.practitionerPriceCents,
+        insurerIsParticular: billing.isParticular,
       }),
       osAmountCents: billing.insurerFixedFeeCents,
       refundedDepositAfterCollectCents: extra.refundedAfterCents,

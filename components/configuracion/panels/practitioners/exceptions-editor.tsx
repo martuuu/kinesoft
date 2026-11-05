@@ -90,8 +90,10 @@ export function ExceptionsEditor({
   const load = useCallback(async () => {
     setLoadError(null);
     try {
-      const list = await listExceptions({ ...monthRange(month), practitionerId });
-      setRows(list);
+      // CF3 ZF2: `listExceptions` devuelve `ActionResult` (un rango inválido ya no es un 500).
+      const res = await listExceptions({ ...monthRange(month), practitionerId });
+      if (res.ok) setRows(res.data);
+      else setLoadError(res.error);
     } catch {
       setLoadError("No pudimos cargar las excepciones. Probá de nuevo.");
     }
