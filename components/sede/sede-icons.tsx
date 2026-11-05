@@ -4,7 +4,7 @@
  */
 import s from "./sede.module.css";
 
-export type SedeIconId = "cal" | "clock" | "pin" | "phone" | "chat" | "co";
+export type SedeIconId = "cal" | "clock" | "pin" | "phone" | "chat";
 
 export function SedeIconSprite() {
   return (
@@ -27,10 +27,6 @@ export function SedeIconSprite() {
       <symbol id="sede-i-chat" viewBox="0 0 24 24">
         <path d="M4 20l1.3-3.9A8 8 0 1 1 8 18.8z" />
         <path d="M9 10.5c.5 1.7 1.8 3 3.5 3.5" />
-      </symbol>
-      <symbol id="sede-i-co" viewBox="0 0 24 24">
-        <circle cx="7" cy="6" r="2.5" fill="currentColor" stroke="none" />
-        <path d="M6 9.5C6 12 7.5 13 8 14.5L6 21M9 11.5l4 1 3-2 3 5.5" strokeWidth="2.4" />
       </symbol>
     </svg>
   );

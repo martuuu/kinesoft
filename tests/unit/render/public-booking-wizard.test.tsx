@@ -484,7 +484,8 @@ describe("[TP-1] paso Servicio", () => {
     ];
     const html = renderToStaticMarkup(<PublicBookingWizard clinic={c} session={null} prefill={null} />);
     expect(html).toContain("Primera consulta");
-    expect(html).toMatch(/\$\s?15\.000/);
+    // Martin (05-nov): el paso de servicio no muestra precios (ni $ 0 ni el valor): el valor va en el resumen.
+    expect(html).not.toMatch(/\$\s?15\.000/);
     expect(html).not.toMatch(/\$\s?0\b/);
   });
 

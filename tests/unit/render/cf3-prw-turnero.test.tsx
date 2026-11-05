@@ -50,12 +50,26 @@ function clinic(practitioners = ["Ana", "Beto", "Caro"]): PublicClinic {
 const svc = (c: PublicClinic) => c.services;
 
 describe("CF3 PR-W · precio por profesional en el paso de servicio", () => {
-  it("[CF3-PRW-1] por ?pro= el wizard real pinta la cotización de ESE profesional, no el precio del servicio", () => {
+  it("[CF3-PRW-1] el paso de servicio NO muestra precios (Martin, 05-nov): el valor aparece recién en el resumen con horario", () => {
     const ana = renderToStaticMarkup(<PublicBookingWizard clinic={clinic()} session={null} prefill={null} initialPractitionerId="Ana" />);
-    expect(ana).toContain(formatARS(1_800_000));
+    expect(ana).not.toContain(formatARS(1_800_000));
     expect(ana).not.toContain(formatARS(1_500_000));
+    expect(ana).toContain("El valor lo ves en el resumen cuando elegís el horario.");
     const beto = renderToStaticMarkup(<PublicBookingWizard clinic={clinic()} session={null} prefill={null} initialPractitionerId="Beto" />);
-    expect(beto).toContain(formatARS(1_200_000));
+    expect(beto).not.toContain(formatARS(1_200_000));
+  });
+
+  it("[CF3-PRW-1b] el resumen muestra el valor del profesional recién con el horario elegido", () => {
+    const c = clinic();
+    const checkout = checkoutCopyFor({ payment: null, ...checkoutPricingFor(c, "Ana", "S", { insurerId: null }) });
+    const before = renderToStaticMarkup(
+      <SummaryAside clinic={c} practitioner={c.practitioners[0]} anyPractitioner={false} service={c.services[0]} slotISO={null} location={null} checkout={checkout} />
+    );
+    expect(before).not.toContain(formatARS(1_800_000));
+    const after = renderToStaticMarkup(
+      <SummaryAside clinic={c} practitioner={c.practitioners[0]} anyPractitioner={false} service={c.services[0]} slotISO="2026-11-10T13:00:00.000Z" location={null} checkout={checkout} />
+    );
+    expect(after).toContain(formatARS(1_800_000));
   });
 
   it("[CF3-PRW-2] precio oculto (D-CF3-3): ni la cotización ni el precio del servicio, y el subtítulo no promete precio", () => {
@@ -92,7 +106,7 @@ describe("CF3 PR-W · obra social → bloque de cobertura", () => {
   it("[CF3-PRW-5] el resumen muestra el texto de cobertura y no un total; la action NO corre al render", () => {
     getInsuredContact.mockClear();
     const html = renderToStaticMarkup(
-      <SummaryAside clinic={c} practitioner={c.practitioners[0]} anyPractitioner={false} service={c.services[0]} slotISO={null} location={null} checkout={insuredCheckout("Ana")} />
+      <SummaryAside clinic={c} practitioner={c.practitioners[0]} anyPractitioner={false} service={c.services[0]} slotISO="2026-11-10T13:00:00.000Z" location={null} checkout={insuredCheckout("Ana")} />
     );
     expect(html).toContain("El valor depende de tu cobertura");
     expect(html).not.toContain(formatARS(1_800_000));
@@ -154,7 +168,7 @@ describe("CF3 PR-W · obra social → bloque de cobertura", () => {
 
   it("[CF3-PRW-8] sin opt-in: directo «Consultá tu cobertura con el consultorio» + teléfono; sin teléfono, solo el texto", () => {
     const summary = renderToStaticMarkup(
-      <SummaryAside clinic={c} practitioner={c.practitioners[1]} anyPractitioner={false} service={c.services[0]} slotISO={null} location={null} checkout={insuredCheckout("Beto")} />
+      <SummaryAside clinic={c} practitioner={c.practitioners[1]} anyPractitioner={false} service={c.services[0]} slotISO="2026-11-10T13:00:00.000Z" location={null} checkout={insuredCheckout("Beto")} />
     );
     expect(summary).toContain("Consultá tu cobertura con el consultorio");
     expect(summary).toContain("Según tu cobertura");

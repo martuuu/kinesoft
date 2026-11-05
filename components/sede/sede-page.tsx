@@ -15,6 +15,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { BRAND_NAME } from "@/lib/brand";
+import { KineLogo } from "@/components/ui/kine-logo";
 import { buttonClassName } from "@/components/ui/button";
 import { PractitionerPhoto } from "@/components/ui/practitioner-photo";
 import {
@@ -30,7 +31,6 @@ import {
   firstNameOf,
   licenseText,
   placeText,
-  priceText,
   sedeChannels,
 } from "./sede-copy";
 import { SedeHero } from "./sede-hero";
@@ -129,18 +129,16 @@ function ProsSection({ site }: { site: ClinicSite }) {
                   </div>
                   {p.services.length > 0 && (
                     <ul className={`${s.list} ${s.svc}`} role="list" aria-label={`Servicios de ${p.name}`}>
-                      {p.services.map((svc) => {
-                        const price = priceText(svc.priceCents);
-                        return (
-                          <li key={svc.id}>
-                            <span className={s.svcName}>
-                              {svc.name}
-                              <span className={s.svcDur}>{svc.durationMin} min</span>
-                            </span>
-                            <span className={price.priced ? s.svcPrice : s.svcAsk}>{price.text}</span>
-                          </li>
-                        );
-                      })}
+                      {/* Martin (05-nov): la sede no muestra precios. El valor aparece recién en el turnero, en el resumen,
+                          cuando el paciente eligió servicio y horario. */}
+                      {p.services.map((svc) => (
+                        <li key={svc.id}>
+                          <span className={s.svcName}>
+                            {svc.name}
+                            <span className={s.svcDur}>{svc.durationMin} min</span>
+                          </span>
+                        </li>
+                      ))}
                     </ul>
                   )}
                   <BookLink href={p.bookingUrl} size="md" className={s.proCta} label={`Sacar turno con ${p.name}`}>
@@ -447,7 +445,8 @@ export function SedePage({ site }: { site: ClinicSite }) {
         <div className={`k-container ${s.made}`}>
           <span>© {site.name}</span>
           <a href="/">
-            <SedeIcon id="co" />
+            {/* El sello de la marca (Sello C, `KineLogo`), no el ícono viejo del prototipo (Martin, 05-nov). */}
+            <KineLogo size={18} markOnly />
             Hecho con {BRAND_NAME}
           </a>
         </div>

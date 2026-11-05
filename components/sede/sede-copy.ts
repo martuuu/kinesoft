@@ -10,7 +10,6 @@
  */
 import type { Metadata } from "next";
 import { BRAND_NAME } from "@/lib/brand";
-import { formatARS } from "@/lib/format";
 import { phoneActionsFor } from "@/lib/booking-share";
 import type { ClinicSite, ClinicSiteLocation } from "@/lib/clinic-site-types";
 
@@ -27,7 +26,6 @@ export const SEDE_COPY = {
   prosTitle: "Elegí con quién atenderte",
   prosEmpty: "Por ahora no hay turnos online. Escribinos o llamanos al consultorio para coordinar.",
   prosEmptyNoContact: "Por ahora no hay turnos online.",
-  askPrice: "Consultá el valor",
   weekEyebrow: "Semana",
   weekTitle: "Quién atiende cada día",
   weekNote: "Los feriados y las vacaciones se ven al sacar turno.",
@@ -53,12 +51,6 @@ export const SEDE_COPY = {
 export function firstNameOf(name: string): string {
   const words = name.trim().split(/\s+/).filter((w) => !/^(lic|dr|dra|klgo|klga|prof)\.?$/i.test(w));
   return words[0] ?? name.trim();
-}
-
-export function priceText(priceCents: number | null): { text: string; priced: boolean } {
-  return priceCents != null && priceCents > 0
-    ? { text: formatARS(priceCents), priced: true }
-    : { text: SEDE_COPY.askPrice, priced: false };
 }
 
 /** La matrícula que cargó el profesional (D-CF3-9: lo que ya es público en el turnero). */

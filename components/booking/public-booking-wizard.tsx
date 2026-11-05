@@ -58,7 +58,6 @@ import {
   locationsForPractitioner,
   missingTurneroReason,
   nextAttempt,
-  particularQuoteFor,
   payNowFor,
   quotedForInterstitial,
   reconcileSelection,
@@ -728,17 +727,11 @@ export function ServiceStep({
   value: string | null;
   onChange: (id: string) => void;
 }) {
-  // CF3 (D-CF3-1/3/4): lo que paga un particular con ESE profesional; null con «cualquiera» (el precio aparece en el
-  // resumen cuando se sabe con quién es) o con el precio oculto. Nunca el `priceCents` del servicio si hay cotizaciones.
-  const prices = new Map(services.map((sv) => [sv.id, declaredObraSocial ? null : particularQuoteFor(clinic, practitionerId, sv.id)]));
-  const anyPrice = [...prices.values()].some((v) => (v ?? 0) > 0);
+  // Martin (05-nov): el paso de servicio no muestra precios. El valor aparece recién en el resumen, cuando ya hay
+  // servicio y horario elegidos (`SummaryAside`).
   const subtitle = declaredObraSocial
     ? "Cada servicio tiene su duración. El valor depende de tu cobertura."
-    : anyPrice
-      ? "Cada servicio tiene su duración y su precio."
-      : !practitionerId && clinic.particularQuotes
-        ? "Cada servicio tiene su duración. El precio lo ves en el resumen, cuando se sabe con quién es el turno."
-        : "Cada servicio tiene su duración.";
+    : "Cada servicio tiene su duración. El valor lo ves en el resumen cuando elegís el horario.";
   return (
     <>
       <StepHeader title="¿Qué servicio necesitás?" subtitle={subtitle} />
@@ -759,8 +752,6 @@ export function ServiceStep({
                 {sv.description && <div className={s.choiceSub}>{sv.description}</div>}
                 <div className={s.choiceMeta}>{durationFor(sv, practitionerId)} min</div>
               </div>
-              {/* TP-1: con precio 0 no hay monto (antes «$ 0», que se leía como un error o como «gratis» sin serlo). */}
-              {(prices.get(sv.id) ?? 0) > 0 && <div className={`k-display ${s.price}`}>{formatARS(prices.get(sv.id)!)}</div>}
             </button>
           ))}
         </div>
@@ -819,14 +810,15 @@ export function SummaryAside({
           {location && <Row label="Dónde" value={location.name} sub={address || undefined} />}
         </dl>
         <div className={s.total}>
-          {/* Sin servicio elegido: «—». Elegido, sin cobro y con precio 0: sin fila (antes «$ 0», H-TP2). */}
-          {(!service || checkout.showTotal) && (
+          {/* Sin servicio u horario elegido: «—» (Martin, 05-nov: el valor se muestra recién con el horario elegido).
+              Elegido, sin cobro y con precio 0: sin fila (antes «$ 0», H-TP2). */}
+          {(!service || !slotISO || checkout.showTotal) && !(service && slotISO && checkout.insured) && (
             <div className={s.totalRow}>
               <span className={s.totalLabel}>{checkout.totalLabel}</span>
-              <span className={`k-display ${s.totalValue}`}>{service ? formatARS(checkout.totalCents) : "—"}</span>
+              <span className={`k-display ${s.totalValue}`}>{service && slotISO ? formatARS(checkout.totalCents) : "—"}</span>
             </div>
           )}
-          {checkout.split && (
+          {slotISO && checkout.split && (
             <>
               <div className={s.totalRow}>
                 <span className={s.totalLabel}>{"Seña a pagar ahora"}</span>
@@ -839,7 +831,7 @@ export function SummaryAside({
             </>
           )}
           {/* CF3 (D-CF3-5): con obra social no hay número; el texto y, con opt-in, el WhatsApp del profesional al tocar. */}
-          {service && checkout.insured && (
+          {service && slotISO && checkout.insured && (
             <>
               <div className={s.totalRow}>
                 <span className={s.totalLabel}>Valor del turno</span>

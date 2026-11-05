@@ -154,7 +154,7 @@ describe("[CF3-SDU] contrato de la ruta", () => {
 });
 
 describe("[CF3-SDU] contenido (D-CF3-9)", () => {
-  it("[CF3-SDU14] encabezado, CTA, profesionales con precio o «Consultá el valor», matrícula y ?pro=", async () => {
+  it("[CF3-SDU14] encabezado, CTA, profesionales sin precios (Martin 05-nov), matrícula y ?pro=", async () => {
     const html = await render(page("tmp"));
     expect(count(html, /<h1/g)).toBe(1);
     for (const tag of ["<header", "<nav", "<main", "<footer"]) expect(html).toContain(tag);
@@ -168,9 +168,9 @@ describe("[CF3-SDU] contenido (D-CF3-9)", () => {
     expect(html).toContain("Sacar turno con Tomás");
     expect(html).toContain('aria-label="Sacar turno con Lic. Tomás Paredes"');
     expect(html).toContain('href="/c/tmp/booking?pro=mariana"');
-    expect(html).toContain(formatARS(1_800_000));
-    // Mariana ocultó el precio (D-CF3-3): ni el número viaja.
-    expect(html).toContain("Consultá el valor");
+    // Martin (05-nov): la sede no muestra precios (ni el visible ni el oculto): el valor aparece en el turnero.
+    expect(html).not.toContain(formatARS(1_800_000));
+    expect(html).not.toContain("Consultá el valor");
     expect(html).not.toContain("22.222");
     expect(html).toContain("Matrícula MN 12345");
     expect(count(html, /Matrícula/g)).toBe(1); // Mariana no cargó
